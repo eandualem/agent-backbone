@@ -1,0 +1,10 @@
+# Prefect deployment definitions
+# Phase 1: flows invoked directly by gateway (no deployments needed yet)
+# Phase 2: deployments for scheduled flows
+
+deployments:
+  - name: agent-monitor
+    entrypoint: flows/agent_monitor.py:monitor_agents
+    schedule:
+      interval: 60  # seconds
+    description: "Periodic check for newly-online agent sessions with pending issues"
