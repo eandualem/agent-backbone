@@ -1,21 +1,133 @@
-.PHONY: lint format format-check test check run-gateway run-prefect
+.PHONY: help install dev clean lint format format-check fix type-check \
+       test test-file test-unit test-integration cov cov-html check build \
+       run-gateway run-prefect setup-pool deploy run-worker
 
-lint:
-	uv run ruff check src/ gateway/ flows/ tests/
+.DEFAULT_GOAL := help
 
-format:
-	uv run ruff format src/ gateway/ flows/ tests/
+# ─── Config ──────────────────────────────────────────────
 
-format-check:
-	uv run ruff format --check src/ gateway/ flows/ tests/
+PROJECT_NAME := agent-backbone
+SRC_DIRS     := src/ gateway/ flows/ api/
+ALL_DIRS     := src/ gateway/ flows/ api/ tests/
 
-test:
-	uv run pytest
+# ─── Colors ──────────────────────────────────────────────
 
-check: lint format-check test
+GREEN  := $(shell tput -Txterm setaf 2)
+YELLOW := $(shell tput -Txterm setaf 3)
+CYAN   := $(shell tput -Txterm setaf 6)
+RED    := $(shell tput -Txterm setaf 1)
+RESET  := $(shell tput -Txterm sgr0)
 
-run-gateway:
+# ─── Help ────────────────────────────────────────────────
+
+help: ## Show available commands
+	@echo ""
+	@echo "$(CYAN)$(PROJECT_NAME)$(RESET) — Development Commands"
+	@echo ""
+	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@echo ""
+
+# ─── Setup ───────────────────────────────────────────────
+
+install: ## Install all dependencies
+	@echo "$(CYAN)Installing dependencies...$(RESET)"
+	uv sync
+	@echo "$(GREEN)Done.$(RESET)"
+
+clean: ## Remove generated artifacts
+	@echo "$(CYAN)Cleaning...$(RESET)"
+	rm -rf dist/ build/ *.egg-info .pytest_cache .coverage coverage_html .ruff_cache
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	@echo "$(GREEN)Done.$(RESET)"
+
+# ─── Development ─────────────────────────────────────────
+
+dev: ## Start gateway server (development)
 	uv run python -m gateway.server
 
-run-prefect:
+# ─── Code Quality ────────────────────────────────────────
+
+lint: ## Run linter
+	@echo "$(CYAN)Linting...$(RESET)"
+	uv run ruff check $(ALL_DIRS)
+	@echo "$(GREEN)Done.$(RESET)"
+
+format: ## Format code
+	@echo "$(CYAN)Formatting...$(RESET)"
+	uv run ruff format $(ALL_DIRS)
+	@echo "$(GREEN)Done.$(RESET)"
+
+format-check: ## Check formatting (no changes)
+	@echo "$(CYAN)Checking format...$(RESET)"
+	uv run ruff format --check $(ALL_DIRS)
+	@echo "$(GREEN)Done.$(RESET)"
+
+fix: ## Auto-fix lint issues + format
+	@echo "$(CYAN)Fixing...$(RESET)"
+	uv run ruff check --fix $(ALL_DIRS)
+	uv run ruff format $(ALL_DIRS)
+	@echo "$(GREEN)Done.$(RESET)"
+
+type-check: ## Run type checker
+	@echo "$(CYAN)Type checking...$(RESET)"
+	uv run pyright $(SRC_DIRS)
+	@echo "$(GREEN)Done.$(RESET)"
+
+# ─── Testing ─────────────────────────────────────────────
+
+test: ## Run all tests
+	@echo "$(CYAN)Running tests...$(RESET)"
+	uv run pytest
+	@echo "$(GREEN)Done.$(RESET)"
+
+test-file: ## Run a single test file (FILE=tests/test_foo.py)
+	uv run pytest $(FILE) -v
+
+test-unit: ## Run unit tests only
+	@echo "$(CYAN)Running unit tests...$(RESET)"
+	uv run pytest -m unit
+	@echo "$(GREEN)Done.$(RESET)"
+
+test-integration: ## Run integration tests only
+	@echo "$(CYAN)Running integration tests...$(RESET)"
+	uv run pytest -m integration
+	@echo "$(GREEN)Done.$(RESET)"
+
+cov: ## Run tests with coverage
+	@echo "$(CYAN)Running tests with coverage...$(RESET)"
+	uv run pytest --cov=src --cov-report=term-missing
+	@echo "$(GREEN)Done.$(RESET)"
+
+cov-html: ## Generate HTML coverage report
+	@echo "$(CYAN)Generating HTML coverage...$(RESET)"
+	uv run pytest --cov=src --cov-report=html:coverage_html
+	@echo "$(GREEN)Report at coverage_html/index.html$(RESET)"
+
+# ─── Quality Gate ────────────────────────────────────────
+
+check: lint format-check test ## Full quality check (CI equivalent)
+	@echo "$(GREEN)All checks passed.$(RESET)"
+
+# ─── Build ───────────────────────────────────────────────
+
+build: ## Production build
+	@echo "$(CYAN)Building...$(RESET)"
+	uv build
+	@echo "$(GREEN)Done.$(RESET)"
+
+# ─── Services ────────────────────────────────────────────
+
+run-gateway: ## Start gateway server (port 9877)
+	uv run python -m gateway.server
+
+run-prefect: ## Start Prefect server (port 4200)
 	uv run prefect server start
+
+setup-pool: ## Create agent-pool work pool (one-time)
+	uv run prefect work-pool create agent-pool --type process
+
+deploy: ## Deploy all scheduled flows
+	uv run prefect deploy --all
+
+run-worker: ## Start Prefect worker for agent-pool
+	uv run prefect worker start --pool agent-pool

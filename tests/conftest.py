@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
-from src.config import BackboneConfig
+from src.config import BackboneConfig, GatewayConfig, GitHubConfig
 from src.models import (
     CommentData,
     EventType,
@@ -21,10 +23,9 @@ def config():
     """Test BackboneConfig with dummy values."""
     return BackboneConfig(
         github_token="test-token-123",
-        github_owner="eandualem",
-        github_repo="orchestration",
-        gateway_port=9877,
         webhook_secret="test-secret",
+        gateway=GatewayConfig(port=9877),
+        github=GitHubConfig(owner="eandualem", repo="orchestration"),
     )
 
 
@@ -127,3 +128,43 @@ def webhook_payload(github_issue_json):
         "action": "opened",
         "issue": github_issue_json,
     }
+
+
+@pytest.fixture
+def api_app(config, tmp_path):
+    """Create a FastAPI app with test config and in-memory DB."""
+    from api.app import create_app
+
+    app = create_app()
+    # Override config with test config using in-memory DB
+    from dataclasses import replace
+
+    from src.config import DeliveryConfig
+
+    test_db_path = str(tmp_path / "test.db")
+    test_config = replace(config, delivery=DeliveryConfig(db_path=test_db_path))
+    app.state.config = test_config
+    return app
+
+
+@pytest.fixture
+async def api_client(api_app):
+    """Async test client for the FastAPI app."""
+    transport = ASGITransport(app=api_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+@pytest.fixture
+def api_key():
+    """Set and return a test API key."""
+    key = "test-api-key-123"
+    os.environ["BACKBONE_API_KEY"] = key
+    yield key
+    os.environ.pop("BACKBONE_API_KEY", None)
+
+
+@pytest.fixture
+def auth_headers(api_key):
+    """Authorization headers with test API key."""
+    return {"Authorization": f"Bearer {api_key}"}

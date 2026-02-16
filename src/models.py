@@ -5,12 +5,26 @@ Validates untrusted GitHub webhook payloads into typed structures.
 
 from __future__ import annotations
 
-from enum import Enum
+import re
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+_FROM_TAG_PATTERN = re.compile(r"^\[from:([a-z][a-z0-9-]*)\]", re.IGNORECASE)
 
-class EventType(str, Enum):
+
+def parse_from_tag(comment_body: str) -> str | None:
+    """Extract entity name from ``[from:X]`` tag at start of comment body.
+
+    Returns the lowercased entity name, or None if no valid tag is found.
+    """
+    match = _FROM_TAG_PATTERN.match(comment_body.lstrip())
+    if match:
+        return match.group(1).lower()
+    return None
+
+
+class EventType(StrEnum):
     """Normalized event types from GitHub webhooks."""
 
     ISSUE_OPENED = "issue_opened"
@@ -77,6 +91,7 @@ class IssueData(BaseModel):
 class CommentData(BaseModel):
     """Comment data from issue_comment webhook events."""
 
+    id: int = 0
     body: str = ""
     user_login: str = "unknown"
 
@@ -114,6 +129,7 @@ class IssueEvent(BaseModel):
         comment_data = payload.get("comment")
         if comment_data:
             comment = CommentData(
+                id=comment_data.get("id", 0),
                 body=comment_data.get("body", ""),
                 user_login=comment_data.get("user", {}).get("login", "unknown"),
             )

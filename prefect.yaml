@@ -1,10 +1,50 @@
-# Prefect deployment definitions
-# Phase 1: flows invoked directly by gateway (no deployments needed yet)
-# Phase 2: deployments for scheduled flows
+# Prefect deployment definitions for agent-backbone
+# Deploy all: `make deploy`
+# Requires work pool: `make setup-pool`
+
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /Users/elias/ws/core/code/WF/agent-backbone
 
 deployments:
   - name: agent-monitor
     entrypoint: flows/agent_monitor.py:monitor_agents
+    work_pool:
+      name: agent-pool
     schedule:
       interval: 60  # seconds
     description: "Periodic check for newly-online agent sessions with pending issues"
+
+  - name: delivery-retry
+    entrypoint: flows/delivery_retry.py:delivery_retry
+    work_pool:
+      name: agent-pool
+    schedule:
+      interval: 300  # 5 minutes
+    description: "Retry failed/offline/deferred deliveries for now-available agents"
+
+  - name: morning-startup
+    entrypoint: flows/morning_startup.py:morning_startup
+    work_pool:
+      name: agent-pool
+    schedule:
+      cron: "0 8 * * *"
+      timezone: "Africa/Addis_Ababa"
+    description: "Morning routine: start agents, deliver overnight issues, send digest"
+
+  - name: evening-shutdown
+    entrypoint: flows/evening_shutdown.py:evening_shutdown
+    work_pool:
+      name: agent-pool
+    schedule:
+      cron: "0 18 * * *"
+      timezone: "Africa/Addis_Ababa"
+    description: "Evening routine: capture stats, identify stale sessions, send digest"
+
+  - name: heartbeat-scheduler
+    entrypoint: flows/agent_heartbeat.py:heartbeat_scheduler
+    work_pool:
+      name: agent-pool
+    schedule:
+      interval: 60
+    description: "Evaluate heartbeat schedules and wake agents at configured times"

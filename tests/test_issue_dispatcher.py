@@ -4,16 +4,118 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
-from flows.issue_dispatcher import DispatchResult, issue_dispatcher, resolve_session
+from flows.issue_dispatcher import issue_dispatcher, resolve_session
+from src.agent_state import AgentState, StateSnapshot
 from src.models import (
     CommentData,
     EventType,
     IssueData,
     IssueEvent,
     ParsedLabels,
+    parse_from_tag,
 )
+
+# Default idle state snapshot used in most tests
+_IDLE_SNAP = StateSnapshot(state=AgentState.IDLE, source="default")
+
+
+def _patch_state_idle():
+    """Patch get_agent_state to return idle."""
+    return patch(
+        "flows.issue_dispatcher.get_agent_state",
+        new_callable=AsyncMock,
+        return_value=_IDLE_SNAP,
+    )
+
+
+def _patch_send_ok():
+    """Patch send_message to return True (delivery succeeds)."""
+    return patch(
+        "flows.issue_dispatcher.send_message",
+        new_callable=AsyncMock,
+        return_value=True,
+    )
+
+
+def _patch_session_exists(exists: bool = True):
+    """Patch session_exists to return a fixed boolean."""
+    return patch(
+        "flows.issue_dispatcher.session_exists",
+        new_callable=AsyncMock,
+        return_value=exists,
+    )
+
+
+def _patch_find_outgoing(result: str | None):
+    """Patch find_outgoing_comment to return a fixed value."""
+    return patch(
+        "flows.issue_dispatcher.find_outgoing_comment",
+        return_value=result,
+    )
+
+
+def _patch_db():
+    """Patch BackboneDB for persistence assertions. Returns (patcher, mock_db).
+
+    Usage:
+        with _patch_db() as (mock_db_cls, mock_db):
+            ...
+            mock_db.record_acknowledgment.assert_called_once_with(...)
+    """
+
+    class _DBContext:
+        def __init__(self):
+            self.mock_db = AsyncMock()
+            self.patcher = patch("src.persistence.BackboneDB")
+
+        def __enter__(self):
+            mock_db_cls = self.patcher.__enter__()
+            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=self.mock_db)
+            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            return mock_db_cls, self.mock_db
+
+        def __exit__(self, *exc):
+            return self.patcher.__exit__(*exc)
+
+    return _DBContext()
+
+
+# ---------------------------------------------------------------------------
+# TestParseFromTag
+# ---------------------------------------------------------------------------
+
+
+class TestParseFromTag:
+    """Tests for the parse_from_tag() function in src/models.py."""
+
+    def test_basic_tag(self):
+        assert parse_from_tag("[from:ike]") == "ike"
+
+    def test_hyphenated_entity(self):
+        assert parse_from_tag("[from:agent-backbone]") == "agent-backbone"
+
+    def test_case_insensitive(self):
+        assert parse_from_tag("[from:IKE]") == "ike"
+
+    def test_no_tag_returns_none(self):
+        assert parse_from_tag("just a regular comment") is None
+
+    def test_tag_not_at_start(self):
+        assert parse_from_tag("some text [from:ike]") is None
+
+    def test_empty_string(self):
+        assert parse_from_tag("") is None
+
+    def test_leading_whitespace_stripped(self):
+        assert parse_from_tag("  [from:ike]") == "ike"
+
+    def test_invalid_name_starts_with_digit(self):
+        assert parse_from_tag("[from:123]") is None
+
+
+# ---------------------------------------------------------------------------
+# TestResolveSession
+# ---------------------------------------------------------------------------
 
 
 class TestResolveSession:
@@ -26,26 +128,23 @@ class TestResolveSession:
         assert result is None
 
     async def test_coding_agent_with_repo_session(self):
-        with patch(
-            "flows.issue_dispatcher.session_exists",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
+        with _patch_session_exists(True):
             result = await resolve_session.fn("coding-agent", "[task] platform-api: Fix bug")
             assert result == "platform-api"
 
     async def test_coding_agent_repo_offline_falls_back(self):
-        with patch(
-            "flows.issue_dispatcher.session_exists",
-            new_callable=AsyncMock,
-            return_value=False,
-        ):
+        with _patch_session_exists(False):
             result = await resolve_session.fn("coding-agent", "[task] platform-api: Fix bug")
             assert result == "ike"
 
     async def test_coding_agent_no_repo_in_title(self):
         result = await resolve_session.fn("coding-agent", "Some random title")
         assert result == "ike"
+
+
+# ---------------------------------------------------------------------------
+# TestIssueDispatcher — non-comment issue event paths
+# ---------------------------------------------------------------------------
 
 
 class TestIssueDispatcher:
@@ -55,16 +154,9 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
         with (
-            patch(
-                "flows.issue_dispatcher.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "flows.issue_dispatcher.send_message",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_send,
+            _patch_session_exists(True),
+            _patch_send_ok() as mock_send,
+            _patch_state_idle(),
         ):
             result = await issue_dispatcher.fn(event)
 
@@ -86,44 +178,17 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
         with (
-            patch(
-                "flows.issue_dispatcher.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
+            _patch_session_exists(True),
             patch(
                 "flows.issue_dispatcher.send_message",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
+            _patch_state_idle(),
         ):
             result = await issue_dispatcher.fn(event)
 
         assert "feynman" in result.offline
-
-    async def test_comment_event(self):
-        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
-        issue = IssueData(number=4, title="[task] Something", labels=labels)
-        comment = CommentData(body="Test comment", user_login="eandualem")
-        event = IssueEvent(
-            event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment
-        )
-
-        with (
-            patch(
-                "flows.issue_dispatcher.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "flows.issue_dispatcher.send_message",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            result = await issue_dispatcher.fn(event)
-
-        assert "ike" in result.delivered
 
     async def test_multiple_targets(self):
         labels = ParsedLabels(sender="leo", targets=["ike", "feynman"], issue_type="task")
@@ -131,16 +196,9 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
         with (
-            patch(
-                "flows.issue_dispatcher.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "flows.issue_dispatcher.send_message",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            _patch_state_idle(),
         ):
             result = await issue_dispatcher.fn(event)
 
@@ -154,3 +212,289 @@ class TestIssueDispatcher:
         result = await issue_dispatcher.fn(event)
         assert result.delivered == []
         assert result.offline == []
+
+    async def test_defers_busy_agent(self):
+        """Busy agents should get deferred, not delivered."""
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(number=7, title="[task] Deferred", labels=labels)
+        event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
+
+        busy_snap = StateSnapshot(state=AgentState.BUSY, source="pull")
+        with (
+            _patch_session_exists(True),
+            patch(
+                "flows.issue_dispatcher.get_agent_state",
+                new_callable=AsyncMock,
+                return_value=busy_snap,
+            ),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        assert "ike" in result.deferred
+        assert result.delivered == []
+
+    async def test_blocking_overrides_processing(self):
+        """Blocking issues should deliver even to processing agents."""
+        labels = ParsedLabels(
+            sender="leo",
+            targets=["ike"],
+            issue_type="bug",
+            priority="blocking",
+        )
+        issue = IssueData(number=8, title="[bug] Critical", labels=labels)
+        event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
+
+        processing_snap = StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="push")
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            patch(
+                "flows.issue_dispatcher.get_agent_state",
+                new_callable=AsyncMock,
+                return_value=processing_snap,
+            ),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        assert "ike" in result.delivered
+
+    async def test_comment_event_unknown_commenter(self):
+        """When the commenter is unknown (no from-tag, no JSONL), both sender
+        and target get notified."""
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(number=4, title="[task] Something", labels=labels)
+        comment = CommentData(body="Test comment", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            _patch_find_outgoing(None),
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        # Unknown commenter means nobody is subtracted from {sender} | {targets},
+        # except the skip set. Both leo and ike should be notified.
+        assert "leo" in result.delivered
+        assert "ike" in result.delivered
+
+    async def test_comment_not_suppressed_for_sender(self):
+        """When Ike comments [from:ike] on a from:leo for:ike issue,
+        Leo (the sender) gets notified and Ike (the commenter) is suppressed."""
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(number=9, title="[task] Collab", labels=labels)
+        comment = CommentData(body="[from:ike] Done with this.", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        # Leo should be delivered (sender, not commenter)
+        assert "leo" in result.delivered
+        # Ike should be suppressed (commenter removed from target set by
+        # _compute_comment_targets, or session-level self-suppression)
+        assert "ike" not in result.delivered
+
+    async def test_self_comment_records_acknowledgment(self):
+        """Commenter identified via [from:ike] tag records acknowledgment in DB."""
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(number=42, title="[task] Something", labels=labels)
+        comment = CommentData(body="[from:ike] Ack", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        # Ike is the commenter and should be skipped (removed from target set)
+        assert "ike" not in result.delivered
+        # Acknowledgment recorded for the commenter
+        mock_db.record_acknowledgment.assert_called_once_with(42, "ike")
+
+    async def test_external_comment_clears_acknowledgment(self):
+        """When someone else comments, the target's acknowledgment is cleared
+        (new information for them)."""
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(number=42, title="[task] Something", labels=labels)
+        comment = CommentData(body="[from:leo] New info", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        # Ike should receive the comment (Leo is the commenter, Ike is target)
+        assert "ike" in result.delivered
+        # Acknowledgment should be cleared for Ike (new info for them)
+        mock_db.clear_acknowledgment.assert_called_with(42, "ike")
+
+
+# ---------------------------------------------------------------------------
+# TestCommentRouting — focused tests for the comment dispatch path
+# ---------------------------------------------------------------------------
+
+
+class TestCommentRouting:
+    """Tests for the comment-specific dispatch logic: from-tag parsing,
+    commenter resolution, target computation, and session-level suppression."""
+
+    async def test_from_tag_suppresses_self_notification(self):
+        """[from:ike] comment on from:leo for:ike issue: ike suppressed, leo notified."""
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(number=10, title="[task] Review", labels=labels)
+        comment = CommentData(body="[from:ike] Reviewing now.", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        assert "leo" in result.delivered
+        # Ike is removed by _compute_comment_targets (commenter subtracted from set)
+        assert "ike" not in result.delivered
+
+    async def test_sender_notified_on_comment(self):
+        """Ike comments [from:ike] on from:leo for:ike issue: leo (sender) gets notified."""
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(number=11, title="[task] Progress", labels=labels)
+        comment = CommentData(body="[from:ike] Making progress.", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok() as mock_send,
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        assert "leo" in result.delivered
+        assert mock_send.called
+
+    async def test_no_from_tag_falls_back_to_jsonl(self):
+        """No [from:] tag in body, JSONL returns 'ike': ike suppressed as commenter."""
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(number=12, title="[task] Fallback", labels=labels)
+        comment = CommentData(body="Just a plain comment.", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            _patch_find_outgoing("ike"),
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        # ike identified as commenter via JSONL fallback, subtracted from targets
+        assert "leo" in result.delivered
+        assert "ike" not in result.delivered
+
+    async def test_no_tag_no_jsonl_delivers_to_all(self):
+        """Unknown commenter (no tag, no JSONL): all parties notified."""
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(number=13, title="[task] Unknown", labels=labels)
+        comment = CommentData(body="Mystery comment.", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            _patch_find_outgoing(None),
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        # Both sender and target notified since commenter is unknown
+        assert "leo" in result.delivered
+        assert "ike" in result.delivered
+
+    async def test_coding_agent_session_level_suppression(self):
+        """Session-level suppression: Ike comments [from:ike] on a for:coding-agent
+        issue where coding-agent falls back to 'ike' session. Even though entity
+        names differ ('ike' vs 'coding-agent'), the resolved sessions match so
+        the target is suppressed."""
+        labels = ParsedLabels(sender="leo", targets=["coding-agent"], issue_type="task")
+        issue = IssueData(
+            number=14,
+            title="[task] unknown-repo: Fix dispatch",
+            labels=labels,
+        )
+        comment = CommentData(body="[from:ike] I'll handle this.", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        # coding-agent with no matching repo session falls back to "ike"
+        with (
+            _patch_session_exists(False),
+            _patch_send_ok(),
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        # Leo should be delivered (sender)
+        assert "leo" in result.delivered
+        # coding-agent resolves to ike (fallback), commenter ike also resolves
+        # to ike session: session-level self-suppression applies
+        assert "coding-agent" in result.skipped
+
+    async def test_elias_skipped_in_comment_routing(self):
+        """for:elias is still skipped even in comment routing."""
+        labels = ParsedLabels(sender="ike", targets=["elias"], issue_type="question")
+        issue = IssueData(number=15, title="[question] Clarify", labels=labels)
+        comment = CommentData(body="[from:leo] Thoughts?", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        # elias is in skip set, so removed by _compute_comment_targets
+        assert "elias" not in result.delivered
+
+    async def test_multiple_targets_comment(self):
+        """Feynman comments on from:leo for:ike,feynman issue:
+        leo + ike notified, feynman (commenter) suppressed."""
+        labels = ParsedLabels(sender="leo", targets=["ike", "feynman"], issue_type="task")
+        issue = IssueData(number=16, title="[task] Multi", labels=labels)
+        comment = CommentData(body="[from:feynman] I'll handle this.", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_session_exists(True),
+            _patch_send_ok(),
+            _patch_state_idle(),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await issue_dispatcher.fn(event)
+
+        # Feynman is the commenter, removed from target set by _compute_comment_targets
+        assert "feynman" not in result.delivered
+        # Leo (sender) and Ike (target) should both be notified
+        assert "leo" in result.delivered
+        assert "ike" in result.delivered

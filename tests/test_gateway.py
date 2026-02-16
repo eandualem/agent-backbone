@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 
 from gateway.server import (
-    is_duplicate,
-    is_recent_notification,
-    normalize_event,
-    verify_signature,
+    _reverse_topic_routes,
     _seen_deliveries,
-    _recent_notifications,
+    is_duplicate,
+    normalize_event,
+    send_telegram_reply,
+    verify_signature,
 )
+from src.dedup import clear as clear_dedup
+from src.dedup import is_recent_notification
 from src.models import EventType
 
 
@@ -55,7 +56,7 @@ class TestIsDuplicate:
 
 class TestIsRecentNotification:
     def setup_method(self):
-        _recent_notifications.clear()
+        clear_dedup()
 
     def test_first_notification(self):
         assert is_recent_notification(42, "ike") is False
@@ -125,3 +126,42 @@ class TestNormalizeEvent:
         payload = {"action": "deleted", "issue": {"number": 1, "labels": []}}
         event = normalize_event("issues", "deleted", payload, "delivery-4")
         assert event.event_type == EventType.UNKNOWN
+
+
+class TestReverseTopicRoutes:
+    def test_builds_reverse_map(self):
+        routes = {10: "leo", 20: "agent-backbone", 30: "coding-agents"}
+        reverse = _reverse_topic_routes(routes)
+        assert reverse == {"leo": 10, "agent-backbone": 20}
+
+    def test_excludes_coding_agents_catchall(self):
+        routes = {30: "coding-agents"}
+        reverse = _reverse_topic_routes(routes)
+        assert "coding-agents" not in reverse
+        assert reverse == {}
+
+    def test_empty_routes(self):
+        assert _reverse_topic_routes({}) == {}
+
+
+class TestSendTelegramReply:
+    def test_success(self):
+        from unittest.mock import MagicMock, patch
+
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("gateway.server.urllib.request.urlopen", return_value=mock_resp):
+            assert send_telegram_reply("tok", -100123, 10, "hello") is True
+
+    def test_failure(self):
+        from unittest.mock import patch
+        from urllib.error import URLError
+
+        with patch(
+            "gateway.server.urllib.request.urlopen",
+            side_effect=URLError("connection failed"),
+        ):
+            assert send_telegram_reply("tok", -100123, 10, "hello") is False

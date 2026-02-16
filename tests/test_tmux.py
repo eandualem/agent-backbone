@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.tmux import list_sessions, send_message, session_exists
+from src.tmux import list_sessions, send_keys, send_message, session_exists
 
 
 @pytest.fixture
@@ -25,7 +25,10 @@ class TestSessionExists:
 
         assert await session_exists("ike") is True
         mock_subprocess.assert_called_once_with(
-            "tmux", "has-session", "-t", "ike",
+            "tmux",
+            "has-session",
+            "-t",
+            "ike",
             stdout=-3,  # DEVNULL
             stderr=-3,
         )
@@ -89,3 +92,27 @@ class TestListSessions:
 
         result = await list_sessions()
         assert result == []
+
+
+class TestSendKeys:
+    async def test_send_keys_success(self):
+        with (
+            patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=True),
+            patch("src.tmux.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+        ):
+            proc = AsyncMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_exec.return_value = proc
+
+            assert await send_keys("ike", "Escape") is True
+            # Only called once (no Enter, no -l flag)
+            assert mock_exec.call_count == 1
+            call_args = mock_exec.call_args[0]
+            assert "-l" not in call_args
+            assert "Enter" not in call_args
+            assert "Escape" in call_args
+
+    async def test_send_keys_session_offline(self):
+        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+            assert await send_keys("offline", "Escape") is False

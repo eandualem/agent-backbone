@@ -1,13 +1,14 @@
 """Configuration for the agent backbone.
 
-Entity-to-session mapping, routing constants, and runtime config.
-Ported from webhook-receiver.py with additions for Prefect integration.
+Loads structural config from backbone.toml (committed), secrets from env vars.
+Nested frozen dataclasses per section. Backward-compatible — works without TOML file.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,56 +16,324 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Entity → tmux session name mapping
-ENTITY_SESSIONS: dict[str, str] = {
+# Repo name pattern: "[type] repo-name: description" or "[type] org/repo-name: description"
+REPO_NAME_PATTERN: re.Pattern[str] = re.compile(r"^\[[^\]]+\]\s+([\w/.-]+):")
+
+# Default TOML path: backbone.toml in repo root
+_DEFAULT_TOML_PATH = Path(__file__).resolve().parent.parent / "backbone.toml"
+
+_DEFAULT_SESSIONS: dict[str, str] = {
     "feynman": "feynman",
     "ike": "ike",
     "leo": "leo",
     "ada": "ada",
+    "brunel": "brunel",
 }
 
-# Skip these recipients (no tmux routing)
-SKIP_ENTITIES: set[str] = {"elias"}
+_DEFAULT_CODING_REPOS: frozenset[str] = frozenset(
+    {
+        "platform-api",
+        "platform-web",
+        "arclio-assistant",
+        "arclio-janus",
+        "mcp-hub",
+        "AI-chatbot",
+        "arclio-mcp-tooling",
+        "prefect-workflow-migration",
+        "rag-eval",
+        "rules-clients",
+        "agent-backbone",
+    }
+)
 
-# Fallback routing: if a target can't be resolved to a session, route here
-FALLBACK_ROUTING: dict[str, str] = {
-    "coding-agent": "ike",
-}
 
-# Repo name pattern: "[type] repo-name: description"
-REPO_NAME_PATTERN: re.Pattern[str] = re.compile(r"^\[[^\]]+\]\s+([\w-]+):")
+@dataclass(frozen=True)
+class GatewayConfig:
+    """Gateway server settings."""
 
-# Known coding agent repos (for session resolution)
-CODING_REPOS: set[str] = {
-    "platform-api",
-    "platform-web",
-    "arclio-assistant",
-    "arclio-janus",
-    "mcp-hub",
-    "AI-chatbot",
-    "arclio-mcp-tooling",
-    "prefect-workflow-migration",
-    "rag-eval",
-    "rules-clients",
-}
+    port: int = 9877
+    max_delivery_ids: int = 100
 
-# All named entities (for agent_monitor iteration)
-ALL_ENTITIES: list[str] = list(ENTITY_SESSIONS.keys())
+
+@dataclass(frozen=True)
+class GitHubConfig:
+    """GitHub API settings (non-secret)."""
+
+    owner: str = "eandualem"
+    repo: str = "orchestration"
+
+
+@dataclass(frozen=True)
+class EntityConfig:
+    """Entity-to-session mapping and routing."""
+
+    sessions: dict[str, str] = field(default_factory=lambda: dict(_DEFAULT_SESSIONS))
+    skip: frozenset[str] = frozenset({"elias"})
+    fallback: dict[str, str] = field(default_factory=lambda: {"coding-agent": "ike"})
+    coding_repos: frozenset[str] = field(default_factory=lambda: _DEFAULT_CODING_REPOS)
+
+    @property
+    def all_entities(self) -> list[str]:
+        """All named entities (for monitor iteration)."""
+        return list(self.sessions.keys())
+
+
+@dataclass(frozen=True)
+class DedupConfig:
+    """Notification deduplication settings."""
+
+    notification_window_seconds: int = 10
+
+
+@dataclass(frozen=True)
+class AgentStateConfig:
+    """Agent state tracking settings."""
+
+    state_dir: str = "~/.claude/state"
+    stale_threshold_seconds: int = 300
+
+    @property
+    def state_path(self) -> Path:
+        return Path(self.state_dir).expanduser()
+
+
+@dataclass(frozen=True)
+class SchedulingConfig:
+    """Scheduling and retry settings."""
+
+    monitor_interval_seconds: int = 60
+    delivery_retry_interval_seconds: int = 300
+    work_pool_name: str = "agent-pool"
+
+
+@dataclass(frozen=True)
+class DeliveryConfig:
+    """Delivery tracking / persistence settings."""
+
+    db_path: str = "~/.prefect/backbone.db"
+    retention_days: int = 30
+
+    @property
+    def db_file(self) -> Path:
+        return Path(self.db_path).expanduser()
+
+
+@dataclass(frozen=True)
+class TelegramConfig:
+    """Telegram bot settings."""
+
+    allowed_chat_ids: list[int] = field(default_factory=list)
+    topic_routes: dict[int, str] = field(default_factory=dict)
+    group_chat_id: int | None = None
+    notification_chat_id: int | None = None
+    topic_discovery_file: str = "~/.claude/state/telegram-topics.json"
+
+    @property
+    def topic_discovery_path(self) -> Path:
+        return Path(self.topic_discovery_file).expanduser()
+
+
+@dataclass(frozen=True)
+class DailyRoutineConfig:
+    """Daily routine scheduling settings."""
+
+    morning_time: str = "08:00"
+    evening_time: str = "18:00"
+    morning_agents: list[str] = field(default_factory=lambda: ["ike", "feynman"])
+    timezone: str = "Africa/Addis_Ababa"
+
+
+@dataclass(frozen=True)
+class PriorityScoringConfig:
+    """Priority scoring weights for issue queue ordering."""
+
+    blocking_weight: float = 1000.0
+    type_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "spec-gap": 100.0,
+            "bug": 90.0,
+            "task": 50.0,
+            "question": 20.0,
+            "optimization": 10.0,
+        }
+    )
+    dependents_multiplier: float = 1.5
+    age_tiebreaker_weight: float = 0.01
+
+
+@dataclass(frozen=True)
+class CapacityRoutingConfig:
+    """Capacity-aware routing settings."""
+
+    busy_threshold_seconds: int = 1800
+
+
+@dataclass(frozen=True)
+class HeartbeatConfig:
+    """Heartbeat scheduler settings."""
+
+    schedule_file: str = "~/.claude/state/heartbeat-schedules.json"
+    default_timezone: str = "Africa/Addis_Ababa"
+
+    @property
+    def schedule_path(self) -> Path:
+        return Path(self.schedule_file).expanduser()
+
+
+@dataclass(frozen=True)
+class EscalationConfig:
+    """Escalation settings for stalled/offline agent detection."""
+
+    stall_threshold_seconds: int = 5400  # 90 minutes
+    escalation_target: str = "ike"
+    escalation_dedup_seconds: int = 1800  # 30 minutes
 
 
 @dataclass(frozen=True)
 class BackboneConfig:
-    """Runtime configuration loaded from environment."""
+    """Top-level configuration. Assembled from TOML + env vars."""
 
+    # Secrets (env vars only)
     github_token: str = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN", ""))
-    github_owner: str = field(default_factory=lambda: os.environ.get("GITHUB_OWNER", "eandualem"))
-    github_repo: str = field(default_factory=lambda: os.environ.get("GITHUB_REPO", "orchestration"))
-    gateway_port: int = field(
-        default_factory=lambda: int(os.environ.get("GATEWAY_PORT", "9877"))
-    )
     webhook_secret: str = field(default_factory=lambda: _load_webhook_secret())
-    max_delivery_ids: int = 100
-    notify_dedup_seconds: int = 5
+
+    # Nested structural config
+    gateway: GatewayConfig = field(default_factory=GatewayConfig)
+    github: GitHubConfig = field(default_factory=GitHubConfig)
+    entities: EntityConfig = field(default_factory=EntityConfig)
+    dedup: DedupConfig = field(default_factory=DedupConfig)
+    agent_state: AgentStateConfig = field(default_factory=AgentStateConfig)
+    scheduling: SchedulingConfig = field(default_factory=SchedulingConfig)
+    delivery: DeliveryConfig = field(default_factory=DeliveryConfig)
+    telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    daily_routines: DailyRoutineConfig = field(default_factory=DailyRoutineConfig)
+    priority_scoring: PriorityScoringConfig = field(default_factory=PriorityScoringConfig)
+    capacity_routing: CapacityRoutingConfig = field(default_factory=CapacityRoutingConfig)
+    escalation: EscalationConfig = field(default_factory=EscalationConfig)
+    heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
+
+    # Convenience aliases for backward compat during migration
+    @property
+    def github_owner(self) -> str:
+        return self.github.owner
+
+    @property
+    def github_repo(self) -> str:
+        return self.github.repo
+
+    @property
+    def gateway_port(self) -> int:
+        return self.gateway.port
+
+    @property
+    def max_delivery_ids(self) -> int:
+        return self.gateway.max_delivery_ids
+
+    @property
+    def notify_dedup_seconds(self) -> int:
+        return self.dedup.notification_window_seconds
+
+    @classmethod
+    def from_toml(cls, path: Path | None = None) -> BackboneConfig:
+        """Load config from TOML file + env var overrides.
+
+        Falls back to defaults if TOML file doesn't exist.
+        """
+        toml_path = path or _DEFAULT_TOML_PATH
+        raw: dict = {}
+        if toml_path.exists():
+            with open(toml_path, "rb") as f:
+                raw = tomllib.load(f)
+
+        gw = raw.get("gateway", {})
+        gh = raw.get("github", {})
+        ent = raw.get("entities", {})
+        dd = raw.get("dedup", {})
+        ag = raw.get("agent_state", {})
+        sc = raw.get("scheduling", {})
+        dl = raw.get("delivery", {})
+        tg = raw.get("telegram", {})
+        dr = raw.get("daily_routines", {})
+        ps = raw.get("priority_scoring", {})
+        cr = raw.get("capacity_routing", {})
+        es = raw.get("escalation", {})
+        hb = raw.get("heartbeat", {})
+
+        return cls(
+            gateway=GatewayConfig(
+                port=gw.get("port", 9877),
+                max_delivery_ids=gw.get("max_delivery_ids", 100),
+            ),
+            github=GitHubConfig(
+                owner=gh.get("owner", "eandualem"),
+                repo=gh.get("repo", "orchestration"),
+            ),
+            entities=EntityConfig(
+                sessions=ent.get("sessions", dict(_DEFAULT_SESSIONS)),
+                skip=frozenset(ent.get("skip", ["elias"])),
+                fallback=ent.get("fallback", {"coding-agent": "ike"}),
+                coding_repos=frozenset(ent.get("coding_repos", _DEFAULT_CODING_REPOS)),
+            ),
+            dedup=DedupConfig(
+                notification_window_seconds=dd.get("notification_window_seconds", 10),
+            ),
+            agent_state=AgentStateConfig(
+                state_dir=ag.get("state_dir", "~/.claude/state"),
+                stale_threshold_seconds=ag.get("stale_threshold_seconds", 300),
+            ),
+            scheduling=SchedulingConfig(
+                monitor_interval_seconds=sc.get("monitor_interval_seconds", 60),
+                delivery_retry_interval_seconds=sc.get("delivery_retry_interval_seconds", 300),
+                work_pool_name=sc.get("work_pool_name", "agent-pool"),
+            ),
+            delivery=DeliveryConfig(
+                db_path=dl.get("db_path", "~/.prefect/backbone.db"),
+                retention_days=dl.get("retention_days", 30),
+            ),
+            telegram=TelegramConfig(
+                allowed_chat_ids=tg.get("allowed_chat_ids", []),
+                topic_routes={int(k): v for k, v in tg.get("topic_routes", {}).items()},
+                group_chat_id=tg.get("group_chat_id"),
+                notification_chat_id=tg.get("notification_chat_id"),
+                topic_discovery_file=tg.get(
+                    "topic_discovery_file",
+                    "~/.claude/state/telegram-topics.json",
+                ),
+            ),
+            daily_routines=DailyRoutineConfig(
+                morning_time=dr.get("morning_time", "08:00"),
+                evening_time=dr.get("evening_time", "18:00"),
+                morning_agents=dr.get("morning_agents", ["ike", "feynman"]),
+                timezone=dr.get("timezone", "Africa/Addis_Ababa"),
+            ),
+            priority_scoring=PriorityScoringConfig(
+                blocking_weight=ps.get("blocking_weight", 1000.0),
+                type_weights=ps.get(
+                    "type_weights",
+                    {
+                        "spec-gap": 100.0,
+                        "bug": 90.0,
+                        "task": 50.0,
+                        "question": 20.0,
+                        "optimization": 10.0,
+                    },
+                ),
+                dependents_multiplier=ps.get("dependents_multiplier", 1.5),
+                age_tiebreaker_weight=ps.get("age_tiebreaker_weight", 0.01),
+            ),
+            capacity_routing=CapacityRoutingConfig(
+                busy_threshold_seconds=cr.get("busy_threshold_seconds", 1800),
+            ),
+            escalation=EscalationConfig(
+                stall_threshold_seconds=es.get("stall_threshold_seconds", 5400),
+                escalation_target=es.get("escalation_target", "ike"),
+                escalation_dedup_seconds=es.get("escalation_dedup_seconds", 1800),
+            ),
+            heartbeat=HeartbeatConfig(
+                schedule_file=hb.get("schedule_file", "~/.claude/state/heartbeat-schedules.json"),
+                default_timezone=hb.get("default_timezone", "Africa/Addis_Ababa"),
+            ),
+        )
 
 
 def _load_webhook_secret() -> str:

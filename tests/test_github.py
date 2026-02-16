@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from src.config import BackboneConfig
+from src.config import BackboneConfig, GitHubConfig
 from src.github import API_BASE, GitHubClient
 
 
@@ -14,8 +14,7 @@ from src.github import API_BASE, GitHubClient
 def config():
     return BackboneConfig(
         github_token="test-token",
-        github_owner="eandualem",
-        github_repo="orchestration",
+        github=GitHubConfig(owner="eandualem", repo="orchestration"),
     )
 
 
@@ -121,3 +120,82 @@ class TestGetIssue:
         assert issue.number == 42
         assert issue.labels.sender == "leo"
         assert issue.labels.issue_type == "task"
+
+
+class TestGetSubIssues:
+    @respx.mock
+    async def test_returns_sub_issues(self, config):
+        url = f"{API_BASE}/repos/eandualem/orchestration/issues/10/sub_issues"
+        respx.get(url).respond(
+            json=[
+                {
+                    "number": 20,
+                    "title": "[task] Sub task 1",
+                    "state": "closed",
+                    "labels": [{"name": "for:feynman"}, {"name": "task"}],
+                },
+                {
+                    "number": 21,
+                    "title": "[task] Sub task 2",
+                    "state": "open",
+                    "labels": [{"name": "for:feynman"}, {"name": "task"}],
+                },
+            ]
+        )
+
+        async with GitHubClient(config) as gh:
+            subs = await gh.get_sub_issues(10)
+
+        assert len(subs) == 2
+        assert subs[0].number == 20
+        assert subs[0].state == "closed"
+        assert subs[1].number == 21
+        assert subs[1].state == "open"
+
+    @respx.mock
+    async def test_404_returns_empty(self, config):
+        url = f"{API_BASE}/repos/eandualem/orchestration/issues/99/sub_issues"
+        respx.get(url).respond(status_code=404)
+
+        async with GitHubClient(config) as gh:
+            subs = await gh.get_sub_issues(99)
+
+        assert subs == []
+
+    @respx.mock
+    async def test_empty_sub_issues(self, config):
+        url = f"{API_BASE}/repos/eandualem/orchestration/issues/10/sub_issues"
+        respx.get(url).respond(json=[])
+
+        async with GitHubClient(config) as gh:
+            subs = await gh.get_sub_issues(10)
+
+        assert subs == []
+
+
+class TestCountOpenSubIssues:
+    @respx.mock
+    async def test_counts_open_only(self, config):
+        url = f"{API_BASE}/repos/eandualem/orchestration/issues/10/sub_issues"
+        respx.get(url).respond(
+            json=[
+                {"number": 20, "title": "Sub 1", "state": "closed", "labels": []},
+                {"number": 21, "title": "Sub 2", "state": "open", "labels": []},
+                {"number": 22, "title": "Sub 3", "state": "open", "labels": []},
+            ]
+        )
+
+        async with GitHubClient(config) as gh:
+            count = await gh.count_open_sub_issues(10)
+
+        assert count == 2
+
+    @respx.mock
+    async def test_error_returns_zero(self, config):
+        url = f"{API_BASE}/repos/eandualem/orchestration/issues/99/sub_issues"
+        respx.get(url).respond(status_code=500)
+
+        async with GitHubClient(config) as gh:
+            count = await gh.count_open_sub_issues(99)
+
+        assert count == 0
