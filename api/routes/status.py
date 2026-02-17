@@ -31,12 +31,13 @@ async def get_system_status(
 
     agents: list[EnrichedAgent] = []
     for entity, session in config.entities.sessions.items():
-        agent = await _build_enriched_agent(session, entity, config)
+        agent = await _build_enriched_agent(session, entity, config, agent_type="named_entity")
         agents.append(agent)
     named_sessions = set(config.entities.sessions.values())
+    service_sessions = config.entities.service_sessions
     for session in active:
-        if session not in named_sessions:
-            agent = await _build_enriched_agent(session, session, config)
+        if session not in named_sessions and session not in service_sessions:
+            agent = await _build_enriched_agent(session, session, config, agent_type="coding_agent")
             agents.append(agent)
 
     failed_rows = await db.get_failed_deliveries(limit=1000)

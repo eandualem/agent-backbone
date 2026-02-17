@@ -33,6 +33,7 @@ class EnrichedAgent(BaseModel):
     entity: str
     display_name: str = ""
     role: str = ""
+    type: str = "coding_agent"  # "named_entity" | "coding_agent"
     state: str = "unknown"
     current_issue: int | None = None
     online: bool = False
@@ -176,6 +177,31 @@ class WorkflowInfo(BaseModel):
     name: str
     description: str = ""
     module: str = ""
+    source: str = "prefect"
+    last_run: str | None = None
+    steps: list[dict] = Field(default_factory=list)
+
+
+class WorkflowCreateRequest(BaseModel):
+    """Request body for creating a JSON workflow."""
+
+    name: str
+    description: str = ""
+    steps: list[dict]
+
+
+class AgentStartRequest(BaseModel):
+    """Optional request body for starting an agent session."""
+
+    working_directory: str | None = None
+    runtime: str | None = None
+
+
+class RuntimeInfo(BaseModel):
+    """Runtime option for agent sessions."""
+
+    id: str
+    display_name: str
 
 
 # --- Prefect ---
@@ -215,3 +241,143 @@ class FileNode(BaseModel):
     type: str  # "file" or "directory"
     path: str
     children: list[FileNode] | None = None
+
+
+class FileWriteRequest(BaseModel):
+    """Request body for writing file content."""
+
+    path: str
+    content: str
+
+
+# --- Schedule ---
+
+
+class ScheduleEntry(BaseModel):
+    """A single schedule item for today."""
+
+    id: str  # "{entity}-{HH:MM}" or slugified personal ID
+    entity: str
+    time: str  # "HH:MM"
+    label: str
+    type: str = "heartbeat"  # "heartbeat" | "personal"
+    done: bool = False
+
+
+class PersonalScheduleCreate(BaseModel):
+    """Request body for creating a personal schedule item."""
+
+    time: str  # "HH:MM"
+    label: str
+    recurring: bool = False
+    days: list[int] | None = None  # 0=Sun, 1=Mon, ..., 6=Sat
+
+
+# --- Activity ---
+
+
+class ActivityEvent(BaseModel):
+    """Unified activity timeline event."""
+
+    ts: float
+    type: str  # "action" | "delivery" | "heartbeat"
+    entity: str
+    summary: str
+
+
+# --- Notes ---
+
+
+class NoteItem(BaseModel):
+    """Note list entry (preview)."""
+
+    id: str  # relative path from ~/notes/
+    title: str
+    preview: str = ""
+    modified: str = ""  # ISO 8601
+
+
+class NoteDetail(BaseModel):
+    """Full note content."""
+
+    id: str
+    title: str
+    content: str
+    modified: str = ""
+
+
+class NoteCreate(BaseModel):
+    """Request body for creating a note."""
+
+    title: str
+    content: str
+    subdir: str = ""
+
+
+class NoteUpdate(BaseModel):
+    """Request body for updating a note."""
+
+    content: str
+
+
+# --- Rooms ---
+
+
+class RoomMessage(BaseModel):
+    """A single message in a room transcript."""
+
+    id: str
+    sender: str
+    recipients: list[str]
+    mode: str  # "directed" | "broadcast" | "response"
+    content: str
+    timestamp: float
+
+
+class Room(BaseModel):
+    """Meeting room with participants and transcript."""
+
+    id: str
+    title: str
+    description: str = ""
+    moderator: str
+    participants: list[str]
+    state: str = "active"
+    transcript: list[RoomMessage] = Field(default_factory=list)
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+
+class RoomCreate(BaseModel):
+    """Request body for creating a room."""
+
+    title: str
+    description: str = ""
+    moderator: str
+    participants: list[str]
+
+
+class DirectedMessageRequest(BaseModel):
+    """Request body for directed message."""
+
+    target: str
+    content: str
+
+
+class BroadcastMessageRequest(BaseModel):
+    """Request body for broadcast message."""
+
+    content: str
+
+
+class ResponseMessageRequest(BaseModel):
+    """Request body for participant response."""
+
+    sender: str
+    content: str
+
+
+class RoomStateUpdate(BaseModel):
+    """Request body for updating room state."""
+
+    state: str

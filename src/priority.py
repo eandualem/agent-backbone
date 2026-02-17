@@ -28,6 +28,6 @@ def compute_priority_score(
     else:
         dependents_bonus = 0.0
 
-    age_bonus = (10000 - issue.number) * config.age_tiebreaker_weight
+    age_bonus = max(0, 10000 - issue.number) * config.age_tiebreaker_weight
 
     return base + blocking_bonus + dependents_bonus + age_bonus

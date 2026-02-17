@@ -79,6 +79,9 @@ class TestGetSystemStatus:
         assert data["pending_issues"] == 3
         assert data["failed_deliveries"] == 0
         assert len(data["agents"]) == 5
+        # Named entities get type "named_entity"
+        for agent in data["agents"]:
+            assert agent["type"] == "named_entity"
 
     async def test_includes_unnamed_sessions_as_agents(
         self, api_client, auth_headers, config, api_app
@@ -108,6 +111,47 @@ class TestGetSystemStatus:
         assert data["agent_count"] == 6
         sessions_in_agents = [a["session"] for a in data["agents"]]
         assert "platform-api" in sessions_in_agents
+        # Verify type classification
+        coding = next(a for a in data["agents"] if a["session"] == "platform-api")
+        assert coding["type"] == "coding_agent"
+        named = next(a for a in data["agents"] if a["session"] == "feynman")
+        assert named["type"] == "named_entity"
+
+    async def test_excludes_service_sessions(self, api_client, auth_headers, config, api_app):
+        """Service sessions (ngrok, prefect-*) are excluded from status digest."""
+        snapshot = _idle_snapshot()
+        mock_gh = AsyncMock()
+        mock_gh.list_issues = AsyncMock(return_value=[])
+        api_app.dependency_overrides[get_github] = lambda: mock_gh
+
+        with (
+            patch("api.routes.status.list_sessions", new_callable=AsyncMock) as mock_list,
+            patch("api.routes.agents.session_exists", new_callable=AsyncMock) as mock_exists,
+            patch("api.routes.agents.get_agent_state", new_callable=AsyncMock) as mock_state,
+        ):
+            mock_list.return_value = [
+                "feynman",
+                "ike",
+                "platform-api",
+                "ngrok",
+                "prefect-worker",
+                "prefect-server",
+                "telegram-bot",
+            ]
+            mock_exists.return_value = True
+            mock_state.return_value = snapshot
+
+            resp = await api_client.get("/api/status", headers=auth_headers)
+
+        del api_app.dependency_overrides[get_github]
+        assert resp.status_code == 200
+        data = resp.json()
+        sessions = [a["session"] for a in data["agents"]]
+        assert "platform-api" in sessions
+        for svc in ("ngrok", "prefect-worker", "prefect-server", "telegram-bot"):
+            assert svc not in sessions
+        # 5 named + 1 coding agent (platform-api), no services
+        assert data["agent_count"] == 6
 
     async def test_counts_failed_deliveries(
         self, status_client_with_failures, auth_headers, status_app_with_failures

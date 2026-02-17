@@ -65,13 +65,17 @@ def create_app() -> FastAPI:
     from fastapi import Depends
 
     from api.routes.actions import router as actions_router
+    from api.routes.activity import router as activity_router
     from api.routes.agents import router as agents_router
     from api.routes.deliveries import router as deliveries_router
     from api.routes.files import router as files_router
     from api.routes.heartbeats import router as heartbeats_router
     from api.routes.issues import router as issues_router
+    from api.routes.notes import router as notes_router
     from api.routes.plans import router as plans_router
     from api.routes.prefect import router as prefect_router
+    from api.routes.rooms import router as rooms_router
+    from api.routes.schedule import router as schedule_router
     from api.routes.status import router as status_router
     from api.routes.workflows import router as workflows_router
 
@@ -86,6 +90,10 @@ def create_app() -> FastAPI:
         files_router,
         prefect_router,
         actions_router,
+        schedule_router,
+        activity_router,
+        notes_router,
+        rooms_router,
     ]
     for r in api_routers:
         app.include_router(r, dependencies=[Depends(require_api_key)])

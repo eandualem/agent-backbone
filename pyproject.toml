@@ -12,6 +12,7 @@ dependencies = [
     "python-telegram-bot>=21.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
+    "croniter>=3.0",
 ]
 
 [dependency-groups]

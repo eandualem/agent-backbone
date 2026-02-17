@@ -1,15 +1,18 @@
 """Workflow registry — discovers and catalogs workflow templates.
 
 Scans flows/workflows/ for modules containing @flow-decorated functions.
+Also discovers JSON-defined workflows from a configurable directory.
 Provides listing and lookup by name for Telegram /workflow command and CLI.
 """
 
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import pkgutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from prefect import Flow
 
@@ -24,14 +27,18 @@ class WorkflowEntry:
 
     name: str
     description: str
-    module: str
-    flow_fn: Flow
+    module: str = ""
+    flow_fn: Flow | None = None
+    source: str = "prefect"  # "prefect" or "json"
+    last_run: str | None = None
+    steps: list[dict] = field(default_factory=list)
 
 
 class WorkflowRegistry:
     """Discovers and provides access to workflow templates.
 
     Scans flows/workflows/ for modules with @flow-decorated callables.
+    Optionally discovers JSON-defined workflows from a directory.
     """
 
     def __init__(self) -> None:
@@ -41,12 +48,12 @@ class WorkflowRegistry:
     def workflows(self) -> dict[str, WorkflowEntry]:
         return dict(self._workflows)
 
-    def discover(self) -> int:
+    def _discover_prefect_flows(self) -> int:
         """Scan flows/workflows/ and register all @flow functions.
 
-        Returns the number of workflows discovered.
+        Returns the number of Prefect workflows discovered.
         """
-        self._workflows.clear()
+        count = 0
         package = flows.workflows
         package_path = package.__path__
 
@@ -70,12 +77,62 @@ class WorkflowRegistry:
                         description=(obj.description or obj.fn.__doc__ or "").strip(),
                         module=full_name,
                         flow_fn=obj,
+                        source="prefect",
                     )
                     self._workflows[entry.name] = entry
+                    count += 1
                     log.debug("Registered workflow: %s from %s", entry.name, full_name)
 
-        log.info("Discovered %d workflow(s)", len(self._workflows))
-        return len(self._workflows)
+        return count
+
+    def discover_json_workflows(self, json_dir: Path) -> int:
+        """Discover JSON-defined workflows from a directory.
+
+        Each .json file defines one workflow with name, description, steps,
+        and optional last_run timestamp.
+
+        Returns the number of JSON workflows discovered.
+        """
+        count = 0
+        if not json_dir.is_dir():
+            return 0
+
+        for path in sorted(json_dir.glob("*.json")):
+            try:
+                data = json.loads(path.read_text())
+            except (json.JSONDecodeError, OSError):
+                log.warning("Failed to read workflow JSON: %s", path)
+                continue
+
+            name = data.get("name", path.stem)
+            entry = WorkflowEntry(
+                name=name,
+                description=data.get("description", ""),
+                source="json",
+                last_run=data.get("last_run"),
+                steps=data.get("steps", []),
+            )
+            self._workflows[entry.name] = entry
+            count += 1
+            log.debug("Registered JSON workflow: %s from %s", name, path)
+
+        return count
+
+    def discover(self, json_dir: Path | None = None) -> int:
+        """Discover all workflows from Prefect flows and optionally JSON.
+
+        Args:
+            json_dir: Optional directory containing JSON workflow definitions.
+                When None, only Prefect flows are discovered.
+
+        Returns the total number of workflows discovered.
+        """
+        self._workflows.clear()
+        count = self._discover_prefect_flows()
+        if json_dir is not None:
+            count += self.discover_json_workflows(json_dir)
+        log.info("Discovered %d workflow(s)", count)
+        return count
 
     def get(self, name: str) -> WorkflowEntry | None:
         """Look up a workflow by name."""

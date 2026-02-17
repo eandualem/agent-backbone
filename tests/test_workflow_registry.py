@@ -74,3 +74,78 @@ async def test_discover_clears_previous():
     first = reg.discover()
     second = reg.discover()
     assert first == second
+
+
+# ---------------------------------------------------------------------------
+# JSON workflow discovery
+# ---------------------------------------------------------------------------
+
+
+async def test_discover_json_workflows(tmp_path):
+    """JSON workflows are discovered from a directory."""
+    import json
+
+    wf_data = {
+        "name": "test-json",
+        "description": "A json workflow",
+        "steps": [{"action": "start", "session": "x"}],
+    }
+    (tmp_path / "test-json.json").write_text(json.dumps(wf_data))
+
+    reg = WorkflowRegistry()
+    reg.discover(json_dir=tmp_path)
+    assert reg.get("test-json") is not None
+    entry = reg.get("test-json")
+    assert entry.source == "json"
+    assert entry.steps == [{"action": "start", "session": "x"}]
+
+
+async def test_discover_json_with_last_run(tmp_path):
+    """JSON workflow last_run is preserved."""
+    import json
+
+    wf_data = {
+        "name": "timed-wf",
+        "description": "",
+        "steps": [],
+        "last_run": "2026-02-16T00:00:00",
+    }
+    (tmp_path / "timed-wf.json").write_text(json.dumps(wf_data))
+
+    reg = WorkflowRegistry()
+    reg.discover(json_dir=tmp_path)
+    entry = reg.get("timed-wf")
+    assert entry is not None
+    assert entry.last_run == "2026-02-16T00:00:00"
+
+
+async def test_discover_without_json_dir():
+    """Calling discover() without json_dir only finds Prefect flows (backward compat)."""
+    reg = WorkflowRegistry()
+    count = reg.discover()
+    assert count >= 3  # same as test_discover_finds_workflows
+    # Verify all entries are Prefect source
+    for entry in reg.workflows.values():
+        assert entry.source == "prefect"
+
+
+async def test_discover_json_empty_dir(tmp_path):
+    """Empty JSON dir doesn't add workflows but doesn't fail."""
+    reg = WorkflowRegistry()
+    count = reg.discover(json_dir=tmp_path)
+    # Only Prefect workflows
+    assert count >= 3
+
+
+async def test_json_entry_fields(tmp_path):
+    """JSON entry has correct field defaults."""
+    import json
+
+    (tmp_path / "minimal.json").write_text(json.dumps({"name": "min", "steps": []}))
+    reg = WorkflowRegistry()
+    reg.discover(json_dir=tmp_path)
+    entry = reg.get("min")
+    assert entry is not None
+    assert entry.flow_fn is None
+    assert entry.module == ""
+    assert entry.source == "json"

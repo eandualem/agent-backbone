@@ -71,6 +71,9 @@ class EntityConfig:
     skip: frozenset[str] = frozenset({"elias"})
     fallback: dict[str, str] = field(default_factory=lambda: {"coding-agent": "ike"})
     coding_repos: frozenset[str] = field(default_factory=lambda: _DEFAULT_CODING_REPOS)
+    service_sessions: frozenset[str] = frozenset(
+        {"ngrok", "prefect-worker", "prefect-server", "telegram-bot"}
+    )
 
     @property
     def all_entities(self) -> list[str]:
@@ -273,6 +276,12 @@ class BackboneConfig:
                 skip=frozenset(ent.get("skip", ["elias"])),
                 fallback=ent.get("fallback", {"coding-agent": "ike"}),
                 coding_repos=frozenset(ent.get("coding_repos", _DEFAULT_CODING_REPOS)),
+                service_sessions=frozenset(
+                    ent.get(
+                        "service_sessions",
+                        ["ngrok", "prefect-worker", "prefect-server", "telegram-bot"],
+                    )
+                ),
             ),
             dedup=DedupConfig(
                 notification_window_seconds=dd.get("notification_window_seconds", 10),

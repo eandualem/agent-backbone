@@ -82,6 +82,16 @@ class TestComputePriorityScore:
         # base=200 + blocking=500 + dependents=200*(2^1 - 1)=200 + age=0
         assert abs(score - 900.0) < 0.001
 
+    def test_high_issue_number_no_negative_age(self):
+        """Issue numbers > 10000 should not produce negative age bonus."""
+        config = PriorityScoringConfig(age_tiebreaker_weight=0.01)
+        high = _make_issue(number=15000, issue_type="task")
+
+        score = compute_priority_score(high, config)
+
+        # base=50 + age=0 (clamped, not negative)
+        assert score >= 50.0
+
     def test_zero_dependents_no_bonus(self):
         config = PriorityScoringConfig(age_tiebreaker_weight=0.0)
         issue = _make_issue(issue_type="task")

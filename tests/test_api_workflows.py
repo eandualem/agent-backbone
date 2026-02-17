@@ -124,3 +124,136 @@ class TestRunWorkflow:
 
         assert resp.status_code == 500
         assert "Something broke" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/workflows  (create JSON workflow)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateWorkflow:
+    async def test_create_workflow_success(self, client, auth_headers, tmp_path):
+        """Creates a JSON workflow file and returns 201 with source=json."""
+        with patch("api.routes.workflows._JSON_WORKFLOW_DIR", tmp_path):
+            resp = await client.post(
+                "/api/workflows",
+                json={
+                    "name": "my-wf",
+                    "description": "Test workflow",
+                    "steps": [{"action": "start", "session": "ike"}],
+                },
+                headers=auth_headers,
+            )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "my-wf"
+        assert data["source"] == "json"
+        # Verify file was written
+        assert (tmp_path / "my-wf.json").exists()
+
+    async def test_create_duplicate_returns_409(self, client, auth_headers, tmp_path):
+        """Returns 409 when a workflow with the same name already exists."""
+        (tmp_path / "existing.json").write_text("{}")
+        with patch("api.routes.workflows._JSON_WORKFLOW_DIR", tmp_path):
+            resp = await client.post(
+                "/api/workflows",
+                json={
+                    "name": "existing",
+                    "description": "Dup",
+                    "steps": [{"action": "stop", "session": "x"}],
+                },
+                headers=auth_headers,
+            )
+        assert resp.status_code == 409
+
+    async def test_create_invalid_steps_returns_422(self, client, auth_headers, tmp_path):
+        """Returns 422 when a step is missing required fields."""
+        with patch("api.routes.workflows._JSON_WORKFLOW_DIR", tmp_path):
+            resp = await client.post(
+                "/api/workflows",
+                json={
+                    "name": "bad-wf",
+                    "description": "",
+                    "steps": [{"action": "start"}],  # missing session
+                },
+                headers=auth_headers,
+            )
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# POST /api/workflows/{name}/run  (JSON workflow execution)
+# ---------------------------------------------------------------------------
+
+
+class TestRunJsonWorkflow:
+    async def test_run_json_workflow(self, client, auth_headers, tmp_path):
+        """Executes a JSON workflow via the workflow engine and returns result."""
+        entry = WorkflowEntry(
+            name="json-wf",
+            description="A json workflow",
+            source="json",
+            steps=[{"action": "stop", "session": "test"}],
+        )
+        registry = _make_registry(entry)
+
+        with (
+            patch("api.routes.workflows._get_registry", return_value=registry),
+            patch(
+                "api.routes.workflows.execute_workflow_steps",
+                new_callable=AsyncMock,
+            ) as mock_exec,
+            patch("api.routes.workflows._JSON_WORKFLOW_DIR", tmp_path),
+        ):
+            mock_exec.return_value = {
+                "ok": True,
+                "steps": [{"action": "stop", "session": "test", "ok": True, "detail": "stopped"}],
+            }
+            resp = await client.post("/api/workflows/json-wf/run", headers=auth_headers)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["workflow"] == "json-wf"
+        assert "result" in data
+
+
+# ---------------------------------------------------------------------------
+# GET /api/workflows  (dual-mode listing: prefect + json)
+# ---------------------------------------------------------------------------
+
+
+class TestListDualMode:
+    async def test_list_includes_source_and_last_run(self, client, auth_headers):
+        """List endpoint includes source and last_run for both Prefect and JSON workflows."""
+        prefect_entry = WorkflowEntry(
+            name="prefect-wf",
+            description="Prefect one",
+            module="flows.workflows.test",
+            flow_fn=AsyncMock(),
+            source="prefect",
+        )
+        json_entry = WorkflowEntry(
+            name="json-wf",
+            description="JSON one",
+            source="json",
+            last_run="2026-02-16T10:00:00+00:00",
+            steps=[{"action": "start", "session": "x"}],
+        )
+        registry = _make_registry(prefect_entry, json_entry)
+
+        with patch("api.routes.workflows._get_registry", return_value=registry):
+            resp = await client.get("/api/workflows", headers=auth_headers)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        sources = {item["name"]: item["source"] for item in data["items"]}
+        assert sources["prefect-wf"] == "prefect"
+        assert sources["json-wf"] == "json"
+        json_item = next(i for i in data["items"] if i["name"] == "json-wf")
+        assert json_item["last_run"] == "2026-02-16T10:00:00+00:00"
+        # JSON workflows include their steps; Prefect workflows return empty
+        assert json_item["steps"] == [{"action": "start", "session": "x"}]
+        prefect_item = next(i for i in data["items"] if i["name"] == "prefect-wf")
+        assert prefect_item["steps"] == []

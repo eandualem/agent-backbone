@@ -2,43 +2,116 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
-from api.models import ListEnvelope, WorkflowInfo
+from api.deps import get_config
+from api.models import ListEnvelope, WorkflowCreateRequest, WorkflowInfo
+from src.config import BackboneConfig
+from src.workflow_engine import execute_workflow_steps
 from src.workflow_registry import WorkflowRegistry
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["workflows"])
 
+_JSON_WORKFLOW_DIR = Path.home() / ".claude" / "state" / "workflows"
 
-def _get_registry() -> WorkflowRegistry:
+
+def _get_registry(json_dir: Path | None = None) -> WorkflowRegistry:
     """Get a fresh workflow registry with discovered workflows."""
     registry = WorkflowRegistry()
-    registry.discover()
+    registry.discover(json_dir=json_dir if json_dir is not None else _JSON_WORKFLOW_DIR)
     return registry
 
 
 @router.get("/workflows", response_model=ListEnvelope[WorkflowInfo])
 async def list_workflows():
-    """List all available workflow templates."""
+    """List all available workflow templates (Prefect + JSON)."""
     registry = _get_registry()
     items = [
-        WorkflowInfo(name=entry.name, description=entry.description, module=entry.module)
+        WorkflowInfo(
+            name=entry.name,
+            description=entry.description,
+            module=entry.module,
+            source=entry.source,
+            last_run=entry.last_run,
+            steps=entry.steps,
+        )
         for entry in registry.workflows.values()
     ]
     return ListEnvelope(items=items, total=len(items))
 
 
+@router.post("/workflows", response_model=WorkflowInfo, status_code=201)
+async def create_workflow(body: WorkflowCreateRequest):
+    """Create a new JSON-defined workflow.
+
+    Stores the workflow as a JSON file in ~/.claude/state/workflows/.
+    Returns 409 if a workflow with the same name already exists.
+    """
+    _JSON_WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+    file_path = _JSON_WORKFLOW_DIR / f"{body.name}.json"
+
+    if file_path.exists():
+        raise HTTPException(status_code=409, detail=f"Workflow '{body.name}' already exists")
+
+    # Validate steps have required fields
+    for i, step in enumerate(body.steps):
+        if "action" not in step or "session" not in step:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Step {i} missing required 'action' or 'session' field",
+            )
+
+    data = {
+        "name": body.name,
+        "description": body.description,
+        "steps": body.steps,
+        "last_run": None,
+    }
+    file_path.write_text(json.dumps(data, indent=2))
+
+    return WorkflowInfo(
+        name=body.name,
+        description=body.description,
+        source="json",
+    )
+
+
 @router.post("/workflows/{name}/run")
-async def run_workflow(name: str):
-    """Execute a workflow by name."""
+async def run_workflow(name: str, config: BackboneConfig = Depends(get_config)):
+    """Execute a workflow by name.
+
+    For Prefect workflows: invokes the flow function directly.
+    For JSON workflows: executes steps via the workflow engine.
+    """
     registry = _get_registry()
     entry = registry.get(name)
     if not entry:
         raise HTTPException(status_code=404, detail=f"Workflow '{name}' not found")
+
+    if entry.source == "json":
+        result = await execute_workflow_steps(entry.steps, config)
+
+        # Update last_run in the JSON file
+        file_path = _JSON_WORKFLOW_DIR / f"{name}.json"
+        if file_path.exists():
+            try:
+                from datetime import UTC, datetime
+
+                data = json.loads(file_path.read_text())
+                data["last_run"] = datetime.now(UTC).isoformat()
+                file_path.write_text(json.dumps(data, indent=2))
+            except Exception:
+                log.warning("Failed to update last_run for workflow '%s'", name)
+
+        return {"ok": result["ok"], "workflow": name, "result": result}
+
+    # Prefect workflow
     try:
         result = await entry.flow_fn()
         return {"ok": True, "workflow": name, "result": str(result)}

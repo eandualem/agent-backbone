@@ -5,16 +5,17 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from api.deps import get_config
-from api.models import AgentStateDetail, EnrichedAgent, ListEnvelope
+from api.models import AgentStartRequest, AgentStateDetail, EnrichedAgent, ListEnvelope, RuntimeInfo
 from src.agent_state import get_agent_state
 from src.config import BackboneConfig
 from src.tmux import (
     capture_pane,
     list_sessions,
     list_sessions_rich,
+    resolve_agent_dir,
     send_message,
     session_exists,
     start_session,
@@ -24,6 +25,14 @@ from src.tmux import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agents"])
+
+# Runtime registry
+_RUNTIMES = {
+    "claude": {"display_name": "Claude Code", "command": "claude"},
+    "gemini": {"display_name": "Gemini CLI", "command": "gemini"},
+    "codex": {"display_name": "Codex", "command": "codex"},
+    "shell": {"display_name": "Plain Shell", "command": None},
+}
 
 # Named entity display info
 _ENTITY_DISPLAY = {
@@ -40,6 +49,7 @@ async def _build_enriched_agent(
     entity: str,
     config: BackboneConfig,
     tmux_info: dict | None = None,
+    agent_type: str = "coding_agent",
 ) -> EnrichedAgent:
     """Build an EnrichedAgent from session name and entity."""
     online = await session_exists(session)
@@ -65,6 +75,7 @@ async def _build_enriched_agent(
         entity=entity,
         display_name=display.get("display_name", session),
         role=display.get("role", "Coding Agent"),
+        type=agent_type,
         state=snapshot.state.value,
         current_issue=snapshot.current_issue,
         online=online,
@@ -87,15 +98,20 @@ async def list_agents(config: BackboneConfig = Depends(get_config)):
 
     # Named entities
     for entity, session in config.entities.sessions.items():
-        agent = await _build_enriched_agent(session, entity, config, tmux_lookup.get(session))
+        agent = await _build_enriched_agent(
+            session, entity, config, tmux_lookup.get(session), agent_type="named_entity"
+        )
         agents.append(agent)
 
-    # Discover coding agents from tmux sessions
+    # Discover coding agents from tmux sessions (exclude services)
     active = await list_sessions()
     named_sessions = set(config.entities.sessions.values())
+    service_sessions = config.entities.service_sessions
     for session in active:
-        if session not in named_sessions:
-            agent = await _build_enriched_agent(session, session, config, tmux_lookup.get(session))
+        if session not in named_sessions and session not in service_sessions:
+            agent = await _build_enriched_agent(
+                session, session, config, tmux_lookup.get(session), agent_type="coding_agent"
+            )
             agents.append(agent)
 
     return ListEnvelope(items=agents, total=len(agents))
@@ -133,11 +149,43 @@ async def send_agent_message(session: str, body: dict):
     return {"ok": True, "session": session}
 
 
+@router.get("/runtimes", response_model=list[RuntimeInfo])
+async def list_runtimes():
+    """List available runtimes for agent sessions."""
+    return [RuntimeInfo(id=k, display_name=v["display_name"]) for k, v in _RUNTIMES.items()]
+
+
 @router.post("/agents/{session}/start")
-async def start_agent_session(session: str):
-    """Start a new tmux session for an agent."""
-    ok = await start_session(session)
-    return {"ok": ok, "session": session}
+async def start_agent_session(
+    session: str,
+    body: AgentStartRequest | None = Body(default=None),
+):
+    """Start a new tmux session for an agent.
+
+    Optionally accepts a JSON body with working_directory and runtime.
+    If working_directory is not provided, resolves from session name.
+    If runtime is not provided, defaults to "claude".
+    """
+    runtime_id = (body.runtime if body else None) or "claude"
+    if runtime_id not in _RUNTIMES:
+        available = list(_RUNTIMES.keys())
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown runtime '{runtime_id}'. Available: {available}",
+        )
+    runtime_entry = _RUNTIMES[runtime_id]
+    working_dir = (body.working_directory if body else None) or resolve_agent_dir(session)
+    ok = await start_session(
+        session,
+        working_dir=working_dir or None,
+        command=runtime_entry["command"],
+    )
+    return {
+        "ok": ok,
+        "session": session,
+        "working_directory": working_dir or None,
+        "runtime": runtime_id,
+    }
 
 
 @router.post("/agents/{session}/stop")

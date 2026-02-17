@@ -6,7 +6,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.tmux import list_sessions, send_keys, send_message, session_exists
+from src.tmux import (
+    list_sessions,
+    resolve_agent_dir,
+    send_keys,
+    send_message,
+    session_exists,
+    start_session,
+)
 
 
 @pytest.fixture
@@ -116,3 +123,62 @@ class TestSendKeys:
     async def test_send_keys_session_offline(self):
         with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
             assert await send_keys("offline", "Escape") is False
+
+
+class TestResolveAgentDir:
+    def test_named_entity_feynman(self):
+        result = resolve_agent_dir("feynman")
+        assert result.endswith("orchestration")
+
+    def test_named_entity_ike(self):
+        result = resolve_agent_dir("ike")
+        assert "ws/core/ike" in result
+
+    def test_coding_repo_found(self, tmp_path):
+        with patch("src.tmux._CODE_BASE_DIRS", [tmp_path]):
+            (tmp_path / "my-repo").mkdir()
+            result = resolve_agent_dir("my-repo")
+            assert result == str(tmp_path / "my-repo")
+
+    def test_unknown_returns_empty(self):
+        result = resolve_agent_dir("nonexistent-xyz")
+        assert result == ""
+
+
+class TestStartSession:
+    async def test_start_with_working_dir_and_command(self, mock_subprocess):
+        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+            proc = AsyncMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.wait = AsyncMock()
+            mock_subprocess.return_value = proc
+            result = await start_session(
+                "test",
+                working_dir="/tmp/wd",
+                command="claude",
+                apply_theme=False,
+            )
+            assert result is True
+            call_args = mock_subprocess.call_args_list[0][0]  # first call positional args
+            assert "-c" in call_args
+            assert "/tmp/wd" in call_args
+            assert "claude" in call_args
+
+    async def test_start_already_exists(self, mock_subprocess):
+        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=True):
+            result = await start_session("ike", apply_theme=False)
+            assert result is True
+            mock_subprocess.assert_not_called()
+
+    async def test_start_without_working_dir(self, mock_subprocess):
+        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+            proc = AsyncMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.wait = AsyncMock()
+            mock_subprocess.return_value = proc
+            result = await start_session("test", apply_theme=False)
+            assert result is True
+            call_args = mock_subprocess.call_args_list[0][0]
+            assert "-c" not in call_args

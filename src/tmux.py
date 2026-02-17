@@ -9,8 +9,46 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# Named entity → working directory mapping
+_ENTITY_DIRS: dict[str, str] = {
+    "feynman": str(Path.home() / "orchestration"),
+    "ike": str(Path.home() / "ws" / "core" / "ike"),
+    "leo": str(Path.home() / "ws" / "leo"),
+    "ada": str(Path.home() / "ws" / "core" / "spec"),
+    "brunel": str(Path.home() / "infra"),
+}
+
+# Base directories to search for coding repos
+_CODE_BASE_DIRS = [
+    Path.home() / "ws" / "core" / "code" / "Arclio",
+    Path.home() / "ws" / "core" / "code" / "Loveble",
+    Path.home() / "ws" / "core" / "code" / "WF",
+]
+
+
+def resolve_agent_dir(session_name: str) -> str:
+    """Resolve the working directory for an agent session.
+
+    Named entities map to fixed directories. Coding repos search
+    base directories for a matching folder name.
+
+    Returns empty string if unresolvable.
+    """
+    # Named entities
+    if session_name in _ENTITY_DIRS:
+        return _ENTITY_DIRS[session_name]
+
+    # Coding repos: check base dirs for a matching folder
+    for base in _CODE_BASE_DIRS:
+        candidate = base / session_name
+        if candidate.is_dir():
+            return str(candidate)
+
+    return ""
 
 
 async def session_exists(session_name: str) -> bool:
@@ -125,8 +163,19 @@ async def capture_pane(session_name: str, lines: int = 50) -> str:
     return stdout.decode()
 
 
-async def start_session(session_name: str, command: str | None = None) -> bool:
+async def start_session(
+    session_name: str,
+    working_dir: str | None = None,
+    command: str | None = None,
+    apply_theme: bool = True,
+) -> bool:
     """Start a new detached tmux session.
+
+    Args:
+        session_name: Name for the tmux session.
+        working_dir: Starting directory for the session.
+        command: Shell command to run in the session (e.g. "claude").
+        apply_theme: Whether to apply the tmux theme script after creation.
 
     Returns True if the session was created, False if it already exists or failed.
     """
@@ -135,8 +184,10 @@ async def start_session(session_name: str, command: str | None = None) -> bool:
         return True
 
     args = ["tmux", "new-session", "-d", "-s", session_name]
+    if working_dir:
+        args.extend(["-c", working_dir])
     if command:
-        args.extend(["-c", command])
+        args.append(command)
 
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -148,6 +199,22 @@ async def start_session(session_name: str, command: str | None = None) -> bool:
         log.error("Failed to start session '%s': %s", session_name, stderr.decode())
         return False
     log.info("Started tmux session '%s'", session_name)
+
+    # Apply theme (fire-and-forget, non-critical)
+    if apply_theme:
+        theme_script = Path.home() / "orchestration" / "tmux" / "hooks" / "apply-theme.sh"
+        if theme_script.is_file():
+            try:
+                theme_proc = await asyncio.create_subprocess_exec(
+                    str(theme_script),
+                    session_name,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await theme_proc.wait()
+            except Exception:
+                log.debug("Theme application failed for '%s' (non-critical)", session_name)
+
     return True
 
 

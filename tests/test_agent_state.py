@@ -195,9 +195,7 @@ class TestGetAgentState:
     async def test_stale_idle_trusted(self, tmp_path):
         """Stale idle push state is trusted without pane capture (STATE-17)."""
         state_file = tmp_path / "ike.json"
-        state_file.write_text(
-            json.dumps({"state": "idle", "issue": None, "ts": time.time() - 600})
-        )
+        state_file.write_text(json.dumps({"state": "idle", "issue": None, "ts": time.time() - 600}))
         mock_capture = AsyncMock(return_value="random stuff")
         with patch("src.agent_state.capture_pane", mock_capture):
             result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
@@ -208,9 +206,7 @@ class TestGetAgentState:
     async def test_stale_busy_triggers_pull(self, tmp_path):
         """Stale busy push state falls through to pane parsing."""
         state_file = tmp_path / "ike.json"
-        state_file.write_text(
-            json.dumps({"state": "busy", "issue": None, "ts": time.time() - 600})
-        )
+        state_file.write_text(json.dumps({"state": "busy", "issue": None, "ts": time.time() - 600}))
         with patch(
             "src.agent_state.capture_pane",
             new_callable=AsyncMock,
