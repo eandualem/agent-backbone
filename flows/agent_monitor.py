@@ -26,8 +26,9 @@ from src.notifications import (
     format_unexpected_offline_notification,
 )
 from src.persistence import BackboneDB
+from src.session_bridge import safe_deliver
 from src.telegram import BackboneBot
-from src.tmux import list_sessions, send_message
+from src.tmux import list_sessions
 
 log = logging.getLogger(__name__)
 
@@ -244,7 +245,7 @@ async def _monitor_agents_impl() -> dict:
                         stall["duration_minutes"],
                         stall["entity"],
                     )
-                    await send_message(escalation_session, msg)
+                    await safe_deliver(escalation_session, msg, config, priority=True)
                     log.warning(
                         "Escalated stall: %s on #%s (%dm)",
                         stall["entity"],
@@ -271,8 +272,25 @@ async def _monitor_agents_impl() -> dict:
                         agent["entity"],
                         agent["pending_count"],
                     )
-                    await send_message(escalation_session, msg)
+                    await safe_deliver(escalation_session, msg, config, priority=True)
                     log.warning("Escalated offline: %s", agent["entity"])
+
+                # Mark agent as "unknown" in DB so the next cycle doesn't
+                # re-detect the same offline event.  Re-detection only happens
+                # if the agent comes back online (persists a new state) and
+                # goes offline again — i.e. a real state transition.
+                try:
+                    async with BackboneDB(str(config.delivery.db_file)) as db:
+                        await db.set_agent_state(
+                            session_name=agent["session"],
+                            state="unknown",
+                            current_issue=None,
+                        )
+                except Exception:
+                    log.exception(
+                        "Failed to clear DB state for offline agent %s (non-fatal)",
+                        agent["session"],
+                    )
     except Exception:
         log.exception("Offline detection failed (non-fatal)")
 
@@ -409,7 +427,15 @@ async def _monitor_agents_impl() -> dict:
 
             # Found an unacknowledged, undelivered issue — deliver it
             message = format_next_issue_notification(candidate)
-            if await send_message(session_name, message):
+            delivery_outcome = await safe_deliver(
+                session_name,
+                message,
+                config,
+                issue_number=candidate.number,
+                target_entity=entity,
+                flow_name="agent-monitor",
+            )
+            if delivery_outcome == "delivered":
                 result[entity] = f"delivered_#{candidate.number}"
                 log.info("Delivered pending issue #%d to %s", candidate.number, entity)
                 try:

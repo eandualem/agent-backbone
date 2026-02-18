@@ -51,20 +51,15 @@ class TestOnDependencyResolved:
                     return_value={"parent": parent, "targets": ["feynman"]},
                 ),
                 patch(
-                    "flows.dependency_tracker.session_exists",
+                    "flows.dependency_tracker.safe_deliver",
                     new_callable=AsyncMock,
-                    return_value=True,
-                ),
-                patch(
-                    "flows.dependency_tracker.send_message",
-                    new_callable=AsyncMock,
-                    return_value=True,
-                ) as mock_send,
+                    return_value="delivered",
+                ) as mock_deliver,
             ):
                 result = await on_dependency_resolved.fn(20)
 
         assert "unblocked" in result.get("parent_10", "")
-        assert mock_send.called
+        assert mock_deliver.called
 
     async def test_parent_found_some_open(self):
         """Some sub-issues still open → no notification."""

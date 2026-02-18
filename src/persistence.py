@@ -71,6 +71,20 @@ CREATE TABLE IF NOT EXISTS heartbeats (
     message TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_heartbeats_agent ON heartbeats(agent);
+
+CREATE TABLE IF NOT EXISTS message_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_name TEXT NOT NULL,
+    message TEXT NOT NULL,
+    issue_number INTEGER,
+    target_entity TEXT,
+    flow_name TEXT DEFAULT '',
+    enqueued_at TEXT NOT NULL,
+    delivered_at TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+);
+CREATE INDEX IF NOT EXISTS idx_mq_status ON message_queue(status);
+CREATE INDEX IF NOT EXISTS idx_mq_session ON message_queue(session_name);
 """
 
 
@@ -357,6 +371,52 @@ class BackboneDB:
         )
         row = await cursor.fetchone()
         return row["delivered_at"] if row else None
+
+    # --- Message queue ---
+
+    async def enqueue_message(
+        self,
+        session_name: str,
+        message: str,
+        issue_number: int | None = None,
+        target_entity: str | None = None,
+        flow_name: str = "",
+    ) -> int:
+        """Enqueue a message for later delivery. Returns the row ID."""
+        cursor = await self.conn.execute(
+            """INSERT INTO message_queue
+               (session_name, message, issue_number, target_entity,
+                flow_name, enqueued_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+            (session_name, message, issue_number, target_entity, flow_name, _now_iso()),
+        )
+        await self.conn.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+    async def dequeue_messages(
+        self,
+        session_name: str,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Get pending messages for a session, oldest first."""
+        cursor = await self.conn.execute(
+            """SELECT * FROM message_queue
+               WHERE session_name = ? AND status = 'pending'
+               ORDER BY enqueued_at ASC LIMIT ?""",
+            (session_name, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def mark_message_delivered(self, message_id: int) -> None:
+        """Mark a queued message as delivered."""
+        await self.conn.execute(
+            """UPDATE message_queue
+               SET status = 'delivered', delivered_at = ?
+               WHERE id = ?""",
+            (_now_iso(), message_id),
+        )
+        await self.conn.commit()
 
     async def query_heartbeats(
         self,

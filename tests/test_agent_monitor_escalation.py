@@ -353,9 +353,9 @@ class TestMonitorAgentsIntegration:
                 return_value=[pending_issue],
             ),
             patch(
-                "flows.agent_monitor.send_message",
+                "flows.agent_monitor.safe_deliver",
                 new_callable=AsyncMock,
-                return_value=True,
+                return_value="delivered",
             ),
             patch("flows.agent_monitor.has_commented_on_issue", return_value=False),
             patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
@@ -427,15 +427,23 @@ class TestMonitorAgentsIntegration:
                 return_value=[pending_issue],
             ),
             patch(
-                "flows.agent_monitor.send_message",
+                "flows.agent_monitor.safe_deliver",
                 new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_send,
+                return_value="delivered",
+            ) as mock_deliver,
+            patch("flows.agent_monitor.has_commented_on_issue", return_value=False),
+            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
         ):
+            mock_db = AsyncMock()
+            mock_db.is_acknowledged.return_value = False
+            mock_db.query_deliveries.return_value = []
+            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
             result = await monitor_agents.fn()
 
         assert result["ike"] == "delivered_#10"
-        mock_send.assert_called_once()
+        mock_deliver.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_monitor_skips_recently_delivered(self):
@@ -507,10 +515,10 @@ class TestMonitorAgentsIntegration:
                 return_value=[pending_issue],
             ),
             patch(
-                "flows.agent_monitor.send_message",
+                "flows.agent_monitor.safe_deliver",
                 new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_send,
+                return_value="delivered",
+            ) as mock_deliver,
             patch("flows.agent_monitor.has_commented_on_issue", return_value=False),
             patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
         ):
@@ -520,7 +528,7 @@ class TestMonitorAgentsIntegration:
             result = await monitor_agents.fn()
 
         assert result["ike"] == "no_deliverable"
-        mock_send.assert_not_called()
+        mock_deliver.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_monitor_skips_acknowledged_issue(self):
@@ -581,10 +589,10 @@ class TestMonitorAgentsIntegration:
                 return_value=[pending_issue],
             ),
             patch(
-                "flows.agent_monitor.send_message",
+                "flows.agent_monitor.safe_deliver",
                 new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_send,
+                return_value="delivered",
+            ) as mock_deliver,
             patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
         ):
             mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
@@ -593,7 +601,7 @@ class TestMonitorAgentsIntegration:
             result = await monitor_agents.fn()
 
         assert result["ike"] == "no_deliverable"
-        mock_send.assert_not_called()
+        mock_deliver.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_monitor_records_ack_from_action_log(self):
@@ -658,10 +666,10 @@ class TestMonitorAgentsIntegration:
                 return_value=True,
             ),
             patch(
-                "flows.agent_monitor.send_message",
+                "flows.agent_monitor.safe_deliver",
                 new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_send,
+                return_value="delivered",
+            ) as mock_deliver,
             patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
         ):
             mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
@@ -671,7 +679,7 @@ class TestMonitorAgentsIntegration:
 
         assert result["ike"] == "no_deliverable"
         mock_db.record_acknowledgment.assert_called_once_with(42, "ike")
-        mock_send.assert_not_called()
+        mock_deliver.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_monitor_delivers_second_issue_when_first_acknowledged(self):
@@ -742,10 +750,10 @@ class TestMonitorAgentsIntegration:
             ),
             patch("flows.agent_monitor.has_commented_on_issue", return_value=False),
             patch(
-                "flows.agent_monitor.send_message",
+                "flows.agent_monitor.safe_deliver",
                 new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_send,
+                return_value="delivered",
+            ) as mock_deliver,
             patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
         ):
             mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
@@ -755,7 +763,90 @@ class TestMonitorAgentsIntegration:
 
         # Should skip #49 (acknowledged) and deliver #50
         assert result["ike"] == "delivered_#50"
-        mock_send.assert_called_once()
+        mock_deliver.assert_called_once()
+
+
+class TestOfflineDedup:
+    @pytest.mark.asyncio
+    async def test_offline_clears_db_state(self):
+        """After notifying about an offline agent, DB state is set to 'unknown'
+        so the next monitor cycle doesn't re-detect the same offline event."""
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+
+        with (
+            patch(
+                "flows.agent_monitor.BackboneConfig.from_toml",
+                return_value=BackboneConfig(
+                    github_token="test",
+                    webhook_secret="test",
+                    entities=EntityConfig(
+                        sessions={"ike": "ike", "feynman": "feynman"},
+                        skip=frozenset({"elias"}),
+                    ),
+                    delivery=DeliveryConfig(db_path=":memory:"),
+                    escalation=EscalationConfig(
+                        escalation_target="ike",
+                        escalation_dedup_seconds=1800,
+                    ),
+                    capacity_routing=CapacityRoutingConfig(),
+                ),
+            ),
+            patch(
+                "flows.agent_monitor.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike"],  # feynman is NOT active
+            ),
+            patch("flows.agent_monitor._sync_dependencies", new_callable=AsyncMock),
+            patch(
+                "flows.agent_monitor.check_for_stalls",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "flows.agent_monitor.check_for_unexpected_offline",
+                new_callable=AsyncMock,
+                return_value=[
+                    {"entity": "feynman", "session": "feynman", "pending_count": 0},
+                ],
+            ),
+            patch(
+                "flows.agent_monitor.get_agent_state",
+                new_callable=AsyncMock,
+                return_value=idle_snapshot,
+            ),
+            patch(
+                "flows.agent_monitor.check_pending_issues",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "flows.agent_monitor.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
+        ):
+            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await monitor_agents.fn()
+
+        # Escalation message was sent to ike via safe_deliver
+        mock_deliver.assert_called()
+
+        # DB state for feynman was cleared to "unknown"
+        mock_db.set_agent_state.assert_called_once_with(
+            session_name="feynman",
+            state="unknown",
+            current_issue=None,
+        )
 
 
 class TestPlanWaitingMonitor:
@@ -853,9 +944,9 @@ class TestPlanWaitingMonitor:
                 return_value=[],
             ),
             patch(
-                "flows.agent_monitor.send_message",
+                "flows.agent_monitor.safe_deliver",
                 new_callable=AsyncMock,
-                return_value=True,
+                return_value="delivered",
             ),
             patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
             patch.dict(os.environ, {"TELEGRAM_TOKEN": "test-token"}),

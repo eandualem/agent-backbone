@@ -11,12 +11,11 @@ import logging
 
 from prefect import flow, task
 
-from src.agent_state import get_agent_state, should_deliver
 from src.config import BackboneConfig
 from src.github import GitHubClient
 from src.notifications import format_next_issue_notification
 from src.persistence import BackboneDB
-from src.tmux import send_message, session_exists
+from src.session_bridge import safe_deliver
 
 log = logging.getLogger(__name__)
 
@@ -31,19 +30,6 @@ async def retry_delivery(config: BackboneConfig, delivery: dict) -> str:
     issue_number = delivery["issue_number"]
     target_entity = delivery["target_entity"]
 
-    # Check if session is online
-    if not await session_exists(session_name):
-        return "still_offline"
-
-    # Check agent state
-    state_snap = await get_agent_state(
-        config.agent_state.state_path,
-        session_name,
-        config.agent_state.stale_threshold_seconds,
-    )
-    if not should_deliver(state_snap.state, require_idle=True):
-        return "still_busy"
-
     # Fetch current issue state from GitHub
     async with GitHubClient(config) as gh:
         try:
@@ -56,9 +42,18 @@ async def retry_delivery(config: BackboneConfig, delivery: dict) -> str:
     if issue.state == "closed":
         return "issue_closed"
 
-    # Deliver
+    # Deliver via safe_deliver (handles state checks + enqueue on failure)
     message = format_next_issue_notification(issue)
-    if await send_message(session_name, message):
+    outcome = await safe_deliver(
+        session_name,
+        message,
+        config,
+        issue_number=issue_number,
+        target_entity=target_entity,
+        flow_name="delivery-retry",
+    )
+
+    if outcome == "delivered":
         log.info(
             "Retry delivered #%d to %s (%s)",
             issue_number,
@@ -66,6 +61,11 @@ async def retry_delivery(config: BackboneConfig, delivery: dict) -> str:
             session_name,
         )
         return "retried"
+    if outcome == "offline":
+        return "still_offline"
+    busy_states = ("agent_working", "plan_waiting", "copy_mode", "user_interacting", "grace_period")
+    if outcome in busy_states:
+        return "still_busy"
     return "delivery_failed"
 
 
@@ -101,6 +101,31 @@ async def delivery_retry() -> dict:
                     outcome="retried",
                     flow_name="delivery-retry",
                 )
+
+    # Drain message queue: deliver pending queued messages
+    try:
+        from src.tmux import list_sessions as _list_sessions
+
+        active_sessions = set(await _list_sessions())
+        async with BackboneDB(str(config.delivery.db_file)) as db:
+            for session_name in active_sessions:
+                queued = await db.dequeue_messages(session_name, limit=5)
+                for msg_record in queued:
+                    q_outcome = await safe_deliver(
+                        session_name,
+                        msg_record["message"],
+                        config,
+                        issue_number=msg_record.get("issue_number"),
+                        target_entity=msg_record.get("target_entity"),
+                        flow_name="delivery-retry-queue",
+                    )
+                    if q_outcome == "delivered":
+                        await db.mark_message_delivered(msg_record["id"])
+                        summary["queue_delivered"] = summary.get("queue_delivered", 0) + 1
+                    else:
+                        break  # Stop draining this session if delivery fails
+    except Exception:
+        log.exception("Queue drain failed (non-fatal)")
 
     log.info("Retry complete: %s", summary)
     return summary

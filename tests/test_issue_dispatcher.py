@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 from flows.issue_dispatcher import issue_dispatcher, resolve_session
-from src.agent_state import AgentState, StateSnapshot
 from src.models import (
     CommentData,
     EventType,
@@ -15,34 +14,26 @@ from src.models import (
     parse_from_tag,
 )
 
-# Default idle state snapshot used in most tests
-_IDLE_SNAP = StateSnapshot(state=AgentState.IDLE, source="default")
+
+def _patch_resolve():
+    """Patch resolve_entity_session -- named entities map via config, coding-agent falls back."""
+
+    async def _resolver(target, config, issue_title="", **kwargs):
+        if target in config.entities.skip:
+            return None
+        if target in config.entities.sessions:
+            return config.entities.sessions[target]
+        return config.entities.fallback.get(target)
+
+    return patch("flows.issue_dispatcher.resolve_entity_session", side_effect=_resolver)
 
 
-def _patch_state_idle():
-    """Patch get_agent_state to return idle."""
+def _patch_safe_deliver(outcome: str = "delivered"):
+    """Patch safe_deliver to return a fixed outcome string."""
     return patch(
-        "flows.issue_dispatcher.get_agent_state",
+        "flows.issue_dispatcher.safe_deliver",
         new_callable=AsyncMock,
-        return_value=_IDLE_SNAP,
-    )
-
-
-def _patch_send_ok():
-    """Patch send_message to return True (delivery succeeds)."""
-    return patch(
-        "flows.issue_dispatcher.send_message",
-        new_callable=AsyncMock,
-        return_value=True,
-    )
-
-
-def _patch_session_exists(exists: bool = True):
-    """Patch session_exists to return a fixed boolean."""
-    return patch(
-        "flows.issue_dispatcher.session_exists",
-        new_callable=AsyncMock,
-        return_value=exists,
+        return_value=outcome,
     )
 
 
@@ -119,27 +110,29 @@ class TestParseFromTag:
 
 
 class TestResolveSession:
-    async def test_named_entity(self):
-        result = await resolve_session.fn("ike", "irrelevant title")
+    async def test_delegates_to_resolve_entity_session(self):
+        """resolve_session delegates to resolve_entity_session from session_bridge."""
+        with patch(
+            "flows.issue_dispatcher.resolve_entity_session",
+            new_callable=AsyncMock,
+            return_value="ike",
+        ) as mock:
+            result = await resolve_session.fn("ike", "[task] Something")
         assert result == "ike"
+        mock.assert_called_once()
+        args = mock.call_args[0]
+        assert args[0] == "ike"
+        assert args[2] == "[task] Something"
 
-    async def test_unknown_entity(self):
-        result = await resolve_session.fn("nobody", "irrelevant title")
+    async def test_returns_none_when_bridge_returns_none(self):
+        """resolve_session returns None when bridge cannot resolve."""
+        with patch(
+            "flows.issue_dispatcher.resolve_entity_session",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await resolve_session.fn("nobody", "irrelevant")
         assert result is None
-
-    async def test_coding_agent_with_repo_session(self):
-        with _patch_session_exists(True):
-            result = await resolve_session.fn("coding-agent", "[task] platform-api: Fix bug")
-            assert result == "platform-api"
-
-    async def test_coding_agent_repo_offline_falls_back(self):
-        with _patch_session_exists(False):
-            result = await resolve_session.fn("coding-agent", "[task] platform-api: Fix bug")
-            assert result == "ike"
-
-    async def test_coding_agent_no_repo_in_title(self):
-        result = await resolve_session.fn("coding-agent", "Some random title")
-        assert result == "ike"
 
 
 # ---------------------------------------------------------------------------
@@ -154,14 +147,13 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok() as mock_send,
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered") as mock_deliver,
         ):
             result = await issue_dispatcher.fn(event)
 
         assert "ike" in result.delivered
-        assert mock_send.called
+        assert mock_deliver.called
 
     async def test_skip_elias(self):
         labels = ParsedLabels(sender="ike", targets=["elias"], issue_type="question")
@@ -178,13 +170,8 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
         with (
-            _patch_session_exists(True),
-            patch(
-                "flows.issue_dispatcher.send_message",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivery_failed"),
         ):
             result = await issue_dispatcher.fn(event)
 
@@ -196,9 +183,8 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
         ):
             result = await issue_dispatcher.fn(event)
 
@@ -219,14 +205,9 @@ class TestIssueDispatcher:
         issue = IssueData(number=7, title="[task] Deferred", labels=labels)
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
-        busy_snap = StateSnapshot(state=AgentState.BUSY, source="pull")
         with (
-            _patch_session_exists(True),
-            patch(
-                "flows.issue_dispatcher.get_agent_state",
-                new_callable=AsyncMock,
-                return_value=busy_snap,
-            ),
+            _patch_resolve(),
+            _patch_safe_deliver("agent_working"),
         ):
             result = await issue_dispatcher.fn(event)
 
@@ -244,15 +225,9 @@ class TestIssueDispatcher:
         issue = IssueData(number=8, title="[bug] Critical", labels=labels)
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
-        processing_snap = StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="push")
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
-            patch(
-                "flows.issue_dispatcher.get_agent_state",
-                new_callable=AsyncMock,
-                return_value=processing_snap,
-            ),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
         ):
             result = await issue_dispatcher.fn(event)
 
@@ -267,10 +242,9 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
             _patch_find_outgoing(None),
-            _patch_state_idle(),
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)
@@ -289,9 +263,8 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)
@@ -310,9 +283,8 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)
@@ -331,9 +303,8 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)
@@ -361,9 +332,8 @@ class TestCommentRouting:
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)
@@ -380,15 +350,14 @@ class TestCommentRouting:
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok() as mock_send,
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered") as mock_deliver,
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)
 
         assert "leo" in result.delivered
-        assert mock_send.called
+        assert mock_deliver.called
 
     async def test_no_from_tag_falls_back_to_jsonl(self):
         """No [from:] tag in body, JSONL returns 'ike': ike suppressed as commenter."""
@@ -398,10 +367,9 @@ class TestCommentRouting:
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
             _patch_find_outgoing("ike"),
-            _patch_state_idle(),
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)
@@ -418,10 +386,9 @@ class TestCommentRouting:
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
             _patch_find_outgoing(None),
-            _patch_state_idle(),
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)
@@ -444,11 +411,10 @@ class TestCommentRouting:
         comment = CommentData(body="[from:ike] I'll handle this.", user_login="eandualem")
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
-        # coding-agent with no matching repo session falls back to "ike"
+        # coding-agent with no matching repo session falls back to "ike" via _patch_resolve
         with (
-            _patch_session_exists(False),
-            _patch_send_ok(),
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)
@@ -467,9 +433,8 @@ class TestCommentRouting:
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)
@@ -486,9 +451,8 @@ class TestCommentRouting:
         event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
         with (
-            _patch_session_exists(True),
-            _patch_send_ok(),
-            _patch_state_idle(),
+            _patch_resolve(),
+            _patch_safe_deliver("delivered"),
             _patch_db() as (_, mock_db),
         ):
             result = await issue_dispatcher.fn(event)

@@ -15,6 +15,7 @@ from src.dedup import is_recent_notification
 from src.github import GitHubClient
 from src.models import IssueData, IssueEvent
 from src.notifications import format_next_issue_notification
+from src.session_bridge import resolve_entity_session
 from src.tmux import send_message, session_exists
 
 log = logging.getLogger(__name__)
@@ -85,11 +86,10 @@ async def on_issue_closed(event: IssueEvent) -> dict:
             result[target] = "skipped"
             continue
 
-        # Resolve session name
-        if target == "coding-agent":
-            session_name = config.entities.fallback.get(target, "ike")
-        else:
-            session_name = config.entities.sessions.get(target)
+        # Resolve session name (no title extraction — lifecycle uses fallback directly)
+        session_name = await resolve_entity_session(
+            target, config, event.issue.title, use_title_extraction=False
+        )
 
         if not session_name:
             result[target] = "no_session"

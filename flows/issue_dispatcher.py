@@ -10,16 +10,15 @@ State-aware: checks agent state before delivery. Busy agents get deferred.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field
 
 from prefect import flow, task
 
-from src.agent_state import find_outgoing_comment, get_agent_state, should_deliver
-from src.config import REPO_NAME_PATTERN, BackboneConfig
+from src.agent_state import find_outgoing_comment
+from src.config import BackboneConfig
 from src.models import EventType, IssueEvent, parse_from_tag
 from src.notifications import format_comment_notification, format_issue_notification
-from src.tmux import send_message, session_exists
+from src.session_bridge import resolve_entity_session, safe_deliver
 
 log = logging.getLogger(__name__)
 
@@ -47,54 +46,11 @@ class DispatchResult:
 async def resolve_session(target: str, issue_title: str) -> str | None:
     """Resolve a target entity to a tmux session name.
 
-    Named entities map directly. 'coding-agent' resolves by extracting
-    repo name from issue title, falling back to Ike.
+    Delegates to session_bridge.resolve_entity_session() for unified resolution.
+    Kept as a Prefect @task for dashboard visibility.
     """
     config = _get_config()
-    if target == "coding-agent":
-        match = REPO_NAME_PATTERN.match(issue_title)
-        if match:
-            repo_name = match.group(1)
-            # Try candidates: full match, last segment, lowercase variants
-            last_segment = repo_name.rsplit("/", 1)[-1] if "/" in repo_name else repo_name
-            candidates = list(
-                dict.fromkeys(
-                    [
-                        repo_name,
-                        repo_name.lower(),
-                        last_segment,
-                        last_segment.lower(),
-                    ]
-                )
-            )
-            for candidate in candidates:
-                if await session_exists(candidate):
-                    log.info(
-                        "Resolved coding-agent → repo session '%s' (from '%s')",
-                        candidate,
-                        repo_name,
-                    )
-                    return candidate
-            log.info(
-                "No session found for repo '%s' (tried: %s), using fallback",
-                repo_name,
-                candidates,
-            )
-        else:
-            log.info("Could not extract repo name from title: %s", issue_title)
-        fallback = config.entities.fallback.get(target)
-        if fallback:
-            log.info("Routing coding-agent → fallback '%s'", fallback)
-            return fallback
-        return None
-
-    return config.entities.sessions.get(target)
-
-
-@task
-async def deliver_notification(session_name: str, message: str) -> bool:
-    """Deliver a notification message to a tmux session."""
-    return await send_message(session_name, message)
+    return await resolve_entity_session(target, config, issue_title)
 
 
 def _resolve_commenter_entity(event: IssueEvent) -> str | None:
@@ -149,38 +105,26 @@ async def _deliver_to_entity(
         result.skipped.append(target)
         return
 
-    # Check agent state before delivery
-    state_snap = await get_agent_state(
-        config.agent_state.state_path,
+    outcome = await safe_deliver(
         session_name,
-        config.agent_state.stale_threshold_seconds,
+        message,
+        config,
+        issue_number=event.issue.number,
+        target_entity=target,
+        flow_name="issue-dispatcher",
+        priority=is_blocking,
     )
-    busy_duration = None
-    if state_snap.started_at is not None:
-        busy_duration = time.time() - state_snap.started_at
-    if not should_deliver(
-        state_snap.state,
-        is_blocking,
-        busy_duration=busy_duration,
-        busy_threshold=float(config.capacity_routing.busy_threshold_seconds),
-    ):
-        log.info(
-            "Decision: #%d → %s (%s) = deferred (state=%s, blocking=%s)",
-            event.issue.number,
-            target,
-            session_name,
-            state_snap.state,
-            is_blocking,
-        )
-        result.deferred.append(session_name)
-        return
 
-    if await deliver_notification(session_name, message):
+    # Map safe_deliver outcomes to DispatchResult fields
+    if outcome == "delivered":
         result.delivered.append(session_name)
-        outcome = "delivered"
-    else:
+    elif outcome == "offline":
         result.offline.append(session_name)
-        outcome = "offline"
+    elif outcome == "delivery_failed":
+        result.offline.append(session_name)
+    else:
+        # agent_working, plan_waiting, copy_mode, user_interacting, grace_period
+        result.deferred.append(session_name)
 
     log.info(
         "Decision: #%d → %s (%s) = %s",

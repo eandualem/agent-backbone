@@ -153,3 +153,86 @@ class TestAcknowledgments:
 
     async def test_unacknowledged_by_default(self, db):
         assert await db.is_acknowledged(99, "nobody") is False
+
+
+class TestMessageQueue:
+    async def test_enqueue_and_dequeue(self, db):
+        row_id = await db.enqueue_message(
+            session_name="ike",
+            message="Test message",
+            issue_number=42,
+            target_entity="ike",
+            flow_name="test-flow",
+        )
+        assert row_id > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 1
+        assert messages[0]["message"] == "Test message"
+        assert messages[0]["issue_number"] == 42
+        assert messages[0]["status"] == "pending"
+
+    async def test_dequeue_empty(self, db):
+        messages = await db.dequeue_messages("nobody")
+        assert messages == []
+
+    async def test_mark_delivered(self, db):
+        row_id = await db.enqueue_message("ike", "msg")
+        await db.mark_message_delivered(row_id)
+
+        messages = await db.dequeue_messages("ike")
+        assert messages == []  # delivered messages not returned
+
+    async def test_dequeue_respects_limit(self, db):
+        for i in range(5):
+            await db.enqueue_message("ike", f"msg-{i}")
+
+        messages = await db.dequeue_messages("ike", limit=2)
+        assert len(messages) == 2
+
+    async def test_dequeue_oldest_first(self, db):
+        await db.enqueue_message("ike", "first")
+        await db.enqueue_message("ike", "second")
+
+        messages = await db.dequeue_messages("ike")
+        assert messages[0]["message"] == "first"
+        assert messages[1]["message"] == "second"
+
+    async def test_dequeue_only_own_session(self, db):
+        await db.enqueue_message("ike", "for ike")
+        await db.enqueue_message("feynman", "for feynman")
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 1
+        assert messages[0]["session_name"] == "ike"
+
+    async def test_enqueue_without_optional_fields(self, db):
+        row_id = await db.enqueue_message("ike", "bare message")
+        assert row_id > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 1
+        assert messages[0]["issue_number"] is None
+        assert messages[0]["target_entity"] is None
+
+    async def test_mark_delivered_sets_timestamp(self, db):
+        row_id = await db.enqueue_message("ike", "msg")
+        await db.mark_message_delivered(row_id)
+
+        # Query directly to check delivered_at is set
+        cursor = await db.conn.execute(
+            "SELECT delivered_at, status FROM message_queue WHERE id = ?", (row_id,)
+        )
+        row = await cursor.fetchone()
+        assert row["status"] == "delivered"
+        assert row["delivered_at"] is not None
+
+    async def test_multiple_sessions_independent(self, db):
+        await db.enqueue_message("ike", "msg1", issue_number=1)
+        await db.enqueue_message("feynman", "msg2", issue_number=2)
+        await db.enqueue_message("ike", "msg3", issue_number=3)
+
+        ike_msgs = await db.dequeue_messages("ike")
+        feynman_msgs = await db.dequeue_messages("feynman")
+        assert len(ike_msgs) == 2
+        assert len(feynman_msgs) == 1

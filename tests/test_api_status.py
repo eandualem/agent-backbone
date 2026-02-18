@@ -74,11 +74,11 @@ class TestGetSystemStatus:
         assert resp.status_code == 200
         data = resp.json()
         assert data["active_sessions"] == ["feynman", "ike"]
-        # Config has 5 named entities (feynman, ike, leo, ada, brunel)
-        assert data["agent_count"] == 5
+        # Config has 8 named entities (feynman, ike, leo, ada, brunel, hamilton, curie, bell)
+        assert data["agent_count"] == 8
         assert data["pending_issues"] == 3
         assert data["failed_deliveries"] == 0
-        assert len(data["agents"]) == 5
+        assert len(data["agents"]) == 8
         # Named entities get type "named_entity"
         for agent in data["agents"]:
             assert agent["type"] == "named_entity"
@@ -107,8 +107,8 @@ class TestGetSystemStatus:
         del api_app.dependency_overrides[get_github]
         assert resp.status_code == 200
         data = resp.json()
-        # 5 named entities + 1 unnamed session (platform-api)
-        assert data["agent_count"] == 6
+        # 8 named entities + 1 unnamed session (platform-api)
+        assert data["agent_count"] == 9
         sessions_in_agents = [a["session"] for a in data["agents"]]
         assert "platform-api" in sessions_in_agents
         # Verify type classification
@@ -150,8 +150,8 @@ class TestGetSystemStatus:
         assert "platform-api" in sessions
         for svc in ("ngrok", "prefect-worker", "prefect-server", "telegram-bot"):
             assert svc not in sessions
-        # 5 named + 1 coding agent (platform-api), no services
-        assert data["agent_count"] == 6
+        # 8 named + 1 coding agent (platform-api), no services
+        assert data["agent_count"] == 9
 
     async def test_counts_failed_deliveries(
         self, status_client_with_failures, auth_headers, status_app_with_failures

@@ -14,7 +14,7 @@ from src.config import BackboneConfig
 from src.github import GitHubClient
 from src.notifications import format_unblock_notification
 from src.persistence import BackboneDB
-from src.tmux import send_message, session_exists
+from src.session_bridge import safe_deliver
 
 log = logging.getLogger(__name__)
 
@@ -74,9 +74,8 @@ async def on_dependency_resolved(closed_issue_number: int) -> dict:
             session_name = config.entities.sessions.get(target)
             if not session_name:
                 continue
-            if not await session_exists(session_name):
-                continue
-            if await send_message(session_name, message):
+            outcome = await safe_deliver(session_name, message, config)
+            if outcome == "delivered":
                 delivered_to.append(session_name)
 
         if delivered_to:

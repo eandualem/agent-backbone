@@ -28,6 +28,9 @@ _DEFAULT_SESSIONS: dict[str, str] = {
     "leo": "leo",
     "ada": "ada",
     "brunel": "brunel",
+    "hamilton": "hamilton",
+    "curie": "curie",
+    "bell": "bell",
 }
 
 _DEFAULT_CODING_REPOS: frozenset[str] = frozenset(
@@ -184,6 +187,24 @@ class HeartbeatConfig:
 
 
 @dataclass(frozen=True)
+class SessionBridgeConfig:
+    """Session bridge settings."""
+
+    grace_period_seconds: int = 5
+    queue_retry_seconds: int = 30
+
+
+@dataclass(frozen=True)
+class ControlModeConfig:
+    """Control mode streaming settings."""
+
+    buffer_size: int = 1000
+    reconnect_interval_seconds: int = 5
+    max_reconnect_attempts: int = 10
+    reconnect_backoff_factor: float = 1.5
+
+
+@dataclass(frozen=True)
 class EscalationConfig:
     """Escalation settings for stalled/offline agent detection."""
 
@@ -214,6 +235,8 @@ class BackboneConfig:
     capacity_routing: CapacityRoutingConfig = field(default_factory=CapacityRoutingConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
+    session_bridge: SessionBridgeConfig = field(default_factory=SessionBridgeConfig)
+    control_mode: ControlModeConfig = field(default_factory=ControlModeConfig)
 
     # Convenience aliases for backward compat during migration
     @property
@@ -261,6 +284,8 @@ class BackboneConfig:
         cr = raw.get("capacity_routing", {})
         es = raw.get("escalation", {})
         hb = raw.get("heartbeat", {})
+        sb = raw.get("session_bridge", {})
+        cm = raw.get("control_mode", {})
 
         return cls(
             gateway=GatewayConfig(
@@ -341,6 +366,16 @@ class BackboneConfig:
             heartbeat=HeartbeatConfig(
                 schedule_file=hb.get("schedule_file", "~/.claude/state/heartbeat-schedules.json"),
                 default_timezone=hb.get("default_timezone", "Africa/Addis_Ababa"),
+            ),
+            session_bridge=SessionBridgeConfig(
+                grace_period_seconds=sb.get("grace_period_seconds", 5),
+                queue_retry_seconds=sb.get("queue_retry_seconds", 30),
+            ),
+            control_mode=ControlModeConfig(
+                buffer_size=cm.get("buffer_size", 1000),
+                reconnect_interval_seconds=cm.get("reconnect_interval_seconds", 5),
+                max_reconnect_attempts=cm.get("max_reconnect_attempts", 10),
+                reconnect_backoff_factor=cm.get("reconnect_backoff_factor", 1.5),
             ),
         )
 

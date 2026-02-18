@@ -10,12 +10,11 @@ import logging
 
 from prefect import flow
 
-from src.agent_state import get_agent_state, should_deliver
 from src.config import BackboneConfig
 from src.github import GitHubClient
 from src.notifications import format_next_issue_notification
 from src.persistence import BackboneDB
-from src.tmux import send_message, session_exists
+from src.session_bridge import safe_deliver
 
 log = logging.getLogger(__name__)
 
@@ -33,19 +32,6 @@ async def scheduled_delivery(
     """
     config = BackboneConfig.from_toml()
 
-    # Check if session is online
-    if not await session_exists(session_name):
-        return "offline"
-
-    # Check agent state
-    state_snap = await get_agent_state(
-        config.agent_state.state_path,
-        session_name,
-        config.agent_state.stale_threshold_seconds,
-    )
-    if not should_deliver(state_snap.state, is_blocking):
-        return "busy"
-
     # Fetch current issue state
     async with GitHubClient(config) as gh:
         issue = await gh.get_issue(issue_number)
@@ -53,9 +39,19 @@ async def scheduled_delivery(
     if issue.state == "closed":
         return "issue_closed"
 
-    # Deliver
+    # Deliver via safe_deliver (handles state checks)
     message = format_next_issue_notification(issue)
-    if await send_message(session_name, message):
+    outcome = await safe_deliver(
+        session_name,
+        message,
+        config,
+        issue_number=issue_number,
+        target_entity=target_entity,
+        flow_name="scheduled-delivery",
+        priority=is_blocking,
+    )
+
+    if outcome == "delivered":
         # Record delivery
         async with BackboneDB(str(config.delivery.db_file)) as db:
             await db.record_delivery(
@@ -68,4 +64,9 @@ async def scheduled_delivery(
         log.info("Scheduled delivery of #%d to %s", issue_number, session_name)
         return "delivered"
 
+    if outcome == "offline":
+        return "offline"
+    busy_states = ("agent_working", "plan_waiting", "copy_mode", "user_interacting", "grace_period")
+    if outcome in busy_states:
+        return "busy"
     return "delivery_failed"

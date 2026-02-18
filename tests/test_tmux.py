@@ -8,11 +8,14 @@ import pytest
 
 from src.tmux import (
     list_sessions,
+    query_format_vars,
     resolve_agent_dir,
     send_keys,
     send_message,
     session_exists,
+    start_pipe_pane,
     start_session,
+    stop_pipe_pane,
 )
 
 
@@ -182,3 +185,92 @@ class TestStartSession:
             assert result is True
             call_args = mock_subprocess.call_args_list[0][0]
             assert "-c" not in call_args
+
+
+class TestQueryFormatVars:
+    async def test_returns_parsed_vars(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(
+            return_value=(b"pane_in_mode=0\nclient_activity=1234567890\n", b"")
+        )
+        mock_subprocess.return_value = proc
+
+        result = await query_format_vars("ike")
+        assert result == {"pane_in_mode": "0", "client_activity": "1234567890"}
+
+    async def test_returns_empty_on_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await query_format_vars("nonexistent")
+        assert result == {}
+
+    async def test_custom_format_string(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"foo=bar\n", b""))
+        mock_subprocess.return_value = proc
+
+        result = await query_format_vars("ike", "foo=#{foo}")
+        assert result == {"foo": "bar"}
+
+    async def test_handles_empty_output(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await query_format_vars("ike")
+        assert result == {}
+
+
+class TestPipePane:
+    async def test_start_pipe_pane_success(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await start_pipe_pane("ike", "/tmp/ike.log")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "pipe-pane" in call_args
+        assert "-t" in call_args
+        assert "ike" in call_args
+        assert "-o" in call_args
+        assert "cat >> /tmp/ike.log" in call_args
+
+    async def test_start_pipe_pane_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await start_pipe_pane("ike", "/tmp/ike.log")
+        assert result is False
+
+    async def test_stop_pipe_pane_success(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await stop_pipe_pane("ike")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "pipe-pane" in call_args
+        assert "-t" in call_args
+        assert "ike" in call_args
+        assert "-o" not in call_args
+
+    async def test_stop_pipe_pane_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await stop_pipe_pane("ike")
+        assert result is False

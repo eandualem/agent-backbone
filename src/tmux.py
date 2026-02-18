@@ -13,6 +13,9 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+# Default format string for session intelligence queries
+SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}\nclient_activity=#{client_activity}"
+
 # Named entity → working directory mapping
 _ENTITY_DIRS: dict[str, str] = {
     "feynman": str(Path.home() / "orchestration"),
@@ -20,6 +23,9 @@ _ENTITY_DIRS: dict[str, str] = {
     "leo": str(Path.home() / "ws" / "leo"),
     "ada": str(Path.home() / "ws" / "core" / "spec"),
     "brunel": str(Path.home() / "infra"),
+    "hamilton": str(Path.home() / "ws" / "core" / "hamilton"),
+    "curie": str(Path.home() / "ws" / "core" / "curie"),
+    "bell": str(Path.home() / "ws" / "core" / "bell"),
 }
 
 # Base directories to search for coding repos
@@ -257,6 +263,83 @@ async def list_sessions() -> list[str]:
     if proc.returncode != 0:
         return []
     return [s.strip() for s in stdout.decode().splitlines() if s.strip()]
+
+
+async def query_format_vars(
+    session_name: str, format_str: str = SESSION_FORMAT_STR
+) -> dict[str, str]:
+    """Query tmux format variables for a session.
+
+    Runs `tmux display-message -p -t {session} '{format_str}'` and parses
+    key=value lines from the output. Returns empty dict on error or missing session.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "display-message",
+        "-p",
+        "-t",
+        session_name,
+        format_str,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return {}
+
+    result: dict[str, str] = {}
+    for line in stdout.decode().splitlines():
+        line = line.strip()
+        if "=" in line:
+            key, _, value = line.partition("=")
+            result[key.strip()] = value.strip()
+    return result
+
+
+async def start_pipe_pane(session_name: str, output_path: str) -> bool:
+    """Start piping pane output to a file.
+
+    Runs `tmux pipe-pane -t {session} -o 'cat >> {path}'`.
+    Returns True if the command succeeded, False otherwise.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "pipe-pane",
+        "-t",
+        session_name,
+        "-o",
+        f"cat >> {output_path}",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("pipe-pane start failed for '%s': %s", session_name, stderr.decode())
+        return False
+    log.info("Started pipe-pane for '%s' → %s", session_name, output_path)
+    return True
+
+
+async def stop_pipe_pane(session_name: str) -> bool:
+    """Stop piping pane output.
+
+    Runs `tmux pipe-pane -t {session}` (no -o disconnects the pipe).
+    Returns True if the command succeeded, False otherwise.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "pipe-pane",
+        "-t",
+        session_name,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("pipe-pane stop failed for '%s': %s", session_name, stderr.decode())
+        return False
+    log.info("Stopped pipe-pane for '%s'", session_name)
+    return True
 
 
 async def list_sessions_rich() -> list[dict]:
