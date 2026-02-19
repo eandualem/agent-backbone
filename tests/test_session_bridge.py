@@ -10,6 +10,7 @@ from src.config import BackboneConfig, SessionBridgeConfig
 from src.session_bridge import (
     SessionIntelligence,
     get_session_intelligence,
+    list_sessions_full,
     resolve_entity_session,
     safe_deliver,
 )
@@ -469,3 +470,97 @@ class TestSafeDeliver:
 
         assert result == "delivered"
         mock_send.assert_called_once_with("ike", "Hello")
+
+
+# ---------------------------------------------------------------------------
+# TestListSessionsFull
+# ---------------------------------------------------------------------------
+
+
+class TestListSessionsFull:
+    """Tests for list_sessions_full() — enriched session listing."""
+
+    async def test_enriches_sessions(self):
+        """Returns sessions with intelligence and agent_state fields."""
+        config = _default_config()
+        mock_sessions = [
+            {"name": "ike", "windows": 1, "created": 1000, "attached": True},
+            {"name": "leo", "windows": 2, "created": 2000, "attached": False},
+        ]
+        with (
+            patch(
+                "src.tmux.list_sessions_rich",
+                new_callable=AsyncMock,
+                return_value=mock_sessions,
+            ),
+            _patch_list_sessions(["ike", "leo"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+        ):
+            result = await list_sessions_full(config)
+
+        assert len(result) == 2
+        assert result[0]["name"] == "ike"
+        assert result[0]["intelligence"] == "idle_ready"
+        assert result[0]["agent_state"] == "idle"
+        assert result[0]["windows"] == 1
+        assert result[0]["attached"] is True
+        assert result[1]["name"] == "leo"
+        assert result[1]["intelligence"] == "idle_ready"
+        assert result[1]["agent_state"] == "idle"
+        assert result[1]["windows"] == 2
+
+    async def test_empty_list(self):
+        """Returns empty list when no sessions exist."""
+        config = _default_config()
+        with patch("src.tmux.list_sessions_rich", new_callable=AsyncMock, return_value=[]):
+            result = await list_sessions_full(config)
+        assert result == []
+
+    async def test_correct_intelligence_values(self):
+        """Intelligence values reflect actual session states (e.g. copy_mode)."""
+        config = _default_config()
+        mock_sessions = [
+            {"name": "ike", "windows": 1, "created": 1000, "attached": True},
+        ]
+        with (
+            patch(
+                "src.tmux.list_sessions_rich",
+                new_callable=AsyncMock,
+                return_value=mock_sessions,
+            ),
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+        ):
+            result = await list_sessions_full(config)
+
+        assert len(result) == 1
+        assert result[0]["intelligence"] == "copy_mode"
+        assert result[0]["agent_state"] == "idle"
+
+    async def test_preserves_rich_fields(self):
+        """All fields from list_sessions_rich are preserved in the output."""
+        config = _default_config()
+        mock_sessions = [
+            {"name": "ada", "windows": 3, "created": 5000, "attached": False},
+        ]
+        with (
+            patch(
+                "src.tmux.list_sessions_rich",
+                new_callable=AsyncMock,
+                return_value=mock_sessions,
+            ),
+            _patch_list_sessions(["ada"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_UNKNOWN_SNAP),
+        ):
+            result = await list_sessions_full(config)
+
+        assert len(result) == 1
+        assert result[0]["name"] == "ada"
+        assert result[0]["windows"] == 3
+        assert result[0]["created"] == 5000
+        assert result[0]["attached"] is False
+        assert result[0]["intelligence"] == "unknown"
+        assert result[0]["agent_state"] == "unknown"

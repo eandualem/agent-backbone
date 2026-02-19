@@ -2,20 +2,34 @@
 
 from __future__ import annotations
 
+import signal
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.tmux import (
+    close_pane,
+    close_window,
+    create_layout,
+    create_window,
+    graceful_close,
+    list_panes,
     list_sessions,
+    list_windows,
     query_format_vars,
+    rename_window,
+    resize_pane,
     resolve_agent_dir,
+    select_window,
     send_keys,
     send_message,
     session_exists,
+    set_layout,
+    split_pane,
     start_pipe_pane,
     start_session,
     stop_pipe_pane,
+    swap_panes,
 )
 
 
@@ -274,3 +288,504 @@ class TestPipePane:
 
         result = await stop_pipe_pane("ike")
         assert result is False
+
+
+class TestListPanes:
+    async def test_success(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"%1\t0\t120\t40\t1\n%2\t1\t120\t40\t0\n", b""))
+        mock_subprocess.return_value = proc
+
+        result = await list_panes("ike")
+        assert len(result) == 2
+        assert result[0]["pane_id"] == "%1"
+        assert result[0]["pane_index"] == "0"
+        assert result[0]["pane_width"] == "120"
+        assert result[0]["pane_height"] == "40"
+        assert result[0]["pane_active"] is True
+        assert result[1]["pane_active"] is False
+
+    async def test_empty_result(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await list_panes("ike")
+        assert result == []
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await list_panes("nonexistent")
+        assert result == []
+
+
+class TestSplitPane:
+    async def test_vertical(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await split_pane("ike", direction="vertical")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "-v" in call_args
+        assert "-h" not in call_args
+
+    async def test_horizontal(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await split_pane("ike", direction="horizontal")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "-h" in call_args
+        assert "-v" not in call_args
+
+    async def test_with_size(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await split_pane("ike", size="50%")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "-l" in call_args
+        assert "50%" in call_args
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await split_pane("ike")
+        assert result is False
+
+
+class TestResizePane:
+    async def test_width(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await resize_pane("ike", "0", width=80)
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "-x" in call_args
+        assert "80" in call_args
+
+    async def test_height(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await resize_pane("ike", "0", height=24)
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "-y" in call_args
+        assert "24" in call_args
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await resize_pane("ike", "0", width=80)
+        assert result is False
+
+
+class TestSwapPanes:
+    async def test_success(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await swap_panes("ike", "0", "1")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "-s" in call_args
+        assert "ike:0" in call_args
+        assert "-t" in call_args
+        assert "ike:1" in call_args
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await swap_panes("ike", "0", "1")
+        assert result is False
+
+
+class TestClosePane:
+    async def test_success(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await close_pane("ike", "1")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "kill-pane" in call_args
+        assert "ike:1" in call_args
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await close_pane("ike", "1")
+        assert result is False
+
+
+class TestSetLayout:
+    async def test_tiled(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await set_layout("ike", "tiled")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "select-layout" in call_args
+        assert "tiled" in call_args
+
+    async def test_even_horizontal(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await set_layout("ike", "even-horizontal")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "even-horizontal" in call_args
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await set_layout("ike", "tiled")
+        assert result is False
+
+
+class TestCreateLayout:
+    async def test_correct_split_count(self):
+        """3 panes = 2 splits."""
+        with (
+            patch("src.tmux.split_pane", new_callable=AsyncMock, return_value=True) as mock_split,
+            patch("src.tmux.set_layout", new_callable=AsyncMock, return_value=True),
+            patch("src.tmux.list_panes", new_callable=AsyncMock, return_value=[]),
+            patch("src.tmux.send_message", new_callable=AsyncMock, return_value=True),
+        ):
+            result = await create_layout("ike", {"panes": 3, "layout": "tiled"})
+            assert result is True
+            assert mock_split.call_count == 2
+
+    async def test_layout_applied(self):
+        with (
+            patch("src.tmux.split_pane", new_callable=AsyncMock, return_value=True),
+            patch("src.tmux.set_layout", new_callable=AsyncMock, return_value=True) as mock_layout,
+            patch("src.tmux.list_panes", new_callable=AsyncMock, return_value=[]),
+            patch("src.tmux.send_message", new_callable=AsyncMock, return_value=True),
+        ):
+            result = await create_layout("ike", {"panes": 2, "layout": "even-horizontal"})
+            assert result is True
+            mock_layout.assert_called_once_with("ike", "even-horizontal")
+
+    async def test_split_failure_aborts(self):
+        with (
+            patch("src.tmux.split_pane", new_callable=AsyncMock, return_value=False),
+            patch("src.tmux.set_layout", new_callable=AsyncMock, return_value=True) as mock_layout,
+        ):
+            result = await create_layout("ike", {"panes": 3, "layout": "tiled"})
+            assert result is False
+            mock_layout.assert_not_called()
+
+
+class TestCreateWindow:
+    async def test_minimal(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await create_window("ike")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "new-window" in call_args
+        assert "-n" not in call_args
+
+    async def test_with_name(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await create_window("ike", name="logs")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "-n" in call_args
+        assert "logs" in call_args
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await create_window("ike")
+        assert result is False
+
+
+class TestCloseWindow:
+    async def test_success(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await close_window("ike", "1")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "kill-window" in call_args
+        assert "ike:1" in call_args
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await close_window("ike", "1")
+        assert result is False
+
+
+class TestRenameWindow:
+    async def test_success(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await rename_window("ike", "0", "new-name")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "rename-window" in call_args
+        assert "ike:0" in call_args
+        assert "new-name" in call_args
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await rename_window("ike", "0", "new-name")
+        assert result is False
+
+
+class TestListWindows:
+    async def test_success(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"@0\t0\tbash\t1\t1\n@1\t1\tlogs\t0\t2\n", b""))
+        mock_subprocess.return_value = proc
+
+        result = await list_windows("ike")
+        assert len(result) == 2
+        assert result[0]["window_id"] == "@0"
+        assert result[0]["window_index"] == "0"
+        assert result[0]["window_name"] == "bash"
+        assert result[0]["window_active"] is True
+        assert result[0]["window_panes"] == 1
+        assert result[1]["window_active"] is False
+        assert result[1]["window_panes"] == 2
+
+    async def test_empty(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await list_windows("ike")
+        assert result == []
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await list_windows("nonexistent")
+        assert result == []
+
+
+class TestSelectWindow:
+    async def test_success(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_subprocess.return_value = proc
+
+        result = await select_window("ike", "1")
+        assert result is True
+        call_args = mock_subprocess.call_args[0]
+        assert "select-window" in call_args
+        assert "ike:1" in call_args
+
+    async def test_failure(self, mock_subprocess):
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_subprocess.return_value = proc
+
+        result = await select_window("ike", "1")
+        assert result is False
+
+
+class TestStartSessionEnvironment:
+    async def test_env_vars_set(self, mock_subprocess):
+        """Environment variables are set via tmux set-environment."""
+        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+            proc = AsyncMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.wait = AsyncMock()
+            mock_subprocess.return_value = proc
+
+            result = await start_session(
+                "test",
+                apply_theme=False,
+                environment={"MY_VAR": "hello", "OTHER": "world"},
+            )
+            assert result is True
+            # First call: new-session, then 2 set-environment calls
+            set_env_calls = [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
+            assert len(set_env_calls) == 2
+
+    async def test_no_env_no_calls(self, mock_subprocess):
+        """No environment param means no set-environment calls."""
+        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+            proc = AsyncMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.wait = AsyncMock()
+            mock_subprocess.return_value = proc
+
+            result = await start_session("test", apply_theme=False)
+            assert result is True
+            set_env_calls = [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
+            assert len(set_env_calls) == 0
+
+    async def test_partial_failure_logs_warning(self, mock_subprocess):
+        """If one env var fails, session still returns True."""
+        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+            # First call (new-session) succeeds, subsequent calls alternate
+            success_proc = AsyncMock()
+            success_proc.returncode = 0
+            success_proc.communicate = AsyncMock(return_value=(b"", b""))
+            success_proc.wait = AsyncMock()
+
+            fail_proc = AsyncMock()
+            fail_proc.returncode = 1
+            fail_proc.communicate = AsyncMock(return_value=(b"", b"env error"))
+            fail_proc.wait = AsyncMock()
+
+            mock_subprocess.side_effect = [success_proc, fail_proc]
+
+            result = await start_session(
+                "test",
+                apply_theme=False,
+                environment={"BAD_VAR": "value"},
+            )
+            # Session creation succeeded, env var failure is non-fatal
+            assert result is True
+
+
+class TestGracefulClose:
+    async def test_graceful_exit(self):
+        """Process exits gracefully after SIGTERM."""
+        with (
+            patch("src.tmux.query_format_vars", new_callable=AsyncMock) as mock_qfv,
+            patch("src.tmux.session_exists", new_callable=AsyncMock) as mock_exists,
+            patch("src.tmux.stop_session", new_callable=AsyncMock, return_value=True) as mock_stop,
+            patch("src.tmux.os.kill") as mock_kill,
+            patch("src.tmux.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            # First call: get pane_pid. Second call: pane_dead=1
+            mock_qfv.side_effect = [
+                {"pane_pid": "12345"},
+                {"pane_dead": "1"},
+            ]
+            mock_exists.return_value = True
+
+            result = await graceful_close("ike", timeout=5.0)
+            assert result is True
+            mock_kill.assert_called_once_with(12345, signal.SIGTERM)
+            mock_stop.assert_called_once_with("ike")
+
+    async def test_timeout_fallback(self):
+        """Process doesn't exit within timeout, falls back to kill-session."""
+        with (
+            patch("src.tmux.query_format_vars", new_callable=AsyncMock) as mock_qfv,
+            patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=True),
+            patch("src.tmux.stop_session", new_callable=AsyncMock, return_value=True) as mock_stop,
+            patch("src.tmux.os.kill"),
+            patch("src.tmux.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            # pane_pid OK, then pane_dead always 0
+            mock_qfv.side_effect = [
+                {"pane_pid": "12345"},
+                {"pane_dead": "0"},
+                {"pane_dead": "0"},
+            ]
+
+            result = await graceful_close("ike", timeout=0.5)
+            assert result is True
+            # stop_session is the fallback
+            mock_stop.assert_called()
+
+    async def test_process_already_gone(self):
+        """ProcessLookupError on kill means session cleanup."""
+        with (
+            patch("src.tmux.query_format_vars", new_callable=AsyncMock) as mock_qfv,
+            patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False),
+            patch("src.tmux.stop_session", new_callable=AsyncMock, return_value=True),
+            patch("src.tmux.os.kill", side_effect=ProcessLookupError),
+        ):
+            mock_qfv.return_value = {"pane_pid": "12345"}
+
+            result = await graceful_close("ike")
+            # Session doesn't exist either, so True
+            assert result is True
+
+    async def test_no_pid_fallback(self):
+        """No pane_pid available means falls back to stop_session."""
+        with (
+            patch("src.tmux.query_format_vars", new_callable=AsyncMock, return_value={}),
+            patch("src.tmux.stop_session", new_callable=AsyncMock, return_value=True) as mock_stop,
+        ):
+            result = await graceful_close("ike")
+            assert result is True
+            mock_stop.assert_called_once_with("ike")

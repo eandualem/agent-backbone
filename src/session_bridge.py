@@ -334,3 +334,24 @@ async def _maybe_enqueue(
         )
     except Exception:
         log.warning("Failed to enqueue message for %s (non-fatal)", session_name)
+
+
+async def list_sessions_full(config: BackboneConfig) -> list[dict]:
+    """List all tmux sessions enriched with intelligence and agent state.
+
+    Combines list_sessions_rich() metadata (name, windows, created, attached)
+    with get_session_intelligence() for each session. Returns a list of dicts
+    with all rich fields plus 'intelligence' and 'agent_state' string fields.
+    """
+    from src.tmux import list_sessions_rich
+
+    sessions = await list_sessions_rich()
+    results: list[dict] = []
+    for session in sessions:
+        name = session["name"]
+        profile = await get_session_intelligence(name, config)
+        enriched = dict(session)
+        enriched["intelligence"] = str(profile.intelligence)
+        enriched["agent_state"] = str(profile.agent_state)
+        results.append(enriched)
+    return results

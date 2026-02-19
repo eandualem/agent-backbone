@@ -9,9 +9,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
 from pathlib import Path
+from typing import TypedDict
 
 log = logging.getLogger(__name__)
+
+
+class PaneInfo(TypedDict):
+    pane_id: str
+    pane_index: str
+    pane_width: str
+    pane_height: str
+    pane_active: bool
+
+
+class WindowInfo(TypedDict):
+    window_id: str
+    window_index: str
+    window_name: str
+    window_active: bool
+    window_panes: int
+
 
 # Default format string for session intelligence queries
 SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}\nclient_activity=#{client_activity}"
@@ -174,6 +194,7 @@ async def start_session(
     working_dir: str | None = None,
     command: str | None = None,
     apply_theme: bool = True,
+    environment: dict[str, str] | None = None,
 ) -> bool:
     """Start a new detached tmux session.
 
@@ -182,6 +203,7 @@ async def start_session(
         working_dir: Starting directory for the session.
         command: Shell command to run in the session (e.g. "claude").
         apply_theme: Whether to apply the tmux theme script after creation.
+        environment: Optional dict of environment variables to set in the session.
 
     Returns True if the session was created, False if it already exists or failed.
     """
@@ -220,6 +242,28 @@ async def start_session(
                 await theme_proc.wait()
             except Exception:
                 log.debug("Theme application failed for '%s' (non-critical)", session_name)
+
+    # Set environment variables
+    if environment:
+        for key, value in environment.items():
+            env_proc = await asyncio.create_subprocess_exec(
+                "tmux",
+                "set-environment",
+                "-t",
+                session_name,
+                key,
+                value,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, env_stderr = await env_proc.communicate()
+            if env_proc.returncode != 0:
+                log.warning(
+                    "Failed to set env var '%s' for session '%s': %s",
+                    key,
+                    session_name,
+                    env_stderr.decode(),
+                )
 
     return True
 
@@ -373,3 +417,368 @@ async def list_sessions_rich() -> list[dict]:
             }
         )
     return results
+
+
+async def list_panes(session_name: str) -> list[PaneInfo]:
+    """List panes in a tmux session with metadata."""
+    fmt = "#{pane_id}\t#{pane_index}\t#{pane_width}\t#{pane_height}\t#{pane_active}"
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "list-panes",
+        "-t",
+        session_name,
+        "-F",
+        fmt,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return []
+    results: list[PaneInfo] = []
+    for line in stdout.decode().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 5:
+            continue
+        results.append(
+            PaneInfo(
+                pane_id=parts[0],
+                pane_index=parts[1],
+                pane_width=parts[2],
+                pane_height=parts[3],
+                pane_active=parts[4] == "1",
+            )
+        )
+    return results
+
+
+async def split_pane(
+    session_name: str,
+    *,
+    direction: str = "vertical",
+    size: str | None = None,
+    command: str | None = None,
+    target_pane: str | None = None,
+) -> bool:
+    """Split a pane in a tmux session.
+
+    Args:
+        session_name: Target tmux session.
+        direction: 'vertical' (-v) or 'horizontal' (-h).
+        size: Size for the new pane (e.g. '50%', '20').
+        command: Shell command to run in the new pane.
+        target_pane: Specific pane to split (e.g. '0'). Defaults to active pane.
+    """
+    target = f"{session_name}:{target_pane}" if target_pane else session_name
+    args = ["tmux", "split-window"]
+    args.append("-v" if direction == "vertical" else "-h")
+    if size:
+        args.extend(["-l", size])
+    args.extend(["-t", target])
+    if command:
+        args.append(command)
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("split-pane failed for '%s': %s", session_name, stderr.decode())
+        return False
+    return True
+
+
+async def resize_pane(
+    session_name: str,
+    pane_id: str,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+) -> bool:
+    """Resize a pane in a tmux session.
+
+    At least one of width or height must be provided.
+    """
+    args = ["tmux", "resize-pane", "-t", f"{session_name}:{pane_id}"]
+    if width is not None:
+        args.extend(["-x", str(width)])
+    if height is not None:
+        args.extend(["-y", str(height)])
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("resize-pane failed for '%s:%s': %s", session_name, pane_id, stderr.decode())
+        return False
+    return True
+
+
+async def swap_panes(session_name: str, pane_a: str, pane_b: str) -> bool:
+    """Swap two panes in a tmux session."""
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "swap-pane",
+        "-s",
+        f"{session_name}:{pane_a}",
+        "-t",
+        f"{session_name}:{pane_b}",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("swap-pane failed for '%s': %s", session_name, stderr.decode())
+        return False
+    return True
+
+
+async def close_pane(session_name: str, pane_id: str) -> bool:
+    """Close (kill) a pane in a tmux session."""
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "kill-pane",
+        "-t",
+        f"{session_name}:{pane_id}",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("close-pane failed for '%s:%s': %s", session_name, pane_id, stderr.decode())
+        return False
+    return True
+
+
+async def set_layout(session_name: str, layout: str) -> bool:
+    """Apply a tmux layout preset to a session.
+
+    Common layouts: 'even-horizontal', 'even-vertical', 'main-horizontal',
+    'main-vertical', 'tiled'.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "select-layout",
+        "-t",
+        session_name,
+        layout,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("set-layout failed for '%s': %s", session_name, stderr.decode())
+        return False
+    return True
+
+
+async def create_layout(
+    session_name: str,
+    layout_spec: dict,
+) -> bool:
+    """Create a multi-pane layout from a spec.
+
+    Args:
+        session_name: Target tmux session.
+        layout_spec: Dict with keys:
+            - panes (int): Number of panes (must be >= 1).
+            - layout (str): Layout preset to apply after splitting.
+            - commands (list[str] | None): Optional commands to send to each pane.
+
+    Creates panes by splitting N-1 times, applies the layout preset,
+    then optionally sends commands to each pane.
+    """
+    pane_count = layout_spec.get("panes", 1)
+    layout = layout_spec.get("layout", "tiled")
+    commands = layout_spec.get("commands")
+
+    # Split N-1 times to create the desired number of panes
+    for _ in range(pane_count - 1):
+        if not await split_pane(session_name):
+            log.error("create_layout: split failed for '%s', aborting", session_name)
+            return False
+
+    # Apply layout preset
+    if not await set_layout(session_name, layout):
+        log.error("create_layout: set_layout failed for '%s'", session_name)
+        return False
+
+    # Send commands to panes if provided
+    if commands:
+        panes = await list_panes(session_name)
+        for i, cmd in enumerate(commands):
+            if i < len(panes) and cmd:
+                await send_message(f"{session_name}:{panes[i]['pane_index']}", cmd)
+
+    return True
+
+
+async def create_window(
+    session_name: str,
+    *,
+    name: str | None = None,
+    command: str | None = None,
+) -> bool:
+    """Create a new window in a tmux session."""
+    args = ["tmux", "new-window", "-t", session_name]
+    if name:
+        args.extend(["-n", name])
+    if command:
+        args.append(command)
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("create-window failed for '%s': %s", session_name, stderr.decode())
+        return False
+    return True
+
+
+async def close_window(session_name: str, window_id: str) -> bool:
+    """Close (kill) a window in a tmux session."""
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "kill-window",
+        "-t",
+        f"{session_name}:{window_id}",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("close-window failed for '%s:%s': %s", session_name, window_id, stderr.decode())
+        return False
+    return True
+
+
+async def rename_window(session_name: str, window_id: str, new_name: str) -> bool:
+    """Rename a window in a tmux session."""
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "rename-window",
+        "-t",
+        f"{session_name}:{window_id}",
+        new_name,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("rename-window failed for '%s:%s': %s", session_name, window_id, stderr.decode())
+        return False
+    return True
+
+
+async def list_windows(session_name: str) -> list[WindowInfo]:
+    """List windows in a tmux session with metadata."""
+    fmt = "#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}"
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "list-windows",
+        "-t",
+        session_name,
+        "-F",
+        fmt,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return []
+    results: list[WindowInfo] = []
+    for line in stdout.decode().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 5:
+            continue
+        results.append(
+            WindowInfo(
+                window_id=parts[0],
+                window_index=parts[1],
+                window_name=parts[2],
+                window_active=parts[3] == "1",
+                window_panes=int(parts[4]) if parts[4].isdigit() else 0,
+            )
+        )
+    return results
+
+
+async def select_window(session_name: str, window_id: str) -> bool:
+    """Select (focus) a window in a tmux session."""
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "select-window",
+        "-t",
+        f"{session_name}:{window_id}",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("select-window failed for '%s:%s': %s", session_name, window_id, stderr.decode())
+        return False
+    return True
+
+
+async def graceful_close(session_name: str, timeout: float = 30.0) -> bool:
+    """Gracefully close a tmux session by signaling the foreground process.
+
+    Sends SIGTERM to the pane's foreground process, then polls for exit.
+    Falls back to kill-session if the process doesn't exit within timeout.
+
+    Returns True if the session is gone after this call, False on error.
+    """
+    # Get foreground PID
+    vars_result = await query_format_vars(session_name, "pane_pid=#{pane_pid}")
+    pid_str = vars_result.get("pane_pid", "")
+    if not pid_str or not pid_str.isdigit():
+        log.warning("Could not get pane_pid for '%s', falling back to kill", session_name)
+        return await stop_session(session_name)
+
+    pid = int(pid_str)
+
+    # Send SIGTERM
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        log.info("Process %d already gone for '%s'", pid, session_name)
+        # Session may still exist even if process is gone
+        if not await session_exists(session_name):
+            return True
+        return await stop_session(session_name)
+    except OSError as e:
+        log.warning("Failed to signal PID %d for '%s': %s", pid, session_name, e)
+        return await stop_session(session_name)
+
+    # Poll for pane_dead
+    elapsed = 0.0
+    poll_interval = 0.5
+    while elapsed < timeout:
+        dead_vars = await query_format_vars(session_name, "pane_dead=#{pane_dead}")
+        if dead_vars.get("pane_dead") == "1":
+            log.info("Process exited gracefully in '%s'", session_name)
+            # Clean up the session
+            return await stop_session(session_name)
+        if not await session_exists(session_name):
+            log.info("Session '%s' gone during graceful close", session_name)
+            return True
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+
+    # Timeout — force kill
+    log.warning("Graceful close timed out for '%s', killing session", session_name)
+    return await stop_session(session_name)
