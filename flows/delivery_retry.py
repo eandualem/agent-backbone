@@ -30,6 +30,13 @@ async def retry_delivery(config: BackboneConfig, delivery: dict) -> str:
     issue_number = delivery["issue_number"]
     target_entity = delivery["target_entity"]
 
+    # Skip if already acknowledged (check both entity and session for fallback scenarios)
+    async with BackboneDB(str(config.delivery.db_file)) as db:
+        if await db.is_acknowledged(issue_number, target_entity):
+            return "acknowledged"
+        if session_name != target_entity and await db.is_acknowledged(issue_number, session_name):
+            return "acknowledged"
+
     # Fetch current issue state from GitHub
     async with GitHubClient(config) as gh:
         try:
@@ -92,13 +99,13 @@ async def delivery_retry() -> dict:
         summary[outcome] = summary.get(outcome, 0) + 1
 
         # Record the retry attempt
-        if outcome == "retried":
+        if outcome in ("retried", "acknowledged"):
             async with BackboneDB(str(config.delivery.db_file)) as db:
                 await db.record_delivery(
                     issue_number=delivery["issue_number"],
                     target_entity=delivery["target_entity"],
                     session_name=delivery["session_name"],
-                    outcome="retried",
+                    outcome=outcome,
                     flow_name="delivery-retry",
                 )
 

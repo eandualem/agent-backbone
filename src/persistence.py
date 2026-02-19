@@ -182,11 +182,22 @@ class BackboneDB:
         return [dict(row) for row in rows]
 
     async def get_failed_deliveries(self, limit: int = 50) -> list[dict]:
-        """Get deliveries with failed outcomes for retry."""
+        """Get deliveries with failed outcomes for retry.
+
+        Excludes rows that have a later delivered/retried row for the same
+        (issue_number, target_entity) pair — those are already resolved.
+        """
         cursor = await self.conn.execute(
-            """SELECT * FROM deliveries
-               WHERE outcome IN ('offline', 'delivery_failed', 'deferred')
-               ORDER BY created_at ASC LIMIT ?""",
+            """SELECT d.* FROM deliveries d
+               WHERE d.outcome IN ('offline', 'delivery_failed', 'deferred')
+                 AND NOT EXISTS (
+                   SELECT 1 FROM deliveries d2
+                   WHERE d2.issue_number = d.issue_number
+                     AND d2.target_entity = d.target_entity
+                     AND d2.outcome IN ('delivered', 'retried')
+                     AND d2.created_at > d.created_at
+                 )
+               ORDER BY d.created_at ASC LIMIT ?""",
             (limit,),
         )
         rows = await cursor.fetchall()

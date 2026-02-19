@@ -1,4 +1,4 @@
-.PHONY: help install dev clean lint format format-check fix type-check \
+.PHONY: help install dev logs clean lint format format-check fix type-check \
        test test-file test-unit test-integration cov cov-html check build \
        run-gateway run-prefect setup-pool deploy run-worker
 
@@ -42,8 +42,18 @@ clean: ## Remove generated artifacts
 
 # ─── Development ─────────────────────────────────────────
 
-dev: ## Start gateway server (development)
-	uv run python -m gateway.server
+dev: ## Restart gateway with latest code (auto-reload enabled)
+	@if tmux has-session -t gateway 2>/dev/null; then \
+		echo "$(CYAN)Restarting gateway service...$(RESET)"; \
+		~/.claude/services/agent-services.sh restart-gateway; \
+	else \
+		echo "$(CYAN)Starting gateway service...$(RESET)"; \
+		~/.claude/services/agent-services.sh start-gateway; \
+	fi
+	@echo "$(GREEN)Gateway running in tmux session 'gateway' — attach with: tmux attach -t gateway$(RESET)"
+
+logs: ## Tail gateway logs (attach to tmux session)
+	@tmux attach -t gateway 2>/dev/null || echo "Gateway not running. Start with: make dev"
 
 # ─── Code Quality ────────────────────────────────────────
 

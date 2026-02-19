@@ -74,6 +74,7 @@ def create_app() -> FastAPI:
     from api.routes.notes import router as notes_router
     from api.routes.plans import router as plans_router
     from api.routes.prefect import router as prefect_router
+    from api.routes.repos import router as repos_router
     from api.routes.rooms import router as rooms_router
     from api.routes.schedule import router as schedule_router
     from api.routes.status import router as status_router
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
         activity_router,
         notes_router,
         rooms_router,
+        repos_router,
     ]
     for r in api_routers:
         app.include_router(r, dependencies=[Depends(require_api_key)])

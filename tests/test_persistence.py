@@ -63,6 +63,31 @@ class TestDeliveryTracking:
         outcomes = {r["outcome"] for r in failed}
         assert outcomes == {"offline", "delivery_failed", "deferred"}
 
+    async def test_get_failed_deliveries_excludes_superseded(self, db):
+        """A failed delivery superseded by a later retried/delivered row is excluded."""
+        await db.record_delivery(42, "ike", "ike", "offline")
+        await db.record_delivery(42, "ike", "ike", "retried")
+
+        failed = await db.get_failed_deliveries()
+        assert len(failed) == 0
+
+    async def test_get_failed_deliveries_excludes_superseded_by_delivered(self, db):
+        """A failed delivery superseded by a later delivered row is excluded."""
+        await db.record_delivery(42, "ike", "ike", "offline")
+        await db.record_delivery(42, "ike", "ike", "delivered")
+
+        failed = await db.get_failed_deliveries()
+        assert len(failed) == 0
+
+    async def test_get_failed_deliveries_includes_unsuperseded(self, db):
+        """A failed delivery for entity A is not superseded by entity B's retried row."""
+        await db.record_delivery(42, "coding-agent", "ike", "offline")
+        await db.record_delivery(42, "feynman", "feynman", "retried")
+
+        failed = await db.get_failed_deliveries()
+        assert len(failed) == 1
+        assert failed[0]["target_entity"] == "coding-agent"
+
     async def test_prune_old_deliveries(self, db):
         # Insert a record, then prune with 0-day retention
         await db.record_delivery(42, "ike", "ike", "delivered")
