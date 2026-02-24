@@ -8,7 +8,7 @@ import pytest
 import respx
 
 from src.config import AgentStateConfig, BackboneConfig, TelegramConfig
-from src.telegram import BackboneBot
+from src.telegram import BackboneBot, _delivery_reply
 from src.topic_discovery import TopicDiscovery
 
 
@@ -64,7 +64,8 @@ class TestTopicRouting:
     async def test_direct_topic_to_mapped_session(self, bot_with_routes):
         """Message in a directly-mapped topic goes to that session."""
         update = _make_topic_update(thread_id=10, text="Hello Leo")
-        with patch("src.tmux.send_message", new_callable=AsyncMock, return_value=True) as mock_send:
+        mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
+        with patch("src.telegram.safe_deliver", **mock_kw) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             args = mock_send.call_args[0]
             assert args[0] == "leo"
@@ -77,7 +78,8 @@ class TestTopicRouting:
     async def test_coding_agents_colon_format(self, bot_with_routes):
         """Coding-agents topic parses 'agent: message' format."""
         update = _make_topic_update(thread_id=30, text="platform-api: fix the auth bug")
-        with patch("src.tmux.send_message", new_callable=AsyncMock, return_value=True) as mock_send:
+        mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
+        with patch("src.telegram.safe_deliver", **mock_kw) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             args = mock_send.call_args[0]
             assert args[0] == "platform-api"
@@ -88,7 +90,8 @@ class TestTopicRouting:
     async def test_coding_agents_space_format(self, bot_with_routes):
         """Coding-agents topic parses 'agent message' format (no colon)."""
         update = _make_topic_update(thread_id=30, text="mcp-hub check the logs")
-        with patch("src.tmux.send_message", new_callable=AsyncMock, return_value=True) as mock_send:
+        mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
+        with patch("src.telegram.safe_deliver", **mock_kw) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             args = mock_send.call_args[0]
             assert args[0] == "mcp-hub"
@@ -99,7 +102,7 @@ class TestTopicRouting:
     async def test_coding_agents_no_message_body(self, bot_with_routes):
         """Coding-agents topic with agent name only shows usage hint."""
         update = _make_topic_update(thread_id=30, text="platform-api:")
-        with patch("src.tmux.send_message", new_callable=AsyncMock) as mock_send:
+        with patch("src.telegram.safe_deliver", new_callable=AsyncMock) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             mock_send.assert_not_awaited()
         assert "Usage" in update.message.reply_text.call_args[0][0]
@@ -108,7 +111,7 @@ class TestTopicRouting:
     async def test_unmapped_topic_ignored(self, bot_with_routes):
         """Message in an unmapped topic is silently ignored."""
         update = _make_topic_update(thread_id=999, text="hello")
-        with patch("src.tmux.send_message", new_callable=AsyncMock) as mock_send:
+        with patch("src.telegram.safe_deliver", new_callable=AsyncMock) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             mock_send.assert_not_awaited()
         update.message.reply_text.assert_not_awaited()
@@ -117,7 +120,7 @@ class TestTopicRouting:
     async def test_non_topic_message_ignored(self, bot_with_routes):
         """Message without thread_id is ignored."""
         update = _make_topic_update(thread_id=None, text="hello")
-        with patch("src.tmux.send_message", new_callable=AsyncMock) as mock_send:
+        with patch("src.telegram.safe_deliver", new_callable=AsyncMock) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             mock_send.assert_not_awaited()
         update.message.reply_text.assert_not_awaited()
@@ -126,15 +129,15 @@ class TestTopicRouting:
     async def test_unauthorized_chat_ignored(self, bot_with_routes):
         """Message from unauthorized chat is ignored."""
         update = _make_topic_update(thread_id=10, text="hello", chat_id=999)
-        with patch("src.tmux.send_message", new_callable=AsyncMock) as mock_send:
+        with patch("src.telegram.safe_deliver", new_callable=AsyncMock) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             mock_send.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_send_failure_reports_offline(self, bot_with_routes):
-        """Failed send_message results in 'offline?' response."""
+        """Offline safe_deliver result reports agent offline."""
         update = _make_topic_update(thread_id=10, text="hello")
-        with patch("src.tmux.send_message", new_callable=AsyncMock, return_value=False):
+        with patch("src.telegram.safe_deliver", new_callable=AsyncMock, return_value="offline"):
             await bot_with_routes.handle_topic_message(update, MagicMock())
         assert "offline" in update.message.reply_text.call_args[0][0]
 
@@ -151,7 +154,7 @@ class TestTopicRouting:
         with patch("src.telegram.load_discovery", return_value=TopicDiscovery()):
             bot = BackboneBot(config)
         update = _make_topic_update(thread_id=10, text="hello")
-        with patch("src.tmux.send_message", new_callable=AsyncMock) as mock_send:
+        with patch("src.telegram.safe_deliver", new_callable=AsyncMock) as mock_send:
             await bot.handle_topic_message(update, MagicMock())
             mock_send.assert_not_awaited()
         update.message.reply_text.assert_not_awaited()
@@ -245,7 +248,8 @@ class TestDiscoveryIntegration:
             bot = BackboneBot(config)
 
         update = _make_topic_update(thread_id=10, text="hello from discovery")
-        with patch("src.tmux.send_message", new_callable=AsyncMock, return_value=True) as mock_send:
+        mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
+        with patch("src.telegram.safe_deliver", **mock_kw) as mock_send:
             await bot.handle_topic_message(update, MagicMock())
             args = mock_send.call_args[0]
             assert args[0] == "leo"
@@ -266,7 +270,8 @@ class TestDiscoveryIntegration:
             bot = BackboneBot(config)
 
         update = _make_topic_update(thread_id=10, text="who gets this?")
-        with patch("src.tmux.send_message", new_callable=AsyncMock, return_value=True) as mock_send:
+        mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
+        with patch("src.telegram.safe_deliver", **mock_kw) as mock_send:
             await bot.handle_topic_message(update, MagicMock())
             args = mock_send.call_args[0]
             assert args[0] == "ike"
@@ -455,6 +460,87 @@ class TestApproveCommand:
         assert calls[1] == ("ike", "[Z")
         reply = update.message.reply_text.call_args[0][0]
         assert "approved" in reply.lower()
+
+
+class TestDeliveryReply:
+    """Tests for _delivery_reply feedback and safe_deliver integration."""
+
+    @pytest.fixture
+    def bot(self, tmp_path):
+        config = BackboneConfig(
+            telegram=TelegramConfig(
+                allowed_chat_ids=[],
+                topic_routes={10: "leo"},
+                topic_discovery_file=str(tmp_path / "topics.json"),
+            )
+        )
+        with patch("src.telegram.load_discovery", return_value=TopicDiscovery()):
+            return BackboneBot(config)
+
+    @pytest.mark.asyncio
+    async def test_cmd_tell_uses_safe_deliver(self, bot):
+        """cmd_tell calls safe_deliver and replies 'Sent' on delivered."""
+        update = _make_topic_update(thread_id=None, text="/tell feynman hello")
+        ctx = MagicMock()
+        ctx.args = ["feynman", "hello"]
+        mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
+        with patch("src.telegram.safe_deliver", **mock_kw) as mock_sd:
+            await bot.cmd_tell(update, ctx)
+            args = mock_sd.call_args[0]
+            assert args[0] == "feynman"
+            assert "hello" in args[1]
+            assert args[2] is bot._config
+        reply = update.message.reply_text.call_args[0][0]
+        assert "Sent" in reply
+        assert "feynman" in reply
+
+    @pytest.mark.asyncio
+    async def test_cmd_tell_agent_busy(self, bot):
+        """cmd_tell reports 'busy' when safe_deliver returns agent_working."""
+        update = _make_topic_update(thread_id=None, text="/tell ike check status")
+        ctx = MagicMock()
+        ctx.args = ["ike", "check", "status"]
+        mock_kw = dict(new_callable=AsyncMock, return_value="agent_working")
+        with patch("src.telegram.safe_deliver", **mock_kw):
+            await bot.cmd_tell(update, ctx)
+        reply = update.message.reply_text.call_args[0][0]
+        assert "busy" in reply
+        assert "ike" in reply
+
+    @pytest.mark.asyncio
+    async def test_topic_message_agent_plan_waiting(self, bot):
+        """Topic message reports plan approval when safe_deliver returns plan_waiting."""
+        update = _make_topic_update(thread_id=10, text="check this")
+        mock_kw = dict(new_callable=AsyncMock, return_value="plan_waiting")
+        with patch("src.telegram.safe_deliver", **mock_kw):
+            await bot.handle_topic_message(update, MagicMock())
+        reply = update.message.reply_text.call_args[0][0]
+        assert "plan approval" in reply
+        assert "leo" in reply
+
+
+class TestDeliveryReplyFallbacks:
+    """Tests for _delivery_reply fallback path — statuses that return 'Not delivered'."""
+
+    def test_copy_mode_fallback(self):
+        reply = _delivery_reply("leo", "copy_mode")
+        assert "Not delivered" in reply
+        assert "copy_mode" in reply
+
+    def test_user_interacting_fallback(self):
+        reply = _delivery_reply("leo", "user_interacting")
+        assert "Not delivered" in reply
+        assert "user_interacting" in reply
+
+    def test_grace_period_fallback(self):
+        reply = _delivery_reply("leo", "grace_period")
+        assert "Not delivered" in reply
+        assert "grace_period" in reply
+
+    def test_delivery_failed_fallback(self):
+        reply = _delivery_reply("leo", "delivery_failed")
+        assert "Not delivered" in reply
+        assert "delivery_failed" in reply
 
 
 class TestSendNotification:

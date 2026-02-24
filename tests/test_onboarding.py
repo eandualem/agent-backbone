@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -20,6 +20,7 @@ from src.onboarding import (
     _symlink_block,
     discover_repos,
     load_repos_json,
+    parse_ssh_url,
     register_repo,
     run_onboarding,
     run_status_checks,
@@ -27,6 +28,38 @@ from src.onboarding import (
     validate_org,
     validate_repo_name,
 )
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_SSH_URL = "git@github.com:eandualem/new-thing.git"
+_SSH_URL_NO_GIT = "git@github.com:eandualem/new-thing"
+
+
+def _mock_subprocess_ok():
+    """Create a mock process that exits 0."""
+    proc = AsyncMock()
+    proc.communicate.return_value = (b"", b"")
+    proc.returncode = 0
+    return proc
+
+
+def _mock_subprocess_fail(code: int = 128, stderr: bytes = b"fatal: error"):
+    """Create a mock process that exits non-zero."""
+    proc = AsyncMock()
+    proc.communicate.return_value = (b"", stderr)
+    proc.returncode = code
+    return proc
+
+
+def _selective_create_subprocess_exec(real_func, clone_proc):
+    """Return a side_effect that mocks git clone but delegates other calls."""
+    async def _side_effect(*args, **kwargs):
+        if args and args[0] == "git":
+            return clone_proc
+        return await real_func(*args, **kwargs)
+    return _side_effect
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +75,7 @@ def workspace(tmp_path):
     orch = tmp_path / "orchestration" / "core" / "code"
     registry = tmp_path / "infra" / "registry" / "symlinks.conf"
     setup_sh = tmp_path / "infra" / "scripts" / "setup.sh"
+    sdd_init_sh = tmp_path / "infra" / "scripts" / "sdd-init.sh"
     repos_json = tmp_path / "state" / "repos.json"
 
     # Create base dirs
@@ -52,9 +86,11 @@ def workspace(tmp_path):
     setup_sh.parent.mkdir(parents=True)
     repos_json.parent.mkdir(parents=True)
 
-    # Create a working setup.sh
+    # Create working scripts
     setup_sh.write_text("#!/bin/bash\nexit 0\n")
     setup_sh.chmod(0o755)
+    sdd_init_sh.write_text("#!/bin/bash\nexit 0\n")
+    sdd_init_sh.chmod(0o755)
 
     with (
         patch("src.onboarding._WS_ROOT", ws),
@@ -62,6 +98,7 @@ def workspace(tmp_path):
         patch("src.onboarding._ORCH_ROOT", orch),
         patch("src.onboarding._REGISTRY_PATH", registry),
         patch("src.onboarding._SETUP_SCRIPT", setup_sh),
+        patch("src.onboarding._SDD_INIT_SCRIPT", sdd_init_sh),
         patch("src.onboarding._REPOS_JSON", repos_json),
     ):
         yield {
@@ -70,6 +107,7 @@ def workspace(tmp_path):
             "orch": orch,
             "registry": registry,
             "setup_sh": setup_sh,
+            "sdd_init_sh": sdd_init_sh,
             "repos_json": repos_json,
             "root": tmp_path,
         }
@@ -99,6 +137,37 @@ class TestValidation:
         assert validate_repo_name("../etc") is False
         assert validate_repo_name("repo name") is False
         assert validate_repo_name("repo/nested") is False
+
+
+# ---------------------------------------------------------------------------
+# SSH URL parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseSshUrl:
+    def test_valid_with_git_suffix(self):
+        assert parse_ssh_url("git@github.com:eandualem/my-repo.git") == "my-repo"
+
+    def test_valid_without_git_suffix(self):
+        assert parse_ssh_url("git@github.com:eandualem/my-repo") == "my-repo"
+
+    def test_valid_with_dots_in_name(self):
+        assert parse_ssh_url("git@github.com:org/repo.name.git") == "repo.name"
+
+    def test_valid_with_underscores(self):
+        assert parse_ssh_url("git@gitlab.com:user/my_repo.git") == "my_repo"
+
+    def test_invalid_https_url(self):
+        assert parse_ssh_url("https://github.com/eandualem/repo.git") is None
+
+    def test_invalid_empty_string(self):
+        assert parse_ssh_url("") is None
+
+    def test_invalid_no_colon(self):
+        assert parse_ssh_url("git@github.com/eandualem/repo.git") is None
+
+    def test_invalid_malformed(self):
+        assert parse_ssh_url("not-a-url") is None
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +398,7 @@ class TestSymlinkBlock:
 
     def test_has_all_five_entries(self):
         block = _symlink_block("WF", "new-thing")
-        lines = [l for l in block.splitlines() if l.strip()]
+        lines = [line for line in block.splitlines() if line.strip()]
         assert len(lines) == 5
 
     def test_entry_types(self):
@@ -348,23 +417,87 @@ class TestSymlinkBlock:
 
 
 class TestRunOnboarding:
-    async def test_creates_spec_dir(self, workspace):
-        result = await run_onboarding("WF", "new-thing")
-        spec_dir = workspace["spec"] / "WF" / "new-thing" / "docs" / "specifications"
-        assert spec_dir.is_dir()
+    async def test_parse_url_extracts_repo(self, workspace):
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
+        assert result.repo == "new-thing"
         step1 = result.steps[0]
         assert step1.step == 1
+        assert step1.name == "parse_url"
         assert step1.status == "done"
 
+    async def test_invalid_url_aborts(self, workspace):
+        result = await run_onboarding("WF", "https://github.com/bad/url")
+        assert result.success is False
+        assert result.error.startswith("Invalid SSH URL")
+        assert len(result.steps) == 1
+        assert result.steps[0].status == "failed"
+
+    async def test_clone_success(self, workspace):
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
+        step2 = result.steps[1]
+        assert step2.step == 2
+        assert step2.name == "clone"
+        assert step2.status == "done"
+
+    async def test_clone_failure_aborts(self, workspace):
+        clone_proc = _mock_subprocess_fail()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
+        assert result.success is False
+        assert "Clone failed" in result.error
+        assert len(result.steps) == 2
+        assert result.steps[1].status == "failed"
+
+    async def test_clone_dir_exists_aborts(self, workspace):
+        (workspace["ws"] / "WF" / "new-thing").mkdir(parents=True)
+        result = await run_onboarding("WF", _SSH_URL)
+        assert result.success is False
+        assert "already exists" in result.error
+        assert len(result.steps) == 2
+        assert result.steps[1].status == "failed"
+
+    async def test_creates_spec_dir(self, workspace):
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
+        spec_dir = workspace["spec"] / "WF" / "new-thing" / "docs" / "specifications"
+        assert spec_dir.is_dir()
+        step3 = result.steps[2]
+        assert step3.step == 3
+        assert step3.name == "spec_directory"
+        assert step3.status == "done"
+
     async def test_creates_orch_config(self, workspace):
-        result = await run_onboarding("WF", "new-thing")
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
         orch_dir = workspace["orch"] / "WF" / "new-thing"
         assert (orch_dir / "CLAUDE.md").is_file()
         assert (orch_dir / "AGENTS.md").is_file()
         assert (orch_dir / ".claude" / "settings.local.json").is_file()
-        step2 = result.steps[1]
-        assert step2.step == 2
-        assert step2.status == "done"
+        step4 = result.steps[3]
+        assert step4.step == 4
+        assert step4.name == "orchestration_config"
+        assert step4.status == "done"
 
     async def test_orch_config_idempotent(self, workspace):
         """Doesn't overwrite existing orch files."""
@@ -372,12 +505,22 @@ class TestRunOnboarding:
         orch_dir.mkdir(parents=True)
         (orch_dir / "CLAUDE.md").write_text("# custom content")
 
-        await run_onboarding("WF", "new-thing")
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            await run_onboarding("WF", _SSH_URL)
         assert (orch_dir / "CLAUDE.md").read_text() == "# custom content"
 
     async def test_appends_to_registry(self, workspace):
         workspace["registry"].write_text("# existing\n")
-        await run_onboarding("WF", "new-thing")
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            await run_onboarding("WF", _SSH_URL)
         content = workspace["registry"].read_text()
         assert "core/code/WF/new-thing/CLAUDE.md" in content
         assert "# existing" in content
@@ -386,37 +529,147 @@ class TestRunOnboarding:
         workspace["registry"].write_text(
             "agent-repo | core/code/WF/new-thing/CLAUDE.md | target | desc\n"
         )
-        result = await run_onboarding("WF", "new-thing")
-        step3 = result.steps[2]
-        assert step3.status == "skipped"
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
+        step5 = result.steps[4]
+        assert step5.name == "registry_entries"
+        assert step5.status == "skipped"
 
     async def test_setup_sh_success(self, workspace):
-        result = await run_onboarding("WF", "new-thing")
-        step4 = result.steps[3]
-        assert step4.step == 4
-        assert step4.status == "done"
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
+        step6 = result.steps[5]
+        assert step6.step == 6
+        assert step6.name == "setup_script"
+        assert step6.status == "done"
 
     async def test_setup_sh_failure(self, workspace):
         workspace["setup_sh"].write_text("#!/bin/bash\nexit 1\n")
         workspace["setup_sh"].chmod(0o755)
-        result = await run_onboarding("WF", "new-thing")
-        step4 = result.steps[3]
-        assert step4.status == "failed"
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
+        step6 = result.steps[5]
+        assert step6.name == "setup_script"
+        assert step6.status == "failed"
         assert result.success is False
 
-    async def test_sdd_manual_step(self, workspace):
-        result = await run_onboarding("WF", "new-thing")
-        step5 = result.steps[4]
-        assert step5.step == 5
-        assert step5.status == "manual_required"
-        assert "sdd-init.sh" in step5.command
+    async def test_sdd_init_success(self, workspace):
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
+        step7 = result.steps[6]
+        assert step7.step == 7
+        assert step7.name == "sdd_init"
+        assert step7.status == "done"
+
+    async def test_sdd_init_failure(self, workspace):
+        workspace["sdd_init_sh"].write_text("#!/bin/bash\nexit 1\n")
+        workspace["sdd_init_sh"].chmod(0o755)
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
+        step7 = result.steps[6]
+        assert step7.name == "sdd_init"
+        assert step7.status == "failed"
+        assert result.success is False
 
     async def test_registers_in_repos_json(self, workspace):
-        await run_onboarding("WF", "new-thing")
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            await run_onboarding("WF", _SSH_URL)
         entries = load_repos_json()
         assert any(e.org == "WF" and e.repo == "new-thing" for e in entries)
 
+    async def test_notify_brunel_created(self, workspace):
+        clone_proc = _mock_subprocess_ok()
+        mock_gh = AsyncMock()
+        mock_gh.create_issue = AsyncMock()
+        mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
+        mock_gh.__aexit__ = AsyncMock(return_value=False)
+
+        from src.config import BackboneConfig
+        cfg = BackboneConfig(github_token="test-token")
+
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with (
+            patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
+            patch("src.github.GitHubClient", return_value=mock_gh),
+        ):
+            result = await run_onboarding("WF", _SSH_URL, config=cfg)
+
+        step9 = result.steps[8]
+        assert step9.step == 9
+        assert step9.name == "notify_brunel"
+        assert step9.status == "done"
+        assert step9.detail == "Created verification issue for brunel"
+        # Only one issue created (Brunel only, not Feynman)
+        assert mock_gh.create_issue.call_count == 1
+        call_kwargs = mock_gh.create_issue.call_args.kwargs
+        assert "for:brunel" in call_kwargs["labels"]
+
+    async def test_notify_brunel_skipped_no_config(self, workspace):
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL, config=None)
+        step9 = result.steps[8]
+        assert step9.name == "notify_brunel"
+        assert step9.status == "skipped"
+
+    async def test_notify_brunel_skipped_no_token(self, workspace):
+        clone_proc = _mock_subprocess_ok()
+        from src.config import BackboneConfig
+        cfg = BackboneConfig(github_token="")
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL, config=cfg)
+        step9 = result.steps[8]
+        assert step9.name == "notify_brunel"
+        assert step9.status == "skipped"
+
     async def test_success_when_all_ok(self, workspace):
-        result = await run_onboarding("WF", "new-thing")
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL)
         assert result.success is True
-        assert len(result.steps) == 6
+        assert len(result.steps) == 9
+
+    async def test_url_without_git_suffix(self, workspace):
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            result = await run_onboarding("WF", _SSH_URL_NO_GIT)
+        assert result.repo == "new-thing"
+        assert result.steps[0].status == "done"

@@ -127,8 +127,10 @@ build: ## Production build
 
 # ─── Services ────────────────────────────────────────────
 
-run-gateway: ## Start gateway server (port 9877)
-	uv run python -m gateway.server
+run-gateway: ## ⚠ Use 'make dev' instead (delegates to agent-services.sh)
+	@echo "$(RED)Direct gateway run is disabled — causes ghost processes and port conflicts.$(RESET)"
+	@echo "$(CYAN)Use 'make dev' to start/restart via agent-services.sh.$(RESET)"
+	@exit 1
 
 run-prefect: ## Start Prefect server (port 4200)
 	uv run prefect server start

@@ -31,6 +31,7 @@ _DEFAULT_SESSIONS: dict[str, str] = {
     "hamilton": "hamilton",
     "curie": "curie",
     "bell": "bell",
+    "gallup": "gallup",
 }
 
 _DEFAULT_CODING_REPOS: frozenset[str] = frozenset(
@@ -202,6 +203,7 @@ class ControlModeConfig:
     reconnect_interval_seconds: int = 5
     max_reconnect_attempts: int = 10
     reconnect_backoff_factor: float = 1.5
+    stream_grace_period_seconds: int = 30
 
 
 @dataclass(frozen=True)
@@ -211,6 +213,18 @@ class EscalationConfig:
     stall_threshold_seconds: int = 5400  # 90 minutes
     escalation_target: str = "ike"
     escalation_dedup_seconds: int = 1800  # 30 minutes
+
+
+@dataclass(frozen=True)
+class JarvisConfig:
+    """Jarvis injection endpoint settings."""
+
+    inject_url: str = ""
+    sessions_url: str = ""
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.inject_url)
 
 
 @dataclass(frozen=True)
@@ -237,6 +251,7 @@ class BackboneConfig:
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     session_bridge: SessionBridgeConfig = field(default_factory=SessionBridgeConfig)
     control_mode: ControlModeConfig = field(default_factory=ControlModeConfig)
+    jarvis: JarvisConfig = field(default_factory=JarvisConfig)
 
     # Convenience aliases for backward compat during migration
     @property
@@ -376,6 +391,11 @@ class BackboneConfig:
                 reconnect_interval_seconds=cm.get("reconnect_interval_seconds", 5),
                 max_reconnect_attempts=cm.get("max_reconnect_attempts", 10),
                 reconnect_backoff_factor=cm.get("reconnect_backoff_factor", 1.5),
+                stream_grace_period_seconds=cm.get("stream_grace_period_seconds", 30),
+            ),
+            jarvis=JarvisConfig(
+                inject_url=os.environ.get("JARVIS_INJECT_URL", ""),
+                sessions_url=os.environ.get("JARVIS_SESSIONS_URL", ""),
             ),
         )
 

@@ -169,7 +169,8 @@ async def send_keys(session_name: str, keys: str) -> bool:
 async def capture_pane(session_name: str, lines: int = 50) -> str:
     """Capture recent output from a tmux session's active pane.
 
-    Returns the last N lines of visible pane content.
+    Returns the last N lines of visible pane content with ANSI escape
+    sequences preserved (colors, bold, underline, cursor positioning).
     Returns empty string if session doesn't exist or capture fails.
     """
     proc = await asyncio.create_subprocess_exec(
@@ -178,6 +179,7 @@ async def capture_pane(session_name: str, lines: int = 50) -> str:
         "-t",
         session_name,
         "-p",  # output to stdout
+        "-e",  # include escape sequences (colors, formatting)
         "-S",
         str(-lines),  # start N lines back
         stdout=asyncio.subprocess.PIPE,

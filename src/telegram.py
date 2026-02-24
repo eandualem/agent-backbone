@@ -22,6 +22,7 @@ from telegram.ext import (
 from src.agent_state import AgentState, read_state_file
 from src.config import BackboneConfig
 from src.persistence import BackboneDB
+from src.session_bridge import safe_deliver
 from src.tmux import list_sessions, send_keys, session_exists
 from src.topic_discovery import (
     effective_group_chat_id,
@@ -35,6 +36,19 @@ from telegram import Update
 log = logging.getLogger(__name__)
 
 SERVICES_SCRIPT = "~/.claude/services/agent-services.sh"
+
+
+def _delivery_reply(agent: str, status: str) -> str:
+    """Map safe_deliver outcome to a user-friendly Telegram reply."""
+    if status == "delivered":
+        return f"Sent to `{agent}`."
+    if status == "offline":
+        return f"`{agent}` is offline."
+    if status == "agent_working":
+        return f"`{agent}` is busy."
+    if status == "plan_waiting":
+        return f"`{agent}` is awaiting plan approval."
+    return f"Not delivered to `{agent}` ({status})."
 
 
 class BackboneBot:
@@ -201,18 +215,13 @@ class BackboneBot:
             await update.message.reply_text("Usage: /tell <agent> <message>")
             return
 
-        from src.tmux import send_message
-
         agent = context.args[0]
         raw_message = " ".join(context.args[1:])
         sender = self._sender_tag(update)
         message = f"[via:telegram from:{sender}] {raw_message}"
-        success = await send_message(agent, message)
+        result = await safe_deliver(agent, message, self._config)
 
-        if success:
-            await update.message.reply_text(f"Sent to `{agent}`.", parse_mode="Markdown")
-        else:
-            await update.message.reply_text(f"Failed — `{agent}` offline?", parse_mode="Markdown")
+        await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")
 
     async def cmd_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show system digest — sessions, pending issues, recent deliveries."""
@@ -423,8 +432,6 @@ class BackboneBot:
         if not text:
             return
 
-        from src.tmux import send_message
-
         sender = self._sender_tag(update)
         tag = f"[via:telegram from:{sender}]"
 
@@ -443,11 +450,8 @@ class BackboneBot:
             agent = target
             message = f"{tag} {text}"
 
-        success = await send_message(agent, message)
-        if success:
-            await update.message.reply_text(f"Sent to `{agent}`.", parse_mode="Markdown")
-        else:
-            await update.message.reply_text(f"Failed — `{agent}` offline?", parse_mode="Markdown")
+        result = await safe_deliver(agent, message, self._config)
+        await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")
 
     def build_app(self) -> Application:
         """Build the Telegram bot application with all command handlers."""

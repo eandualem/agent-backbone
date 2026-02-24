@@ -97,7 +97,10 @@ def mock_tmux():
     ):
         mock_exists.return_value = True
         mock_send.return_value = True
-        mock_list.return_value = ["feynman", "ike", "leo", "ada"]
+        mock_list.return_value = [
+            "feynman", "ike", "leo", "ada", "brunel",
+            "hamilton", "curie", "bell", "gallup",
+        ]
         yield {
             "session_exists": mock_exists,
             "send_message": mock_send,
@@ -132,10 +135,17 @@ def webhook_payload(github_issue_json):
 
 @pytest.fixture
 def api_app(config, tmp_path):
-    """Create a FastAPI app with test config and in-memory DB."""
+    """Create a FastAPI app with test config and in-memory DB.
+
+    create_app() returns a socketio.ASGIApp wrapping FastAPI.
+    Tests need the inner FastAPI app for dependency_overrides and state.
+    """
     from api.app import create_app
 
-    app = create_app()
+    asgi_app = create_app()
+    # Extract the inner FastAPI app from the socketio.ASGIApp wrapper
+    app = asgi_app.other_asgi_app
+
     # Override config with test config using in-memory DB
     from dataclasses import replace
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
@@ -26,6 +28,31 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agents"])
 
+# Fallback directories for binaries not on system PATH
+_FALLBACK_DIRS = [
+    Path.home() / ".bun" / "bin",
+    Path.home() / ".local" / "bin",
+]
+
+
+def _resolve_command(name: str | None) -> str | None:
+    """Resolve a command name to an absolute path.
+
+    Tries shutil.which() first (system PATH), then checks fallback
+    directories. Returns the absolute path string, or None if unresolved.
+    """
+    if name is None:
+        return None
+    path = shutil.which(name)
+    if path:
+        return path
+    for directory in _FALLBACK_DIRS:
+        candidate = directory / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 # Runtime registry
 _RUNTIMES = {
     "claude": {"display_name": "Claude Code", "command": "claude"},
@@ -33,6 +60,12 @@ _RUNTIMES = {
     "codex": {"display_name": "Codex", "command": "codex"},
     "shell": {"display_name": "Plain Shell", "command": None},
 }
+
+# Resolve commands to absolute paths at load time
+for _rt_id, _rt_entry in _RUNTIMES.items():
+    _rt_entry["resolved_path"] = _resolve_command(_rt_entry["command"])
+    if _rt_entry["command"] and not _rt_entry["resolved_path"]:
+        log.warning("Runtime '%s': binary '%s' not found", _rt_id, _rt_entry["command"])
 
 # Named entity display info
 _ENTITY_DISPLAY = {
@@ -152,7 +185,14 @@ async def send_agent_message(session: str, body: dict):
 @router.get("/runtimes", response_model=list[RuntimeInfo])
 async def list_runtimes():
     """List available runtimes for agent sessions."""
-    return [RuntimeInfo(id=k, display_name=v["display_name"]) for k, v in _RUNTIMES.items()]
+    return [
+        RuntimeInfo(
+            id=k,
+            display_name=v["display_name"],
+            available=v["command"] is None or v["resolved_path"] is not None,
+        )
+        for k, v in _RUNTIMES.items()
+    ]
 
 
 @router.post("/agents/{session}/start")
@@ -174,11 +214,21 @@ async def start_agent_session(
             detail=f"Unknown runtime '{runtime_id}'. Available: {available}",
         )
     runtime_entry = _RUNTIMES[runtime_id]
+    command = runtime_entry["command"]
+    resolved = runtime_entry["resolved_path"]
+
+    # Validate binary is available (shell has no command)
+    if command is not None and resolved is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Runtime '{runtime_id}': binary '{command}' not found on this system",
+        )
+
     working_dir = (body.working_directory if body else None) or resolve_agent_dir(session)
     ok = await start_session(
         session,
         working_dir=working_dir or None,
-        command=runtime_entry["command"],
+        command=resolved,
     )
     return {
         "ok": ok,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from unittest.mock import AsyncMock, patch
 
+from api.routes.agents import _resolve_command
 from src.agent_state import AgentState, StateSnapshot
 
 # All patches target api.routes.agents.* because the route imports
@@ -27,6 +28,36 @@ def _processing_snapshot(issue: int = 42) -> StateSnapshot:
         source="push",
         timestamp=time.time(),
     )
+
+
+# ---------------------------------------------------------------------------
+# _resolve_command
+# ---------------------------------------------------------------------------
+
+
+class TestResolveCommand:
+    def test_none_command_returns_none(self):
+        """None input (shell runtime) returns None."""
+        assert _resolve_command(None) is None
+
+    def test_resolves_system_binary(self):
+        """Finds a binary on system PATH (e.g. 'python3')."""
+        result = _resolve_command("python3")
+        assert result is not None
+        assert "python3" in result
+
+    def test_unresolvable_returns_none(self):
+        """Unknown binary returns None."""
+        result = _resolve_command("nonexistent-binary-xyz-12345")
+        assert result is None
+
+    def test_fallback_dir_resolution(self, tmp_path):
+        """Finds binary in fallback directory when not on PATH."""
+        fake_bin = tmp_path / "my-tool"
+        fake_bin.touch()
+        with patch(f"{_AGENTS}._FALLBACK_DIRS", [tmp_path]):
+            result = _resolve_command("my-tool")
+        assert result == str(fake_bin)
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +84,11 @@ class TestListAgents:
         assert resp.status_code == 200
         data = resp.json()
         sessions = [a["session"] for a in data["items"]]
-        for expected in ("feynman", "ike", "leo", "ada", "brunel"):
+        # All 9 named entities from _DEFAULT_SESSIONS must be present
+        for expected in (
+            "feynman", "ike", "leo", "ada", "brunel",
+            "hamilton", "curie", "bell", "gallup",
+        ):
             assert expected in sessions
         assert data["total"] == len(data["items"])
         # Named entities have type "named_entity"
@@ -267,16 +302,68 @@ class TestListRuntimes:
         claude = next(r for r in data if r["id"] == "claude")
         assert claude["display_name"] == "Claude Code"
 
+    async def test_shows_availability(self, api_client, auth_headers):
+        """Runtimes include available field based on resolution."""
+        runtimes_with_one_missing = {
+            "claude": {
+                "display_name": "Claude Code",
+                "command": "claude",
+                "resolved_path": "/usr/bin/claude",
+            },
+            "gemini": {
+                "display_name": "Gemini CLI",
+                "command": "gemini",
+                "resolved_path": None,
+            },
+            "shell": {"display_name": "Plain Shell", "command": None, "resolved_path": None},
+        }
+        with patch(f"{_AGENTS}._RUNTIMES", runtimes_with_one_missing):
+            resp = await api_client.get("/api/runtimes", headers=auth_headers)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        claude = next(r for r in data if r["id"] == "claude")
+        gemini = next(r for r in data if r["id"] == "gemini")
+        shell = next(r for r in data if r["id"] == "shell")
+        assert claude["available"] is True
+        assert gemini["available"] is False
+        assert shell["available"] is True  # shell has no binary requirement
+
 
 # ---------------------------------------------------------------------------
 # POST /api/agents/{session}/start
 # ---------------------------------------------------------------------------
 
 
+_RESOLVED_RUNTIMES = {
+    "claude": {
+        "display_name": "Claude Code",
+        "command": "claude",
+        "resolved_path": "/usr/local/bin/claude",
+    },
+    "gemini": {
+        "display_name": "Gemini CLI",
+        "command": "gemini",
+        "resolved_path": "/home/.bun/bin/gemini",
+    },
+    "codex": {
+        "display_name": "Codex",
+        "command": "codex",
+        "resolved_path": "/home/.bun/bin/codex",
+    },
+    "shell": {
+        "display_name": "Plain Shell",
+        "command": None,
+        "resolved_path": None,
+    },
+}
+
+
 class TestStartSession:
     async def test_start_session_success(self, api_client, auth_headers):
         """Starting a new session returns ok=True."""
         with (
+            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
             patch(f"{_AGENTS}.start_session", new_callable=AsyncMock, return_value=True),
             patch(f"{_AGENTS}.resolve_agent_dir", return_value=""),
         ):
@@ -290,6 +377,7 @@ class TestStartSession:
     async def test_start_already_exists(self, api_client, auth_headers):
         """Starting an existing session still returns ok=True (idempotent)."""
         with (
+            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
             patch(f"{_AGENTS}.start_session", new_callable=AsyncMock, return_value=True),
             patch(f"{_AGENTS}.resolve_agent_dir", return_value=""),
         ):
@@ -301,6 +389,7 @@ class TestStartSession:
     async def test_start_with_explicit_working_directory(self, api_client, auth_headers):
         """POST with explicit working_directory uses it instead of resolving."""
         with (
+            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
             patch(
                 f"{_AGENTS}.start_session",
                 new_callable=AsyncMock,
@@ -320,12 +409,13 @@ class TestStartSession:
         mock_start.assert_awaited_once_with(
             "test-agent",
             working_dir="/custom/dir",
-            command="claude",
+            command="/usr/local/bin/claude",
         )
 
     async def test_start_resolves_default_directory(self, api_client, auth_headers):
         """POST without body resolves working directory from session name."""
         with (
+            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
             patch(f"{_AGENTS}.start_session", new_callable=AsyncMock, return_value=True),
             patch(f"{_AGENTS}.resolve_agent_dir", return_value="/resolved/dir") as mock_resolve,
         ):
@@ -336,8 +426,9 @@ class TestStartSession:
         mock_resolve.assert_called_once_with("ike")
 
     async def test_start_default_runtime(self, api_client, auth_headers):
-        """POST without runtime defaults to claude."""
+        """POST without runtime defaults to claude, passes resolved absolute path."""
         with (
+            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
             patch(
                 f"{_AGENTS}.start_session",
                 new_callable=AsyncMock,
@@ -349,11 +440,14 @@ class TestStartSession:
         assert resp.status_code == 200
         data = resp.json()
         assert data["runtime"] == "claude"
-        mock_start.assert_awaited_once_with("test-agent", working_dir=None, command="claude")
+        mock_start.assert_awaited_once_with(
+            "test-agent", working_dir=None, command="/usr/local/bin/claude"
+        )
 
     async def test_start_with_runtime_gemini(self, api_client, auth_headers):
-        """POST with runtime=gemini passes gemini command to start_session."""
+        """POST with runtime=gemini passes resolved absolute path to start_session."""
         with (
+            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
             patch(
                 f"{_AGENTS}.start_session",
                 new_callable=AsyncMock,
@@ -369,11 +463,14 @@ class TestStartSession:
         assert resp.status_code == 200
         data = resp.json()
         assert data["runtime"] == "gemini"
-        mock_start.assert_awaited_once_with("test-agent", working_dir=None, command="gemini")
+        mock_start.assert_awaited_once_with(
+            "test-agent", working_dir=None, command="/home/.bun/bin/gemini"
+        )
 
     async def test_start_with_runtime_shell(self, api_client, auth_headers):
         """POST with runtime=shell passes command=None to start_session."""
         with (
+            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
             patch(
                 f"{_AGENTS}.start_session",
                 new_callable=AsyncMock,
@@ -403,6 +500,22 @@ class TestStartSession:
         detail = resp.json()["detail"]
         assert "invalid-rt" in detail
         assert "claude" in detail
+
+    async def test_start_unresolved_binary_returns_400(self, api_client, auth_headers):
+        """POST with runtime whose binary is unresolved returns 400."""
+        unresolved = {
+            "gemini": {"display_name": "Gemini CLI", "command": "gemini", "resolved_path": None},
+        }
+        with patch(f"{_AGENTS}._RUNTIMES", unresolved):
+            resp = await api_client.post(
+                "/api/agents/test-agent/start",
+                json={"runtime": "gemini"},
+                headers=auth_headers,
+            )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "gemini" in detail
+        assert "not found" in detail
 
 
 # ---------------------------------------------------------------------------

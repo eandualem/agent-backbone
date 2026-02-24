@@ -21,10 +21,10 @@ def room_dir(tmp_path):
 
 
 @pytest.fixture
-def mock_send_message():
-    """Mock tmux send_message."""
-    with patch("api.routes.rooms.send_message", new_callable=AsyncMock) as m:
-        m.return_value = True
+def mock_safe_deliver():
+    """Mock session_bridge safe_deliver."""
+    with patch("api.routes.rooms.safe_deliver", new_callable=AsyncMock) as m:
+        m.return_value = "delivered"
         yield m
 
 
@@ -169,9 +169,9 @@ class TestSendDirected:
     """Tests for POST /api/rooms/{room_id}/directed."""
 
     async def test_send_directed_success(
-        self, api_client, auth_headers, room_dir, mock_send_message
+        self, api_client, auth_headers, room_dir, mock_safe_deliver
     ):
-        """200, tmux called, message appended with mode=directed."""
+        """200, safe_deliver called, message appended with mode=directed."""
         room = _make_room()
         _save_room_file(room_dir, room)
 
@@ -184,12 +184,12 @@ class TestSendDirected:
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
-        assert data["delivered"] == 1
+        assert data["status"] == "delivered"
         assert data["target"] == "leo"
 
-        # Verify tmux was called
-        mock_send_message.assert_called_once()
-        call_args = mock_send_message.call_args
+        # Verify safe_deliver was called
+        mock_safe_deliver.assert_called_once()
+        call_args = mock_safe_deliver.call_args
         assert call_args[0][0] == "leo"
         assert "What's your take?" in call_args[0][1]
 
@@ -200,7 +200,7 @@ class TestSendDirected:
         assert saved.transcript[0].sender == "ike"
 
     async def test_send_directed_target_not_participant(
-        self, api_client, auth_headers, room_dir, mock_send_message
+        self, api_client, auth_headers, room_dir, mock_safe_deliver
     ):
         """400 when target is not a room participant."""
         room = _make_room(participants=["leo", "feynman"])
@@ -214,10 +214,10 @@ class TestSendDirected:
 
         assert resp.status_code == 400
         assert "not a room participant" in resp.json()["detail"]
-        mock_send_message.assert_not_called()
+        mock_safe_deliver.assert_not_called()
 
     async def test_send_directed_room_not_found(
-        self, api_client, auth_headers, room_dir, mock_send_message
+        self, api_client, auth_headers, room_dir, mock_safe_deliver
     ):
         """404 for non-existent room."""
         resp = await api_client.post(
@@ -232,7 +232,7 @@ class TestSendBroadcast:
     """Tests for POST /api/rooms/{room_id}/broadcast."""
 
     async def test_send_broadcast_success(
-        self, api_client, auth_headers, room_dir, mock_send_message
+        self, api_client, auth_headers, room_dir, mock_safe_deliver
     ):
         """200, all delivered, message appended with mode=broadcast."""
         room = _make_room(participants=["leo", "feynman"])
@@ -251,8 +251,8 @@ class TestSendBroadcast:
         assert data["failed"] == 0
         assert data["total"] == 2
 
-        # Verify tmux called for each participant
-        assert mock_send_message.call_count == 2
+        # Verify safe_deliver called for each participant
+        assert mock_safe_deliver.call_count == 2
 
         # Verify transcript
         saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
@@ -261,14 +261,14 @@ class TestSendBroadcast:
         assert set(saved.transcript[0].recipients) == {"leo", "feynman"}
 
     async def test_send_broadcast_partial_failure(
-        self, api_client, auth_headers, room_dir, mock_send_message
+        self, api_client, auth_headers, room_dir, mock_safe_deliver
     ):
         """Partial delivery: delivered=1, failed=1, message still appended."""
         room = _make_room(participants=["leo", "feynman"])
         _save_room_file(room_dir, room)
 
-        # First call succeeds, second fails
-        mock_send_message.side_effect = [True, False]
+        # First call succeeds, second returns offline
+        mock_safe_deliver.side_effect = ["delivered", "offline"]
 
         resp = await api_client.post(
             f"/api/rooms/{room.id}/broadcast",
@@ -288,7 +288,7 @@ class TestSendBroadcast:
         assert len(saved.transcript) == 1
 
     async def test_send_broadcast_room_not_found(
-        self, api_client, auth_headers, room_dir, mock_send_message
+        self, api_client, auth_headers, room_dir, mock_safe_deliver
     ):
         """404 for non-existent room."""
         resp = await api_client.post(

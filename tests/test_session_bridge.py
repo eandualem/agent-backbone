@@ -6,9 +6,10 @@ import time
 from unittest.mock import AsyncMock, patch
 
 from src.agent_state import AgentState, StateSnapshot
-from src.config import BackboneConfig, SessionBridgeConfig
+from src.config import BackboneConfig, JarvisConfig, SessionBridgeConfig
 from src.session_bridge import (
     SessionIntelligence,
+    SessionProfile,
     get_session_intelligence,
     list_sessions_full,
     resolve_entity_session,
@@ -307,6 +308,22 @@ class TestResolveEntitySession:
         result = await resolve_entity_session("nobody", config)
         assert result is None
 
+    async def test_jarvis_enabled(self):
+        """Jarvis resolves to 'jarvis' when inject_url is configured."""
+        config = BackboneConfig(
+            github_token="t",
+            webhook_secret="s",
+            jarvis=JarvisConfig(inject_url="http://localhost:3000/api/assistant/inject"),
+        )
+        result = await resolve_entity_session("jarvis", config)
+        assert result == "jarvis"
+
+    async def test_jarvis_disabled(self):
+        """Jarvis returns None when inject_url is not set."""
+        config = _default_config()
+        result = await resolve_entity_session("jarvis", config)
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # TestSafeDeliver
@@ -470,6 +487,73 @@ class TestSafeDeliver:
 
         assert result == "delivered"
         mock_send.assert_called_once_with("ike", "Hello")
+
+    async def test_grace_period_defers(self):
+        """IDLE_GRACE intelligence returns 'grace_period' outcome."""
+        config = _default_config()
+        with patch(
+            "src.session_bridge.get_session_intelligence",
+            new_callable=AsyncMock,
+            return_value=SessionProfile(
+                session_name="ike",
+                intelligence=SessionIntelligence.IDLE_GRACE,
+                agent_state=AgentState.IDLE,
+            ),
+        ):
+            result = await safe_deliver("ike", "Hello", config)
+        assert result == "grace_period"
+
+    async def test_jarvis_http_delivery(self):
+        """Jarvis HTTP target delivers via inject_message, returns 'delivered'."""
+        config = BackboneConfig(
+            github_token="t",
+            webhook_secret="s",
+            jarvis=JarvisConfig(inject_url="http://localhost:3000/api/assistant/inject"),
+        )
+        with patch(
+            "src.jarvis.inject_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_inject:
+            result = await safe_deliver("jarvis", "Hello Jarvis", config)
+
+        assert result == "delivered"
+        mock_inject.assert_called_once_with(
+            "http://localhost:3000/api/assistant/inject", "Hello Jarvis", sessions_url=""
+        )
+
+    async def test_jarvis_http_failure_enqueues(self):
+        """Jarvis HTTP failure returns 'delivery_failed' and enqueues."""
+        config = BackboneConfig(
+            github_token="t",
+            webhook_secret="s",
+            jarvis=JarvisConfig(inject_url="http://localhost:3000/api/assistant/inject"),
+        )
+        with (
+            patch(
+                "src.jarvis.inject_message",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            _patch_db() as (_, mock_db),
+        ):
+            result = await safe_deliver(
+                "jarvis",
+                "Hello",
+                config,
+                issue_number=42,
+                target_entity="jarvis",
+                flow_name="test_flow",
+            )
+
+        assert result == "delivery_failed"
+        mock_db.enqueue_message.assert_called_once_with(
+            session_name="jarvis",
+            message="Hello",
+            issue_number=42,
+            target_entity="jarvis",
+            flow_name="test_flow",
+        )
 
 
 # ---------------------------------------------------------------------------

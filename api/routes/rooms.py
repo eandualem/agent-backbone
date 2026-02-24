@@ -9,8 +9,9 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from api.deps import get_config
 from api.models import (
     BroadcastMessageRequest,
     DirectedMessageRequest,
@@ -21,7 +22,8 @@ from api.models import (
     RoomMessage,
     RoomStateUpdate,
 )
-from src.tmux import send_message
+from src.config import BackboneConfig
+from src.session_bridge import safe_deliver
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +114,14 @@ def _format_room_message(
     return "\n".join(parts)
 
 
+def _check_room_active(room: Room) -> None:
+    """Raise 400 if the room is not in an active state."""
+    if room.state == "closed":
+        raise HTTPException(status_code=400, detail="Cannot send messages to a closed room")
+    if room.state == "paused":
+        raise HTTPException(status_code=400, detail="Room is paused")
+
+
 # --- Endpoints ---
 
 
@@ -151,11 +161,15 @@ async def get_room(room_id: str):
 
 
 @router.post("/rooms/{room_id}/directed")
-async def send_directed(room_id: str, body: DirectedMessageRequest):
+async def send_directed(
+    room_id: str, body: DirectedMessageRequest, config: BackboneConfig = Depends(get_config)
+):
     """Send a directed message to one participant with context delta."""
     room = _load_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
+
+    _check_room_active(room)
 
     if body.target not in room.participants:
         raise HTTPException(status_code=400, detail="Target is not a room participant")
@@ -163,9 +177,9 @@ async def send_directed(room_id: str, body: DirectedMessageRequest):
     # Compute context delta for the target
     delta = _compute_context_delta(room, body.target)
 
-    # Format and deliver via tmux
+    # Format and deliver via session bridge (state-aware, supports HTTP targets)
     envelope = _format_room_message(room, room.moderator, body.content, body.target, delta)
-    delivered = await send_message(body.target, envelope)
+    result = await safe_deliver(body.target, envelope, config)
 
     # Record in transcript regardless of delivery outcome
     msg = RoomMessage(
@@ -179,27 +193,31 @@ async def send_directed(room_id: str, body: DirectedMessageRequest):
     room.transcript.append(msg)
     _save_room(room)
 
-    return {"ok": delivered, "delivered": 1 if delivered else 0, "target": body.target}
+    return {"ok": result == "delivered", "status": result, "target": body.target}
 
 
 @router.post("/rooms/{room_id}/broadcast")
-async def send_broadcast(room_id: str, body: BroadcastMessageRequest):
+async def send_broadcast(
+    room_id: str, body: BroadcastMessageRequest, config: BackboneConfig = Depends(get_config)
+):
     """Broadcast a message to all participants with per-participant context deltas."""
     room = _load_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
-    # Deliver to each participant in parallel
-    async def _deliver(participant: str) -> bool:
+    _check_room_active(room)
+
+    # Deliver to each participant in parallel via session bridge
+    async def _deliver(participant: str) -> str:
         delta = _compute_context_delta(room, participant)
         envelope = _format_room_message(room, room.moderator, body.content, participant, delta)
-        return await send_message(participant, envelope)
+        return await safe_deliver(participant, envelope, config)
 
     results = await asyncio.gather(
         *[_deliver(p) for p in room.participants], return_exceptions=True
     )
 
-    delivered = sum(1 for r in results if r is True)
+    delivered = sum(1 for r in results if r == "delivered")
     failed = len(room.participants) - delivered
 
     # Record in transcript regardless

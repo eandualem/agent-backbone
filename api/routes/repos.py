@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from api.models import (
     CheckDetail,
@@ -54,14 +54,17 @@ async def list_repos():
 
 
 @router.post("/repos/onboard", response_model=RepoOnboardResponse, status_code=201)
-async def onboard_repo(body: RepoOnboardRequest):
+async def onboard_repo(body: RepoOnboardRequest, request: Request):
     """Onboard a new repository — runs automated setup steps."""
     if not validate_org(body.org):
-        raise HTTPException(status_code=400, detail=f"Unknown org: {body.org}. Known: Arclio, WF, Loveble, Tenacious")
-    if not validate_repo_name(body.repo):
-        raise HTTPException(status_code=400, detail=f"Invalid repo name: {body.repo}. Must match [a-zA-Z0-9_-]+")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown org: {body.org}."
+            " Known: Arclio, WF, Loveble, Tenacious",
+        )
 
-    result = await run_onboarding(body.org, body.repo)
+    backbone_config = getattr(request.app.state, "config", None)
+    result = await run_onboarding(body.org, body.url, config=backbone_config)
     return RepoOnboardResponse(
         org=result.org,
         repo=result.repo,
@@ -84,9 +87,17 @@ async def onboard_repo(body: RepoOnboardRequest):
 async def get_repo_status(org: str, repo: str):
     """Get onboarding status for a specific repo."""
     if not validate_org(org):
-        raise HTTPException(status_code=400, detail=f"Unknown org: {org}. Known: Arclio, WF, Loveble, Tenacious")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown org: {org}."
+            " Known: Arclio, WF, Loveble, Tenacious",
+        )
     if not validate_repo_name(repo):
-        raise HTTPException(status_code=400, detail=f"Invalid repo name: {repo}. Must match [a-zA-Z0-9_-]+")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid repo name: {repo}."
+            " Must match [a-zA-Z0-9_-]+",
+        )
 
     status = run_status_checks(org, repo)
     return _status_to_response(status)

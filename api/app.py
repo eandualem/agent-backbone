@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
+import socketio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -29,11 +30,23 @@ async def lifespan(app: FastAPI):
 
     log.info("Backbone API started — port %d", config.gateway_port)
     yield
+    # Shutdown stream broker if it was initialized
+    from api.broker import get_broker_instance
+
+    broker = get_broker_instance()
+    if broker is not None:
+        await broker.shutdown()
+
+    # Clean up PTY sessions
+    from api.socketio_server import get_pty_manager
+
+    get_pty_manager().cleanup_all()
+
     log.info("Backbone API shutting down")
 
 
-def create_app() -> FastAPI:
-    """Build and return the FastAPI application."""
+def create_app() -> socketio.ASGIApp:
+    """Build and return the ASGI application (Socket.IO wrapping FastAPI)."""
     app = FastAPI(
         title="Agent Backbone API",
         description="REST API for agent orchestration backbone",
@@ -78,6 +91,7 @@ def create_app() -> FastAPI:
     from api.routes.rooms import router as rooms_router
     from api.routes.schedule import router as schedule_router
     from api.routes.status import router as status_router
+    from api.routes.stream import router as stream_router
     from api.routes.workflows import router as workflows_router
 
     api_routers = [
@@ -96,8 +110,18 @@ def create_app() -> FastAPI:
         notes_router,
         rooms_router,
         repos_router,
+        stream_router,
     ]
     for r in api_routers:
         app.include_router(r, dependencies=[Depends(require_api_key)])
 
-    return app
+    # Wrap FastAPI with Socket.IO — Socket.IO handles /socket.io/ path,
+    # everything else falls through to FastAPI
+    from api.socketio_server import create_sio
+
+    sio = create_sio(cors_origins=["http://localhost:3000"])
+    sio.fastapi_app = app  # Store reference for namespace config access
+    app.state.sio = sio
+    asgi_app = socketio.ASGIApp(sio, app)
+
+    return asgi_app

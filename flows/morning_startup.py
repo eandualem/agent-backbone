@@ -13,7 +13,8 @@ from prefect import flow, task
 from src.config import BackboneConfig
 from src.github import GitHubClient
 from src.notifications import format_digest
-from src.tmux import list_sessions, send_message, start_session
+from src.session_bridge import safe_deliver
+from src.tmux import list_sessions, start_session
 
 log = logging.getLogger(__name__)
 
@@ -66,10 +67,18 @@ async def deliver_overnight_issues(
                 from src.notifications import format_next_issue_notification
 
                 msg = format_next_issue_notification(issues[0])
-                if await send_message(session, msg):
+                outcome = await safe_deliver(
+                    session,
+                    msg,
+                    config,
+                    issue_number=issues[0].number,
+                    target_entity=entity,
+                    flow_name="morning-startup",
+                )
+                if outcome == "delivered":
                     results[entity] = f"delivered_#{issues[0].number}"
                 else:
-                    results[entity] = "delivery_failed"
+                    results[entity] = outcome
 
     return results
 

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.config import BackboneConfig, EscalationConfig, GatewayConfig, HeartbeatConfig
+from src.config import (
+    BackboneConfig,
+    EscalationConfig,
+    GatewayConfig,
+    HeartbeatConfig,
+    JarvisConfig,
+)
 
 
 class TestBackboneConfigDefaults:
@@ -258,6 +264,28 @@ class TestPhaseIVConfigs:
         assert config.capacity_routing.busy_threshold_seconds == 3600
 
 
+class TestControlModeConfig:
+    def test_stream_grace_period_default(self):
+        config = BackboneConfig()
+        assert config.control_mode.stream_grace_period_seconds == 30
+
+    def test_stream_grace_period_from_toml(self):
+        config = BackboneConfig.from_toml()
+        assert config.control_mode.stream_grace_period_seconds == 30
+
+    def test_stream_grace_period_custom_toml(self, tmp_path):
+        toml_file = tmp_path / "custom.toml"
+        toml_file.write_text("[control_mode]\nstream_grace_period_seconds = 60\n")
+        config = BackboneConfig.from_toml(toml_file)
+        assert config.control_mode.stream_grace_period_seconds == 60
+
+    def test_stream_grace_period_missing_uses_default(self, tmp_path):
+        toml_file = tmp_path / "empty.toml"
+        toml_file.write_text("[control_mode]\nbuffer_size = 500\n")
+        config = BackboneConfig.from_toml(toml_file)
+        assert config.control_mode.stream_grace_period_seconds == 30
+
+
 class TestEscalationConfig:
     def test_defaults(self):
         config = BackboneConfig()
@@ -334,6 +362,55 @@ class TestHeartbeatConfig:
         hb = HeartbeatConfig()
         try:
             hb.schedule_file = "/other"  # type: ignore[misc]
+            assert False, "Should be frozen"
+        except AttributeError:
+            pass
+
+
+class TestJarvisConfig:
+    def test_defaults_disabled(self):
+        """Empty URL means Jarvis is disabled."""
+        jc = JarvisConfig()
+        assert jc.inject_url == ""
+        assert jc.enabled is False
+
+    def test_enabled_with_url(self):
+        """Non-empty URL means Jarvis is enabled."""
+        jc = JarvisConfig(inject_url="http://localhost:3000/api/assistant/inject")
+        assert jc.enabled is True
+
+    def test_from_toml_with_env_var(self, monkeypatch):
+        """JARVIS_INJECT_URL env var populates jarvis config."""
+        monkeypatch.setenv("JARVIS_INJECT_URL", "http://example.com/inject")
+        config = BackboneConfig.from_toml()
+        assert config.jarvis.inject_url == "http://example.com/inject"
+        assert config.jarvis.enabled is True
+
+    def test_from_toml_sessions_url_env_var(self, monkeypatch):
+        """JARVIS_SESSIONS_URL env var populates sessions_url."""
+        monkeypatch.setenv("JARVIS_INJECT_URL", "http://example.com/api/assistant/inject")
+        monkeypatch.setenv("JARVIS_SESSIONS_URL", "http://example.com/api/sessions")
+        config = BackboneConfig.from_toml()
+        assert config.jarvis.sessions_url == "http://example.com/api/sessions"
+
+    def test_from_toml_no_env_var(self, monkeypatch):
+        """Without JARVIS_INJECT_URL, jarvis is disabled."""
+        monkeypatch.delenv("JARVIS_INJECT_URL", raising=False)
+        monkeypatch.delenv("JARVIS_SESSIONS_URL", raising=False)
+        config = BackboneConfig.from_toml()
+        assert config.jarvis.inject_url == ""
+        assert config.jarvis.sessions_url == ""
+        assert config.jarvis.enabled is False
+
+    def test_backbone_config_default(self):
+        """BackboneConfig() has jarvis disabled by default."""
+        config = BackboneConfig()
+        assert config.jarvis.enabled is False
+
+    def test_frozen(self):
+        jc = JarvisConfig()
+        try:
+            jc.inject_url = "http://x"  # type: ignore[misc]
             assert False, "Should be frozen"
         except AttributeError:
             pass

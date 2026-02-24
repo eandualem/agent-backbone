@@ -2,12 +2,34 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from src.onboarding import RepoEntry, save_repos_json
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_SSH_URL = "git@github.com:eandualem/new-thing.git"
+
+
+def _mock_subprocess_ok():
+    """Create a mock process that exits 0."""
+    proc = AsyncMock()
+    proc.communicate.return_value = (b"", b"")
+    proc.returncode = 0
+    return proc
+
+
+def _selective_create_subprocess_exec(real_func, clone_proc):
+    """Return a side_effect that mocks git clone but delegates other calls."""
+    async def _side_effect(*args, **kwargs):
+        if args and args[0] == "git":
+            return clone_proc
+        return await real_func(*args, **kwargs)
+    return _side_effect
 
 
 @pytest.fixture
@@ -26,6 +48,7 @@ def repo_workspace(tmp_path):
     orch = tmp_path / "orchestration" / "core" / "code"
     registry = tmp_path / "infra" / "registry" / "symlinks.conf"
     setup_sh = tmp_path / "infra" / "scripts" / "setup.sh"
+    sdd_init_sh = tmp_path / "infra" / "scripts" / "sdd-init.sh"
     repos_json = tmp_path / "state" / "repos.json"
 
     ws.mkdir(parents=True)
@@ -35,9 +58,11 @@ def repo_workspace(tmp_path):
     setup_sh.parent.mkdir(parents=True)
     repos_json.parent.mkdir(parents=True)
 
-    # Working setup.sh
+    # Working scripts
     setup_sh.write_text("#!/bin/bash\nexit 0\n")
     setup_sh.chmod(0o755)
+    sdd_init_sh.write_text("#!/bin/bash\nexit 0\n")
+    sdd_init_sh.chmod(0o755)
 
     with (
         patch("src.onboarding._WS_ROOT", ws),
@@ -45,6 +70,7 @@ def repo_workspace(tmp_path):
         patch("src.onboarding._ORCH_ROOT", orch),
         patch("src.onboarding._REGISTRY_PATH", registry),
         patch("src.onboarding._SETUP_SCRIPT", setup_sh),
+        patch("src.onboarding._SDD_INIT_SCRIPT", sdd_init_sh),
         patch("src.onboarding._REPOS_JSON", repos_json),
     ):
         yield {
@@ -53,6 +79,7 @@ def repo_workspace(tmp_path):
             "orch": orch,
             "registry": registry,
             "setup_sh": setup_sh,
+            "sdd_init_sh": sdd_init_sh,
             "repos_json": repos_json,
         }
 
@@ -98,24 +125,43 @@ class TestListRepos:
 class TestOnboardRepo:
     async def test_creates_scaffolding(self, client, auth_headers, repo_workspace):
         """Creates spec dir, orch config, registry entries."""
-        resp = await client.post(
-            "/api/repos/onboard",
-            json={"org": "WF", "repo": "new-thing"},
-            headers=auth_headers,
+        clone_proc = _mock_subprocess_ok()
+        mock_gh = AsyncMock()
+        mock_gh.create_issue = AsyncMock()
+        mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
+        mock_gh.__aexit__ = AsyncMock(return_value=False)
+
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
         )
+        with (
+            patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
+            patch("src.github.GitHubClient", return_value=mock_gh),
+        ):
+            resp = await client.post(
+                "/api/repos/onboard",
+                json={"org": "WF", "url": _SSH_URL},
+                headers=auth_headers,
+            )
 
         assert resp.status_code == 201
         data = resp.json()
         assert data["org"] == "WF"
         assert data["repo"] == "new-thing"
         assert data["success"] is True
-        assert len(data["steps"]) == 6
+        assert len(data["steps"]) == 9
 
         # Verify spec dir created
-        assert (repo_workspace["spec"] / "WF" / "new-thing" / "docs" / "specifications").is_dir()
+        spec_path = (
+            repo_workspace["spec"] / "WF" / "new-thing"
+            / "docs" / "specifications"
+        )
+        assert spec_path.is_dir()
         # Verify orch config created
-        assert (repo_workspace["orch"] / "WF" / "new-thing" / "CLAUDE.md").is_file()
-        assert (repo_workspace["orch"] / "WF" / "new-thing" / ".claude" / "settings.local.json").is_file()
+        orch_base = repo_workspace["orch"] / "WF" / "new-thing"
+        assert (orch_base / "CLAUDE.md").is_file()
+        settings_path = orch_base / ".claude" / "settings.local.json"
+        assert settings_path.is_file()
         # Verify registry entries
         assert "core/code/WF/new-thing/" in repo_workspace["registry"].read_text()
 
@@ -123,19 +169,22 @@ class TestOnboardRepo:
         """Unknown org returns 400."""
         resp = await client.post(
             "/api/repos/onboard",
-            json={"org": "FakeOrg", "repo": "thing"},
+            json={"org": "FakeOrg", "url": _SSH_URL},
             headers=auth_headers,
         )
         assert resp.status_code == 400
 
-    async def test_invalid_repo_name_returns_400(self, client, auth_headers, repo_workspace):
-        """Invalid repo name returns 400."""
+    async def test_invalid_url_returns_failure(self, client, auth_headers, repo_workspace):
+        """Invalid SSH URL returns 201 with success=False (parse step fails)."""
         resp = await client.post(
             "/api/repos/onboard",
-            json={"org": "WF", "repo": "../escape"},
+            json={"org": "WF", "url": "https://not-ssh.com/repo"},
             headers=auth_headers,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["success"] is False
+        assert "Invalid SSH URL" in data["error"]
 
     async def test_idempotent_registry(self, client, auth_headers, repo_workspace):
         """Re-running onboard doesn't duplicate registry entries."""
@@ -143,51 +192,92 @@ class TestOnboardRepo:
             "agent-repo | core/code/WF/new-thing/CLAUDE.md | target | desc\n"
         )
 
-        resp = await client.post(
-            "/api/repos/onboard",
-            json={"org": "WF", "repo": "new-thing"},
-            headers=auth_headers,
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
         )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            resp = await client.post(
+                "/api/repos/onboard",
+                json={"org": "WF", "url": _SSH_URL},
+                headers=auth_headers,
+            )
 
         assert resp.status_code == 201
         data = resp.json()
-        registry_step = next(s for s in data["steps"] if s["name"] == "registry_entries")
+        registry_step = next(
+            s for s in data["steps"]
+            if s["name"] == "registry_entries"
+        )
         assert registry_step["status"] == "skipped"
 
-    async def test_manual_step_returned(self, client, auth_headers, repo_workspace):
-        """Step 5 is returned as manual_required with sdd-init command."""
-        resp = await client.post(
-            "/api/repos/onboard",
-            json={"org": "WF", "repo": "new-thing"},
-            headers=auth_headers,
+    async def test_sdd_init_automated(self, client, auth_headers, repo_workspace):
+        """Step 7 (sdd_init) is now automated, not manual_required."""
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
         )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            resp = await client.post(
+                "/api/repos/onboard",
+                json={"org": "WF", "url": _SSH_URL},
+                headers=auth_headers,
+            )
 
         data = resp.json()
         sdd_step = next(s for s in data["steps"] if s["name"] == "sdd_init")
-        assert sdd_step["status"] == "manual_required"
-        assert "sdd-init.sh" in sdd_step["command"]
+        assert sdd_step["status"] == "done"
 
     async def test_setup_sh_failure(self, client, auth_headers, repo_workspace):
         """Reports failure when setup.sh exits non-zero."""
         repo_workspace["setup_sh"].write_text("#!/bin/bash\nexit 1\n")
         repo_workspace["setup_sh"].chmod(0o755)
 
-        resp = await client.post(
-            "/api/repos/onboard",
-            json={"org": "WF", "repo": "new-thing"},
-            headers=auth_headers,
+        clone_proc = _mock_subprocess_ok()
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
         )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            resp = await client.post(
+                "/api/repos/onboard",
+                json={"org": "WF", "url": _SSH_URL},
+                headers=auth_headers,
+            )
 
         data = resp.json()
         assert data["success"] is False
-        setup_step = next(s for s in data["steps"] if s["name"] == "setup_script")
+        setup_step = next(
+            s for s in data["steps"]
+            if s["name"] == "setup_script"
+        )
         assert setup_step["status"] == "failed"
+
+    async def test_clone_failure_aborts(self, client, auth_headers, repo_workspace):
+        """Clone failure returns only parse + clone steps."""
+        clone_proc = AsyncMock()
+        clone_proc.communicate.return_value = (b"", b"fatal: repo not found")
+        clone_proc.returncode = 128
+
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
+            resp = await client.post(
+                "/api/repos/onboard",
+                json={"org": "WF", "url": _SSH_URL},
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["success"] is False
+        assert len(data["steps"]) == 2
 
     async def test_requires_auth(self, client, api_key, repo_workspace):
         """Returns 401 without auth header."""
         resp = await client.post(
             "/api/repos/onboard",
-            json={"org": "WF", "repo": "thing"},
+            json={"org": "WF", "url": _SSH_URL},
         )
         assert resp.status_code == 401
 

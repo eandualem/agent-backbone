@@ -15,8 +15,8 @@ from src.dedup import is_recent_notification
 from src.github import GitHubClient
 from src.models import IssueData, IssueEvent
 from src.notifications import format_next_issue_notification
-from src.session_bridge import resolve_entity_session
-from src.tmux import send_message, session_exists
+from src.session_bridge import is_http_target, resolve_entity_session, safe_deliver
+from src.tmux import session_exists
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +29,74 @@ async def _check_dependencies(issue_number: int) -> None:
         await on_dependency_resolved(issue_number)
     except Exception:
         log.exception("Dependency tracker failed for #%d (non-fatal)", issue_number)
+
+
+_ONBOARDING_TITLE_PREFIX = "[task] Verify onboarding infrastructure: "
+
+
+async def _check_onboarding_chain(event: IssueEvent, config: BackboneConfig) -> None:
+    """Sequential chain: when Brunel closes a verification issue, notify Leo.
+
+    Detects onboarding verification issues by title prefix + for:brunel label.
+    Extracts org/repo from the title and creates a follow-up issue for Leo.
+    Errors are logged but never block the lifecycle flow.
+    """
+    try:
+        title = event.issue.title
+        if not title.startswith(_ONBOARDING_TITLE_PREFIX):
+            return
+        if "brunel" not in event.issue.labels.targets:
+            return
+
+        # Extract org/repo from title
+        org_repo = title[len(_ONBOARDING_TITLE_PREFIX):].strip()
+        if "/" not in org_repo:
+            log.warning("Cannot parse org/repo from title: %s", title)
+            return
+        org, repo = org_repo.split("/", 1)
+
+        if not config.github_token:
+            log.info("No GitHub token — skipping onboarding chain for %s/%s", org, repo)
+            return
+
+        async with GitHubClient(config) as gh:
+            await gh.create_issue(
+                title=f"[task] Repository scaffolded and verified: {org}/{repo}",
+                body=(
+                    f"## Context\n"
+                    f"The `{org}/{repo}` repository has been scaffolded"
+                    f" by the automated pipeline\n"
+                    f"and Brunel has verified the infrastructure"
+                    f" (symlinks, registry, SDD).\n\n"
+                    f"## Request\n"
+                    f"The repo is ready for Phase 3 of the"
+                    f" project-bootstrap pattern:\n"
+                    f"write a comprehensive `PROJECT.md`"
+                    f" synthesizing the strategic discussion.\n\n"
+                    f"After writing PROJECT.md, notify Feynman"
+                    f" (Phase 4) to configure agents.\n"
+                    f"See your `project-bootstrap` skill"
+                    f" for the full sequential chain.\n\n"
+                    f"## References\n"
+                    f"- Repo path: `~/ws/core/code/{org}/{repo}/`\n"
+                    f"- Orchestration config:"
+                    f" `~/orchestration/core/code/{org}/{repo}/`\n"
+                    f"- Brunel verification issue: #{event.issue.number}\n"
+                    f"- Bootstrap pattern:"
+                    f" `orchestration/leo/.claude/skills/"
+                    f"project-bootstrap/SKILL.md`\n"
+                ),
+                labels=["from:backbone", "for:leo", "task"],
+            )
+        log.info(
+            "Onboarding chain: created Leo issue for %s/%s (Brunel closed #%d)",
+            org, repo, event.issue.number,
+        )
+    except Exception:
+        log.exception(
+            "Onboarding chain handler failed for #%d (non-fatal)",
+            event.issue.number,
+        )
 
 
 @task
@@ -64,10 +132,22 @@ async def find_next_issue(
 
 
 @task
-async def deliver_next(session_name: str, issue: IssueData) -> bool:
-    """Deliver a next-issue notification to a tmux session."""
+async def deliver_next(
+    session_name: str,
+    issue: IssueData,
+    config: BackboneConfig,
+    target_entity: str = "",
+) -> str:
+    """Deliver a next-issue notification via safe_deliver."""
     message = format_next_issue_notification(issue)
-    return await send_message(session_name, message)
+    return await safe_deliver(
+        session_name,
+        message,
+        config,
+        issue_number=issue.number,
+        target_entity=target_entity,
+        flow_name="issue-lifecycle",
+    )
 
 
 @flow(name="issue-lifecycle")
@@ -95,8 +175,8 @@ async def on_issue_closed(event: IssueEvent) -> dict:
             result[target] = "no_session"
             continue
 
-        # Check if session is online
-        if not await session_exists(session_name):
+        # Check if session is reachable (HTTP targets are always reachable)
+        if not is_http_target(session_name, config) and not await session_exists(session_name):
             log.info("Session '%s' offline — next issue delivered when online", session_name)
             result[target] = "offline"
             continue
@@ -119,13 +199,17 @@ async def on_issue_closed(event: IssueEvent) -> dict:
             continue
 
         # Deliver it
-        if await deliver_next(session_name, next_issue):
+        outcome = await deliver_next(session_name, next_issue, config, target_entity=target)
+        if outcome == "delivered":
             result[target] = f"delivered_#{next_issue.number}"
         else:
-            result[target] = "delivery_failed"
+            result[target] = outcome
 
     # Check if closing this issue unblocks any parent issues
     await _check_dependencies(event.issue.number)
+
+    # Sequential onboarding chain: Brunel verification → Leo PROJECT.md
+    await _check_onboarding_chain(event, config)
 
     log.info("Lifecycle complete: %s", result)
     return result

@@ -202,6 +202,7 @@ class RuntimeInfo(BaseModel):
 
     id: str
     display_name: str
+    available: bool = True
 
 
 # --- Prefect ---
@@ -409,7 +410,7 @@ class RepoOnboardRequest(BaseModel):
     """Request body for onboarding a new repository."""
 
     org: str
-    repo: str
+    url: str  # SSH URL, e.g. git@github.com:eandualem/repo.git
 
 
 class OnboardingStepDetail(BaseModel):

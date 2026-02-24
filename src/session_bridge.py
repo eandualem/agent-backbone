@@ -55,6 +55,11 @@ _WORKING_STATES = frozenset({AgentState.PROCESSING_ISSUE, AgentState.BUSY, Agent
 _USER_ACTIVITY_THRESHOLD = 10.0
 
 
+def is_http_target(session_name: str, config: BackboneConfig) -> bool:
+    """Check if a session name represents an HTTP delivery target."""
+    return session_name == "jarvis" and config.jarvis.enabled
+
+
 async def get_session_intelligence(
     session_name: str,
     config: BackboneConfig,
@@ -203,6 +208,13 @@ async def resolve_entity_session(
     if target in config.entities.sessions:
         return config.entities.sessions[target]
 
+    # Jarvis: HTTP injection target (no tmux session)
+    if target == "jarvis":
+        if config.jarvis.enabled:
+            return "jarvis"
+        log.info("Jarvis target disabled (JARVIS_INJECT_URL not set)")
+        return None
+
     # Coding agent resolution
     if target == "coding-agent":
         if use_title_extraction and issue_title:
@@ -270,6 +282,19 @@ async def safe_deliver(
         Outcome string: "delivered", "offline", "copy_mode", "user_interacting",
         "agent_working", "plan_waiting", "grace_period", "delivery_failed".
     """
+    # HTTP delivery targets bypass tmux intelligence entirely
+    if is_http_target(session_name, config):
+        from src.jarvis import inject_message
+
+        if await inject_message(
+            config.jarvis.inject_url, message, sessions_url=config.jarvis.sessions_url
+        ):
+            return "delivered"
+        await _maybe_enqueue(
+            session_name, message, issue_number, target_entity, flow_name, config
+        )
+        return "delivery_failed"
+
     # Get composite state (safe_deliver skips grace — passes idle_since=None)
     profile = await get_session_intelligence(session_name, config)
 
