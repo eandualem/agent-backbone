@@ -71,7 +71,7 @@ async def on_dependency_resolved(closed_issue_number: int) -> dict:
         for target in resolved["targets"]:
             if target in config.entities.skip:
                 continue
-            session_name = config.entities.sessions.get(target)
+            session_name = config.registry.sessions_map.get(target)
             if not session_name:
                 continue
             outcome = await safe_deliver(session_name, message, config)

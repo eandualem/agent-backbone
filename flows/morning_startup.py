@@ -24,7 +24,7 @@ async def start_morning_agents(config: BackboneConfig) -> list[str]:
     """Start configured morning agents. Returns list of started sessions."""
     started = []
     for agent in config.daily_routines.morning_agents:
-        session_name = config.entities.sessions.get(agent, agent)
+        session_name = config.registry.sessions_map.get(agent, agent)
         if await start_session(session_name):
             started.append(session_name)
     return started
@@ -37,7 +37,7 @@ async def count_pending_issues(
     """Count pending issues per entity."""
     counts: dict[str, int] = {}
     async with GitHubClient(config) as gh:
-        for entity in config.entities.all_entities:
+        for entity in config.registry.all_entities:
             label = f"for:{entity}"
             issues = await gh.list_open_issues(label)
             if issues:
@@ -54,8 +54,8 @@ async def deliver_overnight_issues(
     sessions = set(await list_sessions())
 
     async with GitHubClient(config) as gh:
-        for entity in config.entities.all_entities:
-            session = config.entities.sessions.get(entity)
+        for entity in config.registry.all_entities:
+            session = config.registry.sessions_map.get(entity)
             if not session or session not in sessions:
                 continue
             if entity not in pending:

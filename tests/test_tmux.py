@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.registry import EntityEntry, EntityRegistry, RepoInfo
 from src.tmux import (
     close_pane,
     close_window,
@@ -143,22 +144,45 @@ class TestSendKeys:
 
 
 class TestResolveAgentDir:
+    def _make_registry(self, entities=None, repos=None):
+        return EntityRegistry(
+            entities=entities or {},
+            repos=repos or [],
+        )
+
     def test_named_entity_feynman(self):
-        result = resolve_agent_dir("feynman")
+        registry = self._make_registry(entities={
+            "feynman": EntityEntry(
+                session="feynman", home="~/orchestration",
+                groups=[], figure="", role="",
+            ),
+        })
+        result = resolve_agent_dir("feynman", registry)
         assert result.endswith("orchestration")
 
     def test_named_entity_ike(self):
-        result = resolve_agent_dir("ike")
+        registry = self._make_registry(entities={
+            "ike": EntityEntry(session="ike", home="~/ws/core/ike", groups=[], figure="", role=""),
+        })
+        result = resolve_agent_dir("ike", registry)
         assert "ws/core/ike" in result
 
     def test_coding_repo_found(self, tmp_path):
-        with patch("src.tmux._CODE_BASE_DIRS", [tmp_path]):
-            (tmp_path / "my-repo").mkdir()
-            result = resolve_agent_dir("my-repo")
-            assert result == str(tmp_path / "my-repo")
+        repo_dir = tmp_path / "my-repo"
+        repo_dir.mkdir()
+        registry = self._make_registry(repos=[
+            RepoInfo(org="WF", name="my-repo", path=str(repo_dir)),
+        ])
+        result = resolve_agent_dir("my-repo", registry)
+        assert result == str(repo_dir)
 
     def test_unknown_returns_empty(self):
-        result = resolve_agent_dir("nonexistent-xyz")
+        registry = self._make_registry()
+        result = resolve_agent_dir("nonexistent-xyz", registry)
+        assert result == ""
+
+    def test_no_registry_returns_empty(self):
+        result = resolve_agent_dir("feynman")
         assert result == ""
 
 

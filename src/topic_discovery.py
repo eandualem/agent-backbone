@@ -72,12 +72,12 @@ def resolve_topic_name(name: str, config: BackboneConfig) -> str | None:
     normalized = re.sub(r"[\s_]+", "-", name.strip().lower())
 
     # Match named entity sessions
-    for entity, session in config.entities.sessions.items():
+    for entity, session in config.registry.sessions_map.items():
         if normalized == entity or normalized == session:
             return session
 
     # Match coding repos
-    if normalized in config.entities.coding_repos:
+    if normalized in config.registry.repo_names:
         return normalized
 
     # Literal catch-all

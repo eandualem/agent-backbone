@@ -29,6 +29,18 @@ from src.config import (
     TelegramConfig,
 )
 from src.models import IssueData, ParsedLabels
+from src.registry import EntityEntry, EntityRegistry
+
+
+def _make_registry(names: list[str]) -> EntityRegistry:
+    """Build a minimal EntityRegistry with the given entity names (session == name)."""
+    return EntityRegistry(
+        entities={
+            n: EntityEntry(session=n, home=f"~/ws/{n}", groups=[], figure="", role="")
+            for n in names
+        },
+        repos=[],
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -49,9 +61,9 @@ def escalation_config():
         webhook_secret="test-secret",
         github=GitHubConfig(owner="eandualem", repo="orchestration"),
         entities=EntityConfig(
-            sessions={"ike": "ike", "feynman": "feynman", "leo": "leo"},
             skip=frozenset({"elias"}),
         ),
+        registry=_make_registry(["ike", "feynman", "leo"]),
         agent_state=AgentStateConfig(
             state_dir="/tmp/test-state",
             stale_threshold_seconds=300,
@@ -322,9 +334,9 @@ class TestMonitorAgentsIntegration:
                     github_token="test",
                     webhook_secret="test",
                     entities=EntityConfig(
-                        sessions={"feynman": "feynman", "ike": "ike"},
                         skip=frozenset({"elias"}),
                     ),
+                    registry=_make_registry(["feynman", "ike"]),
                     delivery=DeliveryConfig(db_path=":memory:"),
                     escalation=EscalationConfig(),
                     capacity_routing=CapacityRoutingConfig(),
@@ -392,9 +404,9 @@ class TestMonitorAgentsIntegration:
                     github_token="test",
                     webhook_secret="test",
                     entities=EntityConfig(
-                        sessions={"ike": "ike"},
                         skip=frozenset({"elias"}),
                     ),
+                    registry=_make_registry(["ike"]),
                     delivery=DeliveryConfig(db_path=":memory:"),
                     escalation=EscalationConfig(),
                     capacity_routing=CapacityRoutingConfig(),
@@ -479,9 +491,9 @@ class TestMonitorAgentsIntegration:
                     github_token="test",
                     webhook_secret="test",
                     entities=EntityConfig(
-                        sessions={"ike": "ike"},
                         skip=frozenset({"elias"}),
                     ),
+                    registry=_make_registry(["ike"]),
                     delivery=DeliveryConfig(db_path=":memory:"),
                     escalation=EscalationConfig(),
                     capacity_routing=CapacityRoutingConfig(),
@@ -554,9 +566,9 @@ class TestMonitorAgentsIntegration:
                     github_token="test",
                     webhook_secret="test",
                     entities=EntityConfig(
-                        sessions={"ike": "ike"},
                         skip=frozenset({"elias"}),
                     ),
+                    registry=_make_registry(["ike"]),
                     delivery=DeliveryConfig(db_path=":memory:"),
                     escalation=EscalationConfig(),
                     capacity_routing=CapacityRoutingConfig(),
@@ -627,9 +639,9 @@ class TestMonitorAgentsIntegration:
                     github_token="test",
                     webhook_secret="test",
                     entities=EntityConfig(
-                        sessions={"ike": "ike"},
                         skip=frozenset({"elias"}),
                     ),
+                    registry=_make_registry(["ike"]),
                     delivery=DeliveryConfig(db_path=":memory:"),
                     escalation=EscalationConfig(),
                     capacity_routing=CapacityRoutingConfig(),
@@ -713,9 +725,9 @@ class TestMonitorAgentsIntegration:
                     github_token="test",
                     webhook_secret="test",
                     entities=EntityConfig(
-                        sessions={"ike": "ike"},
                         skip=frozenset({"elias"}),
                     ),
+                    registry=_make_registry(["ike"]),
                     delivery=DeliveryConfig(db_path=":memory:"),
                     escalation=EscalationConfig(),
                     capacity_routing=CapacityRoutingConfig(),
@@ -787,9 +799,9 @@ class TestOfflineDedup:
                     github_token="test",
                     webhook_secret="test",
                     entities=EntityConfig(
-                        sessions={"ike": "ike", "feynman": "feynman"},
                         skip=frozenset({"elias"}),
                     ),
+                    registry=_make_registry(["ike", "feynman"]),
                     delivery=DeliveryConfig(db_path=":memory:"),
                     escalation=EscalationConfig(
                         escalation_target="ike",
@@ -903,9 +915,9 @@ class TestPlanWaitingMonitor:
             webhook_secret="test-secret",
             github=GitHubConfig(owner="eandualem", repo="orchestration"),
             entities=EntityConfig(
-                sessions={"feynman": "feynman", "ike": "ike"},
                 skip=frozenset({"elias"}),
             ),
+            registry=_make_registry(["feynman", "ike"]),
             agent_state=AgentStateConfig(
                 state_dir="/tmp/test-state",
                 stale_threshold_seconds=300,

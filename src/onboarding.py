@@ -23,7 +23,17 @@ log = logging.getLogger(__name__)
 # Known organisations (filesystem convention under ~/ws/core/code/)
 # ---------------------------------------------------------------------------
 
-KNOWN_ORGS = ("Arclio", "WF", "Loveble", "Tenacious")
+def _discover_orgs() -> tuple[str, ...]:
+    """Discover org directories under the workspace root."""
+    if not _WS_ROOT.is_dir():
+        return ()
+    return tuple(
+        sorted(
+            d.name
+            for d in _WS_ROOT.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        )
+    )
 
 # ---------------------------------------------------------------------------
 # Path roots — module-level for easy patching in tests
@@ -47,7 +57,7 @@ _SSH_URL_RE = re.compile(r"^git@[\w.-]+:[\w.-]+/([\w.-]+?)(?:\.git)?$")
 
 def validate_org(org: str) -> bool:
     """Check org is in the known list."""
-    return org in KNOWN_ORGS
+    return org in _discover_orgs()
 
 
 def validate_repo_name(repo: str) -> bool:
@@ -112,7 +122,7 @@ def discover_repos() -> list[RepoEntry]:
     result: list[RepoEntry] = []
 
     # Scan filesystem
-    for org in KNOWN_ORGS:
+    for org in _discover_orgs():
         org_dir = _WS_ROOT / org
         if not org_dir.is_dir():
             continue

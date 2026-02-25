@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.onboarding import (
-    KNOWN_ORGS,
     RepoEntry,
     _check_assume_unchanged,
     _check_git_excludes,
@@ -119,11 +118,15 @@ def workspace(tmp_path):
 
 
 class TestValidation:
-    def test_known_orgs_accepted(self):
-        for org in KNOWN_ORGS:
-            assert validate_org(org) is True
+    def test_known_orgs_accepted(self, workspace):
+        """Org dirs under the workspace root are accepted by validate_org."""
+        (workspace["ws"] / "WF").mkdir(parents=True, exist_ok=True)
+        (workspace["ws"] / "Arclio").mkdir(parents=True, exist_ok=True)
+        assert validate_org("WF") is True
+        assert validate_org("Arclio") is True
 
-    def test_unknown_org_rejected(self):
+    def test_unknown_org_rejected(self, workspace):
+        """Orgs not present as dirs under workspace root are rejected."""
         assert validate_org("FakeOrg") is False
         assert validate_org("") is False
 
@@ -237,11 +240,12 @@ class TestDiscovery:
         names = [r.repo for r in repos]
         assert ".hidden" not in names
 
-    def test_ignores_unknown_orgs(self, workspace):
+    def test_discovers_all_org_dirs(self, workspace):
+        """All directories under workspace root are treated as orgs."""
         (workspace["ws"] / "RandomOrg" / "repo").mkdir(parents=True)
         repos = discover_repos()
         orgs = [r.org for r in repos]
-        assert "RandomOrg" not in orgs
+        assert "RandomOrg" in orgs
 
 
 # ---------------------------------------------------------------------------

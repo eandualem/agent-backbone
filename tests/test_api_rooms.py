@@ -89,8 +89,8 @@ class TestCreateRoom:
         assert data["participants"] == ["leo", "feynman"]
         assert data["state"] == "active"
         assert data["transcript"] == []
-        assert data["created_at"] > 0
-        assert data["updated_at"] > 0
+        assert isinstance(data["created_at"], str) and "T" in data["created_at"]
+        assert isinstance(data["updated_at"], str) and "T" in data["updated_at"]
 
         # Verify JSON file persisted
         room_file = room_dir / f"{data['id']}.json"

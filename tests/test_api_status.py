@@ -87,7 +87,7 @@ class TestGetSystemStatus:
     async def test_includes_unnamed_sessions_as_agents(
         self, api_client, auth_headers, config, api_app
     ):
-        """Sessions not in config.entities.sessions are included as extra agents."""
+        """Sessions not in config.registry.sessions_map are included as extra agents."""
         snapshot = _idle_snapshot()
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[])

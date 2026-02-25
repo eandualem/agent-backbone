@@ -21,8 +21,8 @@ def _patch_resolve():
     async def _resolver(target, config, issue_title="", **kwargs):
         if target in config.entities.skip:
             return None
-        if target in config.entities.sessions:
-            return config.entities.sessions[target]
+        if target in config.registry.sessions_map:
+            return config.registry.sessions_map[target]
         return config.entities.fallback.get(target)
 
     return patch("flows.issue_dispatcher.resolve_entity_session", side_effect=_resolver)

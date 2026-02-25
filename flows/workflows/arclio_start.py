@@ -24,7 +24,7 @@ async def start_arclio_agents(config: BackboneConfig) -> list[str]:
     """Start Arclio-related agent sessions."""
     started = []
     for agent in ARCLIO_AGENTS:
-        session_name = config.entities.sessions.get(agent, agent)
+        session_name = config.registry.sessions_map.get(agent, agent)
         if await start_session(session_name):
             started.append(session_name)
     return started

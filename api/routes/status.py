@@ -30,10 +30,10 @@ async def get_system_status(
     active = await list_sessions()
 
     agents: list[EnrichedAgent] = []
-    for entity, session in config.entities.sessions.items():
+    for entity, session in config.registry.sessions_map.items():
         agent = await _build_enriched_agent(session, entity, config, agent_type="named_entity")
         agents.append(agent)
-    named_sessions = set(config.entities.sessions.values())
+    named_sessions = set(config.registry.sessions_map.values())
     service_sessions = config.entities.service_sessions
     for session in active:
         if session not in named_sessions and session not in service_sessions:
@@ -88,8 +88,8 @@ async def get_service_health(
 async def get_entity_config(config: BackboneConfig = Depends(get_config)):
     """Return entity configuration (non-secret)."""
     return {
-        "sessions": config.entities.sessions,
-        "coding_repos": sorted(config.entities.coding_repos),
+        "sessions": config.registry.sessions_map,
+        "coding_repos": sorted(config.registry.repo_names),
         "skip": sorted(config.entities.skip),
         "fallback": config.entities.fallback,
     }

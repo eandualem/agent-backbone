@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -48,10 +48,15 @@ def _load_room(room_id: str) -> Room | None:
         return None
 
 
+def _now_iso() -> str:
+    """Return current UTC time as ISO 8601 string."""
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _save_room(room: Room) -> None:
     """Write a room to its JSON file, updating updated_at."""
     _ROOM_DIR.mkdir(parents=True, exist_ok=True)
-    room.updated_at = time.time()
+    room.updated_at = _now_iso()
     path = _ROOM_DIR / f"{room.id}.json"
     path.write_text(room.model_dump_json(indent=2))
 
@@ -128,7 +133,7 @@ def _check_room_active(room: Room) -> None:
 @router.post("/rooms", response_model=Room, status_code=201)
 async def create_room(body: RoomCreate):
     """Create a new meeting room."""
-    now = time.time()
+    now = _now_iso()
     room = Room(
         id=str(uuid.uuid4()),
         title=body.title,
@@ -188,7 +193,7 @@ async def send_directed(
         recipients=[body.target],
         mode="directed",
         content=body.content,
-        timestamp=time.time(),
+        timestamp=_now_iso(),
     )
     room.transcript.append(msg)
     _save_room(room)
@@ -227,7 +232,7 @@ async def send_broadcast(
         recipients=list(room.participants),
         mode="broadcast",
         content=body.content,
-        timestamp=time.time(),
+        timestamp=_now_iso(),
     )
     room.transcript.append(msg)
     _save_room(room)
@@ -253,7 +258,7 @@ async def post_response(room_id: str, body: ResponseMessageRequest):
         recipients=[],
         mode="response",
         content=body.content,
-        timestamp=time.time(),
+        timestamp=_now_iso(),
     )
     room.transcript.append(msg)
     _save_room(room)

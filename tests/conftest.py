@@ -16,16 +16,71 @@ from src.models import (
     IssueEvent,
     ParsedLabels,
 )
+from src.registry import EntityEntry, EntityRegistry
 
 
 @pytest.fixture
 def config():
     """Test BackboneConfig with dummy values."""
+    test_registry = EntityRegistry(
+        entities={
+            "feynman": EntityEntry(
+                session="feynman", home="~/orchestration",
+                groups=["orchestrators"], figure="Richard Feynman",
+                role="Orchestration Optimizer",
+            ),
+            "ike": EntityEntry(
+                session="ike", home="~/ws/core/ike",
+                groups=["orchestrators"], figure="Dwight Eisenhower",
+                role="Core Orchestrator",
+            ),
+            "leo": EntityEntry(
+                session="leo", home="~/ws/leo",
+                groups=["orchestrators"], figure="Leonardo da Vinci",
+                role="Strategy Co-Architect",
+            ),
+            "ada": EntityEntry(
+                session="ada", home="~/ws/core/spec",
+                groups=["standalone"], figure="Ada Lovelace",
+                role="Spec Agent",
+            ),
+            "brunel": EntityEntry(
+                session="brunel", home="~/infra",
+                groups=["orchestrators"],
+                figure="Isambard Kingdom Brunel",
+                role="Infrastructure Agent",
+            ),
+            "hamilton": EntityEntry(
+                session="hamilton", home="~/ws/core/hamilton",
+                groups=["orchestrators"],
+                figure="Alexander Hamilton",
+                role="Arclio Orchestrator",
+            ),
+            "curie": EntityEntry(
+                session="curie", home="~/ws/core/curie",
+                groups=["orchestrators"], figure="Marie Curie",
+                role="Loveble Orchestrator",
+            ),
+            "bell": EntityEntry(
+                session="bell", home="~/ws/core/bell",
+                groups=["orchestrators"],
+                figure="Alexander Graham Bell",
+                role="WF Orchestrator",
+            ),
+            "gallup": EntityEntry(
+                session="gallup", home="~/ws/core/gallup",
+                groups=["standalone"], figure="George Gallup",
+                role="Market Research",
+            ),
+        },
+        repos=[],
+    )
     return BackboneConfig(
         github_token="test-token-123",
         webhook_secret="test-secret",
         gateway=GatewayConfig(port=9877),
         github=GitHubConfig(owner="eandualem", repo="orchestration"),
+        registry=test_registry,
     )
 
 

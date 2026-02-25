@@ -6,6 +6,7 @@ import json
 from unittest.mock import MagicMock
 
 from src.config import BackboneConfig, TelegramConfig
+from src.registry import EntityEntry, EntityRegistry, RepoInfo
 from src.topic_discovery import (
     TopicDiscovery,
     effective_group_chat_id,
@@ -17,8 +18,34 @@ from src.topic_discovery import (
 )
 
 
+def _topic_test_registry() -> EntityRegistry:
+    """Registry with entities and repos for topic discovery tests."""
+    return EntityRegistry(
+        entities={
+            "ike": EntityEntry(
+                session="ike", home="~/ws/core/ike",
+                groups=[], figure="", role="",
+            ),
+            "feynman": EntityEntry(
+                session="feynman", home="~/orchestration",
+                groups=[], figure="", role="",
+            ),
+            "leo": EntityEntry(
+                session="leo", home="~/ws/leo",
+                groups=[], figure="", role="",
+            ),
+        },
+        repos=[
+            RepoInfo(org="Arclio", name="platform-api", path="/ws/core/code/Arclio/platform-api"),
+            RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+        ],
+    )
+
+
 def _make_config(**kwargs) -> BackboneConfig:
     """Config with standard entities for testing."""
+    if "registry" not in kwargs:
+        kwargs["registry"] = _topic_test_registry()
     return BackboneConfig(**kwargs)
 
 

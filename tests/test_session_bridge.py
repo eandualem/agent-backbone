@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from src.agent_state import AgentState, StateSnapshot
 from src.config import BackboneConfig, JarvisConfig, SessionBridgeConfig
+from src.registry import EntityEntry, EntityRegistry
 from src.session_bridge import (
     SessionIntelligence,
     SessionProfile,
@@ -98,9 +99,40 @@ def _patch_db():
     return _DBContext()
 
 
+def _test_registry() -> EntityRegistry:
+    """Registry with standard test entities."""
+    return EntityRegistry(
+        entities={
+            "ike": EntityEntry(
+                session="ike", home="~/ws/core/ike",
+                groups=[], figure="", role="Core Orchestrator",
+            ),
+            "feynman": EntityEntry(
+                session="feynman", home="~/orchestration",
+                groups=[], figure="",
+                role="Orchestration Optimizer",
+            ),
+            "leo": EntityEntry(
+                session="leo", home="~/ws/leo",
+                groups=[], figure="",
+                role="Strategy Co-Architect",
+            ),
+            "ada": EntityEntry(
+                session="ada", home="~/ws/core/spec",
+                groups=[], figure="", role="Spec Agent",
+            ),
+        },
+        repos=[],
+    )
+
+
 def _default_config() -> BackboneConfig:
     """BackboneConfig with defaults (no TOML, no env vars needed)."""
-    return BackboneConfig(github_token="test-token", webhook_secret="test-secret")
+    return BackboneConfig(
+        github_token="test-token",
+        webhook_secret="test-secret",
+        registry=_test_registry(),
+    )
 
 
 def _config_with_grace(seconds: int) -> BackboneConfig:
@@ -108,6 +140,7 @@ def _config_with_grace(seconds: int) -> BackboneConfig:
     return BackboneConfig(
         github_token="test-token",
         webhook_secret="test-secret",
+        registry=_test_registry(),
         session_bridge=SessionBridgeConfig(grace_period_seconds=seconds),
     )
 

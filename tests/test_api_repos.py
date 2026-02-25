@@ -52,6 +52,10 @@ def repo_workspace(tmp_path):
     repos_json = tmp_path / "state" / "repos.json"
 
     ws.mkdir(parents=True)
+    # Create known org directories so _discover_orgs() finds them
+    (ws / "Arclio").mkdir()
+    (ws / "Loveble").mkdir()
+    (ws / "WF").mkdir()
     spec.mkdir(parents=True)
     orch.mkdir(parents=True)
     registry.parent.mkdir(parents=True)

@@ -82,8 +82,8 @@ async def check_for_stalls(config: BackboneConfig, active_sessions: set[str]) ->
     state_path = config.agent_state.state_path
     stale_threshold = config.agent_state.stale_threshold_seconds
 
-    for entity in config.entities.all_entities:
-        session_name = config.entities.sessions.get(entity)
+    for entity in config.registry.all_entities:
+        session_name = config.registry.sessions_map.get(entity)
         if not session_name or session_name not in active_sessions:
             continue
 
@@ -115,8 +115,8 @@ async def check_for_stalls(config: BackboneConfig, active_sessions: set[str]) ->
     # Persist current states to DB for offline detection
     try:
         async with BackboneDB(str(config.delivery.db_file)) as db:
-            for entity in config.entities.all_entities:
-                session_name = config.entities.sessions.get(entity)
+            for entity in config.registry.all_entities:
+                session_name = config.registry.sessions_map.get(entity)
                 if not session_name or session_name not in active_sessions:
                     continue
                 snapshot = await get_agent_state(state_path, session_name, stale_threshold)
@@ -165,7 +165,7 @@ async def check_for_unexpected_offline(
 
         # Map session back to entity
         entity = None
-        for ent, sess in config.entities.sessions.items():
+        for ent, sess in config.registry.sessions_map.items():
             if sess == session_name:
                 entity = ent
                 break
@@ -231,7 +231,7 @@ async def _monitor_agents_impl() -> dict:
     try:
         stalls = await check_for_stalls(config, active_sessions)
         escalation_target = config.escalation.escalation_target
-        escalation_session = config.entities.sessions.get(escalation_target)
+        escalation_session = config.registry.sessions_map.get(escalation_target)
 
         for stall in stalls:
             event_key = f"stall:{stall['issue_number']}"
@@ -259,7 +259,7 @@ async def _monitor_agents_impl() -> dict:
     try:
         offline_agents = await check_for_unexpected_offline(config, active_sessions)
         escalation_target = config.escalation.escalation_target
-        escalation_session = config.entities.sessions.get(escalation_target)
+        escalation_session = config.registry.sessions_map.get(escalation_target)
 
         for agent in offline_agents:
             event_key = "offline"
@@ -311,8 +311,8 @@ async def _monitor_agents_impl() -> dict:
             state_path = config.agent_state.state_path
             stale_threshold = config.agent_state.stale_threshold_seconds
 
-            for entity in config.entities.all_entities:
-                session_name = config.entities.sessions.get(entity)
+            for entity in config.registry.all_entities:
+                session_name = config.registry.sessions_map.get(entity)
                 if not session_name or session_name not in active_sessions:
                     continue
 
@@ -342,8 +342,8 @@ async def _monitor_agents_impl() -> dict:
         log.exception("Plan-waiting notification failed (non-fatal)")
 
     # State-aware delivery loop
-    for entity in config.entities.all_entities:
-        session_name = config.entities.sessions.get(entity)
+    for entity in config.registry.all_entities:
+        session_name = config.registry.sessions_map.get(entity)
         if not session_name or session_name not in active_sessions:
             continue
 
@@ -466,7 +466,7 @@ async def _sync_dependencies(config: BackboneConfig) -> None:
         async with GitHubClient(config) as gh:
             # Check each entity's open issues for sub-issue relationships
             checked: set[int] = set()
-            for entity in config.entities.all_entities:
+            for entity in config.registry.all_entities:
                 label = f"for:{entity}"
                 issues = await gh.list_open_issues(label)
                 for issue in issues:

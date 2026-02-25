@@ -67,15 +67,6 @@ for _rt_id, _rt_entry in _RUNTIMES.items():
     if _rt_entry["command"] and not _rt_entry["resolved_path"]:
         log.warning("Runtime '%s': binary '%s' not found", _rt_id, _rt_entry["command"])
 
-# Named entity display info
-_ENTITY_DISPLAY = {
-    "feynman": {"display_name": "Feynman", "role": "Orchestration Optimizer"},
-    "ike": {"display_name": "Ike", "role": "Core Orchestrator"},
-    "leo": {"display_name": "Leo", "role": "Strategy Co-Architect"},
-    "ada": {"display_name": "Ada", "role": "Spec Agent"},
-    "brunel": {"display_name": "Brunel", "role": "Infrastructure Agent"},
-}
-
 
 async def _build_enriched_agent(
     session: str,
@@ -91,7 +82,22 @@ async def _build_enriched_agent(
         session,
         config.agent_state.stale_threshold_seconds,
     )
-    display = _ENTITY_DISPLAY.get(entity, {})
+    reg_entry = config.registry.entities.get(entity)
+    display_name = reg_entry.figure.split()[-1] if reg_entry else session
+    role = reg_entry.role if reg_entry else "Coding Agent"
+    figure = reg_entry.figure if reg_entry else ""
+    groups = list(reg_entry.groups) if reg_entry else []
+    home = reg_entry.home if reg_entry else ""
+
+    # Resolve org: named entities from registry, coding agents from RepoInfo
+    org = ""
+    if reg_entry and reg_entry.organization:
+        org = reg_entry.organization
+    elif agent_type == "coding_agent":
+        for repo in config.registry.repos:
+            if repo.name == session:
+                org = repo.org
+                break
 
     tmux_created = None
     tmux_attached = False
@@ -103,13 +109,26 @@ async def _build_enriched_agent(
         tmux_attached = tmux_info.get("attached", False)
         tmux_windows = tmux_info.get("windows", 0)
 
+    # State inference: reconcile online (tmux) with state (file)
+    state_value = snapshot.state.value
+    if not online:
+        # No tmux session → offline, regardless of stale state file
+        state_value = "offline"
+    elif state_value == "unknown":
+        # Tmux session exists but no state file → default to idle
+        state_value = "idle"
+
     return EnrichedAgent(
         session=session,
         entity=entity,
-        display_name=display.get("display_name", session),
-        role=display.get("role", "Coding Agent"),
+        display_name=display_name,
+        role=role,
+        figure=figure,
+        org=org,
+        groups=groups,
+        home=home,
         type=agent_type,
-        state=snapshot.state.value,
+        state=state_value,
         current_issue=snapshot.current_issue,
         online=online,
         plan_file=snapshot.plan_file,
@@ -130,7 +149,7 @@ async def list_agents(config: BackboneConfig = Depends(get_config)):
     tmux_lookup = {s["name"]: s for s in rich_sessions}
 
     # Named entities
-    for entity, session in config.entities.sessions.items():
+    for entity, session in config.registry.sessions_map.items():
         agent = await _build_enriched_agent(
             session, entity, config, tmux_lookup.get(session), agent_type="named_entity"
         )
@@ -138,12 +157,22 @@ async def list_agents(config: BackboneConfig = Depends(get_config)):
 
     # Discover coding agents from tmux sessions (exclude services)
     active = await list_sessions()
-    named_sessions = set(config.entities.sessions.values())
+    named_sessions = set(config.registry.sessions_map.values())
     service_sessions = config.entities.service_sessions
+    seen_coding: set[str] = set()
     for session in active:
         if session not in named_sessions and session not in service_sessions:
             agent = await _build_enriched_agent(
                 session, session, config, tmux_lookup.get(session), agent_type="coding_agent"
+            )
+            agents.append(agent)
+            seen_coding.add(session)
+
+    # Include all known repos from filesystem scan (offline ones too)
+    for repo in config.registry.repos:
+        if repo.name not in seen_coding and repo.name not in named_sessions:
+            agent = await _build_enriched_agent(
+                repo.name, repo.name, config, agent_type="coding_agent"
             )
             agents.append(agent)
 
@@ -199,6 +228,7 @@ async def list_runtimes():
 async def start_agent_session(
     session: str,
     body: AgentStartRequest | None = Body(default=None),
+    config: BackboneConfig = Depends(get_config),
 ):
     """Start a new tmux session for an agent.
 
@@ -224,7 +254,10 @@ async def start_agent_session(
             detail=f"Runtime '{runtime_id}': binary '{command}' not found on this system",
         )
 
-    working_dir = (body.working_directory if body else None) or resolve_agent_dir(session)
+    working_dir = (
+        (body.working_directory if body else None)
+        or resolve_agent_dir(session, config.registry)
+    )
     ok = await start_session(
         session,
         working_dir=working_dir or None,

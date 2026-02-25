@@ -67,7 +67,7 @@ class TestResolveCommand:
 
 class TestListAgents:
     async def test_returns_named_entities(self, api_client, auth_headers):
-        """Named entities from config.entities.sessions are always included."""
+        """Named entities from config.registry.sessions_map are always included."""
         with (
             patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
             patch(f"{_AGENTS}.list_sessions", new_callable=AsyncMock) as mock_list,
@@ -166,6 +166,71 @@ class TestListAgents:
         # Services are excluded
         for svc in ("ngrok", "prefect-worker", "prefect-server", "telegram-bot"):
             assert svc not in sessions
+
+    async def test_includes_offline_repos_from_registry(
+        self, api_app, api_client, auth_headers
+    ):
+        """All repos from registry appear as coding agents, even without active sessions."""
+        from dataclasses import replace as dc_replace
+
+        from src.registry import RepoInfo
+
+        # Add repos to the test config's registry
+        old_config = api_app.state.config
+        old_reg = old_config.registry
+        new_reg = dc_replace(
+            old_reg,
+            repos=[
+                RepoInfo(org="Arclio", name="platform-api", path="/ws/code/Arclio/platform-api"),
+                RepoInfo(org="WF", name="agent-backbone", path="/ws/code/WF/agent-backbone"),
+            ],
+        )
+        api_app.state.config = dc_replace(old_config, registry=new_reg)
+
+        try:
+            with (
+                patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
+                patch(f"{_AGENTS}.list_sessions", new_callable=AsyncMock) as mock_list,
+                patch(
+                    f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock
+                ) as mock_rich,
+                patch(
+                    f"{_AGENTS}.session_exists", new_callable=AsyncMock
+                ) as mock_exists,
+            ):
+                mock_state.return_value = _idle_snapshot()
+                # Only agent-backbone has an active session
+                mock_list.return_value = ["feynman", "ike", "agent-backbone"]
+                mock_rich.return_value = [{
+                    "name": "agent-backbone", "windows": 1,
+                    "created": 1708000000, "attached": True,
+                }]
+                mock_exists.side_effect = lambda s: s in ("feynman", "ike", "agent-backbone")
+
+                resp = await api_client.get("/api/agents", headers=auth_headers)
+        finally:
+            api_app.state.config = old_config
+
+        assert resp.status_code == 200
+        data = resp.json()
+        sessions = [a["session"] for a in data["items"]]
+
+        # platform-api appears even though it has no active tmux session
+        assert "platform-api" in sessions
+        pa = next(a for a in data["items"] if a["session"] == "platform-api")
+        assert pa["type"] == "coding_agent"
+        assert pa["online"] is False
+        assert pa["org"] == "Arclio"
+
+        # agent-backbone appears via active session discovery (not duplicated)
+        ab = next(a for a in data["items"] if a["session"] == "agent-backbone")
+        assert ab["type"] == "coding_agent"
+        assert ab["online"] is True
+        assert ab["tmux_windows"] == 1
+
+        # No duplicates
+        assert sessions.count("agent-backbone") == 1
+        assert sessions.count("platform-api") == 1
 
     async def test_requires_auth(self, api_client):
         """Request without auth headers is rejected when API key is set."""
@@ -423,7 +488,8 @@ class TestStartSession:
         assert resp.status_code == 200
         data = resp.json()
         assert data["working_directory"] == "/resolved/dir"
-        mock_resolve.assert_called_once_with("ike")
+        mock_resolve.assert_called_once()
+        assert mock_resolve.call_args[0][0] == "ike"
 
     async def test_start_default_runtime(self, api_client, auth_headers):
         """POST without runtime defaults to claude, passes resolved absolute path."""

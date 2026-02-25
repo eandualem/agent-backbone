@@ -43,7 +43,7 @@ async def count_pending_issues(config: BackboneConfig) -> dict[str, int]:
     """Count pending issues per entity."""
     counts: dict[str, int] = {}
     async with GitHubClient(config) as gh:
-        for entity in config.entities.all_entities:
+        for entity in config.registry.all_entities:
             label = f"for:{entity}"
             issues = await gh.list_open_issues(label)
             if issues:

@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 async def stop_all_agents(config: BackboneConfig) -> dict[str, bool]:
     """Stop all configured agent sessions. Returns {session: success}."""
     results: dict[str, bool] = {}
-    for entity, session_name in config.entities.sessions.items():
+    for entity, session_name in config.registry.sessions_map.items():
         results[session_name] = await stop_session(session_name)
     return results
 

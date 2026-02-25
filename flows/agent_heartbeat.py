@@ -106,7 +106,7 @@ async def evaluate_agent_heartbeat(
         return "skipped_disabled"
 
     # Resolve session name
-    session = config.entities.sessions.get(agent, agent)
+    session = config.registry.sessions_map.get(agent, agent)
 
     # Check if due — need last fired from SQLite
     async with BackboneDB(str(config.delivery.db_file)) as db:

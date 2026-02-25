@@ -24,11 +24,11 @@ async def list_pending_plans(config: BackboneConfig = Depends(get_config)):
     plans: list[PlanDetail] = []
 
     # Check named entities
-    all_sessions = list(config.entities.sessions.values())
+    all_sessions = list(config.registry.sessions_map.values())
 
     # Also check active coding agents
     active = await list_sessions()
-    named = set(config.entities.sessions.values())
+    named = set(config.registry.sessions_map.values())
     all_sessions.extend(s for s in active if s not in named)
 
     for session in all_sessions:

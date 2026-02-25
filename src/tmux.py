@@ -12,7 +12,10 @@ import logging
 import os
 import signal
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
+
+if TYPE_CHECKING:
+    from src.registry import EntityRegistry
 
 log = logging.getLogger(__name__)
 
@@ -36,43 +39,25 @@ class WindowInfo(TypedDict):
 # Default format string for session intelligence queries
 SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}\nclient_activity=#{client_activity}"
 
-# Named entity → working directory mapping
-_ENTITY_DIRS: dict[str, str] = {
-    "feynman": str(Path.home() / "orchestration"),
-    "ike": str(Path.home() / "ws" / "core" / "ike"),
-    "leo": str(Path.home() / "ws" / "leo"),
-    "ada": str(Path.home() / "ws" / "core" / "spec"),
-    "brunel": str(Path.home() / "infra"),
-    "hamilton": str(Path.home() / "ws" / "core" / "hamilton"),
-    "curie": str(Path.home() / "ws" / "core" / "curie"),
-    "bell": str(Path.home() / "ws" / "core" / "bell"),
-}
 
-# Base directories to search for coding repos
-_CODE_BASE_DIRS = [
-    Path.home() / "ws" / "core" / "code" / "Arclio",
-    Path.home() / "ws" / "core" / "code" / "Loveble",
-    Path.home() / "ws" / "core" / "code" / "WF",
-]
-
-
-def resolve_agent_dir(session_name: str) -> str:
+def resolve_agent_dir(session_name: str, registry: EntityRegistry | None = None) -> str:
     """Resolve the working directory for an agent session.
 
-    Named entities map to fixed directories. Coding repos search
-    base directories for a matching folder name.
-
-    Returns empty string if unresolvable.
+    Named entities resolve via registry home dirs. Coding repos resolve
+    via registry repo paths. Returns empty string if unresolvable.
     """
-    # Named entities
-    if session_name in _ENTITY_DIRS:
-        return _ENTITY_DIRS[session_name]
+    if registry is None:
+        return ""
 
-    # Coding repos: check base dirs for a matching folder
-    for base in _CODE_BASE_DIRS:
-        candidate = base / session_name
-        if candidate.is_dir():
-            return str(candidate)
+    # Named entities: look up home dir by session name
+    home = registry.home_by_session.get(session_name)
+    if home:
+        return home
+
+    # Coding repos: look up path by repo name
+    repo_path = registry.repo_path_by_name.get(session_name)
+    if repo_path:
+        return repo_path
 
     return ""
 

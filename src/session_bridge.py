@@ -205,8 +205,8 @@ async def resolve_entity_session(
         return None
 
     # Named entity direct mapping
-    if target in config.entities.sessions:
-        return config.entities.sessions[target]
+    if target in config.registry.sessions_map:
+        return config.registry.sessions_map[target]
 
     # Jarvis: HTTP injection target (no tmux session)
     if target == "jarvis":

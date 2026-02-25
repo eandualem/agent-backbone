@@ -14,6 +14,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from src.registry import EntityRegistry, build_registry
+
 load_dotenv()
 
 # Repo name pattern: "[type] repo-name: description" or "[type] org/repo-name: description"
@@ -21,34 +23,6 @@ REPO_NAME_PATTERN: re.Pattern[str] = re.compile(r"^\[[^\]]+\]\s+([\w/.-]+):")
 
 # Default TOML path: backbone.toml in repo root
 _DEFAULT_TOML_PATH = Path(__file__).resolve().parent.parent / "backbone.toml"
-
-_DEFAULT_SESSIONS: dict[str, str] = {
-    "feynman": "feynman",
-    "ike": "ike",
-    "leo": "leo",
-    "ada": "ada",
-    "brunel": "brunel",
-    "hamilton": "hamilton",
-    "curie": "curie",
-    "bell": "bell",
-    "gallup": "gallup",
-}
-
-_DEFAULT_CODING_REPOS: frozenset[str] = frozenset(
-    {
-        "platform-api",
-        "platform-web",
-        "arclio-assistant",
-        "arclio-janus",
-        "mcp-hub",
-        "AI-chatbot",
-        "arclio-mcp-tooling",
-        "prefect-workflow-migration",
-        "rag-eval",
-        "rules-clients",
-        "agent-backbone",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -68,21 +42,31 @@ class GitHubConfig:
 
 
 @dataclass(frozen=True)
-class EntityConfig:
-    """Entity-to-session mapping and routing."""
+class RegistryConfig:
+    """Registry file paths for entity and repo discovery."""
 
-    sessions: dict[str, str] = field(default_factory=lambda: dict(_DEFAULT_SESSIONS))
-    skip: frozenset[str] = frozenset({"elias"})
-    fallback: dict[str, str] = field(default_factory=lambda: {"coding-agent": "ike"})
-    coding_repos: frozenset[str] = field(default_factory=lambda: _DEFAULT_CODING_REPOS)
-    service_sessions: frozenset[str] = frozenset(
-        {"ngrok", "prefect-worker", "prefect-server", "telegram-bot"}
-    )
+    path: str = "~/.claude/state/entity-registry.json"
+    code_base_dir: str = "~/ws/core/code"
 
     @property
-    def all_entities(self) -> list[str]:
-        """All named entities (for monitor iteration)."""
-        return list(self.sessions.keys())
+    def registry_path(self) -> Path:
+        return Path(self.path).expanduser()
+
+    @property
+    def code_base_path(self) -> Path:
+        return Path(self.code_base_dir).expanduser()
+
+
+@dataclass(frozen=True)
+class EntityConfig:
+    """Entity routing configuration (non-registry parts)."""
+
+    skip: frozenset[str] = frozenset({"elias"})
+    fallback: dict[str, str] = field(default_factory=lambda: {"coding-agent": "ike"})
+    service_sessions: frozenset[str] = frozenset({
+        "ngrok", "prefect", "prefect-worker", "prefect-server",
+        "telegram-bot", "gateway", "backbone-worker",
+    })
 
 
 @dataclass(frozen=True)
@@ -239,6 +223,7 @@ class BackboneConfig:
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     github: GitHubConfig = field(default_factory=GitHubConfig)
     entities: EntityConfig = field(default_factory=EntityConfig)
+    registry: EntityRegistry = field(default_factory=EntityRegistry)
     dedup: DedupConfig = field(default_factory=DedupConfig)
     agent_state: AgentStateConfig = field(default_factory=AgentStateConfig)
     scheduling: SchedulingConfig = field(default_factory=SchedulingConfig)
@@ -289,6 +274,7 @@ class BackboneConfig:
         gw = raw.get("gateway", {})
         gh = raw.get("github", {})
         ent = raw.get("entities", {})
+        reg = raw.get("registry", {})
         dd = raw.get("dedup", {})
         ag = raw.get("agent_state", {})
         sc = raw.get("scheduling", {})
@@ -302,6 +288,23 @@ class BackboneConfig:
         sb = raw.get("session_bridge", {})
         cm = raw.get("control_mode", {})
 
+        # Build registry from JSON + filesystem
+        import logging
+
+        _log = logging.getLogger(__name__)
+        reg_cfg = RegistryConfig(
+            path=reg.get("path", "~/.claude/state/entity-registry.json"),
+            code_base_dir=reg.get("code_base_dir", "~/ws/core/code"),
+        )
+        try:
+            registry = build_registry(reg_cfg.registry_path, reg_cfg.code_base_path)
+        except FileNotFoundError:
+            _log.warning(
+                "Entity registry not found at %s — using empty registry",
+                reg_cfg.registry_path,
+            )
+            registry = EntityRegistry()
+
         return cls(
             gateway=GatewayConfig(
                 port=gw.get("port", 9877),
@@ -312,17 +315,18 @@ class BackboneConfig:
                 repo=gh.get("repo", "orchestration"),
             ),
             entities=EntityConfig(
-                sessions=ent.get("sessions", dict(_DEFAULT_SESSIONS)),
                 skip=frozenset(ent.get("skip", ["elias"])),
                 fallback=ent.get("fallback", {"coding-agent": "ike"}),
-                coding_repos=frozenset(ent.get("coding_repos", _DEFAULT_CODING_REPOS)),
                 service_sessions=frozenset(
                     ent.get(
                         "service_sessions",
-                        ["ngrok", "prefect-worker", "prefect-server", "telegram-bot"],
+                        ["ngrok", "prefect", "prefect-worker",
+                         "prefect-server", "telegram-bot",
+                         "gateway", "backbone-worker"],
                     )
                 ),
             ),
+            registry=registry,
             dedup=DedupConfig(
                 notification_window_seconds=dd.get("notification_window_seconds", 10),
             ),

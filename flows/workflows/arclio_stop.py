@@ -24,7 +24,7 @@ async def stop_arclio_agents(config: BackboneConfig) -> list[str]:
     """Stop Arclio-related agent sessions."""
     stopped = []
     for agent in ARCLIO_AGENTS:
-        session_name = config.entities.sessions.get(agent, agent)
+        session_name = config.registry.sessions_map.get(agent, agent)
         if await stop_session(session_name):
             stopped.append(session_name)
     return stopped

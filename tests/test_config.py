@@ -11,6 +11,7 @@ from src.config import (
     HeartbeatConfig,
     JarvisConfig,
 )
+from src.registry import EntityEntry, EntityRegistry
 
 
 class TestBackboneConfigDefaults:
@@ -32,27 +33,10 @@ class TestBackboneConfigDefaults:
         assert config.github.owner == "eandualem"
         assert config.github.repo == "orchestration"
 
-    def test_nested_entities(self):
+    def test_nested_entities_non_registry(self):
         config = BackboneConfig()
-        assert "feynman" in config.entities.sessions
-        assert "ike" in config.entities.sessions
-        assert "leo" in config.entities.sessions
-        assert "ada" in config.entities.sessions
-        assert "brunel" in config.entities.sessions
         assert "elias" in config.entities.skip
         assert config.entities.fallback["coding-agent"] == "ike"
-
-    def test_all_entities_property(self):
-        config = BackboneConfig()
-        entities = config.entities.all_entities
-        assert "feynman" in entities
-        assert "ike" in entities
-
-    def test_coding_repos(self):
-        config = BackboneConfig()
-        assert "platform-api" in config.entities.coding_repos
-        assert "arclio-assistant" in config.entities.coding_repos
-        assert "mcp-hub" in config.entities.coding_repos
 
     def test_frozen(self):
         config = BackboneConfig()
@@ -82,7 +66,7 @@ class TestFromToml:
         config = BackboneConfig.from_toml()
         assert config.gateway.port == 9877
         assert config.github.owner == "eandualem"
-        assert "feynman" in config.entities.sessions
+        assert "feynman" in config.registry.sessions_map
         assert "elias" in config.entities.skip
         assert config.dedup.notification_window_seconds == 10
 
@@ -90,16 +74,13 @@ class TestFromToml:
         config = BackboneConfig.from_toml(tmp_path / "missing.toml")
         assert config.gateway.port == 9877
         assert config.github.owner == "eandualem"
-        assert "feynman" in config.entities.sessions
 
     def test_custom_toml(self, tmp_path):
         toml_file = tmp_path / "test.toml"
         toml_file.write_text(
             "[gateway]\nport = 8080\n\n"
             '[github]\nowner = "testorg"\nrepo = "testrepo"\n\n'
-            '[entities.sessions]\nalice = "alice-session"\n\n'
-            '[entities]\nskip = ["bob"]\n'
-            'coding_repos = ["my-repo"]\n\n'
+            '[entities]\nskip = ["bob"]\n\n'
             '[entities.fallback]\ncoding-agent = "alice"\n\n'
             "[dedup]\nnotification_window_seconds = 30\n"
         )
@@ -107,9 +88,7 @@ class TestFromToml:
         assert config.gateway.port == 8080
         assert config.github.owner == "testorg"
         assert config.github.repo == "testrepo"
-        assert config.entities.sessions == {"alice": "alice-session"}
         assert "bob" in config.entities.skip
-        assert "my-repo" in config.entities.coding_repos
         assert config.entities.fallback["coding-agent"] == "alice"
         assert config.dedup.notification_window_seconds == 30
 
@@ -129,6 +108,69 @@ class TestFromToml:
         assert config.github_repo == config.github.repo
         assert config.max_delivery_ids == config.gateway.max_delivery_ids
         assert config.notify_dedup_seconds == config.dedup.notification_window_seconds
+
+
+class TestEntityRegistry:
+    def test_from_toml_loads_registry(self):
+        """from_toml loads entity registry when file exists."""
+        config = BackboneConfig.from_toml()
+        # Registry should be populated from ~/.claude/state/entity-registry.json
+        assert "feynman" in config.registry.sessions_map
+        assert "ike" in config.registry.sessions_map
+        assert config.registry.sessions_map["feynman"] == "feynman"
+
+    def test_from_toml_registry_all_entities(self):
+        config = BackboneConfig.from_toml()
+        assert "feynman" in config.registry.all_entities
+        assert "ike" in config.registry.all_entities
+
+    def test_from_toml_registry_discovers_repos(self):
+        config = BackboneConfig.from_toml()
+        # Should discover repos from ~/ws/core/code/*/
+        assert len(config.registry.repo_names) > 0
+        assert "agent-backbone" in config.registry.repo_names
+
+    def test_default_constructor_empty_registry(self):
+        config = BackboneConfig()
+        assert config.registry.sessions_map == {}
+        assert config.registry.all_entities == []
+        assert config.registry.repo_names == frozenset()
+
+    def test_constructed_registry(self):
+        """Registry constructed with entities exposes sessions_map correctly."""
+        registry = EntityRegistry(
+            entities={
+                "alice": EntityEntry(
+                    session="alice-session",
+                    home="~/alice",
+                    groups=["test"],
+                    figure="Alice",
+                    role="Tester",
+                ),
+                "bob": EntityEntry(
+                    session="bob-session",
+                    home="~/bob",
+                    groups=["test"],
+                    figure="Bob",
+                    role="Builder",
+                ),
+            },
+            repos=[],
+        )
+        assert registry.sessions_map == {"alice": "alice-session", "bob": "bob-session"}
+        assert set(registry.all_entities) == {"alice", "bob"}
+        assert registry.repo_names == frozenset()
+
+    def test_missing_registry_file_uses_empty(self, tmp_path):
+        """from_toml with missing registry file falls back to empty."""
+        toml_file = tmp_path / "test.toml"
+        toml_file.write_text(
+            "[registry]\n"
+            f'path = "{tmp_path / "nonexistent.json"}"\n'
+            f'code_base_dir = "{tmp_path / "nonexistent"}"\n'
+        )
+        config = BackboneConfig.from_toml(toml_file)
+        assert config.registry.sessions_map == {}
 
 
 class TestPhaseIIConfigs:

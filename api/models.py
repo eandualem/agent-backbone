@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 T = TypeVar("T")
 
@@ -33,6 +34,10 @@ class EnrichedAgent(BaseModel):
     entity: str
     display_name: str = ""
     role: str = ""
+    figure: str = ""
+    org: str = ""
+    groups: list[str] = Field(default_factory=list)
+    home: str = ""
     type: str = "coding_agent"  # "named_entity" | "coding_agent"
     state: str = "unknown"
     current_issue: int | None = None
@@ -332,7 +337,14 @@ class RoomMessage(BaseModel):
     recipients: list[str]
     mode: str  # "directed" | "broadcast" | "response"
     content: str
-    timestamp: float
+    timestamp: str  # ISO 8601
+
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def _coerce_timestamp(cls, v: object) -> str:
+        if isinstance(v, (int, float)):
+            return datetime.fromtimestamp(v, tz=timezone.utc).isoformat()
+        return str(v)
 
 
 class Room(BaseModel):
@@ -345,8 +357,17 @@ class Room(BaseModel):
     participants: list[str]
     state: str = "active"
     transcript: list[RoomMessage] = Field(default_factory=list)
-    created_at: float = 0.0
-    updated_at: float = 0.0
+    created_at: str = ""  # ISO 8601
+    updated_at: str = ""  # ISO 8601
+
+    @field_validator("created_at", "updated_at", mode="before")
+    @classmethod
+    def _coerce_timestamps(cls, v: object) -> str:
+        if isinstance(v, (int, float)):
+            if v == 0.0:
+                return ""
+            return datetime.fromtimestamp(v, tz=timezone.utc).isoformat()
+        return str(v)
 
 
 class RoomCreate(BaseModel):
