@@ -1,4 +1,4 @@
-"""Tests for src/tmux.py."""
+"""Tests for agent_backbone/services/tmux."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.registry import EntityEntry, EntityRegistry, RepoInfo
-from src.tmux import (
+from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
+from agent_backbone.services.tmux import (
     close_pane,
     close_window,
     create_layout,
@@ -36,8 +36,15 @@ from src.tmux import (
 
 @pytest.fixture
 def mock_subprocess():
-    """Mock asyncio.create_subprocess_exec."""
-    with patch("src.tmux.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock:
+    """Mock asyncio.create_subprocess_exec across all tmux private modules."""
+    mock = AsyncMock()
+    with (
+        patch("agent_backbone.services.tmux._core.asyncio.create_subprocess_exec", mock),
+        patch("agent_backbone.services.tmux._sessions.asyncio.create_subprocess_exec", mock),
+        patch("agent_backbone.services.tmux._panes.asyncio.create_subprocess_exec", mock),
+        patch("agent_backbone.services.tmux._windows.asyncio.create_subprocess_exec", mock),
+        patch("agent_backbone.services.tmux._streaming.asyncio.create_subprocess_exec", mock),
+    ):
         yield mock
 
 
@@ -70,8 +77,15 @@ class TestSessionExists:
 class TestSendMessage:
     async def test_send_success(self):
         with (
-            patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=True),
-            patch("src.tmux.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch(
+                "agent_backbone.services.tmux._core.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.tmux._core.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+            ) as mock_exec,
         ):
             proc = AsyncMock()
             proc.returncode = 0
@@ -83,13 +97,24 @@ class TestSendMessage:
             assert mock_exec.call_count == 2
 
     async def test_send_session_offline(self):
-        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+        with patch(
+            "agent_backbone.services.tmux._core.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
             assert await send_message("offline", "hello") is False
 
     async def test_send_keys_failure(self):
         with (
-            patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=True),
-            patch("src.tmux.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch(
+                "agent_backbone.services.tmux._core.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.tmux._core.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+            ) as mock_exec,
         ):
             proc = AsyncMock()
             proc.returncode = 1
@@ -122,8 +147,15 @@ class TestListSessions:
 class TestSendKeys:
     async def test_send_keys_success(self):
         with (
-            patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=True),
-            patch("src.tmux.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch(
+                "agent_backbone.services.tmux._core.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.tmux._core.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+            ) as mock_exec,
         ):
             proc = AsyncMock()
             proc.returncode = 0
@@ -139,7 +171,11 @@ class TestSendKeys:
             assert "Escape" in call_args
 
     async def test_send_keys_session_offline(self):
-        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+        with patch(
+            "agent_backbone.services.tmux._core.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
             assert await send_keys("offline", "Escape") is False
 
 
@@ -151,28 +187,39 @@ class TestResolveAgentDir:
         )
 
     def test_named_entity_feynman(self):
-        registry = self._make_registry(entities={
-            "feynman": EntityEntry(
-                session="feynman", home="~/orchestration",
-                groups=[], figure="", role="",
-            ),
-        })
+        registry = self._make_registry(
+            entities={
+                "feynman": EntityEntry(
+                    session="feynman",
+                    home="~/orchestration",
+                    groups=[],
+                    figure="",
+                    role="",
+                ),
+            }
+        )
         result = resolve_agent_dir("feynman", registry)
         assert result.endswith("orchestration")
 
     def test_named_entity_ike(self):
-        registry = self._make_registry(entities={
-            "ike": EntityEntry(session="ike", home="~/ws/core/ike", groups=[], figure="", role=""),
-        })
+        registry = self._make_registry(
+            entities={
+                "ike": EntityEntry(
+                    session="ike", home="~/ws/core/ike", groups=[], figure="", role=""
+                ),
+            }
+        )
         result = resolve_agent_dir("ike", registry)
         assert "ws/core/ike" in result
 
     def test_coding_repo_found(self, tmp_path):
         repo_dir = tmp_path / "my-repo"
         repo_dir.mkdir()
-        registry = self._make_registry(repos=[
-            RepoInfo(org="WF", name="my-repo", path=str(repo_dir)),
-        ])
+        registry = self._make_registry(
+            repos=[
+                RepoInfo(org="WF", name="my-repo", path=str(repo_dir)),
+            ]
+        )
         result = resolve_agent_dir("my-repo", registry)
         assert result == str(repo_dir)
 
@@ -188,7 +235,11 @@ class TestResolveAgentDir:
 
 class TestStartSession:
     async def test_start_with_working_dir_and_command(self, mock_subprocess):
-        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+        with patch(
+            "agent_backbone.services.tmux._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
             proc = AsyncMock()
             proc.returncode = 0
             proc.communicate = AsyncMock(return_value=(b"", b""))
@@ -207,13 +258,21 @@ class TestStartSession:
             assert "claude" in call_args
 
     async def test_start_already_exists(self, mock_subprocess):
-        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=True):
+        with patch(
+            "agent_backbone.services.tmux._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             result = await start_session("ike", apply_theme=False)
             assert result is True
             mock_subprocess.assert_not_called()
 
     async def test_start_without_working_dir(self, mock_subprocess):
-        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+        with patch(
+            "agent_backbone.services.tmux._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
             proc = AsyncMock()
             proc.returncode = 0
             proc.communicate = AsyncMock(return_value=(b"", b""))
@@ -517,10 +576,26 @@ class TestCreateLayout:
     async def test_correct_split_count(self):
         """3 panes = 2 splits."""
         with (
-            patch("src.tmux.split_pane", new_callable=AsyncMock, return_value=True) as mock_split,
-            patch("src.tmux.set_layout", new_callable=AsyncMock, return_value=True),
-            patch("src.tmux.list_panes", new_callable=AsyncMock, return_value=[]),
-            patch("src.tmux.send_message", new_callable=AsyncMock, return_value=True),
+            patch(
+                "agent_backbone.services.tmux._windows.split_pane",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_split,
+            patch(
+                "agent_backbone.services.tmux._windows.set_layout",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.tmux._windows.list_panes",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "agent_backbone.services.tmux._windows.send_message",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             result = await create_layout("ike", {"panes": 3, "layout": "tiled"})
             assert result is True
@@ -528,10 +603,26 @@ class TestCreateLayout:
 
     async def test_layout_applied(self):
         with (
-            patch("src.tmux.split_pane", new_callable=AsyncMock, return_value=True),
-            patch("src.tmux.set_layout", new_callable=AsyncMock, return_value=True) as mock_layout,
-            patch("src.tmux.list_panes", new_callable=AsyncMock, return_value=[]),
-            patch("src.tmux.send_message", new_callable=AsyncMock, return_value=True),
+            patch(
+                "agent_backbone.services.tmux._windows.split_pane",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.tmux._windows.set_layout",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_layout,
+            patch(
+                "agent_backbone.services.tmux._windows.list_panes",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "agent_backbone.services.tmux._windows.send_message",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             result = await create_layout("ike", {"panes": 2, "layout": "even-horizontal"})
             assert result is True
@@ -539,8 +630,16 @@ class TestCreateLayout:
 
     async def test_split_failure_aborts(self):
         with (
-            patch("src.tmux.split_pane", new_callable=AsyncMock, return_value=False),
-            patch("src.tmux.set_layout", new_callable=AsyncMock, return_value=True) as mock_layout,
+            patch(
+                "agent_backbone.services.tmux._windows.split_pane",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "agent_backbone.services.tmux._windows.set_layout",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_layout,
         ):
             result = await create_layout("ike", {"panes": 3, "layout": "tiled"})
             assert result is False
@@ -691,7 +790,11 @@ class TestSelectWindow:
 class TestStartSessionEnvironment:
     async def test_env_vars_set(self, mock_subprocess):
         """Environment variables are set via tmux set-environment."""
-        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+        with patch(
+            "agent_backbone.services.tmux._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
             proc = AsyncMock()
             proc.returncode = 0
             proc.communicate = AsyncMock(return_value=(b"", b""))
@@ -710,7 +813,11 @@ class TestStartSessionEnvironment:
 
     async def test_no_env_no_calls(self, mock_subprocess):
         """No environment param means no set-environment calls."""
-        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+        with patch(
+            "agent_backbone.services.tmux._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
             proc = AsyncMock()
             proc.returncode = 0
             proc.communicate = AsyncMock(return_value=(b"", b""))
@@ -724,7 +831,11 @@ class TestStartSessionEnvironment:
 
     async def test_partial_failure_logs_warning(self, mock_subprocess):
         """If one env var fails, session still returns True."""
-        with patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False):
+        with patch(
+            "agent_backbone.services.tmux._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
             # First call (new-session) succeeds, subsequent calls alternate
             success_proc = AsyncMock()
             success_proc.returncode = 0
@@ -751,11 +862,24 @@ class TestGracefulClose:
     async def test_graceful_exit(self):
         """Process exits gracefully after SIGTERM."""
         with (
-            patch("src.tmux.query_format_vars", new_callable=AsyncMock) as mock_qfv,
-            patch("src.tmux.session_exists", new_callable=AsyncMock) as mock_exists,
-            patch("src.tmux.stop_session", new_callable=AsyncMock, return_value=True) as mock_stop,
-            patch("src.tmux.os.kill") as mock_kill,
-            patch("src.tmux.asyncio.sleep", new_callable=AsyncMock),
+            patch(
+                "agent_backbone.services.tmux._sessions.query_format_vars",
+                new_callable=AsyncMock,
+            ) as mock_qfv,
+            patch(
+                "agent_backbone.services.tmux._sessions.session_exists",
+                new_callable=AsyncMock,
+            ) as mock_exists,
+            patch(
+                "agent_backbone.services.tmux._sessions.stop_session",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_stop,
+            patch("agent_backbone.services.tmux._sessions.os.kill") as mock_kill,
+            patch(
+                "agent_backbone.services.tmux._sessions.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
             # First call: get pane_pid. Second call: pane_dead=1
             mock_qfv.side_effect = [
@@ -772,11 +896,25 @@ class TestGracefulClose:
     async def test_timeout_fallback(self):
         """Process doesn't exit within timeout, falls back to kill-session."""
         with (
-            patch("src.tmux.query_format_vars", new_callable=AsyncMock) as mock_qfv,
-            patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=True),
-            patch("src.tmux.stop_session", new_callable=AsyncMock, return_value=True) as mock_stop,
-            patch("src.tmux.os.kill"),
-            patch("src.tmux.asyncio.sleep", new_callable=AsyncMock),
+            patch(
+                "agent_backbone.services.tmux._sessions.query_format_vars",
+                new_callable=AsyncMock,
+            ) as mock_qfv,
+            patch(
+                "agent_backbone.services.tmux._sessions.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.tmux._sessions.stop_session",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_stop,
+            patch("agent_backbone.services.tmux._sessions.os.kill"),
+            patch(
+                "agent_backbone.services.tmux._sessions.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
             # pane_pid OK, then pane_dead always 0
             mock_qfv.side_effect = [
@@ -793,10 +931,24 @@ class TestGracefulClose:
     async def test_process_already_gone(self):
         """ProcessLookupError on kill means session cleanup."""
         with (
-            patch("src.tmux.query_format_vars", new_callable=AsyncMock) as mock_qfv,
-            patch("src.tmux.session_exists", new_callable=AsyncMock, return_value=False),
-            patch("src.tmux.stop_session", new_callable=AsyncMock, return_value=True),
-            patch("src.tmux.os.kill", side_effect=ProcessLookupError),
+            patch(
+                "agent_backbone.services.tmux._sessions.query_format_vars",
+                new_callable=AsyncMock,
+            ) as mock_qfv,
+            patch(
+                "agent_backbone.services.tmux._sessions.session_exists",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "agent_backbone.services.tmux._sessions.stop_session",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.tmux._sessions.os.kill",
+                side_effect=ProcessLookupError,
+            ),
         ):
             mock_qfv.return_value = {"pane_pid": "12345"}
 
@@ -807,8 +959,16 @@ class TestGracefulClose:
     async def test_no_pid_fallback(self):
         """No pane_pid available means falls back to stop_session."""
         with (
-            patch("src.tmux.query_format_vars", new_callable=AsyncMock, return_value={}),
-            patch("src.tmux.stop_session", new_callable=AsyncMock, return_value=True) as mock_stop,
+            patch(
+                "agent_backbone.services.tmux._sessions.query_format_vars",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "agent_backbone.services.tmux._sessions.stop_session",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_stop,
         ):
             result = await graceful_close("ike")
             assert result is True

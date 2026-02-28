@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-from flows.dependency_tracker import on_dependency_resolved
-from src.models import IssueData, ParsedLabels
-from src.persistence import BackboneDB
+from agent_backbone.config import BackboneConfig
+from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.services.dispatch import on_dependency_resolved
+from agent_backbone.services.persistence import BackboneDB
 
 
 def _make_issue(number: int, state: str = "closed", targets: list[str] | None = None) -> IssueData:
@@ -18,40 +19,42 @@ def _make_issue(number: int, state: str = "closed", targets: list[str] | None = 
     return IssueData(number=number, title=f"[task] Issue #{number}", state=state, labels=labels)
 
 
-def _mock_db_class(db: BackboneDB):
-    """Create a mock BackboneDB class that returns the real db via async context manager."""
-    mock_cm = AsyncMock()
-    mock_cm.__aenter__ = AsyncMock(return_value=db)
-    mock_cm.__aexit__ = AsyncMock(return_value=None)
-    mock_cls = MagicMock(return_value=mock_cm)
-    return mock_cls
-
-
 class TestOnDependencyResolved:
     async def test_no_parents_noop(self):
         """Closed issue has no parents → empty result."""
-        async with BackboneDB(":memory:") as db:
-            with patch("flows.dependency_tracker.BackboneDB", _mock_db_class(db)):
-                result = await on_dependency_resolved.fn(99)
+        async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
+            mock_gh = AsyncMock()
+            config = BackboneConfig(github_token="t", webhook_secret="s")
+
+            from agent_backbone.services._locator import init as init_flow_services
+
+            init_flow_services(config=config, db=db, gh=mock_gh)
+
+            result = await on_dependency_resolved.fn(99)
 
         assert result["parents_checked"] == "0"
 
-    async def test_parent_found_all_resolved(self):
+    async def test_parent_found_all_resolved(self, config):
         """All sub-issues closed → unblock notification sent."""
         parent = _make_issue(10, state="open", targets=["feynman"])
 
-        async with BackboneDB(":memory:") as db:
+        async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
             await db.upsert_dependency(10, 20)
 
+            mock_gh = AsyncMock()
+
+            from agent_backbone.services._locator import init as init_flow_services
+
+            init_flow_services(config=config, db=db, gh=mock_gh)
+
             with (
-                patch("flows.dependency_tracker.BackboneDB", _mock_db_class(db)),
                 patch(
-                    "flows.dependency_tracker.check_parent_resolved",
+                    "agent_backbone.services.dispatch._dependencies.check_parent_resolved",
                     new_callable=AsyncMock,
                     return_value={"parent": parent, "targets": ["feynman"]},
                 ),
                 patch(
-                    "flows.dependency_tracker.safe_deliver",
+                    "agent_backbone.services.dispatch._dependencies.safe_deliver",
                     new_callable=AsyncMock,
                     return_value="delivered",
                 ) as mock_deliver,
@@ -63,17 +66,21 @@ class TestOnDependencyResolved:
 
     async def test_parent_found_some_open(self):
         """Some sub-issues still open → no notification."""
-        async with BackboneDB(":memory:") as db:
+        async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
             await db.upsert_dependency(10, 20)
             await db.upsert_dependency(10, 21)
 
-            with (
-                patch("flows.dependency_tracker.BackboneDB", _mock_db_class(db)),
-                patch(
-                    "flows.dependency_tracker.check_parent_resolved",
-                    new_callable=AsyncMock,
-                    return_value=None,
-                ),
+            mock_gh = AsyncMock()
+            config = BackboneConfig(github_token="t", webhook_secret="s")
+
+            from agent_backbone.services._locator import init as init_flow_services
+
+            init_flow_services(config=config, db=db, gh=mock_gh)
+
+            with patch(
+                "agent_backbone.services.dispatch._dependencies.check_parent_resolved",
+                new_callable=AsyncMock,
+                return_value=None,
             ):
                 result = await on_dependency_resolved.fn(20)
 
@@ -81,16 +88,20 @@ class TestOnDependencyResolved:
 
     async def test_api_failure_graceful(self):
         """GitHub API error → flow handles it gracefully."""
-        async with BackboneDB(":memory:") as db:
+        async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
             await db.upsert_dependency(10, 20)
 
-            with (
-                patch("flows.dependency_tracker.BackboneDB", _mock_db_class(db)),
-                patch(
-                    "flows.dependency_tracker.check_parent_resolved",
-                    new_callable=AsyncMock,
-                    side_effect=Exception("API timeout"),
-                ),
+            mock_gh = AsyncMock()
+            config = BackboneConfig(github_token="t", webhook_secret="s")
+
+            from agent_backbone.services._locator import init as init_flow_services
+
+            init_flow_services(config=config, db=db, gh=mock_gh)
+
+            with patch(
+                "agent_backbone.services.dispatch._dependencies.check_parent_resolved",
+                new_callable=AsyncMock,
+                side_effect=Exception("API timeout"),
             ):
                 # The flow will raise, but lifecycle wraps it in try/except
                 try:
@@ -102,10 +113,10 @@ class TestOnDependencyResolved:
 class TestLifecycleDependencyIntegration:
     async def test_lifecycle_calls_dependency_tracker(self):
         """Verify _check_dependencies calls the dependency tracker."""
-        from flows.lifecycle import _check_dependencies
+        from agent_backbone.services.dispatch._lifecycle import _check_dependencies
 
         with patch(
-            "flows.dependency_tracker.on_dependency_resolved",
+            "agent_backbone.services.dispatch._dependencies.on_dependency_resolved",
             new_callable=AsyncMock,
             return_value={"parents_checked": "0"},
         ) as mock_dep:
@@ -115,10 +126,10 @@ class TestLifecycleDependencyIntegration:
 
     async def test_lifecycle_dependency_error_isolated(self):
         """Dependency error doesn't break _check_dependencies."""
-        from flows.lifecycle import _check_dependencies
+        from agent_backbone.services.dispatch._lifecycle import _check_dependencies
 
         with patch(
-            "flows.dependency_tracker.on_dependency_resolved",
+            "agent_backbone.services.dispatch._dependencies.on_dependency_resolved",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):
@@ -128,7 +139,7 @@ class TestLifecycleDependencyIntegration:
 
 class TestPersistenceDependencies:
     async def test_upsert_and_get_parents(self):
-        async with BackboneDB(":memory:") as db:
+        async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
             await db.upsert_dependency(10, 20)
             await db.upsert_dependency(11, 20)
 
@@ -136,12 +147,12 @@ class TestPersistenceDependencies:
             assert sorted(parents) == [10, 11]
 
     async def test_no_parents(self):
-        async with BackboneDB(":memory:") as db:
+        async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
             parents = await db.get_parents(99)
             assert parents == []
 
     async def test_sync_dependencies(self):
-        async with BackboneDB(":memory:") as db:
+        async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
             # Initial sync
             await db.sync_dependencies(10, [20, 21, 22])
             parents = await db.get_parents(20)
@@ -157,7 +168,7 @@ class TestPersistenceDependencies:
             assert 10 in parents_20
 
     async def test_sync_empty_clears_all(self):
-        async with BackboneDB(":memory:") as db:
+        async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
             await db.sync_dependencies(10, [20, 21])
             await db.sync_dependencies(10, [])
 

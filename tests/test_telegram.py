@@ -1,4 +1,4 @@
-"""Tests for src/telegram.py."""
+"""Tests for agent_backbone/services/telegram."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import respx
 
-from src.config import AgentStateConfig, BackboneConfig, TelegramConfig
-from src.telegram import BackboneBot, _delivery_reply
-from src.topic_discovery import TopicDiscovery
+from agent_backbone.config import AgentStateConfig, BackboneConfig, TelegramConfig
+from agent_backbone.services.telegram import BackboneBot, _delivery_reply
+from agent_backbone.services.telegram._topic_discovery import TopicDiscovery
 
 
 def _make_topic_update(thread_id: int | None, text: str, chat_id: int = 100) -> MagicMock:
@@ -30,7 +30,10 @@ class TestAuthorization:
     def test_unrestricted_when_empty(self):
         """Empty allowed_chat_ids means unrestricted access."""
         config = BackboneConfig(telegram=TelegramConfig(allowed_chat_ids=[]))
-        with patch("src.telegram.load_discovery", return_value=TopicDiscovery()):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery",
+            return_value=TopicDiscovery(),
+        ):
             bot = BackboneBot(config)
         assert bot._is_authorized(12345) is True
         assert bot._is_authorized(99999) is True
@@ -38,7 +41,10 @@ class TestAuthorization:
     def test_restricted_when_populated(self):
         """Only listed chat IDs are authorized."""
         config = BackboneConfig(telegram=TelegramConfig(allowed_chat_ids=[111, 222]))
-        with patch("src.telegram.load_discovery", return_value=TopicDiscovery()):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery",
+            return_value=TopicDiscovery(),
+        ):
             bot = BackboneBot(config)
         assert bot._is_authorized(111) is True
         assert bot._is_authorized(222) is True
@@ -57,7 +63,10 @@ class TestTopicRouting:
                 topic_discovery_file=str(tmp_path / "topics.json"),
             )
         )
-        with patch("src.telegram.load_discovery", return_value=TopicDiscovery()):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery",
+            return_value=TopicDiscovery(),
+        ):
             return BackboneBot(config)
 
     @pytest.mark.asyncio
@@ -65,7 +74,9 @@ class TestTopicRouting:
         """Message in a directly-mapped topic goes to that session."""
         update = _make_topic_update(thread_id=10, text="Hello Leo")
         mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
-        with patch("src.telegram.safe_deliver", **mock_kw) as mock_send:
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver", **mock_kw
+        ) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             args = mock_send.call_args[0]
             assert args[0] == "leo"
@@ -79,7 +90,9 @@ class TestTopicRouting:
         """Coding-agents topic parses 'agent: message' format."""
         update = _make_topic_update(thread_id=30, text="platform-api: fix the auth bug")
         mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
-        with patch("src.telegram.safe_deliver", **mock_kw) as mock_send:
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver", **mock_kw
+        ) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             args = mock_send.call_args[0]
             assert args[0] == "platform-api"
@@ -91,7 +104,9 @@ class TestTopicRouting:
         """Coding-agents topic parses 'agent message' format (no colon)."""
         update = _make_topic_update(thread_id=30, text="mcp-hub check the logs")
         mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
-        with patch("src.telegram.safe_deliver", **mock_kw) as mock_send:
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver", **mock_kw
+        ) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             args = mock_send.call_args[0]
             assert args[0] == "mcp-hub"
@@ -102,7 +117,9 @@ class TestTopicRouting:
     async def test_coding_agents_no_message_body(self, bot_with_routes):
         """Coding-agents topic with agent name only shows usage hint."""
         update = _make_topic_update(thread_id=30, text="platform-api:")
-        with patch("src.telegram.safe_deliver", new_callable=AsyncMock) as mock_send:
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver", new_callable=AsyncMock
+        ) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             mock_send.assert_not_awaited()
         assert "Usage" in update.message.reply_text.call_args[0][0]
@@ -111,7 +128,9 @@ class TestTopicRouting:
     async def test_unmapped_topic_ignored(self, bot_with_routes):
         """Message in an unmapped topic is silently ignored."""
         update = _make_topic_update(thread_id=999, text="hello")
-        with patch("src.telegram.safe_deliver", new_callable=AsyncMock) as mock_send:
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver", new_callable=AsyncMock
+        ) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             mock_send.assert_not_awaited()
         update.message.reply_text.assert_not_awaited()
@@ -120,7 +139,9 @@ class TestTopicRouting:
     async def test_non_topic_message_ignored(self, bot_with_routes):
         """Message without thread_id is ignored."""
         update = _make_topic_update(thread_id=None, text="hello")
-        with patch("src.telegram.safe_deliver", new_callable=AsyncMock) as mock_send:
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver", new_callable=AsyncMock
+        ) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             mock_send.assert_not_awaited()
         update.message.reply_text.assert_not_awaited()
@@ -129,7 +150,9 @@ class TestTopicRouting:
     async def test_unauthorized_chat_ignored(self, bot_with_routes):
         """Message from unauthorized chat is ignored."""
         update = _make_topic_update(thread_id=10, text="hello", chat_id=999)
-        with patch("src.telegram.safe_deliver", new_callable=AsyncMock) as mock_send:
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver", new_callable=AsyncMock
+        ) as mock_send:
             await bot_with_routes.handle_topic_message(update, MagicMock())
             mock_send.assert_not_awaited()
 
@@ -137,7 +160,11 @@ class TestTopicRouting:
     async def test_send_failure_reports_offline(self, bot_with_routes):
         """Offline safe_deliver result reports agent offline."""
         update = _make_topic_update(thread_id=10, text="hello")
-        with patch("src.telegram.safe_deliver", new_callable=AsyncMock, return_value="offline"):
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver",
+            new_callable=AsyncMock,
+            return_value="offline",
+        ):
             await bot_with_routes.handle_topic_message(update, MagicMock())
         assert "offline" in update.message.reply_text.call_args[0][0]
 
@@ -151,10 +178,15 @@ class TestTopicRouting:
                 topic_discovery_file=str(tmp_path / "topics.json"),
             )
         )
-        with patch("src.telegram.load_discovery", return_value=TopicDiscovery()):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery",
+            return_value=TopicDiscovery(),
+        ):
             bot = BackboneBot(config)
         update = _make_topic_update(thread_id=10, text="hello")
-        with patch("src.telegram.safe_deliver", new_callable=AsyncMock) as mock_send:
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver", new_callable=AsyncMock
+        ) as mock_send:
             await bot.handle_topic_message(update, MagicMock())
             mock_send.assert_not_awaited()
         update.message.reply_text.assert_not_awaited()
@@ -172,7 +204,10 @@ class TestIdentifyCommand:
                 topic_discovery_file=str(tmp_path / "topics.json"),
             )
         )
-        with patch("src.telegram.load_discovery", return_value=TopicDiscovery()):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery",
+            return_value=TopicDiscovery(),
+        ):
             return BackboneBot(config)
 
     @pytest.mark.asyncio
@@ -221,7 +256,9 @@ class TestIdentifyCommand:
             )
         )
         discovery = TopicDiscovery(topic_routes={10: "leo"})
-        with patch("src.telegram.load_discovery", return_value=discovery):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery", return_value=discovery
+        ):
             bot = BackboneBot(config)
         update = _make_topic_update(thread_id=10, text="/identify")
         await bot.cmd_identify(update, MagicMock())
@@ -244,12 +281,16 @@ class TestDiscoveryIntegration:
             )
         )
         discovery = TopicDiscovery(topic_routes={10: "leo"})
-        with patch("src.telegram.load_discovery", return_value=discovery):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery", return_value=discovery
+        ):
             bot = BackboneBot(config)
 
         update = _make_topic_update(thread_id=10, text="hello from discovery")
         mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
-        with patch("src.telegram.safe_deliver", **mock_kw) as mock_send:
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver", **mock_kw
+        ) as mock_send:
             await bot.handle_topic_message(update, MagicMock())
             args = mock_send.call_args[0]
             assert args[0] == "leo"
@@ -266,12 +307,16 @@ class TestDiscoveryIntegration:
             )
         )
         discovery = TopicDiscovery(topic_routes={10: "leo"})
-        with patch("src.telegram.load_discovery", return_value=discovery):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery", return_value=discovery
+        ):
             bot = BackboneBot(config)
 
         update = _make_topic_update(thread_id=10, text="who gets this?")
         mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
-        with patch("src.telegram.safe_deliver", **mock_kw) as mock_send:
+        with patch(
+            "agent_backbone.services.telegram._routing.safe_deliver", **mock_kw
+        ) as mock_send:
             await bot.handle_topic_message(update, MagicMock())
             args = mock_send.call_args[0]
             assert args[0] == "ike"
@@ -287,7 +332,10 @@ class TestViewPlanCommand:
                 topic_discovery_file=str(tmp_path / "topics.json"),
             )
         )
-        with patch("src.telegram.load_discovery", return_value=TopicDiscovery()):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery",
+            return_value=TopicDiscovery(),
+        ):
             return BackboneBot(config)
 
     @pytest.mark.asyncio
@@ -367,7 +415,10 @@ class TestApproveCommand:
                 topic_discovery_file=str(tmp_path / "topics.json"),
             )
         )
-        with patch("src.telegram.load_discovery", return_value=TopicDiscovery()):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery",
+            return_value=TopicDiscovery(),
+        ):
             return BackboneBot(config)
 
     @pytest.mark.asyncio
@@ -416,7 +467,11 @@ class TestApproveCommand:
         update = _make_topic_update(thread_id=None, text="/approve ike")
         ctx = MagicMock()
         ctx.args = ["ike"]
-        with patch("src.telegram.session_exists", new_callable=AsyncMock, return_value=False):
+        with patch(
+            "agent_backbone.services.telegram._commands.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
             await bot.cmd_approve(update, ctx)
         reply = update.message.reply_text.call_args[0][0]
         assert "offline" in reply
@@ -449,8 +504,16 @@ class TestApproveCommand:
         ctx = MagicMock()
         ctx.args = ["ike"]
         with (
-            patch("src.telegram.session_exists", new_callable=AsyncMock, return_value=True),
-            patch("src.telegram.send_keys", new_callable=AsyncMock, return_value=True) as mock_keys,
+            patch(
+                "agent_backbone.services.telegram._commands.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.telegram._commands.send_keys",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_keys,
         ):
             await bot.cmd_approve(update, ctx)
         # Should send Escape then [Z
@@ -474,7 +537,10 @@ class TestDeliveryReply:
                 topic_discovery_file=str(tmp_path / "topics.json"),
             )
         )
-        with patch("src.telegram.load_discovery", return_value=TopicDiscovery()):
+        with patch(
+            "agent_backbone.services.telegram.interface.load_discovery",
+            return_value=TopicDiscovery(),
+        ):
             return BackboneBot(config)
 
     @pytest.mark.asyncio
@@ -484,7 +550,7 @@ class TestDeliveryReply:
         ctx = MagicMock()
         ctx.args = ["feynman", "hello"]
         mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
-        with patch("src.telegram.safe_deliver", **mock_kw) as mock_sd:
+        with patch("agent_backbone.services.telegram._commands.safe_deliver", **mock_kw) as mock_sd:
             await bot.cmd_tell(update, ctx)
             args = mock_sd.call_args[0]
             assert args[0] == "feynman"
@@ -501,7 +567,7 @@ class TestDeliveryReply:
         ctx = MagicMock()
         ctx.args = ["ike", "check", "status"]
         mock_kw = dict(new_callable=AsyncMock, return_value="agent_working")
-        with patch("src.telegram.safe_deliver", **mock_kw):
+        with patch("agent_backbone.services.telegram._commands.safe_deliver", **mock_kw):
             await bot.cmd_tell(update, ctx)
         reply = update.message.reply_text.call_args[0][0]
         assert "busy" in reply
@@ -512,7 +578,7 @@ class TestDeliveryReply:
         """Topic message reports plan approval when safe_deliver returns plan_waiting."""
         update = _make_topic_update(thread_id=10, text="check this")
         mock_kw = dict(new_callable=AsyncMock, return_value="plan_waiting")
-        with patch("src.telegram.safe_deliver", **mock_kw):
+        with patch("agent_backbone.services.telegram._routing.safe_deliver", **mock_kw):
             await bot.handle_topic_message(update, MagicMock())
         reply = update.message.reply_text.call_args[0][0]
         assert "plan approval" in reply

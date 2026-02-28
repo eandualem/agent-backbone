@@ -1,9 +1,9 @@
-"""Tests for src/notifications.py."""
+"""Tests for agent_backbone/services/notifications."""
 
 from __future__ import annotations
 
-from src.models import CommentData, IssueData, ParsedLabels
-from src.notifications import (
+from agent_backbone.models import CommentData, IssueData, ParsedLabels
+from agent_backbone.services.notifications import (
     format_comment_notification,
     format_issue_notification,
     format_next_issue_notification,

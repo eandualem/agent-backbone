@@ -7,9 +7,9 @@ import logging
 
 from fastapi import APIRouter, Depends, Query
 
+from agent_backbone.config import BackboneConfig
 from api.deps import get_config
 from api.models import ActionRecord, ListEnvelope
-from src.config import BackboneConfig
 
 log = logging.getLogger(__name__)
 

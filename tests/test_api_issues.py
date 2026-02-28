@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from agent_backbone.models import CommentData, IssueData, ParsedLabels
+from agent_backbone.services.persistence import BackboneDB
 from api.deps import get_db, get_github
-from src.models import CommentData, IssueData, ParsedLabels
-from src.persistence import BackboneDB
 
 # --- Fixtures ---
 
@@ -75,22 +75,18 @@ def mock_github(sample_issues, sample_comments):
 @pytest.fixture
 async def issues_client(api_app, auth_headers, mock_github):
     """Async test client with GitHub mock and in-memory DB overridden."""
+    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    await db.start()
 
-    async def override_github():
-        yield mock_github
-
-    async def override_db():
-        async with BackboneDB(":memory:") as db:
-            yield db
-
-    api_app.dependency_overrides[get_github] = override_github
-    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[get_github] = lambda: mock_github
+    api_app.dependency_overrides[get_db] = lambda: db
 
     transport = ASGITransport(app=api_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
     api_app.dependency_overrides.clear()
+    await db.stop()
 
 
 # --- Tests ---

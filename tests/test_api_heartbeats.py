@@ -7,24 +7,26 @@ from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from agent_backbone.services.persistence import BackboneDB
 from api.deps import get_db
-from src.persistence import BackboneDB
+
+# Patch target: route imports from the package __init__, not _heartbeat
+_MON = "agent_backbone.services.monitoring"
 
 
 @pytest.fixture
-def heartbeats_app(api_app):
+async def heartbeats_app(api_app):
     """App with get_db overridden to use an in-memory DB seeded with heartbeat records."""
+    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    await db.start()
+    await db.record_heartbeat("ike", "delivered", "Heartbeat check-in")
+    await db.record_heartbeat("ike", "delivered", "Second heartbeat")
+    await db.record_heartbeat("feynman", "failed", "Session offline")
 
-    async def _seed_and_yield():
-        async with BackboneDB(":memory:") as db:
-            await db.record_heartbeat("ike", "delivered", "Heartbeat check-in")
-            await db.record_heartbeat("ike", "delivered", "Second heartbeat")
-            await db.record_heartbeat("feynman", "failed", "Session offline")
-            yield db
-
-    api_app.dependency_overrides[get_db] = _seed_and_yield
+    api_app.dependency_overrides[get_db] = lambda: db
     yield api_app
     api_app.dependency_overrides.clear()
+    await db.stop()
 
 
 @pytest.fixture
@@ -44,7 +46,7 @@ class TestGetHeartbeatSchedules:
     async def test_returns_schedules(self, client, auth_headers):
         """Returns heartbeat schedules loaded from config path."""
         mock_schedules = {"ike": {"cron": "0 * * * *", "enabled": True}}
-        with patch("flows.agent_heartbeat.load_schedules", return_value=mock_schedules):
+        with patch(f"{_MON}.load_schedules", return_value=mock_schedules):
             resp = await client.get("/api/heartbeats/schedules", headers=auth_headers)
 
         assert resp.status_code == 200
@@ -71,8 +73,8 @@ class TestUpdateHeartbeatSchedule:
         new_schedule = {"cron": "*/30 * * * *", "enabled": False}
 
         with (
-            patch("flows.agent_heartbeat.load_schedules", return_value=existing),
-            patch("flows.agent_heartbeat.save_schedules") as mock_save,
+            patch(f"{_MON}.load_schedules", return_value=existing),
+            patch(f"{_MON}.save_schedules") as mock_save,
         ):
             resp = await client.put(
                 "/api/heartbeats/schedules/ike",
@@ -94,8 +96,8 @@ class TestUpdateHeartbeatSchedule:
         new_schedule = {"cron": "0 */2 * * *", "enabled": True}
 
         with (
-            patch("flows.agent_heartbeat.load_schedules", return_value=existing),
-            patch("flows.agent_heartbeat.save_schedules") as mock_save,
+            patch(f"{_MON}.load_schedules", return_value=existing),
+            patch(f"{_MON}.save_schedules") as mock_save,
         ):
             resp = await client.put(
                 "/api/heartbeats/schedules/leo",

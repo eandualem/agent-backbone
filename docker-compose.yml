@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: backbone
+      POSTGRES_PASSWORD: backbone
+      POSTGRES_DB: backbone
+    ports:
+      - "5435:5432"
+    volumes:
+      - backbone-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U backbone"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  backbone-pgdata:

@@ -1,4 +1,4 @@
-"""Tests for src/onboarding.py — repo discovery, status checks, and onboarding."""
+"""Tests for agent_backbone/onboarding.py — repo discovery, status checks, and onboarding."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.onboarding import (
+from agent_backbone.services.onboarding import (
     RepoEntry,
     _check_assume_unchanged,
     _check_git_excludes,
@@ -54,10 +54,12 @@ def _mock_subprocess_fail(code: int = 128, stderr: bytes = b"fatal: error"):
 
 def _selective_create_subprocess_exec(real_func, clone_proc):
     """Return a side_effect that mocks git clone but delegates other calls."""
+
     async def _side_effect(*args, **kwargs):
         if args and args[0] == "git":
             return clone_proc
         return await real_func(*args, **kwargs)
+
     return _side_effect
 
 
@@ -92,13 +94,13 @@ def workspace(tmp_path):
     sdd_init_sh.chmod(0o755)
 
     with (
-        patch("src.onboarding._WS_ROOT", ws),
-        patch("src.onboarding._SPEC_ROOT", spec),
-        patch("src.onboarding._ORCH_ROOT", orch),
-        patch("src.onboarding._REGISTRY_PATH", registry),
-        patch("src.onboarding._SETUP_SCRIPT", setup_sh),
-        patch("src.onboarding._SDD_INIT_SCRIPT", sdd_init_sh),
-        patch("src.onboarding._REPOS_JSON", repos_json),
+        patch("agent_backbone.services.onboarding._pipeline._WS_ROOT", ws),
+        patch("agent_backbone.services.onboarding._pipeline._SPEC_ROOT", spec),
+        patch("agent_backbone.services.onboarding._pipeline._ORCH_ROOT", orch),
+        patch("agent_backbone.services.onboarding._pipeline._REGISTRY_PATH", registry),
+        patch("agent_backbone.services.onboarding._pipeline._SETUP_SCRIPT", setup_sh),
+        patch("agent_backbone.services.onboarding._pipeline._SDD_INIT_SCRIPT", sdd_init_sh),
+        patch("agent_backbone.services.onboarding._pipeline._REPOS_JSON", repos_json),
     ):
         yield {
             "ws": ws,
@@ -612,7 +614,8 @@ class TestRunOnboarding:
         mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
         mock_gh.__aexit__ = AsyncMock(return_value=False)
 
-        from src.config import BackboneConfig
+        from agent_backbone.config import BackboneConfig
+
         cfg = BackboneConfig(github_token="test-token")
 
         _clone_side_effect = _selective_create_subprocess_exec(
@@ -620,7 +623,7 @@ class TestRunOnboarding:
         )
         with (
             patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
-            patch("src.github.GitHubClient", return_value=mock_gh),
+            patch("agent_backbone.services.github.GitHubClient", return_value=mock_gh),
         ):
             result = await run_onboarding("WF", _SSH_URL, config=cfg)
 
@@ -647,7 +650,8 @@ class TestRunOnboarding:
 
     async def test_notify_brunel_skipped_no_token(self, workspace):
         clone_proc = _mock_subprocess_ok()
-        from src.config import BackboneConfig
+        from agent_backbone.config import BackboneConfig
+
         cfg = BackboneConfig(github_token="")
         _clone_side_effect = _selective_create_subprocess_exec(
             asyncio.create_subprocess_exec, clone_proc

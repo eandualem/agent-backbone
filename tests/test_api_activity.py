@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
-from src.config import AgentStateConfig
-from src.persistence import BackboneDB
+from agent_backbone.config import AgentStateConfig
 
 
 def _set_state_dir(api_app, path: str):
@@ -32,16 +31,15 @@ class TestGetActivityTimeline:
         )
         _set_state_dir(api_app, str(state_dir))
 
-        # Setup deliveries and heartbeats in DB
-        db_path = api_app.state.config.delivery.db_file
-        async with BackboneDB(str(db_path)) as db:
-            await db.record_delivery(
-                issue_number=42,
-                target_entity="ike",
-                session_name="ike",
-                outcome="delivered",
-            )
-            await db.record_heartbeat("feynman", "delivered", "test heartbeat")
+        # Setup deliveries and heartbeats in the app's DB instance
+        db = api_app.state.db
+        await db.record_delivery(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivered",
+        )
+        await db.record_heartbeat("feynman", "delivered", "test heartbeat")
 
         resp = await api_client.get("/api/activity/timeline", headers=auth_headers)
 

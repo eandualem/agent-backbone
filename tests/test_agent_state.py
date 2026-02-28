@@ -1,4 +1,4 @@
-"""Tests for src/agent_state.py."""
+"""Tests for agent_backbone/services/state."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import time
 from unittest.mock import AsyncMock, patch
 
-from src.agent_state import (
+from agent_backbone.services.state import (
     AgentState,
     find_outgoing_comment,
     get_agent_state,
@@ -153,7 +153,7 @@ class TestGetAgentState:
         state_file.write_text(
             json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
         )
-        with patch("src.agent_state.capture_pane", new_callable=AsyncMock):
+        with patch("agent_backbone.services.state._inference.capture_pane", new_callable=AsyncMock):
             result = await get_agent_state(tmp_path, "ike")
         assert result.state == AgentState.PROCESSING_ISSUE
         assert result.source == "push"
@@ -164,7 +164,7 @@ class TestGetAgentState:
             json.dumps({"state": "busy", "ts": time.time() - 600})  # 10 min old
         )
         with patch(
-            "src.agent_state.capture_pane",
+            "agent_backbone.services.state._inference.capture_pane",
             new_callable=AsyncMock,
             return_value="user@host $",
         ):
@@ -174,7 +174,7 @@ class TestGetAgentState:
 
     async def test_no_push_uses_pull(self, tmp_path):
         with patch(
-            "src.agent_state.capture_pane",
+            "agent_backbone.services.state._inference.capture_pane",
             new_callable=AsyncMock,
             return_value="Thinking...\n",
         ):
@@ -184,7 +184,7 @@ class TestGetAgentState:
 
     async def test_no_data_returns_unknown(self, tmp_path):
         with patch(
-            "src.agent_state.capture_pane",
+            "agent_backbone.services.state._inference.capture_pane",
             new_callable=AsyncMock,
             return_value="",
         ):
@@ -197,7 +197,7 @@ class TestGetAgentState:
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "idle", "issue": None, "ts": time.time() - 600}))
         mock_capture = AsyncMock(return_value="random stuff")
-        with patch("src.agent_state.capture_pane", mock_capture):
+        with patch("agent_backbone.services.state._inference.capture_pane", mock_capture):
             result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
         assert result.state == AgentState.IDLE
         assert result.source == "push"
@@ -208,7 +208,7 @@ class TestGetAgentState:
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "busy", "issue": None, "ts": time.time() - 600}))
         with patch(
-            "src.agent_state.capture_pane",
+            "agent_backbone.services.state._inference.capture_pane",
             new_callable=AsyncMock,
             return_value="user@host $",
         ):
@@ -223,7 +223,7 @@ class TestGetAgentState:
             json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time() - 600})
         )
         with patch(
-            "src.agent_state.capture_pane",
+            "agent_backbone.services.state._inference.capture_pane",
             new_callable=AsyncMock,
             return_value="user@host $",
         ):

@@ -7,13 +7,13 @@ import logging
 import httpx
 from fastapi import APIRouter, Depends
 
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.github import GitHubClient
+from agent_backbone.services.persistence import BackboneDB
+from agent_backbone.services.tmux import list_sessions
 from api.deps import get_config, get_db, get_github
 from api.models import EnrichedAgent, ServiceHealth, SystemDigest
 from api.routes.agents import _build_enriched_agent
-from src.config import BackboneConfig
-from src.github import GitHubClient
-from src.persistence import BackboneDB
-from src.tmux import list_sessions
 
 log = logging.getLogger(__name__)
 
@@ -28,16 +28,29 @@ async def get_system_status(
 ):
     """System-wide status digest: sessions, agents, deliveries."""
     active = await list_sessions()
+    active_set = set(active)
 
     agents: list[EnrichedAgent] = []
     for entity, session in config.registry.sessions_map.items():
-        agent = await _build_enriched_agent(session, entity, config, agent_type="named_entity")
+        agent = await _build_enriched_agent(
+            session,
+            entity,
+            config,
+            active_set,
+            agent_type="named_entity",
+        )
         agents.append(agent)
     named_sessions = set(config.registry.sessions_map.values())
     service_sessions = config.entities.service_sessions
     for session in active:
         if session not in named_sessions and session not in service_sessions:
-            agent = await _build_enriched_agent(session, session, config, agent_type="coding_agent")
+            agent = await _build_enriched_agent(
+                session,
+                session,
+                config,
+                active_set,
+                agent_type="coding_agent",
+            )
             agents.append(agent)
 
     failed_rows = await db.get_failed_deliveries(limit=1000)
@@ -75,9 +88,10 @@ async def get_service_health(
 
     # Database health
     try:
-        cursor = await db.conn.execute("SELECT 1")
-        await cursor.fetchone()
-        health.database = "up"
+        if await db.check_connection():
+            health.database = "up"
+        else:
+            health.database = "down"
     except Exception:
         health.database = "down"
 

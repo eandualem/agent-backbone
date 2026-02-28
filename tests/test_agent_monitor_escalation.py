@@ -1,4 +1,4 @@
-"""Tests for escalation logic in flows/agent_monitor.py."""
+"""Tests for escalation logic (flows/escalation.py) and monitor integration."""
 
 from __future__ import annotations
 
@@ -8,16 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from flows.agent_monitor import (
-    _escalation_dedup,
-    _plan_notify_dedup,
-    _should_escalate,
-    check_for_stalls,
-    check_for_unexpected_offline,
-    monitor_agents,
-)
-from src.agent_state import AgentState, StateSnapshot
-from src.config import (
+from agent_backbone.config import (
     AgentStateConfig,
     BackboneConfig,
     CapacityRoutingConfig,
@@ -28,8 +19,23 @@ from src.config import (
     SchedulingConfig,
     TelegramConfig,
 )
-from src.models import IssueData, ParsedLabels
-from src.registry import EntityEntry, EntityRegistry
+from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.services._locator import init as init_flow_services
+from agent_backbone.services.monitoring import (
+    _escalation_dedup,
+    _plan_notify_dedup,
+    _should_escalate,
+    check_for_stalls,
+    check_for_unexpected_offline,
+    monitor_agents,
+)
+from agent_backbone.services.registry import EntityEntry, EntityRegistry
+from agent_backbone.services.state import AgentState, StateSnapshot
+
+# Patch target prefixes (keep patch() lines under 100 chars)
+_MON = "agent_backbone.services.monitoring._monitor"
+_PEN = "agent_backbone.services.monitoring._pending"
+_ESC = "agent_backbone.services.monitoring._escalation"
 
 
 def _make_registry(names: list[str]) -> EntityRegistry:
@@ -73,7 +79,7 @@ def escalation_config():
             escalation_target="ike",
             escalation_dedup_seconds=1800,
         ),
-        delivery=DeliveryConfig(db_path=":memory:"),
+        delivery=DeliveryConfig(),
         capacity_routing=CapacityRoutingConfig(busy_threshold_seconds=1800),
     )
 
@@ -112,23 +118,19 @@ class TestCheckForStalls:
             started_at=time.time() - 7200,
             source="push",
         )
-        with (
-            patch(
-                "flows.agent_monitor.get_agent_state",
-                new_callable=AsyncMock,
-                return_value=stalled_snapshot,
-            ),
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
-        ):
-            mock_db = AsyncMock()
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_db = AsyncMock()
 
-            stalls = await check_for_stalls.fn(escalation_config, {"ike", "feynman", "leo"})
+        with patch(
+            f"{_ESC}.get_agent_state",
+            new_callable=AsyncMock,
+            return_value=stalled_snapshot,
+        ):
+            stalls = await check_for_stalls.fn(
+                escalation_config, {"ike", "feynman", "leo"}, mock_db
+            )
 
         assert len(stalls) >= 1
         stall_entities = [s["entity"] for s in stalls]
-        # All entities are stalled with the same mock
         assert "feynman" in stall_entities
 
     @pytest.mark.asyncio
@@ -137,19 +139,16 @@ class TestCheckForStalls:
             state=AgentState.IDLE,
             source="pull",
         )
-        with (
-            patch(
-                "flows.agent_monitor.get_agent_state",
-                new_callable=AsyncMock,
-                return_value=idle_snapshot,
-            ),
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
-        ):
-            mock_db = AsyncMock()
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_db = AsyncMock()
 
-            stalls = await check_for_stalls.fn(escalation_config, {"ike", "feynman", "leo"})
+        with patch(
+            f"{_ESC}.get_agent_state",
+            new_callable=AsyncMock,
+            return_value=idle_snapshot,
+        ):
+            stalls = await check_for_stalls.fn(
+                escalation_config, {"ike", "feynman", "leo"}, mock_db
+            )
 
         assert len(stalls) == 0
 
@@ -163,19 +162,16 @@ class TestCheckForStalls:
             started_at=time.time() - 7200,
             source="push",
         )
-        with (
-            patch(
-                "flows.agent_monitor.get_agent_state",
-                new_callable=AsyncMock,
-                return_value=busy_no_issue,
-            ),
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
-        ):
-            mock_db = AsyncMock()
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_db = AsyncMock()
 
-            stalls = await check_for_stalls.fn(escalation_config, {"ike", "feynman", "leo"})
+        with patch(
+            f"{_ESC}.get_agent_state",
+            new_callable=AsyncMock,
+            return_value=busy_no_issue,
+        ):
+            stalls = await check_for_stalls.fn(
+                escalation_config, {"ike", "feynman", "leo"}, mock_db
+            )
 
         assert len(stalls) == 0
 
@@ -189,19 +185,16 @@ class TestCheckForStalls:
             started_at=time.time() - 7200,  # 2 hours — old session
             source="push",
         )
-        with (
-            patch(
-                "flows.agent_monitor.get_agent_state",
-                new_callable=AsyncMock,
-                return_value=recent_ts_snapshot,
-            ),
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
-        ):
-            mock_db = AsyncMock()
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_db = AsyncMock()
 
-            stalls = await check_for_stalls.fn(escalation_config, {"ike", "feynman", "leo"})
+        with patch(
+            f"{_ESC}.get_agent_state",
+            new_callable=AsyncMock,
+            return_value=recent_ts_snapshot,
+        ):
+            stalls = await check_for_stalls.fn(
+                escalation_config, {"ike", "feynman", "leo"}, mock_db
+            )
 
         assert len(stalls) == 0
 
@@ -212,19 +205,16 @@ class TestCheckForStalls:
             started_at=None,
             source="pull",
         )
-        with (
-            patch(
-                "flows.agent_monitor.get_agent_state",
-                new_callable=AsyncMock,
-                return_value=busy_no_start,
-            ),
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
-        ):
-            mock_db = AsyncMock()
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_db = AsyncMock()
 
-            stalls = await check_for_stalls.fn(escalation_config, {"ike", "feynman", "leo"})
+        with patch(
+            f"{_ESC}.get_agent_state",
+            new_callable=AsyncMock,
+            return_value=busy_no_start,
+        ):
+            stalls = await check_for_stalls.fn(
+                escalation_config, {"ike", "feynman", "leo"}, mock_db
+            )
 
         assert len(stalls) == 0
 
@@ -232,37 +222,31 @@ class TestCheckForStalls:
 class TestCheckForUnexpectedOffline:
     @pytest.mark.asyncio
     async def test_detects_offline(self, escalation_config):
-        with (
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
-            patch("flows.agent_monitor.GitHubClient") as mock_gh_cls,
-        ):
-            mock_db = AsyncMock()
-            mock_db.get_all_agent_states.return_value = [
-                {"session_name": "feynman", "state": "idle"},
-            ]
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_db = AsyncMock()
+        mock_db.get_all_agent_states.return_value = [
+            {"session_name": "feynman", "state": "idle"},
+        ]
 
-            mock_gh = AsyncMock()
-            mock_gh.list_open_issues.return_value = [
-                IssueData(
-                    number=1,
-                    title="[task] Test",
-                    state="open",
-                    labels=ParsedLabels(sender="ike", targets=["feynman"]),
-                ),
-                IssueData(
-                    number=2,
-                    title="[task] Test 2",
-                    state="open",
-                    labels=ParsedLabels(sender="ike", targets=["feynman"]),
-                ),
-            ]
-            mock_gh_cls.return_value.__aenter__ = AsyncMock(return_value=mock_gh)
-            mock_gh_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_gh = AsyncMock()
+        mock_gh.list_open_issues.return_value = [
+            IssueData(
+                number=1,
+                title="[task] Test",
+                state="open",
+                labels=ParsedLabels(sender="ike", targets=["feynman"]),
+            ),
+            IssueData(
+                number=2,
+                title="[task] Test 2",
+                state="open",
+                labels=ParsedLabels(sender="ike", targets=["feynman"]),
+            ),
+        ]
 
-            # feynman NOT in active sessions
-            offline = await check_for_unexpected_offline.fn(escalation_config, {"ike", "leo"})
+        # feynman NOT in active sessions
+        offline = await check_for_unexpected_offline.fn(
+            escalation_config, {"ike", "leo"}, mock_db, mock_gh
+        )
 
         assert len(offline) == 1
         assert offline[0]["entity"] == "feynman"
@@ -270,34 +254,45 @@ class TestCheckForUnexpectedOffline:
 
     @pytest.mark.asyncio
     async def test_unknown_state_ignored(self, escalation_config):
-        with patch("flows.agent_monitor.BackboneDB") as mock_db_cls:
-            mock_db = AsyncMock()
-            mock_db.get_all_agent_states.return_value = [
-                {"session_name": "feynman", "state": "unknown"},
-            ]
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_db = AsyncMock()
+        mock_db.get_all_agent_states.return_value = [
+            {"session_name": "feynman", "state": "unknown"},
+        ]
 
-            offline = await check_for_unexpected_offline.fn(escalation_config, {"ike", "leo"})
+        offline = await check_for_unexpected_offline.fn(
+            escalation_config, {"ike", "leo"}, mock_db, AsyncMock()
+        )
 
         assert len(offline) == 0
 
     @pytest.mark.asyncio
     async def test_active_session_not_flagged(self, escalation_config):
-        with patch("flows.agent_monitor.BackboneDB") as mock_db_cls:
-            mock_db = AsyncMock()
-            mock_db.get_all_agent_states.return_value = [
-                {"session_name": "feynman", "state": "idle"},
-            ]
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_db = AsyncMock()
+        mock_db.get_all_agent_states.return_value = [
+            {"session_name": "feynman", "state": "idle"},
+        ]
 
-            # feynman IS in active sessions
-            offline = await check_for_unexpected_offline.fn(
-                escalation_config, {"ike", "feynman", "leo"}
-            )
+        # feynman IS in active sessions
+        offline = await check_for_unexpected_offline.fn(
+            escalation_config, {"ike", "feynman", "leo"}, mock_db, AsyncMock()
+        )
 
         assert len(offline) == 0
+
+
+def _make_monitor_config(**overrides) -> BackboneConfig:
+    """Build a minimal config for monitor integration tests."""
+    defaults = dict(
+        github_token="test",
+        webhook_secret="test",
+        entities=EntityConfig(skip=frozenset({"elias"})),
+        registry=_make_registry(["ike"]),
+        delivery=DeliveryConfig(),
+        escalation=EscalationConfig(),
+        capacity_routing=CapacityRoutingConfig(),
+    )
+    defaults.update(overrides)
+    return BackboneConfig(**defaults)
 
 
 class TestMonitorAgentsIntegration:
@@ -305,7 +300,7 @@ class TestMonitorAgentsIntegration:
     async def test_defers_busy_agent(self):
         busy_snapshot = StateSnapshot(
             state=AgentState.BUSY,
-            started_at=time.time() - 60,  # 1 minute, under threshold
+            started_at=time.time() - 60,
             source="push",
         )
         idle_snapshot = StateSnapshot(
@@ -327,57 +322,37 @@ class TestMonitorAgentsIntegration:
                 return busy_snapshot
             return idle_snapshot
 
+        config = _make_monitor_config(registry=_make_registry(["feynman", "ike"]))
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
         with (
             patch(
-                "flows.agent_monitor.BackboneConfig.from_toml",
-                return_value=BackboneConfig(
-                    github_token="test",
-                    webhook_secret="test",
-                    entities=EntityConfig(
-                        skip=frozenset({"elias"}),
-                    ),
-                    registry=_make_registry(["feynman", "ike"]),
-                    delivery=DeliveryConfig(db_path=":memory:"),
-                    escalation=EscalationConfig(),
-                    capacity_routing=CapacityRoutingConfig(),
-                ),
-            ),
-            patch(
-                "flows.agent_monitor.list_sessions",
+                f"{_MON}.list_sessions",
                 new_callable=AsyncMock,
                 return_value=["feynman", "ike"],
             ),
-            patch("flows.agent_monitor._sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
             patch(
-                "flows.agent_monitor.check_for_stalls",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.check_for_unexpected_offline",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch("flows.agent_monitor.get_agent_state", side_effect=mock_get_state),
-            patch(
-                "flows.agent_monitor.check_pending_issues",
+                f"{_PEN}.check_pending_issues",
                 new_callable=AsyncMock,
                 return_value=[pending_issue],
             ),
             patch(
-                "flows.agent_monitor.safe_deliver",
+                f"{_PEN}.safe_deliver",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ),
-            patch("flows.agent_monitor.has_commented_on_issue", return_value=False),
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
+            patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            mock_db = AsyncMock()
-            mock_db.is_acknowledged.return_value = False
-            mock_db.query_deliveries.return_value = []
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             result = await monitor_agents.fn()
 
         # Feynman is busy → deferred, Ike is idle → delivered
@@ -397,61 +372,41 @@ class TestMonitorAgentsIntegration:
             labels=ParsedLabels(sender="ada", targets=["ike"], issue_type="task"),
         )
 
+        config = _make_monitor_config()
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
         with (
             patch(
-                "flows.agent_monitor.BackboneConfig.from_toml",
-                return_value=BackboneConfig(
-                    github_token="test",
-                    webhook_secret="test",
-                    entities=EntityConfig(
-                        skip=frozenset({"elias"}),
-                    ),
-                    registry=_make_registry(["ike"]),
-                    delivery=DeliveryConfig(db_path=":memory:"),
-                    escalation=EscalationConfig(),
-                    capacity_routing=CapacityRoutingConfig(),
-                ),
-            ),
-            patch(
-                "flows.agent_monitor.list_sessions",
+                f"{_MON}.list_sessions",
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch("flows.agent_monitor._sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
             patch(
-                "flows.agent_monitor.check_for_stalls",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.check_for_unexpected_offline",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.get_agent_state",
+                f"{_PEN}.get_agent_state",
                 new_callable=AsyncMock,
                 return_value=idle_snapshot,
             ),
             patch(
-                "flows.agent_monitor.check_pending_issues",
+                f"{_PEN}.check_pending_issues",
                 new_callable=AsyncMock,
                 return_value=[pending_issue],
             ),
             patch(
-                "flows.agent_monitor.safe_deliver",
+                f"{_PEN}.safe_deliver",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
-            patch("flows.agent_monitor.has_commented_on_issue", return_value=False),
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
+            patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            mock_db = AsyncMock()
-            mock_db.is_acknowledged.return_value = False
-            mock_db.query_deliveries.return_value = []
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             result = await monitor_agents.fn()
 
         assert result["ike"] == "delivered_#10"
@@ -479,64 +434,44 @@ class TestMonitorAgentsIntegration:
             "flow_name": "issue-dispatcher",
         }
 
+        config = _make_monitor_config(
+            scheduling=SchedulingConfig(monitor_interval_seconds=60),
+        )
         mock_db = AsyncMock()
         mock_db.is_acknowledged.return_value = False
         mock_db.query_deliveries.return_value = [recent_delivery]
         mock_db.record_delivery = AsyncMock()
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
 
         with (
             patch(
-                "flows.agent_monitor.BackboneConfig.from_toml",
-                return_value=BackboneConfig(
-                    github_token="test",
-                    webhook_secret="test",
-                    entities=EntityConfig(
-                        skip=frozenset({"elias"}),
-                    ),
-                    registry=_make_registry(["ike"]),
-                    delivery=DeliveryConfig(db_path=":memory:"),
-                    escalation=EscalationConfig(),
-                    capacity_routing=CapacityRoutingConfig(),
-                    scheduling=SchedulingConfig(monitor_interval_seconds=60),
-                ),
-            ),
-            patch(
-                "flows.agent_monitor.list_sessions",
+                f"{_MON}.list_sessions",
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch("flows.agent_monitor._sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
             patch(
-                "flows.agent_monitor.check_for_stalls",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.check_for_unexpected_offline",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.get_agent_state",
+                f"{_PEN}.get_agent_state",
                 new_callable=AsyncMock,
                 return_value=idle_snapshot,
             ),
             patch(
-                "flows.agent_monitor.check_pending_issues",
+                f"{_PEN}.check_pending_issues",
                 new_callable=AsyncMock,
                 return_value=[pending_issue],
             ),
             patch(
-                "flows.agent_monitor.safe_deliver",
+                f"{_PEN}.safe_deliver",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
-            patch("flows.agent_monitor.has_commented_on_issue", return_value=False),
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
+            patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             result = await monitor_agents.fn()
 
         assert result["ike"] == "no_deliverable"
@@ -556,60 +491,39 @@ class TestMonitorAgentsIntegration:
             labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
         )
 
+        config = _make_monitor_config()
         mock_db = AsyncMock()
         mock_db.is_acknowledged.return_value = True
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
 
         with (
             patch(
-                "flows.agent_monitor.BackboneConfig.from_toml",
-                return_value=BackboneConfig(
-                    github_token="test",
-                    webhook_secret="test",
-                    entities=EntityConfig(
-                        skip=frozenset({"elias"}),
-                    ),
-                    registry=_make_registry(["ike"]),
-                    delivery=DeliveryConfig(db_path=":memory:"),
-                    escalation=EscalationConfig(),
-                    capacity_routing=CapacityRoutingConfig(),
-                ),
-            ),
-            patch(
-                "flows.agent_monitor.list_sessions",
+                f"{_MON}.list_sessions",
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch("flows.agent_monitor._sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
             patch(
-                "flows.agent_monitor.check_for_stalls",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.check_for_unexpected_offline",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.get_agent_state",
+                f"{_PEN}.get_agent_state",
                 new_callable=AsyncMock,
                 return_value=idle_snapshot,
             ),
             patch(
-                "flows.agent_monitor.check_pending_issues",
+                f"{_PEN}.check_pending_issues",
                 new_callable=AsyncMock,
                 return_value=[pending_issue],
             ),
             patch(
-                "flows.agent_monitor.safe_deliver",
+                f"{_PEN}.safe_deliver",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
         ):
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             result = await monitor_agents.fn()
 
         assert result["ike"] == "no_deliverable"
@@ -629,64 +543,43 @@ class TestMonitorAgentsIntegration:
             labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
         )
 
+        config = _make_monitor_config()
         mock_db = AsyncMock()
         mock_db.is_acknowledged.return_value = False
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
 
         with (
             patch(
-                "flows.agent_monitor.BackboneConfig.from_toml",
-                return_value=BackboneConfig(
-                    github_token="test",
-                    webhook_secret="test",
-                    entities=EntityConfig(
-                        skip=frozenset({"elias"}),
-                    ),
-                    registry=_make_registry(["ike"]),
-                    delivery=DeliveryConfig(db_path=":memory:"),
-                    escalation=EscalationConfig(),
-                    capacity_routing=CapacityRoutingConfig(),
-                ),
-            ),
-            patch(
-                "flows.agent_monitor.list_sessions",
+                f"{_MON}.list_sessions",
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch("flows.agent_monitor._sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
             patch(
-                "flows.agent_monitor.check_for_stalls",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.check_for_unexpected_offline",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.get_agent_state",
+                f"{_PEN}.get_agent_state",
                 new_callable=AsyncMock,
                 return_value=idle_snapshot,
             ),
             patch(
-                "flows.agent_monitor.check_pending_issues",
+                f"{_PEN}.check_pending_issues",
                 new_callable=AsyncMock,
                 return_value=[pending_issue],
             ),
             patch(
-                "flows.agent_monitor.has_commented_on_issue",
+                f"{_PEN}.has_commented_on_issue",
                 return_value=True,
             ),
             patch(
-                "flows.agent_monitor.safe_deliver",
+                f"{_PEN}.safe_deliver",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
         ):
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             result = await monitor_agents.fn()
 
         assert result["ike"] == "no_deliverable"
@@ -713,64 +606,43 @@ class TestMonitorAgentsIntegration:
             labels=ParsedLabels(sender="coding-agent", targets=["ike"], issue_type="task"),
         )
 
+        config = _make_monitor_config(
+            scheduling=SchedulingConfig(monitor_interval_seconds=60),
+        )
         mock_db = AsyncMock()
-        # First issue acknowledged, second is not
         mock_db.is_acknowledged.side_effect = lambda num, entity: num == 49
         mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
 
         with (
             patch(
-                "flows.agent_monitor.BackboneConfig.from_toml",
-                return_value=BackboneConfig(
-                    github_token="test",
-                    webhook_secret="test",
-                    entities=EntityConfig(
-                        skip=frozenset({"elias"}),
-                    ),
-                    registry=_make_registry(["ike"]),
-                    delivery=DeliveryConfig(db_path=":memory:"),
-                    escalation=EscalationConfig(),
-                    capacity_routing=CapacityRoutingConfig(),
-                    scheduling=SchedulingConfig(monitor_interval_seconds=60),
-                ),
-            ),
-            patch(
-                "flows.agent_monitor.list_sessions",
+                f"{_MON}.list_sessions",
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch("flows.agent_monitor._sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
             patch(
-                "flows.agent_monitor.check_for_stalls",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.check_for_unexpected_offline",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.get_agent_state",
+                f"{_PEN}.get_agent_state",
                 new_callable=AsyncMock,
                 return_value=idle_snapshot,
             ),
             patch(
-                "flows.agent_monitor.check_pending_issues",
+                f"{_PEN}.check_pending_issues",
                 new_callable=AsyncMock,
                 return_value=[acked_issue, pending_issue],
             ),
-            patch("flows.agent_monitor.has_commented_on_issue", return_value=False),
+            patch(f"{_PEN}.has_commented_on_issue", return_value=False),
             patch(
-                "flows.agent_monitor.safe_deliver",
+                f"{_PEN}.safe_deliver",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
         ):
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             result = await monitor_agents.fn()
 
         # Should skip #49 (acknowledged) and deliver #50
@@ -781,73 +653,58 @@ class TestMonitorAgentsIntegration:
 class TestOfflineDedup:
     @pytest.mark.asyncio
     async def test_offline_clears_db_state(self):
-        """After notifying about an offline agent, DB state is set to 'unknown'
-        so the next monitor cycle doesn't re-detect the same offline event."""
+        """After notifying about an offline agent, DB state is set to 'unknown'."""
         idle_snapshot = StateSnapshot(
             state=AgentState.IDLE,
             source="pull",
         )
 
+        config = _make_monitor_config(
+            registry=_make_registry(["ike", "feynman"]),
+            escalation=EscalationConfig(
+                escalation_target="ike",
+                escalation_dedup_seconds=1800,
+            ),
+        )
         mock_db = AsyncMock()
         mock_db.is_acknowledged.return_value = False
         mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
 
         with (
             patch(
-                "flows.agent_monitor.BackboneConfig.from_toml",
-                return_value=BackboneConfig(
-                    github_token="test",
-                    webhook_secret="test",
-                    entities=EntityConfig(
-                        skip=frozenset({"elias"}),
-                    ),
-                    registry=_make_registry(["ike", "feynman"]),
-                    delivery=DeliveryConfig(db_path=":memory:"),
-                    escalation=EscalationConfig(
-                        escalation_target="ike",
-                        escalation_dedup_seconds=1800,
-                    ),
-                    capacity_routing=CapacityRoutingConfig(),
-                ),
-            ),
-            patch(
-                "flows.agent_monitor.list_sessions",
+                f"{_MON}.list_sessions",
                 new_callable=AsyncMock,
                 return_value=["ike"],  # feynman is NOT active
             ),
-            patch("flows.agent_monitor._sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(
-                "flows.agent_monitor.check_for_stalls",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.check_for_unexpected_offline",
+                f"{_ESC}.check_for_unexpected_offline",
                 new_callable=AsyncMock,
                 return_value=[
                     {"entity": "feynman", "session": "feynman", "pending_count": 0},
                 ],
             ),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
             patch(
-                "flows.agent_monitor.get_agent_state",
+                f"{_PEN}.get_agent_state",
                 new_callable=AsyncMock,
                 return_value=idle_snapshot,
             ),
             patch(
-                "flows.agent_monitor.check_pending_issues",
+                f"{_PEN}.check_pending_issues",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
             patch(
-                "flows.agent_monitor.safe_deliver",
+                f"{_ESC}.safe_deliver",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
         ):
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             await monitor_agents.fn()
 
         # Escalation message was sent to ike via safe_deliver
@@ -873,19 +730,16 @@ class TestPlanWaitingMonitor:
             plan_file="/tmp/plan.md",
             plan_title="Test plan",
         )
-        with (
-            patch(
-                "flows.agent_monitor.get_agent_state",
-                new_callable=AsyncMock,
-                return_value=plan_snapshot,
-            ),
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
-        ):
-            mock_db = AsyncMock()
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_db = AsyncMock()
 
-            stalls = await check_for_stalls.fn(escalation_config, {"ike", "feynman", "leo"})
+        with patch(
+            f"{_ESC}.get_agent_state",
+            new_callable=AsyncMock,
+            return_value=plan_snapshot,
+        ):
+            stalls = await check_for_stalls.fn(
+                escalation_config, {"ike", "feynman", "leo"}, mock_db
+            )
 
         assert len(stalls) == 0
 
@@ -923,57 +777,46 @@ class TestPlanWaitingMonitor:
                 stale_threshold_seconds=300,
             ),
             escalation=EscalationConfig(),
-            delivery=DeliveryConfig(db_path=":memory:"),
+            delivery=DeliveryConfig(),
             capacity_routing=CapacityRoutingConfig(),
             telegram=TelegramConfig(notification_chat_id=897573812),
         )
 
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config_with_telegram, db=mock_db, gh=mock_gh)
+
         with (
             patch(
-                "flows.agent_monitor.BackboneConfig.from_toml",
-                return_value=config_with_telegram,
-            ),
-            patch(
-                "flows.agent_monitor.list_sessions",
+                f"{_MON}.list_sessions",
                 new_callable=AsyncMock,
                 return_value=["feynman", "ike"],
             ),
-            patch("flows.agent_monitor._sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
             patch(
-                "flows.agent_monitor.check_for_stalls",
+                f"{_PEN}.check_pending_issues",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
             patch(
-                "flows.agent_monitor.check_for_unexpected_offline",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch("flows.agent_monitor.get_agent_state", side_effect=mock_get_state),
-            patch(
-                "flows.agent_monitor.check_pending_issues",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "flows.agent_monitor.safe_deliver",
+                f"{_PEN}.safe_deliver",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ),
-            patch("flows.agent_monitor.BackboneDB") as mock_db_cls,
             patch.dict(os.environ, {"TELEGRAM_TOKEN": "test-token"}),
             patch(
-                "flows.agent_monitor.BackboneBot.send_notification",
+                f"{_ESC}.TelegramService.send_notification",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as mock_notify,
         ):
-            mock_db = AsyncMock()
-            mock_db.is_acknowledged.return_value = False
-            mock_db.query_deliveries.return_value = []
-            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             result = await monitor_agents.fn()
 
         mock_notify.assert_called_once()

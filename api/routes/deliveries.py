@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
+from agent_backbone.services.persistence import BackboneDB
 from api.deps import get_db
 from api.models import DeliveryRecord, DeliveryStats, ListEnvelope
-from src.persistence import BackboneDB
 
 router = APIRouter(prefix="/api", tags=["deliveries"])
 
@@ -44,10 +44,7 @@ async def list_failed_deliveries(
 @router.get("/deliveries/stats", response_model=DeliveryStats)
 async def get_delivery_stats(db: BackboneDB = Depends(get_db)):
     """Aggregate delivery statistics by outcome."""
-    cursor = await db.conn.execute(
-        "SELECT outcome, COUNT(*) as cnt FROM deliveries GROUP BY outcome"
-    )
-    rows = await cursor.fetchall()
+    rows = await db.get_delivery_stats()
 
     stats = DeliveryStats()
     for row in rows:

@@ -1,14 +1,12 @@
-"""Tests for src/session_bridge.py — composite intelligence, resolution, safe delivery."""
+"""Tests for agent_backbone/services/delivery — resolution and safe delivery."""
 
 from __future__ import annotations
 
 import time
 from unittest.mock import AsyncMock, patch
 
-from src.agent_state import AgentState, StateSnapshot
-from src.config import BackboneConfig, JarvisConfig, SessionBridgeConfig
-from src.registry import EntityEntry, EntityRegistry
-from src.session_bridge import (
+from agent_backbone.config import BackboneConfig, JarvisConfig, SessionBridgeConfig
+from agent_backbone.services.delivery import (
     SessionIntelligence,
     SessionProfile,
     get_session_intelligence,
@@ -16,6 +14,8 @@ from src.session_bridge import (
     resolve_entity_session,
     safe_deliver,
 )
+from agent_backbone.services.registry import EntityEntry, EntityRegistry
+from agent_backbone.services.state import AgentState, StateSnapshot
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,7 +31,7 @@ _UNKNOWN_SNAP = StateSnapshot(state=AgentState.UNKNOWN, source="default")
 def _patch_list_sessions(sessions: list[str]):
     """Patch list_sessions in session_bridge to return given list."""
     return patch(
-        "src.session_bridge.list_sessions",
+        "agent_backbone.services.delivery._intelligence.list_sessions",
         new_callable=AsyncMock,
         return_value=sessions,
     )
@@ -40,7 +40,7 @@ def _patch_list_sessions(sessions: list[str]):
 def _patch_query_format_vars(vars_dict: dict[str, str]):
     """Patch query_format_vars in session_bridge to return given dict."""
     return patch(
-        "src.session_bridge.query_format_vars",
+        "agent_backbone.services.delivery._intelligence.query_format_vars",
         new_callable=AsyncMock,
         return_value=vars_dict,
     )
@@ -49,7 +49,7 @@ def _patch_query_format_vars(vars_dict: dict[str, str]):
 def _patch_get_agent_state(snap: StateSnapshot):
     """Patch get_agent_state in session_bridge to return given snapshot."""
     return patch(
-        "src.session_bridge.get_agent_state",
+        "agent_backbone.services.delivery._intelligence.get_agent_state",
         new_callable=AsyncMock,
         return_value=snap,
     )
@@ -58,7 +58,7 @@ def _patch_get_agent_state(snap: StateSnapshot):
 def _patch_send_message(success: bool = True):
     """Patch send_message in session_bridge to return given bool."""
     return patch(
-        "src.session_bridge.send_message",
+        "agent_backbone.services.delivery._delivery.send_message",
         new_callable=AsyncMock,
         return_value=success,
     )
@@ -67,7 +67,7 @@ def _patch_send_message(success: bool = True):
 def _patch_session_exists(exists: bool = True):
     """Patch session_exists in session_bridge to return a fixed boolean."""
     return patch(
-        "src.session_bridge.session_exists",
+        "agent_backbone.services.delivery._resolution.session_exists",
         new_callable=AsyncMock,
         return_value=exists,
     )
@@ -85,7 +85,7 @@ def _patch_db():
     class _DBContext:
         def __init__(self):
             self.mock_db = AsyncMock()
-            self.patcher = patch("src.persistence.BackboneDB")
+            self.patcher = patch("agent_backbone.services.persistence.BackboneDB")
 
         def __enter__(self):
             mock_db_cls = self.patcher.__enter__()
@@ -104,22 +104,32 @@ def _test_registry() -> EntityRegistry:
     return EntityRegistry(
         entities={
             "ike": EntityEntry(
-                session="ike", home="~/ws/core/ike",
-                groups=[], figure="", role="Core Orchestrator",
+                session="ike",
+                home="~/ws/core/ike",
+                groups=[],
+                figure="",
+                role="Core Orchestrator",
             ),
             "feynman": EntityEntry(
-                session="feynman", home="~/orchestration",
-                groups=[], figure="",
+                session="feynman",
+                home="~/orchestration",
+                groups=[],
+                figure="",
                 role="Orchestration Optimizer",
             ),
             "leo": EntityEntry(
-                session="leo", home="~/ws/leo",
-                groups=[], figure="",
+                session="leo",
+                home="~/ws/leo",
+                groups=[],
+                figure="",
                 role="Strategy Co-Architect",
             ),
             "ada": EntityEntry(
-                session="ada", home="~/ws/core/spec",
-                groups=[], figure="", role="Spec Agent",
+                session="ada",
+                home="~/ws/core/spec",
+                groups=[],
+                figure="",
+                role="Spec Agent",
             ),
         },
         repos=[],
@@ -383,14 +393,13 @@ class TestSafeDeliver:
     async def test_offline_enqueues(self):
         """OFFLINE with issue_number + target_entity enqueues to DB."""
         config = _default_config()
-        with (
-            _patch_list_sessions([]),
-            _patch_db() as (_, mock_db),
-        ):
+        mock_db = AsyncMock()
+        with _patch_list_sessions([]):
             result = await safe_deliver(
                 "ike",
                 "Hello",
                 config,
+                db=mock_db,
                 issue_number=42,
                 target_entity="ike",
                 flow_name="test_flow",
@@ -482,17 +491,18 @@ class TestSafeDeliver:
     async def test_delivery_failed_enqueues(self):
         """IDLE_READY + send fails returns 'delivery_failed' and enqueues."""
         config = _default_config()
+        mock_db = AsyncMock()
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
             _patch_get_agent_state(_IDLE_SNAP),
             _patch_send_message(False),
-            _patch_db() as (_, mock_db),
         ):
             result = await safe_deliver(
                 "ike",
                 "Hello",
                 config,
+                db=mock_db,
                 issue_number=42,
                 target_entity="ike",
                 flow_name="test_flow",
@@ -525,7 +535,7 @@ class TestSafeDeliver:
         """IDLE_GRACE intelligence returns 'grace_period' outcome."""
         config = _default_config()
         with patch(
-            "src.session_bridge.get_session_intelligence",
+            "agent_backbone.services.delivery._delivery.get_session_intelligence",
             new_callable=AsyncMock,
             return_value=SessionProfile(
                 session_name="ike",
@@ -544,7 +554,7 @@ class TestSafeDeliver:
             jarvis=JarvisConfig(inject_url="http://localhost:3000/api/assistant/inject"),
         )
         with patch(
-            "src.jarvis.inject_message",
+            "agent_backbone.jarvis.inject_message",
             new_callable=AsyncMock,
             return_value=True,
         ) as mock_inject:
@@ -562,18 +572,17 @@ class TestSafeDeliver:
             webhook_secret="s",
             jarvis=JarvisConfig(inject_url="http://localhost:3000/api/assistant/inject"),
         )
-        with (
-            patch(
-                "src.jarvis.inject_message",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            _patch_db() as (_, mock_db),
+        mock_db = AsyncMock()
+        with patch(
+            "agent_backbone.jarvis.inject_message",
+            new_callable=AsyncMock,
+            return_value=False,
         ):
             result = await safe_deliver(
                 "jarvis",
                 "Hello",
                 config,
+                db=mock_db,
                 issue_number=42,
                 target_entity="jarvis",
                 flow_name="test_flow",
@@ -606,7 +615,7 @@ class TestListSessionsFull:
         ]
         with (
             patch(
-                "src.tmux.list_sessions_rich",
+                "agent_backbone.services.tmux.list_sessions_rich",
                 new_callable=AsyncMock,
                 return_value=mock_sessions,
             ),
@@ -630,7 +639,11 @@ class TestListSessionsFull:
     async def test_empty_list(self):
         """Returns empty list when no sessions exist."""
         config = _default_config()
-        with patch("src.tmux.list_sessions_rich", new_callable=AsyncMock, return_value=[]):
+        with patch(
+            "agent_backbone.services.tmux.list_sessions_rich",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
             result = await list_sessions_full(config)
         assert result == []
 
@@ -642,7 +655,7 @@ class TestListSessionsFull:
         ]
         with (
             patch(
-                "src.tmux.list_sessions_rich",
+                "agent_backbone.services.tmux.list_sessions_rich",
                 new_callable=AsyncMock,
                 return_value=mock_sessions,
             ),
@@ -664,7 +677,7 @@ class TestListSessionsFull:
         ]
         with (
             patch(
-                "src.tmux.list_sessions_rich",
+                "agent_backbone.services.tmux.list_sessions_rich",
                 new_callable=AsyncMock,
                 return_value=mock_sessions,
             ),

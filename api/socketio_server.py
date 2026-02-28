@@ -18,8 +18,8 @@ import time
 
 import socketio
 
-from src.pty_manager import PtyManager
-from src.tmux import capture_pane, list_panes, session_exists
+from agent_backbone.services.streaming import PtyManager
+from agent_backbone.services.tmux import capture_pane, list_panes, session_exists
 
 log = logging.getLogger(__name__)
 
@@ -91,11 +91,15 @@ class TerminalNamespace(socketio.AsyncNamespace):
     async def on_join(self, sid: str, data: dict) -> None:
         """Join a terminal session via PTY.
 
-        data: {"session": "session-name"}
+        data: {"session": "session-name", "cols": 160, "rows": 35}
 
         Creates or reuses a PTY running `tmux attach-session`,
         subscribes this client, sends initial snapshot with pane
         dimensions, and starts output forwarding.
+
+        When the client provides cols/rows, those are used for PTY
+        sizing (clamped to MIN/MAX bounds). Otherwise falls back to
+        the tmux pane's native dimensions.
         """
         session_name = data.get("session", "")
         if not session_name:
@@ -106,19 +110,33 @@ class TerminalNamespace(socketio.AsyncNamespace):
             await self.emit("error", {"message": f"Session '{session_name}' not found"}, to=sid)
             return
 
-        # Get pane dimensions for initial PTY size
-        panes = await list_panes(session_name)
-        active_pane = next((p for p in panes if p["pane_active"]), None)
-        cols = int(active_pane["pane_width"]) if active_pane else 80
-        rows = int(active_pane["pane_height"]) if active_pane else 24
+        # Determine PTY dimensions: prefer client-provided, fall back to tmux pane
+        client_cols = data.get("cols")
+        client_rows = data.get("rows")
 
-        # Get or create PTY session
+        if client_cols is not None and client_rows is not None:
+            try:
+                cols = max(MIN_COLS, min(MAX_COLS, int(client_cols)))
+                rows = max(MIN_ROWS, min(MAX_ROWS, int(client_rows)))
+            except (ValueError, TypeError):
+                cols, rows = 80, 24
+        else:
+            panes = await list_panes(session_name)
+            active_pane = next((p for p in panes if p["pane_active"]), None)
+            cols = int(active_pane["pane_width"]) if active_pane else 80
+            rows = int(active_pane["pane_height"]) if active_pane else 24
+
+        # Get or create PTY session, then resize to match this client
         mgr = get_pty_manager()
         pty_session = mgr.get_or_create(session_name, cols, rows)
+        pty_session.resize(cols, rows)
         queue = pty_session.subscribe(sid)
 
         # Enter Socket.IO room
-        self.enter_room(sid, f"session:{session_name}")
+        await self.enter_room(sid, f"session:{session_name}")
+
+        # Brief delay for tmux to process SIGWINCH before snapshot
+        await asyncio.sleep(0.05)
 
         # Send initial snapshot with pane dimensions
         snapshot = await capture_pane(session_name, lines=200)
@@ -167,16 +185,16 @@ class TerminalNamespace(socketio.AsyncNamespace):
         if len(input_data) > MAX_INPUT_BYTES:
             log.warning(
                 "Input too large from sid=%s (%d bytes, max %d)",
-                sid, len(input_data), MAX_INPUT_BYTES,
+                sid,
+                len(input_data),
+                MAX_INPUT_BYTES,
             )
             input_data = input_data[:MAX_INPUT_BYTES]
 
         # Verify sid is subscribed to this session
         sid_subs = self._subscriptions.get(sid, {})
         if session_name not in sid_subs:
-            await self.emit(
-                "error", {"message": f"Not joined to session '{session_name}'"}, to=sid
-            )
+            await self.emit("error", {"message": f"Not joined to session '{session_name}'"}, to=sid)
             return
 
         # Gap 4: Rate limiting
@@ -206,9 +224,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
         # Verify sid is subscribed to this session
         sid_subs = self._subscriptions.get(sid, {})
         if session_name not in sid_subs:
-            await self.emit(
-                "error", {"message": f"Not joined to session '{session_name}'"}, to=sid
-            )
+            await self.emit("error", {"message": f"Not joined to session '{session_name}'"}, to=sid)
             return
 
         # Gap 3: Resize bounds validation
@@ -251,7 +267,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
             if pty_session.subscriber_count == 0:
                 mgr.remove(session_name)
 
-        self.leave_room(sid, f"session:{session_name}")
+        await self.leave_room(sid, f"session:{session_name}")
         self._input_timestamps.pop((sid, session_name), None)
         log.info("sid=%s left session '%s'", sid, session_name)
 
@@ -270,8 +286,11 @@ class TerminalNamespace(socketio.AsyncNamespace):
         if len(timestamps) > INPUT_RATE_LIMIT:
             log.warning(
                 "Rate limit exceeded for sid=%s session='%s' (%d/%d per %.0fs)",
-                sid, session_name, len(timestamps),
-                INPUT_RATE_LIMIT, INPUT_RATE_WINDOW,
+                sid,
+                session_name,
+                len(timestamps),
+                INPUT_RATE_LIMIT,
+                INPUT_RATE_WINDOW,
             )
             return True
         return False
@@ -301,9 +320,9 @@ class TerminalNamespace(socketio.AsyncNamespace):
                     )
                 except Exception:
                     log.warning(
-                        "Output emit failed for sid=%s session='%s' "
-                        "(client may be slow)",
-                        sid, session_name,
+                        "Output emit failed for sid=%s session='%s' (client may be slow)",
+                        sid,
+                        session_name,
                     )
         except asyncio.CancelledError:
             return

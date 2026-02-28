@@ -1,13 +1,13 @@
-"""Tests for src/topic_discovery.py."""
+"""Tests for agent_backbone/topic_discovery.py."""
 
 from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock
 
-from src.config import BackboneConfig, TelegramConfig
-from src.registry import EntityEntry, EntityRegistry, RepoInfo
-from src.topic_discovery import (
+from agent_backbone.config import BackboneConfig, TelegramConfig
+from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
+from agent_backbone.topic_discovery import (
     TopicDiscovery,
     effective_group_chat_id,
     effective_routes,
@@ -23,16 +23,25 @@ def _topic_test_registry() -> EntityRegistry:
     return EntityRegistry(
         entities={
             "ike": EntityEntry(
-                session="ike", home="~/ws/core/ike",
-                groups=[], figure="", role="",
+                session="ike",
+                home="~/ws/core/ike",
+                groups=[],
+                figure="",
+                role="",
             ),
             "feynman": EntityEntry(
-                session="feynman", home="~/orchestration",
-                groups=[], figure="", role="",
+                session="feynman",
+                home="~/orchestration",
+                groups=[],
+                figure="",
+                role="",
             ),
             "leo": EntityEntry(
-                session="leo", home="~/ws/leo",
-                groups=[], figure="", role="",
+                session="leo",
+                home="~/ws/leo",
+                groups=[],
+                figure="",
+                role="",
             ),
         },
         repos=[

@@ -6,7 +6,7 @@ import json
 from dataclasses import replace
 from unittest.mock import patch
 
-from src.config import AgentStateConfig, HeartbeatConfig
+from agent_backbone.config import AgentStateConfig, HeartbeatConfig
 
 
 def _set_config_paths(api_app, schedule_path: str, state_dir: str):

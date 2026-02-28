@@ -12,9 +12,9 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_backbone.config import BackboneConfig
 from api.deps import get_config
 from api.models import ListEnvelope, PersonalScheduleCreate, ScheduleEntry
-from src.config import BackboneConfig
 
 log = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ def _personal_items_for_today(items: list[dict]) -> list[dict]:
 @router.get("/schedule/today", response_model=ListEnvelope[ScheduleEntry])
 async def get_today_schedule(config: BackboneConfig = Depends(get_config)):
     """Get today's schedule — cron fire times merged with ROUTINE.md labels + personal items."""
-    from flows.agent_heartbeat import load_schedules
+    from agent_backbone.services.monitoring import load_schedules
 
     schedules = load_schedules(config.heartbeat.schedule_path)
     done_state = _load_done_state(config.agent_state.state_path)

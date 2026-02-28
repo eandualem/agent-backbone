@@ -1,10 +1,10 @@
-"""Tests for src/priority.py."""
+"""Tests for agent_backbone/priority.py."""
 
 from __future__ import annotations
 
-from src.config import PriorityScoringConfig
-from src.models import IssueData, ParsedLabels
-from src.priority import compute_priority_score
+from agent_backbone.config import PriorityScoringConfig
+from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.services.delivery import compute_priority_score
 
 
 def _make_issue(

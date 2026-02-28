@@ -5,12 +5,25 @@ from __future__ import annotations
 import time
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+import api.routes.agents as agents_module
+from agent_backbone.services.state import AgentState, StateSnapshot
 from api.routes.agents import _resolve_command
-from src.agent_state import AgentState, StateSnapshot
 
 # All patches target api.routes.agents.* because the route imports
-# functions directly (from src.tmux import list_sessions, etc.)
+# functions directly (from agent_backbone.tmux import list_sessions, etc.)
 _AGENTS = "api.routes.agents"
+
+
+@pytest.fixture(autouse=True)
+def _reset_agents_cache():
+    """Reset the TTL cache before each test to prevent cross-test leakage."""
+    agents_module._agents_cache = []
+    agents_module._agents_cache_ts = 0
+    yield
+    agents_module._agents_cache = []
+    agents_module._agents_cache_ts = 0
 
 
 def _idle_snapshot(**overrides) -> StateSnapshot:
@@ -70,14 +83,10 @@ class TestListAgents:
         """Named entities from config.registry.sessions_map are always included."""
         with (
             patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch(f"{_AGENTS}.list_sessions", new_callable=AsyncMock) as mock_list,
             patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
-            patch(f"{_AGENTS}.session_exists", new_callable=AsyncMock) as mock_exists,
         ):
             mock_state.return_value = _idle_snapshot()
-            mock_list.return_value = []
             mock_rich.return_value = []
-            mock_exists.return_value = True
 
             resp = await api_client.get("/api/agents", headers=auth_headers)
 
@@ -86,8 +95,15 @@ class TestListAgents:
         sessions = [a["session"] for a in data["items"]]
         # All 9 named entities from _DEFAULT_SESSIONS must be present
         for expected in (
-            "feynman", "ike", "leo", "ada", "brunel",
-            "hamilton", "curie", "bell", "gallup",
+            "feynman",
+            "ike",
+            "leo",
+            "ada",
+            "brunel",
+            "hamilton",
+            "curie",
+            "bell",
+            "gallup",
         ):
             assert expected in sessions
         assert data["total"] == len(data["items"])
@@ -99,24 +115,17 @@ class TestListAgents:
         """Tmux sessions not in named entities are added as coding agents."""
         with (
             patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch(f"{_AGENTS}.list_sessions", new_callable=AsyncMock) as mock_list,
             patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
-            patch(f"{_AGENTS}.session_exists", new_callable=AsyncMock) as mock_exists,
         ):
             mock_state.return_value = _idle_snapshot()
-            mock_list.return_value = [
-                "feynman",
-                "ike",
-                "leo",
-                "ada",
-                "brunel",
-                "platform-api",
-            ]
             mock_rich.return_value = [
                 {"name": "feynman", "windows": 2, "created": 1708000000, "attached": True},
+                {"name": "ike", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "leo", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "ada", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "brunel", "windows": 1, "created": 1708000000, "attached": False},
                 {"name": "platform-api", "windows": 1, "created": 1708001000, "attached": False},
             ]
-            mock_exists.return_value = True
 
             resp = await api_client.get("/api/agents", headers=auth_headers)
 
@@ -136,25 +145,21 @@ class TestListAgents:
         """Service sessions (ngrok, prefect, etc.) are filtered from agents list."""
         with (
             patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch(f"{_AGENTS}.list_sessions", new_callable=AsyncMock) as mock_list,
             patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
-            patch(f"{_AGENTS}.session_exists", new_callable=AsyncMock) as mock_exists,
         ):
             mock_state.return_value = _idle_snapshot()
-            mock_list.return_value = [
-                "feynman",
-                "ike",
-                "leo",
-                "ada",
-                "brunel",
-                "platform-api",
-                "ngrok",
-                "prefect-worker",
-                "prefect-server",
-                "telegram-bot",
+            mock_rich.return_value = [
+                {"name": "feynman", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "ike", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "leo", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "ada", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "brunel", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "platform-api", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "ngrok", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "prefect-worker", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "prefect-server", "windows": 1, "created": 1708000000, "attached": False},
+                {"name": "telegram-bot", "windows": 1, "created": 1708000000, "attached": False},
             ]
-            mock_rich.return_value = []
-            mock_exists.return_value = True
 
             resp = await api_client.get("/api/agents", headers=auth_headers)
 
@@ -167,13 +172,11 @@ class TestListAgents:
         for svc in ("ngrok", "prefect-worker", "prefect-server", "telegram-bot"):
             assert svc not in sessions
 
-    async def test_includes_offline_repos_from_registry(
-        self, api_app, api_client, auth_headers
-    ):
+    async def test_includes_offline_repos_from_registry(self, api_app, api_client, auth_headers):
         """All repos from registry appear as coding agents, even without active sessions."""
         from dataclasses import replace as dc_replace
 
-        from src.registry import RepoInfo
+        from agent_backbone.services.registry import RepoInfo
 
         # Add repos to the test config's registry
         old_config = api_app.state.config
@@ -190,22 +193,18 @@ class TestListAgents:
         try:
             with (
                 patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
-                patch(f"{_AGENTS}.list_sessions", new_callable=AsyncMock) as mock_list,
-                patch(
-                    f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock
-                ) as mock_rich,
-                patch(
-                    f"{_AGENTS}.session_exists", new_callable=AsyncMock
-                ) as mock_exists,
+                patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
             ):
                 mock_state.return_value = _idle_snapshot()
-                # Only agent-backbone has an active session
-                mock_list.return_value = ["feynman", "ike", "agent-backbone"]
-                mock_rich.return_value = [{
-                    "name": "agent-backbone", "windows": 1,
-                    "created": 1708000000, "attached": True,
-                }]
-                mock_exists.side_effect = lambda s: s in ("feynman", "ike", "agent-backbone")
+                # Only agent-backbone has an active tmux session
+                mock_rich.return_value = [
+                    {
+                        "name": "agent-backbone",
+                        "windows": 1,
+                        "created": 1708000000,
+                        "attached": True,
+                    }
+                ]
 
                 resp = await api_client.get("/api/agents", headers=auth_headers)
         finally:
@@ -231,6 +230,64 @@ class TestListAgents:
         # No duplicates
         assert sessions.count("agent-backbone") == 1
         assert sessions.count("platform-api") == 1
+
+    async def test_excludes_service_entity_type(self, api_app, api_client, auth_headers):
+        """Entities with entity_type='service' are excluded from agent list."""
+        from dataclasses import replace as dc_replace
+
+        from agent_backbone.services.registry import EntityEntry
+
+        old_config = api_app.state.config
+        old_reg = old_config.registry
+        new_entities = dict(old_reg.entities)
+        new_entities["jarvis"] = EntityEntry(
+            session="jarvis",
+            home="~/ws/jarvis/",
+            groups=[],
+            figure="Jarvis",
+            role="Personal Assistant",
+            entity_type="service",
+        )
+        new_reg = dc_replace(old_reg, entities=new_entities)
+        api_app.state.config = dc_replace(old_config, registry=new_reg)
+
+        try:
+            with (
+                patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
+                patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
+            ):
+                mock_state.return_value = _idle_snapshot()
+                mock_rich.return_value = []
+
+                resp = await api_client.get("/api/agents", headers=auth_headers)
+        finally:
+            api_app.state.config = old_config
+
+        assert resp.status_code == 200
+        data = resp.json()
+        sessions = [a["session"] for a in data["items"]]
+        entities = [a["entity"] for a in data["items"]]
+        assert "jarvis" not in sessions
+        assert "jarvis" not in entities
+        # Other named entities still present
+        assert "ike" in entities
+
+    async def test_entity_type_field_returned(self, api_client, auth_headers):
+        """EnrichedAgent includes entity_type field defaulting to 'agent'."""
+        with (
+            patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
+            patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
+        ):
+            mock_state.return_value = _idle_snapshot()
+            mock_rich.return_value = []
+
+            resp = await api_client.get("/api/agents", headers=auth_headers)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        # All agents should have entity_type "agent" (default)
+        for agent in data["items"]:
+            assert agent["entity_type"] == "agent"
 
     async def test_requires_auth(self, api_client):
         """Request without auth headers is rejected when API key is set."""
@@ -276,53 +333,6 @@ class TestGetAgentState:
         data = resp.json()
         assert data["session"] == "nonexistent"
         assert data["state"] == "unknown"
-
-
-# ---------------------------------------------------------------------------
-# POST /api/agents/{session}/message
-# ---------------------------------------------------------------------------
-
-
-class TestSendMessage:
-    async def test_sends_message_successfully(self, api_client, auth_headers):
-        """Sends message to a valid session and returns ok."""
-        with patch(
-            f"{_AGENTS}.send_message", new_callable=AsyncMock, return_value=True
-        ) as mock_send:
-            resp = await api_client.post(
-                "/api/agents/feynman/message",
-                json={"message": "Hello Feynman"},
-                headers=auth_headers,
-            )
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is True
-        assert data["session"] == "feynman"
-        mock_send.assert_awaited_once_with("feynman", "Hello Feynman")
-
-    async def test_empty_message_returns_400(self, api_client, auth_headers):
-        """Empty message body is rejected with 400."""
-        resp = await api_client.post(
-            "/api/agents/feynman/message",
-            json={"message": ""},
-            headers=auth_headers,
-        )
-
-        assert resp.status_code == 400
-        assert "required" in resp.json()["detail"].lower()
-
-    async def test_session_not_found_returns_404(self, api_client, auth_headers):
-        """When send_message fails (session missing), returns 404."""
-        with patch(f"{_AGENTS}.send_message", new_callable=AsyncMock, return_value=False):
-            resp = await api_client.post(
-                "/api/agents/ghost/message",
-                json={"message": "Are you there?"},
-                headers=auth_headers,
-            )
-
-        assert resp.status_code == 404
-        assert "ghost" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -393,220 +403,6 @@ class TestListRuntimes:
         assert claude["available"] is True
         assert gemini["available"] is False
         assert shell["available"] is True  # shell has no binary requirement
-
-
-# ---------------------------------------------------------------------------
-# POST /api/agents/{session}/start
-# ---------------------------------------------------------------------------
-
-
-_RESOLVED_RUNTIMES = {
-    "claude": {
-        "display_name": "Claude Code",
-        "command": "claude",
-        "resolved_path": "/usr/local/bin/claude",
-    },
-    "gemini": {
-        "display_name": "Gemini CLI",
-        "command": "gemini",
-        "resolved_path": "/home/.bun/bin/gemini",
-    },
-    "codex": {
-        "display_name": "Codex",
-        "command": "codex",
-        "resolved_path": "/home/.bun/bin/codex",
-    },
-    "shell": {
-        "display_name": "Plain Shell",
-        "command": None,
-        "resolved_path": None,
-    },
-}
-
-
-class TestStartSession:
-    async def test_start_session_success(self, api_client, auth_headers):
-        """Starting a new session returns ok=True."""
-        with (
-            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
-            patch(f"{_AGENTS}.start_session", new_callable=AsyncMock, return_value=True),
-            patch(f"{_AGENTS}.resolve_agent_dir", return_value=""),
-        ):
-            resp = await api_client.post("/api/agents/test-agent/start", headers=auth_headers)
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is True
-        assert data["session"] == "test-agent"
-
-    async def test_start_already_exists(self, api_client, auth_headers):
-        """Starting an existing session still returns ok=True (idempotent)."""
-        with (
-            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
-            patch(f"{_AGENTS}.start_session", new_callable=AsyncMock, return_value=True),
-            patch(f"{_AGENTS}.resolve_agent_dir", return_value=""),
-        ):
-            resp = await api_client.post("/api/agents/feynman/start", headers=auth_headers)
-
-        assert resp.status_code == 200
-        assert resp.json()["ok"] is True
-
-    async def test_start_with_explicit_working_directory(self, api_client, auth_headers):
-        """POST with explicit working_directory uses it instead of resolving."""
-        with (
-            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
-            patch(
-                f"{_AGENTS}.start_session",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_start,
-            patch(f"{_AGENTS}.resolve_agent_dir", return_value="/default/dir"),
-        ):
-            resp = await api_client.post(
-                "/api/agents/test-agent/start",
-                json={"working_directory": "/custom/dir"},
-                headers=auth_headers,
-            )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is True
-        assert data["working_directory"] == "/custom/dir"
-        mock_start.assert_awaited_once_with(
-            "test-agent",
-            working_dir="/custom/dir",
-            command="/usr/local/bin/claude",
-        )
-
-    async def test_start_resolves_default_directory(self, api_client, auth_headers):
-        """POST without body resolves working directory from session name."""
-        with (
-            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
-            patch(f"{_AGENTS}.start_session", new_callable=AsyncMock, return_value=True),
-            patch(f"{_AGENTS}.resolve_agent_dir", return_value="/resolved/dir") as mock_resolve,
-        ):
-            resp = await api_client.post("/api/agents/ike/start", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["working_directory"] == "/resolved/dir"
-        mock_resolve.assert_called_once()
-        assert mock_resolve.call_args[0][0] == "ike"
-
-    async def test_start_default_runtime(self, api_client, auth_headers):
-        """POST without runtime defaults to claude, passes resolved absolute path."""
-        with (
-            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
-            patch(
-                f"{_AGENTS}.start_session",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_start,
-            patch(f"{_AGENTS}.resolve_agent_dir", return_value=""),
-        ):
-            resp = await api_client.post("/api/agents/test-agent/start", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["runtime"] == "claude"
-        mock_start.assert_awaited_once_with(
-            "test-agent", working_dir=None, command="/usr/local/bin/claude"
-        )
-
-    async def test_start_with_runtime_gemini(self, api_client, auth_headers):
-        """POST with runtime=gemini passes resolved absolute path to start_session."""
-        with (
-            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
-            patch(
-                f"{_AGENTS}.start_session",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_start,
-            patch(f"{_AGENTS}.resolve_agent_dir", return_value=""),
-        ):
-            resp = await api_client.post(
-                "/api/agents/test-agent/start",
-                json={"runtime": "gemini"},
-                headers=auth_headers,
-            )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["runtime"] == "gemini"
-        mock_start.assert_awaited_once_with(
-            "test-agent", working_dir=None, command="/home/.bun/bin/gemini"
-        )
-
-    async def test_start_with_runtime_shell(self, api_client, auth_headers):
-        """POST with runtime=shell passes command=None to start_session."""
-        with (
-            patch(f"{_AGENTS}._RUNTIMES", _RESOLVED_RUNTIMES),
-            patch(
-                f"{_AGENTS}.start_session",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_start,
-            patch(f"{_AGENTS}.resolve_agent_dir", return_value=""),
-        ):
-            resp = await api_client.post(
-                "/api/agents/test-agent/start",
-                json={"runtime": "shell"},
-                headers=auth_headers,
-            )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["runtime"] == "shell"
-        mock_start.assert_awaited_once_with("test-agent", working_dir=None, command=None)
-
-    async def test_start_with_invalid_runtime(self, api_client, auth_headers):
-        """POST with unknown runtime returns 400 with available runtimes."""
-        with patch(f"{_AGENTS}.resolve_agent_dir", return_value=""):
-            resp = await api_client.post(
-                "/api/agents/test-agent/start",
-                json={"runtime": "invalid-rt"},
-                headers=auth_headers,
-            )
-        assert resp.status_code == 400
-        detail = resp.json()["detail"]
-        assert "invalid-rt" in detail
-        assert "claude" in detail
-
-    async def test_start_unresolved_binary_returns_400(self, api_client, auth_headers):
-        """POST with runtime whose binary is unresolved returns 400."""
-        unresolved = {
-            "gemini": {"display_name": "Gemini CLI", "command": "gemini", "resolved_path": None},
-        }
-        with patch(f"{_AGENTS}._RUNTIMES", unresolved):
-            resp = await api_client.post(
-                "/api/agents/test-agent/start",
-                json={"runtime": "gemini"},
-                headers=auth_headers,
-            )
-        assert resp.status_code == 400
-        detail = resp.json()["detail"]
-        assert "gemini" in detail
-        assert "not found" in detail
-
-
-# ---------------------------------------------------------------------------
-# POST /api/agents/{session}/stop
-# ---------------------------------------------------------------------------
-
-
-class TestStopSession:
-    async def test_stop_session_success(self, api_client, auth_headers):
-        """Stopping a running session returns ok=True."""
-        with patch(f"{_AGENTS}.stop_session", new_callable=AsyncMock, return_value=True):
-            resp = await api_client.post("/api/agents/feynman/stop", headers=auth_headers)
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is True
-        assert data["session"] == "feynman"
-
-    async def test_stop_session_failure(self, api_client, auth_headers):
-        """When stop fails, returns ok=False."""
-        with patch(f"{_AGENTS}.stop_session", new_callable=AsyncMock, return_value=False):
-            resp = await api_client.post("/api/agents/ghost/stop", headers=auth_headers)
-
-        assert resp.status_code == 200
-        assert resp.json()["ok"] is False
 
 
 # ---------------------------------------------------------------------------

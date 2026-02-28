@@ -1,4 +1,4 @@
-"""Tests for src/pty_manager.py."""
+"""Tests for agent_backbone/pty_manager.py."""
 
 from __future__ import annotations
 
@@ -7,7 +7,9 @@ import os
 import signal
 from unittest.mock import MagicMock, patch
 
-from src.pty_manager import PtyManager, PtySession
+from agent_backbone.services.streaming import PtyManager, PtySession
+
+_PTY = "agent_backbone.services.streaming._pty"
 
 
 class TestPtySession:
@@ -52,15 +54,15 @@ class TestPtySession:
 
     def test_start_and_cleanup(self):
         """Start spawns a tmux attach process and cleanup kills it."""
-        with patch("src.pty_manager.subprocess.Popen") as mock_popen:
+        with patch(f"{_PTY}.subprocess.Popen") as mock_popen:
             mock_proc = MagicMock()
             mock_proc.pid = 12345
             mock_popen.return_value = mock_proc
 
             master_fd, slave_fd = os.openpty()
-            with patch("src.pty_manager.os.openpty", return_value=(master_fd, slave_fd)):
-                with patch("src.pty_manager.os.close"):
-                    with patch("src.pty_manager.asyncio.create_task"):
+            with patch(f"{_PTY}.os.openpty", return_value=(master_fd, slave_fd)):
+                with patch(f"{_PTY}.os.close"):
+                    with patch(f"{_PTY}.asyncio.create_task"):
                         session = PtySession("test-session")
                         session.start(cols=120, rows=40)
 
@@ -69,9 +71,7 @@ class TestPtySession:
 
                         # Verify tmux attach command
                         call_args = mock_popen.call_args
-                        assert call_args[0][0] == [
-                            "tmux", "attach-session", "-t", "test-session"
-                        ]
+                        assert call_args[0][0] == ["tmux", "attach-session", "-t", "test-session"]
                         assert call_args[1]["env"]["TERM"] == "xterm-256color"
 
                         # Cleanup
@@ -89,7 +89,7 @@ class TestPtySession:
         session = PtySession("test")
         session.master_fd = 42
 
-        with patch("src.pty_manager.os.write") as mock_write:
+        with patch(f"{_PTY}.os.write") as mock_write:
             session.write("hello")
             mock_write.assert_called_once_with(42, b"hello")
 
@@ -98,7 +98,7 @@ class TestPtySession:
         session = PtySession("test")
         session.master_fd = 42
 
-        with patch("src.pty_manager.fcntl.ioctl") as mock_ioctl:
+        with patch(f"{_PTY}.fcntl.ioctl") as mock_ioctl:
             session.resize(140, 35)
             mock_ioctl.assert_called_once()
             args = mock_ioctl.call_args[0]

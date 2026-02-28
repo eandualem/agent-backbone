@@ -1,8 +1,8 @@
 """Webhook intake routes — migrated from gateway/server.py.
 
 Handles GitHub webhook events and Telegram reply routing.
-Pure functions (verify_signature, normalize_event, is_duplicate) remain
-in gateway/server.py and are imported here.
+Pure functions (verify_signature, normalize_event) live in api.webhook_utils.
+Dedup uses the persistence service's hot cache via app.state.db.
 """
 
 from __future__ import annotations
@@ -14,21 +14,18 @@ import os
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
-from api.deps import get_config
-from gateway.server import (
-    _record_delivery_id_to_db,
-    is_duplicate,
-    normalize_event,
-    verify_signature,
-)
-from src.config import BackboneConfig
-from src.dedup import is_recent_notification
-from src.models import EventType
-from src.topic_discovery import (
+from agent_backbone.config import BackboneConfig
+from agent_backbone.models import EventType
+from agent_backbone.services.delivery import is_recent_notification
+from agent_backbone.services.github import GitHubClient
+from agent_backbone.services.persistence import BackboneDB
+from agent_backbone.services.telegram._topic_discovery import (
     effective_group_chat_id,
     effective_routes,
     load_discovery,
 )
+from api.deps import get_config, get_db, get_github
+from api.webhook_utils import normalize_event, verify_signature
 
 log = logging.getLogger(__name__)
 
@@ -42,18 +39,20 @@ def _reverse_topic_routes(routes: dict[int, str]) -> dict[str, int]:
     }
 
 
-async def dispatch_event_async(event, config: BackboneConfig) -> str:
+async def dispatch_event_async(
+    event, config: BackboneConfig, db: BackboneDB, gh: GitHubClient
+) -> str:
     """Async version of dispatch_event — awaits Prefect flows directly."""
     if event.delivery_id:
         try:
-            await _record_delivery_id_to_db(event.delivery_id, str(config.delivery.db_file))
+            await db.record_delivery_id(event.delivery_id)
         except Exception:
             log.warning("Failed to persist delivery ID to SQLite")
 
     if event.event_type == EventType.ISSUE_CLOSED:
-        from flows.lifecycle import on_issue_closed
+        from agent_backbone.services.dispatch import on_issue_closed
 
-        result = await on_issue_closed(event)
+        result = await on_issue_closed(event, config, gh)
         return f"lifecycle: {result}"
 
     if event.event_type in (
@@ -70,9 +69,9 @@ async def dispatch_event_async(event, config: BackboneConfig) -> str:
             )
             return f"deduped: all targets already notified for #{event.issue.number}"
 
-        from flows.issue_dispatcher import issue_dispatcher
+        from agent_backbone.services.dispatch import issue_dispatcher
 
-        result = await issue_dispatcher(event)
+        result = await issue_dispatcher(event, config, db)
         return (
             f"dispatch: {len(result.delivered)} delivered, "
             f"{len(result.offline)} offline, "
@@ -83,7 +82,12 @@ async def dispatch_event_async(event, config: BackboneConfig) -> str:
 
 
 @router.post("/webhook")
-async def handle_webhook(request: Request, config: BackboneConfig = Depends(get_config)):
+async def handle_webhook(
+    request: Request,
+    config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
+    gh: GitHubClient = Depends(get_github),
+):
     """Receive GitHub webhook events, validate, dedup, and dispatch."""
     payload_body = await request.body()
 
@@ -95,9 +99,9 @@ async def handle_webhook(request: Request, config: BackboneConfig = Depends(get_
         log.warning("Invalid webhook signature — rejecting")
         return Response(content="Invalid signature", status_code=403)
 
-    # Dedup check (delivery ID level)
+    # Dedup check (delivery ID level) — uses persistence hot cache
     delivery_id = request.headers.get("X-GitHub-Delivery", "")
-    if is_duplicate(delivery_id, config.max_delivery_ids):
+    if db.is_duplicate(delivery_id, config.max_delivery_ids):
         log.info("Dedup: delivery_id=%s reason=duplicate_delivery_id", delivery_id)
         return Response(content="Duplicate, skipped", status_code=200)
 
@@ -121,7 +125,7 @@ async def handle_webhook(request: Request, config: BackboneConfig = Depends(get_
         event.issue.labels.targets,
     )
 
-    outcome = await dispatch_event_async(event, config)
+    outcome = await dispatch_event_async(event, config, db, gh)
     return Response(content=outcome, status_code=200)
 
 

@@ -6,8 +6,8 @@ Socket.IO server can share the same broker instance.
 
 from __future__ import annotations
 
-from src.config import BackboneConfig
-from src.stream_broker import StreamBroker
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.streaming import StreamBroker
 
 _broker: StreamBroker | None = None
 

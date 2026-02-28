@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, Field, field_validator
@@ -39,6 +39,7 @@ class EnrichedAgent(BaseModel):
     groups: list[str] = Field(default_factory=list)
     home: str = ""
     type: str = "coding_agent"  # "named_entity" | "coding_agent"
+    entity_type: str = "agent"  # "agent" | "service"
     state: str = "unknown"
     current_issue: int | None = None
     online: bool = False
@@ -195,13 +196,6 @@ class WorkflowCreateRequest(BaseModel):
     steps: list[dict]
 
 
-class AgentStartRequest(BaseModel):
-    """Optional request body for starting an agent session."""
-
-    working_directory: str | None = None
-    runtime: str | None = None
-
-
 class RuntimeInfo(BaseModel):
     """Runtime option for agent sessions."""
 
@@ -247,13 +241,6 @@ class FileNode(BaseModel):
     type: str  # "file" or "directory"
     path: str
     children: list[FileNode] | None = None
-
-
-class FileWriteRequest(BaseModel):
-    """Request body for writing file content."""
-
-    path: str
-    content: str
 
 
 # --- Schedule ---
@@ -312,20 +299,6 @@ class NoteDetail(BaseModel):
     modified: str = ""
 
 
-class NoteCreate(BaseModel):
-    """Request body for creating a note."""
-
-    title: str
-    content: str
-    subdir: str = ""
-
-
-class NoteUpdate(BaseModel):
-    """Request body for updating a note."""
-
-    content: str
-
-
 # --- Rooms ---
 
 
@@ -343,7 +316,7 @@ class RoomMessage(BaseModel):
     @classmethod
     def _coerce_timestamp(cls, v: object) -> str:
         if isinstance(v, (int, float)):
-            return datetime.fromtimestamp(v, tz=timezone.utc).isoformat()
+            return datetime.fromtimestamp(v, tz=UTC).isoformat()
         return str(v)
 
 
@@ -366,7 +339,7 @@ class Room(BaseModel):
         if isinstance(v, (int, float)):
             if v == 0.0:
                 return ""
-            return datetime.fromtimestamp(v, tz=timezone.utc).isoformat()
+            return datetime.fromtimestamp(v, tz=UTC).isoformat()
         return str(v)
 
 

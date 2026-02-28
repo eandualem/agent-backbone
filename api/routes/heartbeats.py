@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.persistence import BackboneDB
 from api.deps import get_config, get_db
 from api.models import HeartbeatRecord, ListEnvelope
-from src.config import BackboneConfig
-from src.persistence import BackboneDB
 
 router = APIRouter(prefix="/api", tags=["heartbeats"])
 
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api", tags=["heartbeats"])
 @router.get("/heartbeats/schedules")
 async def get_heartbeat_schedules(config: BackboneConfig = Depends(get_config)):
     """Get all heartbeat schedules."""
-    from flows.agent_heartbeat import load_schedules
+    from agent_backbone.services.monitoring import load_schedules
 
     schedules = load_schedules(config.heartbeat.schedule_path)
     return schedules
@@ -28,7 +28,7 @@ async def update_heartbeat_schedule(
     config: BackboneConfig = Depends(get_config),
 ):
     """Update heartbeat schedule for a specific agent."""
-    from flows.agent_heartbeat import load_schedules, save_schedules
+    from agent_backbone.services.monitoring import load_schedules, save_schedules
 
     schedules = load_schedules(config.heartbeat.schedule_path)
     schedules[agent] = body

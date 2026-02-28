@@ -1,14 +1,15 @@
 .PHONY: help install dev logs clean lint format format-check fix type-check \
        test test-file test-unit test-integration cov cov-html check build \
-       run-gateway run-prefect setup-pool deploy run-worker
+       run-gateway run-prefect setup-pool deploy run-worker \
+       db-up db-down db-upgrade db-migrate db-revision db-history db-current db-downgrade
 
 .DEFAULT_GOAL := help
 
 # ─── Config ──────────────────────────────────────────────
 
 PROJECT_NAME := agent-backbone
-SRC_DIRS     := src/ gateway/ flows/ api/
-ALL_DIRS     := src/ gateway/ flows/ api/ tests/
+SRC_DIRS     := src/ gateway/ api/
+ALL_DIRS     := src/ gateway/ api/ tests/
 
 # ─── Colors ──────────────────────────────────────────────
 
@@ -143,3 +144,33 @@ deploy: ## Deploy all scheduled flows
 
 run-worker: ## Start Prefect worker for agent-pool
 	uv run prefect worker start --pool agent-pool
+
+# ─── Database ───────────────────────────────────────────
+
+db-up: ## Start PostgreSQL (docker-compose)
+	@echo "$(CYAN)Starting PostgreSQL...$(RESET)"
+	docker compose up -d
+	@echo "$(GREEN)PostgreSQL running on port 5435.$(RESET)"
+
+db-down: ## Stop PostgreSQL (docker-compose)
+	@echo "$(CYAN)Stopping PostgreSQL...$(RESET)"
+	docker compose down
+	@echo "$(GREEN)Done.$(RESET)"
+
+db-upgrade: ## Run Alembic migrations to head
+	uv run alembic upgrade head
+
+db-migrate: ## Create a new migration (MSG="description")
+	uv run alembic revision --autogenerate -m "$(MSG)"
+
+db-revision: ## Create a new migration (MSG="description") — alias for db-migrate
+	uv run alembic revision --autogenerate -m "$(MSG)"
+
+db-history: ## Show migration history
+	uv run alembic history
+
+db-current: ## Show current migration version
+	uv run alembic current
+
+db-downgrade: ## Downgrade one migration step
+	uv run alembic downgrade -1

@@ -1,4 +1,4 @@
-"""Tests for src/jarvis.py — HTTP injection delivery and session discovery."""
+"""Tests for agent_backbone/jarvis.py — HTTP injection delivery and session discovery."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import httpx
 import respx
 
-from src.jarvis import discover_session, inject_message
+from agent_backbone.jarvis import discover_session, inject_message
 
 INJECT_URL = "https://console.example.com/api/assistant/inject"
 SESSIONS_URL = "https://console.example.com/api/sessions"
@@ -18,9 +18,7 @@ class TestDiscoverSession:
     @respx.mock
     async def test_success(self):
         """Returns id from first session object."""
-        respx.get(SESSIONS_URL).respond(
-            200, json={"sessions": [{"id": "abc-123"}]}
-        )
+        respx.get(SESSIONS_URL).respond(200, json={"sessions": [{"id": "abc-123"}]})
         result = await discover_session(INJECT_URL)
         assert result == "abc-123"
 
@@ -55,9 +53,7 @@ class TestDiscoverSession:
     @respx.mock
     async def test_url_derivation(self):
         """Derives /api/sessions from inject URL by stripping to /api/ base."""
-        route = respx.get(SESSIONS_URL).respond(
-            200, json={"sessions": [{"id": "s1"}]}
-        )
+        route = respx.get(SESSIONS_URL).respond(200, json={"sessions": [{"id": "s1"}]})
         await discover_session(INJECT_URL)
         assert route.calls[0].request.url == SESSIONS_URL
 
@@ -105,9 +101,7 @@ class TestInjectMessage:
     @respx.mock
     async def test_network_error_returns_false(self):
         """Network error returns False."""
-        respx.post(INJECT_URL).mock(
-            side_effect=httpx.ConnectError("Connection refused")
-        )
+        respx.post(INJECT_URL).mock(side_effect=httpx.ConnectError("Connection refused"))
         result = await inject_message(INJECT_URL, "Hello", session_id="sess-1")
         assert result is False
 
@@ -121,9 +115,7 @@ class TestInjectMessage:
     @respx.mock
     async def test_auto_discovery(self):
         """When session_id is None, discovers session then injects."""
-        respx.get(SESSIONS_URL).respond(
-            200, json={"sessions": [{"id": "auto-sess"}]}
-        )
+        respx.get(SESSIONS_URL).respond(200, json={"sessions": [{"id": "auto-sess"}]})
         route = respx.post(INJECT_URL).respond(200)
 
         result = await inject_message(INJECT_URL, "Auto message")

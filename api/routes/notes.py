@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import os
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
-from api.models import ListEnvelope, NoteCreate, NoteDetail, NoteItem, NoteUpdate
+from api.models import ListEnvelope, NoteDetail, NoteItem
 
 router = APIRouter(prefix="/api", tags=["notes"])
 
@@ -21,13 +20,6 @@ def _is_safe_path(note_path: Path) -> bool:
     resolved = note_path.resolve()
     root_resolved = _NOTES_ROOT.resolve()
     return resolved == root_resolved or str(resolved).startswith(str(root_resolved) + os.sep)
-
-
-def _slugify(title: str) -> str:
-    """Convert title to a safe filename slug."""
-    slug = re.sub(r"[^\w\s-]", "", title.lower())
-    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
-    return slug or "untitled"
 
 
 def _note_to_item(note_path: Path) -> NoteItem:
@@ -68,36 +60,6 @@ async def list_notes(
     return ListEnvelope(items=items, total=len(items))
 
 
-@router.post("/notes", response_model=NoteDetail, status_code=201)
-async def create_note(body: NoteCreate):
-    """Create a new markdown note."""
-    slug = _slugify(body.title)
-    target_dir = _NOTES_ROOT / body.subdir if body.subdir else _NOTES_ROOT
-    if not _is_safe_path(target_dir):
-        raise HTTPException(status_code=403, detail="Path outside notes directory")
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    # Avoid name collisions
-    file_path = target_dir / f"{slug}.md"
-    counter = 1
-    while file_path.exists():
-        file_path = target_dir / f"{slug}-{counter}.md"
-        counter += 1
-
-    file_path.write_text(body.content)
-    rel = file_path.relative_to(_NOTES_ROOT)
-    mtime = file_path.stat().st_mtime
-    modified = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
-
-    return NoteDetail(
-        id=str(rel),
-        title=body.title,
-        content=body.content,
-        modified=modified,
-    )
-
-
 @router.get("/notes/{note_id:path}", response_model=NoteDetail)
 async def get_note(note_id: str):
     """Read full note content by ID (relative path)."""
@@ -114,34 +76,3 @@ async def get_note(note_id: str):
     modified = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
 
     return NoteDetail(id=note_id, title=title, content=content, modified=modified)
-
-
-@router.put("/notes/{note_id:path}", response_model=NoteDetail)
-async def update_note(note_id: str, body: NoteUpdate):
-    """Update note content."""
-    note_path = _NOTES_ROOT / note_id
-    if not _is_safe_path(note_path):
-        raise HTTPException(status_code=403, detail="Path outside notes directory")
-    if not note_path.is_file():
-        raise HTTPException(status_code=404, detail="Note not found")
-
-    note_path.write_text(body.content)
-    lines = body.content.splitlines()
-    title = lines[0].lstrip("# ").strip() if lines else note_path.stem
-    mtime = note_path.stat().st_mtime
-    modified = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
-
-    return NoteDetail(id=note_id, title=title, content=body.content, modified=modified)
-
-
-@router.delete("/notes/{note_id:path}")
-async def delete_note(note_id: str):
-    """Delete a note by ID."""
-    note_path = _NOTES_ROOT / note_id
-    if not _is_safe_path(note_path):
-        raise HTTPException(status_code=403, detail="Path outside notes directory")
-    if not note_path.is_file():
-        raise HTTPException(status_code=404, detail="Note not found")
-
-    note_path.unlink()
-    return {"deleted": True, "id": note_id}

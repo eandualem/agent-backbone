@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from src.workflow_registry import WorkflowEntry
+from agent_backbone.services.workflows import WorkflowEntry
 
 
 @pytest.fixture

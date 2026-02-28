@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from unittest.mock import AsyncMock, patch
 
-from src.agent_state import AgentState, StateSnapshot
+from agent_backbone.services.state import AgentState, StateSnapshot
 
 
 def _plan_waiting_snapshot(**overrides) -> StateSnapshot:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.workflow_registry import WorkflowRegistry
+from agent_backbone.services.workflows import WorkflowRegistry
 
 
 async def test_discover_finds_workflows():
@@ -30,7 +30,7 @@ async def test_get_known_workflow():
     entry = reg.get("arclio-start")
     assert entry is not None
     assert entry.name == "arclio-start"
-    assert entry.module == "flows.workflows.arclio_start"
+    assert entry.module == "agent_backbone.services.workflows._flows"
     assert entry.description  # has a docstring
 
 

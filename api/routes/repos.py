@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
+from agent_backbone.services.onboarding import (
+    discover_repos,
+    run_onboarding,
+    run_status_checks,
+    validate_org,
+    validate_repo_name,
+)
 from api.models import (
     CheckDetail,
     ListEnvelope,
@@ -11,13 +18,6 @@ from api.models import (
     RepoOnboardRequest,
     RepoOnboardResponse,
     RepoStatusResponse,
-)
-from src.onboarding import (
-    discover_repos,
-    run_onboarding,
-    run_status_checks,
-    validate_org,
-    validate_repo_name,
 )
 
 router = APIRouter(prefix="/api", tags=["repos"])
@@ -59,8 +59,7 @@ async def onboard_repo(body: RepoOnboardRequest, request: Request):
     if not validate_org(body.org):
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown org: {body.org}."
-            " Known: Arclio, WF, Loveble, Tenacious",
+            detail=f"Unknown org: {body.org}. Known: Arclio, WF, Loveble, Tenacious",
         )
 
     backbone_config = getattr(request.app.state, "config", None)
@@ -89,14 +88,12 @@ async def get_repo_status(org: str, repo: str):
     if not validate_org(org):
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown org: {org}."
-            " Known: Arclio, WF, Loveble, Tenacious",
+            detail=f"Unknown org: {org}. Known: Arclio, WF, Loveble, Tenacious",
         )
     if not validate_repo_name(repo):
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid repo name: {repo}."
-            " Must match [a-zA-Z0-9_-]+",
+            detail=f"Invalid repo name: {repo}. Must match [a-zA-Z0-9_-]+",
         )
 
     status = run_status_checks(org, repo)

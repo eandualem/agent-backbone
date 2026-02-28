@@ -22,8 +22,8 @@ def _make_namespace() -> TerminalNamespace:
     ns = TerminalNamespace("/terminal")
     ns.server = MagicMock()
     ns.emit = AsyncMock()
-    ns.enter_room = MagicMock()
-    ns.leave_room = MagicMock()
+    ns.enter_room = AsyncMock()
+    ns.leave_room = AsyncMock()
     return ns
 
 
@@ -103,7 +103,7 @@ class TestOnJoin:
             assert "not found" in ns.emit.call_args[0][1]["message"]
 
     async def test_join_success(self):
-        """Successful join: creates PTY, subscribes, sends snapshot."""
+        """Successful join without client dims: uses pane dimensions, resizes PTY."""
         ns = _make_namespace()
 
         queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -134,13 +134,14 @@ class TestOnJoin:
             # Should have created/gotten PTY with pane dimensions
             mgr.get_or_create.assert_called_once_with("ike", 120, 40)
 
+            # Should have explicitly resized PTY
+            pty_session.resize.assert_called_once_with(120, 40)
+
             # Should have entered room
             ns.enter_room.assert_called_once_with("sid1", "session:ike")
 
             # Should have emitted snapshot with dimensions
-            snapshot_calls = [
-                c for c in ns.emit.call_args_list if c[0][0] == "snapshot"
-            ]
+            snapshot_calls = [c for c in ns.emit.call_args_list if c[0][0] == "snapshot"]
             assert len(snapshot_calls) == 1
             payload = snapshot_calls[0][0][1]
             assert payload["session"] == "ike"
@@ -152,7 +153,62 @@ class TestOnJoin:
             assert "ike" in ns._subscriptions["sid1"]
 
             # Let forwarding task complete
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.15)
+
+    async def test_join_with_client_dimensions(self):
+        """Join with client-provided cols/rows uses those instead of pane dims."""
+        ns = _make_namespace()
+
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        await queue.put(None)
+
+        pty_session = _mock_pty_session()
+        pty_session.subscribe.return_value = queue
+        mgr = _mock_pty_manager(pty_session)
+
+        with (
+            patch("api.socketio_server.session_exists", new_callable=AsyncMock, return_value=True),
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch("api.socketio_server.capture_pane", new_callable=AsyncMock) as mock_capture,
+            patch("api.socketio_server.list_panes", new_callable=AsyncMock) as mock_panes,
+        ):
+            mock_capture.return_value = "$ hello\n"
+            # list_panes should NOT be called when client provides dimensions
+            await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
+
+            mock_panes.assert_not_called()
+            mgr.get_or_create.assert_called_once_with("ike", 160, 35)
+            pty_session.resize.assert_called_once_with(160, 35)
+
+            snapshot_calls = [c for c in ns.emit.call_args_list if c[0][0] == "snapshot"]
+            payload = snapshot_calls[0][0][1]
+            assert payload["cols"] == 160
+            assert payload["rows"] == 35
+
+            await asyncio.sleep(0.15)
+
+    async def test_join_client_dimensions_clamped(self):
+        """Client-provided dimensions are clamped to MIN/MAX bounds."""
+        ns = _make_namespace()
+
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        await queue.put(None)
+
+        pty_session = _mock_pty_session()
+        pty_session.subscribe.return_value = queue
+        mgr = _mock_pty_manager(pty_session)
+
+        with (
+            patch("api.socketio_server.session_exists", new_callable=AsyncMock, return_value=True),
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch("api.socketio_server.capture_pane", new_callable=AsyncMock, return_value=""),
+        ):
+            await ns.on_join("sid1", {"session": "ike", "cols": 9999, "rows": 0})
+
+            mgr.get_or_create.assert_called_once_with("ike", MAX_COLS, MIN_ROWS)
+            pty_session.resize.assert_called_once_with(MAX_COLS, MIN_ROWS)
+
+            await asyncio.sleep(0.15)
 
 
 class TestOnInput:

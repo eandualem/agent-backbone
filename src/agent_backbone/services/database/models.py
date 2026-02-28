@@ -1,0 +1,109 @@
+"""ORM models for all backbone database tables."""
+
+from __future__ import annotations
+
+from sqlalchemy import Index, Integer, Text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from agent_backbone.services.database.base import Base
+
+
+class DeliveryORM(Base):
+    """Delivery tracking records."""
+
+    __tablename__ = "deliveries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_entity: Mapped[str] = mapped_column(Text, nullable=False)
+    session_name: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    flow_name: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    flow_run_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("idx_deliveries_issue", "issue_number"),
+        Index("idx_deliveries_entity", "target_entity"),
+        Index("idx_deliveries_outcome", "outcome"),
+        Index("idx_deliveries_created", "created_at"),
+    )
+
+
+class DedupLogORM(Base):
+    """Webhook delivery deduplication log."""
+
+    __tablename__ = "dedup_log"
+
+    delivery_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    received_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class AgentStateORM(Base):
+    """Agent state snapshots."""
+
+    __tablename__ = "agent_states"
+
+    session_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="unknown")
+    current_issue: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_activity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class IssueDependencyORM(Base):
+    """Parent/sub-issue dependency tracking."""
+
+    __tablename__ = "issue_dependencies"
+
+    parent_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sub_issue_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (Index("idx_deps_sub", "sub_issue_number"),)
+
+
+class AcknowledgmentORM(Base):
+    """Issue acknowledgment tracking."""
+
+    __tablename__ = "acknowledgments"
+
+    issue_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_entity: Mapped[str] = mapped_column(Text, primary_key=True)
+    acknowledged_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class HeartbeatORM(Base):
+    """Heartbeat delivery records."""
+
+    __tablename__ = "heartbeats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent: Mapped[str] = mapped_column(Text, nullable=False)
+    delivered_at: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (Index("idx_heartbeats_agent", "agent"),)
+
+
+class MessageQueueORM(Base):
+    """Queued messages for deferred delivery."""
+
+    __tablename__ = "message_queue"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_name: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_entity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    flow_name: Mapped[str | None] = mapped_column(Text, server_default="")
+    enqueued_at: Mapped[str] = mapped_column(Text, nullable=False)
+    delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+
+    __table_args__ = (
+        Index("idx_mq_status", "status"),
+        Index("idx_mq_session", "session_name"),
+    )

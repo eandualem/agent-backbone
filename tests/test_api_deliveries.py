@@ -5,25 +5,24 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from agent_backbone.services.persistence import BackboneDB
 from api.deps import get_db
-from src.persistence import BackboneDB
 
 
 @pytest.fixture
-def deliveries_app(api_app):
+async def deliveries_app(api_app):
     """App with get_db overridden to use an in-memory DB seeded with delivery records."""
+    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    await db.start()
+    # Seed test data: 3 deliveries across 2 issues and 3 outcomes
+    await db.record_delivery(42, "ike", "ike", "delivered", "dispatcher")
+    await db.record_delivery(42, "leo", "leo", "offline", "dispatcher")
+    await db.record_delivery(43, "ike", "ike", "deferred", "monitor")
 
-    async def _seed_and_yield():
-        async with BackboneDB(":memory:") as db:
-            # Seed test data: 3 deliveries across 2 issues and 3 outcomes
-            await db.record_delivery(42, "ike", "ike", "delivered", "dispatcher")
-            await db.record_delivery(42, "leo", "leo", "offline", "dispatcher")
-            await db.record_delivery(43, "ike", "ike", "deferred", "monitor")
-            yield db
-
-    api_app.dependency_overrides[get_db] = _seed_and_yield
+    api_app.dependency_overrides[get_db] = lambda: db
     yield api_app
     api_app.dependency_overrides.clear()
+    await db.stop()
 
 
 @pytest.fixture

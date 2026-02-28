@@ -8,10 +8,10 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.persistence import BackboneDB
 from api.deps import get_config, get_db
 from api.models import ActivityEvent, ListEnvelope
-from src.config import BackboneConfig
-from src.persistence import BackboneDB
 
 log = logging.getLogger(__name__)
 

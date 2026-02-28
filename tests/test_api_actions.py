@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
-from src.config import AgentStateConfig
+from agent_backbone.config import AgentStateConfig
 
 
 def _set_state_dir(api_app, path: str):

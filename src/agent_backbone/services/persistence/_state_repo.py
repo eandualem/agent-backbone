@@ -1,0 +1,73 @@
+"""Agent state repository."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+async def get_agent_state(
+    conn: AsyncConnection,
+    session_name: str,
+) -> dict | None:
+    """Get the current state record for an agent session."""
+    result = await conn.execute(
+        text("SELECT * FROM agent_states WHERE session_name = :session_name"),
+        {"session_name": session_name},
+    )
+    row = result.fetchone()
+    return dict(row._mapping) if row else None
+
+
+async def set_agent_state(
+    conn: AsyncConnection,
+    session_name: str,
+    state: str,
+    current_issue: int | None = None,
+    last_activity: str | None = None,
+    started_at: str | None = None,
+) -> None:
+    """Upsert agent state."""
+    now = _now_iso()
+    await conn.execute(
+        text(
+            """INSERT INTO agent_states
+               (session_name, state, current_issue,
+                last_activity, started_at, updated_at)
+               VALUES (:session_name, :state, :current_issue,
+                       :last_activity, :started_at, :updated_at)
+               ON CONFLICT(session_name) DO UPDATE SET
+                 state = excluded.state,
+                 current_issue = excluded.current_issue,
+                 last_activity = COALESCE(
+                     excluded.last_activity,
+                     agent_states.last_activity),
+                 started_at = COALESCE(
+                     excluded.started_at,
+                     agent_states.started_at),
+                 updated_at = excluded.updated_at"""
+        ),
+        {
+            "session_name": session_name,
+            "state": state,
+            "current_issue": current_issue,
+            "last_activity": last_activity,
+            "started_at": started_at,
+            "updated_at": now,
+        },
+    )
+
+
+async def get_all_agent_states(
+    conn: AsyncConnection,
+) -> list[dict]:
+    """Get state records for all tracked agents."""
+    result = await conn.execute(text("SELECT * FROM agent_states ORDER BY session_name"))
+    rows = result.fetchall()
+    return [dict(row._mapping) for row in rows]

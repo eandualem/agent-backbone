@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from flows.agent_heartbeat import (
+from agent_backbone.config import BackboneConfig, HeartbeatConfig
+from agent_backbone.services.monitoring import (
     _heartbeat_lock,
     evaluate_agent_heartbeat,
     heartbeat_scheduler,
@@ -17,10 +18,12 @@ from flows.agent_heartbeat import (
     load_schedules,
     save_schedules,
 )
-from src.agent_state import AgentState, StateSnapshot
-from src.config import BackboneConfig, HeartbeatConfig
+from agent_backbone.services.state import AgentState, StateSnapshot
 
 TZ = "Africa/Addis_Ababa"
+
+# Patch target prefix (keep patch() lines under 100 chars)
+_HB = "agent_backbone.services.monitoring._heartbeat"
 
 
 # --- is_due ---
@@ -128,32 +131,40 @@ def heartbeat_config(tmp_path):
     )
 
 
+@pytest.fixture
+def mock_db():
+    """Mock BackboneDB for heartbeat tests."""
+    db = AsyncMock()
+    db.get_last_heartbeat = AsyncMock(return_value=None)
+    db.record_heartbeat = AsyncMock(return_value=1)
+    return db
+
+
 class TestEvaluateAgentHeartbeat:
-    async def test_delivers_to_idle_agent(self, heartbeat_config):
+    async def test_delivers_to_idle_agent(self, heartbeat_config, mock_db):
         """Happy path: due schedule, idle agent, online session."""
         schedule = {"cron": "0 * * * *", "timezone": TZ, "enabled": True}
         idle_snapshot = StateSnapshot(state=AgentState.IDLE, source="push")
 
         with (
-            patch("flows.agent_heartbeat.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch("flows.agent_heartbeat.send_message", new_callable=AsyncMock) as mock_send,
-            patch("flows.agent_heartbeat.BackboneDB") as MockDB,
+            patch(
+                f"{_HB}.get_agent_state",
+                new_callable=AsyncMock,
+            ) as mock_state,
+            patch(
+                f"{_HB}.send_message",
+                new_callable=AsyncMock,
+            ) as mock_send,
         ):
             mock_state.return_value = idle_snapshot
             mock_send.return_value = True
 
-            # Mock DB context manager — first call for get_last_heartbeat, second for record
-            db_instance = AsyncMock()
-            db_instance.get_last_heartbeat = AsyncMock(return_value=None)
-            db_instance.record_heartbeat = AsyncMock(return_value=1)
-            MockDB.return_value.__aenter__ = AsyncMock(return_value=db_instance)
-            MockDB.return_value.__aexit__ = AsyncMock(return_value=False)
-
-            result = await evaluate_agent_heartbeat(
+            result = await evaluate_agent_heartbeat.fn(
                 agent="ike",
                 schedule=schedule,
                 active_sessions={"ike"},
                 config=heartbeat_config,
+                db=mock_db,
             )
 
         assert result == "delivered"
@@ -162,85 +173,74 @@ class TestEvaluateAgentHeartbeat:
         assert "[via:heartbeat]" in msg
         assert "Check ROUTINE.md and HEARTBEAT.md." in msg
 
-    async def test_skips_disabled_agent(self, heartbeat_config):
+    async def test_skips_disabled_agent(self, heartbeat_config, mock_db):
         """Disabled schedule returns skipped_disabled."""
         schedule = {"cron": "0 * * * *", "enabled": False}
-        result = await evaluate_agent_heartbeat(
+        result = await evaluate_agent_heartbeat.fn(
             agent="ike",
             schedule=schedule,
             active_sessions={"ike"},
             config=heartbeat_config,
+            db=mock_db,
         )
         assert result == "skipped_disabled"
 
-    async def test_skips_busy_agent(self, heartbeat_config):
+    async def test_skips_busy_agent(self, heartbeat_config, mock_db):
         """Due but agent is busy — skipped_busy."""
         schedule = {"cron": "0 * * * *", "timezone": TZ, "enabled": True}
         busy_snapshot = StateSnapshot(state=AgentState.BUSY, source="push")
 
-        with (
-            patch("flows.agent_heartbeat.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch("flows.agent_heartbeat.BackboneDB") as MockDB,
-        ):
+        with patch(
+            f"{_HB}.get_agent_state",
+            new_callable=AsyncMock,
+        ) as mock_state:
             mock_state.return_value = busy_snapshot
-            db_instance = AsyncMock()
-            db_instance.get_last_heartbeat = AsyncMock(return_value=None)
-            db_instance.record_heartbeat = AsyncMock(return_value=1)
-            MockDB.return_value.__aenter__ = AsyncMock(return_value=db_instance)
-            MockDB.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await evaluate_agent_heartbeat(
+            result = await evaluate_agent_heartbeat.fn(
                 agent="ike",
                 schedule=schedule,
                 active_sessions={"ike"},
                 config=heartbeat_config,
+                db=mock_db,
             )
 
         assert result == "skipped_busy"
 
-    async def test_skips_offline_agent(self, heartbeat_config):
+    async def test_skips_offline_agent(self, heartbeat_config, mock_db):
         """Due and idle but no tmux session — skipped_offline."""
         schedule = {"cron": "0 * * * *", "timezone": TZ, "enabled": True}
         idle_snapshot = StateSnapshot(state=AgentState.IDLE, source="push")
 
-        with (
-            patch("flows.agent_heartbeat.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch("flows.agent_heartbeat.BackboneDB") as MockDB,
-        ):
+        with patch(
+            f"{_HB}.get_agent_state",
+            new_callable=AsyncMock,
+        ) as mock_state:
             mock_state.return_value = idle_snapshot
-            db_instance = AsyncMock()
-            db_instance.get_last_heartbeat = AsyncMock(return_value=None)
-            db_instance.record_heartbeat = AsyncMock(return_value=1)
-            MockDB.return_value.__aenter__ = AsyncMock(return_value=db_instance)
-            MockDB.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await evaluate_agent_heartbeat(
+            result = await evaluate_agent_heartbeat.fn(
                 agent="ike",
                 schedule=schedule,
                 active_sessions=set(),  # no sessions
                 config=heartbeat_config,
+                db=mock_db,
             )
 
         assert result == "skipped_offline"
 
-    async def test_not_due_skips(self, heartbeat_config):
+    async def test_not_due_skips(self, heartbeat_config, mock_db):
         """Schedule not due — returns not_due."""
         schedule = {"cron": "0 * * * *", "timezone": TZ, "enabled": True}
         tz = ZoneInfo(TZ)
         recent = (datetime.now(tz) - timedelta(minutes=1)).isoformat()
+        mock_db.get_last_heartbeat = AsyncMock(return_value=recent)
 
-        with patch("flows.agent_heartbeat.BackboneDB") as MockDB:
-            db_instance = AsyncMock()
-            db_instance.get_last_heartbeat = AsyncMock(return_value=recent)
-            MockDB.return_value.__aenter__ = AsyncMock(return_value=db_instance)
-            MockDB.return_value.__aexit__ = AsyncMock(return_value=False)
-
-            result = await evaluate_agent_heartbeat(
-                agent="ike",
-                schedule=schedule,
-                active_sessions={"ike"},
-                config=heartbeat_config,
-            )
+        result = await evaluate_agent_heartbeat.fn(
+            agent="ike",
+            schedule=schedule,
+            active_sessions={"ike"},
+            config=heartbeat_config,
+            db=mock_db,
+        )
 
         assert result == "not_due"
 
@@ -265,24 +265,31 @@ class TestHeartbeatSchedulerFlow:
         )
 
         idle_snapshot = StateSnapshot(state=AgentState.IDLE, source="push")
+        mock_db = AsyncMock()
+        mock_db.get_last_heartbeat = AsyncMock(return_value=None)
+        mock_db.record_heartbeat = AsyncMock(return_value=1)
+
+        from agent_backbone.services._locator import init as init_flow_services
+
+        init_flow_services(config=config, db=mock_db, gh=AsyncMock())
 
         with (
-            patch("flows.agent_heartbeat.BackboneConfig") as MockConfig,
-            patch("flows.agent_heartbeat.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch("flows.agent_heartbeat.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch("flows.agent_heartbeat.send_message", new_callable=AsyncMock) as mock_send,
-            patch("flows.agent_heartbeat.BackboneDB") as MockDB,
+            patch(
+                f"{_HB}.list_sessions",
+                new_callable=AsyncMock,
+            ) as mock_list,
+            patch(
+                f"{_HB}.get_agent_state",
+                new_callable=AsyncMock,
+            ) as mock_state,
+            patch(
+                f"{_HB}.send_message",
+                new_callable=AsyncMock,
+            ) as mock_send,
         ):
-            MockConfig.from_toml.return_value = config
             mock_list.return_value = ["ike", "feynman"]
             mock_state.return_value = idle_snapshot
             mock_send.return_value = True
-
-            db_instance = AsyncMock()
-            db_instance.get_last_heartbeat = AsyncMock(return_value=None)
-            db_instance.record_heartbeat = AsyncMock(return_value=1)
-            MockDB.return_value.__aenter__ = AsyncMock(return_value=db_instance)
-            MockDB.return_value.__aexit__ = AsyncMock(return_value=False)
 
             result = await heartbeat_scheduler()
 
@@ -319,24 +326,31 @@ class TestHeartbeatSchedulerFlow:
             ),
         )
         idle_snapshot = StateSnapshot(state=AgentState.IDLE, source="push")
+        mock_db = AsyncMock()
+        mock_db.get_last_heartbeat = AsyncMock(return_value=None)
+        mock_db.record_heartbeat = AsyncMock(return_value=1)
+
+        from agent_backbone.services._locator import init as init_flow_services
+
+        init_flow_services(config=config, db=mock_db, gh=AsyncMock())
 
         with (
-            patch("flows.agent_heartbeat.BackboneConfig") as MockConfig,
-            patch("flows.agent_heartbeat.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch("flows.agent_heartbeat.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch("flows.agent_heartbeat.send_message", new_callable=AsyncMock) as mock_send,
-            patch("flows.agent_heartbeat.BackboneDB") as MockDB,
+            patch(
+                f"{_HB}.list_sessions",
+                new_callable=AsyncMock,
+            ) as mock_list,
+            patch(
+                f"{_HB}.get_agent_state",
+                new_callable=AsyncMock,
+            ) as mock_state,
+            patch(
+                f"{_HB}.send_message",
+                new_callable=AsyncMock,
+            ) as mock_send,
         ):
-            MockConfig.from_toml.return_value = config
             mock_list.return_value = ["ike", "temp-agent"]
             mock_state.return_value = idle_snapshot
             mock_send.return_value = True
-
-            db_instance = AsyncMock()
-            db_instance.get_last_heartbeat = AsyncMock(return_value=None)
-            db_instance.record_heartbeat = AsyncMock(return_value=1)
-            MockDB.return_value.__aenter__ = AsyncMock(return_value=db_instance)
-            MockDB.return_value.__aexit__ = AsyncMock(return_value=False)
 
             result = await heartbeat_scheduler()
 
@@ -361,8 +375,10 @@ class TestHeartbeatSchedulerFlow:
             ),
         )
 
-        with patch("flows.agent_heartbeat.BackboneConfig") as MockConfig:
-            MockConfig.from_toml.return_value = config
-            result = await heartbeat_scheduler()
+        from agent_backbone.services._locator import init as init_flow_services
+
+        init_flow_services(config=config, db=AsyncMock(), gh=AsyncMock())
+
+        result = await heartbeat_scheduler()
 
         assert result == {}

@@ -9,9 +9,20 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import api.routes.agents as agents_module
+from agent_backbone.services.persistence import BackboneDB
+from agent_backbone.services.state import AgentState, StateSnapshot
 from api.deps import get_db, get_github
-from src.agent_state import AgentState, StateSnapshot
-from src.persistence import BackboneDB
+
+
+@pytest.fixture(autouse=True)
+def _reset_agents_cache():
+    """Reset the TTL cache before each test to prevent cross-test leakage."""
+    agents_module._agents_cache = []
+    agents_module._agents_cache_ts = 0
+    yield
+    agents_module._agents_cache = []
+    agents_module._agents_cache_ts = 0
 
 
 def _idle_snapshot() -> StateSnapshot:
@@ -20,23 +31,22 @@ def _idle_snapshot() -> StateSnapshot:
 
 
 @pytest.fixture
-def status_app_with_failures(api_app):
+async def status_app_with_failures(api_app):
     """App with get_db overridden to use an in-memory DB seeded with a failed delivery."""
+    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    await db.start()
+    await db.record_delivery(
+        issue_number=99,
+        target_entity="ike",
+        session_name="ike",
+        outcome="delivery_failed",
+        flow_name="test",
+    )
 
-    async def _seed_and_yield():
-        async with BackboneDB(":memory:") as db:
-            await db.record_delivery(
-                issue_number=99,
-                target_entity="ike",
-                session_name="ike",
-                outcome="delivery_failed",
-                flow_name="test",
-            )
-            yield db
-
-    api_app.dependency_overrides[get_db] = _seed_and_yield
+    api_app.dependency_overrides[get_db] = lambda: db
     yield api_app
     api_app.dependency_overrides.clear()
+    await db.stop()
 
 
 @pytest.fixture
@@ -61,11 +71,9 @@ class TestGetSystemStatus:
 
         with (
             patch("api.routes.status.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch("api.routes.agents.session_exists", new_callable=AsyncMock) as mock_exists,
             patch("api.routes.agents.get_agent_state", new_callable=AsyncMock) as mock_state,
         ):
             mock_list.return_value = ["feynman", "ike"]
-            mock_exists.return_value = True
             mock_state.return_value = snapshot
 
             resp = await api_client.get("/api/status", headers=auth_headers)
@@ -95,12 +103,10 @@ class TestGetSystemStatus:
 
         with (
             patch("api.routes.status.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch("api.routes.agents.session_exists", new_callable=AsyncMock) as mock_exists,
             patch("api.routes.agents.get_agent_state", new_callable=AsyncMock) as mock_state,
         ):
             # "platform-api" is not a named entity session
             mock_list.return_value = ["feynman", "ike", "platform-api"]
-            mock_exists.return_value = True
             mock_state.return_value = snapshot
 
             resp = await api_client.get("/api/status", headers=auth_headers)
@@ -127,7 +133,6 @@ class TestGetSystemStatus:
 
         with (
             patch("api.routes.status.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch("api.routes.agents.session_exists", new_callable=AsyncMock) as mock_exists,
             patch("api.routes.agents.get_agent_state", new_callable=AsyncMock) as mock_state,
         ):
             mock_list.return_value = [
@@ -139,7 +144,6 @@ class TestGetSystemStatus:
                 "prefect-server",
                 "telegram-bot",
             ]
-            mock_exists.return_value = True
             mock_state.return_value = snapshot
 
             resp = await api_client.get("/api/status", headers=auth_headers)
@@ -165,11 +169,9 @@ class TestGetSystemStatus:
 
         with (
             patch("api.routes.status.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch("api.routes.agents.session_exists", new_callable=AsyncMock) as mock_exists,
             patch("api.routes.agents.get_agent_state", new_callable=AsyncMock) as mock_state,
         ):
             mock_list.return_value = []
-            mock_exists.return_value = False
             mock_state.return_value = snapshot
 
             resp = await status_client_with_failures.get("/api/status", headers=auth_headers)

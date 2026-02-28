@@ -7,11 +7,11 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.state import AgentState, get_agent_state, read_state_file
+from agent_backbone.services.tmux import list_sessions, send_keys, session_exists
 from api.deps import get_config
 from api.models import ListEnvelope, PlanDetail
-from src.agent_state import AgentState, get_agent_state, read_state_file
-from src.config import BackboneConfig
-from src.tmux import list_sessions, send_keys, session_exists
 
 log = logging.getLogger(__name__)
 

@@ -7,8 +7,6 @@ import hmac
 import json
 from unittest.mock import AsyncMock, patch
 
-from gateway.server import _seen_deliveries
-
 
 def _make_signature(payload: bytes, secret: str = "test-secret") -> str:
     """Generate a valid HMAC-SHA256 signature for the given payload."""
@@ -35,17 +33,20 @@ def _webhook_headers(
 
 
 class TestHealthEndpoint:
-    async def test_health_returns_ok(self, api_client):
+    async def test_health_returns_lifecycle_health(self, api_client):
         resp = await api_client.get("/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        data = resp.json()
+        assert "healthy" in data
 
 
 class TestWebhookSignatureValidation:
     def setup_method(self):
-        _seen_deliveries.clear()
+        self._clear_dedup = True
 
-    async def test_valid_signature_accepted(self, api_client, webhook_payload):
+    async def test_valid_signature_accepted(self, api_client, api_app, webhook_payload):
+        if self._clear_dedup:
+            api_app.state.db._seen_deliveries.clear()
         payload_bytes = json.dumps(webhook_payload).encode()
         headers = _webhook_headers(payload_bytes)
 
@@ -82,10 +83,10 @@ class TestWebhookSignatureValidation:
 
 
 class TestWebhookDeduplication:
-    def setup_method(self):
-        _seen_deliveries.clear()
-
-    async def test_duplicate_delivery_id_returns_200_skipped(self, api_client, webhook_payload):
+    async def test_duplicate_delivery_id_returns_200_skipped(
+        self, api_client, api_app, webhook_payload
+    ):
+        api_app.state.db._seen_deliveries.clear()
         payload_bytes = json.dumps(webhook_payload).encode()
         delivery_id = "dup-delivery-abc"
         headers = _webhook_headers(payload_bytes, delivery_id=delivery_id)
@@ -106,10 +107,8 @@ class TestWebhookDeduplication:
 
 
 class TestWebhookPayloadParsing:
-    def setup_method(self):
-        _seen_deliveries.clear()
-
-    async def test_invalid_json_returns_400(self, api_client):
+    async def test_invalid_json_returns_400(self, api_client, api_app):
+        api_app.state.db._seen_deliveries.clear()
         payload_bytes = b"not valid json {{"
         headers = _webhook_headers(payload_bytes, delivery_id="delivery-bad-json")
 
@@ -120,10 +119,8 @@ class TestWebhookPayloadParsing:
 
 
 class TestWebhookDispatch:
-    def setup_method(self):
-        _seen_deliveries.clear()
-
-    async def test_dispatches_issue_opened_event(self, api_client, webhook_payload):
+    async def test_dispatches_issue_opened_event(self, api_client, api_app, webhook_payload):
+        api_app.state.db._seen_deliveries.clear()
         payload_bytes = json.dumps(webhook_payload).encode()
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-test-1")
 
@@ -140,7 +137,10 @@ class TestWebhookDispatch:
         event = call_args[0][0]
         assert event.issue.number == 42
 
-    async def test_dispatch_outcome_returned_in_response(self, api_client, webhook_payload):
+    async def test_dispatch_outcome_returned_in_response(
+        self, api_client, api_app, webhook_payload
+    ):
+        api_app.state.db._seen_deliveries.clear()
         payload_bytes = json.dumps(webhook_payload).encode()
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-test-2")
 

@@ -1,16 +1,20 @@
-"""Tests for src/persistence.py — all use in-memory SQLite."""
+"""Tests for agent_backbone/services/persistence — all use in-memory SQLite."""
 
 from __future__ import annotations
 
 import pytest
 
-from src.persistence import BackboneDB
+from agent_backbone.services.persistence import BackboneDB
 
 
 @pytest.fixture
 async def db():
-    async with BackboneDB(":memory:") as database:
-        yield database
+    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    await db.start()
+    try:
+        yield db
+    finally:
+        await db.stop()
 
 
 class TestDeliveryTracking:
@@ -244,11 +248,8 @@ class TestMessageQueue:
         row_id = await db.enqueue_message("ike", "msg")
         await db.mark_message_delivered(row_id)
 
-        # Query directly to check delivered_at is set
-        cursor = await db.conn.execute(
-            "SELECT delivered_at, status FROM message_queue WHERE id = ?", (row_id,)
-        )
-        row = await cursor.fetchone()
+        # Use BackboneDB method to verify
+        row = await db.get_message_by_id(row_id)
         assert row["status"] == "delivered"
         assert row["delivered_at"] is not None
 
@@ -261,3 +262,36 @@ class TestMessageQueue:
         feynman_msgs = await db.dequeue_messages("feynman")
         assert len(ike_msgs) == 2
         assert len(feynman_msgs) == 1
+
+
+class TestDedupHotCache:
+    def test_first_delivery_not_duplicate(self):
+        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        assert db.is_duplicate("abc-123") is False
+
+    def test_duplicate_delivery(self):
+        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        db.is_duplicate("abc-123")
+        assert db.is_duplicate("abc-123") is True
+
+    def test_empty_id_never_duplicate(self):
+        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        assert db.is_duplicate("") is False
+
+    def test_max_capacity_eviction(self):
+        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        for i in range(150):
+            db.is_duplicate(f"delivery-{i}", max_ids=100)
+        assert db.is_duplicate("delivery-0", max_ids=100) is False
+        assert db.is_duplicate("delivery-149", max_ids=100) is True
+
+    async def test_load_dedup_cache(self, db):
+        """load_dedup_cache populates hot cache from database."""
+        await db.record_delivery_id("cached-1")
+        await db.record_delivery_id("cached-2")
+        # Clear the hot cache to simulate cold start
+        db._seen_deliveries.clear()
+        await db.load_dedup_cache()
+        assert db.is_duplicate("cached-1") is True
+        assert db.is_duplicate("cached-2") is True
+        assert db.is_duplicate("not-cached") is False

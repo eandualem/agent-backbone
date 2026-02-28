@@ -1,4 +1,4 @@
-"""Tests for src/stream_broker.py."""
+"""Tests for agent_backbone/stream_broker.py."""
 
 from __future__ import annotations
 
@@ -8,17 +8,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.config import BackboneConfig, ControlModeConfig
-from src.control_mode import (
+from agent_backbone.config import BackboneConfig, ControlModeConfig
+from agent_backbone.services.streaming import (
     ExitEvent,
     LayoutChangeEvent,
     ModeChangeEvent,
     OutputEvent,
     SessionEvent,
-    WindowEvent,
-)
-from src.stream_broker import (
     StreamBroker,
+    WindowEvent,
     _event_to_data,
     _event_type_name,
     format_sse,
@@ -181,9 +179,7 @@ class TestBrokerSubscribe:
 class TestGracePeriod:
     async def test_last_unsubscribe_triggers_grace_disconnect(self):
         manager, _ = _make_mock_manager()
-        config = BackboneConfig(
-            control_mode=ControlModeConfig(stream_grace_period_seconds=0)
-        )
+        config = BackboneConfig(control_mode=ControlModeConfig(stream_grace_period_seconds=0))
         broker = StreamBroker(config, manager=manager)
 
         cid, _ = await broker.subscribe("test-session")
@@ -197,9 +193,7 @@ class TestGracePeriod:
 
     async def test_new_client_cancels_grace_timer(self):
         manager, _ = _make_mock_manager()
-        config = BackboneConfig(
-            control_mode=ControlModeConfig(stream_grace_period_seconds=10)
-        )
+        config = BackboneConfig(control_mode=ControlModeConfig(stream_grace_period_seconds=10))
         broker = StreamBroker(config, manager=manager)
 
         cid1, _ = await broker.subscribe("test-session")

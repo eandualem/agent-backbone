@@ -1,0 +1,30 @@
+"""State data models — agent state enum and state snapshots."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+
+class AgentState(StrEnum):
+    """Possible agent states."""
+
+    IDLE = "idle"
+    STARTING = "starting"
+    PROCESSING_ISSUE = "processing_issue"
+    BUSY = "busy"
+    PLAN_WAITING = "plan_waiting"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class StateSnapshot:
+    """A point-in-time agent state reading."""
+
+    state: AgentState
+    current_issue: int | None = None
+    timestamp: float = 0.0
+    source: str = "default"
+    started_at: float | None = None
+    plan_file: str | None = None
+    plan_title: str | None = None

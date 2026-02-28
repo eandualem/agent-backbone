@@ -8,11 +8,11 @@ from collections.abc import AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.streaming import StreamBroker
+from agent_backbone.services.tmux import session_exists
 from api.broker import get_or_create_broker
 from api.deps import get_config
-from src.config import BackboneConfig
-from src.stream_broker import StreamBroker
-from src.tmux import session_exists
 
 log = logging.getLogger(__name__)
 

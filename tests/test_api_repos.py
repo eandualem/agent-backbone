@@ -25,10 +25,12 @@ def _mock_subprocess_ok():
 
 def _selective_create_subprocess_exec(real_func, clone_proc):
     """Return a side_effect that mocks git clone but delegates other calls."""
+
     async def _side_effect(*args, **kwargs):
         if args and args[0] == "git":
             return clone_proc
         return await real_func(*args, **kwargs)
+
     return _side_effect
 
 
@@ -69,13 +71,13 @@ def repo_workspace(tmp_path):
     sdd_init_sh.chmod(0o755)
 
     with (
-        patch("src.onboarding._WS_ROOT", ws),
-        patch("src.onboarding._SPEC_ROOT", spec),
-        patch("src.onboarding._ORCH_ROOT", orch),
-        patch("src.onboarding._REGISTRY_PATH", registry),
-        patch("src.onboarding._SETUP_SCRIPT", setup_sh),
-        patch("src.onboarding._SDD_INIT_SCRIPT", sdd_init_sh),
-        patch("src.onboarding._REPOS_JSON", repos_json),
+        patch("agent_backbone.services.onboarding._pipeline._WS_ROOT", ws),
+        patch("agent_backbone.services.onboarding._pipeline._SPEC_ROOT", spec),
+        patch("agent_backbone.services.onboarding._pipeline._ORCH_ROOT", orch),
+        patch("agent_backbone.services.onboarding._pipeline._REGISTRY_PATH", registry),
+        patch("agent_backbone.services.onboarding._pipeline._SETUP_SCRIPT", setup_sh),
+        patch("agent_backbone.services.onboarding._pipeline._SDD_INIT_SCRIPT", sdd_init_sh),
+        patch("agent_backbone.services.onboarding._pipeline._REPOS_JSON", repos_json),
     ):
         yield {
             "ws": ws,
@@ -140,7 +142,7 @@ class TestOnboardRepo:
         )
         with (
             patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
-            patch("src.github.GitHubClient", return_value=mock_gh),
+            patch("agent_backbone.services.github.GitHubClient", return_value=mock_gh),
         ):
             resp = await client.post(
                 "/api/repos/onboard",
@@ -156,10 +158,7 @@ class TestOnboardRepo:
         assert len(data["steps"]) == 9
 
         # Verify spec dir created
-        spec_path = (
-            repo_workspace["spec"] / "WF" / "new-thing"
-            / "docs" / "specifications"
-        )
+        spec_path = repo_workspace["spec"] / "WF" / "new-thing" / "docs" / "specifications"
         assert spec_path.is_dir()
         # Verify orch config created
         orch_base = repo_workspace["orch"] / "WF" / "new-thing"
@@ -209,10 +208,7 @@ class TestOnboardRepo:
 
         assert resp.status_code == 201
         data = resp.json()
-        registry_step = next(
-            s for s in data["steps"]
-            if s["name"] == "registry_entries"
-        )
+        registry_step = next(s for s in data["steps"] if s["name"] == "registry_entries")
         assert registry_step["status"] == "skipped"
 
     async def test_sdd_init_automated(self, client, auth_headers, repo_workspace):
@@ -250,10 +246,7 @@ class TestOnboardRepo:
 
         data = resp.json()
         assert data["success"] is False
-        setup_step = next(
-            s for s in data["steps"]
-            if s["name"] == "setup_script"
-        )
+        setup_step = next(s for s in data["steps"] if s["name"] == "setup_script")
         assert setup_step["status"] == "failed"
 
     async def test_clone_failure_aborts(self, client, auth_headers, repo_workspace):

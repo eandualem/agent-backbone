@@ -1,4 +1,4 @@
-"""Tests for src/github.py."""
+"""Tests for agent_backbone/services/github."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import httpx
 import pytest
 import respx
 
-from src.config import BackboneConfig, GitHubConfig
-from src.github import API_BASE, GitHubClient
+from agent_backbone.config import BackboneConfig, GitHubConfig
+from agent_backbone.services.github import API_BASE, GitHubClient
 
 
 @pytest.fixture

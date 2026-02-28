@@ -1,17 +1,17 @@
-"""Tests for src/config.py."""
+"""Tests for agent_backbone/config.py."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from src.config import (
+from agent_backbone.config import (
     BackboneConfig,
     EscalationConfig,
     GatewayConfig,
     HeartbeatConfig,
     JarvisConfig,
 )
-from src.registry import EntityEntry, EntityRegistry
+from agent_backbone.services.registry import EntityEntry, EntityRegistry
 
 
 class TestBackboneConfigDefaults:
@@ -180,11 +180,19 @@ class TestPhaseIIConfigs:
         assert config.agent_state.stale_threshold_seconds == 300
         assert config.agent_state.state_path == Path.home() / ".claude" / "state"
 
+    def test_database_defaults(self):
+        config = BackboneConfig()
+        assert config.database.host == "localhost"
+        assert config.database.port == 5435
+        assert config.database.user == "backbone"
+        assert config.database.password == "backbone"
+        assert config.database.name == "backbone"
+        assert "asyncpg" in config.database.async_url
+        assert "5435" in config.database.async_url
+
     def test_delivery_defaults(self):
         config = BackboneConfig()
-        assert config.delivery.db_path == "~/.prefect/backbone.db"
         assert config.delivery.retention_days == 30
-        assert config.delivery.db_file == Path.home() / ".prefect" / "backbone.db"
 
     def test_scheduling_defaults(self):
         config = BackboneConfig()

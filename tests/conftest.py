@@ -8,15 +8,25 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from src.config import BackboneConfig, GatewayConfig, GitHubConfig
-from src.models import (
+from agent_backbone.config import BackboneConfig, GatewayConfig, GitHubConfig
+from agent_backbone.models import (
     CommentData,
     EventType,
     IssueData,
     IssueEvent,
     ParsedLabels,
 )
-from src.registry import EntityEntry, EntityRegistry
+from agent_backbone.services.persistence import BackboneDB
+from agent_backbone.services.registry import EntityEntry, EntityRegistry
+
+
+@pytest.fixture(autouse=True)
+def reset_flow_services():
+    """Reset the flow service locator between tests."""
+    from agent_backbone.services._locator import reset
+
+    yield
+    reset()
 
 
 @pytest.fixture
@@ -25,51 +35,66 @@ def config():
     test_registry = EntityRegistry(
         entities={
             "feynman": EntityEntry(
-                session="feynman", home="~/orchestration",
-                groups=["orchestrators"], figure="Richard Feynman",
+                session="feynman",
+                home="~/orchestration",
+                groups=["orchestrators"],
+                figure="Richard Feynman",
                 role="Orchestration Optimizer",
             ),
             "ike": EntityEntry(
-                session="ike", home="~/ws/core/ike",
-                groups=["orchestrators"], figure="Dwight Eisenhower",
+                session="ike",
+                home="~/ws/core/ike",
+                groups=["orchestrators"],
+                figure="Dwight Eisenhower",
                 role="Core Orchestrator",
             ),
             "leo": EntityEntry(
-                session="leo", home="~/ws/leo",
-                groups=["orchestrators"], figure="Leonardo da Vinci",
+                session="leo",
+                home="~/ws/leo",
+                groups=["orchestrators"],
+                figure="Leonardo da Vinci",
                 role="Strategy Co-Architect",
             ),
             "ada": EntityEntry(
-                session="ada", home="~/ws/core/spec",
-                groups=["standalone"], figure="Ada Lovelace",
+                session="ada",
+                home="~/ws/core/spec",
+                groups=["standalone"],
+                figure="Ada Lovelace",
                 role="Spec Agent",
             ),
             "brunel": EntityEntry(
-                session="brunel", home="~/infra",
+                session="brunel",
+                home="~/infra",
                 groups=["orchestrators"],
                 figure="Isambard Kingdom Brunel",
                 role="Infrastructure Agent",
             ),
             "hamilton": EntityEntry(
-                session="hamilton", home="~/ws/core/hamilton",
+                session="hamilton",
+                home="~/ws/core/hamilton",
                 groups=["orchestrators"],
                 figure="Alexander Hamilton",
                 role="Arclio Orchestrator",
             ),
             "curie": EntityEntry(
-                session="curie", home="~/ws/core/curie",
-                groups=["orchestrators"], figure="Marie Curie",
+                session="curie",
+                home="~/ws/core/curie",
+                groups=["orchestrators"],
+                figure="Marie Curie",
                 role="Loveble Orchestrator",
             ),
             "bell": EntityEntry(
-                session="bell", home="~/ws/core/bell",
+                session="bell",
+                home="~/ws/core/bell",
                 groups=["orchestrators"],
                 figure="Alexander Graham Bell",
                 role="WF Orchestrator",
             ),
             "gallup": EntityEntry(
-                session="gallup", home="~/ws/core/gallup",
-                groups=["standalone"], figure="George Gallup",
+                session="gallup",
+                home="~/ws/core/gallup",
+                groups=["standalone"],
+                figure="George Gallup",
                 role="Market Research",
             ),
         },
@@ -146,15 +171,28 @@ def sample_close_event():
 def mock_tmux():
     """Mock tmux operations."""
     with (
-        patch("src.tmux.session_exists", new_callable=AsyncMock) as mock_exists,
-        patch("src.tmux.send_message", new_callable=AsyncMock) as mock_send,
-        patch("src.tmux.list_sessions", new_callable=AsyncMock) as mock_list,
+        patch(
+            "agent_backbone.services.tmux.interface.session_exists", new_callable=AsyncMock
+        ) as mock_exists,
+        patch(
+            "agent_backbone.services.tmux.interface.send_message", new_callable=AsyncMock
+        ) as mock_send,
+        patch(
+            "agent_backbone.services.tmux.interface.list_sessions", new_callable=AsyncMock
+        ) as mock_list,
     ):
         mock_exists.return_value = True
         mock_send.return_value = True
         mock_list.return_value = [
-            "feynman", "ike", "leo", "ada", "brunel",
-            "hamilton", "curie", "bell", "gallup",
+            "feynman",
+            "ike",
+            "leo",
+            "ada",
+            "brunel",
+            "hamilton",
+            "curie",
+            "bell",
+            "gallup",
         ]
         yield {
             "session_exists": mock_exists,
@@ -189,7 +227,7 @@ def webhook_payload(github_issue_json):
 
 
 @pytest.fixture
-def api_app(config, tmp_path):
+async def api_app(config, tmp_path):
     """Create a FastAPI app with test config and in-memory DB.
 
     create_app() returns a socketio.ASGIApp wrapping FastAPI.
@@ -204,12 +242,25 @@ def api_app(config, tmp_path):
     # Override config with test config using in-memory DB
     from dataclasses import replace
 
-    from src.config import DeliveryConfig
+    from agent_backbone.base import LifecycleManager
+    from agent_backbone.config import DeliveryConfig
 
-    test_db_path = str(tmp_path / "test.db")
-    test_config = replace(config, delivery=DeliveryConfig(db_path=test_db_path))
+    test_config = replace(
+        config,
+        delivery=DeliveryConfig(),
+    )
     app.state.config = test_config
-    return app
+
+    # Wire lifecycle and services for tests
+    app.state.lifecycle = LifecycleManager()
+    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    await db.start()
+    app.state.db = db
+    app.state.github = None  # Tests override via dependency_overrides when needed
+
+    yield app
+
+    await db.stop()
 
 
 @pytest.fixture

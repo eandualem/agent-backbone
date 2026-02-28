@@ -8,11 +8,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.workflows import WorkflowRegistry, execute_workflow_steps
 from api.deps import get_config
 from api.models import ListEnvelope, WorkflowCreateRequest, WorkflowInfo
-from src.config import BackboneConfig
-from src.workflow_engine import execute_workflow_steps
-from src.workflow_registry import WorkflowRegistry
 
 log = logging.getLogger(__name__)
 

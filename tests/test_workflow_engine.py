@@ -1,10 +1,12 @@
-"""Tests for src/workflow_engine.py — workflow execution engine."""
+"""Tests for agent_backbone/workflow_engine.py — workflow execution engine."""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-from src.workflow_engine import execute_workflow_steps
+from agent_backbone.services.workflows import execute_workflow_steps
+
+_ENG = "agent_backbone.services.workflows._engine"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -20,10 +22,25 @@ def _patch_engine(
     """Return a context-manager stack that patches all tmux operations
     imported into workflow_engine, with configurable return values."""
     return (
-        patch("src.workflow_engine.start_session", new_callable=AsyncMock, return_value=start_ok),
-        patch("src.workflow_engine.stop_session", new_callable=AsyncMock, return_value=stop_ok),
-        patch("src.workflow_engine.send_message", new_callable=AsyncMock, return_value=send_ok),
-        patch("src.workflow_engine.resolve_agent_dir", return_value=resolve_dir),
+        patch(
+            f"{_ENG}.start_session",
+            new_callable=AsyncMock,
+            return_value=start_ok,
+        ),
+        patch(
+            f"{_ENG}.stop_session",
+            new_callable=AsyncMock,
+            return_value=stop_ok,
+        ),
+        patch(
+            f"{_ENG}.send_message",
+            new_callable=AsyncMock,
+            return_value=send_ok,
+        ),
+        patch(
+            f"{_ENG}.resolve_agent_dir",
+            return_value=resolve_dir,
+        ),
     )
 
 
@@ -37,11 +54,11 @@ class TestStartStep:
         """Start action succeeds — result has expected structure."""
         with (
             patch(
-                "src.workflow_engine.start_session",
+                f"{_ENG}.start_session",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as mock_start,
-            patch("src.workflow_engine.resolve_agent_dir", return_value="/home/agent"),
+            patch(f"{_ENG}.resolve_agent_dir", return_value="/home/agent"),
         ):
             steps = [{"action": "start", "session": "ike"}]
             result = await execute_workflow_steps(steps, config)
@@ -61,12 +78,12 @@ class TestStartStep:
         """Start action calls resolve_agent_dir when no working_dir in step."""
         with (
             patch(
-                "src.workflow_engine.start_session",
+                f"{_ENG}.start_session",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as mock_start,
             patch(
-                "src.workflow_engine.resolve_agent_dir",
+                f"{_ENG}.resolve_agent_dir",
                 return_value="/resolved/path",
             ) as mock_resolve,
         ):
@@ -82,12 +99,12 @@ class TestStartStep:
         """Start action uses step-provided working_dir instead of resolving."""
         with (
             patch(
-                "src.workflow_engine.start_session",
+                f"{_ENG}.start_session",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "src.workflow_engine.resolve_agent_dir",
+                f"{_ENG}.resolve_agent_dir",
                 return_value="/resolved/path",
             ) as mock_resolve,
         ):
@@ -107,7 +124,7 @@ class TestStopStep:
     async def test_stop_step_success(self, config):
         """Stop action succeeds."""
         with patch(
-            "src.workflow_engine.stop_session",
+            f"{_ENG}.stop_session",
             new_callable=AsyncMock,
             return_value=True,
         ) as mock_stop:
@@ -122,7 +139,11 @@ class TestStopStep:
 
     async def test_stop_step_failure(self, config):
         """Stop action failure is reported correctly."""
-        with patch("src.workflow_engine.stop_session", new_callable=AsyncMock, return_value=False):
+        with patch(
+            f"{_ENG}.stop_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
             steps = [{"action": "stop", "session": "ike"}]
             result = await execute_workflow_steps(steps, config)
 
@@ -140,7 +161,7 @@ class TestMessageStep:
     async def test_message_step_success(self, config):
         """Message action delivers successfully."""
         with patch(
-            "src.workflow_engine.send_message",
+            f"{_ENG}.send_message",
             new_callable=AsyncMock,
             return_value=True,
         ) as mock_send:
@@ -154,7 +175,10 @@ class TestMessageStep:
 
     async def test_message_step_missing_message(self, config):
         """Message with empty/no message field fails."""
-        with patch("src.workflow_engine.send_message", new_callable=AsyncMock) as mock_send:
+        with patch(
+            f"{_ENG}.send_message",
+            new_callable=AsyncMock,
+        ) as mock_send:
             # No message key at all
             steps = [{"action": "message", "session": "ike"}]
             result = await execute_workflow_steps(steps, config)
@@ -166,7 +190,10 @@ class TestMessageStep:
 
     async def test_message_step_empty_string(self, config):
         """Message with empty string value fails."""
-        with patch("src.workflow_engine.send_message", new_callable=AsyncMock) as mock_send:
+        with patch(
+            f"{_ENG}.send_message",
+            new_callable=AsyncMock,
+        ) as mock_send:
             steps = [{"action": "message", "session": "ike", "message": ""}]
             result = await execute_workflow_steps(steps, config)
 
@@ -236,9 +263,20 @@ class TestMultiStep:
     async def test_partial_failure(self, config):
         """Mix of passing and failing steps — overall ok=False, all steps execute."""
         with (
-            patch("src.workflow_engine.start_session", new_callable=AsyncMock, return_value=True),
-            patch("src.workflow_engine.stop_session", new_callable=AsyncMock, return_value=False),
-            patch("src.workflow_engine.resolve_agent_dir", return_value="/resolved"),
+            patch(
+                f"{_ENG}.start_session",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                f"{_ENG}.stop_session",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                f"{_ENG}.resolve_agent_dir",
+                return_value="/resolved",
+            ),
         ):
             steps = [
                 {"action": "start", "session": "ike"},
@@ -258,10 +296,25 @@ class TestMultiStep:
     async def test_all_steps_succeed(self, config):
         """Multiple steps all pass — ok=True."""
         with (
-            patch("src.workflow_engine.start_session", new_callable=AsyncMock, return_value=True),
-            patch("src.workflow_engine.stop_session", new_callable=AsyncMock, return_value=True),
-            patch("src.workflow_engine.send_message", new_callable=AsyncMock, return_value=True),
-            patch("src.workflow_engine.resolve_agent_dir", return_value="/resolved"),
+            patch(
+                f"{_ENG}.start_session",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                f"{_ENG}.stop_session",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                f"{_ENG}.send_message",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                f"{_ENG}.resolve_agent_dir",
+                return_value="/resolved",
+            ),
         ):
             steps = [
                 {"action": "start", "session": "ike"},
@@ -284,7 +337,11 @@ class TestMultiStep:
     async def test_failure_does_not_stop_execution(self, config):
         """A failing step does not prevent subsequent steps from executing."""
         with (
-            patch("src.workflow_engine.send_message", new_callable=AsyncMock, return_value=True),
+            patch(
+                f"{_ENG}.send_message",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             steps = [
                 {"action": "bogus", "session": "ike"},  # will fail (unknown action)

@@ -1,4 +1,4 @@
-"""Tests for src/control_mode.py — tmux control mode streaming."""
+"""Tests for agent_backbone/control_mode.py — tmux control mode streaming."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import asyncio
 import signal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.config import ControlModeConfig
-from src.control_mode import (
+from agent_backbone.config import ControlModeConfig
+from agent_backbone.services.streaming import (
     ConnectionState,
     ControlModeConnection,
     ControlModeManager,
@@ -24,6 +24,8 @@ from src.control_mode import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_CM = "agent_backbone.services.streaming._control_mode"
 
 
 def _default_config() -> ControlModeConfig:
@@ -197,7 +199,7 @@ class TestControlModeConnectionLifecycle:
 
         mock_proc = _mock_proc(returncode=None)
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ) as mock_exec:
@@ -223,7 +225,7 @@ class TestControlModeConnectionLifecycle:
 
         mock_proc = _mock_proc(returncode=None)
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):
@@ -243,14 +245,14 @@ class TestControlModeConnectionLifecycle:
         mock_proc = _mock_proc(returncode=None)
         # Make wait_for raise TimeoutError to simulate slow shutdown
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):
             await conn.start()
 
         with patch(
-            "src.control_mode.asyncio.wait_for",
+            f"{_CM}.asyncio.wait_for",
             new_callable=AsyncMock,
             side_effect=TimeoutError,
         ):
@@ -268,7 +270,7 @@ class TestControlModeConnectionLifecycle:
 
         mock_proc = _mock_proc(returncode=None)
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):
@@ -285,7 +287,7 @@ class TestControlModeConnectionLifecycle:
 
         mock_proc = _mock_proc(returncode=None)
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ) as mock_exec:
@@ -320,7 +322,7 @@ class TestControlModeConnectionStream:
         mock_proc = _mock_proc(returncode=None, stdout=stdout)
 
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):
@@ -332,7 +334,7 @@ class TestControlModeConnectionStream:
         # Don't set stop_event — EOF triggers _reconnect which we mock to end the stream
         events = []
         with (
-            patch("src.control_mode.asyncio.wait_for", side_effect=passthrough_wait_for),
+            patch(f"{_CM}.asyncio.wait_for", side_effect=passthrough_wait_for),
             patch.object(conn, "_reconnect", new_callable=AsyncMock, return_value=False),
         ):
             async for event in conn.stream():
@@ -360,7 +362,7 @@ class TestControlModeConnectionStream:
         mock_proc = _mock_proc(returncode=None, stdout=stdout)
 
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):
@@ -371,7 +373,7 @@ class TestControlModeConnectionStream:
 
         events = []
         with (
-            patch("src.control_mode.asyncio.wait_for", side_effect=passthrough_wait_for),
+            patch(f"{_CM}.asyncio.wait_for", side_effect=passthrough_wait_for),
             patch.object(conn, "_reconnect", new_callable=AsyncMock, return_value=False),
         ):
             async for event in conn.stream():
@@ -390,7 +392,7 @@ class TestControlModeConnectionStream:
         mock_proc = _mock_proc(returncode=None, stdout=stdout)
 
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):
@@ -402,7 +404,10 @@ class TestControlModeConnectionStream:
             return await coro
 
         events = []
-        with patch("src.control_mode.asyncio.wait_for", side_effect=passthrough_wait_for):
+        with patch(
+            f"{_CM}.asyncio.wait_for",
+            side_effect=passthrough_wait_for,
+        ):
             async for event in conn.stream():
                 events.append(event)
 
@@ -420,7 +425,7 @@ class TestControlModeConnectionStream:
         mock_proc = _mock_proc(returncode=None, stdout=stdout)
 
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):
@@ -433,7 +438,7 @@ class TestControlModeConnectionStream:
 
         events = []
         with (
-            patch("src.control_mode.asyncio.wait_for", side_effect=passthrough_wait_for),
+            patch(f"{_CM}.asyncio.wait_for", side_effect=passthrough_wait_for),
             patch.object(
                 conn, "_reconnect", new_callable=AsyncMock, return_value=False
             ) as mock_recon,
@@ -473,7 +478,7 @@ class TestReconnectionBackoff:
         # Make start() always fail so we go through all attempts
         with (
             patch(
-                "src.control_mode.asyncio.wait_for",
+                f"{_CM}.asyncio.wait_for",
                 side_effect=capture_wait_for,
             ),
             patch.object(
@@ -508,7 +513,7 @@ class TestReconnectionBackoff:
             raise TimeoutError
 
         with (
-            patch("src.control_mode.asyncio.wait_for", side_effect=timeout_wait_for),
+            patch(f"{_CM}.asyncio.wait_for", side_effect=timeout_wait_for),
             patch.object(
                 conn,
                 "start",
@@ -535,7 +540,10 @@ class TestReconnectionBackoff:
             # Simulate the stop_event being set (wait_for returns normally)
             return None
 
-        with patch("src.control_mode.asyncio.wait_for", side_effect=event_fires_wait_for):
+        with patch(
+            f"{_CM}.asyncio.wait_for",
+            side_effect=event_fires_wait_for,
+        ):
             result = await conn._reconnect()
 
         # Should return False because stop_event.wait() returned (event was set)
@@ -559,7 +567,7 @@ class TestControlModeManager:
 
         mock_proc = _mock_proc(returncode=None)
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):
@@ -576,7 +584,7 @@ class TestControlModeManager:
 
         mock_proc = _mock_proc(returncode=None)
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):
@@ -592,7 +600,7 @@ class TestControlModeManager:
 
         mock_proc = _mock_proc(returncode=None)
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):
@@ -613,7 +621,7 @@ class TestControlModeManager:
 
         mock_proc = _mock_proc(returncode=None)
         with patch(
-            "src.control_mode.asyncio.create_subprocess_exec",
+            f"{_CM}.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=mock_proc,
         ):

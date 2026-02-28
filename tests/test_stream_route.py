@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from agent_backbone.services.streaming import StreamBroker
 from api.routes.stream import get_broker
-from src.stream_broker import StreamBroker
 
 
 @pytest.fixture
@@ -85,7 +85,7 @@ class TestStreamEndpoint:
         events_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
         # Pre-fill the queue with events
-        sse_frame = f'event: output\ndata: {json.dumps({"pane_id": "%0", "data": "hello"})}\n\n'
+        sse_frame = f"event: output\ndata: {json.dumps({'pane_id': '%0', 'data': 'hello'})}\n\n"
         await events_queue.put(sse_frame)
         await events_queue.put(None)  # Sentinel to end stream
 

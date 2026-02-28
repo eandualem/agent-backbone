@@ -6,6 +6,11 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from agent_backbone.config import BackboneConfig
+from agent_backbone.models import parse_from_tag
+from agent_backbone.services.delivery import compute_priority_score
+from agent_backbone.services.github import GitHubClient
+from agent_backbone.services.persistence import BackboneDB
 from api.deps import get_config, get_db, get_github
 from api.models import (
     IssueCommentResponse,
@@ -14,11 +19,6 @@ from api.models import (
     ListEnvelope,
     ParsedLabelsResponse,
 )
-from src.config import BackboneConfig
-from src.github import GitHubClient
-from src.models import parse_from_tag
-from src.persistence import BackboneDB
-from src.priority import compute_priority_score
 
 log = logging.getLogger(__name__)
 

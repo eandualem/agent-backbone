@@ -1,14 +1,12 @@
-"""FastAPI dependency injection — config, database, GitHub client."""
+"""FastAPI dependency injection — service-based lookups from app.state."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from fastapi import Request
 
-from fastapi import Depends, Request
-
-from src.config import BackboneConfig
-from src.github import GitHubClient
-from src.persistence import BackboneDB
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.github import GitHubClient
+from agent_backbone.services.persistence import BackboneDB
 
 
 def get_config(request: Request) -> BackboneConfig:
@@ -16,13 +14,11 @@ def get_config(request: Request) -> BackboneConfig:
     return request.app.state.config
 
 
-async def get_db(config: BackboneConfig = Depends(get_config)) -> AsyncGenerator[BackboneDB]:
-    """Yield an async BackboneDB connection scoped to the request."""
-    async with BackboneDB(str(config.delivery.db_file)) as db:
-        yield db
+def get_db(request: Request) -> BackboneDB:
+    """Retrieve the long-lived BackboneDB instance from app state."""
+    return request.app.state.db
 
 
-async def get_github(config: BackboneConfig = Depends(get_config)) -> AsyncGenerator[GitHubClient]:
-    """Yield an async GitHubClient scoped to the request."""
-    async with GitHubClient(config) as gh:
-        yield gh
+def get_github(request: Request) -> GitHubClient:
+    """Retrieve the long-lived GitHubClient instance from app state."""
+    return request.app.state.github

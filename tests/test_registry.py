@@ -1,4 +1,4 @@
-"""Tests for src/registry.py."""
+"""Tests for agent_backbone/services/registry."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src.registry import (
+from agent_backbone.services.registry import (
     EntityEntry,
     EntityRegistry,
     RepoInfo,
@@ -17,6 +17,7 @@ from src.registry import (
 )
 
 # --- Sample data helpers ---
+
 
 def _sample_registry_data() -> dict:
     """Minimal valid entity registry JSON structure."""
@@ -45,6 +46,7 @@ def _write_registry_json(path: Path, data: dict) -> Path:
 
 
 # --- load_entity_registry ---
+
 
 class TestLoadEntityRegistry:
     def test_loads_valid_json_with_multiple_entities(self, tmp_path):
@@ -79,6 +81,31 @@ class TestLoadEntityRegistry:
         assert entities["minimal"].groups == []
         assert entities["minimal"].figure == ""
         assert entities["minimal"].role == ""
+        assert entities["minimal"].entity_type == "agent"
+
+    def test_reads_type_field_as_entity_type(self, tmp_path):
+        data = {
+            "jarvis": {
+                "session": None,
+                "home": "~/ws/jarvis/",
+                "type": "service",
+                "figure": "Jarvis",
+                "role": "Personal Assistant",
+            },
+            "ike": {
+                "session": "ike",
+                "home": "~/ws/core/ike/",
+                "type": "agent",
+                "figure": "Dwight D. Eisenhower",
+                "role": "Core Orchestrator",
+            },
+        }
+        registry_file = _write_registry_json(tmp_path / "entities.json", data)
+
+        entities = load_entity_registry(registry_file)
+
+        assert entities["jarvis"].entity_type == "service"
+        assert entities["ike"].entity_type == "agent"
 
     def test_raises_file_not_found_on_missing_file(self, tmp_path):
         missing = tmp_path / "does_not_exist.json"
@@ -93,6 +120,7 @@ class TestLoadEntityRegistry:
 
 
 # --- discover_coding_repos ---
+
 
 class TestDiscoverCodingRepos:
     def test_discovers_repos_in_multiple_org_dirs(self, tmp_path):
@@ -176,6 +204,7 @@ class TestDiscoverCodingRepos:
 
 # --- build_registry ---
 
+
 class TestBuildRegistry:
     def test_combines_entities_and_repos(self, tmp_path):
         data = _sample_registry_data()
@@ -214,6 +243,7 @@ class TestBuildRegistry:
 
 # --- EntityRegistry computed properties ---
 
+
 class TestEntityRegistrySessions:
     def test_sessions_map(self):
         entities = {
@@ -227,8 +257,11 @@ class TestEntityRegistrySessions:
     def test_sessions_map_with_different_session_name(self):
         entities = {
             "coding-agent": EntityEntry(
-                session="agent-backbone", home="~/ws/core/code/WF/agent-backbone/",
-                groups=[], figure="", role="",
+                session="agent-backbone",
+                home="~/ws/core/code/WF/agent-backbone/",
+                groups=[],
+                figure="",
+                role="",
             ),
         }
         registry = EntityRegistry(entities=entities, repos=[])
@@ -247,8 +280,11 @@ class TestEntityRegistrySessions:
     def test_entity_by_session_reverse_lookup(self):
         entities = {
             "coding-agent": EntityEntry(
-                session="agent-backbone", home="~/ws/core/code/WF/agent-backbone/",
-                groups=[], figure="", role="",
+                session="agent-backbone",
+                home="~/ws/core/code/WF/agent-backbone/",
+                groups=[],
+                figure="",
+                role="",
             ),
         }
         registry = EntityRegistry(entities=entities, repos=[])
@@ -260,16 +296,25 @@ class TestEntityRegistryAllEntities:
     def test_all_entities(self):
         entities = {
             "ike": EntityEntry(
-                session="ike", home="~/ws/core/ike/",
-                groups=[], figure="", role="",
+                session="ike",
+                home="~/ws/core/ike/",
+                groups=[],
+                figure="",
+                role="",
             ),
             "leo": EntityEntry(
-                session="leo", home="~/ws/leo/",
-                groups=[], figure="", role="",
+                session="leo",
+                home="~/ws/leo/",
+                groups=[],
+                figure="",
+                role="",
             ),
             "ada": EntityEntry(
-                session="ada", home="~/ws/core/spec/",
-                groups=[], figure="", role="",
+                session="ada",
+                home="~/ws/core/spec/",
+                groups=[],
+                figure="",
+                role="",
             ),
         }
         registry = EntityRegistry(entities=entities, repos=[])
@@ -301,7 +346,8 @@ class TestEntityRegistryRepos:
         repos = [
             RepoInfo(org="Arclio", name="platform-api", path="/ws/core/code/Arclio/platform-api"),
             RepoInfo(
-                org="Arclio", name="arclio-assistant",
+                org="Arclio",
+                name="arclio-assistant",
                 path="/ws/core/code/Arclio/arclio-assistant",
             ),
             RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),

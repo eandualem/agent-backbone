@@ -6,11 +6,13 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.delivery import safe_deliver
 from api.deps import get_config
 from api.models import (
     BroadcastMessageRequest,
@@ -22,8 +24,6 @@ from api.models import (
     RoomMessage,
     RoomStateUpdate,
 )
-from src.config import BackboneConfig
-from src.session_bridge import safe_deliver
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def _load_room(room_id: str) -> Room | None:
 
 def _now_iso() -> str:
     """Return current UTC time as ISO 8601 string."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _save_room(room: Room) -> None:
