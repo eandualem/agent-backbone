@@ -17,11 +17,11 @@ from agent_backbone.services.registry import EntityEntry, EntityRegistry
 class TestBackboneConfigDefaults:
     def test_default_constructor(self):
         config = BackboneConfig()
-        assert config.github_owner == "eandualem"
-        assert config.github_repo == "orchestration"
-        assert config.gateway_port == 9877
-        assert config.max_delivery_ids == 100
-        assert config.notify_dedup_seconds == 10
+        assert config.github.owner == "eandualem"
+        assert config.github.repo == "orchestration"
+        assert config.gateway.port == 9877
+        assert config.gateway.max_delivery_ids == 100
+        assert config.dedup.notification_window_seconds == 10
 
     def test_nested_gateway(self):
         config = BackboneConfig()
@@ -101,13 +101,13 @@ class TestFromToml:
         assert config.github.owner == "eandualem"
         assert config.delivery.retention_days == 30
 
-    def test_backward_compat_properties(self):
+    def test_from_toml_nested_access(self):
         config = BackboneConfig.from_toml()
-        assert config.gateway_port == config.gateway.port
-        assert config.github_owner == config.github.owner
-        assert config.github_repo == config.github.repo
-        assert config.max_delivery_ids == config.gateway.max_delivery_ids
-        assert config.notify_dedup_seconds == config.dedup.notification_window_seconds
+        assert config.gateway.port == 9877
+        assert config.github.owner == "eandualem"
+        assert config.github.repo == "orchestration"
+        assert config.gateway.max_delivery_ids == 100
+        assert config.dedup.notification_window_seconds == 10
 
 
 class TestEntityRegistry:

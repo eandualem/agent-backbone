@@ -17,11 +17,13 @@ from agent_backbone.services.dispatch._router import (
     issue_dispatcher,
     resolve_session,
 )
+from agent_backbone.services.dispatch.interface import DispatchService
 from agent_backbone.services.dispatch.models import DispatchResult as DispatchResultModel
 
 __all__ = [
     "DispatchResult",
     "DispatchResultModel",
+    "DispatchService",
     "_ONBOARDING_TITLE_PREFIX",
     "_check_onboarding_chain",
     "check_parent_resolved",

@@ -1,7 +1,7 @@
 """Configuration for the agent backbone.
 
 Loads structural config from backbone.toml (committed), secrets from env vars.
-Nested frozen dataclasses per section. Backward-compatible — works without TOML file.
+Nested frozen dataclasses per section. Works without TOML file (falls back to defaults).
 """
 
 from __future__ import annotations
@@ -241,27 +241,6 @@ class BackboneConfig:
     session_bridge: SessionBridgeConfig = field(default_factory=SessionBridgeConfig)
     control_mode: ControlModeConfig = field(default_factory=ControlModeConfig)
     jarvis: JarvisConfig = field(default_factory=JarvisConfig)
-
-    # Convenience aliases for backward compat during migration
-    @property
-    def github_owner(self) -> str:
-        return self.github.owner
-
-    @property
-    def github_repo(self) -> str:
-        return self.github.repo
-
-    @property
-    def gateway_port(self) -> int:
-        return self.gateway.port
-
-    @property
-    def max_delivery_ids(self) -> int:
-        return self.gateway.max_delivery_ids
-
-    @property
-    def notify_dedup_seconds(self) -> int:
-        return self.dedup.notification_window_seconds
 
     @classmethod
     def from_toml(cls, path: Path | None = None) -> BackboneConfig:

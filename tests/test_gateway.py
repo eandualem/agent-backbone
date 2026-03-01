@@ -5,11 +5,18 @@ from __future__ import annotations
 import hashlib
 import hmac
 
+from sqlalchemy.ext.asyncio import create_async_engine
+
 from agent_backbone.models import EventType
 from agent_backbone.services.delivery import clear as clear_dedup
 from agent_backbone.services.delivery import is_recent_notification
 from agent_backbone.services.persistence import BackboneDB
 from api.webhook_utils import normalize_event, verify_signature
+
+
+def _make_db() -> BackboneDB:
+    """Create a BackboneDB with a lightweight engine for hot-cache-only tests."""
+    return BackboneDB(create_async_engine("sqlite+aiosqlite:///:memory:"))
 
 
 class TestVerifySignature:
@@ -28,20 +35,20 @@ class TestVerifySignature:
 
 class TestIsDuplicate:
     def test_first_delivery(self):
-        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        db = _make_db()
         assert db.is_duplicate("abc-123") is False
 
     def test_duplicate_delivery(self):
-        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        db = _make_db()
         db.is_duplicate("abc-123")
         assert db.is_duplicate("abc-123") is True
 
     def test_empty_delivery_id(self):
-        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        db = _make_db()
         assert db.is_duplicate("") is False
 
     def test_max_capacity(self):
-        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        db = _make_db()
         for i in range(150):
             db.is_duplicate(f"delivery-{i}", max_ids=100)
         # Oldest entries should be evicted

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.persistence import BackboneDB
 from api.deps import get_db
@@ -12,7 +13,8 @@ from api.deps import get_db
 @pytest.fixture
 async def deliveries_app(api_app):
     """App with get_db overridden to use an in-memory DB seeded with delivery records."""
-    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    db = BackboneDB(engine)
     await db.start()
     # Seed test data: 3 deliveries across 2 issues and 3 outcomes
     await db.record_delivery(42, "ike", "ike", "delivered", "dispatcher")
@@ -22,7 +24,8 @@ async def deliveries_app(api_app):
     api_app.dependency_overrides[get_db] = lambda: db
     yield api_app
     api_app.dependency_overrides.clear()
-    await db.stop()
+    db._engine = None
+    await engine.dispose()
 
 
 @pytest.fixture

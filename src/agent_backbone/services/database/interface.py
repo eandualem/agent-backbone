@@ -34,7 +34,7 @@ class DatabaseService:
 
     @property
     def engine(self) -> AsyncEngine | None:
-        """Expose engine for backward-compatible repos using engine.begin()."""
+        """Expose engine for health checks and direct connection access."""
         return self._engine
 
     async def start(self) -> None:

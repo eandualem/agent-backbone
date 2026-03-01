@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.persistence import BackboneDB
-from api.deps import get_db
-
-# Patch target: route imports from the package __init__, not _heartbeat
-_MON = "agent_backbone.services.monitoring"
+from api.deps import get_db, get_monitoring_service
 
 
 @pytest.fixture
 async def heartbeats_app(api_app):
     """App with get_db overridden to use an in-memory DB seeded with heartbeat records."""
-    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    db = BackboneDB(engine)
     await db.start()
     await db.record_heartbeat("ike", "delivered", "Heartbeat check-in")
     await db.record_heartbeat("ike", "delivered", "Second heartbeat")
@@ -26,7 +25,8 @@ async def heartbeats_app(api_app):
     api_app.dependency_overrides[get_db] = lambda: db
     yield api_app
     api_app.dependency_overrides.clear()
-    await db.stop()
+    db._engine = None
+    await engine.dispose()
 
 
 @pytest.fixture
@@ -43,11 +43,17 @@ async def client(heartbeats_app):
 
 
 class TestGetHeartbeatSchedules:
-    async def test_returns_schedules(self, client, auth_headers):
+    async def test_returns_schedules(self, client, auth_headers, heartbeats_app):
         """Returns heartbeat schedules loaded from config path."""
         mock_schedules = {"ike": {"cron": "0 * * * *", "enabled": True}}
-        with patch(f"{_MON}.load_schedules", return_value=mock_schedules):
+        mock_mon_svc = MagicMock()
+        mock_mon_svc.load_schedules = MagicMock(return_value=mock_schedules)
+
+        heartbeats_app.dependency_overrides[get_monitoring_service] = lambda: mock_mon_svc
+        try:
             resp = await client.get("/api/heartbeats/schedules", headers=auth_headers)
+        finally:
+            heartbeats_app.dependency_overrides.pop(get_monitoring_service, None)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -67,49 +73,57 @@ class TestGetHeartbeatSchedules:
 
 
 class TestUpdateHeartbeatSchedule:
-    async def test_updates_agent_schedule(self, client, auth_headers):
+    async def test_updates_agent_schedule(self, client, auth_headers, heartbeats_app):
         """Updates a schedule for a specific agent and saves it."""
         existing = {"ike": {"cron": "0 * * * *", "enabled": True}}
         new_schedule = {"cron": "*/30 * * * *", "enabled": False}
 
-        with (
-            patch(f"{_MON}.load_schedules", return_value=existing),
-            patch(f"{_MON}.save_schedules") as mock_save,
-        ):
+        mock_mon_svc = MagicMock()
+        mock_mon_svc.load_schedules = MagicMock(return_value=existing)
+        mock_mon_svc.save_schedules = MagicMock()
+
+        heartbeats_app.dependency_overrides[get_monitoring_service] = lambda: mock_mon_svc
+        try:
             resp = await client.put(
                 "/api/heartbeats/schedules/ike",
                 json=new_schedule,
                 headers=auth_headers,
             )
+        finally:
+            heartbeats_app.dependency_overrides.pop(get_monitoring_service, None)
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
         assert data["agent"] == "ike"
         # Verify save was called with the merged schedules
-        saved_schedules = mock_save.call_args[0][0]
+        saved_schedules = mock_mon_svc.save_schedules.call_args[0][0]
         assert saved_schedules["ike"] == new_schedule
 
-    async def test_adds_new_agent_schedule(self, client, auth_headers):
+    async def test_adds_new_agent_schedule(self, client, auth_headers, heartbeats_app):
         """Adding a schedule for a new agent that did not exist before."""
         existing = {"ike": {"cron": "0 * * * *", "enabled": True}}
         new_schedule = {"cron": "0 */2 * * *", "enabled": True}
 
-        with (
-            patch(f"{_MON}.load_schedules", return_value=existing),
-            patch(f"{_MON}.save_schedules") as mock_save,
-        ):
+        mock_mon_svc = MagicMock()
+        mock_mon_svc.load_schedules = MagicMock(return_value=existing)
+        mock_mon_svc.save_schedules = MagicMock()
+
+        heartbeats_app.dependency_overrides[get_monitoring_service] = lambda: mock_mon_svc
+        try:
             resp = await client.put(
                 "/api/heartbeats/schedules/leo",
                 json=new_schedule,
                 headers=auth_headers,
             )
+        finally:
+            heartbeats_app.dependency_overrides.pop(get_monitoring_service, None)
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
         assert data["agent"] == "leo"
-        saved_schedules = mock_save.call_args[0][0]
+        saved_schedules = mock_mon_svc.save_schedules.call_args[0][0]
         assert "leo" in saved_schedules
         assert "ike" in saved_schedules  # existing entry preserved
 

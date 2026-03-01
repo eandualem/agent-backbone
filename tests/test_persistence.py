@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.persistence import BackboneDB
 
 
+def _make_db() -> BackboneDB:
+    """Create a BackboneDB with a lightweight engine for hot-cache-only tests."""
+    return BackboneDB(create_async_engine("sqlite+aiosqlite:///:memory:"))
+
+
 @pytest.fixture
 async def db():
-    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    db = BackboneDB(engine)
     await db.start()
     try:
         yield db
     finally:
-        await db.stop()
+        db._engine = None
+        await engine.dispose()
 
 
 class TestDeliveryTracking:
@@ -279,20 +287,20 @@ class TestMessageQueue:
 
 class TestDedupHotCache:
     def test_first_delivery_not_duplicate(self):
-        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        db = _make_db()
         assert db.is_duplicate("abc-123") is False
 
     def test_duplicate_delivery(self):
-        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        db = _make_db()
         db.is_duplicate("abc-123")
         assert db.is_duplicate("abc-123") is True
 
     def test_empty_id_never_duplicate(self):
-        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        db = _make_db()
         assert db.is_duplicate("") is False
 
     def test_max_capacity_eviction(self):
-        db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        db = _make_db()
         for i in range(150):
             db.is_duplicate(f"delivery-{i}", max_ids=100)
         assert db.is_duplicate("delivery-0", max_ids=100) is False

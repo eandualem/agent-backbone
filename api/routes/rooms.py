@@ -12,8 +12,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.delivery import safe_deliver
-from api.deps import get_config
+from agent_backbone.services.delivery import DeliveryService
+from api.deps import get_config, get_delivery_service
 from api.models import (
     BroadcastMessageRequest,
     DirectedMessageRequest,
@@ -167,7 +167,10 @@ async def get_room(room_id: str):
 
 @router.post("/rooms/{room_id}/directed")
 async def send_directed(
-    room_id: str, body: DirectedMessageRequest, config: BackboneConfig = Depends(get_config)
+    room_id: str,
+    body: DirectedMessageRequest,
+    config: BackboneConfig = Depends(get_config),
+    delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Send a directed message to one participant with context delta."""
     room = _load_room(room_id)
@@ -184,7 +187,7 @@ async def send_directed(
 
     # Format and deliver via session bridge (state-aware, supports HTTP targets)
     envelope = _format_room_message(room, room.moderator, body.content, body.target, delta)
-    result = await safe_deliver(body.target, envelope, config)
+    result = await delivery_svc.safe_deliver(body.target, envelope, config)
 
     # Record in transcript regardless of delivery outcome
     msg = RoomMessage(
@@ -203,7 +206,10 @@ async def send_directed(
 
 @router.post("/rooms/{room_id}/broadcast")
 async def send_broadcast(
-    room_id: str, body: BroadcastMessageRequest, config: BackboneConfig = Depends(get_config)
+    room_id: str,
+    body: BroadcastMessageRequest,
+    config: BackboneConfig = Depends(get_config),
+    delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Broadcast a message to all participants with per-participant context deltas."""
     room = _load_room(room_id)
@@ -216,7 +222,7 @@ async def send_broadcast(
     async def _deliver(participant: str) -> str:
         delta = _compute_context_delta(room, participant)
         envelope = _format_room_message(room, room.moderator, body.content, participant, delta)
-        return await safe_deliver(participant, envelope, config)
+        return await delivery_svc.safe_deliver(participant, envelope, config)
 
     results = await asyncio.gather(
         *[_deliver(p) for p in room.participants], return_exceptions=True

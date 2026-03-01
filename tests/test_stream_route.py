@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from agent_backbone.services.streaming import StreamBroker
+from api.deps import get_tmux_service
 from api.routes.stream import get_broker
 
 
@@ -35,15 +36,23 @@ def _mock_broker(subscribe_side_effect=None, subscribe_return=None):
     return broker
 
 
+def _mock_tmux_svc(session_exists_result=True):
+    """Create a mock TmuxService."""
+    svc = MagicMock()
+    svc.session_exists = AsyncMock(return_value=session_exists_result)
+    return svc
+
+
 @pytest.mark.asyncio
 class TestStreamEndpoint:
     async def test_404_nonexistent_session(self, api_app, api_key, auth_headers, _reset_broker):
         """Returns 404 when session doesn't exist."""
         mock_broker = _mock_broker()
         api_app.dependency_overrides[get_broker] = lambda: mock_broker
-
-        with patch("api.routes.stream.session_exists", new_callable=AsyncMock) as mock_exists:
-            mock_exists.return_value = False
+        api_app.dependency_overrides[get_tmux_service] = lambda: _mock_tmux_svc(
+            session_exists_result=False
+        )
+        try:
             transport = ASGITransport(app=api_app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get(
@@ -52,16 +61,18 @@ class TestStreamEndpoint:
                 )
                 assert resp.status_code == 404
                 assert "not found" in resp.json()["detail"]
-
-        api_app.dependency_overrides.pop(get_broker, None)
+        finally:
+            api_app.dependency_overrides.pop(get_broker, None)
+            api_app.dependency_overrides.pop(get_tmux_service, None)
 
     async def test_502_connection_failure(self, api_app, api_key, auth_headers, _reset_broker):
         """Returns 502 when control mode connection fails."""
         mock_broker = _mock_broker(subscribe_side_effect=RuntimeError("connection failed"))
         api_app.dependency_overrides[get_broker] = lambda: mock_broker
-
-        with patch("api.routes.stream.session_exists", new_callable=AsyncMock) as mock_exists:
-            mock_exists.return_value = True
+        api_app.dependency_overrides[get_tmux_service] = lambda: _mock_tmux_svc(
+            session_exists_result=True
+        )
+        try:
             transport = ASGITransport(app=api_app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get(
@@ -70,8 +81,9 @@ class TestStreamEndpoint:
                 )
                 assert resp.status_code == 502
                 assert "control mode" in resp.json()["detail"].lower()
-
-        api_app.dependency_overrides.pop(get_broker, None)
+        finally:
+            api_app.dependency_overrides.pop(get_broker, None)
+            api_app.dependency_overrides.pop(get_tmux_service, None)
 
     async def test_401_without_api_key(self, api_app, api_key, _reset_broker):
         """Returns 401 without Bearer token when API key is set."""
@@ -91,10 +103,10 @@ class TestStreamEndpoint:
 
         mock_broker = _mock_broker(subscribe_return=(0, events_queue))
         api_app.dependency_overrides[get_broker] = lambda: mock_broker
-
-        with patch("api.routes.stream.session_exists", new_callable=AsyncMock) as mock_exists:
-            mock_exists.return_value = True
-
+        api_app.dependency_overrides[get_tmux_service] = lambda: _mock_tmux_svc(
+            session_exists_result=True
+        )
+        try:
             transport = ASGITransport(app=api_app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 async with client.stream(
@@ -115,6 +127,8 @@ class TestStreamEndpoint:
                     assert '"pane_id": "%0"' in body
                     assert '"data": "hello"' in body
 
-        # Verify unsubscribe was called on stream end
-        mock_broker.unsubscribe.assert_awaited_once_with("test-session", 0)
-        api_app.dependency_overrides.pop(get_broker, None)
+            # Verify unsubscribe was called on stream end
+            mock_broker.unsubscribe.assert_awaited_once_with("test-session", 0)
+        finally:
+            api_app.dependency_overrides.pop(get_broker, None)
+            api_app.dependency_overrides.pop(get_tmux_service, None)

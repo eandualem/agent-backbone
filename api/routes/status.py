@@ -10,8 +10,9 @@ from fastapi import APIRouter, Depends
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.persistence import BackboneDB
-from agent_backbone.services.tmux import list_sessions
-from api.deps import get_config, get_db, get_github
+from agent_backbone.services.state import StateService
+from agent_backbone.services.tmux import TmuxService
+from api.deps import get_config, get_db, get_github, get_state_service, get_tmux_service
 from api.models import EnrichedAgent, ServiceHealth, SystemDigest
 from api.routes.agents import _build_enriched_agent
 
@@ -25,9 +26,11 @@ async def get_system_status(
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
     gh: GitHubClient = Depends(get_github),
+    state_svc: StateService = Depends(get_state_service),
+    tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """System-wide status digest: sessions, agents, deliveries."""
-    active = await list_sessions()
+    active = await tmux_svc.list_sessions()
     active_set = set(active)
 
     agents: list[EnrichedAgent] = []
@@ -37,6 +40,7 @@ async def get_system_status(
             entity,
             config,
             active_set,
+            state_svc,
             agent_type="named_entity",
         )
         agents.append(agent)
@@ -49,6 +53,7 @@ async def get_system_status(
                 session,
                 config,
                 active_set,
+                state_svc,
                 agent_type="coding_agent",
             )
             agents.append(agent)

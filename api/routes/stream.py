@@ -10,9 +10,9 @@ from fastapi.responses import StreamingResponse
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.streaming import StreamBroker
-from agent_backbone.services.tmux import session_exists
+from agent_backbone.services.tmux import TmuxService
 from api.broker import get_or_create_broker
-from api.deps import get_config
+from api.deps import get_config, get_tmux_service
 
 log = logging.getLogger(__name__)
 
@@ -28,13 +28,14 @@ def get_broker(config: BackboneConfig = Depends(get_config)) -> StreamBroker:
 async def stream_session(
     session: str,
     broker: StreamBroker = Depends(get_broker),
+    tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Stream live terminal output from a tmux session via SSE.
 
     Returns Server-Sent Events with types: output, mode_change,
     layout_change, window, session, exit, error.
     """
-    if not await session_exists(session):
+    if not await tmux_svc.session_exists(session):
         raise HTTPException(status_code=404, detail=f"Session '{session}' not found")
 
     try:

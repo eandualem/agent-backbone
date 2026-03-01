@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import create_async_engine
 
 import api.routes.agents as agents_module
 from agent_backbone.services.persistence import BackboneDB
 from agent_backbone.services.state import AgentState, StateSnapshot
-from api.deps import get_db, get_github
+from api.deps import get_db, get_github, get_state_service, get_tmux_service
 
 
 @pytest.fixture(autouse=True)
@@ -30,10 +31,25 @@ def _idle_snapshot() -> StateSnapshot:
     return StateSnapshot(state=AgentState.IDLE, source="push", timestamp=time.time())
 
 
+def _make_mock_state_svc(snapshot: StateSnapshot | None = None) -> MagicMock:
+    """Create a mock StateService that returns the given snapshot."""
+    svc = MagicMock()
+    svc.get_state = AsyncMock(return_value=snapshot or _idle_snapshot())
+    return svc
+
+
+def _make_mock_tmux_svc(sessions: list[str] | None = None) -> MagicMock:
+    """Create a mock TmuxService that returns the given session list."""
+    svc = MagicMock()
+    svc.list_sessions = AsyncMock(return_value=sessions or [])
+    return svc
+
+
 @pytest.fixture
 async def status_app_with_failures(api_app):
     """App with get_db overridden to use an in-memory DB seeded with a failed delivery."""
-    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    db = BackboneDB(engine)
     await db.start()
     await db.record_delivery(
         issue_number=99,
@@ -44,9 +60,15 @@ async def status_app_with_failures(api_app):
     )
 
     api_app.dependency_overrides[get_db] = lambda: db
+    # Also set state and tmux service overrides so tests can customize them
+    mock_state_svc = _make_mock_state_svc()
+    mock_tmux_svc = _make_mock_tmux_svc()
+    api_app.dependency_overrides[get_state_service] = lambda: mock_state_svc
+    api_app.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
     yield api_app
     api_app.dependency_overrides.clear()
-    await db.stop()
+    db._engine = None
+    await engine.dispose()
 
 
 @pytest.fixture
@@ -64,21 +86,20 @@ class TestGetSystemStatus:
         self, api_client, auth_headers, config, api_app
     ):
         """System status includes active sessions, agent count, and agent list."""
-        snapshot = _idle_snapshot()
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[object()] * 3)
+        mock_state_svc = _make_mock_state_svc()
+        mock_tmux_svc = _make_mock_tmux_svc(["feynman", "ike"])
+
         api_app.dependency_overrides[get_github] = lambda: mock_gh
+        api_app.dependency_overrides[get_state_service] = lambda: mock_state_svc
+        api_app.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
 
-        with (
-            patch("api.routes.status.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch("api.routes.agents.get_agent_state", new_callable=AsyncMock) as mock_state,
-        ):
-            mock_list.return_value = ["feynman", "ike"]
-            mock_state.return_value = snapshot
-
-            resp = await api_client.get("/api/status", headers=auth_headers)
+        resp = await api_client.get("/api/status", headers=auth_headers)
 
         del api_app.dependency_overrides[get_github]
+        del api_app.dependency_overrides[get_state_service]
+        del api_app.dependency_overrides[get_tmux_service]
         assert resp.status_code == 200
         data = resp.json()
         assert data["active_sessions"] == ["feynman", "ike"]
@@ -96,22 +117,21 @@ class TestGetSystemStatus:
         self, api_client, auth_headers, config, api_app
     ):
         """Sessions not in config.registry.sessions_map are included as extra agents."""
-        snapshot = _idle_snapshot()
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[])
+        mock_state_svc = _make_mock_state_svc()
+        # "platform-api" is not a named entity session
+        mock_tmux_svc = _make_mock_tmux_svc(["feynman", "ike", "platform-api"])
+
         api_app.dependency_overrides[get_github] = lambda: mock_gh
+        api_app.dependency_overrides[get_state_service] = lambda: mock_state_svc
+        api_app.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
 
-        with (
-            patch("api.routes.status.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch("api.routes.agents.get_agent_state", new_callable=AsyncMock) as mock_state,
-        ):
-            # "platform-api" is not a named entity session
-            mock_list.return_value = ["feynman", "ike", "platform-api"]
-            mock_state.return_value = snapshot
-
-            resp = await api_client.get("/api/status", headers=auth_headers)
+        resp = await api_client.get("/api/status", headers=auth_headers)
 
         del api_app.dependency_overrides[get_github]
+        del api_app.dependency_overrides[get_state_service]
+        del api_app.dependency_overrides[get_tmux_service]
         assert resp.status_code == 200
         data = resp.json()
         # 9 named entities + 1 unnamed session (platform-api)
@@ -126,16 +146,11 @@ class TestGetSystemStatus:
 
     async def test_excludes_service_sessions(self, api_client, auth_headers, config, api_app):
         """Service sessions (ngrok, prefect-*) are excluded from status digest."""
-        snapshot = _idle_snapshot()
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[])
-        api_app.dependency_overrides[get_github] = lambda: mock_gh
-
-        with (
-            patch("api.routes.status.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch("api.routes.agents.get_agent_state", new_callable=AsyncMock) as mock_state,
-        ):
-            mock_list.return_value = [
+        mock_state_svc = _make_mock_state_svc()
+        mock_tmux_svc = _make_mock_tmux_svc(
+            [
                 "feynman",
                 "ike",
                 "platform-api",
@@ -144,11 +159,17 @@ class TestGetSystemStatus:
                 "prefect-server",
                 "telegram-bot",
             ]
-            mock_state.return_value = snapshot
+        )
 
-            resp = await api_client.get("/api/status", headers=auth_headers)
+        api_app.dependency_overrides[get_github] = lambda: mock_gh
+        api_app.dependency_overrides[get_state_service] = lambda: mock_state_svc
+        api_app.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
+
+        resp = await api_client.get("/api/status", headers=auth_headers)
 
         del api_app.dependency_overrides[get_github]
+        del api_app.dependency_overrides[get_state_service]
+        del api_app.dependency_overrides[get_tmux_service]
         assert resp.status_code == 200
         data = resp.json()
         sessions = [a["session"] for a in data["agents"]]
@@ -162,19 +183,14 @@ class TestGetSystemStatus:
         self, status_client_with_failures, auth_headers, status_app_with_failures
     ):
         """Failed delivery count reflects records in the database."""
-        snapshot = _idle_snapshot()
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[])
         status_app_with_failures.dependency_overrides[get_github] = lambda: mock_gh
+        # Update tmux to return empty sessions for this test
+        mock_tmux_svc = _make_mock_tmux_svc([])
+        status_app_with_failures.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
 
-        with (
-            patch("api.routes.status.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch("api.routes.agents.get_agent_state", new_callable=AsyncMock) as mock_state,
-        ):
-            mock_list.return_value = []
-            mock_state.return_value = snapshot
-
-            resp = await status_client_with_failures.get("/api/status", headers=auth_headers)
+        resp = await status_client_with_failures.get("/api/status", headers=auth_headers)
 
         del status_app_with_failures.dependency_overrides[get_github]
         assert resp.status_code == 200

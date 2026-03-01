@@ -75,7 +75,7 @@ class GitHubClient:
         Returns issues sorted: blocking first, then oldest first (FIFO).
         """
         assert self._client is not None
-        url = f"/repos/{self._config.github_owner}/{self._config.github_repo}/issues"
+        url = f"/repos/{self._config.github.owner}/{self._config.github.repo}/issues"
         resp = await self._client.get(
             url,
             params={
@@ -119,7 +119,7 @@ class GitHubClient:
         """
         assert self._client is not None
         url = (
-            f"/repos/{self._config.github_owner}/{self._config.github_repo}"
+            f"/repos/{self._config.github.owner}/{self._config.github.repo}"
             f"/issues/{issue_number}/sub_issues"
         )
         try:
@@ -154,7 +154,7 @@ class GitHubClient:
     async def get_issue(self, issue_number: int) -> IssueData:
         """Get a single issue by number."""
         assert self._client is not None
-        url = f"/repos/{self._config.github_owner}/{self._config.github_repo}/issues/{issue_number}"
+        url = f"/repos/{self._config.github.owner}/{self._config.github.repo}/issues/{issue_number}"
         resp = await self._client.get(url)
         resp.raise_for_status()
         item = resp.json()
@@ -178,7 +178,7 @@ class GitHubClient:
         Unlike list_open_issues, supports state=open/closed/all and multiple labels.
         """
         assert self._client is not None
-        url = f"/repos/{self._config.github_owner}/{self._config.github_repo}/issues"
+        url = f"/repos/{self._config.github.owner}/{self._config.github.repo}/issues"
         params: dict[str, str | int] = {
             "state": state,
             "sort": "created",
@@ -219,7 +219,7 @@ class GitHubClient:
         """List comments on an issue."""
         assert self._client is not None
         url = (
-            f"/repos/{self._config.github_owner}/{self._config.github_repo}"
+            f"/repos/{self._config.github.owner}/{self._config.github.repo}"
             f"/issues/{issue_number}/comments"
         )
         resp = await self._client.get(url, params={"per_page": 100})
@@ -239,7 +239,7 @@ class GitHubClient:
     ) -> IssueData:
         """Create a new issue in the orchestration repo."""
         assert self._client is not None
-        url = f"/repos/{self._config.github_owner}/{self._config.github_repo}/issues"
+        url = f"/repos/{self._config.github.owner}/{self._config.github.repo}/issues"
         payload: dict[str, Any] = {"title": title, "body": body}
         if labels:
             payload["labels"] = labels
@@ -260,7 +260,7 @@ class GitHubClient:
         """Add a comment to an issue."""
         assert self._client is not None
         url = (
-            f"/repos/{self._config.github_owner}/{self._config.github_repo}"
+            f"/repos/{self._config.github.owner}/{self._config.github.repo}"
             f"/issues/{issue_number}/comments"
         )
         resp = await self._client.post(url, json={"body": body})
@@ -275,7 +275,7 @@ class GitHubClient:
     async def update_issue(self, issue_number: int, state: str) -> IssueData:
         """Update an issue's state (open/closed)."""
         assert self._client is not None
-        url = f"/repos/{self._config.github_owner}/{self._config.github_repo}/issues/{issue_number}"
+        url = f"/repos/{self._config.github.owner}/{self._config.github.repo}/issues/{issue_number}"
         resp = await self._client.patch(url, json={"state": state})
         resp.raise_for_status()
         item = resp.json()

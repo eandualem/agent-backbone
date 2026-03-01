@@ -7,10 +7,9 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from agent_backbone.config import BackboneConfig
-from agent_backbone.services.state import AgentState, get_agent_state, read_state_file
-from agent_backbone.services.tmux import list_sessions, send_keys, session_exists
-from api.deps import get_config
+from agent_backbone.services.state import AgentState, StateService
+from agent_backbone.services.tmux import TmuxService
+from api.deps import get_config, get_state_service, get_tmux_service
 from api.models import ListEnvelope, PlanDetail
 
 log = logging.getLogger(__name__)
@@ -19,7 +18,11 @@ router = APIRouter(prefix="/api", tags=["plans"])
 
 
 @router.get("/plans", response_model=ListEnvelope[PlanDetail])
-async def list_pending_plans(config: BackboneConfig = Depends(get_config)):
+async def list_pending_plans(
+    config=Depends(get_config),
+    state_svc: StateService = Depends(get_state_service),
+    tmux_svc: TmuxService = Depends(get_tmux_service),
+):
     """List all agents with plans awaiting approval."""
     plans: list[PlanDetail] = []
 
@@ -27,16 +30,12 @@ async def list_pending_plans(config: BackboneConfig = Depends(get_config)):
     all_sessions = list(config.registry.sessions_map.values())
 
     # Also check active coding agents
-    active = await list_sessions()
+    active = await tmux_svc.list_sessions()
     named = set(config.registry.sessions_map.values())
     all_sessions.extend(s for s in active if s not in named)
 
     for session in all_sessions:
-        snapshot = await get_agent_state(
-            config.agent_state.state_path,
-            session,
-            config.agent_state.stale_threshold_seconds,
-        )
+        snapshot = await state_svc.get_state(session)
         if snapshot.state == AgentState.PLAN_WAITING:
             plans.append(
                 PlanDetail(
@@ -51,9 +50,12 @@ async def list_pending_plans(config: BackboneConfig = Depends(get_config)):
 
 
 @router.get("/plans/{session}", response_model=PlanDetail)
-async def get_plan_detail(session: str, config: BackboneConfig = Depends(get_config)):
+async def get_plan_detail(
+    session: str,
+    state_svc: StateService = Depends(get_state_service),
+):
     """Get plan details including file content for a specific session."""
-    snapshot = read_state_file(config.agent_state.state_path, session)
+    snapshot = state_svc.read_state(session)
     if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
         raise HTTPException(status_code=404, detail=f"No pending plan for session '{session}'")
 
@@ -76,14 +78,17 @@ async def get_plan_detail(session: str, config: BackboneConfig = Depends(get_con
 
 
 @router.post("/plans/{session}/approve")
-async def approve_plan(session: str):
+async def approve_plan(
+    session: str,
+    tmux_svc: TmuxService = Depends(get_tmux_service),
+):
     """Approve a pending plan by sending Shift+Tab (Escape + [Z) to the session."""
-    if not await session_exists(session):
+    if not await tmux_svc.session_exists(session):
         raise HTTPException(status_code=404, detail=f"Session '{session}' not found")
 
     # Send Escape first, then [Z (Shift+Tab sequence)
-    await send_keys(session, "Escape")
-    ok = await send_keys(session, "[Z")
+    await tmux_svc.send_keys(session, "Escape")
+    ok = await tmux_svc.send_keys(session, "[Z")
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to send approval keys")
     return {"ok": True, "session": session, "action": "plan_approved"}

@@ -252,15 +252,26 @@ async def api_app(config, tmp_path):
     app.state.config = test_config
 
     # Wire lifecycle and services for tests
+    from sqlalchemy.ext.asyncio import create_async_engine
+
     app.state.lifecycle = LifecycleManager()
-    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    db = BackboneDB(engine)
     await db.start()
     app.state.db = db
     app.state.github = None  # Tests override via dependency_overrides when needed
 
+    # Non-lifecycle services for DI
+    from agent_backbone.services.onboarding import OnboardingService
+    from agent_backbone.services.workflows import WorkflowsService
+
+    app.state.onboarding_service = OnboardingService()
+    app.state.workflows_service = WorkflowsService()
+
     yield app
 
-    await db.stop()
+    db._engine = None
+    await engine.dispose()
 
 
 @pytest.fixture

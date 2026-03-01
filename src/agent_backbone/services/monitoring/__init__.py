@@ -23,8 +23,10 @@ from agent_backbone.services.monitoring._pending import (
     check_pending_issues,
     deliver_pending_issues,
 )
+from agent_backbone.services.monitoring.interface import MonitoringService
 
 __all__ = [
+    "MonitoringService",
     "_escalation_dedup",
     "_heartbeat_lock",
     "_plan_notify_dedup",

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
-from api.models import ListEnvelope, NoteDetail, NoteItem
+from api.models import ListEnvelope, NoteCreate, NoteDetail, NoteItem, NoteUpdate
 
 router = APIRouter(prefix="/api", tags=["notes"])
 
@@ -76,3 +76,64 @@ async def get_note(note_id: str):
     modified = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
 
     return NoteDetail(id=note_id, title=title, content=content, modified=modified)
+
+
+@router.post("/notes", response_model=NoteDetail, status_code=201)
+async def create_note(body: NoteCreate):
+    """Create a new markdown note in ~/notes/."""
+    target_dir = _NOTES_ROOT / body.subdir if body.subdir else _NOTES_ROOT
+    if not _is_safe_path(target_dir):
+        raise HTTPException(status_code=403, detail="Path outside notes directory")
+
+    # Sanitize title into filename
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "" for c in body.title).strip()
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Title must contain valid filename characters")
+    filename = safe_name.replace(" ", "-").lower() + ".md"
+    note_path = target_dir / filename
+
+    if not _is_safe_path(note_path):
+        raise HTTPException(status_code=403, detail="Path outside notes directory")
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(body.content)
+
+    note_id = str(note_path.relative_to(_NOTES_ROOT))
+    lines = body.content.splitlines()
+    title = lines[0].lstrip("# ").strip() if lines else body.title
+    mtime = note_path.stat().st_mtime
+    modified = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
+
+    return NoteDetail(id=note_id, title=title, content=body.content, modified=modified)
+
+
+@router.put("/notes/{note_id:path}", response_model=NoteDetail)
+async def update_note(note_id: str, body: NoteUpdate):
+    """Update an existing note's content."""
+    note_path = _NOTES_ROOT / note_id
+    if not _is_safe_path(note_path):
+        raise HTTPException(status_code=403, detail="Path outside notes directory")
+    if not note_path.is_file():
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    note_path.write_text(body.content)
+
+    lines = body.content.splitlines()
+    title = lines[0].lstrip("# ").strip() if lines else note_path.stem
+    mtime = note_path.stat().st_mtime
+    modified = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
+
+    return NoteDetail(id=note_id, title=title, content=body.content, modified=modified)
+
+
+@router.delete("/notes/{note_id:path}")
+async def delete_note(note_id: str):
+    """Delete a note by ID."""
+    note_path = _NOTES_ROOT / note_id
+    if not _is_safe_path(note_path):
+        raise HTTPException(status_code=403, detail="Path outside notes directory")
+    if not note_path.is_file():
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    note_path.unlink()
+    return {"deleted": True, "id": note_id}

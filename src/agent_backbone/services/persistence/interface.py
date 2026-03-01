@@ -1,7 +1,8 @@
 """Database persistence — AsyncEngine connection lifecycle and query delegation.
 
 Uses SQLAlchemy AsyncEngine for connection pooling and dialect abstraction.
-Production uses postgresql+asyncpg://, tests use sqlite+aiosqlite:///:memory:.
+Production receives the engine from DatabaseService (single pool).
+Tests use BackboneDB.connect() for standalone in-memory engines.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ class BackboneDB:
     """Async database for backbone persistence.
 
     Usage (production — via LifecycleManager):
-        db = BackboneDB("postgresql+asyncpg://localhost/backbone")
+        db = BackboneDB(engine)          # engine from DatabaseService
         await db.start()
         ...
         await db.stop()
@@ -39,32 +40,24 @@ class BackboneDB:
             await db.record_delivery(...)
     """
 
-    def __init__(
-        self,
-        database_url: str = "sqlite+aiosqlite:///:memory:",
-        pool_size: int | None = None,
-        max_overflow: int | None = None,
-    ) -> None:
-        self._database_url = database_url
-        self._pool_size = pool_size
-        self._max_overflow = max_overflow
-        self._engine: AsyncEngine | None = None
+    def __init__(self, engine: AsyncEngine | None = None, *, database_service=None) -> None:
+        self._engine: AsyncEngine | None = engine
+        self._database_service = database_service
         self._seen_deliveries: OrderedDict[str, bool] = OrderedDict()
 
     @property
     def _is_memory(self) -> bool:
-        return ":memory:" in self._database_url
+        return self._engine is not None and ":memory:" in str(self._engine.url)
 
     # --- LifecycleAware methods ---
 
     async def start(self) -> None:
-        """Initialize database engine, create schema, run migrations."""
-        kwargs: dict = {}
-        if self._pool_size is not None:
-            kwargs["pool_size"] = self._pool_size
-        if self._max_overflow is not None:
-            kwargs["max_overflow"] = self._max_overflow
-        self._engine = create_async_engine(self._database_url, **kwargs)
+        """Create schema and run migrations. Engine is provided externally."""
+        # Resolve engine from DatabaseService if not provided directly (lazy — service starts first)
+        if self._engine is None and self._database_service is not None:
+            self._engine = self._database_service.engine
+        if self._engine is None:
+            raise RuntimeError("BackboneDB requires an engine or database_service")
         # Create tables from metadata (idempotent via checkfirst)
         async with self._engine.begin() as conn:
             await conn.run_sync(metadata.create_all)
@@ -73,10 +66,8 @@ class BackboneDB:
         await self.load_dedup_cache()
 
     async def stop(self) -> None:
-        """Dispose of the database engine."""
-        if self._engine:
-            await self._engine.dispose()
-            self._engine = None
+        """Release engine reference. Engine lifecycle is owned by DatabaseService."""
+        self._engine = None
 
     async def health_check(self) -> dict:
         """Check database connectivity."""
@@ -84,7 +75,7 @@ class BackboneDB:
         return {
             "healthy": healthy,
             "service": "persistence",
-            "database_url": self._database_url,
+            "database_url": str(self._engine.url) if self._engine else "",
             "connected": self._engine is not None,
         }
 
@@ -104,13 +95,15 @@ class BackboneDB:
     async def connect(
         database_url: str = "sqlite+aiosqlite:///:memory:",
     ) -> AsyncIterator[BackboneDB]:
-        """Context manager for test/ad-hoc usage — creates engine, yields, disposes."""
-        db = BackboneDB(database_url)
+        """Context manager for test/ad-hoc usage — creates standalone engine, yields, disposes."""
+        engine = create_async_engine(database_url)
+        db = BackboneDB(engine)
         await db.start()
         try:
             yield db
         finally:
-            await db.stop()
+            db._engine = None
+            await engine.dispose()
 
     async def _run_migrations(self) -> None:
         """Run Alembic migrations for persistent databases.

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.models import CommentData, IssueData, ParsedLabels
 from agent_backbone.services.persistence import BackboneDB
-from api.deps import get_db, get_github
+from api.deps import get_db, get_delivery_service, get_github
 
 # --- Fixtures ---
 
@@ -73,20 +74,32 @@ def mock_github(sample_issues, sample_comments):
 
 
 @pytest.fixture
-async def issues_client(api_app, auth_headers, mock_github):
+def mock_delivery_svc():
+    """Mock DeliveryService with default return values."""
+    mock = MagicMock()
+    mock.compute_priority_score = MagicMock(return_value=42.0)
+    mock.create_and_notify = AsyncMock()
+    return mock
+
+
+@pytest.fixture
+async def issues_client(api_app, auth_headers, mock_github, mock_delivery_svc):
     """Async test client with GitHub mock and in-memory DB overridden."""
-    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    db = BackboneDB(engine)
     await db.start()
 
     api_app.dependency_overrides[get_github] = lambda: mock_github
     api_app.dependency_overrides[get_db] = lambda: db
+    api_app.dependency_overrides[get_delivery_service] = lambda: mock_delivery_svc
 
     transport = ASGITransport(app=api_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
     api_app.dependency_overrides.clear()
-    await db.stop()
+    db._engine = None
+    await engine.dispose()
 
 
 # --- Tests ---
@@ -201,7 +214,9 @@ class TestGetDependencies:
 
 
 class TestCreateIssue:
-    async def test_create_issue_success(self, issues_client, auth_headers, mock_github):
+    async def test_create_issue_success(
+        self, issues_client, auth_headers, mock_github, mock_delivery_svc
+    ):
         created_issue = IssueData(
             number=99,
             title="[task] New issue",
@@ -209,28 +224,25 @@ class TestCreateIssue:
             labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
             html_url="https://github.com/eandualem/orchestration/issues/99",
         )
-        with patch(
-            "api.routes.issues.create_and_notify",
-            new_callable=AsyncMock,
-            return_value=created_issue,
-        ) as mock_create_notify:
-            payload = {
-                "title": "[task] New issue",
-                "body": "## Context\nTest",
-                "labels": ["from:leo", "for:ike", "task"],
-            }
-            resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["number"] == 99
-            assert data["title"] == "[task] New issue"
-            mock_create_notify.assert_called_once()
-            call_args = mock_create_notify.call_args
-            assert call_args.args[0] is mock_github  # gh
-            assert call_args.args[1] == "[task] New issue"  # title
-            assert call_args.args[2] == "## Context\nTest"  # body
-            assert call_args.args[3] == ["from:leo", "for:ike", "task"]  # labels
-            assert call_args.kwargs["flow_name"] == "api-create-issue"
+        mock_delivery_svc.create_and_notify.return_value = created_issue
+
+        payload = {
+            "title": "[task] New issue",
+            "body": "## Context\nTest",
+            "labels": ["from:leo", "for:ike", "task"],
+        }
+        resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["number"] == 99
+        assert data["title"] == "[task] New issue"
+        mock_delivery_svc.create_and_notify.assert_called_once()
+        call_args = mock_delivery_svc.create_and_notify.call_args
+        assert call_args.args[0] is mock_github  # gh
+        assert call_args.args[1] == "[task] New issue"  # title
+        assert call_args.args[2] == "## Context\nTest"  # body
+        assert call_args.args[3] == ["from:leo", "for:ike", "task"]  # labels
+        assert call_args.kwargs["flow_name"] == "api-create-issue"
 
     async def test_create_issue_missing_title(self, issues_client, auth_headers):
         payload = {"body": "no title"}

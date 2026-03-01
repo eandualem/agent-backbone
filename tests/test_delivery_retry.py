@@ -5,18 +5,21 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.persistence import BackboneDB
 
 
 @pytest.fixture
 async def db():
-    db = BackboneDB("sqlite+aiosqlite:///:memory:")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    db = BackboneDB(engine)
     await db.start()
     try:
         yield db
     finally:
-        await db.stop()
+        db._engine = None
+        await engine.dispose()
 
 
 class TestRetryDeliveryAckCheck:

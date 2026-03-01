@@ -16,7 +16,8 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import EventType
-from agent_backbone.services.delivery import is_recent_notification
+from agent_backbone.services.delivery import DeliveryService
+from agent_backbone.services.dispatch import DispatchService
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.persistence import BackboneDB
 from agent_backbone.services.telegram._topic_discovery import (
@@ -24,7 +25,7 @@ from agent_backbone.services.telegram._topic_discovery import (
     effective_routes,
     load_discovery,
 )
-from api.deps import get_config, get_db, get_github
+from api.deps import get_config, get_db, get_delivery_service, get_dispatch_service, get_github
 from api.webhook_utils import normalize_event, verify_signature
 
 log = logging.getLogger(__name__)
@@ -40,7 +41,12 @@ def _reverse_topic_routes(routes: dict[int, str]) -> dict[str, int]:
 
 
 async def dispatch_event_async(
-    event, config: BackboneConfig, db: BackboneDB, gh: GitHubClient
+    event,
+    config: BackboneConfig,
+    db: BackboneDB,
+    gh: GitHubClient,
+    delivery_svc: DeliveryService,
+    dispatch_svc: DispatchService,
 ) -> str:
     """Async version of dispatch_event — awaits Prefect flows directly."""
     if event.delivery_id:
@@ -50,9 +56,7 @@ async def dispatch_event_async(
             log.warning("Failed to persist delivery ID to SQLite")
 
     if event.event_type == EventType.ISSUE_CLOSED:
-        from agent_backbone.services.dispatch import on_issue_closed
-
-        result = await on_issue_closed(event, config, gh)
+        result = await dispatch_svc.on_issue_closed(event, config, gh)
         return f"lifecycle: {result}"
 
     if event.event_type in (
@@ -61,7 +65,9 @@ async def dispatch_event_async(
         EventType.COMMENT_CREATED,
     ):
         targets = event.issue.labels.targets
-        if targets and all(is_recent_notification(event.issue.number, t) for t in targets):
+        if targets and all(
+            delivery_svc.is_recent_notification(event.issue.number, t) for t in targets
+        ):
             log.info(
                 "Dedup: #%d reason=all_targets_recently_notified targets=%s",
                 event.issue.number,
@@ -69,9 +75,7 @@ async def dispatch_event_async(
             )
             return f"deduped: all targets already notified for #{event.issue.number}"
 
-        from agent_backbone.services.dispatch import issue_dispatcher
-
-        result = await issue_dispatcher(event, config, db)
+        result = await dispatch_svc.issue_dispatcher(event, config, db)
         return (
             f"dispatch: {len(result.delivered)} delivered, "
             f"{len(result.offline)} offline, "
@@ -87,6 +91,8 @@ async def handle_webhook(
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
     gh: GitHubClient = Depends(get_github),
+    delivery_svc: DeliveryService = Depends(get_delivery_service),
+    dispatch_svc: DispatchService = Depends(get_dispatch_service),
 ):
     """Receive GitHub webhook events, validate, dedup, and dispatch."""
     payload_body = await request.body()
@@ -101,7 +107,7 @@ async def handle_webhook(
 
     # Dedup check (delivery ID level) — uses persistence hot cache
     delivery_id = request.headers.get("X-GitHub-Delivery", "")
-    if db.is_duplicate(delivery_id, config.max_delivery_ids):
+    if db.is_duplicate(delivery_id, config.gateway.max_delivery_ids):
         log.info("Dedup: delivery_id=%s reason=duplicate_delivery_id", delivery_id)
         return Response(content="Duplicate, skipped", status_code=200)
 
@@ -125,7 +131,7 @@ async def handle_webhook(
         event.issue.labels.targets,
     )
 
-    outcome = await dispatch_event_async(event, config, db, gh)
+    outcome = await dispatch_event_async(event, config, db, gh, delivery_svc, dispatch_svc)
     return Response(content=outcome, status_code=200)
 
 

@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
     from agent_backbone.services.tmux.factory import register_tmux
 
     app.state.database_service = await register_database(lifecycle, config)
-    app.state.db = await register_persistence(lifecycle, config)
+    app.state.db = await register_persistence(lifecycle, app.state.database_service)
     app.state.registry_service = await register_registry(lifecycle, config.registry)
     app.state.github = await register_github(lifecycle, config)
     app.state.tmux_service = await register_tmux(lifecycle)
@@ -54,8 +54,15 @@ async def lifespan(app: FastAPI):
     app.state.notification_service = await register_notifications(lifecycle)
     app.state.delivery_service = await register_delivery(lifecycle)
     app.state.dispatch_service = await register_dispatch(lifecycle)
-    app.state.monitoring_service = await register_monitoring(lifecycle)
+    app.state.monitoring_service = await register_monitoring(lifecycle, config)
     app.state.telegram_service = await register_telegram(lifecycle, config)
+
+    # Non-lifecycle services (lightweight, no start/stop needed but exposed for DI)
+    from agent_backbone.services.onboarding.interface import OnboardingService
+    from agent_backbone.services.workflows.interface import WorkflowsService
+
+    app.state.onboarding_service = OnboardingService()
+    app.state.workflows_service = WorkflowsService()
 
     await lifecycle.start_all()
 
@@ -64,7 +71,7 @@ async def lifespan(app: FastAPI):
 
     init_flow_services(config=config, db=app.state.db, gh=app.state.github)
 
-    log.info("Backbone API started — port %d", config.gateway_port)
+    log.info("Backbone API started — port %d", config.gateway.port)
     yield
 
     await lifecycle.stop_all()

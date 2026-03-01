@@ -204,7 +204,3 @@ class TelegramService:
             await app.updater.stop()
             await app.stop()
             await app.shutdown()
-
-
-# Backward compatibility alias
-BackboneBot = TelegramService

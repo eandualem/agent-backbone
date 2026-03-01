@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from agent_backbone.services.onboarding import (
-    discover_repos,
-    run_onboarding,
-    run_status_checks,
-    validate_org,
-    validate_repo_name,
-)
+from agent_backbone.services.onboarding import OnboardingService
+from api.deps import get_onboarding_service
 from api.models import (
     CheckDetail,
     ListEnvelope,
@@ -43,27 +38,33 @@ def _status_to_response(status) -> RepoStatusResponse:
 
 
 @router.get("/repos", response_model=ListEnvelope[RepoStatusResponse])
-async def list_repos():
+async def list_repos(
+    onboarding_svc: OnboardingService = Depends(get_onboarding_service),
+):
     """List all discovered repos with their onboarding status."""
-    repos = discover_repos()
+    repos = onboarding_svc.discover_repos()
     items = []
     for entry in repos:
-        status = run_status_checks(entry.org, entry.repo)
+        status = onboarding_svc.run_status_checks(entry.org, entry.repo)
         items.append(_status_to_response(status))
     return ListEnvelope(items=items, total=len(items))
 
 
 @router.post("/repos/onboard", response_model=RepoOnboardResponse, status_code=201)
-async def onboard_repo(body: RepoOnboardRequest, request: Request):
+async def onboard_repo(
+    body: RepoOnboardRequest,
+    request: Request,
+    onboarding_svc: OnboardingService = Depends(get_onboarding_service),
+):
     """Onboard a new repository — runs automated setup steps."""
-    if not validate_org(body.org):
+    if not onboarding_svc.validate_org(body.org):
         raise HTTPException(
             status_code=400,
             detail=f"Unknown org: {body.org}. Known: Arclio, WF, Loveble, Tenacious",
         )
 
     backbone_config = getattr(request.app.state, "config", None)
-    result = await run_onboarding(body.org, body.url, config=backbone_config)
+    result = await onboarding_svc.run_onboarding(body.org, body.url, config=backbone_config)
 
     if result.success and result.repo and backbone_config:
         from pathlib import Path
@@ -96,18 +97,22 @@ async def onboard_repo(body: RepoOnboardRequest, request: Request):
 
 
 @router.get("/repos/{org}/{repo}/status", response_model=RepoStatusResponse)
-async def get_repo_status(org: str, repo: str):
+async def get_repo_status(
+    org: str,
+    repo: str,
+    onboarding_svc: OnboardingService = Depends(get_onboarding_service),
+):
     """Get onboarding status for a specific repo."""
-    if not validate_org(org):
+    if not onboarding_svc.validate_org(org):
         raise HTTPException(
             status_code=400,
             detail=f"Unknown org: {org}. Known: Arclio, WF, Loveble, Tenacious",
         )
-    if not validate_repo_name(repo):
+    if not onboarding_svc.validate_repo_name(repo):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid repo name: {repo}. Must match [a-zA-Z0-9_-]+",
         )
 
-    status = run_status_checks(org, repo)
+    status = onboarding_svc.run_status_checks(org, repo)
     return _status_to_response(status)

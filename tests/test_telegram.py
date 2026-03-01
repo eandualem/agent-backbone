@@ -8,7 +8,7 @@ import pytest
 import respx
 
 from agent_backbone.config import AgentStateConfig, BackboneConfig, TelegramConfig
-from agent_backbone.services.telegram import BackboneBot, _delivery_reply
+from agent_backbone.services.telegram import TelegramService, _delivery_reply
 from agent_backbone.services.telegram._topic_discovery import TopicDiscovery
 
 
@@ -34,7 +34,7 @@ class TestAuthorization:
             "agent_backbone.services.telegram.interface.load_discovery",
             return_value=TopicDiscovery(),
         ):
-            bot = BackboneBot(config)
+            bot = TelegramService(config)
         assert bot._is_authorized(12345) is True
         assert bot._is_authorized(99999) is True
 
@@ -45,7 +45,7 @@ class TestAuthorization:
             "agent_backbone.services.telegram.interface.load_discovery",
             return_value=TopicDiscovery(),
         ):
-            bot = BackboneBot(config)
+            bot = TelegramService(config)
         assert bot._is_authorized(111) is True
         assert bot._is_authorized(222) is True
         assert bot._is_authorized(333) is False
@@ -67,7 +67,7 @@ class TestTopicRouting:
             "agent_backbone.services.telegram.interface.load_discovery",
             return_value=TopicDiscovery(),
         ):
-            return BackboneBot(config)
+            return TelegramService(config)
 
     @pytest.mark.asyncio
     async def test_direct_topic_to_mapped_session(self, bot_with_routes):
@@ -182,7 +182,7 @@ class TestTopicRouting:
             "agent_backbone.services.telegram.interface.load_discovery",
             return_value=TopicDiscovery(),
         ):
-            bot = BackboneBot(config)
+            bot = TelegramService(config)
         update = _make_topic_update(thread_id=10, text="hello")
         with patch(
             "agent_backbone.services.telegram._routing.safe_deliver", new_callable=AsyncMock
@@ -208,7 +208,7 @@ class TestIdentifyCommand:
             "agent_backbone.services.telegram.interface.load_discovery",
             return_value=TopicDiscovery(),
         ):
-            return BackboneBot(config)
+            return TelegramService(config)
 
     @pytest.mark.asyncio
     async def test_unmapped_topic(self, bot_with_routes):
@@ -259,7 +259,7 @@ class TestIdentifyCommand:
         with patch(
             "agent_backbone.services.telegram.interface.load_discovery", return_value=discovery
         ):
-            bot = BackboneBot(config)
+            bot = TelegramService(config)
         update = _make_topic_update(thread_id=10, text="/identify")
         await bot.cmd_identify(update, MagicMock())
         reply = update.message.reply_text.call_args[0][0]
@@ -284,7 +284,7 @@ class TestDiscoveryIntegration:
         with patch(
             "agent_backbone.services.telegram.interface.load_discovery", return_value=discovery
         ):
-            bot = BackboneBot(config)
+            bot = TelegramService(config)
 
         update = _make_topic_update(thread_id=10, text="hello from discovery")
         mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
@@ -310,7 +310,7 @@ class TestDiscoveryIntegration:
         with patch(
             "agent_backbone.services.telegram.interface.load_discovery", return_value=discovery
         ):
-            bot = BackboneBot(config)
+            bot = TelegramService(config)
 
         update = _make_topic_update(thread_id=10, text="who gets this?")
         mock_kw = dict(new_callable=AsyncMock, return_value="delivered")
@@ -336,7 +336,7 @@ class TestViewPlanCommand:
             "agent_backbone.services.telegram.interface.load_discovery",
             return_value=TopicDiscovery(),
         ):
-            return BackboneBot(config)
+            return TelegramService(config)
 
     @pytest.mark.asyncio
     async def test_viewplan_no_args(self, bot):
@@ -419,7 +419,7 @@ class TestApproveCommand:
             "agent_backbone.services.telegram.interface.load_discovery",
             return_value=TopicDiscovery(),
         ):
-            return BackboneBot(config)
+            return TelegramService(config)
 
     @pytest.mark.asyncio
     async def test_approve_not_waiting(self, bot, tmp_path):
@@ -541,7 +541,7 @@ class TestDeliveryReply:
             "agent_backbone.services.telegram.interface.load_discovery",
             return_value=TopicDiscovery(),
         ):
-            return BackboneBot(config)
+            return TelegramService(config)
 
     @pytest.mark.asyncio
     async def test_cmd_tell_uses_safe_deliver(self, bot):
@@ -615,7 +615,7 @@ class TestSendNotification:
     async def test_send_notification_success(self):
         url = "https://api.telegram.org/botTEST_TOKEN/sendMessage"
         respx.post(url).respond(200, json={"ok": True})
-        result = await BackboneBot.send_notification("TEST_TOKEN", 12345, "Hello")
+        result = await TelegramService.send_notification("TEST_TOKEN", 12345, "Hello")
         assert result is True
 
     @pytest.mark.asyncio
@@ -623,5 +623,5 @@ class TestSendNotification:
     async def test_send_notification_failure(self):
         url = "https://api.telegram.org/botTEST_TOKEN/sendMessage"
         respx.post(url).respond(400, json={"ok": False})
-        result = await BackboneBot.send_notification("TEST_TOKEN", 12345, "Hello")
+        result = await TelegramService.send_notification("TEST_TOKEN", 12345, "Hello")
         assert result is False

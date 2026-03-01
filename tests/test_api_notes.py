@@ -102,3 +102,131 @@ class TestGetNote:
         resp = await client.get("/api/notes/../../etc/passwd", headers=auth_headers)
 
         assert resp.status_code in (403, 404)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/notes
+# ---------------------------------------------------------------------------
+
+
+class TestCreateNote:
+    async def test_creates_note(self, client, auth_headers, notes_tmp):
+        """Creates a new markdown note and returns NoteDetail."""
+        resp = await client.post(
+            "/api/notes",
+            json={"title": "My Note", "content": "# My Note\nHello world"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["title"] == "My Note"
+        assert "Hello world" in data["content"]
+        assert data["id"] == "my-note.md"
+        # File actually exists on disk
+        assert (notes_tmp / "my-note.md").is_file()
+
+    async def test_creates_note_in_subdir(self, client, auth_headers, notes_tmp):
+        """Creates note in a subdirectory."""
+        resp = await client.post(
+            "/api/notes",
+            json={"title": "Sub Note", "content": "content", "subdir": "work"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 201
+        assert (notes_tmp / "work" / "sub-note.md").is_file()
+
+    async def test_path_traversal_rejected(self, client, auth_headers, notes_tmp):
+        """Path traversal via subdir is rejected."""
+        resp = await client.post(
+            "/api/notes",
+            json={"title": "Evil", "content": "x", "subdir": "../../etc"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 403
+
+    async def test_empty_title_rejected(self, client, auth_headers, notes_tmp):
+        """Title with no valid filename chars is rejected."""
+        resp = await client.post(
+            "/api/notes",
+            json={"title": "!!!", "content": "x"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/notes/{note_id}
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateNote:
+    async def test_updates_note(self, client, auth_headers, notes_tmp):
+        """Updates an existing note's content."""
+        (notes_tmp / "edit-me.md").write_text("# Old\nOld content")
+
+        resp = await client.put(
+            "/api/notes/edit-me.md",
+            json={"content": "# Updated\nNew content"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "Updated"
+        assert "New content" in data["content"]
+        assert (notes_tmp / "edit-me.md").read_text() == "# Updated\nNew content"
+
+    async def test_nonexistent_returns_404(self, client, auth_headers, notes_tmp):
+        """Returns 404 for nonexistent note."""
+        resp = await client.put(
+            "/api/notes/ghost.md",
+            json={"content": "x"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 404
+
+    async def test_path_traversal_rejected(self, client, auth_headers, notes_tmp):
+        """Path traversal in note ID is rejected."""
+        resp = await client.put(
+            "/api/notes/../../etc/passwd",
+            json={"content": "x"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code in (403, 404)
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/notes/{note_id}
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteNote:
+    async def test_deletes_note(self, client, auth_headers, notes_tmp):
+        """Deletes an existing note."""
+        (notes_tmp / "delete-me.md").write_text("# Delete Me")
+
+        resp = await client.delete("/api/notes/delete-me.md", headers=auth_headers)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["deleted"] is True
+        assert data["id"] == "delete-me.md"
+        assert not (notes_tmp / "delete-me.md").exists()
+
+    async def test_nonexistent_returns_404(self, client, auth_headers, notes_tmp):
+        """Returns 404 for nonexistent note."""
+        resp = await client.delete("/api/notes/ghost.md", headers=auth_headers)
+
+        assert resp.status_code == 404
+
+    async def test_path_traversal_rejected(self, client, auth_headers, notes_tmp):
+        """Path traversal in note ID is rejected."""
+        resp = await client.delete("/api/notes/../../etc/passwd", headers=auth_headers)
+
+        assert resp.status_code in (403, 404)

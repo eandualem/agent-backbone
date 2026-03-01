@@ -1,7 +1,7 @@
 """Database schema — re-exports metadata from the database service module.
 
 The ORM models in services/database/models.py are the source of truth.
-This module provides backward-compatible access to metadata for:
+This module provides canonical metadata access for:
 1. BackboneDB.start() — metadata.create_all() for test databases
 2. Alembic autogenerate — detects schema changes from ORM model metadata
 """

@@ -316,7 +316,7 @@ class TestCapacityRouting:
         )
 
     def test_no_duration_fallback(self):
-        """busy_duration=None → uses legacy behavior (defer)."""
+        """busy_duration=None → defers (no capacity routing without duration)."""
         assert (
             should_deliver(
                 AgentState.BUSY, is_blocking=True, busy_duration=None, busy_threshold=1800.0

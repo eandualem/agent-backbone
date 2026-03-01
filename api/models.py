@@ -234,6 +234,13 @@ class ActionRecord(BaseModel):
 # --- Files ---
 
 
+class FileWriteRequest(BaseModel):
+    """Request body for writing file content."""
+
+    path: str
+    content: str
+
+
 class FileNode(BaseModel):
     """File or directory entry."""
 
@@ -279,6 +286,20 @@ class ActivityEvent(BaseModel):
 
 
 # --- Notes ---
+
+
+class NoteCreate(BaseModel):
+    """Request body for creating a note."""
+
+    title: str
+    content: str
+    subdir: str = ""
+
+
+class NoteUpdate(BaseModel):
+    """Request body for updating a note."""
+
+    content: str
 
 
 class NoteItem(BaseModel):

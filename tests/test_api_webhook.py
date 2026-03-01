@@ -5,7 +5,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from api.deps import get_delivery_service, get_dispatch_service
 
 
 def _make_signature(payload: bytes, secret: str = "test-secret") -> str:
@@ -30,6 +34,33 @@ def _webhook_headers(
         "X-GitHub-Delivery": delivery_id,
         "Content-Type": "application/json",
     }
+
+
+@pytest.fixture
+def mock_delivery_svc():
+    """Mock DeliveryService for DI override."""
+    svc = MagicMock()
+    svc.is_recent_notification = MagicMock(return_value=False)
+    return svc
+
+
+@pytest.fixture
+def mock_dispatch_svc():
+    """Mock DispatchService for DI override."""
+    svc = MagicMock()
+    svc.on_issue_closed = AsyncMock(return_value="delivered_next")
+    svc.issue_dispatcher = AsyncMock()
+    return svc
+
+
+@pytest.fixture(autouse=True)
+def _override_services(api_app, mock_delivery_svc, mock_dispatch_svc):
+    """Override DI providers with mocks for all webhook tests."""
+    api_app.dependency_overrides[get_delivery_service] = lambda: mock_delivery_svc
+    api_app.dependency_overrides[get_dispatch_service] = lambda: mock_dispatch_svc
+    yield
+    api_app.dependency_overrides.pop(get_delivery_service, None)
+    api_app.dependency_overrides.pop(get_dispatch_service, None)
 
 
 class TestHealthEndpoint:

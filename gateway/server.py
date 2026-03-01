@@ -23,7 +23,7 @@ def main() -> None:
 
     config = BackboneConfig.from_toml()
     app = create_app()
-    uvicorn.run(app, host="127.0.0.1", port=config.gateway_port, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=config.gateway.port, log_level="info")
 
 
 if __name__ == "__main__":

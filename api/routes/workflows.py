@@ -9,8 +9,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.workflows import WorkflowRegistry, execute_workflow_steps
-from api.deps import get_config
+from agent_backbone.services.workflows import WorkflowsService
+from api.deps import get_config, get_workflows_service
 from api.models import ListEnvelope, WorkflowCreateRequest, WorkflowInfo
 
 log = logging.getLogger(__name__)
@@ -20,17 +20,12 @@ router = APIRouter(prefix="/api", tags=["workflows"])
 _JSON_WORKFLOW_DIR = Path.home() / ".claude" / "state" / "workflows"
 
 
-def _get_registry(json_dir: Path | None = None) -> WorkflowRegistry:
-    """Get a fresh workflow registry with discovered workflows."""
-    registry = WorkflowRegistry()
-    registry.discover(json_dir=json_dir if json_dir is not None else _JSON_WORKFLOW_DIR)
-    return registry
-
-
 @router.get("/workflows", response_model=ListEnvelope[WorkflowInfo])
-async def list_workflows():
+async def list_workflows(
+    workflows_svc: WorkflowsService = Depends(get_workflows_service),
+):
     """List all available workflow templates (Prefect + JSON)."""
-    registry = _get_registry()
+    registry = workflows_svc.get_registry()
     items = [
         WorkflowInfo(
             name=entry.name,
@@ -82,19 +77,23 @@ async def create_workflow(body: WorkflowCreateRequest):
 
 
 @router.post("/workflows/{name}/run")
-async def run_workflow(name: str, config: BackboneConfig = Depends(get_config)):
+async def run_workflow(
+    name: str,
+    config: BackboneConfig = Depends(get_config),
+    workflows_svc: WorkflowsService = Depends(get_workflows_service),
+):
     """Execute a workflow by name.
 
     For Prefect workflows: invokes the flow function directly.
     For JSON workflows: executes steps via the workflow engine.
     """
-    registry = _get_registry()
+    registry = workflows_svc.get_registry()
     entry = registry.get(name)
     if not entry:
         raise HTTPException(status_code=404, detail=f"Workflow '{name}' not found")
 
     if entry.source == "json":
-        result = await execute_workflow_steps(entry.steps, config)
+        result = await workflows_svc.execute_steps(entry.steps, config)
 
         # Update last_run in the JSON file
         file_path = _JSON_WORKFLOW_DIR / f"{name}.json"

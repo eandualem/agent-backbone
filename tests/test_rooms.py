@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from api.deps import get_delivery_service
 from api.models import Room
-
-# Patches target the route module's imported names
-_ROOMS = "api.routes.rooms"
 
 
 def _create_room(tmp_path, *, state="active", participants=None, moderator="bell"):
@@ -33,12 +31,22 @@ def _create_room(tmp_path, *, state="active", participants=None, moderator="bell
     return room_id
 
 
+def _make_mock_delivery_svc(safe_deliver_return="delivered", safe_deliver_side_effect=None):
+    """Create a mock DeliveryService with safe_deliver configured."""
+    svc = MagicMock()
+    svc.safe_deliver = AsyncMock(
+        return_value=safe_deliver_return,
+        side_effect=safe_deliver_side_effect,
+    )
+    return svc
+
+
 @pytest.fixture(autouse=True)
 def _patch_room_dir(tmp_path):
     """Point room storage to tmp_path for all tests."""
     room_dir = tmp_path / ".claude" / "state" / "rooms"
     room_dir.mkdir(parents=True, exist_ok=True)
-    with patch(f"{_ROOMS}._ROOM_DIR", room_dir):
+    with patch("api.routes.rooms._ROOM_DIR", room_dir):
         yield
 
 
@@ -48,82 +56,100 @@ def _patch_room_dir(tmp_path):
 
 
 class TestSendDirected:
-    async def test_uses_safe_deliver(self, api_client, auth_headers, tmp_path):
+    async def test_uses_safe_deliver(self, api_client, auth_headers, tmp_path, api_app):
         """Directed message calls safe_deliver with correct args."""
         room_id = _create_room(tmp_path)
-        with patch(
-            f"{_ROOMS}.safe_deliver", new_callable=AsyncMock, return_value="delivered"
-        ) as mock:
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
             resp = await api_client.post(
                 f"/api/rooms/{room_id}/directed",
                 json={"target": "ike", "content": "Hello Ike"},
                 headers=auth_headers,
             )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
         assert data["status"] == "delivered"
         assert data["target"] == "ike"
-        mock.assert_awaited_once()
-        call_args = mock.call_args
-        assert call_args[0][0] == "ike"  # session_name
-        assert "Hello Ike" in call_args[0][1]  # message contains content
+        mock_svc.safe_deliver.assert_awaited_once()
+        call_args = mock_svc.safe_deliver.call_args
+        assert call_args[0][0] == "ike"
+        assert "Hello Ike" in call_args[0][1]
 
-    async def test_non_delivered_status(self, api_client, auth_headers, tmp_path):
+    async def test_non_delivered_status(self, api_client, auth_headers, tmp_path, api_app):
         """When safe_deliver returns a non-delivered status, ok=False."""
         room_id = _create_room(tmp_path)
-        with patch(f"{_ROOMS}.safe_deliver", new_callable=AsyncMock, return_value="agent_working"):
+        mock_svc = _make_mock_delivery_svc(safe_deliver_return="agent_working")
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
             resp = await api_client.post(
                 f"/api/rooms/{room_id}/directed",
                 json={"target": "ike", "content": "Hello"},
                 headers=auth_headers,
             )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is False
         assert data["status"] == "agent_working"
 
-    async def test_closed_room_returns_400(self, api_client, auth_headers, tmp_path):
+    async def test_closed_room_returns_400(self, api_client, auth_headers, tmp_path, api_app):
         """Sending to a closed room is rejected with 400."""
         room_id = _create_room(tmp_path, state="closed")
-        resp = await api_client.post(
-            f"/api/rooms/{room_id}/directed",
-            json={"target": "ike", "content": "Hello"},
-            headers=auth_headers,
-        )
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            resp = await api_client.post(
+                f"/api/rooms/{room_id}/directed",
+                json={"target": "ike", "content": "Hello"},
+                headers=auth_headers,
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 400
         assert "closed" in resp.json()["detail"].lower()
 
-    async def test_paused_room_returns_400(self, api_client, auth_headers, tmp_path):
+    async def test_paused_room_returns_400(self, api_client, auth_headers, tmp_path, api_app):
         """Sending to a paused room is rejected with 400."""
         room_id = _create_room(tmp_path, state="paused")
-        resp = await api_client.post(
-            f"/api/rooms/{room_id}/directed",
-            json={"target": "ike", "content": "Hello"},
-            headers=auth_headers,
-        )
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            resp = await api_client.post(
+                f"/api/rooms/{room_id}/directed",
+                json={"target": "ike", "content": "Hello"},
+                headers=auth_headers,
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 400
         assert "paused" in resp.json()["detail"].lower()
 
-    async def test_jarvis_target(self, api_client, auth_headers, tmp_path):
+    async def test_jarvis_target(self, api_client, auth_headers, tmp_path, api_app):
         """Jarvis target passes through to safe_deliver (bridge handles HTTP path)."""
         room_id = _create_room(tmp_path, participants=["jarvis", "feynman"])
-        with patch(
-            f"{_ROOMS}.safe_deliver", new_callable=AsyncMock, return_value="delivered"
-        ) as mock:
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
             resp = await api_client.post(
                 f"/api/rooms/{room_id}/directed",
                 json={"target": "jarvis", "content": "Hello Jarvis"},
                 headers=auth_headers,
             )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
-        assert mock.call_args[0][0] == "jarvis"
+        assert mock_svc.safe_deliver.call_args[0][0] == "jarvis"
 
 
 # ---------------------------------------------------------------------------
@@ -132,17 +158,21 @@ class TestSendDirected:
 
 
 class TestSendBroadcast:
-    async def test_uses_safe_deliver_for_all_participants(self, api_client, auth_headers, tmp_path):
+    async def test_uses_safe_deliver_for_all_participants(
+        self, api_client, auth_headers, tmp_path, api_app
+    ):
         """Broadcast calls safe_deliver for each participant."""
         room_id = _create_room(tmp_path, participants=["ike", "feynman", "ada"])
-        with patch(
-            f"{_ROOMS}.safe_deliver", new_callable=AsyncMock, return_value="delivered"
-        ) as mock:
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
             resp = await api_client.post(
                 f"/api/rooms/{room_id}/broadcast",
                 json={"content": "Hello everyone"},
                 headers=auth_headers,
             )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -150,21 +180,25 @@ class TestSendBroadcast:
         assert data["delivered"] == 3
         assert data["failed"] == 0
         assert data["total"] == 3
-        assert mock.await_count == 3
+        assert mock_svc.safe_deliver.await_count == 3
 
-    async def test_partial_delivery(self, api_client, auth_headers, tmp_path):
+    async def test_partial_delivery(self, api_client, auth_headers, tmp_path, api_app):
         """When some participants are offline, counts reflect partial delivery."""
         room_id = _create_room(tmp_path, participants=["ike", "feynman"])
 
         async def _side_effect(session, msg, config):
             return "delivered" if session == "ike" else "offline"
 
-        with patch(f"{_ROOMS}.safe_deliver", new_callable=AsyncMock, side_effect=_side_effect):
+        mock_svc = _make_mock_delivery_svc(safe_deliver_side_effect=_side_effect)
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
             resp = await api_client.post(
                 f"/api/rooms/{room_id}/broadcast",
                 json={"content": "Hello"},
                 headers=auth_headers,
             )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -172,26 +206,36 @@ class TestSendBroadcast:
         assert data["delivered"] == 1
         assert data["failed"] == 1
 
-    async def test_closed_room_returns_400(self, api_client, auth_headers, tmp_path):
+    async def test_closed_room_returns_400(self, api_client, auth_headers, tmp_path, api_app):
         """Broadcasting to a closed room is rejected with 400."""
         room_id = _create_room(tmp_path, state="closed")
-        resp = await api_client.post(
-            f"/api/rooms/{room_id}/broadcast",
-            json={"content": "Hello"},
-            headers=auth_headers,
-        )
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            resp = await api_client.post(
+                f"/api/rooms/{room_id}/broadcast",
+                json={"content": "Hello"},
+                headers=auth_headers,
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 400
         assert "closed" in resp.json()["detail"].lower()
 
-    async def test_paused_room_returns_400(self, api_client, auth_headers, tmp_path):
+    async def test_paused_room_returns_400(self, api_client, auth_headers, tmp_path, api_app):
         """Broadcasting to a paused room is rejected with 400."""
         room_id = _create_room(tmp_path, state="paused")
-        resp = await api_client.post(
-            f"/api/rooms/{room_id}/broadcast",
-            json={"content": "Hello"},
-            headers=auth_headers,
-        )
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            resp = await api_client.post(
+                f"/api/rooms/{room_id}/broadcast",
+                json={"content": "Hello"},
+                headers=auth_headers,
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 400
         assert "paused" in resp.json()["detail"].lower()

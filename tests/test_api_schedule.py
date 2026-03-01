@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import patch
 
 from agent_backbone.config import AgentStateConfig, HeartbeatConfig
+from agent_backbone.services.monitoring.interface import MonitoringService
+from api.deps import get_monitoring_service
 
 
 def _set_config_paths(api_app, schedule_path: str, state_dir: str):
-    """Override heartbeat schedule path and state dir in app config."""
+    """Override heartbeat schedule path, state dir, and monitoring service in app config."""
     config = api_app.state.config
     api_app.state.config = replace(
         config,
         heartbeat=HeartbeatConfig(schedule_file=schedule_path),
         agent_state=AgentStateConfig(state_dir=state_dir),
+    )
+    # Also override monitoring service to use the test schedule path
+    api_app.dependency_overrides[get_monitoring_service] = lambda: MonitoringService(
+        schedule_path=Path(schedule_path)
     )
 
 

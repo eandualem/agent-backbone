@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
-from api.models import FileNode
+from api.models import FileNode, FileWriteRequest
 
 router = APIRouter(prefix="/api", tags=["files"])
 
@@ -88,3 +88,17 @@ async def get_file_content(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {e}") from e
     return {"path": str(target), "content": content}
+
+
+@router.post("/files/content")
+async def write_file_content(body: FileWriteRequest):
+    """Write content to a file. Restricted to allowed paths."""
+    target = Path(body.path).expanduser()
+    if not _is_allowed(target):
+        raise HTTPException(status_code=403, detail="Path not in allowed directories")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body.content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write file: {e}") from e
+    return {"path": str(target), "written": True}

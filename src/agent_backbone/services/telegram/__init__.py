@@ -8,11 +8,7 @@ from agent_backbone.services.telegram.interface import (
     send_notification,
 )
 
-# Backward compatibility alias
-BackboneBot = TelegramService
-
 __all__ = [
-    "BackboneBot",
     "TelegramService",
     "TelegramServiceError",
     "_delivery_reply",

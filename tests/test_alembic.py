@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sqlalchemy.ext.asyncio import create_async_engine
+
 from agent_backbone.services.persistence._schema import metadata
 from agent_backbone.services.persistence.interface import BackboneDB
 
@@ -91,7 +93,8 @@ async def test_memory_db_functional():
 async def test_file_db_runs_migrations(tmp_path):
     """File-based BackboneDB creates alembic_version via start()."""
     db_path = tmp_path / "test.db"
-    db = BackboneDB(f"sqlite+aiosqlite:///{db_path}")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    db = BackboneDB(engine)
     await db.start()
 
     try:
@@ -106,13 +109,15 @@ async def test_file_db_runs_migrations(tmp_path):
         )
         assert row_id > 0
     finally:
-        await db.stop()
+        db._engine = None
+        await engine.dispose()
 
 
 async def test_file_db_idempotent_start(tmp_path):
     """Calling start() twice on a file DB is safe (idempotent)."""
     db_path = tmp_path / "idem.db"
-    db = BackboneDB(f"sqlite+aiosqlite:///{db_path}")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    db = BackboneDB(engine)
     await db.start()
 
     # Record something
@@ -122,14 +127,17 @@ async def test_file_db_idempotent_start(tmp_path):
         session_name="ike",
         outcome="delivered",
     )
-    await db.stop()
+    db._engine = None
+    await engine.dispose()
 
     # Second start — should not fail or lose data
-    db2 = BackboneDB(f"sqlite+aiosqlite:///{db_path}")
+    engine2 = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    db2 = BackboneDB(engine2)
     await db2.start()
 
     try:
         records = await db2.query_deliveries(issue_number=42)
         assert len(records) == 1
     finally:
-        await db2.stop()
+        db2._engine = None
+        await engine2.dispose()

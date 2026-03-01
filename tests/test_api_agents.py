@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import api.routes.agents as agents_module
 from agent_backbone.services.state import AgentState, StateSnapshot
+from api.deps import get_state_service, get_tmux_service
 from api.routes.agents import _resolve_command
 
-# All patches target api.routes.agents.* because the route imports
-# functions directly (from agent_backbone.tmux import list_sessions, etc.)
+# Still needed for _RUNTIMES/_FALLBACK_DIRS patching (module-level dicts, not services)
 _AGENTS = "api.routes.agents"
 
 
@@ -41,6 +41,59 @@ def _processing_snapshot(issue: int = 42) -> StateSnapshot:
         source="push",
         timestamp=time.time(),
     )
+
+
+def _tmux(
+    name: str,
+    *,
+    windows: int = 1,
+    created: int = 1708000000,
+    attached: bool = False,
+) -> dict:
+    """Build a rich tmux session dict for test data."""
+    return {
+        "name": name,
+        "windows": windows,
+        "created": created,
+        "attached": attached,
+    }
+
+
+def _make_mock_state_svc(**kwargs) -> MagicMock:
+    """Create a mock StateService with get_state returning an idle snapshot."""
+    svc = MagicMock()
+    svc.get_state = AsyncMock(return_value=kwargs.get("snapshot", _idle_snapshot()))
+    return svc
+
+
+def _make_mock_tmux_svc(
+    *,
+    rich_sessions: list | None = None,
+    sessions: list | None = None,
+    capture_output: str = "",
+    session_exists_result: bool = True,
+) -> MagicMock:
+    """Create a mock TmuxService with configurable return values."""
+    svc = MagicMock()
+    svc.list_sessions_rich = AsyncMock(return_value=rich_sessions or [])
+    svc.list_sessions = AsyncMock(return_value=sessions or [])
+    svc.capture_pane = AsyncMock(return_value=capture_output)
+    svc.session_exists = AsyncMock(return_value=session_exists_result)
+    return svc
+
+
+def _set_di_overrides(api_app, *, state_svc=None, tmux_svc=None):
+    """Set dependency overrides on the FastAPI app."""
+    if state_svc is not None:
+        api_app.dependency_overrides[get_state_service] = lambda: state_svc
+    if tmux_svc is not None:
+        api_app.dependency_overrides[get_tmux_service] = lambda: tmux_svc
+
+
+def _clear_di_overrides(api_app):
+    """Remove DI overrides for state and tmux services."""
+    api_app.dependency_overrides.pop(get_state_service, None)
+    api_app.dependency_overrides.pop(get_tmux_service, None)
 
 
 # ---------------------------------------------------------------------------
@@ -79,16 +132,17 @@ class TestResolveCommand:
 
 
 class TestListAgents:
-    async def test_returns_named_entities(self, api_client, auth_headers):
+    async def test_returns_named_entities(self, api_app, api_client, auth_headers):
         """Named entities from config.registry.sessions_map are always included."""
-        with (
-            patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
-        ):
-            mock_state.return_value = _idle_snapshot()
-            mock_rich.return_value = []
-
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(),
+            tmux_svc=_make_mock_tmux_svc(),
+        )
+        try:
             resp = await api_client.get("/api/agents", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -111,23 +165,26 @@ class TestListAgents:
         for agent in data["items"]:
             assert agent["type"] == "named_entity"
 
-    async def test_includes_discovered_coding_agents(self, api_client, auth_headers):
+    async def test_includes_discovered_coding_agents(self, api_app, api_client, auth_headers):
         """Tmux sessions not in named entities are added as coding agents."""
-        with (
-            patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
-        ):
-            mock_state.return_value = _idle_snapshot()
-            mock_rich.return_value = [
-                {"name": "feynman", "windows": 2, "created": 1708000000, "attached": True},
-                {"name": "ike", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "leo", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "ada", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "brunel", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "platform-api", "windows": 1, "created": 1708001000, "attached": False},
-            ]
-
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(),
+            tmux_svc=_make_mock_tmux_svc(
+                rich_sessions=[
+                    _tmux("feynman", windows=2, attached=True),
+                    _tmux("ike"),
+                    _tmux("leo"),
+                    _tmux("ada"),
+                    _tmux("brunel"),
+                    _tmux("platform-api", created=1708001000),
+                ],
+            ),
+        )
+        try:
             resp = await api_client.get("/api/agents", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -141,27 +198,30 @@ class TestListAgents:
         assert coding["tmux_attached"] is False
         assert coding["tmux_created"] is not None
 
-    async def test_excludes_service_sessions(self, api_client, auth_headers):
+    async def test_excludes_service_sessions(self, api_app, api_client, auth_headers):
         """Service sessions (ngrok, prefect, etc.) are filtered from agents list."""
-        with (
-            patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
-        ):
-            mock_state.return_value = _idle_snapshot()
-            mock_rich.return_value = [
-                {"name": "feynman", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "ike", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "leo", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "ada", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "brunel", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "platform-api", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "ngrok", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "prefect-worker", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "prefect-server", "windows": 1, "created": 1708000000, "attached": False},
-                {"name": "telegram-bot", "windows": 1, "created": 1708000000, "attached": False},
-            ]
-
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(),
+            tmux_svc=_make_mock_tmux_svc(
+                rich_sessions=[
+                    _tmux("feynman"),
+                    _tmux("ike"),
+                    _tmux("leo"),
+                    _tmux("ada"),
+                    _tmux("brunel"),
+                    _tmux("platform-api"),
+                    _tmux("ngrok"),
+                    _tmux("prefect-worker"),
+                    _tmux("prefect-server"),
+                    _tmux("telegram-bot"),
+                ],
+            ),
+        )
+        try:
             resp = await api_client.get("/api/agents", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -190,24 +250,24 @@ class TestListAgents:
         )
         api_app.state.config = dc_replace(old_config, registry=new_reg)
 
-        try:
-            with (
-                patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
-                patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
-            ):
-                mock_state.return_value = _idle_snapshot()
-                # Only agent-backbone has an active tmux session
-                mock_rich.return_value = [
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(),
+            tmux_svc=_make_mock_tmux_svc(
+                rich_sessions=[
                     {
                         "name": "agent-backbone",
                         "windows": 1,
                         "created": 1708000000,
                         "attached": True,
                     }
-                ]
-
-                resp = await api_client.get("/api/agents", headers=auth_headers)
+                ],
+            ),
+        )
+        try:
+            resp = await api_client.get("/api/agents", headers=auth_headers)
         finally:
+            _clear_di_overrides(api_app)
             api_app.state.config = old_config
 
         assert resp.status_code == 200
@@ -251,16 +311,15 @@ class TestListAgents:
         new_reg = dc_replace(old_reg, entities=new_entities)
         api_app.state.config = dc_replace(old_config, registry=new_reg)
 
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(),
+            tmux_svc=_make_mock_tmux_svc(),
+        )
         try:
-            with (
-                patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
-                patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
-            ):
-                mock_state.return_value = _idle_snapshot()
-                mock_rich.return_value = []
-
-                resp = await api_client.get("/api/agents", headers=auth_headers)
+            resp = await api_client.get("/api/agents", headers=auth_headers)
         finally:
+            _clear_di_overrides(api_app)
             api_app.state.config = old_config
 
         assert resp.status_code == 200
@@ -272,16 +331,17 @@ class TestListAgents:
         # Other named entities still present
         assert "ike" in entities
 
-    async def test_entity_type_field_returned(self, api_client, auth_headers):
+    async def test_entity_type_field_returned(self, api_app, api_client, auth_headers):
         """EnrichedAgent includes entity_type field defaulting to 'agent'."""
-        with (
-            patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state,
-            patch(f"{_AGENTS}.list_sessions_rich", new_callable=AsyncMock) as mock_rich,
-        ):
-            mock_state.return_value = _idle_snapshot()
-            mock_rich.return_value = []
-
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(),
+            tmux_svc=_make_mock_tmux_svc(),
+        )
+        try:
             resp = await api_client.get("/api/agents", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -307,13 +367,17 @@ class TestListAgents:
 
 
 class TestGetAgentState:
-    async def test_returns_state_detail(self, api_client, auth_headers):
+    async def test_returns_state_detail(self, api_app, api_client, auth_headers):
         """Returns detailed state snapshot for a session."""
         snapshot = _processing_snapshot(issue=99)
-        with patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state:
-            mock_state.return_value = snapshot
-
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(snapshot=snapshot),
+        )
+        try:
             resp = await api_client.get("/api/agents/feynman/state", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -322,12 +386,18 @@ class TestGetAgentState:
         assert data["current_issue"] == 99
         assert data["source"] == "push"
 
-    async def test_unknown_session_returns_default_state(self, api_client, auth_headers):
+    async def test_unknown_session_returns_default_state(self, api_app, api_client, auth_headers):
         """An unknown session still returns a snapshot (with default/unknown state)."""
-        with patch(f"{_AGENTS}.get_agent_state", new_callable=AsyncMock) as mock_state:
-            mock_state.return_value = _idle_snapshot(state=AgentState.UNKNOWN, source="default")
-
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(
+                snapshot=_idle_snapshot(state=AgentState.UNKNOWN, source="default")
+            ),
+        )
+        try:
             resp = await api_client.get("/api/agents/nonexistent/state", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -341,14 +411,16 @@ class TestGetAgentState:
 
 
 class TestListSessions:
-    async def test_returns_session_list(self, api_client, auth_headers):
+    async def test_returns_session_list(self, api_app, api_client, auth_headers):
         """Returns the list of active tmux sessions."""
-        with patch(
-            f"{_AGENTS}.list_sessions",
-            new_callable=AsyncMock,
-            return_value=["feynman", "ike", "platform-api"],
-        ):
+        _set_di_overrides(
+            api_app,
+            tmux_svc=_make_mock_tmux_svc(sessions=["feynman", "ike", "platform-api"]),
+        )
+        try:
             resp = await api_client.get("/api/sessions", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
 
         assert resp.status_code == 200
         assert resp.json() == ["feynman", "ike", "platform-api"]
@@ -411,14 +483,16 @@ class TestListRuntimes:
 
 
 class TestGetTerminalOutput:
-    async def test_captures_pane_output(self, api_client, auth_headers):
+    async def test_captures_pane_output(self, api_app, api_client, auth_headers):
         """Returns captured terminal output from a session."""
-        with patch(
-            f"{_AGENTS}.capture_pane",
-            new_callable=AsyncMock,
-            return_value="$ echo hello\nhello\n$",
-        ):
+        _set_di_overrides(
+            api_app,
+            tmux_svc=_make_mock_tmux_svc(capture_output="$ echo hello\nhello\n$"),
+        )
+        try:
             resp = await api_client.get("/api/sessions/feynman/terminal", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -426,21 +500,16 @@ class TestGetTerminalOutput:
         assert "hello" in data["content"]
         assert data["lines"] == 50  # default
 
-    async def test_nonexistent_session_returns_404(self, api_client, auth_headers):
+    async def test_nonexistent_session_returns_404(self, api_app, api_client, auth_headers):
         """When capture returns empty and session does not exist, returns 404."""
-        with (
-            patch(
-                f"{_AGENTS}.capture_pane",
-                new_callable=AsyncMock,
-                return_value="",
-            ),
-            patch(
-                f"{_AGENTS}.session_exists",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-        ):
+        _set_di_overrides(
+            api_app,
+            tmux_svc=_make_mock_tmux_svc(capture_output="", session_exists_result=False),
+        )
+        try:
             resp = await api_client.get("/api/sessions/ghost/terminal", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
 
         assert resp.status_code == 404
         assert "ghost" in resp.json()["detail"]

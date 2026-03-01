@@ -4,35 +4,32 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from agent_backbone.config import BackboneConfig
+from agent_backbone.services.monitoring import MonitoringService
 from agent_backbone.services.persistence import BackboneDB
-from api.deps import get_config, get_db
+from api.deps import get_db, get_monitoring_service
 from api.models import HeartbeatRecord, ListEnvelope
 
 router = APIRouter(prefix="/api", tags=["heartbeats"])
 
 
 @router.get("/heartbeats/schedules")
-async def get_heartbeat_schedules(config: BackboneConfig = Depends(get_config)):
+async def get_heartbeat_schedules(
+    monitoring_svc: MonitoringService = Depends(get_monitoring_service),
+):
     """Get all heartbeat schedules."""
-    from agent_backbone.services.monitoring import load_schedules
-
-    schedules = load_schedules(config.heartbeat.schedule_path)
-    return schedules
+    return monitoring_svc.load_schedules()
 
 
 @router.put("/heartbeats/schedules/{agent}")
 async def update_heartbeat_schedule(
     agent: str,
     body: dict,
-    config: BackboneConfig = Depends(get_config),
+    monitoring_svc: MonitoringService = Depends(get_monitoring_service),
 ):
     """Update heartbeat schedule for a specific agent."""
-    from agent_backbone.services.monitoring import load_schedules, save_schedules
-
-    schedules = load_schedules(config.heartbeat.schedule_path)
+    schedules = monitoring_svc.load_schedules()
     schedules[agent] = body
-    save_schedules(schedules, config.heartbeat.schedule_path)
+    monitoring_svc.save_schedules(schedules)
     return {"ok": True, "agent": agent}
 
 
