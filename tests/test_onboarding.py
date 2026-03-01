@@ -610,7 +610,6 @@ class TestRunOnboarding:
     async def test_notify_brunel_created(self, workspace):
         clone_proc = _mock_subprocess_ok()
         mock_gh = AsyncMock()
-        mock_gh.create_issue = AsyncMock()
         mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
         mock_gh.__aexit__ = AsyncMock(return_value=False)
 
@@ -618,12 +617,18 @@ class TestRunOnboarding:
 
         cfg = BackboneConfig(github_token="test-token")
 
+        mock_create_notify = AsyncMock()
+
         _clone_side_effect = _selective_create_subprocess_exec(
             asyncio.create_subprocess_exec, clone_proc
         )
         with (
             patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
             patch("agent_backbone.services.github.GitHubClient", return_value=mock_gh),
+            patch(
+                "agent_backbone.services.delivery.create_and_notify",
+                mock_create_notify,
+            ),
         ):
             result = await run_onboarding("WF", _SSH_URL, config=cfg)
 
@@ -632,10 +637,12 @@ class TestRunOnboarding:
         assert step9.name == "notify_brunel"
         assert step9.status == "done"
         assert step9.detail == "Created verification issue for brunel"
-        # Only one issue created (Brunel only, not Feynman)
-        assert mock_gh.create_issue.call_count == 1
-        call_kwargs = mock_gh.create_issue.call_args.kwargs
+        # Only one call to create_and_notify (Brunel only)
+        assert mock_create_notify.call_count == 1
+        call_kwargs = mock_create_notify.call_args.kwargs
         assert "for:brunel" in call_kwargs["labels"]
+        assert call_kwargs["flow_name"] == "onboarding"
+        assert call_kwargs["config"] is cfg
 
     async def test_notify_brunel_skipped_no_config(self, workspace):
         clone_proc = _mock_subprocess_ok()

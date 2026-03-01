@@ -64,6 +64,19 @@ async def onboard_repo(body: RepoOnboardRequest, request: Request):
 
     backbone_config = getattr(request.app.state, "config", None)
     result = await run_onboarding(body.org, body.url, config=backbone_config)
+
+    if result.success and result.repo and backbone_config:
+        from pathlib import Path
+
+        from agent_backbone.services.registry import RepoInfo
+
+        new_repo = RepoInfo(
+            org=result.org,
+            name=result.repo,
+            path=str(Path(f"~/ws/core/code/{result.org}/{result.repo}").expanduser()),
+        )
+        backbone_config.registry.add_repo(new_repo)
+
     return RepoOnboardResponse(
         org=result.org,
         repo=result.repo,

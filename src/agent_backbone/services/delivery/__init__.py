@@ -1,5 +1,6 @@
 """Delivery service — session resolution, intelligence, and safe delivery."""
 
+from agent_backbone.services.delivery._create_notify import create_and_notify
 from agent_backbone.services.delivery._dedup import (
     DEFAULT_DEDUP_SECONDS,
     clear,
@@ -27,6 +28,7 @@ from agent_backbone.services.delivery.models import SessionIntelligence, Session
 __all__ = [
     "DEFAULT_DEDUP_SECONDS",
     "DeliveryService",
+    "create_and_notify",
     "DeliveryServiceError",
     "SessionIntelligence",
     "SessionProfile",

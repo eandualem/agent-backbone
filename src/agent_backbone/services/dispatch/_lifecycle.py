@@ -13,6 +13,7 @@ from prefect import flow, task
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import IssueData, IssueEvent
 from agent_backbone.services.delivery import (
+    create_and_notify,
     is_http_target,
     is_recent_notification,
     resolve_entity_session,
@@ -65,7 +66,8 @@ async def _check_onboarding_chain(
             log.info("No GitHub token — skipping onboarding chain for %s/%s", org, repo)
             return
 
-        await gh.create_issue(
+        await create_and_notify(
+            gh,
             title=f"[task] Repository scaffolded and verified: {org}/{repo}",
             body=(
                 f"## Context\n"
@@ -92,6 +94,8 @@ async def _check_onboarding_chain(
                 f"project-bootstrap/SKILL.md`\n"
             ),
             labels=["from:backbone", "for:leo", "task"],
+            config=config,
+            flow_name="issue-lifecycle",
         )
         log.info(
             "Onboarding chain: created Leo issue for %s/%s (Brunel closed #%d)",

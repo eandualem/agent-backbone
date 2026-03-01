@@ -496,10 +496,12 @@ async def run_onboarding(
     # Step 9: Notify Brunel (sequential chain: Pipeline → Brunel → Leo → Feynman)
     if config and config.github_token:
         try:
+            from agent_backbone.services.delivery import create_and_notify
             from agent_backbone.services.github import GitHubClient
 
             async with GitHubClient(config) as gh:
-                await gh.create_issue(
+                await create_and_notify(
+                    gh,
                     title=(f"[task] Verify onboarding infrastructure: {org}/{repo}"),
                     body=(
                         f"## Context\n"
@@ -515,6 +517,8 @@ async def run_onboarding(
                         f" `~/ws/core/code/{org}/{repo}/`\n"
                     ),
                     labels=["from:coding-agent", "for:brunel", "task"],
+                    config=config,
+                    flow_name="onboarding",
                 )
             steps.append(
                 OnboardingStep(

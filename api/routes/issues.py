@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import parse_from_tag
-from agent_backbone.services.delivery import compute_priority_score
+from agent_backbone.services.delivery import compute_priority_score, create_and_notify
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.persistence import BackboneDB
 from api.deps import get_config, get_db, get_github
@@ -130,7 +130,9 @@ async def create_issue(
     labels = body.get("labels", [])
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
-    issue = await gh.create_issue(title, issue_body, labels)
+    issue = await create_and_notify(
+        gh, title, issue_body, labels, config, flow_name="api-create-issue"
+    )
     return _issue_to_response(issue, config)
 
 

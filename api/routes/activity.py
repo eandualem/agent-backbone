@@ -92,6 +92,7 @@ async def _load_heartbeat_events(db: BackboneDB, limit: int) -> list[ActivityEve
     return events
 
 
+@router.get("/activity", response_model=ListEnvelope[ActivityEvent])
 @router.get("/activity/timeline", response_model=ListEnvelope[ActivityEvent])
 async def get_activity_timeline(
     limit: int = Query(default=50, ge=1, le=500),

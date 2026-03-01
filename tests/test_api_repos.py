@@ -133,7 +133,6 @@ class TestOnboardRepo:
         """Creates spec dir, orch config, registry entries."""
         clone_proc = _mock_subprocess_ok()
         mock_gh = AsyncMock()
-        mock_gh.create_issue = AsyncMock()
         mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
         mock_gh.__aexit__ = AsyncMock(return_value=False)
 
@@ -143,6 +142,10 @@ class TestOnboardRepo:
         with (
             patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
             patch("agent_backbone.services.github.GitHubClient", return_value=mock_gh),
+            patch(
+                "agent_backbone.services.delivery.create_and_notify",
+                new_callable=AsyncMock,
+            ),
         ):
             resp = await client.post(
                 "/api/repos/onboard",
@@ -269,6 +272,38 @@ class TestOnboardRepo:
         data = resp.json()
         assert data["success"] is False
         assert len(data["steps"]) == 2
+
+    async def test_registry_refreshed_after_onboard(self, client, auth_headers, repo_workspace):
+        """After successful onboard, config.registry includes the new repo."""
+        clone_proc = _mock_subprocess_ok()
+        mock_gh = AsyncMock()
+        mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
+        mock_gh.__aexit__ = AsyncMock(return_value=False)
+
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with (
+            patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
+            patch("agent_backbone.services.github.GitHubClient", return_value=mock_gh),
+            patch(
+                "agent_backbone.services.delivery.create_and_notify",
+                new_callable=AsyncMock,
+            ),
+        ):
+            resp = await client.post(
+                "/api/repos/onboard",
+                json={"org": "WF", "url": _SSH_URL},
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["success"] is True
+
+        # Verify the registry was updated
+        config = client._transport.app.state.config
+        assert "new-thing" in config.registry.repo_names
 
     async def test_requires_auth(self, client, api_key, repo_workspace):
         """Returns 401 without auth header."""

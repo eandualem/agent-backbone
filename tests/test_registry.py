@@ -268,6 +268,23 @@ class TestEntityRegistrySessions:
 
         assert registry.sessions_map == {"coding-agent": "agent-backbone"}
 
+    def test_sessions_map_excludes_none_sessions(self):
+        entities = {
+            "ike": EntityEntry(session="ike", home="~/ws/core/ike/", groups=[], figure="", role=""),
+            "jarvis": EntityEntry(
+                session=None,
+                home="~/ws/jarvis/",
+                groups=[],
+                figure="Jarvis",
+                role="Personal Assistant",
+                entity_type="service",
+            ),
+        }
+        registry = EntityRegistry(entities=entities, repos=[])
+
+        assert registry.sessions_map == {"ike": "ike"}
+        assert "jarvis" not in registry.sessions_map
+
     def test_entity_by_session(self):
         entities = {
             "ike": EntityEntry(session="ike", home="~/ws/core/ike/", groups=[], figure="", role=""),
@@ -290,6 +307,23 @@ class TestEntityRegistrySessions:
         registry = EntityRegistry(entities=entities, repos=[])
 
         assert registry.entity_by_session["agent-backbone"] == "coding-agent"
+
+    def test_entity_by_session_excludes_none_sessions(self):
+        entities = {
+            "ike": EntityEntry(session="ike", home="~/ws/core/ike/", groups=[], figure="", role=""),
+            "jarvis": EntityEntry(
+                session=None,
+                home="~/ws/jarvis/",
+                groups=[],
+                figure="Jarvis",
+                role="Personal Assistant",
+                entity_type="service",
+            ),
+        }
+        registry = EntityRegistry(entities=entities, repos=[])
+
+        assert registry.entity_by_session == {"ike": "ike"}
+        assert None not in registry.entity_by_session
 
 
 class TestEntityRegistryAllEntities:
@@ -373,6 +407,57 @@ class TestEntityRegistryRepos:
         }
 
 
+class TestEntityRegistryAddRepo:
+    def test_adds_new_repo_and_updates_repo_names(self):
+        repos = [
+            RepoInfo(org="Arclio", name="platform-api", path="/ws/core/code/Arclio/platform-api"),
+        ]
+        registry = EntityRegistry(repos=repos)
+        # Prime cached properties
+        assert "platform-api" in registry.repo_names
+
+        new_repo = RepoInfo(org="WF", name="new-thing", path="/ws/core/code/WF/new-thing")
+        registry.add_repo(new_repo)
+
+        assert "new-thing" in registry.repo_names
+        assert "WF" in registry.orgs
+        assert registry.repo_path_by_name["new-thing"] == "/ws/core/code/WF/new-thing"
+
+    def test_dedup_does_not_duplicate(self):
+        repo = RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone")
+        registry = EntityRegistry(repos=[repo])
+
+        registry.add_repo(repo)
+
+        assert len(registry.repos) == 1
+
+    def test_invalidates_all_cached_properties(self):
+        repos = [
+            RepoInfo(org="Arclio", name="platform-api", path="/ws/core/code/Arclio/platform-api"),
+        ]
+        registry = EntityRegistry(repos=repos)
+
+        # Prime all three cached properties
+        _ = registry.repo_names
+        _ = registry.orgs
+        _ = registry.repo_path_by_name
+        assert "repo_names" in registry.__dict__
+        assert "orgs" in registry.__dict__
+        assert "repo_path_by_name" in registry.__dict__
+
+        new_repo = RepoInfo(org="WF", name="new-thing", path="/ws/core/code/WF/new-thing")
+        registry.add_repo(new_repo)
+
+        # Cached properties should be evicted
+        assert "repo_names" not in registry.__dict__
+        assert "orgs" not in registry.__dict__
+        assert "repo_path_by_name" not in registry.__dict__
+
+        # Re-access should include new repo
+        assert "new-thing" in registry.repo_names
+        assert "WF" in registry.orgs
+
+
 class TestEntityRegistryHome:
     def test_home_by_session(self):
         entities = {
@@ -397,6 +482,25 @@ class TestEntityRegistryHome:
         assert "leo" in result
         assert result["ike"] == str(Path("~/ws/core/ike/").expanduser())
         assert result["leo"] == str(Path("~/ws/leo/").expanduser())
+
+    def test_home_by_session_excludes_none_sessions(self):
+        entities = {
+            "ike": EntityEntry(session="ike", home="~/ws/core/ike/", groups=[], figure="", role=""),
+            "jarvis": EntityEntry(
+                session=None,
+                home="~/ws/jarvis/",
+                groups=[],
+                figure="Jarvis",
+                role="Personal Assistant",
+                entity_type="service",
+            ),
+        }
+        registry = EntityRegistry(entities=entities, repos=[])
+
+        result = registry.home_by_session
+        assert "ike" in result
+        assert None not in result
+        assert len(result) == 1
 
     def test_home_by_session_empty(self):
         registry = EntityRegistry()

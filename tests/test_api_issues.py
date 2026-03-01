@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -202,19 +202,35 @@ class TestGetDependencies:
 
 class TestCreateIssue:
     async def test_create_issue_success(self, issues_client, auth_headers, mock_github):
-        payload = {
-            "title": "[task] New issue",
-            "body": "## Context\nTest",
-            "labels": ["from:leo", "for:ike", "task"],
-        }
-        resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["number"] == 99
-        assert data["title"] == "[task] New issue"
-        mock_github.create_issue.assert_called_once_with(
-            "[task] New issue", "## Context\nTest", ["from:leo", "for:ike", "task"]
+        created_issue = IssueData(
+            number=99,
+            title="[task] New issue",
+            state="open",
+            labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
+            html_url="https://github.com/eandualem/orchestration/issues/99",
         )
+        with patch(
+            "api.routes.issues.create_and_notify",
+            new_callable=AsyncMock,
+            return_value=created_issue,
+        ) as mock_create_notify:
+            payload = {
+                "title": "[task] New issue",
+                "body": "## Context\nTest",
+                "labels": ["from:leo", "for:ike", "task"],
+            }
+            resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["number"] == 99
+            assert data["title"] == "[task] New issue"
+            mock_create_notify.assert_called_once()
+            call_args = mock_create_notify.call_args
+            assert call_args.args[0] is mock_github  # gh
+            assert call_args.args[1] == "[task] New issue"  # title
+            assert call_args.args[2] == "## Context\nTest"  # body
+            assert call_args.args[3] == ["from:leo", "for:ike", "task"]  # labels
+            assert call_args.kwargs["flow_name"] == "api-create-issue"
 
     async def test_create_issue_missing_title(self, issues_client, auth_headers):
         payload = {"body": "no title"}

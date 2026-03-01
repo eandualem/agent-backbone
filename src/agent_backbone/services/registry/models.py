@@ -38,13 +38,21 @@ class EntityRegistry:
 
     @cached_property
     def sessions_map(self) -> dict[str, str]:
-        """Entity name -> session name mapping."""
-        return {name: entry.session for name, entry in self.entities.items()}
+        """Entity name -> session name mapping (excludes entities with no session)."""
+        return {
+            name: entry.session
+            for name, entry in self.entities.items()
+            if entry.session is not None
+        }
 
     @cached_property
     def entity_by_session(self) -> dict[str, str]:
-        """Session name -> entity name (reverse lookup)."""
-        return {entry.session: name for name, entry in self.entities.items()}
+        """Session name -> entity name (reverse lookup, excludes None sessions)."""
+        return {
+            entry.session: name
+            for name, entry in self.entities.items()
+            if entry.session is not None
+        }
 
     @cached_property
     def all_entities(self) -> list[str]:
@@ -63,12 +71,22 @@ class EntityRegistry:
 
     @cached_property
     def home_by_session(self) -> dict[str, str]:
-        """Session name -> home directory (expanded)."""
+        """Session name -> home directory (expanded, excludes None sessions)."""
         return {
-            entry.session: str(Path(entry.home).expanduser()) for entry in self.entities.values()
+            entry.session: str(Path(entry.home).expanduser())
+            for entry in self.entities.values()
+            if entry.session is not None
         }
 
     @cached_property
     def repo_path_by_name(self) -> dict[str, str]:
         """Repo name -> filesystem path."""
         return {r.name: r.path for r in self.repos}
+
+    def add_repo(self, repo: RepoInfo) -> None:
+        """Add a repo to the registry and invalidate cached properties."""
+        if any(r.name == repo.name and r.org == repo.org for r in self.repos):
+            return
+        self.repos.append(repo)
+        for attr in ("repo_names", "orgs", "repo_path_by_name"):
+            self.__dict__.pop(attr, None)

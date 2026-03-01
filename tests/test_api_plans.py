@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
+from agent_backbone.services.registry import EntityEntry, EntityRegistry
 from agent_backbone.services.state import AgentState, StateSnapshot
 
 
@@ -122,6 +124,40 @@ class TestListPendingPlans:
         """Request without auth headers is rejected when API key is set."""
         resp = await api_client.get("/api/plans")
         assert resp.status_code == 401
+
+    async def test_handles_none_session_in_registry(self, api_client, auth_headers, api_app):
+        """Registry entities with session=None (e.g. Jarvis) don't cause TypeError."""
+        # Add a None-session entity to the registry (regression: caused 500 via Path/None)
+        config = api_app.state.config
+        entities_with_jarvis = dict(config.registry.entities)
+        entities_with_jarvis["jarvis"] = EntityEntry(
+            session=None,
+            home="~/ws/jarvis/",
+            groups=[],
+            figure="Jarvis",
+            role="Personal Assistant",
+            entity_type="service",
+        )
+        patched_registry = EntityRegistry(
+            entities=entities_with_jarvis, repos=config.registry.repos
+        )
+        api_app.state.config = replace(config, registry=patched_registry)
+
+        with (
+            patch(
+                "api.routes.plans.get_agent_state",
+                new_callable=AsyncMock,
+                return_value=_idle_snapshot(),
+            ),
+            patch(
+                "api.routes.plans.list_sessions",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            resp = await api_client.get("/api/plans", headers=auth_headers)
+
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

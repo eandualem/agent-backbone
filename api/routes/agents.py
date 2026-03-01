@@ -86,6 +86,8 @@ async def _build_enriched_agent(
     figure = reg_entry.figure if reg_entry else ""
     groups = list(reg_entry.groups) if reg_entry else []
     home = reg_entry.home if reg_entry else ""
+    if not home and agent_type == "coding_agent":
+        home = config.registry.repo_path_by_name.get(session, "")
 
     # Resolve org: named entities from registry, coding agents from RepoInfo
     org = ""

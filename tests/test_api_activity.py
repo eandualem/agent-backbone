@@ -17,6 +17,46 @@ def _set_state_dir(api_app, path: str):
     )
 
 
+class TestGetActivityAlias:
+    """Tests for GET /api/activity (alias for /activity/timeline)."""
+
+    async def test_activity_alias_returns_200(self, api_client, auth_headers, tmp_path, api_app):
+        """GET /api/activity returns the same data as /api/activity/timeline."""
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        actions_file = state_dir / "github-actions.jsonl"
+        actions_file.write_text(
+            json.dumps({"ts": 1000.0, "session": "ike", "action": "opened", "issue": 1})
+        )
+        _set_state_dir(api_app, str(state_dir))
+
+        resp = await api_client.get("/api/activity", headers=auth_headers)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 1
+        assert any(item["type"] == "action" for item in data["items"])
+
+    async def test_activity_alias_matches_timeline(
+        self, api_client, auth_headers, tmp_path, api_app
+    ):
+        """Both /api/activity and /api/activity/timeline return identical responses."""
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        actions_file = state_dir / "github-actions.jsonl"
+        actions_file.write_text(
+            json.dumps({"ts": 2000.0, "session": "leo", "action": "closed", "issue": 5})
+        )
+        _set_state_dir(api_app, str(state_dir))
+
+        resp_alias = await api_client.get("/api/activity", headers=auth_headers)
+        resp_timeline = await api_client.get("/api/activity/timeline", headers=auth_headers)
+
+        assert resp_alias.status_code == 200
+        assert resp_timeline.status_code == 200
+        assert resp_alias.json() == resp_timeline.json()
+
+
 class TestGetActivityTimeline:
     """Tests for GET /api/activity/timeline."""
 
