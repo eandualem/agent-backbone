@@ -488,6 +488,63 @@ class TestSafeDeliver:
 
         assert result == "plan_waiting"
 
+    async def test_copy_mode_enqueues(self):
+        """COPY_MODE enqueues message to DB when tracking info provided."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Hello",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+            )
+
+        assert result == "copy_mode"
+        mock_db.enqueue_message.assert_called_once_with(
+            session_name="ike",
+            message="Hello",
+            issue_number=42,
+            target_entity="ike",
+            flow_name="test_flow",
+        )
+
+    async def test_user_interacting_enqueues(self):
+        """USER_INTERACTING enqueues message to DB when tracking info provided."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        recent_activity = str(time.time() - 2)
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": recent_activity}),
+            _patch_get_agent_state(_IDLE_SNAP),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Hello",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+            )
+
+        assert result == "user_interacting"
+        mock_db.enqueue_message.assert_called_once_with(
+            session_name="ike",
+            message="Hello",
+            issue_number=42,
+            target_entity="ike",
+            flow_name="test_flow",
+        )
+
     async def test_delivery_failed_enqueues(self):
         """IDLE_READY + send fails returns 'delivery_failed' and enqueues."""
         config = _default_config()

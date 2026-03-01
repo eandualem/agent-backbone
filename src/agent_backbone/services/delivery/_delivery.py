@@ -76,9 +76,11 @@ async def safe_deliver(
         return "grace_period"
 
     if intelligence == SessionIntelligence.COPY_MODE and not priority:
+        await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
         return "copy_mode"
 
     if intelligence == SessionIntelligence.USER_INTERACTING and not priority:
+        await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
         return "user_interacting"
 
     # Deliverable: IDLE_READY, UNKNOWN, or priority-bypassed COPY_MODE/USER_INTERACTING

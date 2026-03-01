@@ -81,7 +81,10 @@ async def get_failed_deliveries(
     result = await conn.execute(
         text(
             """SELECT d.* FROM deliveries d
-               WHERE d.outcome IN ('offline', 'delivery_failed', 'deferred')
+               WHERE d.outcome IN (
+                   'offline', 'delivery_failed', 'deferred',
+                   'copy_mode', 'user_interacting'
+               )
                  AND NOT EXISTS (
                    SELECT 1 FROM deliveries d2
                    WHERE d2.issue_number = d.issue_number

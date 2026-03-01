@@ -67,6 +67,19 @@ class TestDeliveryTracking:
         outcomes = {r["outcome"] for r in failed}
         assert outcomes == {"offline", "delivery_failed", "deferred"}
 
+    async def test_get_failed_deliveries_includes_transient(self, db):
+        """Transient outcomes (copy_mode, user_interacting) are included in retry query."""
+        await db.record_delivery(1, "ike", "ike", "delivered")
+        await db.record_delivery(2, "feynman", "feynman", "copy_mode")
+        await db.record_delivery(3, "leo", "leo", "user_interacting")
+
+        failed = await db.get_failed_deliveries()
+        assert len(failed) == 2
+        outcomes = {r["outcome"] for r in failed}
+        assert outcomes == {"copy_mode", "user_interacting"}
+        # 'delivered' must not appear
+        assert "delivered" not in outcomes
+
     async def test_get_failed_deliveries_excludes_superseded(self, db):
         """A failed delivery superseded by a later retried/delivered row is excluded."""
         await db.record_delivery(42, "ike", "ike", "offline")

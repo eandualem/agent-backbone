@@ -142,5 +142,3 @@ class TestGetFileContent:
 
         assert resp.status_code == 404
         assert "not found" in resp.json()["detail"].lower()
-
-

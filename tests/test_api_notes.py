@@ -102,5 +102,3 @@ class TestGetNote:
         resp = await client.get("/api/notes/../../etc/passwd", headers=auth_headers)
 
         assert resp.status_code in (403, 404)
-
-

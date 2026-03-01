@@ -29,7 +29,7 @@ from agent_backbone.services.monitoring import (
     check_for_unexpected_offline,
     monitor_agents,
 )
-from agent_backbone.services.registry import EntityEntry, EntityRegistry
+from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
 from agent_backbone.services.state import AgentState, StateSnapshot
 
 # Patch target prefixes (keep patch() lines under 100 chars)
@@ -827,3 +827,206 @@ class TestPlanWaitingMonitor:
         assert "Add caching" in call_args[2]
         # feynman deferred (plan_waiting), ike delivered or no_pending
         assert result.get("feynman") == "deferred"
+
+
+class TestCodingAgentSweep:
+    """Tests for the coding-agent sweep in deliver_pending_issues.
+
+    After processing named entities, the monitor identifies coding-agent
+    sessions (active sessions minus named entity sessions minus service
+    sessions), validates them against known repo names, fetches
+    for:coding-agent issues, and delivers matching issues by repo name
+    extracted from the title.
+    """
+
+    def _make_coding_config(self) -> BackboneConfig:
+        """Build config with one named entity (ike) and one known repo."""
+        registry = _make_registry(["ike"])
+        registry.add_repo(RepoInfo(org="WF", name="agent-backbone", path="/some/path"))
+        return _make_monitor_config(registry=registry)
+
+    @pytest.mark.asyncio
+    async def test_coding_agent_sweep_delivers(self):
+        """Coding-agent sweep delivers matching issue to idle coding-agent session."""
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+        coding_issue = IssueData(
+            number=100,
+            title="[task] agent-backbone: Fix delivery",
+            state="open",
+            labels=ParsedLabels(sender="bell", targets=["coding-agent"], issue_type="task"),
+        )
+
+        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+            return idle_snapshot
+
+        async def mock_check_pending(config, entity, gh):
+            if entity == "coding-agent":
+                return [coding_issue]
+            return []
+
+        config = self._make_coding_config()
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike", "agent-backbone"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch(
+                f"{_PEN}.check_pending_issues",
+                side_effect=mock_check_pending,
+            ),
+            patch(
+                f"{_PEN}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+            patch(f"{_PEN}.has_commented_on_issue", return_value=False),
+        ):
+            result = await monitor_agents.fn()
+
+        assert result["coding:agent-backbone"] == "delivered_#100"
+        # Verify safe_deliver was called with the coding-agent session
+        mock_deliver.assert_called()
+        deliver_calls = [c for c in mock_deliver.call_args_list if c[0][0] == "agent-backbone"]
+        assert len(deliver_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_coding_agent_sweep_skips_busy(self):
+        """Coding-agent sweep defers delivery when coding-agent session is busy."""
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+        busy_snapshot = StateSnapshot(
+            state=AgentState.BUSY,
+            started_at=time.time() - 60,
+            source="push",
+        )
+        coding_issue = IssueData(
+            number=100,
+            title="[task] agent-backbone: Fix delivery",
+            state="open",
+            labels=ParsedLabels(sender="bell", targets=["coding-agent"], issue_type="task"),
+        )
+
+        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+            if session == "agent-backbone":
+                return busy_snapshot
+            return idle_snapshot
+
+        async def mock_check_pending(config, entity, gh):
+            if entity == "coding-agent":
+                return [coding_issue]
+            return []
+
+        config = self._make_coding_config()
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike", "agent-backbone"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch(
+                f"{_PEN}.check_pending_issues",
+                side_effect=mock_check_pending,
+            ),
+            patch(
+                f"{_PEN}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+            patch(f"{_PEN}.has_commented_on_issue", return_value=False),
+        ):
+            result = await monitor_agents.fn()
+
+        assert result["coding:agent-backbone"] == "deferred"
+        # safe_deliver should NOT have been called for agent-backbone
+        deliver_calls = [c for c in mock_deliver.call_args_list if c[0][0] == "agent-backbone"]
+        assert len(deliver_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_coding_agent_sweep_skips_no_match(self):
+        """Coding-agent sweep reports no_deliverable when no issue title matches the session."""
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+        # Issue targets a different repo — not agent-backbone
+        non_matching_issue = IssueData(
+            number=100,
+            title="[task] other-repo: Fix something",
+            state="open",
+            labels=ParsedLabels(sender="bell", targets=["coding-agent"], issue_type="task"),
+        )
+
+        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+            return idle_snapshot
+
+        async def mock_check_pending(config, entity, gh):
+            if entity == "coding-agent":
+                return [non_matching_issue]
+            return []
+
+        config = self._make_coding_config()
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike", "agent-backbone"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch(
+                f"{_PEN}.check_pending_issues",
+                side_effect=mock_check_pending,
+            ),
+            patch(
+                f"{_PEN}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+            patch(f"{_PEN}.has_commented_on_issue", return_value=False),
+        ):
+            result = await monitor_agents.fn()
+
+        assert result["coding:agent-backbone"] == "no_deliverable"
+        # safe_deliver should NOT have been called for agent-backbone
+        deliver_calls = [c for c in mock_deliver.call_args_list if c[0][0] == "agent-backbone"]
+        assert len(deliver_calls) == 0
