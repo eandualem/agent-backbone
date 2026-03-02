@@ -37,19 +37,22 @@ def init(
 
 def get_config() -> BackboneConfig:
     """Return the shared BackboneConfig instance."""
-    assert _config is not None, "Flow services not initialized — call init() during lifespan"
+    if _config is None:
+        raise RuntimeError("Flow services not initialized — call init() during lifespan")
     return _config
 
 
 def get_db() -> BackboneDB:
     """Return the shared BackboneDB instance."""
-    assert _db is not None, "Flow services not initialized — call init() during lifespan"
+    if _db is None:
+        raise RuntimeError("Flow services not initialized — call init() during lifespan")
     return _db
 
 
 def get_gh() -> GitHubClient:
     """Return the shared GitHubClient instance."""
-    assert _gh is not None, "Flow services not initialized — call init() during lifespan"
+    if _gh is None:
+        raise RuntimeError("Flow services not initialized — call init() during lifespan")
     return _gh
 
 

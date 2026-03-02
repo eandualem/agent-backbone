@@ -239,8 +239,15 @@ async def graceful_close(session_name: str, timeout: float = 30.0) -> bool:
 
     Returns True if the session is gone after this call, False on error.
     """
-    # Get foreground PID
-    vars_result = await query_format_vars(session_name, "pane_pid=#{pane_pid}")
+    # Get foreground PID (with timeout to prevent indefinite hang)
+    try:
+        vars_result = await asyncio.wait_for(
+            query_format_vars(session_name, "pane_pid=#{pane_pid}"),
+            timeout=5.0,
+        )
+    except TimeoutError:
+        log.warning("Timed out querying pane_pid for '%s', falling back to kill", session_name)
+        return await stop_session(session_name)
     pid_str = vars_result.get("pane_pid", "")
     if not pid_str or not pid_str.isdigit():
         log.warning("Could not get pane_pid for '%s', falling back to kill", session_name)
@@ -261,11 +268,18 @@ async def graceful_close(session_name: str, timeout: float = 30.0) -> bool:
         log.warning("Failed to signal PID %d for '%s': %s", pid, session_name, e)
         return await stop_session(session_name)
 
-    # Poll for pane_dead
+    # Poll for pane_dead (with per-query timeout to prevent indefinite hang)
     elapsed = 0.0
     poll_interval = 0.5
     while elapsed < timeout:
-        dead_vars = await query_format_vars(session_name, "pane_dead=#{pane_dead}")
+        try:
+            dead_vars = await asyncio.wait_for(
+                query_format_vars(session_name, "pane_dead=#{pane_dead}"),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            log.warning("Timed out polling pane_dead for '%s', falling back to kill", session_name)
+            return await stop_session(session_name)
         if dead_vars.get("pane_dead") == "1":
             log.info("Process exited gracefully in '%s'", session_name)
             # Clean up the session

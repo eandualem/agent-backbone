@@ -121,7 +121,7 @@ class PtySession:
         (natural backpressure via kernel buffer). Resumes when client
         sends resume.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             while True:
                 # Wait if paused
@@ -160,11 +160,21 @@ class PtySession:
         except asyncio.CancelledError:
             return
         finally:
-            # Send sentinel to output queue
+            # Guarantee sentinel delivery — drain one slot if needed
             try:
                 self._output_queue.put_nowait(None)
             except asyncio.QueueFull:
-                pass
+                try:
+                    self._output_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    self._output_queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    log.error(
+                        "Cannot deliver PTY sentinel for '%s' — forwarding task may leak",
+                        self.session_name,
+                    )
             log.info("PTY read loop ended for '%s'", self.session_name)
 
     def write(self, data: str) -> None:
@@ -217,12 +227,12 @@ class PtySession:
             proc = self._process
             self._process = None
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._terminate_process, proc)
             _unrecord_pid(pid)
 
         # Now safe to wait for the executor — the read thread should have exited
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
             lambda: self._executor.shutdown(wait=True, cancel_futures=True),
@@ -325,9 +335,16 @@ class PtyManager:
             await session.cleanup()
 
     async def cleanup_all(self) -> None:
-        """Clean up all PTY sessions. Called from app lifespan shutdown."""
-        for session in self._sessions.values():
-            await session.cleanup()
+        """Clean up all PTY sessions concurrently. Called from app lifespan shutdown.
+
+        Uses asyncio.gather so that N sessions clean up in ~3s (worst case)
+        instead of N * 3s sequentially — prevents SIGKILL on shutdown.
+        """
+        if self._sessions:
+            await asyncio.gather(
+                *(s.cleanup() for s in self._sessions.values()),
+                return_exceptions=True,
+            )
         self._sessions.clear()
         log.info("All PTY sessions cleaned up")
 

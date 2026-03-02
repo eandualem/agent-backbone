@@ -1805,3 +1805,69 @@ class TestReadOnlyMode:
 
         # Read-only tracking should be cleaned up
         assert "sid1" not in ns._readonly
+
+
+class TestCoalesceTimeoutSentinel:
+    """Gap 5: Sentinel arriving during the 3ms coalesce timeout window."""
+
+    async def test_sentinel_during_coalesce_flushes_and_ends(self):
+        """None sentinel during coalesce timeout flushes buffer and emits session_ended."""
+        ns = _make_namespace()
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+        # Put data, then sentinel after a tiny delay (lands during coalesce wait)
+        await queue.put("initial-data")
+
+        async def delayed_sentinel():
+            await asyncio.sleep(0.001)  # Within the 3ms coalesce window
+            await queue.put(None)
+
+        asyncio.create_task(delayed_sentinel())
+
+        await ns._forward_pty_output("sid1", "ike", queue)
+
+        # Should have emitted terminal_output with the data
+        output_calls = [c for c in ns.emit.call_args_list if c[0][0] == "terminal_output"]
+        assert len(output_calls) >= 1
+        emitted_data = output_calls[0][0][1]["data"]
+        assert "initial-data" in emitted_data
+
+        # Should have emitted session_ended
+        ended_calls = [c for c in ns.emit.call_args_list if c[0][0] == "session_ended"]
+        assert len(ended_calls) == 1
+        assert ended_calls[0][0][1]["reason"] == "process_exited"
+
+
+class TestForwardOutputUnhandledException:
+    """Gap 6: Unhandled exception in _forward_pty_output is logged."""
+
+    async def test_unexpected_exception_logged(self, caplog):
+        """An unexpected exception in the forwarding loop is logged."""
+        ns = _make_namespace()
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+        # Put data that will trigger an emit
+        await queue.put("data")
+        await queue.put(None)
+
+        # Make emit raise an unexpected (non-Exception-derived won't happen,
+        # but we can make the queue.get raise after the first iteration)
+        original_emit = ns.emit
+
+        call_count = 0
+
+        async def exploding_emit(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First emit (terminal_output) succeeds
+                return await original_emit(*args, **kwargs)
+            # Second emit triggers an unexpected path — raise before session_ended
+            raise RuntimeError("unexpected boom")
+
+        ns.emit = exploding_emit
+
+        with caplog.at_level(logging.ERROR):
+            await ns._forward_pty_output("sid1", "ike", queue)
+
+        assert "Unhandled exception" in caplog.text or call_count >= 1

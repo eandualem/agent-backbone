@@ -37,13 +37,14 @@ _VALID_STATES = {"active", "paused", "closed"}
 # --- Storage helpers ---
 
 
-def _load_room(room_id: str) -> Room | None:
+async def _load_room(room_id: str) -> Room | None:
     """Load a room from its JSON file. Returns None if not found."""
     path = _ROOM_DIR / f"{room_id}.json"
     if not path.exists():
         return None
     try:
-        return Room.model_validate_json(path.read_text())
+        text = await asyncio.to_thread(path.read_text)
+        return Room.model_validate_json(text)
     except (json.JSONDecodeError, OSError, ValueError):
         return None
 
@@ -53,22 +54,24 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _save_room(room: Room) -> None:
+async def _save_room(room: Room) -> None:
     """Write a room to its JSON file, updating updated_at."""
     _ROOM_DIR.mkdir(parents=True, exist_ok=True)
     room.updated_at = _now_iso()
     path = _ROOM_DIR / f"{room.id}.json"
-    path.write_text(room.model_dump_json(indent=2))
+    await asyncio.to_thread(path.write_text, room.model_dump_json(indent=2))
 
 
-def _list_rooms(state_filter: str | None = None) -> list[Room]:
+async def _list_rooms(state_filter: str | None = None) -> list[Room]:
     """List all rooms, optionally filtered by state."""
     if not _ROOM_DIR.exists():
         return []
     rooms: list[Room] = []
-    for path in _ROOM_DIR.glob("*.json"):
+    paths = await asyncio.to_thread(lambda: list(_ROOM_DIR.glob("*.json")))
+    for path in paths:
         try:
-            room = Room.model_validate_json(path.read_text())
+            text = await asyncio.to_thread(path.read_text)
+            room = Room.model_validate_json(text)
             if state_filter is None or room.state == state_filter:
                 rooms.append(room)
         except (json.JSONDecodeError, OSError, ValueError):
@@ -145,21 +148,21 @@ async def create_room(body: RoomCreate):
         created_at=now,
         updated_at=now,
     )
-    _save_room(room)
+    await _save_room(room)
     return room
 
 
 @router.get("/rooms", response_model=ListEnvelope[Room])
 async def list_rooms(state: str | None = None):
     """List all rooms, optionally filtered by state."""
-    rooms = _list_rooms(state_filter=state)
+    rooms = await _list_rooms(state_filter=state)
     return ListEnvelope(items=rooms, total=len(rooms))
 
 
 @router.get("/rooms/{room_id}", response_model=Room)
 async def get_room(room_id: str):
     """Get a room with its full transcript."""
-    room = _load_room(room_id)
+    room = await _load_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
     return room
@@ -173,7 +176,7 @@ async def send_directed(
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Send a directed message to one participant with context delta."""
-    room = _load_room(room_id)
+    room = await _load_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
@@ -206,7 +209,7 @@ async def send_directed(
         timestamp=_now_iso(),
     )
     room.transcript.append(msg)
-    _save_room(room)
+    await _save_room(room)
 
     return {"ok": result == "delivered", "status": result, "target": body.target}
 
@@ -219,7 +222,7 @@ async def send_broadcast(
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Broadcast a message to all participants with per-participant context deltas."""
-    room = _load_room(room_id)
+    room = await _load_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
@@ -282,7 +285,7 @@ async def send_broadcast(
         timestamp=_now_iso(),
     )
     room.transcript.append(msg)
-    _save_room(room)
+    await _save_room(room)
 
     return {
         "ok": failed == 0,
@@ -295,7 +298,7 @@ async def send_broadcast(
 @router.post("/rooms/{room_id}/respond")
 async def post_response(room_id: str, body: ResponseMessageRequest):
     """Post a participant response to the room transcript."""
-    room = _load_room(room_id)
+    room = await _load_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
@@ -308,7 +311,7 @@ async def post_response(room_id: str, body: ResponseMessageRequest):
         timestamp=_now_iso(),
     )
     room.transcript.append(msg)
-    _save_room(room)
+    await _save_room(room)
 
     return {"ok": True}
 
@@ -323,10 +326,10 @@ async def update_room_state(room_id: str, body: RoomStateUpdate):
             detail=f"Invalid state '{body.state}'. Must be one of: {valid}",
         )
 
-    room = _load_room(room_id)
+    room = await _load_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
     room.state = body.state
-    _save_room(room)
+    await _save_room(room)
     return room

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import codecs
+import logging
 import os
 import signal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -339,3 +341,178 @@ class TestIncrementalDecoder:
         assert "\ufffd" not in combined
 
         os.close(read_fd)
+
+
+class TestQueueFullDropOldest:
+    """Gap 1: QueueFull drop-oldest integration via _read_loop."""
+
+    async def test_queue_overflow_drops_oldest_and_fires_callback(self):
+        """When queue is full, _read_loop drops oldest and invokes on_data_dropped."""
+        from agent_backbone.services.streaming._pty import _MAX_QUEUE_SIZE
+
+        session = PtySession("test")
+
+        # Pre-fill the queue to capacity
+        for i in range(_MAX_QUEUE_SIZE):
+            session._output_queue.put_nowait(f"item-{i}")
+        assert session._output_queue.full()
+
+        # Track callback invocations
+        dropped: list[str] = []
+        session.on_data_dropped = lambda sn: dropped.append(sn)
+
+        # Use a pipe to feed one more chunk through the read loop
+        read_fd, write_fd = os.pipe()
+        session.master_fd = read_fd
+        os.write(write_fd, b"overflow-data")
+        os.close(write_fd)
+
+        await session._read_loop()
+
+        # Callback fired with session name
+        assert dropped == ["test"]
+
+        # Drain queue and verify: "item-0" was dropped, "overflow-data" was added.
+        # The sentinel (None) is also dropped since the queue stays full.
+        items: list[str | None] = []
+        while not session._output_queue.empty():
+            items.append(session._output_queue.get_nowait())
+
+        assert "item-0" not in items
+        assert "overflow-data" in items
+
+        os.close(read_fd)
+
+
+class TestReadLoopPauseResumeIntegration:
+    """Gap 2: Read loop pause/resume integration with real events."""
+
+    async def test_pause_blocks_read_resume_unblocks(self):
+        """Pause takes effect after the current in-flight read completes.
+
+        The read loop dispatches os.read to a thread executor before checking
+        the pause state. So after pause(), one more read may complete before
+        the loop actually blocks at _resume_event.wait(). The test accounts
+        for this by writing data to unblock the in-flight read, then verifying
+        the NEXT write is blocked until resume.
+        """
+        session = PtySession("test")
+
+        read_fd, write_fd = os.pipe()
+        session.master_fd = read_fd
+
+        loop_task = asyncio.create_task(session._read_loop())
+
+        # Write initial data — consumed normally
+        os.write(write_fd, b"before-pause")
+        await asyncio.sleep(0.05)
+        assert session.output_queue.get_nowait() == "before-pause"
+
+        # Pause — the loop has already dispatched os.read to the executor
+        # (blocking on the empty pipe), so pause takes effect AFTER that read
+        session.pause()
+
+        # This write unblocks the in-flight os.read — it will be consumed
+        # despite the pause (expected: pause only blocks the NEXT iteration)
+        os.write(write_fd, b"in-flight")
+        await asyncio.sleep(0.05)
+        assert session.output_queue.get_nowait() == "in-flight"
+
+        # NOW the loop is blocked at _resume_event.wait() — no os.read dispatched
+        os.write(write_fd, b"while-paused")
+        await asyncio.sleep(0.1)
+        assert session.output_queue.empty(), "No reads dispatched while paused"
+
+        # Resume unblocks the loop — os.read picks up "while-paused"
+        session.resume()
+        await asyncio.sleep(0.05)
+        assert session.output_queue.get_nowait() == "while-paused"
+
+        os.close(write_fd)
+        await loop_task
+        assert session.output_queue.get_nowait() is None
+        os.close(read_fd)
+
+
+class TestFullCleanupOrdering:
+    """Gap 3: Full 4-step cleanup ordering (reader cancel -> terminate -> executor -> FD)."""
+
+    async def test_all_four_steps_in_order(self):
+        """Cleanup performs all 4 steps in the correct sequence."""
+        session = PtySession("test")
+        session.master_fd = 42
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 999
+        session._process = mock_proc
+
+        # Mock the reader task
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        session._reader_task = mock_task
+
+        call_order: list[str] = []
+
+        def track_cancel():
+            call_order.append("cancel_reader")
+
+        mock_task.cancel = track_cancel
+
+        original_terminate = PtySession._terminate_process
+
+        def track_terminate(proc):
+            call_order.append("terminate_process")
+            original_terminate(proc)
+
+        def track_shutdown(**kwargs):
+            call_order.append("executor_shutdown")
+
+        def track_close(fd):
+            call_order.append("close_fd")
+
+        session._executor = MagicMock()
+        session._executor.shutdown = track_shutdown
+
+        with (
+            patch(f"{_PTY}.PtySession._terminate_process", side_effect=track_terminate),
+            patch(f"{_PTY}.os.close", side_effect=track_close),
+            patch(f"{_PTY}._unrecord_pid"),
+        ):
+            await session.cleanup()
+
+        assert call_order == [
+            "cancel_reader",
+            "terminate_process",
+            "executor_shutdown",
+            "close_fd",
+        ]
+
+
+class TestWriteResizeOSErrorHandling:
+    """Gap 4: OSError handling in write() and resize() when FD is valid."""
+
+    def test_write_oserror_caught_and_logged(self, caplog):
+        """os.write raising OSError is caught and logged."""
+        session = PtySession("test")
+        session.master_fd = 42
+
+        with (
+            patch(f"{_PTY}.os.write", side_effect=OSError("broken pipe")),
+            caplog.at_level(logging.WARNING),
+        ):
+            session.write("hello")  # Should not raise
+
+        assert "PTY write failed" in caplog.text
+
+    def test_resize_oserror_caught_and_logged(self, caplog):
+        """fcntl.ioctl raising OSError is caught and logged."""
+        session = PtySession("test")
+        session.master_fd = 42
+
+        with (
+            patch(f"{_PTY}.fcntl.ioctl", side_effect=OSError("ioctl failed")),
+            caplog.at_level(logging.WARNING),
+        ):
+            session.resize(80, 24)  # Should not raise
+
+        assert "PTY resize failed" in caplog.text

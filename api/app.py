@@ -64,29 +64,30 @@ async def lifespan(app: FastAPI):
     app.state.onboarding_service = OnboardingService()
     app.state.workflows_service = WorkflowsService()
 
-    await lifecycle.start_all()
+    try:
+        await lifecycle.start_all()
 
-    # Populate the flow service locator for scheduled/cron flows
-    from agent_backbone.services._locator import init as init_flow_services
+        # Populate the flow service locator for scheduled/cron flows
+        from agent_backbone.services._locator import init as init_flow_services
 
-    init_flow_services(config=config, db=app.state.db, gh=app.state.github)
+        init_flow_services(config=config, db=app.state.db, gh=app.state.github)
 
-    log.info("Backbone API started — port %d", config.gateway.port)
-    yield
+        log.info("Backbone API started — port %d", config.gateway.port)
+        yield
+    finally:
+        await lifecycle.stop_all()
 
-    await lifecycle.stop_all()
+        # Non-lifecycle cleanup (stream broker, PTY)
+        from api.broker import get_broker_instance
 
-    # Non-lifecycle cleanup (stream broker, PTY)
-    from api.broker import get_broker_instance
+        broker = get_broker_instance()
+        if broker is not None:
+            await broker.shutdown()
 
-    broker = get_broker_instance()
-    if broker is not None:
-        await broker.shutdown()
+        from api.socketio_server import get_pty_manager
 
-    from api.socketio_server import get_pty_manager
-
-    await get_pty_manager().cleanup_all()
-    log.info("Backbone API shutting down")
+        await get_pty_manager().cleanup_all()
+        log.info("Backbone API shutting down")
 
 
 def create_app() -> socketio.ASGIApp:

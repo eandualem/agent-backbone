@@ -11,18 +11,18 @@ from agent_backbone.services._locator import get_config, get_db, get_gh, init, r
 
 class TestServiceLocator:
     def test_uninitialized_config_raises(self):
-        """get_config() raises AssertionError before init()."""
-        with pytest.raises(AssertionError, match="not initialized"):
+        """get_config() raises RuntimeError before init()."""
+        with pytest.raises(RuntimeError, match="not initialized"):
             get_config()
 
     def test_uninitialized_db_raises(self):
-        """get_db() raises AssertionError before init()."""
-        with pytest.raises(AssertionError, match="not initialized"):
+        """get_db() raises RuntimeError before init()."""
+        with pytest.raises(RuntimeError, match="not initialized"):
             get_db()
 
     def test_uninitialized_gh_raises(self):
-        """get_gh() raises AssertionError before init()."""
-        with pytest.raises(AssertionError, match="not initialized"):
+        """get_gh() raises RuntimeError before init()."""
+        with pytest.raises(RuntimeError, match="not initialized"):
             get_gh()
 
     def test_init_and_get(self):
@@ -42,7 +42,7 @@ class TestServiceLocator:
         init(config=MagicMock(), db=MagicMock(), gh=MagicMock())
         reset()
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(RuntimeError):
             get_config()
 
     def test_init_reset_init_cycle(self):

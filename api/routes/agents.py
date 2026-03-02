@@ -153,6 +153,7 @@ async def _build_enriched_agent(
 _agents_cache: list[EnrichedAgent] = []
 _agents_cache_ts: float = 0
 _AGENTS_CACHE_TTL = 5.0
+_agents_cache_lock = asyncio.Lock()
 
 
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
@@ -167,69 +168,75 @@ async def list_agents(
     if now - _agents_cache_ts < _AGENTS_CACHE_TTL and _agents_cache:
         return ListEnvelope(items=_agents_cache, total=len(_agents_cache))
 
-    # Fetch rich session info once — single subprocess call
-    rich_sessions = await tmux_svc.list_sessions_rich()
-    tmux_lookup = {s["name"]: s for s in rich_sessions}
-    active_sessions = set(tmux_lookup.keys())
+    async with _agents_cache_lock:
+        # Re-check after acquiring lock (another request may have populated)
+        now = time.monotonic()
+        if now - _agents_cache_ts < _AGENTS_CACHE_TTL and _agents_cache:
+            return ListEnvelope(items=_agents_cache, total=len(_agents_cache))
 
-    # Collect all coroutines, then execute concurrently with asyncio.gather
-    coros: list = []
+        # Fetch rich session info once — single subprocess call
+        rich_sessions = await tmux_svc.list_sessions_rich()
+        tmux_lookup = {s["name"]: s for s in rich_sessions}
+        active_sessions = set(tmux_lookup.keys())
 
-    # Named entities (skip service entities — they have no tmux sessions)
-    for entity, session in config.registry.sessions_map.items():
-        reg_entry = config.registry.entities.get(entity)
-        if reg_entry and reg_entry.entity_type == "service":
-            continue
-        coros.append(
-            _build_enriched_agent(
-                session,
-                entity,
-                config,
-                active_sessions,
-                state_svc,
-                tmux_lookup.get(session),
-                agent_type="named_entity",
-            )
-        )
+        # Collect all coroutines, then execute concurrently with asyncio.gather
+        coros: list = []
 
-    # Discover coding agents from tmux sessions (exclude services)
-    named_sessions = set(config.registry.sessions_map.values())
-    service_sessions = config.entities.service_sessions
-    seen_coding: set[str] = set()
-    for session in active_sessions:
-        if session not in named_sessions and session not in service_sessions:
+        # Named entities (skip service entities — they have no tmux sessions)
+        for entity, session in config.registry.sessions_map.items():
+            reg_entry = config.registry.entities.get(entity)
+            if reg_entry and reg_entry.entity_type == "service":
+                continue
             coros.append(
                 _build_enriched_agent(
                     session,
-                    session,
+                    entity,
                     config,
                     active_sessions,
                     state_svc,
                     tmux_lookup.get(session),
-                    agent_type="coding_agent",
-                )
-            )
-            seen_coding.add(session)
-
-    # Include all known repos from filesystem scan (offline ones too)
-    for repo in config.registry.repos:
-        if repo.name not in seen_coding and repo.name not in named_sessions:
-            coros.append(
-                _build_enriched_agent(
-                    repo.name,
-                    repo.name,
-                    config,
-                    active_sessions,
-                    state_svc,
-                    agent_type="coding_agent",
+                    agent_type="named_entity",
                 )
             )
 
-    agents: list[EnrichedAgent] = list(await asyncio.gather(*coros))
+        # Discover coding agents from tmux sessions (exclude services)
+        named_sessions = set(config.registry.sessions_map.values())
+        service_sessions = config.entities.service_sessions
+        seen_coding: set[str] = set()
+        for session in active_sessions:
+            if session not in named_sessions and session not in service_sessions:
+                coros.append(
+                    _build_enriched_agent(
+                        session,
+                        session,
+                        config,
+                        active_sessions,
+                        state_svc,
+                        tmux_lookup.get(session),
+                        agent_type="coding_agent",
+                    )
+                )
+                seen_coding.add(session)
 
-    _agents_cache = agents
-    _agents_cache_ts = now
-    return ListEnvelope(items=agents, total=len(agents))
+        # Include all known repos from filesystem scan (offline ones too)
+        for repo in config.registry.repos:
+            if repo.name not in seen_coding and repo.name not in named_sessions:
+                coros.append(
+                    _build_enriched_agent(
+                        repo.name,
+                        repo.name,
+                        config,
+                        active_sessions,
+                        state_svc,
+                        agent_type="coding_agent",
+                    )
+                )
+
+        agents: list[EnrichedAgent] = list(await asyncio.gather(*coros))
+
+        _agents_cache = agents
+        _agents_cache_ts = now
+        return ListEnvelope(items=agents, total=len(agents))
 
 
 @router.get("/agents/{session}/state", response_model=AgentStateDetail)

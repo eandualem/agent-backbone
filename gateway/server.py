@@ -18,10 +18,11 @@ def main() -> None:
     )
     import uvicorn
 
-    from agent_backbone.config import BackboneConfig
+    from agent_backbone.settings import AppSettings
     from api.app import create_app
 
-    config = BackboneConfig.from_toml()
+    settings = AppSettings()
+    config = settings.build_config()
     app = create_app()
     uvicorn.run(app, host="127.0.0.1", port=config.gateway.port, log_level="info")
 
