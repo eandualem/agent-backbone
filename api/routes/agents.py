@@ -13,9 +13,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.state import StateService
-from agent_backbone.services.tmux import TmuxService
+from agent_backbone.services.tmux import TmuxService, resolve_agent_dir
 from api.deps import get_config, get_state_service, get_tmux_service
-from api.models import AgentStateDetail, EnrichedAgent, ListEnvelope, RuntimeInfo
+from api.models import (
+    AgentStartRequest,
+    AgentStartResponse,
+    AgentStateDetail,
+    AgentStopResponse,
+    EnrichedAgent,
+    ListEnvelope,
+    RuntimeInfo,
+)
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +140,7 @@ async def _build_enriched_agent(
         tmux_created=tmux_created,
         tmux_attached=tmux_attached,
         tmux_windows=tmux_windows,
+        state_since=snapshot.timestamp if snapshot.timestamp else None,
     )
 
 
@@ -224,6 +233,7 @@ async def get_agent_state_endpoint(
     state_svc: StateService = Depends(get_state_service),
 ):
     """Get detailed state for a specific agent session."""
+    session = session.lower()
     snapshot = await state_svc.get_state(session)
     return AgentStateDetail(
         session=session,
@@ -250,6 +260,82 @@ async def list_runtimes():
     ]
 
 
+@router.post("/agents/{session}/start", response_model=AgentStartResponse)
+async def start_agent(
+    session: str,
+    body: AgentStartRequest | None = None,
+    config: BackboneConfig = Depends(get_config),
+    tmux_svc: TmuxService = Depends(get_tmux_service),
+):
+    """Start an agent tmux session with a specified runtime."""
+    session = session.lower()
+    req = body or AgentStartRequest()
+
+    # Validate runtime
+    rt = _RUNTIMES.get(req.runtime)
+    if rt is None:
+        raise HTTPException(status_code=400, detail=f"Unknown runtime: {req.runtime}")
+
+    # Check binary availability (shell has no binary)
+    if rt["command"] is not None and not rt["resolved_path"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Runtime '{req.runtime}' binary not found: {rt['command']}",
+        )
+
+    # Idempotent: if session already exists, return success
+    if await tmux_svc.session_exists(session):
+        return AgentStartResponse(
+            ok=True,
+            session=session,
+            runtime=req.runtime,
+            model=req.model,
+            already_existed=True,
+        )
+
+    # Resolve working directory
+    working_dir = req.working_directory or resolve_agent_dir(session, config.registry)
+    if not working_dir:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot resolve working directory — provide working_directory explicitly",
+        )
+
+    # Build command list
+    command: list[str] | None = None
+    if rt["command"] is not None:
+        resolved = rt["resolved_path"]
+        command = [resolved]
+        if req.model:
+            command.extend(["--model", req.model])
+        if req.resume:
+            command.append("--resume")
+
+    ok = await tmux_svc.start_session(
+        session,
+        working_dir=working_dir,
+        command=command,
+    )
+    return AgentStartResponse(
+        ok=ok,
+        session=session,
+        working_directory=working_dir,
+        runtime=req.runtime,
+        model=req.model if rt["command"] is not None else None,
+    )
+
+
+@router.post("/agents/{session}/stop", response_model=AgentStopResponse)
+async def stop_agent(
+    session: str,
+    tmux_svc: TmuxService = Depends(get_tmux_service),
+):
+    """Stop an agent tmux session."""
+    session = session.lower()
+    ok = await tmux_svc.stop_session(session)
+    return AgentStopResponse(ok=ok, session=session)
+
+
 @router.get("/sessions", response_model=list[str])
 async def get_sessions(tmux_svc: TmuxService = Depends(get_tmux_service)):
     """List all active tmux sessions."""
@@ -263,6 +349,7 @@ async def get_terminal_output(
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Capture recent terminal output from a tmux session."""
+    name = name.lower()
     output = await tmux_svc.capture_pane(name, lines=lines)
     if not output and not await tmux_svc.session_exists(name):
         raise HTTPException(status_code=404, detail=f"Session '{name}' not found")

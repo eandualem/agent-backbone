@@ -136,9 +136,11 @@ class PtySession:
                 log.warning("PTY write failed for '%s'", self.session_name)
 
     def resize(self, cols: int, rows: int) -> None:
-        """Resize PTY — sends SIGWINCH to tmux attach via TIOCSWINSZ.
+        """Resize PTY via TIOCSWINSZ ioctl — sends SIGWINCH to tmux attach.
 
-        Only affects this tmux client's view, not other clients (Ghostty).
+        This only resizes the PTY file descriptor. The caller is responsible
+        for also calling tmux resize-window if the tmux window itself should
+        change dimensions.
         """
         if self.master_fd is not None:
             try:

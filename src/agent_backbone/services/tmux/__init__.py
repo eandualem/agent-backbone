@@ -2,6 +2,8 @@
 
 from agent_backbone.services.tmux._core import (
     capture_pane,
+    get_window_size,
+    resize_window,
     send_keys,
     send_message,
     session_exists,
@@ -45,6 +47,7 @@ __all__ = [
     "WindowInfo",
     "capture_pane",
     "close_pane",
+    "get_window_size",
     "close_window",
     "create_layout",
     "create_window",
@@ -56,6 +59,7 @@ __all__ = [
     "query_format_vars",
     "rename_window",
     "resize_pane",
+    "resize_window",
     "resolve_agent_dir",
     "select_window",
     "send_keys",

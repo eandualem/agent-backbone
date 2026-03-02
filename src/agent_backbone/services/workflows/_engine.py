@@ -58,11 +58,11 @@ async def execute_workflow_steps(
         try:
             if action == "start":
                 working_dir = step.get("working_dir") or resolve_agent_dir(session)
-                command = step.get("command", "claude")
+                command_str = step.get("command", "claude")
                 ok = await start_session(
                     session,
                     working_dir=working_dir or None,
-                    command=command,
+                    command=[command_str] if command_str else None,
                 )
                 detail = "started" if ok else "failed to start"
             elif action == "stop":

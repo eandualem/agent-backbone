@@ -19,7 +19,13 @@ import time
 import socketio
 
 from agent_backbone.services.streaming import PtyManager
-from agent_backbone.services.tmux import capture_pane, list_panes, session_exists
+from agent_backbone.services.tmux import (
+    capture_pane,
+    get_window_size,
+    list_panes,
+    resize_window,
+    session_exists,
+)
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +77,10 @@ class TerminalNamespace(socketio.AsyncNamespace):
         self._subscriptions: dict[str, dict[str, asyncio.Task]] = {}
         # Rate limiting: (sid, session) -> list of timestamps
         self._input_timestamps: dict[tuple[str, str], list[float]] = {}
+        # Per-client dimensions: session_name -> {sid: (cols, rows)}
+        self._client_dims: dict[str, dict[str, tuple[int, int]]] = {}
+        # Original tmux dimensions before any browser client joined: session_name -> (cols, rows)
+        self._original_dims: dict[str, tuple[int, int]] = {}
 
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
         """Validate API key on connection.
@@ -126,16 +136,35 @@ class TerminalNamespace(socketio.AsyncNamespace):
             cols = int(active_pane["pane_width"]) if active_pane else 80
             rows = int(active_pane["pane_height"]) if active_pane else 24
 
-        # Get or create PTY session, then resize to match this client
+        # Save original tmux window dimensions before any browser client touches them
+        if session_name not in self._original_dims:
+            orig = await get_window_size(session_name)
+            if orig is not None:
+                self._original_dims[session_name] = orig
+
+        # Track this client's dimensions
+        self._client_dims.setdefault(session_name, {})[sid] = (cols, rows)
+
+        # Compute effective dimensions (minimum across all connected clients)
+        effective = self._compute_effective_dims(session_name)
+        eff_cols, eff_rows = effective if effective else (cols, rows)
+
+        # Get or create PTY session, then resize to match effective dimensions
         mgr = get_pty_manager()
-        pty_session = mgr.get_or_create(session_name, cols, rows)
-        pty_session.resize(cols, rows)
+        pty_session = mgr.get_or_create(session_name, eff_cols, eff_rows)
+        pty_session.resize(eff_cols, eff_rows)
+
+        # Explicitly resize the tmux window so content reflows to match
+        # the browser terminal dimensions (PTY TIOCSWINSZ alone doesn't
+        # reliably resize when other tmux clients are attached)
+        await resize_window(session_name, eff_cols, eff_rows)
+
         queue = pty_session.subscribe(sid)
 
         # Enter Socket.IO room
         await self.enter_room(sid, f"session:{session_name}")
 
-        # Brief delay for tmux to process SIGWINCH before snapshot
+        # Brief delay for tmux to process resize before snapshot
         await asyncio.sleep(0.05)
 
         # Send initial snapshot with pane dimensions
@@ -234,10 +263,19 @@ class TerminalNamespace(socketio.AsyncNamespace):
         except (ValueError, TypeError):
             return
 
+        # Update this client's tracked dimensions
+        if session_name in self._client_dims:
+            self._client_dims[session_name][sid] = (clamped_cols, clamped_rows)
+
+        # Compute effective dimensions (minimum across all connected clients)
+        effective = self._compute_effective_dims(session_name)
+        eff_cols, eff_rows = effective if effective else (clamped_cols, clamped_rows)
+
         mgr = get_pty_manager()
         pty_session = mgr.get(session_name)
         if pty_session:
-            pty_session.resize(clamped_cols, clamped_rows)
+            pty_session.resize(eff_cols, eff_rows)
+            await resize_window(session_name, eff_cols, eff_rows)
 
     async def on_disconnect(self, sid: str) -> None:
         """Clean up all subscriptions for a disconnecting client."""
@@ -267,9 +305,37 @@ class TerminalNamespace(socketio.AsyncNamespace):
             if pty_session.subscriber_count == 0:
                 mgr.remove(session_name)
 
+        # Remove this client's dimension tracking
+        session_clients = self._client_dims.get(session_name, {})
+        session_clients.pop(sid, None)
+
+        if not session_clients:
+            # Last browser client left — restore original tmux dimensions
+            self._client_dims.pop(session_name, None)
+            orig = self._original_dims.pop(session_name, None)
+            if orig is not None:
+                await resize_window(session_name, orig[0], orig[1])
+        else:
+            # Other clients remain — recompute effective dimensions
+            effective = self._compute_effective_dims(session_name)
+            if effective is not None:
+                pty_session = mgr.get(session_name)
+                if pty_session:
+                    pty_session.resize(effective[0], effective[1])
+                await resize_window(session_name, effective[0], effective[1])
+
         await self.leave_room(sid, f"session:{session_name}")
         self._input_timestamps.pop((sid, session_name), None)
         log.info("sid=%s left session '%s'", sid, session_name)
+
+    def _compute_effective_dims(self, session_name: str) -> tuple[int, int] | None:
+        """Compute effective dimensions as minimum across all clients for a session."""
+        clients = self._client_dims.get(session_name, {})
+        if not clients:
+            return None
+        min_cols = min(c for c, _ in clients.values())
+        min_rows = min(r for _, r in clients.values())
+        return min_cols, min_rows
 
     def _is_rate_limited(self, sid: str, session_name: str) -> bool:
         """Check if input from this sid+session exceeds the rate limit."""

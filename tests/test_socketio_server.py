@@ -126,6 +126,14 @@ class TestOnJoin:
             patch("api.socketio_server.get_pty_manager", return_value=mgr),
             patch("api.socketio_server.capture_pane", new_callable=AsyncMock) as mock_capture,
             patch("api.socketio_server.list_panes", new_callable=AsyncMock) as mock_panes,
+            patch(
+                "api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True
+            ) as mock_resize_win,
+            patch(
+                "api.socketio_server.get_window_size",
+                new_callable=AsyncMock,
+                return_value=(200, 50),
+            ),
         ):
             mock_capture.return_value = "$ hello world\n"
             mock_panes.return_value = [mock_pane]
@@ -136,6 +144,9 @@ class TestOnJoin:
 
             # Should have explicitly resized PTY
             pty_session.resize.assert_called_once_with(120, 40)
+
+            # Should have called tmux resize-window
+            mock_resize_win.assert_awaited_once_with("ike", 120, 40)
 
             # Should have entered room
             ns.enter_room.assert_called_once_with("sid1", "session:ike")
@@ -171,6 +182,14 @@ class TestOnJoin:
             patch("api.socketio_server.get_pty_manager", return_value=mgr),
             patch("api.socketio_server.capture_pane", new_callable=AsyncMock) as mock_capture,
             patch("api.socketio_server.list_panes", new_callable=AsyncMock) as mock_panes,
+            patch(
+                "api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True
+            ) as mock_resize_win,
+            patch(
+                "api.socketio_server.get_window_size",
+                new_callable=AsyncMock,
+                return_value=(200, 50),
+            ),
         ):
             mock_capture.return_value = "$ hello\n"
             # list_panes should NOT be called when client provides dimensions
@@ -179,6 +198,7 @@ class TestOnJoin:
             mock_panes.assert_not_called()
             mgr.get_or_create.assert_called_once_with("ike", 160, 35)
             pty_session.resize.assert_called_once_with(160, 35)
+            mock_resize_win.assert_awaited_once_with("ike", 160, 35)
 
             snapshot_calls = [c for c in ns.emit.call_args_list if c[0][0] == "snapshot"]
             payload = snapshot_calls[0][0][1]
@@ -202,11 +222,20 @@ class TestOnJoin:
             patch("api.socketio_server.session_exists", new_callable=AsyncMock, return_value=True),
             patch("api.socketio_server.get_pty_manager", return_value=mgr),
             patch("api.socketio_server.capture_pane", new_callable=AsyncMock, return_value=""),
+            patch(
+                "api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True
+            ) as mock_resize_win,
+            patch(
+                "api.socketio_server.get_window_size",
+                new_callable=AsyncMock,
+                return_value=(200, 50),
+            ),
         ):
             await ns.on_join("sid1", {"session": "ike", "cols": 9999, "rows": 0})
 
             mgr.get_or_create.assert_called_once_with("ike", MAX_COLS, MIN_ROWS)
             pty_session.resize.assert_called_once_with(MAX_COLS, MIN_ROWS)
+            mock_resize_win.assert_awaited_once_with("ike", MAX_COLS, MIN_ROWS)
 
             await asyncio.sleep(0.15)
 
@@ -253,17 +282,23 @@ class TestOnResize:
         await ns.on_resize("sid1", {"session": "ike"})
         ns.emit.assert_not_awaited()
 
-    async def test_resize_calls_pty_resize(self):
-        """Calls PTY resize with TIOCSWINSZ."""
+    async def test_resize_calls_pty_and_tmux_resize(self):
+        """Calls PTY resize with TIOCSWINSZ and tmux resize-window."""
         ns = _make_namespace()
         ns._subscriptions["sid1"] = {"ike": MagicMock()}
 
         pty_session = _mock_pty_session()
         mgr = _mock_pty_manager(pty_session)
 
-        with patch("api.socketio_server.get_pty_manager", return_value=mgr):
+        with (
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch(
+                "api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True
+            ) as mock_resize_win,
+        ):
             await ns.on_resize("sid1", {"session": "ike", "cols": 140, "rows": 35})
             pty_session.resize.assert_called_once_with(140, 35)
+            mock_resize_win.assert_awaited_once_with("ike", 140, 35)
             ns.emit.assert_not_awaited()
 
 
@@ -544,3 +579,194 @@ class TestOutputBackpressure:
         second_call = ns.emit.call_args_list[1]
         assert second_call[0][0] == "terminal_output"
         assert second_call[0][1] == {"session": "ike", "data": "message2"}
+
+
+class TestDimensionTracking:
+    """Per-client dimension tracking, original dims save/restore, min-dims strategy."""
+
+    async def _join_client(self, ns, sid, session_name, cols, rows, mgr, pty_session):
+        """Helper: join a client with given dimensions, mocking all dependencies."""
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        await queue.put(None)
+        pty_session.subscribe.return_value = queue
+
+        with (
+            patch("api.socketio_server.session_exists", new_callable=AsyncMock, return_value=True),
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch("api.socketio_server.capture_pane", new_callable=AsyncMock, return_value=""),
+            patch("api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True),
+            patch(
+                "api.socketio_server.get_window_size",
+                new_callable=AsyncMock,
+                return_value=(200, 50),
+            ),
+        ):
+            await ns.on_join(sid, {"session": session_name, "cols": cols, "rows": rows})
+            await asyncio.sleep(0.1)
+
+    async def test_join_saves_original_dims(self):
+        """First join queries and stores original tmux window dimensions."""
+        ns = _make_namespace()
+        pty_session = _mock_pty_session()
+        mgr = _mock_pty_manager(pty_session)
+
+        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
+
+        assert ns._original_dims["ike"] == (200, 50)
+        assert ns._client_dims["ike"]["sid1"] == (160, 35)
+
+    async def test_join_second_client_no_re_query(self):
+        """Second join to same session does not re-query original dims."""
+        ns = _make_namespace()
+        pty_session = _mock_pty_session()
+        mgr = _mock_pty_manager(pty_session)
+
+        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
+        assert ns._original_dims["ike"] == (200, 50)
+
+        # Manually set original_dims to a different value to prove second join doesn't overwrite
+        ns._original_dims["ike"] = (200, 50)
+
+        await self._join_client(ns, "sid2", "ike", 140, 30, mgr, pty_session)
+
+        # Original dims should still be from first join
+        assert ns._original_dims["ike"] == (200, 50)
+        # Both clients should be tracked
+        assert "sid1" in ns._client_dims["ike"]
+        assert "sid2" in ns._client_dims["ike"]
+
+    async def test_multi_client_uses_minimum_dims(self):
+        """Two clients at different sizes uses min(cols) x min(rows)."""
+        ns = _make_namespace()
+        pty_session = _mock_pty_session()
+        mgr = _mock_pty_manager(pty_session)
+
+        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
+
+        # Second client with smaller dimensions — should trigger min-dims
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        await queue.put(None)
+        pty_session.subscribe.return_value = queue
+        pty_session.resize.reset_mock()
+
+        with (
+            patch("api.socketio_server.session_exists", new_callable=AsyncMock, return_value=True),
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch("api.socketio_server.capture_pane", new_callable=AsyncMock, return_value=""),
+            patch(
+                "api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True
+            ) as mock_resize_win,
+            patch(
+                "api.socketio_server.get_window_size",
+                new_callable=AsyncMock,
+                return_value=(200, 50),
+            ),
+        ):
+            await ns.on_join("sid2", {"session": "ike", "cols": 140, "rows": 30})
+
+            # Effective dims should be min(160,140) x min(35,30) = 140 x 30
+            pty_session.resize.assert_called_once_with(140, 30)
+            mock_resize_win.assert_awaited_once_with("ike", 140, 30)
+
+            await asyncio.sleep(0.1)
+
+    async def test_resize_updates_client_dims(self):
+        """Resize event updates tracked dims and recomputes effective dimensions."""
+        ns = _make_namespace()
+        pty_session = _mock_pty_session()
+        mgr = _mock_pty_manager(pty_session)
+
+        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
+        await self._join_client(ns, "sid2", "ike", 140, 30, mgr, pty_session)
+
+        pty_session.resize.reset_mock()
+
+        # sid1 resizes smaller
+        with (
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch(
+                "api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True
+            ) as mock_resize_win,
+        ):
+            await ns.on_resize("sid1", {"session": "ike", "cols": 120, "rows": 25})
+
+            # Updated client dims
+            assert ns._client_dims["ike"]["sid1"] == (120, 25)
+
+            # Effective should be min(120,140) x min(25,30) = 120 x 25
+            pty_session.resize.assert_called_once_with(120, 25)
+            mock_resize_win.assert_awaited_once_with("ike", 120, 25)
+
+    async def test_cleanup_last_client_restores_dims(self):
+        """Last client disconnect calls resize_window with original dims."""
+        ns = _make_namespace()
+        pty_session = _mock_pty_session()
+        pty_session.subscriber_count = 0
+        mgr = _mock_pty_manager(pty_session)
+
+        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
+
+        with (
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch(
+                "api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True
+            ) as mock_resize_win,
+        ):
+            await ns.on_leave("sid1", {"session": "ike"})
+
+            # Should restore original dims (200, 50)
+            mock_resize_win.assert_awaited_once_with("ike", 200, 50)
+
+        # Tracking state should be cleaned up
+        assert "ike" not in ns._client_dims
+        assert "ike" not in ns._original_dims
+
+    async def test_cleanup_not_last_recomputes_effective(self):
+        """When one of two clients leaves, recomputes min dims for remaining."""
+        ns = _make_namespace()
+        pty_session = _mock_pty_session()
+        pty_session.subscriber_count = 1  # Still has subscribers after leave
+        mgr = _mock_pty_manager(pty_session)
+
+        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
+        await self._join_client(ns, "sid2", "ike", 140, 30, mgr, pty_session)
+
+        pty_session.resize.reset_mock()
+
+        with (
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch(
+                "api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True
+            ) as mock_resize_win,
+        ):
+            # sid2 (the smaller one) leaves — remaining sid1 should resize up
+            await ns.on_leave("sid2", {"session": "ike"})
+
+            # Should resize to sid1's dims (160, 35) — now the only client
+            mock_resize_win.assert_awaited_once_with("ike", 160, 35)
+            pty_session.resize.assert_called_once_with(160, 35)
+
+        # sid2 should be removed, sid1 should remain
+        assert "sid2" not in ns._client_dims.get("ike", {})
+        assert ns._client_dims["ike"]["sid1"] == (160, 35)
+        # Original dims should still be tracked (not last client)
+        assert "ike" in ns._original_dims
+
+    async def test_cleanup_clears_dim_tracking(self):
+        """Full disconnect clears all dimension tracking for the client."""
+        ns = _make_namespace()
+        pty_session = _mock_pty_session()
+        pty_session.subscriber_count = 0
+        mgr = _mock_pty_manager(pty_session)
+
+        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
+
+        with (
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch("api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True),
+        ):
+            await ns.on_disconnect("sid1")
+
+        assert "ike" not in ns._client_dims
+        assert "ike" not in ns._original_dims
+        assert "sid1" not in ns._subscriptions

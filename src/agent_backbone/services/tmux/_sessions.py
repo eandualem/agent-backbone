@@ -46,7 +46,7 @@ def resolve_agent_dir(session_name: str, registry: EntityRegistry | None = None)
 async def start_session(
     session_name: str,
     working_dir: str | None = None,
-    command: str | None = None,
+    command: list[str] | None = None,
     apply_theme: bool = True,
     environment: dict[str, str] | None = None,
 ) -> bool:
@@ -55,7 +55,7 @@ async def start_session(
     Args:
         session_name: Name for the tmux session.
         working_dir: Starting directory for the session.
-        command: Shell command to run in the session (e.g. "claude").
+        command: Command args to run in the session (e.g. ["claude", "--resume"]).
         apply_theme: Whether to apply the tmux theme script after creation.
         environment: Optional dict of environment variables to set in the session.
 
@@ -69,7 +69,7 @@ async def start_session(
     if working_dir:
         args.extend(["-c", working_dir])
     if command:
-        args.append(command)
+        args.extend(command)
 
     proc = await asyncio.create_subprocess_exec(
         *args,

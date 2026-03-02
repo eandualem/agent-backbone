@@ -72,6 +72,8 @@ def _make_mock_tmux_svc(
     sessions: list | None = None,
     capture_output: str = "",
     session_exists_result: bool = True,
+    start_session_result: bool = True,
+    stop_session_result: bool = True,
 ) -> MagicMock:
     """Create a mock TmuxService with configurable return values."""
     svc = MagicMock()
@@ -79,6 +81,8 @@ def _make_mock_tmux_svc(
     svc.list_sessions = AsyncMock(return_value=sessions or [])
     svc.capture_pane = AsyncMock(return_value=capture_output)
     svc.session_exists = AsyncMock(return_value=session_exists_result)
+    svc.start_session = AsyncMock(return_value=start_session_result)
+    svc.stop_session = AsyncMock(return_value=stop_session_result)
     return svc
 
 
@@ -386,6 +390,22 @@ class TestGetAgentState:
         assert data["current_issue"] == 99
         assert data["source"] == "push"
 
+    async def test_session_name_case_insensitive(self, api_app, api_client, auth_headers):
+        """Capitalized session names are normalized to lowercase."""
+        snapshot = _processing_snapshot(issue=99)
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(snapshot=snapshot),
+        )
+        try:
+            resp = await api_client.get("/api/agents/Feynman/state", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["session"] == "feynman"
+
     async def test_unknown_session_returns_default_state(self, api_app, api_client, auth_headers):
         """An unknown session still returns a snapshot (with default/unknown state)."""
         _set_di_overrides(
@@ -513,3 +533,244 @@ class TestGetTerminalOutput:
 
         assert resp.status_code == 404
         assert "ghost" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/agents/{session}/start
+# ---------------------------------------------------------------------------
+
+
+class TestStartAgent:
+    async def test_start_default_runtime(self, api_app, api_client, auth_headers):
+        """Default runtime (claude) starts a session with resolved binary."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            with patch("api.routes.agents.resolve_agent_dir", return_value="/ws/code/WF/my-repo"):
+                resp = await api_client.post("/api/agents/my-repo/start", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["session"] == "my-repo"
+        assert data["runtime"] == "claude"
+        assert data["working_directory"] == "/ws/code/WF/my-repo"
+        assert data["already_existed"] is False
+        tmux_svc.start_session.assert_awaited_once()
+
+    async def test_start_with_model_and_resume(self, api_app, api_client, auth_headers):
+        """Model and resume flags are passed into the command list."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            with patch("api.routes.agents.resolve_agent_dir", return_value="/ws/code/WF/my-repo"):
+                resp = await api_client.post(
+                    "/api/agents/my-repo/start",
+                    json={"model": "claude-opus-4-6", "resume": True},
+                    headers=auth_headers,
+                )
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model"] == "claude-opus-4-6"
+        # Verify the command list passed to start_session
+        call_kwargs = tmux_svc.start_session.call_args[1]
+        cmd = call_kwargs["command"]
+        assert "--model" in cmd
+        assert "claude-opus-4-6" in cmd
+        assert "--resume" in cmd
+
+    async def test_start_normalizes_session_case(self, api_app, api_client, auth_headers):
+        """Capitalized session names are normalized to lowercase for start."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            with patch("api.routes.agents.resolve_agent_dir", return_value="/ws/leo/"):
+                resp = await api_client.post("/api/agents/Leo/start", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["session"] == "leo"
+        # Verify tmux was called with lowercase
+        tmux_svc.session_exists.assert_awaited_once_with("leo")
+
+    async def test_start_unknown_runtime_400(self, api_app, api_client, auth_headers):
+        """Unknown runtime returns 400."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            resp = await api_client.post(
+                "/api/agents/my-repo/start",
+                json={"runtime": "nonexistent-rt"},
+                headers=auth_headers,
+            )
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 400
+        assert "Unknown runtime" in resp.json()["detail"]
+
+    async def test_start_unavailable_binary_400(self, api_app, api_client, auth_headers):
+        """Runtime with unresolved binary returns 400."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        fake_runtimes = {
+            "broken": {
+                "display_name": "Broken",
+                "command": "broken-bin",
+                "resolved_path": None,
+            },
+        }
+        try:
+            with patch(f"{_AGENTS}._RUNTIMES", fake_runtimes):
+                resp = await api_client.post(
+                    "/api/agents/my-repo/start",
+                    json={"runtime": "broken"},
+                    headers=auth_headers,
+                )
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 400
+        assert "binary not found" in resp.json()["detail"]
+
+    async def test_start_idempotent_already_existed(self, api_app, api_client, auth_headers):
+        """Starting an already-existing session returns ok with already_existed=True."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=True)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            resp = await api_client.post("/api/agents/ike/start", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["already_existed"] is True
+        tmux_svc.start_session.assert_not_awaited()
+
+    async def test_start_unresolvable_dir_400(self, api_app, api_client, auth_headers):
+        """Unresolvable working directory without explicit dir returns 400."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            with patch("api.routes.agents.resolve_agent_dir", return_value=""):
+                resp = await api_client.post("/api/agents/unknown-xyz/start", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 400
+        assert "working_directory" in resp.json()["detail"]
+
+    async def test_start_explicit_working_dir(self, api_app, api_client, auth_headers):
+        """Explicit working_directory bypasses resolve_agent_dir."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            resp = await api_client.post(
+                "/api/agents/custom/start",
+                json={"working_directory": "/tmp/custom"},
+                headers=auth_headers,
+            )
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["working_directory"] == "/tmp/custom"
+        call_kwargs = tmux_svc.start_session.call_args[1]
+        assert call_kwargs["working_dir"] == "/tmp/custom"
+
+    async def test_start_shell_no_command(self, api_app, api_client, auth_headers):
+        """Shell runtime starts session with command=None."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            with patch("api.routes.agents.resolve_agent_dir", return_value="/tmp/shell-dir"):
+                resp = await api_client.post(
+                    "/api/agents/my-shell/start",
+                    json={"runtime": "shell"},
+                    headers=auth_headers,
+                )
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["runtime"] == "shell"
+        call_kwargs = tmux_svc.start_session.call_args[1]
+        assert call_kwargs["command"] is None
+
+    async def test_start_shell_ignores_model(self, api_app, api_client, auth_headers):
+        """Shell runtime ignores model — response model is null."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            with patch("api.routes.agents.resolve_agent_dir", return_value="/tmp/shell-dir"):
+                resp = await api_client.post(
+                    "/api/agents/my-shell/start",
+                    json={"runtime": "shell", "model": "claude-opus-4-6"},
+                    headers=auth_headers,
+                )
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model"] is None
+
+
+# ---------------------------------------------------------------------------
+# POST /api/agents/{session}/stop
+# ---------------------------------------------------------------------------
+
+
+class TestStopAgent:
+    async def test_stop_existing_session(self, api_app, api_client, auth_headers):
+        """Stopping an existing session returns ok=True."""
+        tmux_svc = _make_mock_tmux_svc(stop_session_result=True)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            resp = await api_client.post("/api/agents/ike/stop", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["session"] == "ike"
+        tmux_svc.stop_session.assert_awaited_once_with("ike")
+
+    async def test_stop_normalizes_session_case(self, api_app, api_client, auth_headers):
+        """Capitalized session names are normalized to lowercase for stop."""
+        tmux_svc = _make_mock_tmux_svc(stop_session_result=True)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            resp = await api_client.post("/api/agents/Ike/stop", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["session"] == "ike"
+        tmux_svc.stop_session.assert_awaited_once_with("ike")
+
+    async def test_stop_nonexistent_idempotent(self, api_app, api_client, auth_headers):
+        """Stopping a nonexistent session is idempotent (ok=True from tmux layer)."""
+        tmux_svc = _make_mock_tmux_svc(stop_session_result=True)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        try:
+            resp = await api_client.post("/api/agents/ghost/stop", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["session"] == "ghost"

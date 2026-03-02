@@ -52,7 +52,7 @@ class TestSessionExists:
     async def test_session_exists_true(self, mock_subprocess):
         proc = AsyncMock()
         proc.returncode = 0
-        proc.wait = AsyncMock()
+        proc.communicate = AsyncMock(return_value=(b"", b""))
         mock_subprocess.return_value = proc
 
         assert await session_exists("ike") is True
@@ -62,13 +62,13 @@ class TestSessionExists:
             "-t",
             "ike",
             stdout=-3,  # DEVNULL
-            stderr=-3,
+            stderr=-1,  # PIPE
         )
 
     async def test_session_exists_false(self, mock_subprocess):
         proc = AsyncMock()
         proc.returncode = 1
-        proc.wait = AsyncMock()
+        proc.communicate = AsyncMock(return_value=(b"", b"no session"))
         mock_subprocess.return_value = proc
 
         assert await session_exists("nonexistent") is False
@@ -248,7 +248,7 @@ class TestStartSession:
             result = await start_session(
                 "test",
                 working_dir="/tmp/wd",
-                command="claude",
+                command=["claude"],
                 apply_theme=False,
             )
             assert result is True
@@ -282,6 +282,30 @@ class TestStartSession:
             assert result is True
             call_args = mock_subprocess.call_args_list[0][0]
             assert "-c" not in call_args
+
+    async def test_start_with_multi_arg_command(self, mock_subprocess):
+        """Multi-arg command list extends into subprocess args individually."""
+        with patch(
+            "agent_backbone.services.tmux._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            proc = AsyncMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.wait = AsyncMock()
+            mock_subprocess.return_value = proc
+            result = await start_session(
+                "test",
+                working_dir="/tmp/wd",
+                command=["claude", "--model", "opus"],
+                apply_theme=False,
+            )
+            assert result is True
+            call_args = mock_subprocess.call_args_list[0][0]
+            assert "claude" in call_args
+            assert "--model" in call_args
+            assert "opus" in call_args
 
 
 class TestQueryFormatVars:

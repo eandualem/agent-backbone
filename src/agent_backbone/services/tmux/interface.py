@@ -18,6 +18,12 @@ from agent_backbone.services.tmux._sessions import (
 from agent_backbone.services.tmux._sessions import (
     list_sessions_rich as _list_sessions_rich,
 )
+from agent_backbone.services.tmux._sessions import (
+    start_session as _start_session,
+)
+from agent_backbone.services.tmux._sessions import (
+    stop_session as _stop_session,
+)
 
 log = logging.getLogger(__name__)
 
@@ -60,3 +66,22 @@ class TmuxService:
     async def send_keys(self, session: str, keys: str, literal: bool = True) -> bool:
         """Send keys to a tmux session."""
         return await _send_keys(session, keys, literal=literal)
+
+    async def start_session(
+        self,
+        session_name: str,
+        working_dir: str | None = None,
+        command: list[str] | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> bool:
+        """Start a new detached tmux session."""
+        return await _start_session(
+            session_name,
+            working_dir=working_dir,
+            command=command,
+            environment=environment,
+        )
+
+    async def stop_session(self, session_name: str) -> bool:
+        """Stop (kill) a tmux session."""
+        return await _stop_session(session_name)

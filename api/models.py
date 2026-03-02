@@ -48,6 +48,34 @@ class EnrichedAgent(BaseModel):
     tmux_created: str | None = None
     tmux_attached: bool = False
     tmux_windows: int = 0
+    state_since: float | None = None
+
+
+class AgentStartRequest(BaseModel):
+    """Request body for starting an agent session."""
+
+    runtime: str = "claude"
+    model: str | None = None
+    resume: bool = False
+    working_directory: str | None = None
+
+
+class AgentStartResponse(BaseModel):
+    """Response for agent start endpoint."""
+
+    ok: bool
+    session: str
+    working_directory: str | None = None
+    runtime: str = "claude"
+    model: str | None = None
+    already_existed: bool = False
+
+
+class AgentStopResponse(BaseModel):
+    """Response for agent stop endpoint."""
+
+    ok: bool
+    session: str
 
 
 class AgentStateDetail(BaseModel):
@@ -159,6 +187,28 @@ class SystemDigest(BaseModel):
     pending_issues: int = 0
     failed_deliveries: int = 0
     agents: list[EnrichedAgent] = Field(default_factory=list)
+
+
+class DashboardCounts(BaseModel):
+    """Aggregate agent counts by state."""
+
+    total: int = 0
+    active: int = 0
+    idle: int = 0
+    busy: int = 0
+    plan_waiting: int = 0
+    offline: int = 0
+
+
+class DashboardResponse(BaseModel):
+    """Unified dashboard payload — everything the dashboard needs in one request."""
+
+    agents: list[EnrichedAgent] = Field(default_factory=list)
+    counts: DashboardCounts = Field(default_factory=DashboardCounts)
+    plans_pending: int = 0
+    issues_pending: int = 0
+    failed_deliveries: int = 0
+    services: ServiceHealth = Field(default_factory=ServiceHealth)
 
 
 # --- Heartbeats ---

@@ -154,6 +154,7 @@ def create_app() -> socketio.ASGIApp:
     from api.routes.actions import router as actions_router
     from api.routes.activity import router as activity_router
     from api.routes.agents import router as agents_router
+    from api.routes.dashboard import router as dashboard_router
     from api.routes.deliveries import router as deliveries_router
     from api.routes.files import router as files_router
     from api.routes.heartbeats import router as heartbeats_router
@@ -170,6 +171,7 @@ def create_app() -> socketio.ASGIApp:
 
     api_routers = [
         agents_router,
+        dashboard_router,
         deliveries_router,
         issues_router,
         plans_router,
