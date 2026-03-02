@@ -103,12 +103,16 @@ async def _build_enriched_agent(
     tmux_created = None
     tmux_attached = False
     tmux_windows = 0
+    last_activity: float | None = None
     if tmux_info:
         created_ts = tmux_info.get("created", 0)
         if created_ts:
             tmux_created = datetime.fromtimestamp(created_ts, tz=UTC).isoformat()
         tmux_attached = tmux_info.get("attached", False)
         tmux_windows = tmux_info.get("windows", 0)
+        activity_ts = tmux_info.get("activity", 0)
+        if activity_ts:
+            last_activity = float(activity_ts)
 
     # State inference: reconcile online (tmux) with state (file)
     state_value = snapshot.state.value
@@ -140,6 +144,7 @@ async def _build_enriched_agent(
         tmux_created=tmux_created,
         tmux_attached=tmux_attached,
         tmux_windows=tmux_windows,
+        last_activity=last_activity,
         state_since=snapshot.timestamp if snapshot.timestamp else None,
     )
 

@@ -179,11 +179,16 @@ class TestSendDirected:
             room = _make_room()
             _save_room_file(room_dir, room)
 
-            resp = await api_client.post(
-                f"/api/rooms/{room.id}/directed",
-                headers=auth_headers,
-                json={"target": "leo", "content": "What's your take?"},
-            )
+            with patch(
+                "api.routes.rooms.resolve_entity_session",
+                new_callable=AsyncMock,
+                return_value="leo",
+            ):
+                resp = await api_client.post(
+                    f"/api/rooms/{room.id}/directed",
+                    headers=auth_headers,
+                    json={"target": "leo", "content": "What's your take?"},
+                )
 
             assert resp.status_code == 200
             data = resp.json()
@@ -253,11 +258,16 @@ class TestSendBroadcast:
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
-            resp = await api_client.post(
-                f"/api/rooms/{room.id}/broadcast",
-                headers=auth_headers,
-                json={"content": "Let's discuss the architecture"},
-            )
+            with patch(
+                "api.routes.rooms.resolve_entity_session",
+                new_callable=AsyncMock,
+                side_effect=["leo-session", "feynman-session"],
+            ):
+                resp = await api_client.post(
+                    f"/api/rooms/{room.id}/broadcast",
+                    headers=auth_headers,
+                    json={"content": "Let's discuss the architecture"},
+                )
 
             assert resp.status_code == 200
             data = resp.json()
@@ -287,11 +297,16 @@ class TestSendBroadcast:
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
-            resp = await api_client.post(
-                f"/api/rooms/{room.id}/broadcast",
-                headers=auth_headers,
-                json={"content": "Broadcast test"},
-            )
+            with patch(
+                "api.routes.rooms.resolve_entity_session",
+                new_callable=AsyncMock,
+                side_effect=["leo-session", "feynman-session"],
+            ):
+                resp = await api_client.post(
+                    f"/api/rooms/{room.id}/broadcast",
+                    headers=auth_headers,
+                    json={"content": "Broadcast test"},
+                )
 
             assert resp.status_code == 200
             data = resp.json()
@@ -457,7 +472,7 @@ class TestFormatRoomMessage:
         assert "Description: Discuss architecture tradeoffs" in result
         assert "--- Context (since your last participation) ---" in result
         assert "[ike]: Earlier question" in result
-        assert "--- Current prompt ---" in result
+        assert "[meeting: Architecture review] [from: ike]" in result
         assert "New question" in result
 
     def test_no_context(self):
@@ -469,7 +484,7 @@ class TestFormatRoomMessage:
         assert "[via:room room:test-room-1 from:ike]" in result
         assert "Title: Architecture review" in result
         assert "Context" not in result
-        assert "--- Current prompt ---" in result
+        assert "[meeting: Architecture review] [from: ike]" in result
         assert "First question" in result
 
     def test_no_description(self):
@@ -480,3 +495,188 @@ class TestFormatRoomMessage:
 
         assert "Title: Architecture review" in result
         assert "Description:" not in result
+
+
+class TestBroadcastSessionResolution:
+    """Tests for entity->session resolution in broadcast delivery."""
+
+    async def test_send_broadcast_resolves_sessions(
+        self, api_client, auth_headers, room_dir, api_app
+    ):
+        """resolve_entity_session called per participant; resolved name passed to safe_deliver."""
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            room = _make_room(participants=["leo", "feynman"])
+            _save_room_file(room_dir, room)
+
+            with patch(
+                "api.routes.rooms.resolve_entity_session",
+                new_callable=AsyncMock,
+                side_effect=["leo-session", "feynman-session"],
+            ) as mock_resolve:
+                resp = await api_client.post(
+                    f"/api/rooms/{room.id}/broadcast",
+                    headers=auth_headers,
+                    json={"content": "Hello everyone"},
+                )
+
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["delivered"] == 2
+            assert data["failed"] == 0
+
+            # Verify resolution called for each participant
+            assert mock_resolve.call_count == 2
+            resolve_targets = [c.args[0] for c in mock_resolve.call_args_list]
+            assert "leo" in resolve_targets
+            assert "feynman" in resolve_targets
+
+            # Verify safe_deliver received resolved session names
+            deliver_sessions = [c.args[0] for c in mock_svc.safe_deliver.call_args_list]
+            assert "leo-session" in deliver_sessions
+            assert "feynman-session" in deliver_sessions
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+    async def test_send_broadcast_unresolvable_participant(
+        self, api_client, auth_headers, room_dir, api_app
+    ):
+        """Unresolvable participant counted as failed, not delivered."""
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            room = _make_room(participants=["leo", "unknown-entity"])
+            _save_room_file(room_dir, room)
+
+            with patch(
+                "api.routes.rooms.resolve_entity_session",
+                new_callable=AsyncMock,
+                side_effect=["leo-session", None],
+            ):
+                resp = await api_client.post(
+                    f"/api/rooms/{room.id}/broadcast",
+                    headers=auth_headers,
+                    json={"content": "Hello everyone"},
+                )
+
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["delivered"] == 1
+            assert data["failed"] == 1
+            assert data["total"] == 2
+
+            # safe_deliver called only for the resolvable participant
+            assert mock_svc.safe_deliver.call_count == 1
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+    async def test_send_broadcast_exception_logged(
+        self, api_client, auth_headers, room_dir, api_app
+    ):
+        """Exceptions from gather are caught; counted as failed."""
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            room = _make_room(participants=["leo", "feynman"])
+            _save_room_file(room_dir, room)
+
+            # First participant resolves fine, second raises
+            async def _resolve_side_effect(target, config):
+                if target == "leo":
+                    return "leo-session"
+                raise RuntimeError("tmux error")
+
+            with patch(
+                "api.routes.rooms.resolve_entity_session",
+                new_callable=AsyncMock,
+                side_effect=_resolve_side_effect,
+            ):
+                resp = await api_client.post(
+                    f"/api/rooms/{room.id}/broadcast",
+                    headers=auth_headers,
+                    json={"content": "Test"},
+                )
+
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["delivered"] == 1
+            assert data["failed"] == 1
+            # Message still appended to transcript
+            saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
+            assert len(saved.transcript) == 1
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+
+class TestDirectedSessionResolution:
+    """Tests for entity->session resolution in directed delivery."""
+
+    async def test_send_directed_resolves_session(
+        self, api_client, auth_headers, room_dir, api_app
+    ):
+        """resolve_entity_session called; resolved name passed to safe_deliver."""
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            room = _make_room()
+            _save_room_file(room_dir, room)
+
+            with patch(
+                "api.routes.rooms.resolve_entity_session",
+                new_callable=AsyncMock,
+                return_value="leo-session",
+            ) as mock_resolve:
+                resp = await api_client.post(
+                    f"/api/rooms/{room.id}/directed",
+                    headers=auth_headers,
+                    json={"target": "leo", "content": "What's your take?"},
+                )
+
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["ok"] is True
+            assert data["status"] == "delivered"
+
+            # Verify resolution called
+            mock_resolve.assert_called_once()
+            assert mock_resolve.call_args.args[0] == "leo"
+
+            # Verify safe_deliver received resolved session name
+            mock_svc.safe_deliver.assert_called_once()
+            assert mock_svc.safe_deliver.call_args.args[0] == "leo-session"
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+    async def test_send_directed_unresolvable(self, api_client, auth_headers, room_dir, api_app):
+        """Unresolvable target returns unresolvable status."""
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            room = _make_room()
+            _save_room_file(room_dir, room)
+
+            with patch(
+                "api.routes.rooms.resolve_entity_session",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                resp = await api_client.post(
+                    f"/api/rooms/{room.id}/directed",
+                    headers=auth_headers,
+                    json={"target": "leo", "content": "Hello"},
+                )
+
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["ok"] is False
+            assert data["status"] == "unresolvable"
+
+            # safe_deliver never called
+            mock_svc.safe_deliver.assert_not_called()
+
+            # Message still in transcript
+            saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
+            assert len(saved.transcript) == 1
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)

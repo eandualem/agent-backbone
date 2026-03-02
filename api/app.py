@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
 
     from api.socketio_server import get_pty_manager
 
-    get_pty_manager().cleanup_all()
+    await get_pty_manager().cleanup_all()
     log.info("Backbone API shutting down")
 
 

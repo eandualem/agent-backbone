@@ -50,6 +50,17 @@ def _patch_room_dir(tmp_path):
         yield
 
 
+@pytest.fixture(autouse=True)
+def _patch_resolve():
+    """Patch resolve_entity_session to identity-map entity → session name."""
+
+    async def _identity(target, config):
+        return target
+
+    with patch("api.routes.rooms.resolve_entity_session", side_effect=_identity):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # send_directed — session_bridge integration
 # ---------------------------------------------------------------------------

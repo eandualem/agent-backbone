@@ -49,6 +49,7 @@ def _tmux(
     windows: int = 1,
     created: int = 1708000000,
     attached: bool = False,
+    activity: int = 1708000100,
 ) -> dict:
     """Build a rich tmux session dict for test data."""
     return {
@@ -56,6 +57,7 @@ def _tmux(
         "windows": windows,
         "created": created,
         "attached": attached,
+        "activity": activity,
     }
 
 

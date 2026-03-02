@@ -1,8 +1,8 @@
 """Socket.IO server for interactive terminal communication.
 
 Provides bidirectional real-time terminal access via PTY-based
-`tmux attach-session`. Each viewed session gets a PTY that produces
-the exact same byte stream as a native terminal (Ghostty, iTerm).
+`tmux attach-session`. Each WebSocket connection gets its own PTY
+(1:1 model), delegating multiplexing to tmux natively.
 
 Control mode infrastructure (StreamBroker, SSE) remains for session
 monitoring and dashboard state events — only the interactive terminal
@@ -20,7 +20,6 @@ import socketio
 
 from agent_backbone.services.streaming import PtyManager
 from agent_backbone.services.tmux import (
-    capture_pane,
     get_window_size,
     list_panes,
     resize_window,
@@ -39,6 +38,8 @@ MIN_ROWS, MAX_ROWS = 2, 200
 # Rate limiting: max input events per second per sid+session
 INPUT_RATE_LIMIT = 100
 INPUT_RATE_WINDOW = 1.0  # seconds
+# Output coalescing window (milliseconds)
+COALESCE_MS = 3
 
 
 def get_pty_manager() -> PtyManager:
@@ -62,6 +63,8 @@ class TerminalNamespace(socketio.AsyncNamespace):
     Uses PTY-based `tmux attach-session` for full terminal fidelity:
     correct ANSI rendering, input echo, and proper resize propagation.
 
+    1:1 model: each WebSocket connection gets its own PTY process.
+
     Events:
         connect     — authenticate via API key in auth dict
         join        — attach to a session via PTY
@@ -77,10 +80,12 @@ class TerminalNamespace(socketio.AsyncNamespace):
         self._subscriptions: dict[str, dict[str, asyncio.Task]] = {}
         # Rate limiting: (sid, session) -> list of timestamps
         self._input_timestamps: dict[tuple[str, str], list[float]] = {}
-        # Per-client dimensions: session_name -> {sid: (cols, rows)}
-        self._client_dims: dict[str, dict[str, tuple[int, int]]] = {}
+        # Active browser sessions: session_name -> set of sids
+        self._active_sessions: dict[str, set[str]] = {}
         # Original tmux dimensions before any browser client joined: session_name -> (cols, rows)
         self._original_dims: dict[str, tuple[int, int]] = {}
+        # Read-only subscribers: sid -> set of session_names
+        self._readonly: dict[str, set[str]] = {}
 
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
         """Validate API key on connection.
@@ -101,15 +106,17 @@ class TerminalNamespace(socketio.AsyncNamespace):
     async def on_join(self, sid: str, data: dict) -> None:
         """Join a terminal session via PTY.
 
-        data: {"session": "session-name", "cols": 160, "rows": 35}
+        data: {"session": "session-name", "cols": 160, "rows": 35, "readonly": false}
 
-        Creates or reuses a PTY running `tmux attach-session`,
-        subscribes this client, sends initial snapshot with pane
-        dimensions, and starts output forwarding.
+        Creates a dedicated PTY running `tmux attach-session` for this
+        client and starts output forwarding. When a fresh tmux attach
+        connects, tmux natively redraws the full screen.
 
         When the client provides cols/rows, those are used for PTY
         sizing (clamped to MIN/MAX bounds). Otherwise falls back to
         the tmux pane's native dimensions.
+
+        If readonly=true, the client receives output but cannot send input.
         """
         session_name = data.get("session", "")
         if not session_name:
@@ -119,6 +126,12 @@ class TerminalNamespace(socketio.AsyncNamespace):
         if not await session_exists(session_name):
             await self.emit("error", {"message": f"Session '{session_name}' not found"}, to=sid)
             return
+
+        # Fix double-join: clean up existing subscription before creating a new one
+        if sid in self._subscriptions and session_name in self._subscriptions[sid]:
+            await self._cleanup_session(sid, session_name)
+
+        readonly = bool(data.get("readonly", False))
 
         # Determine PTY dimensions: prefer client-provided, fall back to tmux pane
         client_cols = data.get("cols")
@@ -136,57 +149,75 @@ class TerminalNamespace(socketio.AsyncNamespace):
             cols = int(active_pane["pane_width"]) if active_pane else 80
             rows = int(active_pane["pane_height"]) if active_pane else 24
 
-        # Save original tmux window dimensions before any browser client touches them
-        if session_name not in self._original_dims:
+        # Save original tmux window dimensions only when no browser clients
+        # are currently connected. This prevents a second client from
+        # overwriting the original dims with already-resized values.
+        active_sids = self._active_sessions.get(session_name, set())
+        if not active_sids:
+            orig = await get_window_size(session_name)
+            if orig is not None:
+                self._original_dims[session_name] = orig
+        elif session_name not in self._original_dims:
+            # Reload recovery: dict was wiped but clients reconnected
             orig = await get_window_size(session_name)
             if orig is not None:
                 self._original_dims[session_name] = orig
 
-        # Track this client's dimensions
-        self._client_dims.setdefault(session_name, {})[sid] = (cols, rows)
+        # Track this client in active sessions
+        self._active_sessions.setdefault(session_name, set()).add(sid)
 
-        # Compute effective dimensions (minimum across all connected clients)
-        effective = self._compute_effective_dims(session_name)
-        eff_cols, eff_rows = effective if effective else (cols, rows)
+        # Track read-only state
+        if readonly:
+            self._readonly.setdefault(sid, set()).add(session_name)
 
-        # Get or create PTY session, then resize to match effective dimensions
+        # Create a dedicated PTY for this client
         mgr = get_pty_manager()
-        pty_session = mgr.get_or_create(session_name, eff_cols, eff_rows)
-        pty_session.resize(eff_cols, eff_rows)
+        pty_session = await mgr.create(sid, session_name, cols, rows)
 
-        # Explicitly resize the tmux window so content reflows to match
-        # the browser terminal dimensions (PTY TIOCSWINSZ alone doesn't
-        # reliably resize when other tmux clients are attached)
-        await resize_window(session_name, eff_cols, eff_rows)
+        try:
+            # Wire up data-drop notification callback with sid captured via closure
+            def _on_drop(sn: str, _sid: str = sid) -> None:
+                self._on_data_dropped(_sid, sn)
 
-        queue = pty_session.subscribe(sid)
+            pty_session.on_data_dropped = _on_drop
 
-        # Enter Socket.IO room
-        await self.enter_room(sid, f"session:{session_name}")
+            # Explicitly resize the tmux window so content reflows to match
+            # the browser terminal dimensions (PTY TIOCSWINSZ alone doesn't
+            # reliably resize when other tmux clients are attached)
+            if not await resize_window(session_name, cols, rows):
+                log.error(
+                    "resize_window failed on join for '%s' (%dx%d)",
+                    session_name,
+                    cols,
+                    rows,
+                )
 
-        # Brief delay for tmux to process resize before snapshot
-        await asyncio.sleep(0.05)
+            queue = pty_session.output_queue
 
-        # Send initial snapshot with pane dimensions
-        snapshot = await capture_pane(session_name, lines=200)
-        await self.emit(
-            "snapshot",
-            {"session": session_name, "data": snapshot, "cols": cols, "rows": rows},
-            to=sid,
+            # Enter Socket.IO room
+            await self.enter_room(sid, f"session:{session_name}")
+
+            # Start forwarding PTY output to this client
+            task = asyncio.create_task(
+                self._forward_pty_output(sid, session_name, queue),
+                name=f"sio-pty-{sid}-{session_name}",
+            )
+
+            # Track subscription
+            if sid not in self._subscriptions:
+                self._subscriptions[sid] = {}
+            self._subscriptions[sid][session_name] = task
+        except Exception:
+            # Client disconnected or error before tracking — clean up orphan
+            await mgr.remove(sid, session_name)
+            raise
+
+        log.info(
+            "sid=%s joined session '%s' via PTY%s",
+            sid,
+            session_name,
+            " (readonly)" if readonly else "",
         )
-
-        # Start forwarding PTY output to this client
-        task = asyncio.create_task(
-            self._forward_pty_output(sid, session_name, queue),
-            name=f"sio-pty-{sid}-{session_name}",
-        )
-
-        # Track subscription
-        if sid not in self._subscriptions:
-            self._subscriptions[sid] = {}
-        self._subscriptions[sid][session_name] = task
-
-        log.info("sid=%s joined session '%s' via PTY", sid, session_name)
 
     async def on_leave(self, sid: str, data: dict) -> None:
         """Leave a terminal session.
@@ -202,7 +233,8 @@ class TerminalNamespace(socketio.AsyncNamespace):
         data: {"session": "session-name", "data": "input-bytes"}
 
         Writes directly to the PTY master fd — instant, with echo
-        handled by the PTY line discipline.
+        handled by the PTY line discipline. Rejects input from
+        read-only subscribers.
         """
         session_name = data.get("session", "")
         input_data = data.get("data", "")
@@ -226,14 +258,24 @@ class TerminalNamespace(socketio.AsyncNamespace):
             await self.emit("error", {"message": f"Not joined to session '{session_name}'"}, to=sid)
             return
 
+        # Reject input from read-only subscribers
+        if session_name in self._readonly.get(sid, set()):
+            await self.emit(
+                "error",
+                {"message": "Read-only session — input not allowed"},
+                to=sid,
+            )
+            return
+
         # Gap 4: Rate limiting
         if self._is_rate_limited(sid, session_name):
             return
 
         mgr = get_pty_manager()
-        pty_session = mgr.get(session_name)
+        pty_session = mgr.get(sid, session_name)
         if pty_session:
-            pty_session.write(input_data)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, pty_session.write, input_data)
 
     async def on_resize(self, sid: str, data: dict) -> None:
         """Resize PTY to match client terminal dimensions.
@@ -241,7 +283,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
         data: {"session": "session-name", "cols": 140, "rows": 35}
 
         Uses TIOCSWINSZ ioctl which sends SIGWINCH to the tmux attach
-        process. Only affects this client's view, not other tmux clients.
+        process. In 1:1 model, directly resizes this client's PTY.
         """
         session_name = data.get("session", "")
         cols = data.get("cols")
@@ -263,19 +305,17 @@ class TerminalNamespace(socketio.AsyncNamespace):
         except (ValueError, TypeError):
             return
 
-        # Update this client's tracked dimensions
-        if session_name in self._client_dims:
-            self._client_dims[session_name][sid] = (clamped_cols, clamped_rows)
-
-        # Compute effective dimensions (minimum across all connected clients)
-        effective = self._compute_effective_dims(session_name)
-        eff_cols, eff_rows = effective if effective else (clamped_cols, clamped_rows)
-
         mgr = get_pty_manager()
-        pty_session = mgr.get(session_name)
+        pty_session = mgr.get(sid, session_name)
         if pty_session:
-            pty_session.resize(eff_cols, eff_rows)
-            await resize_window(session_name, eff_cols, eff_rows)
+            pty_session.resize(clamped_cols, clamped_rows)
+            if not await resize_window(session_name, clamped_cols, clamped_rows):
+                log.error(
+                    "resize_window failed on resize for '%s' (%dx%d)",
+                    session_name,
+                    clamped_cols,
+                    clamped_rows,
+                )
 
     async def on_disconnect(self, sid: str) -> None:
         """Clean up all subscriptions for a disconnecting client."""
@@ -286,7 +326,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
         log.info("sid=%s disconnected, cleaned up %d sessions", sid, len(sessions))
 
     async def _cleanup_session(self, sid: str, session_name: str) -> None:
-        """Unsubscribe from PTY and clean up if last subscriber."""
+        """Remove this client's PTY and restore dims if last client."""
         sid_subs = self._subscriptions.get(sid, {})
         task = sid_subs.pop(session_name, None)
         if task is None:
@@ -297,45 +337,34 @@ class TerminalNamespace(socketio.AsyncNamespace):
             await task
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            log.warning("PTY forwarding task failed during cleanup: %s", e)
 
+        # Remove this client's PTY immediately
         mgr = get_pty_manager()
-        pty_session = mgr.get(session_name)
-        if pty_session:
-            pty_session.unsubscribe(sid)
-            if pty_session.subscriber_count == 0:
-                mgr.remove(session_name)
+        await mgr.remove(sid, session_name)
 
-        # Remove this client's dimension tracking
-        session_clients = self._client_dims.get(session_name, {})
-        session_clients.pop(sid, None)
+        # Remove from active sessions tracking
+        active_sids = self._active_sessions.get(session_name, set())
+        active_sids.discard(sid)
 
-        if not session_clients:
+        # Clean up read-only tracking
+        readonly_sessions = self._readonly.get(sid, set())
+        readonly_sessions.discard(session_name)
+        if not readonly_sessions:
+            self._readonly.pop(sid, None)
+
+        if not active_sids:
             # Last browser client left — restore original tmux dimensions
-            self._client_dims.pop(session_name, None)
+            self._active_sessions.pop(session_name, None)
             orig = self._original_dims.pop(session_name, None)
             if orig is not None:
-                await resize_window(session_name, orig[0], orig[1])
-        else:
-            # Other clients remain — recompute effective dimensions
-            effective = self._compute_effective_dims(session_name)
-            if effective is not None:
-                pty_session = mgr.get(session_name)
-                if pty_session:
-                    pty_session.resize(effective[0], effective[1])
-                await resize_window(session_name, effective[0], effective[1])
+                if not await resize_window(session_name, orig[0], orig[1]):
+                    log.error("Failed to restore original dims for '%s'", session_name)
 
         await self.leave_room(sid, f"session:{session_name}")
         self._input_timestamps.pop((sid, session_name), None)
         log.info("sid=%s left session '%s'", sid, session_name)
-
-    def _compute_effective_dims(self, session_name: str) -> tuple[int, int] | None:
-        """Compute effective dimensions as minimum across all clients for a session."""
-        clients = self._client_dims.get(session_name, {})
-        if not clients:
-            return None
-        min_cols = min(c for c, _ in clients.values())
-        min_rows = min(r for _, r in clients.values())
-        return min_cols, min_rows
 
     def _is_rate_limited(self, sid: str, session_name: str) -> bool:
         """Check if input from this sid+session exceeds the rate limit."""
@@ -361,27 +390,168 @@ class TerminalNamespace(socketio.AsyncNamespace):
             return True
         return False
 
+    async def on_pause(self, sid: str, data: dict) -> None:
+        """Client signals its write buffer is full — pause output.
+
+        data: {"session": "session-name"}
+
+        Pauses this client's PTY read loop, applying natural backpressure
+        via the kernel buffer.
+        """
+        session_name = data.get("session", "")
+        if not session_name:
+            return
+        mgr = get_pty_manager()
+        pty_session = mgr.get(sid, session_name)
+        if pty_session:
+            pty_session.pause()
+
+    async def on_resume(self, sid: str, data: dict) -> None:
+        """Client signals its write buffer has drained — resume output.
+
+        data: {"session": "session-name"}
+        """
+        session_name = data.get("session", "")
+        if not session_name:
+            return
+        mgr = get_pty_manager()
+        pty_session = mgr.get(sid, session_name)
+        if pty_session:
+            pty_session.resume()
+
+    async def on_focus(self, sid: str, data: dict) -> None:
+        """Forward browser tab focus/blur to the PTY as DECSET 1004 sequences.
+
+        data: {"session": "session-name", "focused": true/false}
+
+        Programs that enable focus reporting (DECSET 1004) will receive
+        these sequences and can react to focus changes.
+        """
+        session_name = data.get("session", "")
+        focused = data.get("focused", True)
+        if not session_name:
+            return
+
+        # Verify sid is subscribed
+        if session_name not in self._subscriptions.get(sid, {}):
+            return
+
+        # Reject from read-only
+        if session_name in self._readonly.get(sid, set()):
+            return
+
+        mgr = get_pty_manager()
+        pty_session = mgr.get(sid, session_name)
+        if pty_session:
+            # DECSET 1004 focus event sequences
+            pty_session.write("\x1b[I" if focused else "\x1b[O")
+
+    def _on_data_dropped(self, sid: str, session_name: str) -> None:
+        """Callback from PtySession when queue overflow drops data.
+
+        Schedules an async emit of a data_dropped event to the affected client.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(
+                    self.emit(
+                        "data_dropped",
+                        {"session": session_name},
+                        to=sid,
+                    ),
+                    name=f"data-dropped-{sid}-{session_name}",
+                )
+        except RuntimeError:
+            pass
+
     async def _forward_pty_output(
         self,
         sid: str,
         session_name: str,
         queue: asyncio.Queue[str | None],
     ) -> None:
-        """Forward PTY output to Socket.IO client.
+        """Forward PTY output to Socket.IO client with output coalescing.
 
-        Reads raw terminal bytes from the PTY subscriber queue and
-        emits them as terminal_output events. Handles backpressure
-        by catching emit failures for slow clients.
+        Buffers output for COALESCE_MS milliseconds and sends as a single
+        concatenated chunk. This reduces Socket.IO event count for rapid
+        small outputs (keystroke echoes, character-at-a-time output).
+
+        Emits a session_ended event when the PTY process dies (None sentinel).
         """
         try:
             while True:
                 data = await queue.get()
                 if data is None:
+                    try:
+                        await self.emit(
+                            "session_ended",
+                            {"session": session_name, "reason": "process_exited"},
+                            to=sid,
+                        )
+                    except Exception:
+                        pass
                     break
+
+                buffer = [data]
+
+                # Drain any immediately available items
+                while not queue.empty():
+                    more = queue.get_nowait()
+                    if more is None:
+                        # Flush buffer then send session_ended
+                        if buffer:
+                            try:
+                                await self.emit(
+                                    "terminal_output",
+                                    {"session": session_name, "data": "".join(buffer)},
+                                    to=sid,
+                                )
+                            except Exception:
+                                pass
+                        try:
+                            await self.emit(
+                                "session_ended",
+                                {"session": session_name, "reason": "process_exited"},
+                                to=sid,
+                            )
+                        except Exception:
+                            pass
+                        return
+                    buffer.append(more)
+
+                # Coalesce: wait briefly for more data
+                try:
+                    async with asyncio.timeout(COALESCE_MS / 1000):
+                        more = await queue.get()
+                        if more is None:
+                            if buffer:
+                                try:
+                                    await self.emit(
+                                        "terminal_output",
+                                        {"session": session_name, "data": "".join(buffer)},
+                                        to=sid,
+                                    )
+                                except Exception:
+                                    pass
+                            try:
+                                await self.emit(
+                                    "session_ended",
+                                    {"session": session_name, "reason": "process_exited"},
+                                    to=sid,
+                                )
+                            except Exception:
+                                pass
+                            return
+                        buffer.append(more)
+                except TimeoutError:
+                    pass
+
+                # Emit coalesced chunk
                 try:
                     await self.emit(
                         "terminal_output",
-                        {"session": session_name, "data": data},
+                        {"session": session_name, "data": "".join(buffer)},
                         to=sid,
                     )
                 except Exception:
@@ -392,3 +562,5 @@ class TerminalNamespace(socketio.AsyncNamespace):
                     )
         except asyncio.CancelledError:
             return
+        except Exception as e:
+            log.exception("Unhandled exception in _forward_pty_output for sid=%s: %s", sid, e)

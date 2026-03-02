@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.delivery import DeliveryService
+from agent_backbone.services.delivery import DeliveryService, resolve_entity_session
 from api.deps import get_config, get_delivery_service
 from api.models import (
     BroadcastMessageRequest,
@@ -113,7 +113,7 @@ def _format_room_message(
         parts.append("\n--- Context (since your last participation) ---")
         parts.append(_format_context_section(context_delta))
 
-    parts.append("\n--- Current prompt ---")
+    parts.append(f"\n[meeting: {room.title}] [from: {sender}]")
     parts.append(content)
 
     return "\n".join(parts)
@@ -185,9 +185,16 @@ async def send_directed(
     # Compute context delta for the target
     delta = _compute_context_delta(room, body.target)
 
-    # Format and deliver via session bridge (state-aware, supports HTTP targets)
-    envelope = _format_room_message(room, room.moderator, body.content, body.target, delta)
-    result = await delivery_svc.safe_deliver(body.target, envelope, config)
+    # Resolve entity → session name
+    session_name = await resolve_entity_session(body.target, config)
+    if session_name is None:
+        log.error("Room directed: cannot resolve session for '%s'", body.target)
+        result = "unresolvable"
+    else:
+        envelope = _format_room_message(room, room.moderator, body.content, body.target, delta)
+        result = await delivery_svc.safe_deliver(session_name, envelope, config)
+        if result != "delivered":
+            log.error("Room directed delivery failed for '%s': %s", body.target, result)
 
     # Record in transcript regardless of delivery outcome
     msg = RoomMessage(
@@ -219,16 +226,50 @@ async def send_broadcast(
     _check_room_active(room)
 
     # Deliver to each participant in parallel via session bridge
-    async def _deliver(participant: str) -> str:
+    async def _deliver(participant: str) -> tuple[str, str]:
+        """Returns (participant, outcome)."""
+        session_name = await resolve_entity_session(participant, config)
+        if session_name is None:
+            log.error(
+                "Room broadcast: cannot resolve session for participant '%s'",
+                participant,
+            )
+            return (participant, "unresolvable")
         delta = _compute_context_delta(room, participant)
-        envelope = _format_room_message(room, room.moderator, body.content, participant, delta)
-        return await delivery_svc.safe_deliver(participant, envelope, config)
+        envelope = _format_room_message(
+            room,
+            room.moderator,
+            body.content,
+            participant,
+            delta,
+        )
+        result = await delivery_svc.safe_deliver(session_name, envelope, config)
+        if result != "delivered":
+            log.error(
+                "Room broadcast delivery failed for '%s' (session '%s'): %s",
+                participant,
+                session_name,
+                result,
+            )
+        return (participant, result)
 
-    results = await asyncio.gather(
-        *[_deliver(p) for p in room.participants], return_exceptions=True
+    raw_results = await asyncio.gather(
+        *[_deliver(p) for p in room.participants],
+        return_exceptions=True,
     )
 
-    delivered = sum(1 for r in results if r == "delivered")
+    # Process results — log exceptions, count outcomes
+    delivered = 0
+    for i, r in enumerate(raw_results):
+        participant = room.participants[i]
+        if isinstance(r, BaseException):
+            log.error(
+                "Room broadcast exception for '%s': %s",
+                participant,
+                r,
+            )
+        elif isinstance(r, tuple) and r[1] == "delivered":
+            delivered += 1
     failed = len(room.participants) - delivered
 
     # Record in transcript regardless

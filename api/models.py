@@ -48,6 +48,7 @@ class EnrichedAgent(BaseModel):
     tmux_created: str | None = None
     tmux_attached: bool = False
     tmux_windows: int = 0
+    last_activity: float | None = None
     state_since: float | None = None
 
 

@@ -195,8 +195,11 @@ async def query_format_vars(
 
 
 async def list_sessions_rich() -> list[dict]:
-    """List sessions with metadata: name, windows, created, attached."""
-    fmt = "#{session_name}\t#{session_windows}\t#{session_created}\t#{session_attached}"
+    """List sessions with metadata: name, windows, created, attached, activity."""
+    fmt = (
+        "#{session_name}\t#{session_windows}\t#{session_created}"
+        "\t#{session_attached}\t#{session_activity}"
+    )
     proc = await asyncio.create_subprocess_exec(
         "tmux",
         "list-sessions",
@@ -222,6 +225,7 @@ async def list_sessions_rich() -> list[dict]:
                 "windows": int(parts[1]) if parts[1].isdigit() else 0,
                 "created": int(parts[2]) if parts[2].isdigit() else 0,
                 "attached": parts[3] == "1",
+                "activity": int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0,
             }
         )
     return results
