@@ -13,7 +13,7 @@ import httpx
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import CommentData, IssueData, ParsedLabels
-from agent_backbone.services.delivery import compute_priority_score
+from agent_backbone.services.routing._priority import compute_priority_score
 
 log = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ from telegram.ext import ContextTypes
 if TYPE_CHECKING:
     from agent_backbone.services.telegram.interface import TelegramService
 
-from agent_backbone.services.delivery import safe_deliver
+from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.telegram._topic_discovery import process_message_for_discovery
 
 

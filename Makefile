@@ -1,15 +1,16 @@
 .PHONY: help install dev logs clean lint format format-check fix type-check \
        test test-file test-unit test-integration cov cov-html check build \
        run-gateway run-prefect setup-pool deploy run-worker \
-       db-up db-down db-upgrade db-migrate db-revision db-history db-current db-downgrade
+       db-up db-down db-upgrade db-migrate db-revision db-history db-current db-downgrade \
+       start-backbone stop-backbone restart-backbone start-tunnel stop-tunnel infra-status
 
 .DEFAULT_GOAL := help
 
 # ─── Config ──────────────────────────────────────────────
 
 PROJECT_NAME := agent-backbone
-SRC_DIRS     := src/ gateway/ api/
-ALL_DIRS     := src/ gateway/ api/ tests/
+SRC_DIRS     := src/
+ALL_DIRS     := src/ tests/
 
 # ─── Colors ──────────────────────────────────────────────
 
@@ -46,10 +47,10 @@ clean: ## Remove generated artifacts
 dev: ## Restart gateway with latest code (auto-reload enabled)
 	@if tmux has-session -t gateway 2>/dev/null; then \
 		echo "$(CYAN)Restarting gateway service...$(RESET)"; \
-		~/.claude/services/agent-services.sh restart-gateway; \
+		uv run python -m agent_backbone.services.infrastructure restart-gateway; \
 	else \
 		echo "$(CYAN)Starting gateway service...$(RESET)"; \
-		~/.claude/services/agent-services.sh start-gateway; \
+		uv run python -m agent_backbone.services.infrastructure start-gateway; \
 	fi
 	@echo "$(GREEN)Gateway running in tmux session 'gateway' — attach with: tmux attach -t gateway$(RESET)"
 
@@ -96,12 +97,12 @@ test-file: ## Run a single test file (FILE=tests/test_foo.py)
 
 test-unit: ## Run unit tests only
 	@echo "$(CYAN)Running unit tests...$(RESET)"
-	uv run pytest -m unit
+	uv run pytest tests/unit/
 	@echo "$(GREEN)Done.$(RESET)"
 
 test-integration: ## Run integration tests only
 	@echo "$(CYAN)Running integration tests...$(RESET)"
-	uv run pytest -m integration
+	uv run pytest tests/integration/
 	@echo "$(GREEN)Done.$(RESET)"
 
 cov: ## Run tests with coverage
@@ -128,10 +129,8 @@ build: ## Production build
 
 # ─── Services ────────────────────────────────────────────
 
-run-gateway: ## ⚠ Use 'make dev' instead (delegates to agent-services.sh)
-	@echo "$(RED)Direct gateway run is disabled — causes ghost processes and port conflicts.$(RESET)"
-	@echo "$(CYAN)Use 'make dev' to start/restart via agent-services.sh.$(RESET)"
-	@exit 1
+run-gateway: ## Start gateway server (prefer 'make dev' for auto-reload)
+	@uv run python -m agent_backbone.services.infrastructure start-gateway
 
 run-prefect: ## Start Prefect server (port 4200)
 	uv run prefect server start
@@ -174,3 +173,23 @@ db-current: ## Show current migration version
 
 db-downgrade: ## Downgrade one migration step
 	uv run alembic downgrade -1
+
+# ─── Infrastructure Management ──────────────────────────
+
+start-backbone: ## Start all services (Prefect + Gateway + Worker + Telegram)
+	@uv run python -m agent_backbone.services.infrastructure start-backbone
+
+stop-backbone: ## Stop all services
+	@uv run python -m agent_backbone.services.infrastructure stop-backbone
+
+restart-backbone: ## Restart all services
+	@uv run python -m agent_backbone.services.infrastructure restart-backbone
+
+start-tunnel: ## Start ngrok tunnel
+	@uv run python -m agent_backbone.services.infrastructure start-tunnel
+
+stop-tunnel: ## Stop ngrok tunnel
+	@uv run python -m agent_backbone.services.infrastructure stop-tunnel
+
+infra-status: ## Show all services and sessions
+	@uv run python -m agent_backbone.services.infrastructure status

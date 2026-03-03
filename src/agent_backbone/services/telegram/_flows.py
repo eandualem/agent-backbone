@@ -12,7 +12,7 @@ import logging
 from prefect import flow
 
 from agent_backbone.services._locator import get_db
-from agent_backbone.services.tmux import list_sessions
+from agent_backbone.services.terminal import list_sessions
 
 log = logging.getLogger(__name__)
 

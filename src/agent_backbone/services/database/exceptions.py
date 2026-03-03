@@ -9,3 +9,11 @@ class DatabaseError(BackboneError):
     category = "database"
     severity = "high"
     retry_allowed = True
+
+
+class PersistenceError(BackboneError):
+    """Database persistence error."""
+
+    category = "persistence"
+    severity = "high"
+    retry_allowed = True

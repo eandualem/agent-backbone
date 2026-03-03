@@ -1,11 +1,13 @@
-"""Database service — engine lifecycle, ORM models, session management."""
+"""Database service — engine lifecycle, ORM models, session management, persistence."""
 
+from agent_backbone.services.database.backbone_db import BackboneDB
 from agent_backbone.services.database.base import Base
 from agent_backbone.services.database.config import DatabaseConfig
-from agent_backbone.services.database.exceptions import DatabaseError
+from agent_backbone.services.database.exceptions import DatabaseError, PersistenceError
 from agent_backbone.services.database.interface import DatabaseService
 from agent_backbone.services.database.models import (
     AcknowledgmentORM,
+    AgentActivityORM,
     AgentStateORM,
     DedupLogORM,
     DeliveryORM,
@@ -16,7 +18,9 @@ from agent_backbone.services.database.models import (
 
 __all__ = [
     "AcknowledgmentORM",
+    "AgentActivityORM",
     "AgentStateORM",
+    "BackboneDB",
     "Base",
     "DatabaseConfig",
     "DatabaseError",
@@ -26,4 +30,5 @@ __all__ = [
     "HeartbeatORM",
     "IssueDependencyORM",
     "MessageQueueORM",
+    "PersistenceError",
 ]

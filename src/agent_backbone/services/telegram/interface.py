@@ -20,13 +20,13 @@ from telegram.ext import (
 )
 
 from agent_backbone.config import BackboneConfig
+from agent_backbone.services.automation import WorkflowRegistry
 from agent_backbone.services.telegram import _commands, _routing
 from agent_backbone.services.telegram._topic_discovery import (
     effective_group_chat_id,
     effective_routes,
     load_discovery,
 )
-from agent_backbone.services.workflows import WorkflowRegistry
 
 log = logging.getLogger(__name__)
 

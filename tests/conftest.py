@@ -16,7 +16,7 @@ from agent_backbone.models import (
     IssueEvent,
     ParsedLabels,
 )
-from agent_backbone.services.persistence import BackboneDB
+from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.registry import EntityEntry, EntityRegistry
 
 
@@ -103,7 +103,7 @@ def config():
     return BackboneConfig(
         github_token="test-token-123",
         webhook_secret="test-secret",
-        gateway=GatewayConfig(port=9877),
+        gateway=GatewayConfig(port=7120),
         github=GitHubConfig(owner="eandualem", repo="orchestration"),
         registry=test_registry,
     )
@@ -172,13 +172,13 @@ def mock_tmux():
     """Mock tmux operations."""
     with (
         patch(
-            "agent_backbone.services.tmux.interface.session_exists", new_callable=AsyncMock
+            "agent_backbone.services.terminal.interface.session_exists", new_callable=AsyncMock
         ) as mock_exists,
         patch(
-            "agent_backbone.services.tmux.interface.send_message", new_callable=AsyncMock
+            "agent_backbone.services.terminal.interface.send_message", new_callable=AsyncMock
         ) as mock_send,
         patch(
-            "agent_backbone.services.tmux.interface.list_sessions", new_callable=AsyncMock
+            "agent_backbone.services.terminal.interface.list_sessions", new_callable=AsyncMock
         ) as mock_list,
     ):
         mock_exists.return_value = True
@@ -233,7 +233,7 @@ async def api_app(config, tmp_path):
     create_app() returns a socketio.ASGIApp wrapping FastAPI.
     Tests need the inner FastAPI app for dependency_overrides and state.
     """
-    from api.app import create_app
+    from agent_backbone.api.app import create_app
 
     asgi_app = create_app()
     # Extract the inner FastAPI app from the socketio.ASGIApp wrapper
@@ -262,8 +262,7 @@ async def api_app(config, tmp_path):
     app.state.github = None  # Tests override via dependency_overrides when needed
 
     # Non-lifecycle services for DI
-    from agent_backbone.services.onboarding import OnboardingService
-    from agent_backbone.services.workflows import WorkflowsService
+    from agent_backbone.services.automation import OnboardingService, WorkflowsService
 
     app.state.onboarding_service = OnboardingService()
     app.state.workflows_service = WorkflowsService()

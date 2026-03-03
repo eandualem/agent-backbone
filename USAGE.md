@@ -3,7 +3,7 @@
 The automation backbone for the multi-agent workspace. Receives GitHub webhook events, routes them to agent tmux sessions, manages delivery lifecycle, and exposes a REST + real-time API for dashboard and mobile control.
 
 ```
-GitHub webhook --> FastAPI (port 9877) --> Prefect flows --> tmux / Jarvis
+GitHub webhook --> FastAPI (port 7120) --> Prefect flows --> tmux / Jarvis
                         |                        |
                   14 services on           scheduled flows
                   app.state                via service locator
@@ -62,7 +62,7 @@ Edit `.env`:
 GITHUB_TOKEN=ghp_your_token_here
 
 # Required — webhook signature verification
-# Auto-loaded from ~/.claude/services/.webhook-secret if not set here
+# Auto-loaded from .webhook-secret (repo root) or ~/.claude/services/.webhook-secret
 WEBHOOK_SECRET=your_secret_here
 
 # Optional — Telegram bot
@@ -81,54 +81,54 @@ BACKBONE_API_KEY=your_api_key
 
 ### 5. GitHub webhook config
 
-Same port (9877) and endpoint (`/webhook`) as always. If setting up fresh:
+Same port (7120) and endpoint (`/webhook`) as always. If setting up fresh:
 
-1. Generate secret: `openssl rand -hex 32 > ~/.claude/services/.webhook-secret`
-2. Start services: `as start-backbone && as start-tunnel`
+1. Generate secret: `openssl rand -hex 32 > .webhook-secret` (in repo root)
+2. Start services: `make start-backbone && make start-tunnel`
 3. Configure at https://github.com/eandualem/orchestration/settings/hooks:
    - Payload URL: `https://YOUR-NGROK-URL/webhook`
    - Content type: `application/json`
-   - Secret: contents of `~/.claude/services/.webhook-secret`
+   - Secret: contents of `.webhook-secret`
    - Events: **Issues** and **Issue comments** only
 
 ---
 
 ## Starting and Stopping
 
-All commands use the `as` alias (`alias as='~/.claude/services/agent-services.sh'`).
+All commands use `make` targets or the infrastructure module CLI (`uv run python -m agent_backbone.services.infrastructure <command>`).
 
 ### Start Everything
 
 ```bash
-make db-up            # PostgreSQL (if not already running)
-as start-backbone     # Prefect server + gateway
-as start-tunnel       # ngrok tunnel
+make db-up              # PostgreSQL (if not already running)
+make start-backbone     # Prefect server + gateway + worker + telegram
+make start-tunnel       # ngrok tunnel
 ```
 
 ### Individual Control
 
 ```bash
 # Database
-make db-up            # Start PostgreSQL container
-make db-down          # Stop PostgreSQL container
+make db-up              # Start PostgreSQL container
+make db-down            # Stop PostgreSQL container
 
 # Prefect server
-as start-prefect      # Dashboard at http://localhost:4200
-as stop-prefect
+uv run python -m agent_backbone.services.infrastructure start-prefect
+uv run python -m agent_backbone.services.infrastructure stop-prefect
 
 # Gateway
-as start-gateway      # HTTP intake on port 9877
-as stop-gateway
+make dev                # Start/restart gateway with auto-reload
+uv run python -m agent_backbone.services.infrastructure stop-gateway
 
-# Both Prefect + gateway
-as start-backbone
-as stop-backbone
+# All backbone services
+make start-backbone
+make stop-backbone
 ```
 
 ### Check What's Running
 
 ```bash
-as status
+make infra-status
 ```
 
 ---
@@ -342,15 +342,15 @@ make db-upgrade
 ### Gateway won't start — port in use
 
 ```bash
-lsof -i :9877
-kill $(lsof -ti :9877)
-as start-gateway
+lsof -i :7120
+kill $(lsof -ti :7120)
+make dev
 ```
 
 ### Notifications not arriving
 
 Check in order:
-1. **Services running?** `as status`
+1. **Services running?** `make infra-status`
 2. **Database up?** `make db-up` then check `/health` endpoint
 3. **Gateway receiving?** `tmux attach -t gateway`
 4. **GitHub delivering?** Check webhook recent deliveries in GitHub settings
@@ -376,13 +376,13 @@ make test-file FILE=tests/test_persistence.py
 make install && make db-up && make db-upgrade
 
 # Start everything
-as start-backbone && as start-tunnel
+make start-backbone && make start-tunnel
 
 # Stop everything
-as stop-backbone && as stop-tunnel && make db-down
+make stop-backbone && make stop-tunnel && make db-down
 
 # Check status
-as status
+make infra-status
 
 # Run tests
 make check

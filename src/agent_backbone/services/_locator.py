@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
+    from agent_backbone.services.database import BackboneDB
     from agent_backbone.services.github import GitHubClient
-    from agent_backbone.services.persistence import BackboneDB
 
 log = logging.getLogger(__name__)
 

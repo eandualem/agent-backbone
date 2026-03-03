@@ -50,6 +50,11 @@ class AgentStateORM(Base):
     last_activity: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+    entity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    plan_file: Mapped[str | None] = mapped_column(Text, nullable=True)
+    plan_title: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class IssueDependencyORM(Base):
@@ -107,3 +112,18 @@ class MessageQueueORM(Base):
         Index("idx_mq_status", "status"),
         Index("idx_mq_session", "session_name"),
     )
+
+
+class AgentActivityORM(Base):
+    """Agent activity event log."""
+
+    __tablename__ = "agent_activity"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session: Mapped[str] = mapped_column(Text, nullable=False)
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    data: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ts: Mapped[str] = mapped_column(Text, nullable=False)
+    received_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (Index("idx_activity_session_ts", "session", "ts"),)

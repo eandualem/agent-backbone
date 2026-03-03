@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shlex
 from typing import TYPE_CHECKING
 
 from telegram import Update
@@ -11,14 +10,20 @@ from telegram.ext import ContextTypes
 if TYPE_CHECKING:
     from agent_backbone.services.telegram.interface import TelegramService
 
-from agent_backbone.services.delivery import safe_deliver
-from agent_backbone.services.persistence import BackboneDB
-from agent_backbone.services.state import AgentState, read_state_file
+from agent_backbone.services.agents._file_reader import read_state_file
+from agent_backbone.services.agents.models import AgentState
+from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.telegram._routing import _delivery_reply
 from agent_backbone.services.telegram._topic_discovery import process_message_for_discovery
-from agent_backbone.services.tmux import list_sessions, send_keys, session_exists
-
-SERVICES_SCRIPT = "~/.claude/services/agent-services.sh"
+from agent_backbone.services.terminal import (
+    list_sessions,
+    resolve_agent_dir,
+    send_keys,
+    session_exists,
+    start_session,
+    stop_session,
+)
 
 
 async def cmd_help(
@@ -105,12 +110,15 @@ async def cmd_start_agent(
         await update.message.reply_text("Usage: /start <agent_name>")
         return
 
-    agent = shlex.quote(context.args[0])
-    output, rc = await bot._run_shell(f"bash {SERVICES_SCRIPT} start {agent}")
-    status = "Started" if rc == 0 else "Failed"
-    await update.message.reply_text(
-        f"{status} `{agent}`:\n```\n{output}\n```", parse_mode="Markdown"
-    )
+    agent = context.args[0]
+    working_dir = resolve_agent_dir(agent, bot._config.registry)
+    if not working_dir:
+        await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
+        return
+
+    ok = await start_session(agent, working_dir=working_dir, command=["claude"])
+    status = "Started" if ok else "Failed to start"
+    await update.message.reply_text(f"{status} `{agent}`", parse_mode="Markdown")
 
 
 async def cmd_stop_agent(
@@ -124,12 +132,10 @@ async def cmd_stop_agent(
         await update.message.reply_text("Usage: /stop <agent_name>")
         return
 
-    agent = shlex.quote(context.args[0])
-    output, rc = await bot._run_shell(f"bash {SERVICES_SCRIPT} stop {agent}")
-    status = "Stopped" if rc == 0 else "Failed"
-    await update.message.reply_text(
-        f"{status} `{agent}`:\n```\n{output}\n```", parse_mode="Markdown"
-    )
+    agent = context.args[0]
+    ok = await stop_session(agent)
+    status = "Stopped" if ok else "Failed to stop"
+    await update.message.reply_text(f"{status} `{agent}`", parse_mode="Markdown")
 
 
 async def cmd_tell(

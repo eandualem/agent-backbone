@@ -30,7 +30,7 @@ _DEFAULT_TOML_PATH = Path(__file__).resolve().parent.parent.parent / "backbone.t
 class GatewayConfig:
     """Gateway server settings."""
 
-    port: int = 9877
+    port: int = 7120
     max_delivery_ids: int = 100
 
 
@@ -291,7 +291,7 @@ class BackboneConfig:
 
         return cls(
             gateway=GatewayConfig(
-                port=gw.get("port", 9877),
+                port=gw.get("port", 7120),
                 max_delivery_ids=gw.get("max_delivery_ids", 100),
             ),
             github=GitHubConfig(
@@ -404,12 +404,23 @@ class BackboneConfig:
 
 
 def _load_webhook_secret() -> str:
-    """Load webhook secret from env or fallback to file."""
+    """Load webhook secret from env or fallback to file.
+
+    Checks repo root first (.webhook-secret next to backbone.toml),
+    then legacy path (~/.claude/services/.webhook-secret).
+    """
     secret = os.environ.get("WEBHOOK_SECRET", "")
     if secret:
         return secret
-    secret_path = Path.home() / ".claude" / "services" / ".webhook-secret"
+    # Repo root (next to backbone.toml)
+    repo_secret = _DEFAULT_TOML_PATH.parent / ".webhook-secret"
     try:
-        return secret_path.read_text().strip()
+        return repo_secret.read_text().strip()
+    except FileNotFoundError:
+        pass
+    # Legacy path
+    legacy_secret = Path.home() / ".claude" / "services" / ".webhook-secret"
+    try:
+        return legacy_secret.read_text().strip()
     except FileNotFoundError:
         return ""
