@@ -75,9 +75,11 @@ class BackboneDB:
             self._engine = self._database_service.engine
         if self._engine is None:
             raise RuntimeError("BackboneDB requires an engine or database_service")
-        # Create tables from metadata (idempotent via checkfirst)
-        async with self._engine.begin() as conn:
-            await conn.run_sync(metadata.create_all)
+        # PostgreSQL (asyncpg): skip create_all — checkfirst unreliable, Alembic owns schema
+        # SQLite (memory or file): create_all is safe and needed for schema init
+        if "postgresql" not in str(self._engine.url):
+            async with self._engine.begin() as conn:
+                await conn.run_sync(metadata.create_all)
         if not self._is_memory:
             await self._run_migrations()
         await self.load_dedup_cache()
