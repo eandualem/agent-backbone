@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import signal
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agent_backbone.services.streaming._pty import (
@@ -22,6 +23,9 @@ from api.socketio_server import (
     MIN_COLS,
     MIN_ROWS,
     TerminalNamespace,
+    _load_persisted_dims,
+    _persist_dims,
+    _remove_persisted_dims,
 )
 
 
@@ -908,6 +912,8 @@ class TestReloadDimsRecovery:
                 "api.socketio_server.get_window_size",
                 new_callable=AsyncMock,
             ) as mock_get_size,
+            patch("api.socketio_server._load_persisted_dims", return_value=None),
+            patch("api.socketio_server._persist_dims"),
         ):
             # First join: returns (200, 50)
             mock_get_size.return_value = (200, 50)
@@ -956,6 +962,8 @@ class TestReloadDimsRecovery:
                 new_callable=AsyncMock,
                 return_value=(180, 45),
             ) as mock_get_size,
+            patch("api.socketio_server._load_persisted_dims", return_value=None),
+            patch("api.socketio_server._persist_dims"),
         ):
             await ns.on_join("sid2", {"session": "ike", "cols": 140, "rows": 30})
             await asyncio.sleep(0.1)
@@ -1174,6 +1182,8 @@ class TestOriginalDimsOverwriteFix:
                 new_callable=AsyncMock,
                 return_value=(200, 50),
             ) as mock_get_size,
+            patch("api.socketio_server._load_persisted_dims", return_value=None),
+            patch("api.socketio_server._persist_dims"),
         ):
             await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
             await asyncio.sleep(0.1)
@@ -1285,6 +1295,146 @@ class TestOriginalDimsOverwriteFix:
 
             mock_get_size.assert_awaited_once()
             assert ns._original_dims["ike"] == (180, 45)
+
+
+class TestDimsFilePersistence:
+    """File-based persistence of original tmux dimensions across reloads."""
+
+    async def test_persist_and_load_roundtrip(self, tmp_path: Path):
+        """Persist dims then load them back — values must match."""
+        dims_file = tmp_path / "dims.json"
+        with patch("api.socketio_server._DIMS_FILE", dims_file):
+            _persist_dims("ike", 200, 50)
+            result = _load_persisted_dims("ike")
+
+        assert result == (200, 50)
+
+    async def test_load_missing_file_returns_none(self, tmp_path: Path):
+        """Loading from a non-existent file returns None."""
+        dims_file = tmp_path / "dims.json"
+        with patch("api.socketio_server._DIMS_FILE", dims_file):
+            result = _load_persisted_dims("ike")
+
+        assert result is None
+
+    async def test_load_missing_session_returns_none(self, tmp_path: Path):
+        """File exists but requested session is not in it — returns None."""
+        dims_file = tmp_path / "dims.json"
+        with patch("api.socketio_server._DIMS_FILE", dims_file):
+            _persist_dims("leo", 180, 45)
+            result = _load_persisted_dims("ike")
+
+        assert result is None
+
+    async def test_persist_multiple_sessions(self, tmp_path: Path):
+        """Persist two sessions, load each independently."""
+        dims_file = tmp_path / "dims.json"
+        with patch("api.socketio_server._DIMS_FILE", dims_file):
+            _persist_dims("ike", 200, 50)
+            _persist_dims("leo", 180, 45)
+
+            result_ike = _load_persisted_dims("ike")
+            result_leo = _load_persisted_dims("leo")
+
+        assert result_ike == (200, 50)
+        assert result_leo == (180, 45)
+
+    async def test_remove_persisted_dims(self, tmp_path: Path):
+        """Persist, remove, verify load returns None."""
+        dims_file = tmp_path / "dims.json"
+        with patch("api.socketio_server._DIMS_FILE", dims_file):
+            _persist_dims("ike", 200, 50)
+            _remove_persisted_dims("ike")
+            result = _load_persisted_dims("ike")
+
+        assert result is None
+
+    async def test_remove_nonexistent_session_is_noop(self, tmp_path: Path):
+        """Remove a session not in the file — no crash, other data preserved."""
+        dims_file = tmp_path / "dims.json"
+        with patch("api.socketio_server._DIMS_FILE", dims_file):
+            _persist_dims("ike", 200, 50)
+            _remove_persisted_dims("leo")  # not in file — should not crash
+            result = _load_persisted_dims("ike")
+
+        assert result == (200, 50)
+
+    async def test_load_corrupted_file_returns_none(self, tmp_path: Path):
+        """Corrupted JSON in dims file returns None without crashing."""
+        dims_file = tmp_path / "dims.json"
+        dims_file.write_text("not valid json {{{")
+        with patch("api.socketio_server._DIMS_FILE", dims_file):
+            result = _load_persisted_dims("ike")
+
+        assert result is None
+
+    async def test_reload_recovery_uses_persisted_dims(self):
+        """First join persists dims, reload wipes dicts, second join loads from file."""
+        ns = _make_namespace()
+        pty_session = _mock_pty_session()
+        mgr = _mock_pty_manager(pty_session)
+
+        # --- First join: fresh, no persisted file ---
+        queue1: asyncio.Queue[str | None] = asyncio.Queue()
+        await queue1.put(None)
+        pty_session.output_queue = queue1
+
+        with (
+            patch("api.socketio_server.session_exists", new_callable=AsyncMock, return_value=True),
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch("api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True),
+            patch(
+                "api.socketio_server.get_window_size",
+                new_callable=AsyncMock,
+                return_value=(200, 50),
+            ) as mock_get_size,
+            patch(
+                "api.socketio_server._load_persisted_dims",
+                return_value=None,
+            ) as mock_load,
+            patch("api.socketio_server._persist_dims") as mock_persist,
+        ):
+            await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
+            await asyncio.sleep(0.1)
+
+            # First join: no persisted dims, so get_window_size queried and persist called
+            mock_load.assert_called_once_with("ike")
+            mock_get_size.assert_awaited_once()
+            mock_persist.assert_called_once_with("ike", 200, 50)
+            assert ns._original_dims["ike"] == (200, 50)
+
+        # --- Simulate uvicorn reload: wipe in-memory dicts ---
+        ns._original_dims.clear()
+        ns._active_sessions.clear()
+
+        # --- Second join: persisted file has the dims ---
+        queue2: asyncio.Queue[str | None] = asyncio.Queue()
+        await queue2.put(None)
+        pty_session.output_queue = queue2
+
+        with (
+            patch("api.socketio_server.session_exists", new_callable=AsyncMock, return_value=True),
+            patch("api.socketio_server.get_pty_manager", return_value=mgr),
+            patch("api.socketio_server.resize_window", new_callable=AsyncMock, return_value=True),
+            patch(
+                "api.socketio_server.get_window_size",
+                new_callable=AsyncMock,
+                return_value=(999, 999),
+            ) as mock_get_size_2,
+            patch(
+                "api.socketio_server._load_persisted_dims",
+                return_value=(200, 50),
+            ) as mock_load_2,
+            patch("api.socketio_server._persist_dims") as mock_persist_2,
+        ):
+            await ns.on_join("sid2", {"session": "ike", "cols": 140, "rows": 30})
+            await asyncio.sleep(0.1)
+
+            # Reload recovery: persisted dims found, so get_window_size NOT called
+            mock_load_2.assert_called_once_with("ike")
+            mock_get_size_2.assert_not_awaited()
+            mock_persist_2.assert_not_called()
+            assert ns._original_dims["ike"] == (200, 50)
 
 
 class TestPtyDeathNotification:

@@ -402,6 +402,7 @@ class Room(BaseModel):
     participants: list[str]
     state: str = "active"
     transcript: list[RoomMessage] = Field(default_factory=list)
+    cursors: dict[str, int] = Field(default_factory=dict)
     created_at: str = ""  # ISO 8601
     updated_at: str = ""  # ISO 8601
 
@@ -429,6 +430,7 @@ class DirectedMessageRequest(BaseModel):
 
     target: str
     content: str
+    sender: str = ""
 
 
 class BroadcastMessageRequest(BaseModel):

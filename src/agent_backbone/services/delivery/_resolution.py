@@ -44,6 +44,14 @@ async def resolve_entity_session(
     if target in config.registry.sessions_map:
         return config.registry.sessions_map[target]
 
+    # Coding agent repo name (e.g. "agent-backbone", "lovely-assistant")
+    if target in config.registry.repo_names:
+        if await session_exists(target):
+            log.info("Resolved repo name '%s' to session '%s'", target, target)
+            return target
+        log.info("Repo '%s' recognized but session not running", target)
+        return None
+
     # Jarvis: HTTP injection target (no tmux session)
     if target == "jarvis":
         if config.jarvis.enabled:

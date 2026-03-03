@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["rooms"])
 
 _ROOM_DIR = Path.home() / ".claude" / "state" / "rooms"
+_MEETING_SKILL_PATH = Path.home() / ".claude" / "skills" / "meeting-participant" / "SKILL.md"
 
 _VALID_STATES = {"active", "paused", "closed"}
 
@@ -80,18 +81,9 @@ async def _list_rooms(state_filter: str | None = None) -> list[Room]:
 
 
 def _compute_context_delta(room: Room, participant: str) -> list[RoomMessage]:
-    """Return messages since the participant's last response.
-
-    Scans transcript backward for the participant's last 'response' message.
-    Returns everything after it. If never responded, returns full transcript.
-    """
-    last_response_idx = -1
-    for i in range(len(room.transcript) - 1, -1, -1):
-        msg = room.transcript[i]
-        if msg.sender == participant and msg.mode == "response":
-            last_response_idx = i
-            break
-    return room.transcript[last_response_idx + 1 :]
+    """Return transcript messages since the participant's last delivery cursor."""
+    cursor = room.cursors.get(participant, 0)
+    return room.transcript[cursor:]
 
 
 def _format_context_section(messages: list[RoomMessage]) -> str:
@@ -130,11 +122,97 @@ def _check_room_active(room: Room) -> None:
         raise HTTPException(status_code=400, detail="Room is paused")
 
 
+# --- Meeting skill injection ---
+
+
+def _read_meeting_skill() -> str | None:
+    """Read the meeting-participant skill file. Returns content or None."""
+    try:
+        return _MEETING_SKILL_PATH.read_text()
+    except FileNotFoundError:
+        log.warning("Meeting skill not found at %s", _MEETING_SKILL_PATH)
+        return None
+    except OSError as exc:
+        log.warning("Failed to read meeting skill: %s", exc)
+        return None
+
+
+def _format_meeting_setup_envelope(room: Room, skill_content: str) -> str:
+    """Format the meeting-setup envelope per ROOM-18."""
+    participant_list = ", ".join(room.participants)
+    return (
+        f"[via:meeting-setup room:{room.id}]\n"
+        f'You are joining meeting: "{room.title}"\n'
+        f"Moderator: {room.moderator}\n"
+        f"Participants: {participant_list}\n"
+        f"\n--- Meeting Participant Protocol ---\n"
+        f"{skill_content}\n"
+        f"---\n"
+        f"\n--- How to Reply ---\n"
+        f"To respond in this meeting, run:\n"
+        f"~/.claude/bin/room-respond.sh --room {room.id} "
+        f'--from {{your_name}} --message "your response"\n'
+        f"\n"
+        f"Replace {{your_name}} with your entity name. "
+        f"Always reply to the room — do not just respond in your terminal.\n"
+        f"---"
+    )
+
+
+async def _inject_meeting_skill(
+    room: Room,
+    config: BackboneConfig,
+    delivery_svc: DeliveryService,
+) -> None:
+    """Deliver meeting-participant skill to all room participants. Fire-and-forget."""
+    skill_content = await asyncio.to_thread(_read_meeting_skill)
+    if skill_content is None:
+        return
+
+    envelope = _format_meeting_setup_envelope(room, skill_content)
+
+    async def _deliver(participant: str) -> bool:
+        session_name = await resolve_entity_session(participant, config)
+        if session_name is None:
+            log.warning(
+                "Meeting skill injection: cannot resolve session for '%s'",
+                participant,
+            )
+            return False
+        result = await delivery_svc.safe_deliver(session_name, envelope, config)
+        if result != "delivered":
+            log.warning("Meeting skill injection failed for '%s': %s", participant, result)
+            return False
+        return True
+
+    results = await asyncio.gather(
+        *[_deliver(p) for p in room.participants],
+        return_exceptions=True,
+    )
+    changed = False
+    for i, r in enumerate(results):
+        if isinstance(r, BaseException):
+            log.warning(
+                "Meeting skill injection exception for '%s': %s",
+                room.participants[i],
+                r,
+            )
+        elif r is True:
+            room.cursors[room.participants[i]] = len(room.transcript)
+            changed = True
+    if changed:
+        await _save_room(room)
+
+
 # --- Endpoints ---
 
 
 @router.post("/rooms", response_model=Room, status_code=201)
-async def create_room(body: RoomCreate):
+async def create_room(
+    body: RoomCreate,
+    config: BackboneConfig = Depends(get_config),
+    delivery_svc: DeliveryService = Depends(get_delivery_service),
+):
     """Create a new meeting room."""
     now = _now_iso()
     room = Room(
@@ -149,6 +227,7 @@ async def create_room(body: RoomCreate):
         updated_at=now,
     )
     await _save_room(room)
+    asyncio.create_task(_inject_meeting_skill(room, config, delivery_svc))
     return room
 
 
@@ -175,43 +254,86 @@ async def send_directed(
     config: BackboneConfig = Depends(get_config),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
-    """Send a directed message to one participant with context delta."""
+    """Send a directed message from any room member to another."""
     room = await _load_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
     _check_room_active(room)
 
-    if body.target not in room.participants:
-        raise HTTPException(status_code=400, detail="Target is not a room participant")
+    # Determine effective sender (defaults to moderator when empty)
+    effective_sender = body.sender or room.moderator
 
-    # Compute context delta for the target
-    delta = _compute_context_delta(room, body.target)
+    # Validate sender is moderator or participant
+    if effective_sender != room.moderator and effective_sender not in room.participants:
+        raise HTTPException(status_code=400, detail="Sender is not a room participant or moderator")
 
-    # Resolve entity → session name
-    session_name = await resolve_entity_session(body.target, config)
-    if session_name is None:
-        log.error("Room directed: cannot resolve session for '%s'", body.target)
-        result = "unresolvable"
-    else:
-        envelope = _format_room_message(room, room.moderator, body.content, body.target, delta)
+    # Validate target is moderator or participant
+    if body.target != room.moderator and body.target not in room.participants:
+        raise HTTPException(status_code=400, detail="Target is not a room participant or moderator")
+
+    # Can't message yourself
+    if effective_sender == body.target:
+        raise HTTPException(status_code=400, detail="Sender and target must be different")
+
+    # Build recipient list: target + moderator CC (when non-moderator sends)
+    deliver_to = [body.target]
+    if effective_sender != room.moderator and room.moderator != body.target:
+        deliver_to.append(room.moderator)
+
+    # Deliver to all recipients in parallel
+    async def _deliver_one(recipient: str) -> tuple[str, str]:
+        session_name = await resolve_entity_session(recipient, config)
+        if session_name is None:
+            log.error("Room directed: cannot resolve session for '%s'", recipient)
+            return (recipient, "unresolvable")
+        delta = _compute_context_delta(room, recipient)
+        envelope = _format_room_message(room, effective_sender, body.content, recipient, delta)
         result = await delivery_svc.safe_deliver(session_name, envelope, config)
         if result != "delivered":
-            log.error("Room directed delivery failed for '%s': %s", body.target, result)
+            log.error("Room directed delivery failed for '%s': %s", recipient, result)
+        return (recipient, result)
 
-    # Record in transcript regardless of delivery outcome
+    raw_results = await asyncio.gather(
+        *[_deliver_one(r) for r in deliver_to],
+        return_exceptions=True,
+    )
+
+    # Record in transcript (recipients = [target] only, not CC)
     msg = RoomMessage(
         id=str(uuid.uuid4()),
-        sender=room.moderator,
+        sender=effective_sender,
         recipients=[body.target],
         mode="directed",
         content=body.content,
         timestamp=_now_iso(),
     )
     room.transcript.append(msg)
+
+    # Advance cursors for delivered recipients + sender
+    for r in raw_results:
+        if isinstance(r, tuple) and r[1] == "delivered":
+            room.cursors[r[0]] = len(room.transcript)
+    # Sender knows what they sent — advance their cursor too
+    room.cursors[effective_sender] = len(room.transcript)
+
     await _save_room(room)
 
-    return {"ok": result == "delivered", "status": result, "target": body.target}
+    # Primary outcome = target delivery result
+    target_result = "error"
+    for r in raw_results:
+        if isinstance(r, tuple) and r[0] == body.target:
+            target_result = r[1]
+            break
+        elif isinstance(r, BaseException):
+            target_result = "error"
+
+    return {
+        "ok": target_result == "delivered",
+        "status": target_result,
+        "target": body.target,
+        "sender": effective_sender,
+    }
 
 
 @router.post("/rooms/{room_id}/broadcast")
@@ -285,6 +407,12 @@ async def send_broadcast(
         timestamp=_now_iso(),
     )
     room.transcript.append(msg)
+
+    # Advance cursors for successfully delivered participants
+    for r in raw_results:
+        if isinstance(r, tuple) and r[1] == "delivered":
+            room.cursors[r[0]] = len(room.transcript)
+
     await _save_room(room)
 
     return {
@@ -296,8 +424,13 @@ async def send_broadcast(
 
 
 @router.post("/rooms/{room_id}/respond")
-async def post_response(room_id: str, body: ResponseMessageRequest):
-    """Post a participant response to the room transcript."""
+async def post_response(
+    room_id: str,
+    body: ResponseMessageRequest,
+    config: BackboneConfig = Depends(get_config),
+    delivery_svc: DeliveryService = Depends(get_delivery_service),
+):
+    """Post a participant response and deliver to moderator."""
     room = await _load_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -311,13 +444,43 @@ async def post_response(room_id: str, body: ResponseMessageRequest):
         timestamp=_now_iso(),
     )
     room.transcript.append(msg)
+
+    # Sender knows what they sent — advance their cursor
+    room.cursors[body.sender] = len(room.transcript)
+
+    # Deliver to moderator if sender is not the moderator
+    if body.sender != room.moderator:
+        session_name = await resolve_entity_session(room.moderator, config)
+        if session_name is None:
+            log.warning(
+                "Room respond: cannot resolve session for moderator '%s'",
+                room.moderator,
+            )
+        else:
+            delta = _compute_context_delta(room, room.moderator)
+            envelope = _format_room_message(room, body.sender, body.content, room.moderator, delta)
+            result = await delivery_svc.safe_deliver(session_name, envelope, config)
+            if result == "delivered":
+                room.cursors[room.moderator] = len(room.transcript)
+            else:
+                log.warning(
+                    "Room respond: moderator delivery failed for '%s': %s",
+                    room.moderator,
+                    result,
+                )
+
     await _save_room(room)
 
     return {"ok": True}
 
 
 @router.patch("/rooms/{room_id}", response_model=Room)
-async def update_room_state(room_id: str, body: RoomStateUpdate):
+async def update_room_state(
+    room_id: str,
+    body: RoomStateUpdate,
+    config: BackboneConfig = Depends(get_config),
+    delivery_svc: DeliveryService = Depends(get_delivery_service),
+):
     """Update room state (active/paused/closed)."""
     if body.state not in _VALID_STATES:
         valid = ", ".join(sorted(_VALID_STATES))
@@ -330,6 +493,11 @@ async def update_room_state(room_id: str, body: RoomStateUpdate):
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
+    old_state = room.state
     room.state = body.state
     await _save_room(room)
+
+    if body.state == "active" and old_state != "active":
+        asyncio.create_task(_inject_meeting_skill(room, config, delivery_svc))
+
     return room

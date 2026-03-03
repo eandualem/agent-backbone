@@ -14,7 +14,7 @@ from agent_backbone.services.delivery import (
     resolve_entity_session,
     safe_deliver,
 )
-from agent_backbone.services.registry import EntityEntry, EntityRegistry
+from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
 from agent_backbone.services.state import AgentState, StateSnapshot
 
 # ---------------------------------------------------------------------------
@@ -133,6 +133,24 @@ def _test_registry() -> EntityRegistry:
             ),
         },
         repos=[],
+    )
+
+
+def _test_registry_with_repos() -> EntityRegistry:
+    """Registry with standard test entities and repos."""
+    return EntityRegistry(
+        entities={
+            "ike": EntityEntry(
+                session="ike",
+                home="~/ws/core/ike",
+                groups=[],
+                figure="",
+                role="Core Orchestrator",
+            ),
+        },
+        repos=[
+            RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+        ],
     )
 
 
@@ -344,6 +362,28 @@ class TestResolveEntitySession:
             issue_title="Some random title without brackets",
         )
         assert result == "ike"
+
+    async def test_repo_name_with_active_session(self):
+        """Known repo name with active tmux session resolves to that session."""
+        config = BackboneConfig(
+            github_token="test-token",
+            webhook_secret="test-secret",
+            registry=_test_registry_with_repos(),
+        )
+        with _patch_session_exists(True):
+            result = await resolve_entity_session("agent-backbone", config)
+        assert result == "agent-backbone"
+
+    async def test_repo_name_session_not_running(self):
+        """Known repo name without active tmux session returns None."""
+        config = BackboneConfig(
+            github_token="test-token",
+            webhook_secret="test-secret",
+            registry=_test_registry_with_repos(),
+        )
+        with _patch_session_exists(False):
+            result = await resolve_entity_session("agent-backbone", config)
+        assert result is None
 
     async def test_unknown_entity(self):
         """Unknown entity 'nobody' returns None."""

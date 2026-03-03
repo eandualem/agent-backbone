@@ -12,9 +12,11 @@ path uses PTY.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
+from pathlib import Path
 
 import socketio
 
@@ -30,6 +32,48 @@ log = logging.getLogger(__name__)
 
 # Module-level PTY manager singleton
 _pty_manager = PtyManager()
+
+# Persisted original dimensions — survives uvicorn reload
+_DIMS_FILE = Path("/tmp/agent-backbone-original-dims.json")
+
+
+def _persist_dims(session_name: str, cols: int, rows: int) -> None:
+    """Save original dimensions to file for reload recovery."""
+    try:
+        data = {}
+        if _DIMS_FILE.exists():
+            data = json.loads(_DIMS_FILE.read_text())
+        data[session_name] = [cols, rows]
+        _DIMS_FILE.write_text(json.dumps(data))
+    except Exception:
+        log.debug("Failed to persist original dims for '%s'", session_name)
+
+
+def _load_persisted_dims(session_name: str) -> tuple[int, int] | None:
+    """Load persisted original dimensions from file."""
+    try:
+        if not _DIMS_FILE.exists():
+            return None
+        data = json.loads(_DIMS_FILE.read_text())
+        dims = data.get(session_name)
+        if dims and len(dims) == 2:
+            return (int(dims[0]), int(dims[1]))
+    except Exception:
+        log.debug("Failed to load persisted dims for '%s'", session_name)
+    return None
+
+
+def _remove_persisted_dims(session_name: str) -> None:
+    """Remove persisted original dimensions from file."""
+    try:
+        if not _DIMS_FILE.exists():
+            return
+        data = json.loads(_DIMS_FILE.read_text())
+        data.pop(session_name, None)
+        _DIMS_FILE.write_text(json.dumps(data))
+    except Exception:
+        log.debug("Failed to remove persisted dims for '%s'", session_name)
+
 
 # --- Hardening constants ---
 MAX_INPUT_BYTES = 4096
@@ -152,16 +196,31 @@ class TerminalNamespace(socketio.AsyncNamespace):
         # Save original tmux window dimensions only when no browser clients
         # are currently connected. This prevents a second client from
         # overwriting the original dims with already-resized values.
+        #
+        # After uvicorn reload, both _active_sessions and _original_dims are
+        # wiped. The tmux window may already be browser-resized, so querying
+        # tmux would give wrong "original" dims. Check the persisted file first.
         active_sids = self._active_sessions.get(session_name, set())
         if not active_sids:
-            orig = await get_window_size(session_name)
-            if orig is not None:
-                self._original_dims[session_name] = orig
+            persisted = _load_persisted_dims(session_name)
+            if persisted is not None:
+                # Reload recovery: use persisted dims (tmux is already resized)
+                self._original_dims[session_name] = persisted
+            else:
+                # Fresh join: query tmux for true original dims and persist
+                orig = await get_window_size(session_name)
+                if orig is not None:
+                    self._original_dims[session_name] = orig
+                    _persist_dims(session_name, orig[0], orig[1])
         elif session_name not in self._original_dims:
-            # Reload recovery: dict was wiped but clients reconnected
-            orig = await get_window_size(session_name)
-            if orig is not None:
-                self._original_dims[session_name] = orig
+            # Multiple active sids but dict was wiped — check persisted file
+            persisted = _load_persisted_dims(session_name)
+            if persisted is not None:
+                self._original_dims[session_name] = persisted
+            else:
+                orig = await get_window_size(session_name)
+                if orig is not None:
+                    self._original_dims[session_name] = orig
 
         # Track this client in active sessions
         self._active_sessions.setdefault(session_name, set()).add(sid)
@@ -358,6 +417,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
             # Last browser client left — restore original tmux dimensions
             self._active_sessions.pop(session_name, None)
             orig = self._original_dims.pop(session_name, None)
+            _remove_persisted_dims(session_name)
             if orig is not None:
                 if not await resize_window(session_name, orig[0], orig[1]):
                     log.error("Failed to restore original dims for '%s'", session_name)
