@@ -1,4 +1,4 @@
-"""Tests for agent_backbone/topic_discovery.py."""
+"""Tests for agent_backbone/services/telegram/_topic_discovery.py."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 from agent_backbone.config import BackboneConfig, TelegramConfig
 from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
-from agent_backbone.topic_discovery import (
+from agent_backbone.services.telegram._topic_discovery import (
     TopicDiscovery,
     effective_group_chat_id,
     effective_routes,

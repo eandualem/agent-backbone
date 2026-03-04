@@ -2,9 +2,18 @@
        test test-file test-unit test-integration cov cov-html check build \
        run-gateway run-prefect setup-pool deploy run-worker \
        db-up db-down db-upgrade db-migrate db-revision db-history db-current db-downgrade \
-       start-backbone stop-backbone restart-backbone start-tunnel stop-tunnel infra-status
+       start-backbone stop-backbone restart-backbone start-tunnel stop-tunnel status \
+       start-agent stop-agent start-orchestrators start-arclio start-loveble start-wf \
+       start-all stop-all list
 
 .DEFAULT_GOAL := help
+
+# ─── Positional arg capture (allows: make start-agent bell) ───
+
+ifneq (,$(filter start-agent stop-agent,$(firstword $(MAKECMDGOALS))))
+  NAME := $(word 2,$(MAKECMDGOALS))
+  $(eval $(NAME):;@:)
+endif
 
 # ─── Config ──────────────────────────────────────────────
 
@@ -191,5 +200,34 @@ start-tunnel: ## Start ngrok tunnel
 stop-tunnel: ## Stop ngrok tunnel
 	@uv run python -m agent_backbone.services.infrastructure stop-tunnel
 
-infra-status: ## Show all services and sessions
+status: ## Show all services and agent sessions
 	@uv run python -m agent_backbone.services.infrastructure status
+
+# ─── Agent Management ──────────────────────────────────
+
+start-agent: ## Start an agent session (NAME=bell, CLI=claude, MODEL=)
+	@uv run python -m agent_backbone.services.infrastructure start-agent $(NAME) $(if $(CLI),--cli $(CLI)) $(if $(MODEL),--model $(MODEL))
+
+stop-agent: ## Stop an agent session (NAME=bell)
+	@uv run python -m agent_backbone.services.infrastructure stop-agent $(NAME)
+
+start-orchestrators: ## Start all orchestrator agents
+	@uv run python -m agent_backbone.services.infrastructure start-orchestrators
+
+start-arclio: ## Start Arclio coding agents
+	@uv run python -m agent_backbone.services.infrastructure start-arclio
+
+start-loveble: ## Start Loveble coding agents
+	@uv run python -m agent_backbone.services.infrastructure start-loveble
+
+start-wf: ## Start WF coding agents
+	@uv run python -m agent_backbone.services.infrastructure start-wf
+
+start-all: ## Start all agents (orchestrators + coding)
+	@uv run python -m agent_backbone.services.infrastructure start-all
+
+stop-all: ## Stop all agent sessions
+	@uv run python -m agent_backbone.services.infrastructure stop-all
+
+list: ## List all known agents and directories
+	@uv run python -m agent_backbone.services.infrastructure list

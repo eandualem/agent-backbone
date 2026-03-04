@@ -314,28 +314,6 @@ class TestPhaseIVConfigs:
         assert config.capacity_routing.busy_threshold_seconds == 3600
 
 
-class TestControlModeConfig:
-    def test_stream_grace_period_default(self):
-        config = BackboneConfig()
-        assert config.control_mode.stream_grace_period_seconds == 30
-
-    def test_stream_grace_period_from_toml(self):
-        config = BackboneConfig.from_toml()
-        assert config.control_mode.stream_grace_period_seconds == 30
-
-    def test_stream_grace_period_custom_toml(self, tmp_path):
-        toml_file = tmp_path / "custom.toml"
-        toml_file.write_text("[control_mode]\nstream_grace_period_seconds = 60\n")
-        config = BackboneConfig.from_toml(toml_file)
-        assert config.control_mode.stream_grace_period_seconds == 60
-
-    def test_stream_grace_period_missing_uses_default(self, tmp_path):
-        toml_file = tmp_path / "empty.toml"
-        toml_file.write_text("[control_mode]\nbuffer_size = 500\n")
-        config = BackboneConfig.from_toml(toml_file)
-        assert config.control_mode.stream_grace_period_seconds == 30
-
-
 class TestEscalationConfig:
     def test_defaults(self):
         config = BackboneConfig()

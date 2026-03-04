@@ -3,10 +3,6 @@
 Provides bidirectional real-time terminal access via PTY-based
 `tmux attach-session`. Each WebSocket connection gets its own PTY
 (1:1 model), delegating multiplexing to tmux natively.
-
-Control mode infrastructure (StreamBroker, SSE) remains for session
-monitoring and dashboard state events — only the interactive terminal
-path uses PTY.
 """
 
 from __future__ import annotations

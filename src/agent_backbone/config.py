@@ -183,17 +183,6 @@ class SessionBridgeConfig:
 
 
 @dataclass(frozen=True)
-class ControlModeConfig:
-    """Control mode streaming settings."""
-
-    buffer_size: int = 1000
-    reconnect_interval_seconds: int = 5
-    max_reconnect_attempts: int = 10
-    reconnect_backoff_factor: float = 1.5
-    stream_grace_period_seconds: int = 30
-
-
-@dataclass(frozen=True)
 class EscalationConfig:
     """Escalation settings for stalled/offline agent detection."""
 
@@ -239,7 +228,6 @@ class BackboneConfig:
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     session_bridge: SessionBridgeConfig = field(default_factory=SessionBridgeConfig)
-    control_mode: ControlModeConfig = field(default_factory=ControlModeConfig)
     jarvis: JarvisConfig = field(default_factory=JarvisConfig)
 
     @classmethod
@@ -270,7 +258,6 @@ class BackboneConfig:
         es = raw.get("escalation", {})
         hb = raw.get("heartbeat", {})
         sb = raw.get("session_bridge", {})
-        cm = raw.get("control_mode", {})
 
         # Build registry from JSON + filesystem
         import logging
@@ -388,13 +375,6 @@ class BackboneConfig:
             session_bridge=SessionBridgeConfig(
                 grace_period_seconds=sb.get("grace_period_seconds", 5),
                 queue_retry_seconds=sb.get("queue_retry_seconds", 30),
-            ),
-            control_mode=ControlModeConfig(
-                buffer_size=cm.get("buffer_size", 1000),
-                reconnect_interval_seconds=cm.get("reconnect_interval_seconds", 5),
-                max_reconnect_attempts=cm.get("max_reconnect_attempts", 10),
-                reconnect_backoff_factor=cm.get("reconnect_backoff_factor", 1.5),
-                stream_grace_period_seconds=cm.get("stream_grace_period_seconds", 30),
             ),
             jarvis=JarvisConfig(
                 inject_url=os.environ.get("JARVIS_INJECT_URL", ""),

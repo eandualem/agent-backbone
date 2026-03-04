@@ -1,20 +1,5 @@
-"""Terminal service — async tmux session operations and streaming."""
+"""Terminal service — async tmux session operations and PTY management."""
 
-from agent_backbone.services.terminal._broker import (
-    SessionBroadcast,
-    StreamBroker,
-    _event_to_data,
-    _event_type_name,
-    format_sse,
-    parse_sse_frame,
-)
-from agent_backbone.services.terminal._control_mode import (
-    ControlModeConnection,
-    ControlModeManager,
-    _manager,
-    _unescape_output,
-    parse_control_mode_line,
-)
 from agent_backbone.services.terminal._core import (
     capture_pane,
     get_window_size,
@@ -51,61 +36,32 @@ from agent_backbone.services.terminal._windows import (
     select_window,
     set_layout,
 )
-from agent_backbone.services.terminal.exceptions import StreamingServiceError, TmuxError
-from agent_backbone.services.terminal.interface import StreamingService, TmuxService
+from agent_backbone.services.terminal.exceptions import TmuxError
+from agent_backbone.services.terminal.interface import TmuxService
 from agent_backbone.services.terminal.models import (
-    ConnectionState,
-    ControlModeEvent,
-    ExitEvent,
-    LayoutChangeEvent,
-    ModeChangeEvent,
-    OutputEvent,
     PaneInfo,
-    SessionEvent,
-    WindowEvent,
     WindowInfo,
 )
 
 __all__ = [
-    "ConnectionState",
-    "ControlModeConnection",
-    "ControlModeEvent",
-    "ControlModeManager",
-    "ExitEvent",
-    "LayoutChangeEvent",
-    "ModeChangeEvent",
-    "OutputEvent",
     "PaneInfo",
     "PtyManager",
     "PtySession",
     "SESSION_FORMAT_STR",
-    "SessionBroadcast",
-    "SessionEvent",
-    "StreamBroker",
-    "StreamingService",
-    "StreamingServiceError",
     "TmuxError",
     "TmuxService",
-    "WindowEvent",
     "WindowInfo",
-    "_event_to_data",
-    "_event_type_name",
-    "_manager",
-    "_unescape_output",
     "capture_pane",
     "close_pane",
     "close_window",
     "create_layout",
     "create_window",
-    "format_sse",
     "get_window_size",
     "graceful_close",
     "list_panes",
     "list_sessions",
     "list_sessions_rich",
     "list_windows",
-    "parse_control_mode_line",
-    "parse_sse_frame",
     "query_format_vars",
     "rename_window",
     "resize_pane",

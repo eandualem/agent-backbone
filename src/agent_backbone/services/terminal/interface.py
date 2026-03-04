@@ -85,16 +85,3 @@ class TmuxService:
     async def stop_session(self, session_name: str) -> bool:
         """Stop (kill) a tmux session."""
         return await _stop_session(session_name)
-
-
-class StreamingService:
-    """Streaming service implementing LifecycleAware."""
-
-    async def start(self) -> None:
-        log.info("Streaming service started")
-
-    async def stop(self) -> None:
-        pass
-
-    async def health_check(self) -> dict:
-        return {"healthy": True, "service": "streaming"}

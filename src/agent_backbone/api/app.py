@@ -78,13 +78,7 @@ async def lifespan(app: FastAPI):
     finally:
         await lifecycle.stop_all()
 
-        # Non-lifecycle cleanup (stream broker, PTY)
-        from agent_backbone.api.broker import get_broker_instance
-
-        broker = get_broker_instance()
-        if broker is not None:
-            await broker.shutdown()
-
+        # Non-lifecycle cleanup (PTY)
         from agent_backbone.api.socketio_server import get_pty_manager
 
         await get_pty_manager().cleanup_all()
@@ -168,7 +162,6 @@ def create_app() -> socketio.ASGIApp:
     from agent_backbone.api.routes.rooms import router as rooms_router
     from agent_backbone.api.routes.schedule import router as schedule_router
     from agent_backbone.api.routes.status import router as status_router
-    from agent_backbone.api.routes.stream import router as stream_router
     from agent_backbone.api.routes.workflows import router as workflows_router
 
     api_routers = [
@@ -188,7 +181,6 @@ def create_app() -> socketio.ASGIApp:
         notes_router,
         rooms_router,
         repos_router,
-        stream_router,
     ]
     for r in api_routers:
         app.include_router(r, dependencies=[Depends(require_api_key)])
