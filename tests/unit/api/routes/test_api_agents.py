@@ -392,8 +392,8 @@ class TestGetAgentState:
         assert data["current_issue"] == 99
         assert data["source"] == "push"
 
-    async def test_session_name_case_insensitive(self, api_app, api_client, auth_headers):
-        """Capitalized session names are normalized to lowercase."""
+    async def test_session_name_case_preserved(self, api_app, api_client, auth_headers):
+        """Mixed-case session names are preserved (not lowercased)."""
         snapshot = _processing_snapshot(issue=99)
         _set_di_overrides(
             api_app,
@@ -406,7 +406,7 @@ class TestGetAgentState:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["session"] == "feynman"
+        assert data["session"] == "Feynman"
 
     async def test_unknown_session_returns_default_state(self, api_app, api_client, auth_headers):
         """An unknown session still returns a snapshot (with default/unknown state)."""
@@ -592,24 +592,24 @@ class TestStartAgent:
         assert "claude-opus-4-6" in cmd
         assert "--resume" in cmd
 
-    async def test_start_normalizes_session_case(self, api_app, api_client, auth_headers):
-        """Capitalized session names are normalized to lowercase for start."""
+    async def test_start_preserves_session_case(self, api_app, api_client, auth_headers):
+        """Mixed-case session names are preserved through start."""
         tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
         _set_di_overrides(api_app, tmux_svc=tmux_svc)
         try:
             with patch(
                 "agent_backbone.api.routes.agents.resolve_agent_dir",
-                return_value="/ws/leo/",
+                return_value="/ws/code/AI-chatbot/",
             ):
-                resp = await api_client.post("/api/agents/Leo/start", headers=auth_headers)
+                resp = await api_client.post("/api/agents/AI-chatbot/start", headers=auth_headers)
         finally:
             _clear_di_overrides(api_app)
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["session"] == "leo"
-        # Verify tmux was called with lowercase
-        tmux_svc.session_exists.assert_awaited_once_with("leo")
+        assert data["session"] == "AI-chatbot"
+        # Verify tmux was called with original casing
+        tmux_svc.session_exists.assert_awaited_once_with("AI-chatbot")
 
     async def test_start_unknown_runtime_400(self, api_app, api_client, auth_headers):
         """Unknown runtime returns 400."""
@@ -764,19 +764,19 @@ class TestStopAgent:
         assert data["session"] == "ike"
         tmux_svc.stop_session.assert_awaited_once_with("ike")
 
-    async def test_stop_normalizes_session_case(self, api_app, api_client, auth_headers):
-        """Capitalized session names are normalized to lowercase for stop."""
+    async def test_stop_preserves_session_case(self, api_app, api_client, auth_headers):
+        """Mixed-case session names are preserved through stop."""
         tmux_svc = _make_mock_tmux_svc(stop_session_result=True)
         _set_di_overrides(api_app, tmux_svc=tmux_svc)
         try:
-            resp = await api_client.post("/api/agents/Ike/stop", headers=auth_headers)
+            resp = await api_client.post("/api/agents/AI-chatbot/stop", headers=auth_headers)
         finally:
             _clear_di_overrides(api_app)
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["session"] == "ike"
-        tmux_svc.stop_session.assert_awaited_once_with("ike")
+        assert data["session"] == "AI-chatbot"
+        tmux_svc.stop_session.assert_awaited_once_with("AI-chatbot")
 
     async def test_stop_nonexistent_idempotent(self, api_app, api_client, auth_headers):
         """Stopping a nonexistent session is idempotent (ok=True from tmux layer)."""
@@ -831,15 +831,15 @@ class TestPostAgentState:
         assert row["entity"] == "ike"
         assert row["ts"] == "100.0"
 
-    async def test_post_state_normalizes_case(self, api_app, api_client, auth_headers):
-        """Session name is lowercased."""
+    async def test_post_state_preserves_case(self, api_app, api_client, auth_headers):
+        """Mixed-case session names are preserved."""
         resp = await api_client.post(
-            "/api/agents/Feynman/state",
+            "/api/agents/AI-chatbot/state",
             json={"state": "idle"},
             headers=auth_headers,
         )
         assert resp.status_code == 200
-        assert resp.json()["session"] == "feynman"
+        assert resp.json()["session"] == "AI-chatbot"
 
     async def test_post_state_with_plan(self, api_app, api_client, auth_headers):
         """Plan file and title are stored."""
@@ -905,16 +905,16 @@ class TestPostAgentActivity:
         assert data["tool"] == "Read"
         assert data["file"] == "main.py"
 
-    async def test_post_activity_normalizes_case(self, api_app, api_client, auth_headers):
-        """Session name is lowercased."""
+    async def test_post_activity_preserves_case(self, api_app, api_client, auth_headers):
+        """Mixed-case session names are preserved."""
         resp = await api_client.post(
-            "/api/agents/Feynman/activity",
+            "/api/agents/AI-chatbot/activity",
             json={"event": "session_start", "ts": 100.0},
             headers=auth_headers,
         )
         assert resp.status_code == 200
         db = api_app.state.db
-        rows = await db.get_activity("feynman")
+        rows = await db.get_activity("AI-chatbot")
         assert len(rows) == 1
 
 

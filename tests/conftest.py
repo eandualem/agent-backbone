@@ -129,6 +129,7 @@ def sample_issue(sample_labels):
         state="open",
         labels=sample_labels,
         html_url="https://github.com/eandualem/orchestration/issues/42",
+        repo_full_name="eandualem/orchestration",
     )
 
 
@@ -223,6 +224,7 @@ def webhook_payload(github_issue_json):
     return {
         "action": "opened",
         "issue": github_issue_json,
+        "repository": {"full_name": "eandualem/orchestration"},
     }
 
 

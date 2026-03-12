@@ -15,22 +15,25 @@ _semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
 async def _run_tmux(
     *args: str,
     capture_stdout: bool = False,
+    stdin_data: bytes | None = None,
 ) -> tuple[int, bytes, bytes]:
     """Run a tmux subprocess with concurrency limiting.
 
     Returns (returncode, stdout, stderr). stdout is only captured
     when capture_stdout=True; otherwise it's empty bytes.
+    When stdin_data is provided, it is piped to the process's stdin.
     """
     async with _semaphore:
-        proc = await asyncio.create_subprocess_exec(
-            "tmux",
-            *args,
-            stdout=asyncio.subprocess.PIPE if capture_stdout else asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        kwargs: dict = {
+            "stdout": asyncio.subprocess.PIPE if capture_stdout else asyncio.subprocess.DEVNULL,
+            "stderr": asyncio.subprocess.PIPE,
+        }
+        if stdin_data is not None:
+            kwargs["stdin"] = asyncio.subprocess.PIPE
+        proc = await asyncio.create_subprocess_exec("tmux", *args, **kwargs)
         try:
             async with asyncio.timeout(10.0):
-                stdout, stderr = await proc.communicate()
+                stdout, stderr = await proc.communicate(input=stdin_data)
         except TimeoutError:
             try:
                 proc.kill()
@@ -52,16 +55,22 @@ async def send_message(session_name: str, message: str) -> bool:
     """Send a message to a tmux session.
 
     Returns True if delivery succeeded, False otherwise.
-    Uses -l flag for literal text, then separate Enter key.
+    Uses load-buffer/paste-buffer to avoid keystroke interpretation.
     """
     if not await session_exists(session_name):
         log.warning("tmux session '%s' not found — notification dropped", session_name)
         return False
 
-    # Send message text literally (-l prevents key name interpretation)
-    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, "-l", message)
+    # Load message into tmux buffer via stdin
+    rc, _, stderr = await _run_tmux("load-buffer", "-", stdin_data=message.encode())
     if rc != 0:
-        log.error("tmux send-keys failed for '%s': %s", session_name, stderr.decode())
+        log.error("tmux load-buffer failed for '%s': %s", session_name, stderr.decode())
+        return False
+
+    # Paste buffer into target session and delete it
+    rc, _, stderr = await _run_tmux("paste-buffer", "-t", session_name, "-d")
+    if rc != 0:
+        log.error("tmux paste-buffer failed for '%s': %s", session_name, stderr.decode())
         return False
 
     # Send Enter separately to submit

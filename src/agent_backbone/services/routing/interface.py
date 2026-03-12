@@ -50,16 +50,20 @@ class DispatchService:
     # --- DI surface for route handlers ---
 
     async def on_issue_closed(
-        self, event: IssueEvent, config: BackboneConfig, gh: GitHubClient
+        self, event: IssueEvent, config: BackboneConfig, gh: GitHubClient, db: BackboneDB
     ) -> str:
         """Handle issue closed event — close-then-next lifecycle."""
-        return await _on_issue_closed(event, config, gh)
+        return await _on_issue_closed(event, config, gh, db)
 
     async def issue_dispatcher(
-        self, event: IssueEvent, config: BackboneConfig, db: BackboneDB
+        self,
+        event: IssueEvent,
+        config: BackboneConfig,
+        db: BackboneDB,
+        gh: GitHubClient | None = None,
     ) -> DispatchResult:
         """Route an issue event to target sessions."""
-        return await _issue_dispatcher(event, config, db)
+        return await _issue_dispatcher(event, config, db, gh)
 
 
 class DeliveryService:
@@ -100,7 +104,16 @@ class DeliveryService:
         body: str,
         labels: list[str],
         config: BackboneConfig,
+        db: BackboneDB | None = None,
         flow_name: str = "",
     ) -> IssueData:
         """Create an issue and notify targets."""
-        return await _create_and_notify(gh, title, body, labels, config, flow_name=flow_name)
+        return await _create_and_notify(
+            gh,
+            title,
+            body,
+            labels,
+            config,
+            db=db,
+            flow_name=flow_name,
+        )

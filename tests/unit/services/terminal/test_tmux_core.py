@@ -47,7 +47,7 @@ class TestRunTmux:
             nonlocal max_concurrent_seen, current_concurrent
             proc = AsyncMock()
 
-            async def fake_communicate():
+            async def fake_communicate(input=None):
                 nonlocal max_concurrent_seen, current_concurrent
                 async with lock:
                     current_concurrent += 1

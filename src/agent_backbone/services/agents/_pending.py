@@ -61,6 +61,7 @@ async def deliver_pending_issues(
         if not pending_issues:
             result[entity] = "no_pending"
             continue
+        queue_scope_issue_numbers = {issue.number for issue in pending_issues}
 
         # Iterate through pending issues — skip acknowledged and recently delivered,
         # deliver the first one that's ready
@@ -127,22 +128,16 @@ async def deliver_pending_issues(
                 issue_number=candidate.number,
                 target_entity=entity,
                 flow_name="agent-monitor",
+                enforce_issue_queue=True,
+                queue_scope_issue_numbers=queue_scope_issue_numbers,
             )
             if delivery_outcome == "delivered":
                 result[entity] = f"delivered_#{candidate.number}"
                 log.info("Delivered pending issue #%d to %s", candidate.number, entity)
-                try:
-                    await db.record_delivery(
-                        issue_number=candidate.number,
-                        target_entity=entity,
-                        session_name=session_name,
-                        outcome="delivered",
-                        flow_name="agent-monitor",
-                    )
-                except Exception:
-                    log.exception("Failed to record delivery (non-fatal)")
+            elif delivery_outcome in {"already_delivered", "awaiting_ack"}:
+                result[entity] = delivery_outcome
             else:
-                result[entity] = "delivery_failed"
+                result[entity] = delivery_outcome
             delivered = True
             break
 
@@ -160,6 +155,7 @@ async def deliver_pending_issues(
     if coding_sessions:
         # Fetch for:coding-agent issues once
         coding_issues: list[IssueData] = await check_pending_issues(config, "coding-agent", gh)
+        coding_queue_scope_issue_numbers = {issue.number for issue in coding_issues}
 
         for session_name in sorted(coding_sessions):
             snapshot = await get_agent_state(
@@ -236,6 +232,8 @@ async def deliver_pending_issues(
                     issue_number=candidate.number,
                     target_entity="coding-agent",
                     flow_name="agent-monitor",
+                    enforce_issue_queue=True,
+                    queue_scope_issue_numbers=coding_queue_scope_issue_numbers,
                 )
                 if delivery_outcome == "delivered":
                     result[f"coding:{session_name}"] = f"delivered_#{candidate.number}"
@@ -244,18 +242,10 @@ async def deliver_pending_issues(
                         candidate.number,
                         session_name,
                     )
-                    try:
-                        await db.record_delivery(
-                            issue_number=candidate.number,
-                            target_entity="coding-agent",
-                            session_name=session_name,
-                            outcome="delivered",
-                            flow_name="agent-monitor",
-                        )
-                    except Exception:
-                        log.exception("Failed to record coding-agent delivery (non-fatal)")
+                elif delivery_outcome in {"already_delivered", "awaiting_ack"}:
+                    result[f"coding:{session_name}"] = delivery_outcome
                 else:
-                    result[f"coding:{session_name}"] = "delivery_failed"
+                    result[f"coding:{session_name}"] = delivery_outcome
                 delivered = True
                 break
 

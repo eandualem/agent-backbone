@@ -75,6 +75,14 @@ async def create_and_notify(
             issue_number=issue.number,
             target_entity=target,
             flow_name=flow_name,
+            enforce_issue_queue=True,
+            queue_scope_issue_numbers={
+                item.number
+                for item in await gh.list_open_issues(
+                    f"for:{target}",
+                    repo_full_name=issue.repo_full_name or None,
+                )
+            },
         )
         log.info(
             "Direct notification for #%d → %s (%s): %s",

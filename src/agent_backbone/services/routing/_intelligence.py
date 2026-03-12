@@ -44,13 +44,17 @@ async def get_session_intelligence(
     SessionIntelligence value. Derivation priority (first match wins):
 
     1. Session not active -> OFFLINE
-    2. pane_in_mode == "1" -> COPY_MODE
+    2. pane_in_mode == "1" AND agent NOT working -> COPY_MODE
     3. Recent client_activity + agent idle -> USER_INTERACTING
     4. Agent plan_waiting -> PLAN_WAITING
     5. Agent processing/busy/starting -> AGENT_WORKING
     6. Agent idle + grace not elapsed -> IDLE_GRACE
     7. Agent idle + grace elapsed (or no idle_since) -> IDLE_READY
     8. Otherwise -> UNKNOWN
+
+    Invariant: Steps 4-5 (plan_waiting, agent_working) MUST take priority
+    over tmux-only signals (copy_mode, user_interacting). Any tmux-signal
+    step that precedes them must guard against working states.
 
     Args:
         session_name: tmux session to query.
@@ -82,8 +86,10 @@ async def get_session_intelligence(
     agent_state = state_snap.state
 
     # Derivation priority chain
-    # 2. Copy mode
-    if tmux_vars.get("pane_in_mode") == "1":
+    # 2. Copy mode — only when agent is NOT in a working state.
+    # A working agent whose pane is in copy/scroll mode must still resolve
+    # to AGENT_WORKING, not COPY_MODE (which priority=True can bypass).
+    if tmux_vars.get("pane_in_mode") == "1" and agent_state not in _WORKING_STATES:
         return SessionProfile(
             session_name=session_name,
             intelligence=SessionIntelligence.COPY_MODE,

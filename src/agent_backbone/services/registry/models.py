@@ -90,3 +90,20 @@ class EntityRegistry:
         self.repos.append(repo)
         for attr in ("repo_names", "orgs", "repo_path_by_name"):
             self.__dict__.pop(attr, None)
+
+    def orchestrator_for_repo(self, repo_name: str) -> str | None:
+        """Find the orchestrator entity for a repo by org matching.
+
+        Returns entity name (e.g., 'bell') or None if no match.
+        """
+        org = None
+        for repo in self.repos:
+            if repo.name == repo_name:
+                org = repo.org
+                break
+        if not org:
+            return None
+        for name, entry in self.entities.items():
+            if entry.organization == org and "orchestrators" in entry.groups:
+                return name
+        return None

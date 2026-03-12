@@ -7,8 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.services.automation import (
-    RepoEntry,
+from agent_backbone.services.automation._checks import (
     _check_assume_unchanged,
     _check_git_excludes,
     _check_orch_config,
@@ -16,13 +15,16 @@ from agent_backbone.services.automation import (
     _check_sparse_checkout,
     _check_spec_dir,
     _check_symlinks_created,
+    run_status_checks,
+)
+from agent_backbone.services.automation._pipeline import (
+    RepoEntry,
     _symlink_block,
     discover_repos,
     load_repos_json,
     parse_ssh_url,
     register_repo,
     run_onboarding,
-    run_status_checks,
     save_repos_json,
     validate_org,
     validate_repo_name,
@@ -500,6 +502,8 @@ class TestRunOnboarding:
         assert (orch_dir / "CLAUDE.md").is_file()
         assert (orch_dir / "AGENTS.md").is_file()
         assert (orch_dir / ".claude" / "settings.local.json").is_file()
+        assert (orch_dir / ".cursor" / "rules").is_dir()
+        assert (orch_dir / ".gemini").is_dir()
         step4 = result.steps[3]
         assert step4.step == 4
         assert step4.name == "orchestration_config"
@@ -614,8 +618,23 @@ class TestRunOnboarding:
         mock_gh.__aexit__ = AsyncMock(return_value=False)
 
         from agent_backbone.config import BackboneConfig
+        from agent_backbone.services.registry.models import EntityEntry, EntityRegistry
 
-        cfg = BackboneConfig(github_token="test-token")
+        cfg = BackboneConfig(
+            github_token="test-token",
+            registry=EntityRegistry(
+                entities={
+                    "bell": EntityEntry(
+                        session="bell",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="Bell",
+                        role="WF Orchestrator",
+                        organization="WF",
+                    )
+                }
+            ),
+        )
 
         mock_create_notify = AsyncMock()
 
@@ -633,16 +652,28 @@ class TestRunOnboarding:
             result = await run_onboarding("WF", _SSH_URL, config=cfg)
 
         step9 = result.steps[8]
+        step10 = result.steps[9]
         assert step9.step == 9
         assert step9.name == "notify_brunel"
         assert step9.status == "done"
         assert step9.detail == "Created verification issue for brunel"
-        # Only one call to create_and_notify (Brunel only)
-        assert mock_create_notify.call_count == 1
-        call_kwargs = mock_create_notify.call_args.kwargs
-        assert "for:brunel" in call_kwargs["labels"]
-        assert call_kwargs["flow_name"] == "onboarding"
-        assert call_kwargs["config"] is cfg
+        assert step10.step == 10
+        assert step10.name == "notify_orchestrator"
+        assert step10.status == "done"
+        assert step10.detail == "Created onboarding issue for bell"
+        assert mock_create_notify.call_count == 2
+        brunel_call = mock_create_notify.call_args_list[0].kwargs
+        orchestrator_call = mock_create_notify.call_args_list[1].kwargs
+        assert "for:brunel" in brunel_call["labels"]
+        assert brunel_call["flow_name"] == "onboarding"
+        assert brunel_call["config"] is cfg
+        assert "for:bell" in orchestrator_call["labels"]
+        assert orchestrator_call["flow_name"] == "onboarding"
+        assert orchestrator_call["config"] is cfg
+        assert (
+            orchestrator_call["title"]
+            == "[task] New repo onboarded: WF/new-thing - needs CLAUDE.md content"
+        )
 
     async def test_notify_brunel_skipped_no_config(self, workspace):
         clone_proc = _mock_subprocess_ok()
@@ -652,8 +683,11 @@ class TestRunOnboarding:
         with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
             result = await run_onboarding("WF", _SSH_URL, config=None)
         step9 = result.steps[8]
+        step10 = result.steps[9]
         assert step9.name == "notify_brunel"
         assert step9.status == "skipped"
+        assert step10.name == "notify_orchestrator"
+        assert step10.status == "skipped"
 
     async def test_notify_brunel_skipped_no_token(self, workspace):
         clone_proc = _mock_subprocess_ok()
@@ -666,8 +700,46 @@ class TestRunOnboarding:
         with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
             result = await run_onboarding("WF", _SSH_URL, config=cfg)
         step9 = result.steps[8]
+        step10 = result.steps[9]
         assert step9.name == "notify_brunel"
         assert step9.status == "skipped"
+        assert step10.name == "notify_orchestrator"
+        assert step10.status == "skipped"
+
+    async def test_notify_orchestrator_failed_without_mapping(self, workspace):
+        clone_proc = _mock_subprocess_ok()
+        mock_gh = AsyncMock()
+        mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
+        mock_gh.__aexit__ = AsyncMock(return_value=False)
+
+        from agent_backbone.config import BackboneConfig
+        from agent_backbone.services.registry.models import EntityRegistry
+
+        cfg = BackboneConfig(
+            github_token="test-token",
+            registry=EntityRegistry(),
+        )
+        mock_create_notify = AsyncMock()
+
+        _clone_side_effect = _selective_create_subprocess_exec(
+            asyncio.create_subprocess_exec, clone_proc
+        )
+        with (
+            patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
+            patch("agent_backbone.services.github.GitHubClient", return_value=mock_gh),
+            patch(
+                "agent_backbone.services.routing.create_and_notify",
+                mock_create_notify,
+            ),
+        ):
+            result = await run_onboarding("WF", _SSH_URL, config=cfg)
+
+        step10 = result.steps[9]
+        assert step10.name == "notify_orchestrator"
+        assert step10.status == "failed"
+        assert "No orchestrator found" in step10.detail
+        assert result.success is False
+        assert mock_create_notify.call_count == 1
 
     async def test_success_when_all_ok(self, workspace):
         clone_proc = _mock_subprocess_ok()
@@ -677,7 +749,7 @@ class TestRunOnboarding:
         with patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect):
             result = await run_onboarding("WF", _SSH_URL)
         assert result.success is True
-        assert len(result.steps) == 9
+        assert len(result.steps) == 10
 
     async def test_url_without_git_suffix(self, workspace):
         clone_proc = _mock_subprocess_ok()

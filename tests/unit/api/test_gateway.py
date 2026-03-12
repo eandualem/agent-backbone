@@ -80,6 +80,7 @@ class TestNormalizeEvent:
     def test_issue_opened(self):
         payload = {
             "action": "opened",
+            "repository": {"full_name": "WF/agent-shell"},
             "issue": {
                 "number": 42,
                 "title": "[task] Test",
@@ -92,6 +93,7 @@ class TestNormalizeEvent:
         assert event.issue.number == 42
         assert event.issue.labels.sender == "leo"
         assert "ike" in event.issue.labels.targets
+        assert event.issue.repo_full_name == "WF/agent-shell"
 
     def test_issue_closed(self):
         payload = {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -80,6 +81,28 @@ class TestWebhookSignatureValidation:
             api_app.state.db._seen_deliveries.clear()
         payload_bytes = json.dumps(webhook_payload).encode()
         headers = _webhook_headers(payload_bytes)
+
+        with patch(
+            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
+        ) as mock_dispatch:
+            mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
+            resp = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+
+        assert resp.status_code == 200
+        mock_dispatch.assert_awaited_once()
+
+    async def test_github_app_secret_is_accepted(self, api_client, api_app, webhook_payload):
+        api_app.state.db._seen_deliveries.clear()
+        api_app.state.config = replace(
+            api_app.state.config,
+            github_app_webhook_secret="app-secret",
+        )
+        payload_bytes = json.dumps(webhook_payload).encode()
+        headers = _webhook_headers(
+            payload_bytes,
+            secret="app-secret",
+            delivery_id="delivery-app-secret",
+        )
 
         with patch(
             "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
@@ -167,6 +190,28 @@ class TestWebhookDispatch:
         call_args = mock_dispatch.call_args
         event = call_args[0][0]
         assert event.issue.number == 42
+        assert event.issue.repo_full_name == "eandualem/orchestration"
+
+    async def test_dispatches_non_default_repo_event(self, api_client, api_app, webhook_payload):
+        api_app.state.db._seen_deliveries.clear()
+        repo_payload = dict(webhook_payload)
+        repo_payload["repository"] = {"full_name": "WF/agent-shell"}
+        repo_payload["issue"] = {
+            **webhook_payload["issue"],
+            "html_url": "https://github.com/WF/agent-shell/issues/42",
+        }
+        payload_bytes = json.dumps(repo_payload).encode()
+        headers = _webhook_headers(payload_bytes, delivery_id="dispatch-test-non-default")
+
+        with patch(
+            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
+        ) as mock_dispatch:
+            mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
+            resp = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+
+        assert resp.status_code == 200
+        event = mock_dispatch.call_args[0][0]
+        assert event.issue.repo_full_name == "WF/agent-shell"
 
     async def test_dispatch_outcome_returned_in_response(
         self, api_client, api_app, webhook_payload

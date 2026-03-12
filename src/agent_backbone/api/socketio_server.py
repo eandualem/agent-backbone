@@ -106,12 +106,13 @@ class TerminalNamespace(socketio.AsyncNamespace):
     1:1 model: each WebSocket connection gets its own PTY process.
 
     Events:
-        connect     — authenticate via API key in auth dict
-        join        — attach to a session via PTY
-        leave       — detach from a session
-        input       — write keyboard input to PTY
-        resize      — resize PTY (SIGWINCH to tmux attach)
-        disconnect  — clean up all sessions
+        connect      — authenticate via API key in auth dict
+        join         — attach to a session via PTY
+        leave        — detach from a session
+        input        — write keyboard input to PTY
+        resize       — resize PTY (SIGWINCH to tmux attach)
+        release_dims — restore original tmux dims (dashboard collapse)
+        disconnect   — clean up all sessions
     """
 
     def __init__(self, namespace: str) -> None:
@@ -339,6 +340,9 @@ class TerminalNamespace(socketio.AsyncNamespace):
 
         Uses TIOCSWINSZ ioctl which sends SIGWINCH to the tmux attach
         process. In 1:1 model, directly resizes this client's PTY.
+
+        When resuming from a released state (after release_dims), re-captures
+        current tmux dimensions as the new original before applying the resize.
         """
         session_name = data.get("session", "")
         cols = data.get("cols")
@@ -360,6 +364,17 @@ class TerminalNamespace(socketio.AsyncNamespace):
         except (ValueError, TypeError):
             return
 
+        # Re-capture original dims on re-expand after release_dims cleared them.
+        # Only capture if no other browser client already holds original dims
+        # (i.e., this is the first resize after a release).
+        if session_name not in self._original_dims:
+            active_sids = self._active_sessions.get(session_name, set())
+            if active_sids:
+                orig = await get_window_size(session_name)
+                if orig is not None:
+                    self._original_dims[session_name] = orig
+                    _persist_dims(session_name, orig[0], orig[1])
+
         mgr = get_pty_manager()
         pty_session = mgr.get(sid, session_name)
         if pty_session:
@@ -371,6 +386,51 @@ class TerminalNamespace(socketio.AsyncNamespace):
                     clamped_cols,
                     clamped_rows,
                 )
+
+    async def on_release_dims(self, sid: str, data: dict) -> None:
+        """Restore original tmux dimensions without disconnecting.
+
+        data: {"session": "session-name"}
+
+        Called when the dashboard collapses/hides a terminal. Restores the
+        tmux window to its pre-browser dimensions so Ghostty (or other
+        native clients) aren't left squished. The socket stays alive and
+        the PTY remains attached — a subsequent resize event re-expands.
+        """
+        session_name = data.get("session", "")
+        if not session_name:
+            return
+
+        # Verify sid is subscribed to this session
+        if session_name not in self._subscriptions.get(sid, {}):
+            await self.emit(
+                "error",
+                {"message": f"Not joined to session '{session_name}'"},
+                to=sid,
+            )
+            return
+
+        orig = self._original_dims.pop(session_name, None)
+        _remove_persisted_dims(session_name)
+
+        if orig is not None:
+            if not await resize_window(session_name, orig[0], orig[1]):
+                log.error(
+                    "Failed to restore dims on release_dims for '%s'",
+                    session_name,
+                )
+            else:
+                log.info(
+                    "Restored original dims for '%s' (%dx%d) on release_dims",
+                    session_name,
+                    orig[0],
+                    orig[1],
+                )
+        else:
+            log.debug(
+                "No original dims to restore for '%s' on release_dims",
+                session_name,
+            )
 
     async def on_disconnect(self, sid: str) -> None:
         """Clean up all subscriptions for a disconnecting client."""

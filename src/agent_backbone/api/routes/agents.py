@@ -250,7 +250,6 @@ async def get_agent_state_endpoint(
     state_svc: StateService = Depends(get_state_service),
 ):
     """Get detailed state for a specific agent session."""
-    session = session.lower()
     snapshot = await state_svc.get_state(session)
     return AgentStateDetail(
         session=session,
@@ -285,7 +284,6 @@ async def start_agent(
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Start an agent tmux session with a specified runtime."""
-    session = session.lower()
     req = body or AgentStartRequest()
 
     # Validate runtime
@@ -348,7 +346,6 @@ async def stop_agent(
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Stop an agent tmux session."""
-    session = session.lower()
     ok = await tmux_svc.stop_session(session)
     return AgentStopResponse(ok=ok, session=session)
 
@@ -366,7 +363,6 @@ async def get_terminal_output(
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Capture recent terminal output from a tmux session."""
-    name = name.lower()
     output = await tmux_svc.capture_pane(name, lines=lines)
     if not output and not await tmux_svc.session_exists(name):
         raise HTTPException(status_code=404, detail=f"Session '{name}' not found")
@@ -386,7 +382,6 @@ async def post_agent_state(
 ):
     """Update agent state in the database."""
     global _agents_cache_ts  # noqa: PLW0603
-    session = session.lower()
     await db.set_agent_state(
         session,
         body.state,
@@ -413,7 +408,6 @@ async def post_agent_activity(
     db: BackboneDB = Depends(get_db),
 ):
     """Record an agent activity event."""
-    session = session.lower()
     # Extra fields beyond event/ts go into the data payload
     data_dict = dict(body.model_extra or {})
     data_json = json.dumps(data_dict) if data_dict else None
@@ -429,7 +423,6 @@ async def get_agent_activity(
     db: BackboneDB = Depends(get_db),
 ):
     """Get activity events for an agent session."""
-    session = session.lower()
     since_str = str(since) if since is not None else None
     rows = await db.get_activity(session, limit, since=since_str)
     items = []

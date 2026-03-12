@@ -69,7 +69,11 @@ async def start_session(
     if working_dir:
         args.extend(["-c", working_dir])
     if command:
-        args.extend(command)
+        if environment:
+            env_prefix = ["env", *(f"{key}={value}" for key, value in environment.items())]
+            args.extend(env_prefix + command)
+        else:
+            args.extend(command)
 
     proc = await asyncio.create_subprocess_exec(
         *args,

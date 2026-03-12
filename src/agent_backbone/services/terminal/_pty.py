@@ -81,6 +81,7 @@ class PtySession:
             fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
 
             env = {**os.environ, "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+            env.pop("TMUX", None)  # Prevent tmux nesting guard when gateway runs inside tmux
             self._process = subprocess.Popen(
                 ["tmux", "attach-session", "-t", self.session_name],
                 stdin=slave_fd,

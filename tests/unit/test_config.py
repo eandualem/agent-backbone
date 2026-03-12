@@ -12,6 +12,7 @@ from agent_backbone.config import (
     JarvisConfig,
 )
 from agent_backbone.services.registry import EntityEntry, EntityRegistry
+from agent_backbone.settings import AppSettings
 
 
 class TestBackboneConfigDefaults:
@@ -58,6 +59,21 @@ class TestBackboneConfigDefaults:
         config = BackboneConfig(github_token="tok", webhook_secret="sec")
         assert config.github_token == "tok"
         assert config.webhook_secret == "sec"
+
+    def test_webhook_secrets_include_github_app_secret(self):
+        config = BackboneConfig(
+            webhook_secret="legacy-secret",
+            github_app_webhook_secret="app-secret",
+        )
+        assert config.webhook_secrets == ("legacy-secret", "app-secret")
+
+    def test_github_app_fields_can_be_set(self):
+        config = BackboneConfig(
+            github_app_id=3075015,
+            github_app_private_key_path="/tmp/private-key.pem",
+        )
+        assert config.github_app_id == 3075015
+        assert config.github_app_private_key_path == "/tmp/private-key.pem"
 
 
 class TestFromToml:
@@ -442,3 +458,18 @@ class TestJarvisConfig:
             assert False, "Should be frozen"
         except AttributeError:
             pass
+
+
+class TestAppSettings:
+    def test_build_config_overlays_github_app_webhook_secret(self):
+        settings = AppSettings(
+            github_app_id=3075015,
+            github_app_private_key_path="/tmp/private-key.pem",
+            github_app_webhook_secret="app-secret",
+        )
+
+        config = settings.build_config()
+
+        assert config.github_app_id == 3075015
+        assert config.github_app_private_key_path == "/tmp/private-key.pem"
+        assert config.github_app_webhook_secret == "app-secret"

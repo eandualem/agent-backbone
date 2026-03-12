@@ -117,8 +117,8 @@ class TestInferStateFromPane:
     def test_processing_issue(self):
         content = "Starting task\nWorking on issue #42\nuser@host $"
         result = infer_state_from_pane(content)
-        assert result.state == AgentState.PROCESSING_ISSUE
-        assert result.current_issue == 42
+        assert result.state == AgentState.IDLE
+        assert result.current_issue is None
 
     def test_unknown_content(self):
         result = infer_state_from_pane("random output with no indicators")
@@ -147,11 +147,23 @@ class TestInferStateFromPane:
         result = infer_state_from_pane(pane)
         assert result.state == AgentState.IDLE
 
+    def test_idle_claude_code_prompt_with_ansi_formatting(self):
+        """Rich-formatted prompt output should still resolve to IDLE."""
+        pane = "\x1b[39m\u276f\xa0\x1b[7m \x1b[0m"
+        result = infer_state_from_pane(pane)
+        assert result.state == AgentState.IDLE
+
     def test_idle_standard_prompt_with_trailing_lines(self):
         """Non-prompt trailing content returns UNKNOWN."""
         pane = "user@host $\nsome trailing output"
         result = infer_state_from_pane(pane)
         assert result.state == AgentState.UNKNOWN
+
+    def test_idle_prompt_overrides_stale_tool_call_history(self):
+        """Old activity text above a live prompt should not force BUSY."""
+        pane = "Running tool call: Read\nprevious output\nuser@host $"
+        result = infer_state_from_pane(pane)
+        assert result.state == AgentState.IDLE
 
 
 class TestGetAgentState:
@@ -166,9 +178,10 @@ class TestGetAgentState:
         assert result.source == "push"
 
     async def test_stale_push_triggers_pull(self, tmp_path):
+        """Stale push for states NOT in the trusted set triggers pane capture."""
         state_file = tmp_path / "ike.json"
         state_file.write_text(
-            json.dumps({"state": "busy", "ts": time.time() - 600})  # 10 min old
+            json.dumps({"state": "plan_waiting", "ts": time.time() - 600})  # 10 min old
         )
         with patch(
             f"{_INF}.capture_pane",
@@ -199,44 +212,40 @@ class TestGetAgentState:
         assert result.state == AgentState.UNKNOWN
         assert result.source == "default"
 
-    async def test_stale_idle_trusted(self, tmp_path):
-        """Stale idle push state is trusted without pane capture (STATE-17)."""
+    async def test_stale_idle_verified_via_tmux(self, tmp_path):
+        """Stale idle push state is re-checked from tmux before fallback."""
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "idle", "issue": None, "ts": time.time() - 600}))
         mock_capture = AsyncMock(return_value="random stuff")
         with patch(f"{_INF}.capture_pane", mock_capture):
             result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
-        assert result.state == AgentState.IDLE
-        assert result.source == "push"
-        mock_capture.assert_not_called()
+        assert result.state == AgentState.UNKNOWN
+        assert result.source == "pull"
+        mock_capture.assert_awaited_once()
 
-    async def test_stale_busy_triggers_pull(self, tmp_path):
-        """Stale busy push state falls through to pane parsing."""
+    async def test_stale_busy_verified_via_tmux(self, tmp_path):
+        """Stale busy push state is re-checked from tmux before fallback."""
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "busy", "issue": None, "ts": time.time() - 600}))
-        with patch(
-            f"{_INF}.capture_pane",
-            new_callable=AsyncMock,
-            return_value="user@host $",
-        ):
+        mock_capture = AsyncMock(return_value="user@host $")
+        with patch(f"{_INF}.capture_pane", mock_capture):
             result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
         assert result.state == AgentState.IDLE
         assert result.source == "pull"
+        mock_capture.assert_awaited_once()
 
-    async def test_stale_processing_triggers_pull(self, tmp_path):
-        """Stale processing_issue push state falls through to pane parsing."""
+    async def test_stale_processing_verified_via_tmux(self, tmp_path):
+        """Stale processing_issue push state is re-checked from tmux before fallback."""
         state_file = tmp_path / "ike.json"
         state_file.write_text(
             json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time() - 600})
         )
-        with patch(
-            f"{_INF}.capture_pane",
-            new_callable=AsyncMock,
-            return_value="user@host $",
-        ):
+        mock_capture = AsyncMock(return_value="user@host $")
+        with patch(f"{_INF}.capture_pane", mock_capture):
             result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
         assert result.state == AgentState.IDLE
         assert result.source == "pull"
+        mock_capture.assert_awaited_once()
 
 
 class TestRowToSnapshot:
@@ -342,17 +351,17 @@ class TestShouldDeliver:
     def test_idle_always_delivers(self):
         assert should_deliver(AgentState.IDLE) is True
 
-    def test_starting_always_delivers(self):
-        assert should_deliver(AgentState.STARTING) is True
+    def test_starting_deferred(self):
+        assert should_deliver(AgentState.STARTING) is False
 
-    def test_unknown_always_delivers(self):
-        assert should_deliver(AgentState.UNKNOWN) is True
+    def test_unknown_deferred(self):
+        assert should_deliver(AgentState.UNKNOWN) is False
 
     def test_processing_blocks_nonblocking(self):
         assert should_deliver(AgentState.PROCESSING_ISSUE, is_blocking=False) is False
 
-    def test_processing_allows_blocking(self):
-        assert should_deliver(AgentState.PROCESSING_ISSUE, is_blocking=True) is True
+    def test_processing_blocks_even_blocking(self):
+        assert should_deliver(AgentState.PROCESSING_ISSUE, is_blocking=True) is False
 
     def test_busy_never_delivers(self):
         assert should_deliver(AgentState.BUSY, is_blocking=False) is False
@@ -403,13 +412,13 @@ class TestCapacityRouting:
             is False
         )
 
-    def test_busy_long_blocking_deliver(self):
-        """Busy >=30min + blocking → deliver (NEW capacity routing)."""
+    def test_busy_long_blocking_still_defer(self):
+        """Strict delivery gating ignores capacity-routing overrides."""
         assert (
             should_deliver(
                 AgentState.BUSY, is_blocking=True, busy_duration=1800.0, busy_threshold=1800.0
             )
-            is True
+            is False
         )
 
     def test_busy_long_nonblocking_defer(self):

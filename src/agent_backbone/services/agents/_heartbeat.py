@@ -18,7 +18,7 @@ from croniter import croniter
 from prefect import flow, task
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services._locator import get_config, get_db
+from agent_backbone.services._locator import ensure_initialized, get_config, get_db
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import BackboneDB
@@ -160,6 +160,8 @@ async def heartbeat_scheduler() -> dict:
     if _heartbeat_lock.locked():
         log.info("Heartbeat scheduler already running — skipping concurrent run")
         return {"_skipped": "concurrent_run"}
+
+    await ensure_initialized()
 
     async with _heartbeat_lock:
         return await _heartbeat_scheduler_impl()

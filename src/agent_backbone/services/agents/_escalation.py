@@ -12,12 +12,11 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import (
+    format_plan_notification,
     format_stall_notification,
     format_unexpected_offline_notification,
 )
-from agent_backbone.services.telegram.interface import TelegramService
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +25,23 @@ _escalation_dedup: dict[tuple[str, str], float] = {}
 
 # Module-level plan notification dedup: (session, plan_file) → monotonic timestamp
 _plan_notify_dedup: dict[tuple[str, str], float] = {}
+
+
+async def safe_deliver(*args, **kwargs):
+    """Lazy proxy to avoid importing routing delivery during module import."""
+    from agent_backbone.services.routing._delivery import safe_deliver as _safe_deliver
+
+    return await _safe_deliver(*args, **kwargs)
+
+
+class TelegramService:
+    """Lazy proxy to avoid importing telegram service during module import."""
+
+    @staticmethod
+    async def send_notification(*args, **kwargs):
+        from agent_backbone.services.telegram.interface import TelegramService as _TelegramService
+
+        return await _TelegramService.send_notification(*args, **kwargs)
 
 
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
@@ -237,14 +253,23 @@ async def handle_offline(
                 )
 
 
-async def check_plan_waiting(config: BackboneConfig, active_sessions: set[str]) -> None:
-    """Detect plan-waiting agents and send Telegram notification."""
-    notification_chat_id = config.telegram.notification_chat_id
-    telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
+def _resolve_orchestrator(session_name: str, config: BackboneConfig) -> str | None:
+    """Resolve orchestrator for a session.
 
-    if not notification_chat_id or not telegram_token:
-        return
+    Coding agents → org orchestrator, named entities → escalation target.
+    """
+    orch = config.registry.orchestrator_for_repo(session_name)
+    if orch:
+        return orch
+    if session_name in config.registry.entity_by_session:
+        return config.escalation.escalation_target
+    return None
 
+
+async def check_plan_waiting(
+    config: BackboneConfig, active_sessions: set[str], db: BackboneDB | None = None
+) -> None:
+    """Detect plan-waiting agents and send Telegram + orchestrator notification."""
     now = time.monotonic()
     plan_dedup_seconds = 1800  # 30 minutes
 
@@ -256,6 +281,9 @@ async def check_plan_waiting(config: BackboneConfig, active_sessions: set[str]) 
     state_path = config.agent_state.state_path
     stale_threshold = config.agent_state.stale_threshold_seconds
 
+    notification_chat_id = config.telegram.notification_chat_id
+    telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
+
     for entity in config.registry.all_entities:
         session_name = config.registry.sessions_map.get(entity)
         if not session_name or session_name not in active_sessions:
@@ -266,18 +294,46 @@ async def check_plan_waiting(config: BackboneConfig, active_sessions: set[str]) 
             continue
 
         plan_file = snapshot.plan_file or ""
-        dedup_key = (session_name, plan_file)
-        if dedup_key in _plan_notify_dedup:
-            continue
-
         plan_title = snapshot.plan_title or "Untitled plan"
-        msg = (
-            f"\U0001f4cb Plan waiting — {entity}\n"
-            f"Title: {plan_title}\n\n"
-            f"/viewplan {session_name}\n"
-            f"/approve {session_name}"
-        )
-        sent = await TelegramService.send_notification(telegram_token, notification_chat_id, msg)
-        if sent:
-            _plan_notify_dedup[dedup_key] = now
-            log.info("Sent plan-waiting notification for %s", entity)
+
+        # Telegram notification
+        tg_dedup_key = (session_name, plan_file)
+        if notification_chat_id and telegram_token and tg_dedup_key not in _plan_notify_dedup:
+            msg = (
+                f"\U0001f4cb Plan waiting — {entity}\n"
+                f"Title: {plan_title}\n\n"
+                f"/viewplan {session_name}\n"
+                f"/approve {session_name}"
+            )
+            sent = await TelegramService.send_notification(
+                telegram_token, notification_chat_id, msg
+            )
+            if sent:
+                _plan_notify_dedup[tg_dedup_key] = now
+                log.info("Sent plan-waiting Telegram notification for %s", entity)
+
+        # Orchestrator tmux notification
+        orchestrator = _resolve_orchestrator(session_name, config)
+        if orchestrator:
+            orch_session = config.registry.sessions_map.get(orchestrator)
+            orch_dedup_key = (session_name, f"orch:{plan_file}")
+            if (
+                orch_session
+                and orch_session in active_sessions
+                and orch_dedup_key not in _plan_notify_dedup
+            ):
+                orch_msg = format_plan_notification(
+                    session_name,
+                    entity,
+                    plan_file,
+                    plan_title,
+                    issue_number=snapshot.current_issue,
+                )
+                outcome = await safe_deliver(orch_session, orch_msg, config, db=db, priority=True)
+                if outcome == "delivered":
+                    _plan_notify_dedup[orch_dedup_key] = now
+                    log.info(
+                        "Sent plan notification to orchestrator %s for %s",
+                        orchestrator,
+                        entity,
+                    )

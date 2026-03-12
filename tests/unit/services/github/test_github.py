@@ -100,6 +100,27 @@ class TestListOpenIssues:
             with pytest.raises(httpx.HTTPStatusError):
                 await gh.list_open_issues("for:ike")
 
+    @respx.mock
+    async def test_uses_requested_repo_for_multi_repo_queries(self, config):
+        url = f"{API_BASE}/repos/WF/agent-shell/issues"
+        respx.get(url).respond(
+            json=[
+                {
+                    "number": 5,
+                    "title": "[task] Cross-repo issue",
+                    "state": "open",
+                    "labels": [{"name": "for:ike"}, {"name": "from:leo"}, {"name": "task"}],
+                    "html_url": "https://github.com/WF/agent-shell/issues/5",
+                }
+            ]
+        )
+
+        async with GitHubClient(config) as gh:
+            issues = await gh.list_open_issues("for:ike", repo_full_name="WF/agent-shell")
+
+        assert len(issues) == 1
+        assert issues[0].repo_full_name == "WF/agent-shell"
+
 
 class TestGetIssue:
     @respx.mock

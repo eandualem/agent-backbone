@@ -8,6 +8,33 @@ from __future__ import annotations
 from agent_backbone.models import CommentData, IssueData, parse_from_tag
 
 
+def _repo_from_html_url(html_url: str) -> str:
+    """Extract owner/repo from a GitHub issue URL."""
+    parts = html_url.split("/")
+    if len(parts) >= 5 and parts[2] == "github.com":
+        return f"{parts[3]}/{parts[4]}"
+    return ""
+
+
+def _review_target(issue: IssueData) -> tuple[str, str]:
+    """Resolve owner/repo for GitHub MCP review commands."""
+    repo_full_name = issue.repo_full_name or _repo_from_html_url(issue.html_url)
+    if "/" in repo_full_name:
+        owner, repo = repo_full_name.split("/", 1)
+        if owner and repo:
+            return owner, repo
+    return ("eandualem", "orchestration")
+
+
+def _review_with(issue: IssueData, method: str) -> str:
+    """Build an MCP review command for an issue in its source repository."""
+    owner, repo = _review_target(issue)
+    return (
+        f'Review with: mcp__github__issue_read(method:"{method}", '
+        f'owner:"{owner}", repo:"{repo}", issue_number:{issue.number})'
+    )
+
+
 def format_digest(
     title: str,
     sessions: list[str],
@@ -52,8 +79,7 @@ def format_issue_notification(issue: IssueData) -> str:
         f"[via:github issue:{issue.number}] "
         f'New issue targeting you: #{issue.number}{type_str} "{issue.title}" '
         f"(from {labels.sender}{priority_str}). "
-        f'Review with: mcp__github__issue_read(method:"get", owner:"eandualem", '
-        f'repo:"orchestration", issue_number:{issue.number})'
+        f"{_review_with(issue, 'get')}"
     )
 
 
@@ -81,8 +107,7 @@ def format_comment_notification(
     return (
         f"[via:github issue:{issue.number}] "
         f'New comment on #{issue.number} "{issue.title}" from {attribution}: "{preview}" '
-        f'Review with: mcp__github__issue_read(method:"get_comments", owner:"eandualem", '
-        f'repo:"orchestration", issue_number:{issue.number})'
+        f"{_review_with(issue, 'get_comments')}"
     )
 
 
@@ -95,8 +120,7 @@ def format_unblock_notification(issue: IssueData) -> str:
         f"[via:backbone] "
         f'Dependencies resolved for #{issue.number}{type_str} "{issue.title}" '
         f"(from {labels.sender}). All sub-issues are now closed. "
-        f'Review with: mcp__github__issue_read(method:"get", owner:"eandualem", '
-        f'repo:"orchestration", issue_number:{issue.number})'
+        f"{_review_with(issue, 'get')}"
     )
 
 
@@ -123,6 +147,21 @@ def format_unexpected_offline_notification(session: str, entity: str, pending_co
     )
 
 
+def format_plan_notification(
+    session: str,
+    entity: str,
+    plan_file: str,
+    plan_title: str,
+    issue_number: int | None = None,
+) -> str:
+    """Format plan-waiting notification for orchestrator delivery."""
+    issue_str = f" (issue #{issue_number})" if issue_number else ""
+    return (
+        f"[via:backbone] Agent {entity} ({session}) created a plan{issue_str}. "
+        f'Title: "{plan_title}". Plan file: {plan_file}'
+    )
+
+
 def format_next_issue_notification(issue: IssueData) -> str:
     """Format a close-then-next notification — delivered when an issue is closed
     and there's another pending issue for the same entity."""
@@ -134,8 +173,7 @@ def format_next_issue_notification(issue: IssueData) -> str:
         f"[via:backbone] "
         f'Next issue in your queue: #{issue.number}{type_str}{priority_str} "{issue.title}" '
         f"(from {labels.sender}). "
-        f'Review with: mcp__github__issue_read(method:"get", owner:"eandualem", '
-        f'repo:"orchestration", issue_number:{issue.number})'
+        f"{_review_with(issue, 'get')}"
     )
 
 

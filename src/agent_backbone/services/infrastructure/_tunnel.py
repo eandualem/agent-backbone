@@ -7,12 +7,15 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from agent_backbone.services.infrastructure._processes import kill_port_process
 from agent_backbone.services.terminal import session_exists, start_session, stop_session
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
 
 log = logging.getLogger(__name__)
+
+NGROK_API_PORT = 4040
 
 
 async def start_tunnel(config: BackboneConfig) -> bool:
@@ -43,9 +46,10 @@ async def start_tunnel(config: BackboneConfig) -> bool:
 
 async def stop_tunnel() -> bool:
     """Stop ngrok tunnel."""
-    ok = await stop_session("ngrok")
+    session_ok = await stop_session("ngrok")
+    port_ok = await kill_port_process(NGROK_API_PORT)
     log.info("ngrok tunnel stopped")
-    return ok
+    return session_ok and port_ok
 
 
 async def get_tunnel_url() -> str | None:

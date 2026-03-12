@@ -13,11 +13,17 @@ import httpx
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import CommentData, IssueData, ParsedLabels
-from agent_backbone.services.routing._priority import compute_priority_score
 
 log = logging.getLogger(__name__)
 
 API_BASE = "https://api.github.com"
+
+
+def _issue_sort_key(issue: IssueData, config: BackboneConfig) -> tuple[float, int]:
+    """Compute the delivery sort key without importing routing at module load."""
+    from agent_backbone.services.routing._priority import compute_priority_score
+
+    return (-compute_priority_score(issue, config.priority_scoring), issue.number)
 
 
 class GitHubClient:
@@ -67,15 +73,39 @@ class GitHubClient:
             "client_active": self._client is not None,
         }
 
+    def _default_repo_full_name(self) -> str:
+        return f"{self._config.github.owner}/{self._config.github.repo}"
+
+    def _resolve_repo(self, repo_full_name: str | None = None) -> tuple[str, str]:
+        if repo_full_name and "/" in repo_full_name:
+            owner, repo = repo_full_name.split("/", 1)
+            if owner and repo:
+                return owner, repo
+        return (self._config.github.owner, self._config.github.repo)
+
+    def _build_issue(self, item: dict[str, Any], repo_full_name: str | None = None) -> IssueData:
+        labels = ParsedLabels.from_github_labels(item.get("labels", []))
+        return IssueData(
+            number=item["number"],
+            title=item.get("title", ""),
+            state=item.get("state", "open"),
+            labels=labels,
+            html_url=item.get("html_url", ""),
+            repo_full_name=repo_full_name or self._default_repo_full_name(),
+        )
+
     # --- Issue operations ---
 
-    async def list_open_issues(self, label: str) -> list[IssueData]:
+    async def list_open_issues(
+        self, label: str, repo_full_name: str | None = None
+    ) -> list[IssueData]:
         """List open issues with a specific label, sorted for delivery.
 
         Returns issues sorted: blocking first, then oldest first (FIFO).
         """
         assert self._client is not None
-        url = f"/repos/{self._config.github.owner}/{self._config.github.repo}/issues"
+        owner, repo = self._resolve_repo(repo_full_name)
+        url = f"/repos/{owner}/{repo}/issues"
         resp = await self._client.get(
             url,
             params={
@@ -92,36 +122,21 @@ class GitHubClient:
         for item in resp.json():
             if "pull_request" in item:
                 continue
-            labels = ParsedLabels.from_github_labels(item.get("labels", []))
-            issues.append(
-                IssueData(
-                    number=item["number"],
-                    title=item.get("title", ""),
-                    state=item.get("state", "open"),
-                    labels=labels,
-                    html_url=item.get("html_url", ""),
-                )
-            )
+            issues.append(self._build_issue(item, repo_full_name=repo_full_name))
 
-        scoring_config = self._config.priority_scoring
-        issues.sort(
-            key=lambda i: (
-                -compute_priority_score(i, scoring_config),
-                i.number,
-            )
-        )
+        issues.sort(key=lambda i: _issue_sort_key(i, self._config))
         return issues
 
-    async def get_sub_issues(self, issue_number: int) -> list[IssueData]:
+    async def get_sub_issues(
+        self, issue_number: int, repo_full_name: str | None = None
+    ) -> list[IssueData]:
         """Fetch sub-issues of a parent issue.
 
         Returns empty list on error (404, timeout, rate limit).
         """
         assert self._client is not None
-        url = (
-            f"/repos/{self._config.github.owner}/{self._config.github.repo}"
-            f"/issues/{issue_number}/sub_issues"
-        )
+        owner, repo = self._resolve_repo(repo_full_name)
+        url = f"/repos/{owner}/{repo}/issues/{issue_number}/sub_issues"
         try:
             resp = await self._client.get(url)
             resp.raise_for_status()
@@ -134,51 +149,39 @@ class GitHubClient:
 
         results: list[IssueData] = []
         for item in resp.json():
-            labels = ParsedLabels.from_github_labels(item.get("labels", []))
-            results.append(
-                IssueData(
-                    number=item["number"],
-                    title=item.get("title", ""),
-                    state=item.get("state", "open"),
-                    labels=labels,
-                    html_url=item.get("html_url", ""),
-                )
-            )
+            results.append(self._build_issue(item, repo_full_name=repo_full_name))
         return results
 
-    async def count_open_sub_issues(self, issue_number: int) -> int:
+    async def count_open_sub_issues(
+        self, issue_number: int, repo_full_name: str | None = None
+    ) -> int:
         """Count open sub-issues of a parent. Returns 0 on error."""
-        subs = await self.get_sub_issues(issue_number)
+        subs = await self.get_sub_issues(issue_number, repo_full_name=repo_full_name)
         return sum(1 for s in subs if s.state == "open")
 
-    async def get_issue(self, issue_number: int) -> IssueData:
+    async def get_issue(self, issue_number: int, repo_full_name: str | None = None) -> IssueData:
         """Get a single issue by number."""
         assert self._client is not None
-        url = f"/repos/{self._config.github.owner}/{self._config.github.repo}/issues/{issue_number}"
+        owner, repo = self._resolve_repo(repo_full_name)
+        url = f"/repos/{owner}/{repo}/issues/{issue_number}"
         resp = await self._client.get(url)
         resp.raise_for_status()
-        item = resp.json()
-        labels = ParsedLabels.from_github_labels(item.get("labels", []))
-        return IssueData(
-            number=item["number"],
-            title=item.get("title", ""),
-            state=item.get("state", "open"),
-            labels=labels,
-            html_url=item.get("html_url", ""),
-        )
+        return self._build_issue(resp.json(), repo_full_name=repo_full_name)
 
     async def list_issues(
         self,
         state: str = "open",
         labels: list[str] | None = None,
         per_page: int = 50,
+        repo_full_name: str | None = None,
     ) -> list[IssueData]:
         """List issues with flexible filtering by state and labels.
 
         Unlike list_open_issues, supports state=open/closed/all and multiple labels.
         """
         assert self._client is not None
-        url = f"/repos/{self._config.github.owner}/{self._config.github.repo}/issues"
+        owner, repo = self._resolve_repo(repo_full_name)
+        url = f"/repos/{owner}/{repo}/issues"
         params: dict[str, str | int] = {
             "state": state,
             "sort": "created",
@@ -195,33 +198,18 @@ class GitHubClient:
         for item in resp.json():
             if "pull_request" in item:
                 continue
-            parsed = ParsedLabels.from_github_labels(item.get("labels", []))
-            issues.append(
-                IssueData(
-                    number=item["number"],
-                    title=item.get("title", ""),
-                    state=item.get("state", "open"),
-                    labels=parsed,
-                    html_url=item.get("html_url", ""),
-                )
-            )
+            issues.append(self._build_issue(item, repo_full_name=repo_full_name))
 
-        scoring_config = self._config.priority_scoring
-        issues.sort(
-            key=lambda i: (
-                -compute_priority_score(i, scoring_config),
-                i.number,
-            )
-        )
+        issues.sort(key=lambda i: _issue_sort_key(i, self._config))
         return issues
 
-    async def list_comments(self, issue_number: int) -> list[CommentData]:
+    async def list_comments(
+        self, issue_number: int, repo_full_name: str | None = None
+    ) -> list[CommentData]:
         """List comments on an issue."""
         assert self._client is not None
-        url = (
-            f"/repos/{self._config.github.owner}/{self._config.github.repo}"
-            f"/issues/{issue_number}/comments"
-        )
+        owner, repo = self._resolve_repo(repo_full_name)
+        url = f"/repos/{owner}/{repo}/issues/{issue_number}/comments"
         resp = await self._client.get(url, params={"per_page": 100})
         resp.raise_for_status()
 

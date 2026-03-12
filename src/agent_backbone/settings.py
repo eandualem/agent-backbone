@@ -21,6 +21,9 @@ class AppSettings(BaseSettings):
 
     github_token: str = ""
     webhook_secret: str = ""
+    github_app_id: int | None = None
+    github_app_private_key_path: str = ""
+    github_app_webhook_secret: str = ""
     jarvis_inject_url: str = ""
     jarvis_sessions_url: str = ""
     telegram_token: str = ""
@@ -50,6 +53,12 @@ class AppSettings(BaseSettings):
             overrides["github_token"] = self.github_token
         if self.webhook_secret:
             overrides["webhook_secret"] = self.webhook_secret
+        if self.github_app_id is not None:
+            overrides["github_app_id"] = self.github_app_id
+        if self.github_app_private_key_path:
+            overrides["github_app_private_key_path"] = self.github_app_private_key_path
+        if self.github_app_webhook_secret:
+            overrides["github_app_webhook_secret"] = self.github_app_webhook_secret
         if self.jarvis_inject_url or self.jarvis_sessions_url:
             overrides["jarvis"] = JarvisConfig(
                 inject_url=self.jarvis_inject_url or config.jarvis.inject_url,

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_backbone.config import BackboneConfig, GatewayConfig
+from agent_backbone.config import BackboneConfig, GatewayConfig, SchedulingConfig
 
 
 @pytest.fixture
@@ -216,6 +216,10 @@ class TestStartWorker:
         """start_worker creates work-pool, deploys, and starts worker session."""
         mock_subprocess = AsyncMock()
         mock_subprocess.wait.return_value = 0
+        bb_config = BackboneConfig(
+            gateway=GatewayConfig(port=7120),
+            scheduling=SchedulingConfig(work_pool_name="custom-pool"),
+        )
 
         with patch(
             "agent_backbone.services.infrastructure._backbone.session_exists",
@@ -226,7 +230,9 @@ class TestStartWorker:
                 "agent_backbone.services.infrastructure._backbone.stop_by_pid",
                 new_callable=AsyncMock,
             ):
-                with patch("asyncio.create_subprocess_exec", return_value=mock_subprocess):
+                with patch(
+                    "asyncio.create_subprocess_exec", return_value=mock_subprocess
+                ) as mock_create_subprocess:
                     with patch(
                         "agent_backbone.services.infrastructure._backbone.start_session",
                         new_callable=AsyncMock,
@@ -237,6 +243,7 @@ class TestStartWorker:
                             new_callable=AsyncMock,
                         ):
                             from agent_backbone.services.infrastructure._backbone import (
+                                PREFECT_API_URL,
                                 start_worker,
                             )
 
@@ -244,7 +251,11 @@ class TestStartWorker:
         assert result is True
         call_args = mock_start.call_args
         assert call_args[0][0] == "backbone-worker"
-        assert "agent-pool" in call_args[1]["command"]
+        assert "custom-pool" in call_args[1]["command"]
+        assert call_args[1]["environment"] == {"PREFECT_API_URL": PREFECT_API_URL}
+        pool_create_call = mock_create_subprocess.call_args_list[0]
+        assert pool_create_call.args[5] == "custom-pool"
+        assert pool_create_call.kwargs["env"]["PREFECT_API_URL"] == PREFECT_API_URL
 
     @pytest.mark.asyncio
     async def test_skips_if_already_running(self, bb_config):
@@ -395,7 +406,7 @@ class TestStartBackbone:
 class TestStopBackbone:
     @pytest.mark.asyncio
     async def test_reverse_stop_order(self, bb_config):
-        """stop_backbone stops in reverse order: Telegram -> Gateway -> Worker -> Prefect."""
+        """stop_backbone stops services, then the legacy ngrok tunnel."""
         order = []
 
         async def mock_stop_telegram(config):
@@ -414,6 +425,10 @@ class TestStopBackbone:
             order.append("prefect")
             return True
 
+        async def mock_stop_tunnel():
+            order.append("ngrok")
+            return True
+
         with patch(
             "agent_backbone.services.infrastructure._backbone.stop_telegram",
             side_effect=mock_stop_telegram,
@@ -430,13 +445,17 @@ class TestStopBackbone:
                         "agent_backbone.services.infrastructure._backbone.stop_prefect",
                         side_effect=mock_stop_prefect,
                     ):
-                        from agent_backbone.services.infrastructure._backbone import (
-                            stop_backbone,
-                        )
+                        with patch(
+                            "agent_backbone.services.infrastructure._backbone.stop_tunnel",
+                            side_effect=mock_stop_tunnel,
+                        ):
+                            from agent_backbone.services.infrastructure._backbone import (
+                                stop_backbone,
+                            )
 
-                        await stop_backbone(bb_config)
+                            await stop_backbone(bb_config)
 
-        assert order == ["telegram", "gateway", "worker", "prefect"]
+        assert order == ["telegram", "gateway", "worker", "prefect", "ngrok"]
 
 
 class TestRestartBackbone:

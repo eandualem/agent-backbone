@@ -73,6 +73,11 @@ async def lifespan(app: FastAPI):
 
         init_flow_services(config=config, db=app.state.db, gh=app.state.github)
 
+        # Reconcile disk agent states to DB (catches plan_waiting missed during downtime)
+        from agent_backbone.services.agents._reconciliation import reconcile_startup_states
+
+        await reconcile_startup_states(config=config, db=app.state.db)
+
         log.info("Backbone API started — port %d", config.gateway.port)
         yield
     finally:
@@ -94,10 +99,10 @@ def create_app() -> socketio.ASGIApp:
         lifespan=lifespan,
     )
 
-    # CORS for dashboard
+    # CORS for dashboard (dev mode — allow all origins)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000"],
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -155,6 +160,7 @@ def create_app() -> socketio.ASGIApp:
     from agent_backbone.api.routes.files import router as files_router
     from agent_backbone.api.routes.heartbeats import router as heartbeats_router
     from agent_backbone.api.routes.issues import router as issues_router
+    from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.notes import router as notes_router
     from agent_backbone.api.routes.plans import router as plans_router
     from agent_backbone.api.routes.prefect import router as prefect_router
@@ -178,6 +184,7 @@ def create_app() -> socketio.ASGIApp:
         actions_router,
         schedule_router,
         activity_router,
+        messages_router,
         notes_router,
         rooms_router,
         repos_router,
@@ -189,7 +196,7 @@ def create_app() -> socketio.ASGIApp:
     # everything else falls through to FastAPI
     from agent_backbone.api.socketio_server import create_sio
 
-    sio = create_sio(cors_origins=["http://localhost:3000"])
+    sio = create_sio(cors_origins=["*"])
     sio.fastapi_app = app  # Store reference for namespace config access
     app.state.sio = sio
     asgi_app = socketio.ASGIApp(sio, app)

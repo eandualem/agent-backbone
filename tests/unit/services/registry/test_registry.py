@@ -505,3 +505,94 @@ class TestEntityRegistryHome:
     def test_home_by_session_empty(self):
         registry = EntityRegistry()
         assert registry.home_by_session == {}
+
+
+class TestOrchestratorForRepo:
+    def test_wf_repo_returns_bell(self):
+        """WF org repo resolves to bell (WF orchestrator)."""
+        entities = {
+            "bell": EntityEntry(
+                session="bell",
+                home="~/ws/core/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                organization="WF",
+            ),
+            "ike": EntityEntry(
+                session="ike",
+                home="~/ws/core/ike/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                organization="",
+            ),
+        }
+        repos = [
+            RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+        ]
+        registry = EntityRegistry(entities=entities, repos=repos)
+
+        assert registry.orchestrator_for_repo("agent-backbone") == "bell"
+
+    def test_arclio_repo_returns_hamilton(self):
+        """Arclio org repo resolves to hamilton."""
+        entities = {
+            "hamilton": EntityEntry(
+                session="hamilton",
+                home="~/ws/core/hamilton/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                organization="Arclio",
+            ),
+            "bell": EntityEntry(
+                session="bell",
+                home="~/ws/core/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                organization="WF",
+            ),
+        }
+        repos = [
+            RepoInfo(org="Arclio", name="platform-api", path="/ws/core/code/Arclio/platform-api"),
+        ]
+        registry = EntityRegistry(entities=entities, repos=repos)
+
+        assert registry.orchestrator_for_repo("platform-api") == "hamilton"
+
+    def test_unknown_repo_returns_none(self):
+        """Repo not in registry returns None."""
+        entities = {
+            "bell": EntityEntry(
+                session="bell",
+                home="~/ws/core/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                organization="WF",
+            ),
+        }
+        registry = EntityRegistry(entities=entities, repos=[])
+
+        assert registry.orchestrator_for_repo("nonexistent") is None
+
+    def test_no_orchestrator_for_org_returns_none(self):
+        """Repo exists but no orchestrator entity for that org."""
+        entities = {
+            "bell": EntityEntry(
+                session="bell",
+                home="~/ws/core/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                organization="WF",
+            ),
+        }
+        repos = [
+            RepoInfo(org="Arclio", name="platform-api", path="/ws/core/code/Arclio/platform-api"),
+        ]
+        registry = EntityRegistry(entities=entities, repos=repos)
+
+        assert registry.orchestrator_for_repo("platform-api") is None

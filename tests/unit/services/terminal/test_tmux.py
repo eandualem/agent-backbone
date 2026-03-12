@@ -93,8 +93,8 @@ class TestSendMessage:
             mock_exec.return_value = proc
 
             assert await send_message("ike", "hello") is True
-            # Called twice: once for -l message, once for Enter
-            assert mock_exec.call_count == 2
+            # Called 3 times: load-buffer, paste-buffer, send-keys Enter
+            assert mock_exec.call_count == 3
 
     async def test_send_session_offline(self):
         with patch(
@@ -122,6 +122,44 @@ class TestSendMessage:
             mock_exec.return_value = proc
 
             assert await send_message("ike", "hello") is False
+
+    async def test_load_buffer_receives_stdin_data(self):
+        """load-buffer is called with stdin_data containing the encoded message."""
+        with (
+            patch(
+                "agent_backbone.services.terminal._core.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal._core.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+            ) as mock_exec,
+        ):
+            proc = AsyncMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_exec.return_value = proc
+
+            assert await send_message("ike", "test message") is True
+
+            # First call is load-buffer — verify stdin pipe and message data
+            first_call = mock_exec.call_args_list[0]
+            assert "load-buffer" in first_call[0]
+            assert "-" in first_call[0]
+            assert first_call[1]["stdin"] == -1  # PIPE
+            # communicate was called with the message bytes
+            proc.communicate.assert_any_call(input=b"test message")
+
+            # Second call is paste-buffer
+            second_call = mock_exec.call_args_list[1]
+            assert "paste-buffer" in second_call[0]
+            assert "-d" in second_call[0]
+
+            # Third call is send-keys Enter
+            third_call = mock_exec.call_args_list[2]
+            assert "send-keys" in third_call[0]
+            assert "Enter" in third_call[0]
 
 
 class TestListSessions:
@@ -812,6 +850,33 @@ class TestSelectWindow:
 
 
 class TestStartSessionEnvironment:
+    async def test_initial_command_receives_env_vars(self, mock_subprocess):
+        """The initial tmux command inherits env vars when a command is supplied."""
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            proc = AsyncMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.wait = AsyncMock()
+            mock_subprocess.return_value = proc
+
+            result = await start_session(
+                "test",
+                command=["uv", "run", "prefect", "worker", "start"],
+                apply_theme=False,
+                environment={"PREFECT_API_URL": "http://127.0.0.1:4200/api"},
+            )
+
+            assert result is True
+            new_session_call = mock_subprocess.call_args_list[0][0]
+            assert "new-session" in new_session_call
+            assert "env" in new_session_call
+            assert "PREFECT_API_URL=http://127.0.0.1:4200/api" in new_session_call
+            assert "prefect" in new_session_call
+
     async def test_env_vars_set(self, mock_subprocess):
         """Environment variables are set via tmux set-environment."""
         with patch(

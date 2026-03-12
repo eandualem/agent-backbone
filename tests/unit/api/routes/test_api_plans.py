@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from agent_backbone.api.deps import get_state_service, get_tmux_service
 from agent_backbone.services.agents import AgentState, StateSnapshot
@@ -353,4 +353,189 @@ class TestApprovePlan:
     async def test_requires_auth(self, api_client, api_key):
         """Request without auth headers is rejected when API key is set."""
         resp = await api_client.post("/api/plans/ike/approve")
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# POST /api/plans/{session}/reject
+# ---------------------------------------------------------------------------
+
+
+class TestRejectPlan:
+    async def test_reject_sends_escape_and_feedback(self, api_client, auth_headers, api_app):
+        """Sends Escape to exit plan mode, then delivers feedback via send_message."""
+        mock_state_svc, mock_tmux_svc = _make_mock_services(
+            read_state_return=_plan_waiting_snapshot(),
+            session_exists_return=True,
+            send_keys_return=True,
+        )
+
+        api_app.dependency_overrides[get_state_service] = lambda: mock_state_svc
+        api_app.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
+        try:
+            with patch(
+                "agent_backbone.api.routes.plans.send_message",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_send:
+                resp = await api_client.post(
+                    "/api/plans/ike/reject",
+                    headers=auth_headers,
+                    json={"feedback": "Missing error handling section"},
+                )
+        finally:
+            api_app.dependency_overrides.pop(get_state_service, None)
+            api_app.dependency_overrides.pop(get_tmux_service, None)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["session"] == "ike"
+        assert data["action"] == "plan_rejected"
+
+        # Verify Escape was sent
+        mock_tmux_svc.send_keys.assert_awaited_once_with("ike", "Escape")
+
+        # Verify feedback was delivered
+        mock_send.assert_awaited_once()
+        sent_msg = mock_send.call_args[0][1]
+        assert "[Plan rejected]" in sent_msg
+        assert "Missing error handling section" in sent_msg
+
+    async def test_reject_returns_409_when_not_plan_waiting(
+        self, api_client, auth_headers, api_app
+    ):
+        """Returns 409 when session is not in plan_waiting state."""
+        mock_state_svc, mock_tmux_svc = _make_mock_services(
+            read_state_return=_idle_snapshot(),
+        )
+
+        api_app.dependency_overrides[get_state_service] = lambda: mock_state_svc
+        api_app.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
+        try:
+            resp = await api_client.post(
+                "/api/plans/ike/reject",
+                headers=auth_headers,
+                json={"feedback": "Not good enough"},
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_state_service, None)
+            api_app.dependency_overrides.pop(get_tmux_service, None)
+
+        assert resp.status_code == 409
+        assert "plan_waiting" in resp.json()["detail"]
+
+    async def test_reject_requires_feedback(self, api_client, auth_headers, api_app):
+        """Empty body (missing feedback) returns 422."""
+        mock_state_svc, mock_tmux_svc = _make_mock_services(
+            read_state_return=_plan_waiting_snapshot(),
+        )
+        api_app.dependency_overrides[get_state_service] = lambda: mock_state_svc
+        api_app.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
+        try:
+            resp = await api_client.post(
+                "/api/plans/ike/reject",
+                headers=auth_headers,
+                json={},
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_state_service, None)
+            api_app.dependency_overrides.pop(get_tmux_service, None)
+        assert resp.status_code == 422
+
+    async def test_reject_requires_auth(self, api_client, api_key):
+        """Request without auth headers is rejected."""
+        resp = await api_client.post(
+            "/api/plans/ike/reject",
+            json={"feedback": "test"},
+        )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# POST /api/plans/{session}/respond
+# ---------------------------------------------------------------------------
+
+
+class TestRespondToPlan:
+    async def test_respond_sends_input(self, api_client, auth_headers, api_app):
+        """Delivers the literal input text via send_message."""
+        mock_state_svc, mock_tmux_svc = _make_mock_services(
+            read_state_return=_plan_waiting_snapshot(),
+            session_exists_return=True,
+        )
+
+        api_app.dependency_overrides[get_state_service] = lambda: mock_state_svc
+        api_app.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
+        try:
+            with patch(
+                "agent_backbone.api.routes.plans.send_message",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_send:
+                resp = await api_client.post(
+                    "/api/plans/ike/respond",
+                    headers=auth_headers,
+                    json={"input": "2"},
+                )
+        finally:
+            api_app.dependency_overrides.pop(get_state_service, None)
+            api_app.dependency_overrides.pop(get_tmux_service, None)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["session"] == "ike"
+        assert data["action"] == "plan_response_sent"
+
+        # Verify the literal input was sent
+        mock_send.assert_awaited_once_with("ike", "2")
+
+    async def test_respond_returns_409_when_not_plan_waiting(
+        self, api_client, auth_headers, api_app
+    ):
+        """Returns 409 when session is not in plan_waiting state."""
+        mock_state_svc, mock_tmux_svc = _make_mock_services(
+            read_state_return=_idle_snapshot(),
+        )
+
+        api_app.dependency_overrides[get_state_service] = lambda: mock_state_svc
+        api_app.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
+        try:
+            resp = await api_client.post(
+                "/api/plans/ike/respond",
+                headers=auth_headers,
+                json={"input": "1"},
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_state_service, None)
+            api_app.dependency_overrides.pop(get_tmux_service, None)
+
+        assert resp.status_code == 409
+        assert "plan_waiting" in resp.json()["detail"]
+
+    async def test_respond_requires_input(self, api_client, auth_headers, api_app):
+        """Empty body (missing input) returns 422."""
+        mock_state_svc, mock_tmux_svc = _make_mock_services(
+            read_state_return=_plan_waiting_snapshot(),
+        )
+        api_app.dependency_overrides[get_state_service] = lambda: mock_state_svc
+        api_app.dependency_overrides[get_tmux_service] = lambda: mock_tmux_svc
+        try:
+            resp = await api_client.post(
+                "/api/plans/ike/respond",
+                headers=auth_headers,
+                json={},
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_state_service, None)
+            api_app.dependency_overrides.pop(get_tmux_service, None)
+        assert resp.status_code == 422
+
+    async def test_respond_requires_auth(self, api_client, api_key):
+        """Request without auth headers is rejected."""
+        resp = await api_client.post(
+            "/api/plans/ike/respond",
+            json={"input": "1"},
+        )
         assert resp.status_code == 401

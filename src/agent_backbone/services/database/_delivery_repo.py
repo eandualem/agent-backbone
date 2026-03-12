@@ -48,6 +48,7 @@ async def query_deliveries(
     conn: AsyncConnection,
     issue_number: int | None = None,
     target_entity: str | None = None,
+    session_name: str | None = None,
     outcome: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
@@ -60,6 +61,9 @@ async def query_deliveries(
     if target_entity is not None:
         conditions.append("target_entity = :target_entity")
         params["target_entity"] = target_entity
+    if session_name is not None:
+        conditions.append("session_name = :session_name")
+        params["session_name"] = session_name
     if outcome is not None:
         conditions.append("outcome = :outcome")
         params["outcome"] = outcome
@@ -83,7 +87,7 @@ async def get_failed_deliveries(
             """SELECT d.* FROM deliveries d
                WHERE d.outcome IN (
                    'offline', 'delivery_failed', 'deferred',
-                   'copy_mode', 'user_interacting'
+                   'copy_mode', 'user_interacting', 'unknown_state'
                )
                  AND NOT EXISTS (
                    SELECT 1 FROM deliveries d2

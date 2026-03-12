@@ -86,26 +86,9 @@ def should_deliver(
 ) -> bool:
     """Decide whether to deliver a notification based on agent state.
 
-    Default (dispatcher) mode — permissive:
-    - idle / starting / unknown: always deliver
-    - processing_issue: deliver only if blocking
-    - busy: defer unless duration >= threshold AND blocking (capacity routing)
-
-    Monitor mode (require_idle=True) — strict:
-    - Only deliver when state is confirmed idle.
+    Delivery gating is strict in all modes: only confirmed idle agents
+    should receive a new issue. Extra parameters are retained for API
+    compatibility with older call sites and tests.
     """
-    if require_idle:
-        return state == AgentState.IDLE
-    if state in (AgentState.IDLE, AgentState.STARTING, AgentState.UNKNOWN):
-        return True
-    if state == AgentState.PROCESSING_ISSUE:
-        return is_blocking
-    # plan_waiting — agent is blocked waiting for human approval, never deliver
-    if state == AgentState.PLAN_WAITING:
-        return False
-    # busy state — capacity-aware routing
-    if state == AgentState.BUSY:
-        if busy_duration is not None and busy_duration >= busy_threshold and is_blocking:
-            return True
-        return False
-    return False
+    del is_blocking, busy_duration, busy_threshold, require_idle
+    return state == AgentState.IDLE

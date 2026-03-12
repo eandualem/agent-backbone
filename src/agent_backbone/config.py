@@ -210,6 +210,13 @@ class BackboneConfig:
     # Secrets (env vars only)
     github_token: str = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN", ""))
     webhook_secret: str = field(default_factory=lambda: _load_webhook_secret())
+    github_app_id: int | None = field(default_factory=lambda: _load_optional_int("GITHUB_APP_ID"))
+    github_app_private_key_path: str = field(
+        default_factory=lambda: os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH", "")
+    )
+    github_app_webhook_secret: str = field(
+        default_factory=lambda: os.environ.get("GITHUB_APP_WEBHOOK_SECRET", "")
+    )
 
     # Nested structural config
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
@@ -229,6 +236,17 @@ class BackboneConfig:
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     session_bridge: SessionBridgeConfig = field(default_factory=SessionBridgeConfig)
     jarvis: JarvisConfig = field(default_factory=JarvisConfig)
+
+    @property
+    def webhook_secrets(self) -> tuple[str, ...]:
+        """Return the configured webhook secrets in validation order."""
+        return tuple(
+            dict.fromkeys(
+                secret
+                for secret in (self.webhook_secret, self.github_app_webhook_secret)
+                if secret
+            )
+        )
 
     @classmethod
     def from_toml(cls, path: Path | None = None) -> BackboneConfig:
@@ -404,3 +422,14 @@ def _load_webhook_secret() -> str:
         return legacy_secret.read_text().strip()
     except FileNotFoundError:
         return ""
+
+
+def _load_optional_int(env_var: str) -> int | None:
+    """Load an optional integer from the environment."""
+    value = os.environ.get(env_var, "").strip()
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None

@@ -128,6 +128,7 @@ async def create_issue(
     body: dict,
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
+    db: BackboneDB = Depends(get_db),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Create a new issue in the orchestration repo."""
@@ -137,7 +138,13 @@ async def create_issue(
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
     issue = await delivery_svc.create_and_notify(
-        gh, title, issue_body, labels, config, flow_name="api-create-issue"
+        gh,
+        title,
+        issue_body,
+        labels,
+        config,
+        db=db,
+        flow_name="api-create-issue",
     )
     return _issue_to_response(issue, config, delivery_svc)
 

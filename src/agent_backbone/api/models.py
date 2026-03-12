@@ -201,6 +201,38 @@ class PlanDetail(BaseModel):
     content: str | None = None
 
 
+class PlanRejectRequest(BaseModel):
+    """Request body for rejecting a plan with feedback."""
+
+    feedback: str
+
+
+class PlanRespondRequest(BaseModel):
+    """Request body for responding to a plan prompt (option selection or free text)."""
+
+    input: str
+
+
+# --- Messages ---
+
+
+class MessageRequest(BaseModel):
+    """Request body for inter-agent message delivery."""
+
+    target_session: str
+    from_entity: str
+    message: str
+    priority: bool = False
+
+
+class MessageResponse(BaseModel):
+    """Response from inter-agent message delivery."""
+
+    ok: bool
+    session: str
+    outcome: str
+
+
 # --- Status ---
 
 

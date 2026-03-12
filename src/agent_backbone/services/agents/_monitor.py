@@ -13,7 +13,7 @@ import logging
 
 from prefect import flow
 
-from agent_backbone.services._locator import get_config, get_db, get_gh
+from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
 from agent_backbone.services.agents._escalation import (
     check_plan_waiting,
     handle_offline,
@@ -42,6 +42,8 @@ async def monitor_agents() -> dict:
     if _monitor_lock.locked():
         log.info("Monitor already running — skipping concurrent run")
         return {"_skipped": "concurrent_run"}
+
+    await ensure_initialized()
 
     async with _monitor_lock:
         return await _monitor_agents_impl()
@@ -78,7 +80,7 @@ async def _monitor_agents_impl() -> dict:
 
     # Detect plan-waiting agents and send Telegram notification
     try:
-        await check_plan_waiting(config, active_sessions)
+        await check_plan_waiting(config, active_sessions, db=db)
     except Exception:
         log.exception("Plan-waiting notification failed (non-fatal)")
 

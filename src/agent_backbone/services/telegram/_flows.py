@@ -11,7 +11,7 @@ import logging
 
 from prefect import flow
 
-from agent_backbone.services._locator import get_db
+from agent_backbone.services._locator import ensure_initialized, get_db
 from agent_backbone.services.terminal import list_sessions
 
 log = logging.getLogger(__name__)
@@ -23,6 +23,8 @@ async def get_system_status() -> dict:
 
     Returns dict with sessions, delivery stats, and agent states.
     """
+    await ensure_initialized()
+
     db = get_db()
 
     sessions = await list_sessions()
@@ -42,6 +44,8 @@ async def get_system_status() -> dict:
 @flow(name="telegram-queue")
 async def get_delivery_queue() -> dict:
     """Get delivery queue status for the /queue command."""
+    await ensure_initialized()
+
     db = get_db()
 
     failed = await db.get_failed_deliveries(limit=20)

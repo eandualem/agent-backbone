@@ -163,27 +163,38 @@ class TestGetTunnelUrl:
 class TestStopTunnel:
     @pytest.mark.asyncio
     async def test_stops_session(self):
-        """stop_tunnel kills the ngrok tmux session."""
+        """stop_tunnel kills the ngrok tmux session and API listener."""
         with patch(
             "agent_backbone.services.infrastructure._tunnel.stop_session",
             new_callable=AsyncMock,
             return_value=True,
         ) as mock_stop:
-            from agent_backbone.services.infrastructure._tunnel import stop_tunnel
+            with patch(
+                "agent_backbone.services.infrastructure._tunnel.kill_port_process",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_kill_port:
+                from agent_backbone.services.infrastructure._tunnel import stop_tunnel
 
-            result = await stop_tunnel()
+                result = await stop_tunnel()
         assert result is True
         mock_stop.assert_called_once_with("ngrok")
+        mock_kill_port.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_returns_false_when_stop_fails(self):
-        """stop_tunnel returns False when stop_session fails."""
+        """stop_tunnel returns False when session shutdown fails."""
         with patch(
             "agent_backbone.services.infrastructure._tunnel.stop_session",
             new_callable=AsyncMock,
             return_value=False,
         ):
-            from agent_backbone.services.infrastructure._tunnel import stop_tunnel
+            with patch(
+                "agent_backbone.services.infrastructure._tunnel.kill_port_process",
+                new_callable=AsyncMock,
+                return_value=True,
+            ):
+                from agent_backbone.services.infrastructure._tunnel import stop_tunnel
 
-            result = await stop_tunnel()
+                result = await stop_tunnel()
         assert result is False

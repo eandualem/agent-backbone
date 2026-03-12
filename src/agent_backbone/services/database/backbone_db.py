@@ -179,6 +179,7 @@ class BackboneDB:
         self,
         issue_number: int | None = None,
         target_entity: str | None = None,
+        session_name: str | None = None,
         outcome: str | None = None,
         limit: int = 50,
     ) -> list[dict]:
@@ -188,6 +189,7 @@ class BackboneDB:
                 conn,
                 issue_number,
                 target_entity,
+                session_name,
                 outcome,
                 limit,
             )

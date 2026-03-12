@@ -299,6 +299,32 @@ class TestGetSessionIntelligence:
         assert profile.intelligence == SessionIntelligence.UNKNOWN
         assert profile.agent_state == AgentState.UNKNOWN
 
+    async def test_copy_mode_does_not_mask_agent_working_busy(self):
+        """Bug #620: BUSY agent in copy mode must resolve AGENT_WORKING, not COPY_MODE."""
+        config = _default_config()
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
+            _patch_get_agent_state(_BUSY_SNAP),
+        ):
+            profile = await get_session_intelligence("ike", config)
+
+        assert profile.intelligence == SessionIntelligence.AGENT_WORKING
+        assert profile.agent_state == AgentState.BUSY
+
+    async def test_copy_mode_does_not_mask_agent_working_processing(self):
+        """Bug #620: PROCESSING_ISSUE agent in copy mode must resolve AGENT_WORKING."""
+        config = _default_config()
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
+            _patch_get_agent_state(_PROCESSING_SNAP),
+        ):
+            profile = await get_session_intelligence("ike", config)
+
+        assert profile.intelligence == SessionIntelligence.AGENT_WORKING
+        assert profile.agent_state == AgentState.PROCESSING_ISSUE
+
 
 # ---------------------------------------------------------------------------
 # TestResolveEntitySession
@@ -614,19 +640,259 @@ class TestSafeDeliver:
             flow_name="test_flow",
         )
 
-    async def test_unknown_delivers(self):
-        """UNKNOWN state still attempts delivery."""
+    async def test_unknown_enqueues_and_defers(self):
+        """UNKNOWN state is not deliverable and is queued for retry."""
         config = _default_config()
+        mock_db = AsyncMock()
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
             _patch_get_agent_state(_UNKNOWN_SNAP),
-            _patch_send_message(True) as mock_send,
         ):
-            result = await safe_deliver("ike", "Hello", config)
+            result = await safe_deliver(
+                "ike",
+                "Hello",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+            )
+
+        assert result == "unknown_state"
+        mock_db.enqueue_message.assert_called_once_with(
+            session_name="ike",
+            message="Hello",
+            issue_number=42,
+            target_entity="ike",
+            flow_name="test_flow",
+        )
+        mock_db.record_delivery.assert_called_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="unknown_state",
+            flow_name="test_flow",
+        )
+
+    async def test_enforce_issue_queue_blocks_duplicate_issue(self):
+        """Issue queue enforcement suppresses the same issue after first delivery."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        mock_db.query_deliveries.return_value = [
+            {
+                "issue_number": 42,
+                "target_entity": "ike",
+                "session_name": "ike",
+                "outcome": "delivered",
+            }
+        ]
+
+        result = await safe_deliver(
+            "ike",
+            "Hello",
+            config,
+            db=mock_db,
+            issue_number=42,
+            target_entity="ike",
+            flow_name="test_flow",
+            enforce_issue_queue=True,
+        )
+
+        assert result == "already_delivered"
+        mock_db.record_delivery.assert_not_called()
+
+    async def test_enforce_issue_queue_blocks_until_acknowledged(self):
+        """A newer issue is blocked while the last delivered one is still unacked."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        mock_db.query_deliveries.side_effect = [
+            [],
+            [
+                {
+                    "issue_number": 41,
+                    "target_entity": "ike",
+                    "session_name": "ike",
+                    "outcome": "delivered",
+                }
+            ],
+        ]
+        mock_db.is_acknowledged.return_value = False
+
+        result = await safe_deliver(
+            "ike",
+            "Hello",
+            config,
+            db=mock_db,
+            issue_number=42,
+            target_entity="ike",
+            flow_name="test_flow",
+            enforce_issue_queue=True,
+        )
+
+        assert result == "awaiting_ack"
+        mock_db.record_delivery.assert_not_called()
+
+    async def test_enforce_issue_queue_records_delivery_attempt(self):
+        """Central queue enforcement records the successful delivery attempt."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        mock_db.query_deliveries.side_effect = [[], []]
+
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+            _patch_send_message(True),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Hello",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+                enforce_issue_queue=True,
+            )
 
         assert result == "delivered"
-        mock_send.assert_called_once_with("ike", "Hello")
+        mock_db.record_delivery.assert_called_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivered",
+            flow_name="test_flow",
+        )
+
+    async def test_enforce_issue_queue_ignores_stale_delivery_outside_open_queue(self):
+        """Closed or unrelated historical deliveries must not block the current queue."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        mock_db.query_deliveries.side_effect = [
+            [],
+            [
+                {
+                    "issue_number": 665,
+                    "target_entity": "ike",
+                    "session_name": "ike",
+                    "outcome": "delivered",
+                }
+            ],
+        ]
+        mock_db.is_acknowledged.return_value = False
+
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+            _patch_send_message(True),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Hello",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+                enforce_issue_queue=True,
+                queue_scope_issue_numbers={42, 43},
+            )
+
+        assert result == "delivered"
+        mock_db.record_delivery.assert_called_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivered",
+            flow_name="test_flow",
+        )
+
+    async def test_comment_delivery_records_distinct_outcome(self):
+        """Comment notifications should not be persisted as issue deliveries."""
+        config = _default_config()
+        mock_db = AsyncMock()
+
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+            _patch_send_message(True),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Hello",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+                delivery_kind="comment",
+            )
+
+        assert result == "delivered"
+        mock_db.record_delivery.assert_called_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="comment_delivered",
+            flow_name="test_flow",
+        )
+
+    async def test_comment_delivery_bypasses_agent_working(self):
+        """Comments should reach a working agent without waiting for idle."""
+        config = _default_config()
+        mock_db = AsyncMock()
+
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_BUSY_SNAP),
+            _patch_send_message(True),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Comment",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+                delivery_kind="comment",
+            )
+
+        assert result == "delivered"
+        mock_db.record_delivery.assert_called_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="comment_delivered",
+            flow_name="test_flow",
+        )
+
+    async def test_comment_delivery_still_respects_copy_mode(self):
+        """Comments should not interrupt an actively manipulated pane."""
+        config = _default_config()
+        mock_db = AsyncMock()
+
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Comment",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+                delivery_kind="comment",
+            )
+
+        assert result == "copy_mode"
 
     async def test_grace_period_defers(self):
         """IDLE_GRACE intelligence returns 'grace_period' outcome."""

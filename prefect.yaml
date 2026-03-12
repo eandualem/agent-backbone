@@ -8,7 +8,7 @@ pull:
 
 deployments:
   - name: agent-monitor
-    entrypoint: src/agent_backbone/services/monitoring/_monitor.py:monitor_agents
+    entrypoint: src/agent_backbone/services/agents/_monitor.py:monitor_agents
     work_pool:
       name: agent-pool
     schedule:
@@ -16,7 +16,7 @@ deployments:
     description: "Periodic check for newly-online agent sessions with pending issues"
 
   - name: delivery-retry
-    entrypoint: src/agent_backbone/services/delivery/_flows.py:delivery_retry
+    entrypoint: src/agent_backbone/services/routing/_flows.py:delivery_retry
     work_pool:
       name: agent-pool
     schedule:
@@ -24,7 +24,7 @@ deployments:
     description: "Retry failed/offline/deferred deliveries for now-available agents"
 
   - name: morning-startup
-    entrypoint: src/agent_backbone/services/workflows/_flows.py:morning_startup
+    entrypoint: src/agent_backbone/services/automation/_flows.py:morning_startup
     work_pool:
       name: agent-pool
     schedule:
@@ -33,7 +33,7 @@ deployments:
     description: "Morning routine: start agents, deliver overnight issues, send digest"
 
   - name: evening-shutdown
-    entrypoint: src/agent_backbone/services/workflows/_flows.py:evening_shutdown
+    entrypoint: src/agent_backbone/services/automation/_flows.py:evening_shutdown
     work_pool:
       name: agent-pool
     schedule:
@@ -42,7 +42,7 @@ deployments:
     description: "Evening routine: capture stats, identify stale sessions, send digest"
 
   - name: heartbeat-scheduler
-    entrypoint: src/agent_backbone/services/monitoring/_heartbeat.py:heartbeat_scheduler
+    entrypoint: src/agent_backbone/services/agents/_heartbeat.py:heartbeat_scheduler
     work_pool:
       name: agent-pool
     schedule:

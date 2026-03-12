@@ -20,6 +20,7 @@ endif
 PROJECT_NAME := agent-backbone
 SRC_DIRS     := src/
 ALL_DIRS     := src/ tests/
+PREFECT_API_URL ?= http://127.0.0.1:4200/api
 
 # ─── Colors ──────────────────────────────────────────────
 
@@ -145,13 +146,13 @@ run-prefect: ## Start Prefect server (port 4200)
 	uv run prefect server start
 
 setup-pool: ## Create agent-pool work pool (one-time)
-	uv run prefect work-pool create agent-pool --type process
+	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect work-pool create agent-pool --type process
 
 deploy: ## Deploy all scheduled flows
-	uv run prefect deploy --all
+	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect deploy --all
 
 run-worker: ## Start Prefect worker for agent-pool
-	uv run prefect worker start --pool agent-pool
+	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect worker start --pool agent-pool
 
 # ─── Database ───────────────────────────────────────────
 

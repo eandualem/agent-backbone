@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -11,6 +12,13 @@ from agent_backbone.services.agents.models import AgentState, StateSnapshot
 from agent_backbone.services.terminal import capture_pane
 
 log = logging.getLogger(__name__)
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def _sanitize_pane_content(pane_content: str) -> str:
+    """Strip terminal formatting so prompt/state heuristics see plain text."""
+    return _ANSI_ESCAPE_RE.sub("", pane_content).replace("\xa0", " ")
 
 
 def infer_state_from_pane(pane_content: str) -> StateSnapshot:
@@ -22,32 +30,16 @@ def infer_state_from_pane(pane_content: str) -> StateSnapshot:
     - Prompt visible (ends with $ or >) with no activity -> idle
     - Otherwise -> unknown
     """
-    lines = pane_content.strip().splitlines()
+    sanitized = _sanitize_pane_content(pane_content)
+    lines = sanitized.strip().splitlines()
     if not lines:
         return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
 
-    content = pane_content.lower()
+    content = sanitized.lower()
 
-    # Active processing indicators
-    if "thinking..." in content or "tool call" in content:
-        return StateSnapshot(state=AgentState.BUSY, source="pull")
-
-    # Issue processing — look for issue references
-    for line in reversed(lines):
-        stripped = line.strip().lower()
-        if "working on issue #" in stripped or "processing issue #" in stripped:
-            # Try to extract issue number
-            for word in stripped.split("#"):
-                if word and word.split()[0].isdigit():
-                    issue_num = int(word.split()[0])
-                    return StateSnapshot(
-                        state=AgentState.PROCESSING_ISSUE,
-                        current_issue=issue_num,
-                        source="pull",
-                    )
-            return StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="pull")
-
-    # Idle — scan last N non-empty lines for prompt characters.
+    # Idle prompt at the bottom wins over stale activity markers higher up in
+    # the pane. We only treat the session as busy when the current visible tail
+    # does not show a ready prompt.
     _PROMPT_CHARS = ("$", ">", "\u276f", "%")  # ❯ = U+276F
     _BOX_CHARS = "\u2500\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u253c\u2501"
     non_empty = [ln.strip() for ln in lines if ln.strip()]
@@ -67,6 +59,26 @@ def infer_state_from_pane(pane_content: str) -> StateSnapshot:
             return StateSnapshot(state=AgentState.IDLE, source="pull")
         break
 
+    recent_lines = [ln.strip().lower() for ln in non_empty[-20:]]
+    recent_content = "\n".join(recent_lines)
+
+    # Active processing indicators
+    if "thinking..." in recent_content or "tool call" in recent_content:
+        return StateSnapshot(state=AgentState.BUSY, source="pull")
+
+    # Issue processing — look for issue references in the visible tail.
+    for stripped in reversed(recent_lines):
+        if "working on issue #" in stripped or "processing issue #" in stripped:
+            for word in stripped.split("#"):
+                if word and word.split()[0].isdigit():
+                    issue_num = int(word.split()[0])
+                    return StateSnapshot(
+                        state=AgentState.PROCESSING_ISSUE,
+                        current_issue=issue_num,
+                        source="pull",
+                    )
+            return StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="pull")
+
     return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
 
 
@@ -76,7 +88,8 @@ async def get_agent_state(
     """Get reconciled agent state from push + pull sources.
 
     Push (state file) is preferred when fresh.
-    Pull (tmux capture) overrides when push is stale or missing.
+    Stale or missing push state is actively verified from tmux before any
+    stale fallback is trusted.
     """
     push = read_state_file(state_dir, session)
 
@@ -84,18 +97,14 @@ async def get_agent_state(
     if push and (time.time() - push.timestamp) < stale_threshold:
         return push
 
-    # Trust stale idle — idle doesn't expire like busy does.
-    if push and push.state == AgentState.IDLE:
-        return push
-
-    # Pull from tmux (only for non-idle stale states)
+    # Verify stale or missing state from tmux before trusting old push data.
     pane_content = await capture_pane(session)
     if pane_content:
         pull = infer_state_from_pane(pane_content)
         pull.timestamp = time.time()
         return pull
 
-    # No pull data — use stale push or default to unknown
+    # No tmux evidence available — fall back to stale push if present.
     if push:
         log.info(
             "Using stale push state for %s (age: %.0fs)", session, time.time() - push.timestamp

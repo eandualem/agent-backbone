@@ -83,6 +83,9 @@ async def _deliver_to_entity(
     db: BackboneDB,
     result: DispatchResult,
     is_blocking: bool,
+    enforce_issue_queue: bool = False,
+    queue_scope_issue_numbers: set[int] | None = None,
+    delivery_kind: str = "issue",
 ) -> None:
     """Deliver a notification to a single entity with state checks and persistence."""
     session_name = await resolve_session(target, event.issue.title, config)
@@ -100,17 +103,23 @@ async def _deliver_to_entity(
         target_entity=target,
         flow_name="issue-dispatcher",
         priority=is_blocking,
+        enforce_issue_queue=enforce_issue_queue,
+        queue_scope_issue_numbers=queue_scope_issue_numbers,
+        delivery_kind=delivery_kind,
     )
 
     # Map safe_deliver outcomes to DispatchResult fields
     if outcome == "delivered":
         result.delivered.append(session_name)
+    elif outcome == "already_delivered":
+        result.skipped.append(session_name)
     elif outcome == "offline":
         result.offline.append(session_name)
     elif outcome == "delivery_failed":
         result.offline.append(session_name)
     else:
-        # agent_working, plan_waiting, copy_mode, user_interacting, grace_period
+        # awaiting_ack, agent_working, plan_waiting, copy_mode,
+        # user_interacting, grace_period, unknown_state
         result.deferred.append(session_name)
 
     log.info(
@@ -121,22 +130,13 @@ async def _deliver_to_entity(
         outcome,
     )
 
-    # Record delivery to SQLite for monitor awareness
-    try:
-        await db.record_delivery(
-            issue_number=event.issue.number,
-            target_entity=target,
-            session_name=session_name,
-            outcome=outcome,
-            flow_name="issue-dispatcher",
-        )
-    except Exception:
-        log.exception("Failed to record delivery (non-fatal)")
-
 
 @flow(name="issue-dispatcher")
 async def issue_dispatcher(
-    event: IssueEvent, config: BackboneConfig, db: BackboneDB
+    event: IssueEvent,
+    config: BackboneConfig,
+    db: BackboneDB,
+    gh: object | None = None,
 ) -> DispatchResult:
     """Dispatch a webhook event to target entity sessions.
 
@@ -193,7 +193,16 @@ async def issue_dispatcher(
             except Exception:
                 log.exception("Failed to clear acknowledgment (non-fatal)")
 
-            await _deliver_to_entity(target, event, message, config, db, result, is_blocking)
+            await _deliver_to_entity(
+                target,
+                event,
+                message,
+                config,
+                db,
+                result,
+                is_blocking,
+                delivery_kind="comment",
+            )
 
         log.info(
             "Comment dispatch: %d delivered, %d skipped, %d offline, %d deferred",
@@ -212,6 +221,7 @@ async def issue_dispatcher(
         return result
 
     # Deliver to each target from for: labels
+    queue_scope_cache: dict[str, set[int]] = {}
     for target in event.issue.labels.targets:
         if target in config.entities.skip:
             result.skipped.append(target)
@@ -223,7 +233,29 @@ async def issue_dispatcher(
             result.skipped.append(target)
             continue
 
-        await _deliver_to_entity(target, event, message, config, db, result, is_blocking)
+        queue_scope_issue_numbers: set[int] | None = None
+        if gh is not None:
+            try:
+                open_issues = await gh.list_open_issues(
+                    f"for:{target}",
+                    repo_full_name=event.issue.repo_full_name or None,
+                )
+                queue_scope_issue_numbers = {issue.number for issue in open_issues}
+                queue_scope_cache[target] = queue_scope_issue_numbers
+            except Exception:
+                log.exception("Failed to load queue scope for %s (non-fatal)", target)
+
+        await _deliver_to_entity(
+            target,
+            event,
+            message,
+            config,
+            db,
+            result,
+            is_blocking,
+            enforce_issue_queue=True,
+            queue_scope_issue_numbers=queue_scope_cache.get(target, queue_scope_issue_numbers),
+        )
 
     log.info(
         "Dispatch: %d delivered, %d skipped, %d offline, %d deferred",

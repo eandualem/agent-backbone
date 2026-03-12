@@ -1,6 +1,6 @@
 """Onboarding pipeline — discovery, validation, registry, and automated setup.
 
-Contains the 9-step onboarding pipeline for new repos, filesystem discovery,
+Contains the 10-step onboarding pipeline for new repos, filesystem discovery,
 repo registry (repos.json) management, and validation utilities.
 """
 
@@ -319,8 +319,12 @@ async def run_onboarding(
     # Step 4: Create orchestration config
     orch_dir = _ORCH_ROOT / org / repo
     claude_dir = orch_dir / ".claude"
+    cursor_rules_dir = orch_dir / ".cursor" / "rules"
+    gemini_dir = orch_dir / ".gemini"
     try:
         claude_dir.mkdir(parents=True, exist_ok=True)
+        cursor_rules_dir.mkdir(parents=True, exist_ok=True)
+        gemini_dir.mkdir(parents=True, exist_ok=True)
 
         claude_md = orch_dir / "CLAUDE.md"
         if not claude_md.exists():
@@ -543,6 +547,72 @@ async def run_onboarding(
             OnboardingStep(
                 step=9,
                 name="notify_brunel",
+                status="skipped",
+                detail="No config/token — skipped",
+            )
+        )
+
+    # Step 10: Notify the org orchestrator that repo CLAUDE.md content is needed
+    if config and config.github_token:
+        try:
+            from agent_backbone.services.github import GitHubClient
+            from agent_backbone.services.routing import create_and_notify
+
+            orchestrator = next(
+                (
+                    name
+                    for name, entry in config.registry.entities.items()
+                    if entry.organization == org and "orchestrators" in entry.groups
+                ),
+                None,
+            )
+            if not orchestrator:
+                raise RuntimeError(f"No orchestrator found for {org}/{repo}")
+
+            async with GitHubClient(config) as gh:
+                await create_and_notify(
+                    gh,
+                    title=(f"[task] New repo onboarded: {org}/{repo} - needs CLAUDE.md content"),
+                    body=(
+                        f"## Context\n"
+                        f"Repo `{org}/{repo}` was just onboarded"
+                        f" via the automated pipeline.\n\n"
+                        f"## Request\n"
+                        f"Create the repo-specific `CLAUDE.md` content for `{org}/{repo}`"
+                        f" and start the initial orchestration work needed to bring"
+                        f" the repo into service.\n\n"
+                        f"## References\n"
+                        f"- Workspace repo: `~/ws/core/code/{org}/{repo}/`\n"
+                        f"- Orchestration mirror: `~/orchestration/core/code/{org}/{repo}/`\n"
+                        f"- Spec docs: `~/ws/core/spec/{org}/{repo}/docs/`\n"
+                    ),
+                    labels=["from:coding-agent", f"for:{orchestrator}", "task"],
+                    config=config,
+                    flow_name="onboarding",
+                )
+            steps.append(
+                OnboardingStep(
+                    step=10,
+                    name="notify_orchestrator",
+                    status="done",
+                    detail=f"Created onboarding issue for {orchestrator}",
+                )
+            )
+        except Exception as exc:
+            steps.append(
+                OnboardingStep(
+                    step=10,
+                    name="notify_orchestrator",
+                    status="failed",
+                    detail=str(exc)[:200],
+                )
+            )
+            had_failure = True
+    else:
+        steps.append(
+            OnboardingStep(
+                step=10,
+                name="notify_orchestrator",
                 status="skipped",
                 detail="No config/token — skipped",
             )

@@ -15,9 +15,15 @@ from agent_backbone.services.routing import (
 from agent_backbone.services.routing import clear as clear_dedup
 
 
-def make_close_event(targets: list[str]) -> IssueEvent:
+def make_close_event(targets: list[str], repo_full_name: str = "") -> IssueEvent:
     labels = ParsedLabels(sender="ike", targets=targets, issue_type="task")
-    issue = IssueData(number=10, title="[task] Done", state="closed", labels=labels)
+    issue = IssueData(
+        number=10,
+        title="[task] Done",
+        state="closed",
+        labels=labels,
+        repo_full_name=repo_full_name,
+    )
     return IssueEvent(event_type=EventType.ISSUE_CLOSED, issue=issue)
 
 
@@ -232,6 +238,48 @@ class TestOnIssueClosed:
         mock_session_exists.assert_not_called()
         assert result["jarvis"] == "delivered_#15"
         mock_deliver.assert_called_once()
+
+    async def test_non_default_repo_uses_same_repo_and_skips_orchestration_hooks(self, config):
+        event = make_close_event(["feynman"], repo_full_name="WF/agent-shell")
+        next_issue = IssueData(
+            number=11,
+            title="[task] Next thing",
+            labels=ParsedLabels(sender="leo", targets=["feynman"], issue_type="task"),
+            repo_full_name="WF/agent-shell",
+        )
+        mock_gh = AsyncMock()
+
+        with (
+            patch(
+                "agent_backbone.services.routing._lifecycle.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.routing._lifecycle.find_next_issue",
+                new_callable=AsyncMock,
+                return_value=next_issue,
+            ) as mock_find_next_issue,
+            patch(
+                "agent_backbone.services.routing._lifecycle.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ),
+            patch(
+                "agent_backbone.services.routing._lifecycle._check_dependencies",
+                new_callable=AsyncMock,
+            ) as mock_check_dependencies,
+            patch(
+                "agent_backbone.services.routing._lifecycle._check_onboarding_chain",
+                new_callable=AsyncMock,
+            ) as mock_check_onboarding_chain,
+        ):
+            result = await on_issue_closed.fn(event, config, mock_gh)
+
+        assert result["feynman"] == "delivered_#11"
+        assert mock_find_next_issue.await_args.kwargs["repo_full_name"] == "WF/agent-shell"
+        mock_check_dependencies.assert_not_awaited()
+        mock_check_onboarding_chain.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

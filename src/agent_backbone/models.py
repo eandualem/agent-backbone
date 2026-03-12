@@ -86,6 +86,7 @@ class IssueData(BaseModel):
     state: str = "open"
     labels: ParsedLabels = Field(default_factory=ParsedLabels)
     html_url: str = ""
+    repo_full_name: str = ""
 
 
 class CommentData(BaseModel):
@@ -115,6 +116,7 @@ class IssueEvent(BaseModel):
         """Construct from raw GitHub webhook data."""
         event_type = EventType.from_github(event_type_str, action)
         issue_data = payload.get("issue", {})
+        repository = payload.get("repository", {})
         labels = ParsedLabels.from_github_labels(issue_data.get("labels", []))
 
         issue = IssueData(
@@ -123,6 +125,7 @@ class IssueEvent(BaseModel):
             state=issue_data.get("state", "open"),
             labels=labels,
             html_url=issue_data.get("html_url", ""),
+            repo_full_name=repository.get("full_name", ""),
         )
 
         comment = None

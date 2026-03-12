@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from agent_backbone.models import CommentData, IssueData, ParsedLabels
-from agent_backbone.services.routing import (
+from agent_backbone.services.routing._format import (
     format_comment_notification,
     format_issue_notification,
     format_next_issue_notification,
+    format_plan_notification,
     format_stall_notification,
     format_unblock_notification,
     format_unexpected_offline_notification,
@@ -39,6 +40,19 @@ class TestFormatIssueNotification:
         issue = IssueData(number=1, title="Something", labels=labels)
         msg = format_issue_notification(issue)
         assert "[]" not in msg
+
+    def test_uses_issue_repo_for_review_command(self):
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(
+            number=42,
+            title="[task] Update config",
+            labels=labels,
+            html_url="https://github.com/WF/agent-shell/issues/42",
+            repo_full_name="WF/agent-shell",
+        )
+        msg = format_issue_notification(issue)
+        assert 'owner:"WF"' in msg
+        assert 'repo:"agent-shell"' in msg
 
 
 class TestFormatCommentNotification:
@@ -88,6 +102,18 @@ class TestFormatCommentNotification:
         assert "[task] Update config" in msg
         # Verify the full pattern: New comment on #N "title" from attribution
         assert 'New comment on #42 "[task] Update config"' in msg
+
+    def test_uses_issue_repo_for_review_command(self, sample_comment):
+        issue = IssueData(
+            number=42,
+            title="[task] Update config",
+            labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
+            html_url="https://github.com/WF/agent-shell/issues/42",
+            repo_full_name="WF/agent-shell",
+        )
+        msg = format_comment_notification(issue, sample_comment)
+        assert 'owner:"WF"' in msg
+        assert 'repo:"agent-shell"' in msg
 
 
 class TestFormatNextIssueNotification:
@@ -165,4 +191,30 @@ class TestFormatUnexpectedOfflineNotification:
 
     def test_single_line(self):
         msg = format_unexpected_offline_notification("ike", "ike", 5)
+        assert "\n" not in msg
+
+
+class TestFormatPlanNotification:
+    def test_basic_format(self):
+        msg = format_plan_notification("agent-backbone", "bell", "/tmp/plan.md", "Add feature X")
+        assert msg.startswith("[via:backbone]")
+        assert "bell" in msg
+        assert "agent-backbone" in msg
+        assert "/tmp/plan.md" in msg
+        assert "Add feature X" in msg
+
+    def test_with_issue_number(self):
+        msg = format_plan_notification(
+            "feynman", "feynman", "/tmp/plan.md", "Refactor", issue_number=42
+        )
+        assert "(issue #42)" in msg
+
+    def test_without_issue_number(self):
+        msg = format_plan_notification("feynman", "feynman", "/tmp/plan.md", "Refactor")
+        assert "issue" not in msg
+
+    def test_single_line(self):
+        msg = format_plan_notification(
+            "agent-backbone", "bell", "/tmp/plan.md", "Add feature X", issue_number=99
+        )
         assert "\n" not in msg

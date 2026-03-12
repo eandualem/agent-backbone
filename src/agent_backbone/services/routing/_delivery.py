@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -15,6 +16,98 @@ from agent_backbone.services.terminal import send_message
 
 log = logging.getLogger(__name__)
 
+_SUCCESSFUL_ISSUE_OUTCOMES = frozenset({"delivered", "retried"})
+
+
+def _can_track_issue_delivery(
+    db: BackboneDB | None,
+    issue_number: int | None,
+    target_entity: str | None,
+) -> bool:
+    """Whether this delivery has enough metadata for queue coordination."""
+    return db is not None and issue_number is not None and target_entity is not None
+
+
+async def _is_acknowledged_for_session(
+    db: BackboneDB,
+    issue_number: int,
+    target_entity: str,
+    session_name: str,
+) -> bool:
+    """Check acknowledgment using both entity and session fallback keys."""
+    if await db.is_acknowledged(issue_number, target_entity):
+        return True
+    if session_name != target_entity and await db.is_acknowledged(issue_number, session_name):
+        return True
+    return False
+
+
+async def _has_successful_issue_delivery(
+    db: BackboneDB,
+    issue_number: int,
+    session_name: str,
+) -> bool:
+    """Whether this issue was already successfully delivered to this session."""
+    rows = await db.query_deliveries(
+        issue_number=issue_number,
+        session_name=session_name,
+        limit=25,
+    )
+    return any(row.get("outcome") in _SUCCESSFUL_ISSUE_OUTCOMES for row in rows)
+
+
+async def _get_unacknowledged_gate_issue(
+    db: BackboneDB,
+    session_name: str,
+    current_issue: int,
+    queue_scope_issue_numbers: Collection[int] | None = None,
+) -> int | None:
+    """Return the most recent successful issue still awaiting acknowledgment."""
+    scoped_issue_numbers = set(queue_scope_issue_numbers or ())
+    rows = await db.query_deliveries(session_name=session_name, limit=100)
+    for row in rows:
+        issue_number = row.get("issue_number")
+        target_entity = row.get("target_entity")
+        if not isinstance(issue_number, int) or not isinstance(target_entity, str):
+            continue
+        if scoped_issue_numbers and issue_number not in scoped_issue_numbers:
+            continue
+        if issue_number == current_issue:
+            continue
+        if row.get("outcome") not in _SUCCESSFUL_ISSUE_OUTCOMES:
+            continue
+        if await _is_acknowledged_for_session(db, issue_number, target_entity, session_name):
+            continue
+        return issue_number
+    return None
+
+
+async def _record_issue_attempt(
+    db: BackboneDB | None,
+    issue_number: int | None,
+    target_entity: str | None,
+    session_name: str,
+    outcome: str,
+    flow_name: str,
+    delivery_kind: str = "issue",
+) -> None:
+    """Persist a queue delivery attempt when tracking metadata is available."""
+    if not _can_track_issue_delivery(db, issue_number, target_entity):
+        return
+    recorded_outcome = outcome
+    if delivery_kind != "issue":
+        recorded_outcome = f"{delivery_kind}_{outcome}"
+    try:
+        await db.record_delivery(
+            issue_number=issue_number,
+            target_entity=target_entity,
+            session_name=session_name,
+            outcome=recorded_outcome,
+            flow_name=flow_name,
+        )
+    except Exception:
+        log.exception("Failed to record delivery attempt (non-fatal)")
+
 
 async def safe_deliver(
     session_name: str,
@@ -26,6 +119,9 @@ async def safe_deliver(
     target_entity: str | None = None,
     flow_name: str = "",
     priority: bool = False,
+    enforce_issue_queue: bool = False,
+    queue_scope_issue_numbers: Collection[int] | None = None,
+    delivery_kind: str = "issue",
 ) -> str:
     """Deliver a message with composite state pre-checks and optional queuing.
 
@@ -40,11 +136,47 @@ async def safe_deliver(
         target_entity: entity name for queue tracking (optional).
         flow_name: originating flow for logging/tracking.
         priority: if True, bypass COPY_MODE and USER_INTERACTING checks.
+        enforce_issue_queue: if True, apply session-level dedup and
+            acknowledgment gating before attempting delivery.
+        queue_scope_issue_numbers: current open queue for the target entity.
+            When provided, only deliveries for issues still in that queue can
+            block subsequent issue delivery.
+        delivery_kind: delivery classification for persistence. Non-issue
+            kinds are recorded with a prefixed outcome (for example
+            ``comment_delivered``) so they do not interfere with issue
+            assignment gating.
 
     Returns:
         Outcome string: "delivered", "offline", "copy_mode", "user_interacting",
-        "agent_working", "plan_waiting", "grace_period", "delivery_failed".
+        "agent_working", "plan_waiting", "grace_period", "unknown_state",
+        "already_delivered", "awaiting_ack", "delivery_failed".
     """
+    allow_comment_interrupt = delivery_kind == "comment"
+
+    if enforce_issue_queue and _can_track_issue_delivery(db, issue_number, target_entity):
+        if await _has_successful_issue_delivery(db, issue_number, session_name):
+            log.info(
+                "Suppressed duplicate issue delivery for #%d -> %s",
+                issue_number,
+                session_name,
+            )
+            return "already_delivered"
+
+        blocking_issue = await _get_unacknowledged_gate_issue(
+            db,
+            session_name,
+            issue_number,
+            queue_scope_issue_numbers=queue_scope_issue_numbers,
+        )
+        if blocking_issue is not None:
+            log.info(
+                "Blocked #%d -> %s pending acknowledgment for #%d",
+                issue_number,
+                session_name,
+                blocking_issue,
+            )
+            return "awaiting_ack"
+
     # HTTP delivery targets bypass tmux intelligence entirely
     if is_http_target(session_name, config):
         from agent_backbone.jarvis import inject_message
@@ -52,8 +184,26 @@ async def safe_deliver(
         if await inject_message(
             config.jarvis.inject_url, message, sessions_url=config.jarvis.sessions_url
         ):
+            await _record_issue_attempt(
+                db,
+                issue_number,
+                target_entity,
+                session_name,
+                "delivered",
+                flow_name,
+                delivery_kind=delivery_kind,
+            )
             return "delivered"
         await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+        await _record_issue_attempt(
+            db,
+            issue_number,
+            target_entity,
+            session_name,
+            "delivery_failed",
+            flow_name,
+            delivery_kind=delivery_kind,
+        )
         return "delivery_failed"
 
     # Get composite state (safe_deliver skips grace — passes idle_since=None)
@@ -64,31 +214,116 @@ async def safe_deliver(
     # Determine deliverability
     if intelligence == SessionIntelligence.OFFLINE:
         await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+        await _record_issue_attempt(
+            db,
+            issue_number,
+            target_entity,
+            session_name,
+            "offline",
+            flow_name,
+            delivery_kind=delivery_kind,
+        )
         return "offline"
 
-    if intelligence == SessionIntelligence.PLAN_WAITING:
+    if intelligence == SessionIntelligence.PLAN_WAITING and not allow_comment_interrupt:
+        await _record_issue_attempt(
+            db,
+            issue_number,
+            target_entity,
+            session_name,
+            "plan_waiting",
+            flow_name,
+            delivery_kind=delivery_kind,
+        )
         return "plan_waiting"
 
-    if intelligence == SessionIntelligence.AGENT_WORKING:
+    if intelligence == SessionIntelligence.AGENT_WORKING and not allow_comment_interrupt:
+        await _record_issue_attempt(
+            db,
+            issue_number,
+            target_entity,
+            session_name,
+            "agent_working",
+            flow_name,
+            delivery_kind=delivery_kind,
+        )
         return "agent_working"
 
-    if intelligence == SessionIntelligence.IDLE_GRACE:
+    if intelligence == SessionIntelligence.IDLE_GRACE and not allow_comment_interrupt:
+        await _record_issue_attempt(
+            db,
+            issue_number,
+            target_entity,
+            session_name,
+            "grace_period",
+            flow_name,
+            delivery_kind=delivery_kind,
+        )
         return "grace_period"
 
     if intelligence == SessionIntelligence.COPY_MODE and not priority:
         await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+        await _record_issue_attempt(
+            db,
+            issue_number,
+            target_entity,
+            session_name,
+            "copy_mode",
+            flow_name,
+            delivery_kind=delivery_kind,
+        )
         return "copy_mode"
 
     if intelligence == SessionIntelligence.USER_INTERACTING and not priority:
         await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+        await _record_issue_attempt(
+            db,
+            issue_number,
+            target_entity,
+            session_name,
+            "user_interacting",
+            flow_name,
+            delivery_kind=delivery_kind,
+        )
         return "user_interacting"
 
-    # Deliverable: IDLE_READY, UNKNOWN, or priority-bypassed COPY_MODE/USER_INTERACTING
+    if intelligence == SessionIntelligence.UNKNOWN:
+        await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+        await _record_issue_attempt(
+            db,
+            issue_number,
+            target_entity,
+            session_name,
+            "unknown_state",
+            flow_name,
+            delivery_kind=delivery_kind,
+        )
+        return "unknown_state"
+
+    # Deliverable: IDLE_READY or priority-bypassed COPY_MODE/USER_INTERACTING
     if await send_message(session_name, message):
+        await _record_issue_attempt(
+            db,
+            issue_number,
+            target_entity,
+            session_name,
+            "delivered",
+            flow_name,
+            delivery_kind=delivery_kind,
+        )
         return "delivered"
 
     # Delivery failed
     await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+    await _record_issue_attempt(
+        db,
+        issue_number,
+        target_entity,
+        session_name,
+        "delivery_failed",
+        flow_name,
+        delivery_kind=delivery_kind,
+    )
     return "delivery_failed"
 
 

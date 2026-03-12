@@ -15,6 +15,7 @@ from agent_backbone.services.infrastructure._processes import (
     remove_pid,
     stop_by_pid,
 )
+from agent_backbone.services.infrastructure._tunnel import stop_tunnel
 from agent_backbone.services.terminal import session_exists, start_session, stop_session
 
 if TYPE_CHECKING:
@@ -151,6 +152,8 @@ async def start_worker(config: BackboneConfig) -> bool:
 
     import asyncio
 
+    work_pool_name = config.scheduling.work_pool_name
+
     # Create work pool (idempotent)
     pool_proc = await asyncio.create_subprocess_exec(
         "uv",
@@ -158,7 +161,7 @@ async def start_worker(config: BackboneConfig) -> bool:
         "prefect",
         "work-pool",
         "create",
-        "agent-pool",
+        work_pool_name,
         "--type",
         "process",
         cwd=BACKBONE_DIR,
@@ -185,12 +188,12 @@ async def start_worker(config: BackboneConfig) -> bool:
     ok = await start_session(
         "backbone-worker",
         working_dir=BACKBONE_DIR,
-        command=["uv", "run", "prefect", "worker", "start", "--pool", "agent-pool"],
+        command=["uv", "run", "prefect", "worker", "start", "--pool", work_pool_name],
         environment={"PREFECT_API_URL": PREFECT_API_URL},
     )
     if ok:
         await record_tmux_pid("worker", "backbone-worker")
-        log.info("Worker started (pool: agent-pool)")
+        log.info("Worker started (pool: %s)", work_pool_name)
     return ok
 
 
@@ -263,6 +266,7 @@ async def stop_backbone(config: BackboneConfig) -> bool:
     await stop_gateway(config)
     await stop_worker(config)
     await stop_prefect(config)
+    await stop_tunnel()
     log.info("Backbone stopped")
     return True
 

@@ -10,7 +10,7 @@ import logging
 from prefect import flow, task
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services._locator import get_config, get_db, get_gh
+from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import format_digest, safe_deliver
 from agent_backbone.services.terminal import list_sessions, start_session, stop_session
@@ -97,6 +97,8 @@ async def morning_startup() -> dict:
     3. Deliver overnight issues to online agents
     4. Return summary for Telegram digest
     """
+    await ensure_initialized()
+
     config = get_config()
     gh = get_gh()
 
@@ -165,6 +167,8 @@ async def evening_shutdown() -> dict:
     3. List active sessions
     4. Build and return digest
     """
+    await ensure_initialized()
+
     config = get_config()
     db = get_db()
     gh = get_gh()
@@ -222,6 +226,8 @@ async def arclio_start() -> dict:
 
     Starts Arclio coding agents and reports which sessions came online.
     """
+    await ensure_initialized()
+
     config = get_config()
     started = await start_arclio_agents(config)
     sessions = await list_sessions()
@@ -258,6 +264,8 @@ async def arclio_stop() -> dict:
 
     Stops all Arclio coding agents and reports final session state.
     """
+    await ensure_initialized()
+
     config = get_config()
     stopped = await stop_arclio_agents(config)
     sessions = await list_sessions()
@@ -290,6 +298,8 @@ async def full_shutdown() -> dict:
     Stops every configured agent session and reports results.
     Infrastructure (Prefect server, gateway, Telegram bot) is NOT affected.
     """
+    await ensure_initialized()
+
     config = get_config()
     results = await stop_all_agents(config)
 

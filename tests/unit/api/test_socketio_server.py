@@ -2276,3 +2276,195 @@ class TestForwardOutputUnhandledException:
             await ns._forward_pty_output("sid1", "ike", queue)
 
         assert "Unhandled exception" in caplog.text or call_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# release_dims tests
+# ---------------------------------------------------------------------------
+
+
+class TestReleaseDims:
+    """Tests for on_release_dims — restore original tmux dims without disconnecting."""
+
+    async def test_release_dims_restores_original(self):
+        """release_dims calls resize_window with original dims."""
+        ns = _make_namespace()
+        ns._subscriptions["sid1"] = {"ike": MagicMock()}
+        ns._active_sessions["ike"] = {"sid1"}
+        ns._original_dims["ike"] = (200, 50)
+
+        with patch(
+            "agent_backbone.api.socketio_server.resize_window",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_resize:
+            await ns.on_release_dims("sid1", {"session": "ike"})
+            mock_resize.assert_awaited_once_with("ike", 200, 50)
+
+        # Original dims should be cleared
+        assert "ike" not in ns._original_dims
+        # Client should still be in active_sessions (not disconnected)
+        assert "sid1" in ns._active_sessions["ike"]
+
+    async def test_release_dims_does_not_remove_pty(self):
+        """release_dims preserves PTY and subscriptions — socket stays alive."""
+        ns = _make_namespace()
+        task_mock = MagicMock()
+        ns._subscriptions["sid1"] = {"ike": task_mock}
+        ns._active_sessions["ike"] = {"sid1"}
+        ns._original_dims["ike"] = (200, 50)
+
+        with patch(
+            "agent_backbone.api.socketio_server.resize_window",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            await ns.on_release_dims("sid1", {"session": "ike"})
+
+        # Subscription and task still present
+        assert "ike" in ns._subscriptions["sid1"]
+        assert ns._subscriptions["sid1"]["ike"] is task_mock
+
+    async def test_release_dims_not_subscribed(self):
+        """release_dims emits error when sid is not subscribed."""
+        ns = _make_namespace()
+        await ns.on_release_dims("sid1", {"session": "ike"})
+        ns.emit.assert_awaited_once()
+        args = ns.emit.call_args[0]
+        assert args[0] == "error"
+
+    async def test_release_dims_no_original(self):
+        """release_dims with no stored original dims is a no-op (no crash)."""
+        ns = _make_namespace()
+        ns._subscriptions["sid1"] = {"ike": MagicMock()}
+        ns._active_sessions["ike"] = {"sid1"}
+        # No _original_dims set
+
+        with patch(
+            "agent_backbone.api.socketio_server.resize_window",
+            new_callable=AsyncMock,
+        ) as mock_resize:
+            await ns.on_release_dims("sid1", {"session": "ike"})
+            mock_resize.assert_not_awaited()
+
+    async def test_release_dims_missing_session(self):
+        """release_dims with empty session name is a no-op."""
+        ns = _make_namespace()
+        await ns.on_release_dims("sid1", {"session": ""})
+        ns.emit.assert_not_awaited()
+
+    async def test_release_dims_logs_failure(self, caplog):
+        """Resize failure on release_dims is logged at ERROR level."""
+        ns = _make_namespace()
+        ns._subscriptions["sid1"] = {"ike": MagicMock()}
+        ns._active_sessions["ike"] = {"sid1"}
+        ns._original_dims["ike"] = (200, 50)
+
+        with patch(
+            "agent_backbone.api.socketio_server.resize_window",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            with caplog.at_level(logging.ERROR, logger="agent_backbone.api.socketio_server"):
+                await ns.on_release_dims("sid1", {"session": "ike"})
+
+            assert any(
+                "Failed to restore dims on release_dims" in r.message for r in caplog.records
+            )
+
+
+class TestResizeAfterRelease:
+    """Tests for resize re-capturing original dims after release_dims."""
+
+    async def test_resize_recaptures_after_release(self):
+        """After release_dims, next resize re-captures current tmux dims as original."""
+        ns = _make_namespace()
+        ns._subscriptions["sid1"] = {"ike": MagicMock()}
+        ns._active_sessions["ike"] = {"sid1"}
+        # No _original_dims — simulates post-release state
+
+        pty_session = _mock_pty_session()
+        mgr = _mock_pty_manager(pty_session)
+
+        with (
+            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
+            patch(
+                "agent_backbone.api.socketio_server.get_window_size",
+                new_callable=AsyncMock,
+                return_value=(200, 50),
+            ) as mock_get_size,
+            patch(
+                "agent_backbone.api.socketio_server.resize_window",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_resize,
+        ):
+            await ns.on_resize("sid1", {"session": "ike", "cols": 140, "rows": 35})
+
+            # Should have captured current dims before resizing
+            mock_get_size.assert_awaited_once_with("ike")
+            assert ns._original_dims["ike"] == (200, 50)
+            # And then applied the requested resize
+            mock_resize.assert_awaited_once_with("ike", 140, 35)
+
+    async def test_resize_does_not_recapture_when_original_exists(self):
+        """Resize does NOT re-capture when original dims already exist."""
+        ns = _make_namespace()
+        ns._subscriptions["sid1"] = {"ike": MagicMock()}
+        ns._active_sessions["ike"] = {"sid1"}
+        ns._original_dims["ike"] = (200, 50)
+
+        pty_session = _mock_pty_session()
+        mgr = _mock_pty_manager(pty_session)
+
+        with (
+            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
+            patch(
+                "agent_backbone.api.socketio_server.get_window_size",
+                new_callable=AsyncMock,
+            ) as mock_get_size,
+            patch(
+                "agent_backbone.api.socketio_server.resize_window",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            await ns.on_resize("sid1", {"session": "ike", "cols": 140, "rows": 35})
+            mock_get_size.assert_not_awaited()
+
+    async def test_full_cycle_release_then_resize(self):
+        """Full cycle: join → release_dims → resize re-captures → cleanup restores."""
+        ns = _make_namespace()
+        ns._subscriptions["sid1"] = {"ike": MagicMock()}
+        ns._active_sessions["ike"] = {"sid1"}
+        ns._original_dims["ike"] = (200, 50)
+
+        pty_session = _mock_pty_session()
+        mgr = _mock_pty_manager(pty_session)
+
+        # Step 1: release_dims — restores to (200, 50)
+        with patch(
+            "agent_backbone.api.socketio_server.resize_window",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_resize:
+            await ns.on_release_dims("sid1", {"session": "ike"})
+            mock_resize.assert_awaited_once_with("ike", 200, 50)
+        assert "ike" not in ns._original_dims
+
+        # Step 2: resize (re-expand) — re-captures (200, 50) then resizes to (140, 35)
+        with (
+            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
+            patch(
+                "agent_backbone.api.socketio_server.get_window_size",
+                new_callable=AsyncMock,
+                return_value=(200, 50),
+            ),
+            patch(
+                "agent_backbone.api.socketio_server.resize_window",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            await ns.on_resize("sid1", {"session": "ike", "cols": 140, "rows": 35})
+        assert ns._original_dims["ike"] == (200, 50)

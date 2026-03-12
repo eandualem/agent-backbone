@@ -61,7 +61,7 @@ async def dispatch_event_async(
             log.warning("Failed to persist delivery ID to SQLite")
 
     if event.event_type == EventType.ISSUE_CLOSED:
-        result = await dispatch_svc.on_issue_closed(event, config, gh)
+        result = await dispatch_svc.on_issue_closed(event, config, gh, db)
         return f"lifecycle: {result}"
 
     if event.event_type in (
@@ -80,7 +80,7 @@ async def dispatch_event_async(
             )
             return f"deduped: all targets already notified for #{event.issue.number}"
 
-        result = await dispatch_svc.issue_dispatcher(event, config, db)
+        result = await dispatch_svc.issue_dispatcher(event, config, db, gh)
         return (
             f"dispatch: {len(result.delivered)} delivered, "
             f"{len(result.offline)} offline, "
@@ -104,8 +104,8 @@ async def handle_webhook(
 
     # Verify signature
     signature = request.headers.get("X-Hub-Signature-256")
-    if config.webhook_secret and not verify_signature(
-        payload_body, signature, config.webhook_secret
+    if config.webhook_secrets and not any(
+        verify_signature(payload_body, signature, secret) for secret in config.webhook_secrets
     ):
         log.warning("Invalid webhook signature — rejecting")
         return Response(content="Invalid signature", status_code=403)

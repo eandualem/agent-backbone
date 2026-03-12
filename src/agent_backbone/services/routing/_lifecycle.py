@@ -12,6 +12,7 @@ from prefect import flow, task
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import IssueData, IssueEvent
+from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.routing._create_notify import create_and_notify
 from agent_backbone.services.routing._dedup import is_recent_notification
@@ -22,6 +23,21 @@ from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.terminal import session_exists
 
 log = logging.getLogger(__name__)
+
+
+def _default_repo_full_name(config: BackboneConfig) -> str:
+    """Return the configured default GitHub repository."""
+    return f"{config.github.owner}/{config.github.repo}"
+
+
+def _issue_repo_full_name(issue: IssueData, config: BackboneConfig) -> str:
+    """Resolve the source repository for an issue, defaulting to the main repo."""
+    return issue.repo_full_name or _default_repo_full_name(config)
+
+
+def _is_default_repo_issue(issue: IssueData, config: BackboneConfig) -> bool:
+    """Whether the issue belongs to the backbone's default repository."""
+    return _issue_repo_full_name(issue, config) == _default_repo_full_name(config)
 
 
 async def _check_dependencies(issue_number: int) -> None:
@@ -38,7 +54,10 @@ _ONBOARDING_TITLE_PREFIX = "[task] Verify onboarding infrastructure: "
 
 
 async def _check_onboarding_chain(
-    event: IssueEvent, config: BackboneConfig, gh: GitHubClient
+    event: IssueEvent,
+    config: BackboneConfig,
+    gh: GitHubClient,
+    db: BackboneDB | None = None,
 ) -> None:
     """Sequential chain: when Brunel closes a verification issue, notify Leo.
 
@@ -93,6 +112,7 @@ async def _check_onboarding_chain(
             ),
             labels=["from:backbone", "for:leo", "task"],
             config=config,
+            db=db,
             flow_name="issue-lifecycle",
         )
         log.info(
@@ -110,7 +130,11 @@ async def _check_onboarding_chain(
 
 @task
 async def find_next_issue(
-    config: BackboneConfig, entity: str, gh: GitHubClient, exclude_number: int | None = None
+    config: BackboneConfig,
+    entity: str,
+    gh: GitHubClient,
+    exclude_number: int | None = None,
+    repo_full_name: str | None = None,
 ) -> IssueData | None:
     """Query GitHub for the next open issue targeting an entity.
 
@@ -119,7 +143,7 @@ async def find_next_issue(
     that may still appear as open due to GitHub eventual consistency).
     """
     label = f"for:{entity}"
-    issues = await gh.list_open_issues(label)
+    issues = await gh.list_open_issues(label, repo_full_name=repo_full_name)
 
     if exclude_number is not None:
         pre_filter = len(issues)
@@ -144,7 +168,9 @@ async def deliver_next(
     session_name: str,
     issue: IssueData,
     config: BackboneConfig,
+    db: BackboneDB | None = None,
     target_entity: str = "",
+    queue_scope_issue_numbers: set[int] | None = None,
 ) -> str:
     """Deliver a next-issue notification via safe_deliver."""
     message = format_next_issue_notification(issue)
@@ -152,14 +178,22 @@ async def deliver_next(
         session_name,
         message,
         config,
+        db=db,
         issue_number=issue.number,
         target_entity=target_entity,
         flow_name="issue-lifecycle",
+        enforce_issue_queue=True,
+        queue_scope_issue_numbers=queue_scope_issue_numbers,
     )
 
 
 @flow(name="issue-lifecycle")
-async def on_issue_closed(event: IssueEvent, config: BackboneConfig, gh: GitHubClient) -> dict:
+async def on_issue_closed(
+    event: IssueEvent,
+    config: BackboneConfig,
+    gh: GitHubClient,
+    db: BackboneDB | None = None,
+) -> dict:
     """Handle an issue_closed event by delivering the next queued issue.
 
     For each entity that was a target of the closed issue:
@@ -189,7 +223,13 @@ async def on_issue_closed(event: IssueEvent, config: BackboneConfig, gh: GitHubC
             continue
 
         # Find the next issue (exclude just-closed issue — GitHub eventual consistency)
-        next_issue = await find_next_issue(config, target, gh, exclude_number=event.issue.number)
+        next_issue = await find_next_issue(
+            config,
+            target,
+            gh,
+            exclude_number=event.issue.number,
+            repo_full_name=_issue_repo_full_name(event.issue, config),
+        )
         if not next_issue:
             result[target] = "queue_empty"
             continue
@@ -206,17 +246,39 @@ async def on_issue_closed(event: IssueEvent, config: BackboneConfig, gh: GitHubC
             continue
 
         # Deliver it
-        outcome = await deliver_next(session_name, next_issue, config, target_entity=target)
+        queue_scope_issue_numbers = {
+            issue.number
+            for issue in await gh.list_open_issues(
+                f"for:{target}",
+                repo_full_name=_issue_repo_full_name(event.issue, config),
+            )
+            if issue.number != event.issue.number
+        }
+        outcome = await deliver_next(
+            session_name,
+            next_issue,
+            config,
+            db,
+            target_entity=target,
+            queue_scope_issue_numbers=queue_scope_issue_numbers,
+        )
         if outcome == "delivered":
             result[target] = f"delivered_#{next_issue.number}"
         else:
             result[target] = outcome
 
-    # Check if closing this issue unblocks any parent issues
-    await _check_dependencies(event.issue.number)
+    if _is_default_repo_issue(event.issue, config):
+        # Check if closing this issue unblocks any parent issues
+        await _check_dependencies(event.issue.number)
 
-    # Sequential onboarding chain: Brunel verification -> Leo PROJECT.md
-    await _check_onboarding_chain(event, config, gh)
+        # Sequential onboarding chain: Brunel verification -> Leo PROJECT.md
+        await _check_onboarding_chain(event, config, gh, db)
+    else:
+        log.info(
+            "Skipping orchestration-specific lifecycle hooks for non-default repo issue #%d (%s)",
+            event.issue.number,
+            _issue_repo_full_name(event.issue, config),
+        )
 
     log.info("Lifecycle complete: %s", result)
     return result
