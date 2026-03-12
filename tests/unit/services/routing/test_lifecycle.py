@@ -190,7 +190,7 @@ class TestOnIssueClosed:
         # GitHub API returns both (closed one still appears as open)
         mock_gh.list_open_issues.return_value = [closed_issue, real_next]
 
-        config = BackboneConfig(github_token="t", webhook_secret="s")
+        config = BackboneConfig(webhook_secret="s")
         result = await find_next_issue.fn(config, "feynman", mock_gh, exclude_number=10)
 
         assert result is not None
@@ -302,7 +302,7 @@ def _make_brunel_close_event(org: str, repo: str, number: int = 50) -> IssueEven
 class TestOnboardingChain:
     async def test_creates_leo_issue_on_brunel_close(self):
         """When Brunel closes a verification issue, create_and_notify is called for Leo."""
-        config = BackboneConfig(github_token="test-token")
+        config = BackboneConfig()
         event = _make_brunel_close_event("WF", "new-thing", number=42)
 
         mock_gh = AsyncMock()
@@ -326,7 +326,7 @@ class TestOnboardingChain:
 
     async def test_ignores_non_onboarding_issues(self):
         """Non-onboarding issues are silently ignored."""
-        config = BackboneConfig(github_token="test-token")
+        config = BackboneConfig()
         event = make_close_event(["brunel"])  # generic close, wrong title
 
         mock_gh = AsyncMock()
@@ -341,7 +341,7 @@ class TestOnboardingChain:
 
     async def test_ignores_non_brunel_targets(self):
         """Onboarding-titled issue for non-brunel targets is ignored."""
-        config = BackboneConfig(github_token="test-token")
+        config = BackboneConfig()
         title = f"{_ONBOARDING_TITLE_PREFIX}WF/some-repo"
         labels = ParsedLabels(
             sender="coding-agent",
@@ -366,9 +366,9 @@ class TestOnboardingChain:
 
         mock_create_notify.assert_not_called()
 
-    async def test_skipped_when_no_token(self):
-        """No GitHub token → chain is skipped (no error)."""
-        config = BackboneConfig(github_token="")
+    async def test_no_auth_gate_for_onboarding_chain(self):
+        """The lifecycle chain no longer skips based on PAT presence."""
+        config = BackboneConfig()
         event = _make_brunel_close_event("WF", "new-thing")
 
         mock_gh = AsyncMock()
@@ -379,11 +379,11 @@ class TestOnboardingChain:
         ) as mock_create_notify:
             await _check_onboarding_chain(event, config, mock_gh)
 
-        mock_create_notify.assert_not_called()
+        mock_create_notify.assert_called_once()
 
     async def test_error_does_not_block_lifecycle(self):
         """create_and_notify failure is logged, not raised."""
-        config = BackboneConfig(github_token="test-token")
+        config = BackboneConfig()
         event = _make_brunel_close_event("WF", "new-thing")
 
         mock_gh = AsyncMock()

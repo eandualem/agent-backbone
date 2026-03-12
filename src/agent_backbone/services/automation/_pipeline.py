@@ -498,7 +498,7 @@ async def run_onboarding(
         had_failure = True
 
     # Step 9: Notify Brunel (sequential chain: Pipeline → Brunel → Leo → Feynman)
-    if config and config.github_token:
+    if config is not None:
         try:
             from agent_backbone.services.github import GitHubClient
             from agent_backbone.services.routing import create_and_notify
@@ -548,12 +548,12 @@ async def run_onboarding(
                 step=9,
                 name="notify_brunel",
                 status="skipped",
-                detail="No config/token — skipped",
+                detail="No config — skipped",
             )
         )
 
     # Step 10: Notify the org orchestrator that repo CLAUDE.md content is needed
-    if config and config.github_token:
+    if config is not None:
         try:
             from agent_backbone.services.github import GitHubClient
             from agent_backbone.services.routing import create_and_notify
@@ -614,7 +614,7 @@ async def run_onboarding(
                 step=10,
                 name="notify_orchestrator",
                 status="skipped",
-                detail="No config/token — skipped",
+                detail="No config — skipped",
             )
         )
 

@@ -19,7 +19,10 @@ from agent_backbone.services.routing._dedup import is_recent_notification
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_next_issue_notification
 from agent_backbone.services.routing._intelligence import is_http_target
-from agent_backbone.services.routing._resolution import resolve_entity_session
+from agent_backbone.services.routing._resolution import (
+    resolve_entity_session,
+    resolve_entity_sessions,
+)
 from agent_backbone.services.terminal import session_exists
 
 log = logging.getLogger(__name__)
@@ -78,10 +81,6 @@ async def _check_onboarding_chain(
             log.warning("Cannot parse org/repo from title: %s", title)
             return
         org, repo = org_repo.split("/", 1)
-
-        if not config.github_token:
-            log.info("No GitHub token — skipping onboarding chain for %s/%s", org, repo)
-            return
 
         await create_and_notify(
             gh,
@@ -207,19 +206,13 @@ async def on_issue_closed(
             result[target] = "skipped"
             continue
 
-        # Resolve session name (no title extraction — lifecycle uses fallback directly)
-        session_name = await resolve_entity_session(
+        # Resolve session names (no title extraction — lifecycle uses fallback directly)
+        session_names = await resolve_entity_sessions(
             target, config, event.issue.title, use_title_extraction=False
         )
 
-        if not session_name:
+        if not session_names:
             result[target] = "no_session"
-            continue
-
-        # Check if session is reachable (HTTP targets are always reachable)
-        if not is_http_target(session_name, config) and not await session_exists(session_name):
-            log.info("Session '%s' offline — next issue delivered when online", session_name)
-            result[target] = "offline"
             continue
 
         # Find the next issue (exclude just-closed issue — GitHub eventual consistency)
@@ -234,18 +227,6 @@ async def on_issue_closed(
             result[target] = "queue_empty"
             continue
 
-        # Dedup: don't re-deliver an issue the entity was already notified about recently
-        # This prevents duplicate "next issue" notifications when multiple closes happen
-        if is_recent_notification(next_issue.number, session_name):
-            log.info(
-                "Suppressed duplicate next-issue notification for #%d -> %s",
-                next_issue.number,
-                session_name,
-            )
-            result[target] = f"deduped_#{next_issue.number}"
-            continue
-
-        # Deliver it
         queue_scope_issue_numbers = {
             issue.number
             for issue in await gh.list_open_issues(
@@ -254,18 +235,43 @@ async def on_issue_closed(
             )
             if issue.number != event.issue.number
         }
-        outcome = await deliver_next(
-            session_name,
-            next_issue,
-            config,
-            db,
-            target_entity=target,
-            queue_scope_issue_numbers=queue_scope_issue_numbers,
-        )
-        if outcome == "delivered":
-            result[target] = f"delivered_#{next_issue.number}"
+        session_results: list[str] = []
+        for session_name in session_names:
+            # Check if session is reachable (HTTP targets are always reachable)
+            if not is_http_target(session_name, config) and not await session_exists(session_name):
+                log.info("Session '%s' offline — next issue delivered when online", session_name)
+                session_results.append("offline")
+                continue
+
+            # Dedup: don't re-deliver an issue the entity was already notified about recently
+            # This prevents duplicate "next issue" notifications when multiple closes happen
+            if is_recent_notification(next_issue.number, session_name):
+                log.info(
+                    "Suppressed duplicate next-issue notification for #%d -> %s",
+                    next_issue.number,
+                    session_name,
+                )
+                session_results.append(f"deduped_#{next_issue.number}")
+                continue
+
+            outcome = await deliver_next(
+                session_name,
+                next_issue,
+                config,
+                db,
+                target_entity=target,
+                queue_scope_issue_numbers=queue_scope_issue_numbers,
+            )
+            if outcome == "delivered":
+                session_results.append(f"delivered_#{next_issue.number}")
+            else:
+                session_results.append(outcome)
+
+        unique_outcomes = list(dict.fromkeys(session_results))
+        if len(unique_outcomes) == 1:
+            result[target] = unique_outcomes[0]
         else:
-            result[target] = outcome
+            result[target] = ",".join(session_results)
 
     if _is_default_repo_issue(event.issue, config):
         # Check if closing this issue unblocks any parent issues

@@ -123,7 +123,6 @@ class TestLoadSaveSchedules:
 def heartbeat_config(tmp_path):
     """Config with in-memory DB and tmp heartbeat schedule."""
     return BackboneConfig(
-        github_token="test-token",
         webhook_secret="test-secret",
         heartbeat=HeartbeatConfig(
             schedule_file=str(tmp_path / "schedules.json"),
@@ -257,7 +256,6 @@ class TestHeartbeatSchedulerFlow:
         schedule_path.write_text(json.dumps(schedules))
 
         config = BackboneConfig(
-            github_token="test",
             webhook_secret="test",
             heartbeat=HeartbeatConfig(
                 schedule_file=str(schedule_path),
@@ -319,7 +317,6 @@ class TestHeartbeatSchedulerFlow:
         schedule_path.write_text(json.dumps(schedules))
 
         config = BackboneConfig(
-            github_token="test",
             webhook_secret="test",
             heartbeat=HeartbeatConfig(
                 schedule_file=str(schedule_path),
@@ -368,7 +365,6 @@ class TestHeartbeatSchedulerFlow:
         schedule_path.write_text("{}")
 
         config = BackboneConfig(
-            github_token="test",
             webhook_secret="test",
             heartbeat=HeartbeatConfig(
                 schedule_file=str(schedule_path),

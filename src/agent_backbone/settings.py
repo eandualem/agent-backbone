@@ -19,7 +19,6 @@ class AppSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="BACKBONE_", env_nested_delimiter="__")
 
-    github_token: str = ""
     webhook_secret: str = ""
     github_app_id: int | None = None
     github_app_private_key_path: str = ""
@@ -49,8 +48,6 @@ class AppSettings(BaseSettings):
 
         # Overlay env-sourced secrets where provided
         overrides: dict = {}
-        if self.github_token:
-            overrides["github_token"] = self.github_token
         if self.webhook_secret:
             overrides["webhook_secret"] = self.webhook_secret
         if self.github_app_id is not None:

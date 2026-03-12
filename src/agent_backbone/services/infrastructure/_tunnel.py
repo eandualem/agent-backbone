@@ -40,7 +40,7 @@ async def start_tunnel(config: BackboneConfig) -> bool:
         await asyncio.sleep(2)
         url = await get_tunnel_url()
         if url:
-            log.info("Public URL: %s/webhook", url)
+            log.info("Public URL: %s/", url)
     return ok
 
 

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from agent_backbone.config import (
     BackboneConfig,
@@ -13,6 +16,37 @@ from agent_backbone.config import (
 )
 from agent_backbone.services.registry import EntityEntry, EntityRegistry
 from agent_backbone.settings import AppSettings
+
+
+@pytest.fixture(autouse=True)
+def isolated_home(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    state_dir = home / ".claude" / "state"
+    registry_path = state_dir / "entity-registry.json"
+    code_base = home / "ws" / "core" / "code" / "WF" / "agent-backbone"
+    code_base.mkdir(parents=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "feynman": {
+                    "session": "feynman",
+                    "home": "~/orchestration",
+                    "groups": ["orchestrators"],
+                    "figure": "Richard Feynman",
+                    "role": "Orchestration Optimizer",
+                },
+                "ike": {
+                    "session": "ike",
+                    "home": "~/ws/core/ike",
+                    "groups": ["orchestrators"],
+                    "figure": "Dwight Eisenhower",
+                    "role": "Core Orchestrator",
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("HOME", str(home))
 
 
 class TestBackboneConfigDefaults:
@@ -55,9 +89,13 @@ class TestBackboneConfigDefaults:
         except AttributeError:
             pass
 
-    def test_custom_secrets(self):
-        config = BackboneConfig(github_token="tok", webhook_secret="sec")
-        assert config.github_token == "tok"
+    def test_github_app_ready_when_app_fields_set(self):
+        config = BackboneConfig(
+            github_app_id=3075015,
+            github_app_private_key_path="/tmp/private-key.pem",
+            webhook_secret="sec",
+        )
+        assert config.github_app_ready is True
         assert config.webhook_secret == "sec"
 
     def test_webhook_secrets_include_github_app_secret(self):

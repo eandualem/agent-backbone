@@ -118,7 +118,7 @@ async def _dispatch(args: argparse.Namespace) -> None:
     elif cmd == "show-tunnel-url":
         url = await _tunnel.get_tunnel_url()
         if url:
-            print(f"Public URL: {url}/webhook")
+            print(f"Public URL: {url}/")
         else:
             print("Tunnel URL not available")
 

@@ -13,7 +13,8 @@ make db-upgrade
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env: set GITHUB_TOKEN, WEBHOOK_SECRET, TELEGRAM_TOKEN
+# Edit .env: set GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY_PATH,
+# GITHUB_APP_WEBHOOK_SECRET, TELEGRAM_TOKEN
 
 # 4. Install dependencies
 make install
@@ -114,8 +115,7 @@ make run-worker       # Start Prefect worker
 
 Two layers: `AppSettings` (Pydantic `BaseSettings`, `BACKBONE_` env prefix) for secrets, then `BackboneConfig.from_toml()` for structural config from `backbone.toml`.
 
-**Required env vars:** `GITHUB_TOKEN`, `WEBHOOK_SECRET`
-**GitHub App transition:** `GITHUB_APP_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`
+**Required env vars:** `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_APP_WEBHOOK_SECRET`
 **Optional:** `TELEGRAM_TOKEN`, `BACKBONE_API_KEY`, `JARVIS_INJECT_URL`, `BACKBONE_DATABASE_HOST/PORT/USER/PASSWORD/NAME`
 
 Tests use in-memory SQLite — no PostgreSQL required for `make test`.

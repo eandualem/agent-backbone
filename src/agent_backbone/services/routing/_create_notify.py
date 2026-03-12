@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from agent_backbone.models import IssueData
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_issue_notification
-from agent_backbone.services.routing._resolution import resolve_entity_session
+from agent_backbone.services.routing._resolution import resolve_entity_sessions
 
 log = logging.getLogger(__name__)
 
@@ -58,8 +58,8 @@ async def create_and_notify(
     message = format_issue_notification(issue)
 
     for target in targets:
-        session_name = await resolve_entity_session(target, config, issue.title)
-        if not session_name:
+        session_names = await resolve_entity_sessions(target, config, issue.title)
+        if not session_names:
             log.info(
                 "No session resolved for target '%s' on #%d — skipping",
                 target,
@@ -67,29 +67,31 @@ async def create_and_notify(
             )
             continue
 
-        outcome = await safe_deliver(
-            session_name,
-            message,
-            config,
-            db=db,
-            issue_number=issue.number,
-            target_entity=target,
-            flow_name=flow_name,
-            enforce_issue_queue=True,
-            queue_scope_issue_numbers={
-                item.number
-                for item in await gh.list_open_issues(
-                    f"for:{target}",
-                    repo_full_name=issue.repo_full_name or None,
-                )
-            },
-        )
-        log.info(
-            "Direct notification for #%d → %s (%s): %s",
-            issue.number,
-            target,
-            session_name,
-            outcome,
-        )
+        queue_scope_issue_numbers = {
+            item.number
+            for item in await gh.list_open_issues(
+                f"for:{target}",
+                repo_full_name=issue.repo_full_name or None,
+            )
+        }
+        for session_name in session_names:
+            outcome = await safe_deliver(
+                session_name,
+                message,
+                config,
+                db=db,
+                issue_number=issue.number,
+                target_entity=target,
+                flow_name=flow_name,
+                enforce_issue_queue=True,
+                queue_scope_issue_numbers=queue_scope_issue_numbers,
+            )
+            log.info(
+                "Direct notification for #%d → %s (%s): %s",
+                issue.number,
+                target,
+                session_name,
+                outcome,
+            )
 
     return issue

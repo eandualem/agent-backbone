@@ -208,7 +208,6 @@ class BackboneConfig:
     """Top-level configuration. Assembled from TOML + env vars."""
 
     # Secrets (env vars only)
-    github_token: str = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN", ""))
     webhook_secret: str = field(default_factory=lambda: _load_webhook_secret())
     github_app_id: int | None = field(default_factory=lambda: _load_optional_int("GITHUB_APP_ID"))
     github_app_private_key_path: str = field(
@@ -247,6 +246,11 @@ class BackboneConfig:
                 if secret
             )
         )
+
+    @property
+    def github_app_ready(self) -> bool:
+        """Whether GitHub App credentials are configured for REST API access."""
+        return bool(self.github_app_id and self.github_app_private_key_path)
 
     @classmethod
     def from_toml(cls, path: Path | None = None) -> BackboneConfig:

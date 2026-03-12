@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -18,6 +19,8 @@ from agent_backbone.models import (
 )
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.registry import EntityEntry, EntityRegistry
+
+_TEST_GITHUB_APP_KEY = Path(__file__).parent / "fixtures" / "github-app-test-key.pem"
 
 
 @pytest.fixture(autouse=True)
@@ -101,8 +104,9 @@ def config():
         repos=[],
     )
     return BackboneConfig(
-        github_token="test-token-123",
         webhook_secret="test-secret",
+        github_app_id=3075015,
+        github_app_private_key_path=str(_TEST_GITHUB_APP_KEY),
         gateway=GatewayConfig(port=7120),
         github=GitHubConfig(owner="eandualem", repo="orchestration"),
         registry=test_registry,

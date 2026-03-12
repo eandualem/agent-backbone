@@ -58,12 +58,12 @@ cp .env.example .env
 Edit `.env`:
 
 ```bash
-# Required — GitHub PAT with repo scope
-GITHUB_TOKEN=ghp_your_token_here
+# Required — GitHub App credentials for REST API access
+GITHUB_APP_ID=3075015
+GITHUB_APP_PRIVATE_KEY_PATH=/Users/elias/.config/lovely-agents/private-key.pem
 
-# Required — webhook signature verification
-# Auto-loaded from .webhook-secret (repo root) or ~/.claude/services/.webhook-secret
-WEBHOOK_SECRET=your_secret_here
+# Required — GitHub App webhook signature verification
+GITHUB_APP_WEBHOOK_SECRET=your_secret_here
 
 # Optional — Telegram bot
 TELEGRAM_TOKEN=your_telegram_bot_token
@@ -79,14 +79,14 @@ BACKBONE_API_KEY=your_api_key
 # BACKBONE_DATABASE_NAME=backbone
 ```
 
-### 5. GitHub webhook config
+### 5. GitHub App webhook config
 
-Same port (7120) and endpoint (`/webhook`) as always. If setting up fresh:
+GitHub App deliveries should target the root endpoint on port 7120. If setting up fresh:
 
 1. Generate secret: `openssl rand -hex 32 > .webhook-secret` (in repo root)
 2. Start services: `make start-backbone && make start-tunnel`
-3. Configure at https://github.com/eandualem/orchestration/settings/hooks:
-   - Payload URL: `https://YOUR-NGROK-URL/webhook`
+3. Configure the `lovely-agents` GitHub App webhook:
+   - Payload URL: `https://YOUR-PUBLIC-URL/`
    - Content type: `application/json`
    - Secret: contents of `.webhook-secret`
    - Events: **Issues** and **Issue comments** only
@@ -250,7 +250,7 @@ Key endpoints:
 | `/api/workflows` | Workflow listing and execution |
 | `/api/rooms` | Room lifecycle and messaging |
 | `/api/repos` | Repository discovery and onboarding |
-| `/webhook` | GitHub webhook intake |
+| `/` | GitHub webhook intake |
 
 Full protocol: [docs/protocols/REST_API.md](docs/protocols/REST_API.md)
 

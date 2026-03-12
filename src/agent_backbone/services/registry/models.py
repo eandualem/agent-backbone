@@ -8,16 +8,27 @@ from pathlib import Path
 
 
 @dataclass(frozen=True)
+class EntityInstance:
+    """A per-organization runtime instance for a role-based entity."""
+
+    home: str
+    session: str | None
+    organization: str = ""
+
+
+@dataclass(frozen=True)
 class EntityEntry:
     """A single entity from entity-registry.json."""
 
-    session: str
+    session: str | None
     home: str
     groups: list[str]
     figure: str
     role: str
     organization: str = ""
     entity_type: str = "agent"
+    role_definition: str = ""
+    instances: dict[str, EntityInstance] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -36,6 +47,22 @@ class EntityRegistry:
     entities: dict[str, EntityEntry] = field(default_factory=dict)
     repos: list[RepoInfo] = field(default_factory=list)
 
+    def delivery_sessions_for(self, entity_name: str) -> list[str]:
+        """Concrete tmux sessions that should receive deliveries for an entity."""
+        entry = self.entities.get(entity_name)
+        if not entry:
+            return []
+
+        sessions: list[str] = [
+            instance.session for instance in entry.instances.values() if instance.session
+        ]
+        if sessions:
+            return list(dict.fromkeys(sessions))
+
+        if entry.session is None:
+            return []
+        return [entry.session]
+
     @cached_property
     def sessions_map(self) -> dict[str, str]:
         """Entity name -> session name mapping (excludes entities with no session)."""
@@ -47,12 +74,15 @@ class EntityRegistry:
 
     @cached_property
     def entity_by_session(self) -> dict[str, str]:
-        """Session name -> entity name (reverse lookup, excludes None sessions)."""
-        return {
-            entry.session: name
-            for name, entry in self.entities.items()
-            if entry.session is not None
-        }
+        """Session name -> entity name, including concrete role-instance sessions."""
+        reverse: dict[str, str] = {}
+        for name, entry in self.entities.items():
+            if entry.session is not None:
+                reverse[entry.session] = name
+            for instance in entry.instances.values():
+                if instance.session is not None:
+                    reverse[instance.session] = name
+        return reverse
 
     @cached_property
     def all_entities(self) -> list[str]:
@@ -71,12 +101,15 @@ class EntityRegistry:
 
     @cached_property
     def home_by_session(self) -> dict[str, str]:
-        """Session name -> home directory (expanded, excludes None sessions)."""
-        return {
-            entry.session: str(Path(entry.home).expanduser())
-            for entry in self.entities.values()
-            if entry.session is not None
-        }
+        """Session name -> home directory, including role-instance sessions."""
+        homes: dict[str, str] = {}
+        for entry in self.entities.values():
+            if entry.session is not None:
+                homes[entry.session] = str(Path(entry.home).expanduser())
+            for instance in entry.instances.values():
+                if instance.session is not None:
+                    homes[instance.session] = str(Path(instance.home).expanduser())
+        return homes
 
     @cached_property
     def repo_path_by_name(self) -> dict[str, str]:
@@ -104,6 +137,10 @@ class EntityRegistry:
         if not org:
             return None
         for name, entry in self.entities.items():
-            if entry.organization == org and "orchestrators" in entry.groups:
+            if "orchestrators" not in entry.groups:
+                continue
+            if entry.organization == org:
+                return name
+            if any(instance.organization == org for instance in entry.instances.values()):
                 return name
         return None

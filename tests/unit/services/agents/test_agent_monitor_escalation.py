@@ -65,7 +65,6 @@ def clear_escalation_dedup():
 def escalation_config():
     """Config with minimal entities for escalation testing."""
     return BackboneConfig(
-        github_token="test-token",
         webhook_secret="test-secret",
         github=GitHubConfig(owner="eandualem", repo="orchestration"),
         entities=EntityConfig(
@@ -285,7 +284,6 @@ class TestCheckForUnexpectedOffline:
 def _make_monitor_config(**overrides) -> BackboneConfig:
     """Build a minimal config for monitor integration tests."""
     defaults = dict(
-        github_token="test",
         webhook_secret="test",
         entities=EntityConfig(skip=frozenset({"elias"})),
         registry=_make_registry(["ike"]),
@@ -767,7 +765,6 @@ class TestPlanWaitingMonitor:
             return idle_snapshot
 
         config_with_telegram = BackboneConfig(
-            github_token="test-token",
             webhook_secret="test-secret",
             github=GitHubConfig(owner="eandualem", repo="orchestration"),
             entities=EntityConfig(
@@ -1105,7 +1102,6 @@ class TestPlanOrchestratorNotification:
             ],
         )
         config = BackboneConfig(
-            github_token="test-token",
             webhook_secret="test-secret",
             github=GitHubConfig(owner="eandualem", repo="orchestration"),
             entities=EntityConfig(skip=frozenset({"elias"})),
@@ -1183,7 +1179,6 @@ class TestPlanOrchestratorNotification:
             ],
         )
         config = BackboneConfig(
-            github_token="test-token",
             webhook_secret="test-secret",
             github=GitHubConfig(owner="eandualem", repo="orchestration"),
             entities=EntityConfig(skip=frozenset({"elias"})),
@@ -1254,7 +1249,6 @@ class TestPlanOrchestratorNotification:
             ],
         )
         config = BackboneConfig(
-            github_token="test-token",
             webhook_secret="test-secret",
             github=GitHubConfig(owner="eandualem", repo="orchestration"),
             entities=EntityConfig(skip=frozenset({"elias"})),
@@ -1320,7 +1314,6 @@ class TestPlanOrchestratorNotification:
             repos=[],
         )
         config = BackboneConfig(
-            github_token="test-token",
             webhook_secret="test-secret",
             github=GitHubConfig(owner="eandualem", repo="orchestration"),
             entities=EntityConfig(skip=frozenset({"elias"})),

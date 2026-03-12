@@ -46,7 +46,6 @@ def clear_plan_dedup():
 @pytest.fixture
 def config():
     return BackboneConfig(
-        github_token="test-token",
         webhook_secret="test-secret",
         github=GitHubConfig(owner="eandualem", repo="orchestration"),
         entities=EntityConfig(skip=frozenset({"elias"})),

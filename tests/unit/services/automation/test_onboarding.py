@@ -621,7 +621,8 @@ class TestRunOnboarding:
         from agent_backbone.services.registry.models import EntityEntry, EntityRegistry
 
         cfg = BackboneConfig(
-            github_token="test-token",
+            github_app_id=None,
+            github_app_private_key_path="",
             registry=EntityRegistry(
                 entities={
                     "bell": EntityEntry(
@@ -689,11 +690,27 @@ class TestRunOnboarding:
         assert step10.name == "notify_orchestrator"
         assert step10.status == "skipped"
 
-    async def test_notify_brunel_skipped_no_token(self, workspace):
+    async def test_notify_brunel_failed_without_github_app_auth(self, workspace):
         clone_proc = _mock_subprocess_ok()
         from agent_backbone.config import BackboneConfig
+        from agent_backbone.services.registry.models import EntityEntry, EntityRegistry
 
-        cfg = BackboneConfig(github_token="")
+        cfg = BackboneConfig(
+            github_app_id=None,
+            github_app_private_key_path="",
+            registry=EntityRegistry(
+                entities={
+                    "bell": EntityEntry(
+                        session="bell",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="Bell",
+                        role="WF Orchestrator",
+                        organization="WF",
+                    )
+                }
+            )
+        )
         _clone_side_effect = _selective_create_subprocess_exec(
             asyncio.create_subprocess_exec, clone_proc
         )
@@ -702,9 +719,11 @@ class TestRunOnboarding:
         step9 = result.steps[8]
         step10 = result.steps[9]
         assert step9.name == "notify_brunel"
-        assert step9.status == "skipped"
+        assert step9.status == "failed"
+        assert "GITHUB_APP_ID" in step9.detail
         assert step10.name == "notify_orchestrator"
-        assert step10.status == "skipped"
+        assert step10.status == "failed"
+        assert "GITHUB_APP_ID" in step10.detail
 
     async def test_notify_orchestrator_failed_without_mapping(self, workspace):
         clone_proc = _mock_subprocess_ok()
@@ -716,7 +735,6 @@ class TestRunOnboarding:
         from agent_backbone.services.registry.models import EntityRegistry
 
         cfg = BackboneConfig(
-            github_token="test-token",
             registry=EntityRegistry(),
         )
         mock_create_notify = AsyncMock()

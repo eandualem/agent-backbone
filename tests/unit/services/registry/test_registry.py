@@ -9,6 +9,7 @@ import pytest
 
 from agent_backbone.services.registry import (
     EntityEntry,
+    EntityInstance,
     EntityRegistry,
     RepoInfo,
     build_registry,
@@ -106,6 +107,40 @@ class TestLoadEntityRegistry:
 
         assert entities["jarvis"].entity_type == "service"
         assert entities["ike"].entity_type == "agent"
+
+    def test_loads_role_entry_with_instances(self, tmp_path):
+        data = {
+            "bell": {
+                "type": "role",
+                "figure": "Alexander Graham Bell",
+                "role": "Org Orchestrator",
+                "groups": ["orchestrators"],
+                "roleDefinition": "~/orchestration/roles/bell/",
+                "instances": {
+                    "wf": {
+                        "home": "~/ws/core/code/WF/bell",
+                        "session": "bell-wf",
+                        "organization": "WF",
+                    },
+                    "loveble": {
+                        "home": "~/ws/core/code/Loveble/bell",
+                        "session": "bell-loveble",
+                        "organization": "Loveble",
+                    },
+                },
+            }
+        }
+        registry_file = _write_registry_json(tmp_path / "entities.json", data)
+
+        entities = load_entity_registry(registry_file)
+
+        assert entities["bell"].entity_type == "role"
+        assert entities["bell"].session == "bell"
+        assert entities["bell"].home == "~/ws/core/code/WF/bell"
+        assert entities["bell"].role_definition == "~/orchestration/roles/bell/"
+        assert entities["bell"].instances["wf"].session == "bell-wf"
+        assert entities["bell"].instances["wf"].organization == "WF"
+        assert entities["bell"].instances["loveble"].session == "bell-loveble"
 
     def test_raises_file_not_found_on_missing_file(self, tmp_path):
         missing = tmp_path / "does_not_exist.json"
@@ -508,6 +543,32 @@ class TestEntityRegistryHome:
 
 
 class TestOrchestratorForRepo:
+    def test_role_instance_org_match_returns_base_entity(self):
+        """Role-based orchestrator entries resolve by instance organization."""
+        entities = {
+            "bell": EntityEntry(
+                session="bell",
+                home="~/ws/core/code/WF/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                instances={
+                    "wf": EntityInstance(
+                        home="~/ws/core/code/WF/bell/",
+                        session="bell-wf",
+                        organization="WF",
+                    ),
+                },
+                entity_type="role",
+            ),
+        }
+        repos = [
+            RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+        ]
+        registry = EntityRegistry(entities=entities, repos=repos)
+
+        assert registry.orchestrator_for_repo("agent-backbone") == "bell"
+
     def test_wf_repo_returns_bell(self):
         """WF org repo resolves to bell (WF orchestrator)."""
         entities = {

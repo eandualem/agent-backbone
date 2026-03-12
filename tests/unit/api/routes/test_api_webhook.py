@@ -86,7 +86,7 @@ class TestWebhookSignatureValidation:
             "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
         ) as mock_dispatch:
             mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
-            resp = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+            resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
         mock_dispatch.assert_awaited_once()
@@ -108,7 +108,7 @@ class TestWebhookSignatureValidation:
             "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
         ) as mock_dispatch:
             mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
-            resp = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+            resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
         mock_dispatch.assert_awaited_once()
@@ -117,7 +117,7 @@ class TestWebhookSignatureValidation:
         payload_bytes = json.dumps(webhook_payload).encode()
         headers = _webhook_headers(payload_bytes, signature="sha256=invalid")
 
-        resp = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+        resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 403
         assert resp.text == "Invalid signature"
@@ -130,7 +130,7 @@ class TestWebhookSignatureValidation:
             "Content-Type": "application/json",
         }
 
-        resp = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+        resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 403
         assert resp.text == "Invalid signature"
@@ -150,12 +150,12 @@ class TestWebhookDeduplication:
             "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
         ) as mock_dispatch:
             mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
-            resp1 = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+            resp1 = await api_client.post("/", content=payload_bytes, headers=headers)
         assert resp1.status_code == 200
         mock_dispatch.assert_awaited_once()
 
         # Second request with same delivery ID: deduped
-        resp2 = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+        resp2 = await api_client.post("/", content=payload_bytes, headers=headers)
         assert resp2.status_code == 200
         assert resp2.text == "Duplicate, skipped"
 
@@ -166,13 +166,30 @@ class TestWebhookPayloadParsing:
         payload_bytes = b"not valid json {{"
         headers = _webhook_headers(payload_bytes, delivery_id="delivery-bad-json")
 
-        resp = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+        resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 400
         assert resp.text == "Invalid JSON"
 
 
 class TestWebhookDispatch:
+    async def test_dispatches_issue_opened_event_on_root_path(
+        self, api_client, api_app, webhook_payload
+    ):
+        api_app.state.db._seen_deliveries.clear()
+        payload_bytes = json.dumps(webhook_payload).encode()
+        headers = _webhook_headers(payload_bytes, delivery_id="dispatch-root-test-1")
+
+        with patch(
+            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
+        ) as mock_dispatch:
+            mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
+            resp = await api_client.post("/", content=payload_bytes, headers=headers)
+
+        assert resp.status_code == 200
+        assert "dispatch" in resp.text
+        mock_dispatch.assert_awaited_once()
+
     async def test_dispatches_issue_opened_event(self, api_client, api_app, webhook_payload):
         api_app.state.db._seen_deliveries.clear()
         payload_bytes = json.dumps(webhook_payload).encode()
@@ -182,7 +199,7 @@ class TestWebhookDispatch:
             "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
         ) as mock_dispatch:
             mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
-            resp = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+            resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
         assert "dispatch" in resp.text
@@ -207,7 +224,7 @@ class TestWebhookDispatch:
             "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
         ) as mock_dispatch:
             mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
-            resp = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+            resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
         event = mock_dispatch.call_args[0][0]
@@ -224,7 +241,7 @@ class TestWebhookDispatch:
             "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
         ) as mock_dispatch:
             mock_dispatch.return_value = "ignored: unknown"
-            resp = await api_client.post("/webhook", content=payload_bytes, headers=headers)
+            resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
         assert resp.text == "ignored: unknown"

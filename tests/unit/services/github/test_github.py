@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 import respx
@@ -9,11 +11,15 @@ import respx
 from agent_backbone.config import BackboneConfig, GitHubConfig
 from agent_backbone.services.github import API_BASE, GitHubClient
 
+_TEST_GITHUB_APP_KEY = Path(__file__).parents[3] / "fixtures" / "github-app-test-key.pem"
+_ORIGINAL_GET_INSTALLATION_TOKEN = GitHubClient._get_installation_token
+
 
 @pytest.fixture
 def config():
     return BackboneConfig(
-        github_token="test-token",
+        github_app_id=3075015,
+        github_app_private_key_path=str(_TEST_GITHUB_APP_KEY),
         github=GitHubConfig(owner="eandualem", repo="orchestration"),
     )
 
@@ -23,7 +29,49 @@ def issues_url():
     return f"{API_BASE}/repos/eandualem/orchestration/issues"
 
 
+@pytest.fixture(autouse=True)
+def mock_installation_token(monkeypatch):
+    async def _fake_installation_token(self, repo_full_name=None):
+        return "installation-token"
+
+    monkeypatch.setattr(GitHubClient, "_get_installation_token", _fake_installation_token)
+
+
 class TestListOpenIssues:
+    async def test_start_requires_github_app_credentials(self):
+        config = BackboneConfig(github_app_id=None, github_app_private_key_path="")
+
+        with pytest.raises(RuntimeError, match="GITHUB_APP_ID"):
+            async with GitHubClient(config):
+                pass
+
+    @respx.mock
+    async def test_fetches_installation_token_via_github_app(self, config, monkeypatch):
+        monkeypatch.setattr(
+            GitHubClient,
+            "_get_installation_token",
+            _ORIGINAL_GET_INSTALLATION_TOKEN,
+        )
+        monkeypatch.setattr(GitHubClient, "_build_app_jwt", lambda self: "app-jwt")
+
+        installation_url = f"{API_BASE}/repos/eandualem/orchestration/installation"
+        token_url = f"{API_BASE}/app/installations/321/access_tokens"
+        issues_url = f"{API_BASE}/repos/eandualem/orchestration/issues"
+        install_route = respx.get(installation_url).respond(json={"id": 321})
+        token_route = respx.post(token_url).respond(
+            status_code=201,
+            json={"token": "installation-token", "expires_at": "2099-01-01T00:00:00Z"},
+        )
+        issues_route = respx.get(issues_url).respond(json=[])
+
+        async with GitHubClient(config) as gh:
+            issues = await gh.list_open_issues("for:ike")
+
+        assert issues == []
+        assert install_route.called
+        assert token_route.called
+        assert issues_route.called
+
     @respx.mock
     async def test_returns_sorted_issues(self, config, issues_url):
         respx.get(issues_url).respond(

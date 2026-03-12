@@ -7,10 +7,16 @@ from agent_backbone.services.registry._loader import (
 )
 from agent_backbone.services.registry.exceptions import RegistryError
 from agent_backbone.services.registry.interface import RegistryService
-from agent_backbone.services.registry.models import EntityEntry, EntityRegistry, RepoInfo
+from agent_backbone.services.registry.models import (
+    EntityEntry,
+    EntityInstance,
+    EntityRegistry,
+    RepoInfo,
+)
 
 __all__ = [
     "EntityEntry",
+    "EntityInstance",
     "EntityRegistry",
     "RegistryError",
     "RegistryService",

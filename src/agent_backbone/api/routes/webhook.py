@@ -90,7 +90,7 @@ async def dispatch_event_async(
     return f"ignored: {event.event_type}"
 
 
-@router.post("/webhook")
+@router.post("/")
 async def handle_webhook(
     request: Request,
     config: BackboneConfig = Depends(get_config),

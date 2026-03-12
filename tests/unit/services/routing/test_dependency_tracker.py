@@ -24,7 +24,7 @@ class TestOnDependencyResolved:
         """Closed issue has no parents → empty result."""
         async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
             mock_gh = AsyncMock()
-            config = BackboneConfig(github_token="t", webhook_secret="s")
+            config = BackboneConfig(webhook_secret="s")
 
             from agent_backbone.services._locator import init as init_flow_services
 
@@ -71,7 +71,7 @@ class TestOnDependencyResolved:
             await db.upsert_dependency(10, 21)
 
             mock_gh = AsyncMock()
-            config = BackboneConfig(github_token="t", webhook_secret="s")
+            config = BackboneConfig(webhook_secret="s")
 
             from agent_backbone.services._locator import init as init_flow_services
 
@@ -92,7 +92,7 @@ class TestOnDependencyResolved:
             await db.upsert_dependency(10, 20)
 
             mock_gh = AsyncMock()
-            config = BackboneConfig(github_token="t", webhook_secret="s")
+            config = BackboneConfig(webhook_secret="s")
 
             from agent_backbone.services._locator import init as init_flow_services
 

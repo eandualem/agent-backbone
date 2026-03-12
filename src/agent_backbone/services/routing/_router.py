@@ -22,7 +22,10 @@ from agent_backbone.services.routing._format import (
     format_comment_notification,
     format_issue_notification,
 )
-from agent_backbone.services.routing._resolution import resolve_entity_session
+from agent_backbone.services.routing._resolution import (
+    resolve_entity_session,
+    resolve_entity_sessions,
+)
 from agent_backbone.services.routing.models import DispatchResult
 
 log = logging.getLogger(__name__)
@@ -86,49 +89,53 @@ async def _deliver_to_entity(
     enforce_issue_queue: bool = False,
     queue_scope_issue_numbers: set[int] | None = None,
     delivery_kind: str = "issue",
+    session_names: list[str] | None = None,
 ) -> None:
     """Deliver a notification to a single entity with state checks and persistence."""
-    session_name = await resolve_session(target, event.issue.title, config)
-    if not session_name:
+    if session_names is None:
+        session_names = await resolve_entity_sessions(target, config, event.issue.title)
+
+    if not session_names:
         log.warning("Could not resolve session for target '%s'", target)
         result.skipped.append(target)
         return
 
-    outcome = await safe_deliver(
-        session_name,
-        message,
-        config,
-        db=db,
-        issue_number=event.issue.number,
-        target_entity=target,
-        flow_name="issue-dispatcher",
-        priority=is_blocking,
-        enforce_issue_queue=enforce_issue_queue,
-        queue_scope_issue_numbers=queue_scope_issue_numbers,
-        delivery_kind=delivery_kind,
-    )
+    for session_name in session_names:
+        outcome = await safe_deliver(
+            session_name,
+            message,
+            config,
+            db=db,
+            issue_number=event.issue.number,
+            target_entity=target,
+            flow_name="issue-dispatcher",
+            priority=is_blocking,
+            enforce_issue_queue=enforce_issue_queue,
+            queue_scope_issue_numbers=queue_scope_issue_numbers,
+            delivery_kind=delivery_kind,
+        )
 
-    # Map safe_deliver outcomes to DispatchResult fields
-    if outcome == "delivered":
-        result.delivered.append(session_name)
-    elif outcome == "already_delivered":
-        result.skipped.append(session_name)
-    elif outcome == "offline":
-        result.offline.append(session_name)
-    elif outcome == "delivery_failed":
-        result.offline.append(session_name)
-    else:
-        # awaiting_ack, agent_working, plan_waiting, copy_mode,
-        # user_interacting, grace_period, unknown_state
-        result.deferred.append(session_name)
+        # Map safe_deliver outcomes to DispatchResult fields
+        if outcome == "delivered":
+            result.delivered.append(session_name)
+        elif outcome == "already_delivered":
+            result.skipped.append(session_name)
+        elif outcome == "offline":
+            result.offline.append(session_name)
+        elif outcome == "delivery_failed":
+            result.offline.append(session_name)
+        else:
+            # awaiting_ack, agent_working, plan_waiting, copy_mode,
+            # user_interacting, grace_period, unknown_state
+            result.deferred.append(session_name)
 
-    log.info(
-        "Decision: #%d → %s (%s) = %s",
-        event.issue.number,
-        target,
-        session_name,
-        outcome,
-    )
+        log.info(
+            "Decision: #%d → %s (%s) = %s",
+            event.issue.number,
+            target,
+            session_name,
+            outcome,
+        )
 
 
 @flow(name="issue-dispatcher")
@@ -157,9 +164,11 @@ async def issue_dispatcher(
         )
 
         # Resolve commenter to a session for session-level self-suppression
-        commenter_session: str | None = None
+        commenter_sessions: set[str] = set()
         if commenter:
-            commenter_session = await resolve_session(commenter, event.issue.title, config)
+            commenter_sessions = set(
+                await resolve_entity_sessions(commenter, config, event.issue.title)
+            )
 
         # Record acknowledgment for the commenter (they've engaged with the issue)
         if commenter:
@@ -169,22 +178,34 @@ async def issue_dispatcher(
                 log.exception("Failed to record acknowledgment (non-fatal)")
 
         for target in targets:
-            target_session = await resolve_session(target, event.issue.title, config)
-            if not target_session:
+            target_sessions = await resolve_entity_sessions(target, config, event.issue.title)
+            if not target_sessions:
                 log.warning("Could not resolve session for target '%s'", target)
                 result.skipped.append(target)
                 continue
 
             # Session-level self-suppression: skip if target resolves to
             # the same session as the commenter (handles coding-agent overlap)
-            if commenter_session and target_session == commenter_session:
+            deliverable_sessions = [
+                session_name
+                for session_name in target_sessions
+                if session_name not in commenter_sessions
+            ]
+            suppressed_sessions = [
+                session_name
+                for session_name in target_sessions
+                if session_name in commenter_sessions
+            ]
+            for suppressed in suppressed_sessions:
                 log.info(
                     "Suppressed comment self-notification for '%s' (session '%s') on #%d",
                     target,
-                    target_session,
+                    suppressed,
                     event.issue.number,
                 )
-                result.skipped.append(target)
+                result.skipped.append(suppressed)
+
+            if not deliverable_sessions:
                 continue
 
             # Clear acknowledgment for the target (new info for them)
@@ -202,6 +223,7 @@ async def issue_dispatcher(
                 result,
                 is_blocking,
                 delivery_kind="comment",
+                session_names=deliverable_sessions,
             )
 
         log.info(

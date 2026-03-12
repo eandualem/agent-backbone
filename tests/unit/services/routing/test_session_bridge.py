@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from agent_backbone.config import BackboneConfig, JarvisConfig, SessionBridgeConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
+from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry, RepoInfo
 from agent_backbone.services.routing import (
     SessionIntelligence,
     SessionProfile,
@@ -157,7 +157,6 @@ def _test_registry_with_repos() -> EntityRegistry:
 def _default_config() -> BackboneConfig:
     """BackboneConfig with defaults (no TOML, no env vars needed)."""
     return BackboneConfig(
-        github_token="test-token",
         webhook_secret="test-secret",
         registry=_test_registry(),
     )
@@ -166,7 +165,6 @@ def _default_config() -> BackboneConfig:
 def _config_with_grace(seconds: int) -> BackboneConfig:
     """BackboneConfig with a specific grace_period_seconds."""
     return BackboneConfig(
-        github_token="test-token",
         webhook_secret="test-secret",
         registry=_test_registry(),
         session_bridge=SessionBridgeConfig(grace_period_seconds=seconds),
@@ -340,6 +338,53 @@ class TestResolveEntitySession:
         result = await resolve_entity_session("ike", config)
         assert result == "ike"
 
+    async def test_role_entity_prefers_active_instance_session(self):
+        """Role entities can resolve through instance sessions when the base session is absent."""
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            registry=EntityRegistry(
+                entities={
+                    "bell": EntityEntry(
+                        session="bell",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="",
+                        role="Org Orchestrator",
+                        entity_type="role",
+                        instances={
+                            "wf": EntityInstance(
+                                home="~/ws/core/code/WF/bell",
+                                session="bell-wf",
+                                organization="WF",
+                            ),
+                            "loveble": EntityInstance(
+                                home="~/ws/core/code/Loveble/bell",
+                                session="bell-loveble",
+                                organization="Loveble",
+                            ),
+                        },
+                    )
+                },
+                repos=[],
+            ),
+        )
+
+        async def _exists(session_name: str) -> bool:
+            return session_name == "bell-wf"
+
+        with patch(
+            "agent_backbone.services.routing._resolution.session_exists",
+            new_callable=AsyncMock,
+            side_effect=_exists,
+        ):
+            result = await resolve_entity_session(
+                "bell",
+                config,
+                issue_title="[task] WF/new-thing: follow-up",
+            )
+
+        assert result == "bell-wf"
+
     async def test_skip_set(self):
         """Entity in skip set ('elias') returns None."""
         config = _default_config()
@@ -392,7 +437,6 @@ class TestResolveEntitySession:
     async def test_repo_name_with_active_session(self):
         """Known repo name with active tmux session resolves to that session."""
         config = BackboneConfig(
-            github_token="test-token",
             webhook_secret="test-secret",
             registry=_test_registry_with_repos(),
         )
@@ -403,7 +447,6 @@ class TestResolveEntitySession:
     async def test_repo_name_session_not_running(self):
         """Known repo name without active tmux session returns None."""
         config = BackboneConfig(
-            github_token="test-token",
             webhook_secret="test-secret",
             registry=_test_registry_with_repos(),
         )
@@ -420,7 +463,6 @@ class TestResolveEntitySession:
     async def test_jarvis_enabled(self):
         """Jarvis resolves to 'jarvis' when inject_url is configured."""
         config = BackboneConfig(
-            github_token="t",
             webhook_secret="s",
             jarvis=JarvisConfig(inject_url="http://localhost:3000/api/assistant/inject"),
         )
@@ -912,7 +954,6 @@ class TestSafeDeliver:
     async def test_jarvis_http_delivery(self):
         """Jarvis HTTP target delivers via inject_message, returns 'delivered'."""
         config = BackboneConfig(
-            github_token="t",
             webhook_secret="s",
             jarvis=JarvisConfig(inject_url="http://localhost:3000/api/assistant/inject"),
         )
@@ -931,7 +972,6 @@ class TestSafeDeliver:
     async def test_jarvis_http_failure_enqueues(self):
         """Jarvis HTTP failure returns 'delivery_failed' and enqueues."""
         config = BackboneConfig(
-            github_token="t",
             webhook_secret="s",
             jarvis=JarvisConfig(inject_url="http://localhost:3000/api/assistant/inject"),
         )
