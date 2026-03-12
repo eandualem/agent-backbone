@@ -9,11 +9,15 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
 
-from agent_backbone.services.agents._inference import get_agent_state
+from agent_backbone.services.agents._inference import (
+    get_agent_state,
+    prompt_has_pending_input,
+)
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.terminal import (
     SESSION_FORMAT_STR,
+    capture_pane,
     list_sessions,
     query_format_vars,
 )
@@ -97,7 +101,7 @@ async def get_session_intelligence(
             tmux_vars=tmux_vars,
         )
 
-    # 3. User interacting (recent keyboard activity + agent idle)
+    # 3. User interacting (recent keyboard activity or buffered prompt input)
     client_activity_str = tmux_vars.get("client_activity", "")
     if client_activity_str and agent_state == AgentState.IDLE:
         try:
@@ -111,6 +115,19 @@ async def get_session_intelligence(
                 )
         except (ValueError, TypeError):
             pass
+
+    if agent_state == AgentState.IDLE:
+        try:
+            pane_content = await capture_pane(session_name)
+        except Exception:
+            pane_content = ""
+        if pane_content and prompt_has_pending_input(pane_content):
+            return SessionProfile(
+                session_name=session_name,
+                intelligence=SessionIntelligence.USER_INTERACTING,
+                agent_state=agent_state,
+                tmux_vars=tmux_vars,
+            )
 
     # 4. Plan waiting
     if agent_state == AgentState.PLAN_WAITING:

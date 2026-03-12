@@ -33,6 +33,15 @@ def _patch_resolve():
     )
 
 
+def _patch_resolve_sessions(sessions: list[str]):
+    """Patch resolve_entity_sessions to return a fixed session list."""
+    return patch(
+        "agent_backbone.services.routing._router.resolve_entity_sessions",
+        new_callable=AsyncMock,
+        return_value=sessions,
+    )
+
+
 def _patch_safe_deliver(outcome: str = "delivered"):
     """Patch safe_deliver to return a fixed outcome string."""
     return patch(
@@ -178,6 +187,20 @@ class TestIssueDispatcher:
             result = await issue_dispatcher.fn(event, config, mock_db)
 
         assert len(result.delivered) == 2
+
+    async def test_role_target_fans_out_to_multiple_sessions(self, config, mock_db):
+        labels = ParsedLabels(sender="leo", targets=["bell"], issue_type="task")
+        issue = IssueData(number=15, title="[task] Shared role", labels=labels)
+        event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
+
+        with (
+            _patch_resolve_sessions(["bell-wf", "bell-loveble"]),
+            _patch_safe_deliver("delivered") as mock_deliver,
+        ):
+            result = await issue_dispatcher.fn(event, config, mock_db)
+
+        assert result.delivered == ["bell-wf", "bell-loveble"]
+        assert mock_deliver.await_count == 2
 
     async def test_ignores_unknown_event(self, config, mock_db):
         labels = ParsedLabels(sender="leo", targets=["ike"])

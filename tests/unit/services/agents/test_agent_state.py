@@ -18,6 +18,7 @@ from agent_backbone.services.agents import (
     read_state_file,
     should_deliver,
 )
+from agent_backbone.services.agents._inference import prompt_has_pending_input
 from agent_backbone.services.agents.interface import StateService, _row_to_snapshot
 from agent_backbone.services.database import BackboneDB
 
@@ -152,6 +153,36 @@ class TestInferStateFromPane:
         pane = "\x1b[39m\u276f\xa0\x1b[7m \x1b[0m"
         result = infer_state_from_pane(pane)
         assert result.state == AgentState.IDLE
+
+    def test_idle_codex_prompt_marker(self):
+        """Codex uses › (U+203A) as its prompt marker."""
+        result = infer_state_from_pane("\u203a ")
+        assert result.state == AgentState.IDLE
+
+    def test_idle_codex_prompt_with_buffered_input(self):
+        """A visible Codex input line still means the session is at a prompt."""
+        pane = "\u203a Improve documentation in @filename"
+        result = infer_state_from_pane(pane)
+        assert result.state == AgentState.IDLE
+
+    def test_idle_codex_prompt_with_status_line_below(self):
+        """Codex renders a status line below the prompt that should be ignored."""
+        pane = (
+            "\u203a Improve documentation in @filename\n\n"
+            "  gpt-5.4 xhigh \u00b7 91% left \u00b7 ~/ws/core/code/WF/agent-orchestration-dashboard"
+        )
+        result = infer_state_from_pane(pane)
+        assert result.state == AgentState.IDLE
+
+    def test_codex_placeholder_is_not_pending_input(self):
+        """Codex's dim placeholder suggestion should not count as typed input."""
+        pane = "\x1b[1m\u203a\x1b[0m \x1b[2mImprove documentation in @filename\x1b[0m"
+        assert prompt_has_pending_input(pane) is False
+
+    def test_codex_typed_input_is_pending_input(self):
+        """Actual typed Codex input should still block delivery."""
+        pane = "\u203a Review the delivery retry logic"
+        assert prompt_has_pending_input(pane) is True
 
     def test_idle_standard_prompt_with_trailing_lines(self):
         """Non-prompt trailing content returns UNKNOWN."""

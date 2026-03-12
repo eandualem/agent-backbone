@@ -92,6 +92,14 @@ def is_due(schedule: dict, last_fired: str | None, default_tz: str) -> bool:
     return False
 
 
+def _schedule_targets(agent: str, config: BackboneConfig) -> list[str]:
+    """Expand a heartbeat schedule key to concrete runtime sessions."""
+    sessions = config.registry.delivery_sessions_for(agent)
+    if sessions:
+        return sessions
+    return [agent]
+
+
 @task
 async def evaluate_agent_heartbeat(
     agent: str,
@@ -182,19 +190,24 @@ async def _heartbeat_scheduler_impl() -> dict:
     one_shots_fired: list[str] = []
 
     for agent, schedule in schedules.items():
-        outcome = await evaluate_agent_heartbeat(
-            agent=agent,
-            schedule=schedule,
-            active_sessions=active_sessions,
-            config=config,
-            db=db,
-        )
-        if outcome:
-            result[agent] = outcome
+        targets = _schedule_targets(agent, config)
+        target_outcomes: list[str] = []
+        for target in targets:
+            outcome = await evaluate_agent_heartbeat(
+                agent=target,
+                schedule=schedule,
+                active_sessions=active_sessions,
+                config=config,
+                db=db,
+            )
+            if outcome:
+                result[target] = outcome
+                target_outcomes.append(outcome)
 
         # Track one-shot entries that fired
-        if outcome == "delivered" and schedule.get("one_shot"):
-            one_shots_fired.append(agent)
+        if target_outcomes and all(outcome == "delivered" for outcome in target_outcomes):
+            if schedule.get("one_shot"):
+                one_shots_fired.append(agent)
 
     # Remove fired one-shot entries and save
     if one_shots_fired:

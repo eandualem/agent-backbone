@@ -19,7 +19,7 @@ from agent_backbone.config import (
     SchedulingConfig,
     TelegramConfig,
 )
-from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.models import CommentData, IssueData, ParsedLabels
 from agent_backbone.services._locator import init as init_flow_services
 from agent_backbone.services.agents import (
     AgentState,
@@ -32,7 +32,7 @@ from agent_backbone.services.agents import (
     check_plan_waiting,
     monitor_agents,
 )
-from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
+from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry, RepoInfo
 
 # Patch target prefixes (keep patch() lines under 100 chars)
 _MON = "agent_backbone.services.agents._monitor"
@@ -46,6 +46,35 @@ def _make_registry(names: list[str]) -> EntityRegistry:
         entities={
             n: EntityEntry(session=n, home=f"~/ws/{n}", groups=[], figure="", role="")
             for n in names
+        },
+        repos=[],
+    )
+
+
+def _make_role_registry() -> EntityRegistry:
+    """Registry with a shared Bell role and two concrete sessions."""
+    return EntityRegistry(
+        entities={
+            "bell": EntityEntry(
+                session="bell",
+                home="~/ws/core/code/WF/bell",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                entity_type="role",
+                instances={
+                    "wf": EntityInstance(
+                        home="~/ws/core/code/WF/bell",
+                        session="bell-wf",
+                        organization="WF",
+                    ),
+                    "loveble": EntityInstance(
+                        home="~/ws/core/code/Loveble/bell",
+                        session="bell-loveble",
+                        organization="Loveble",
+                    ),
+                },
+            )
         },
         repos=[],
     )
@@ -411,6 +440,60 @@ class TestMonitorAgentsIntegration:
 
         assert result["ike"] == "delivered_#10"
         mock_deliver.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_role_target_delivers_to_each_idle_instance_session(self):
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+        pending_issue = IssueData(
+            number=18,
+            title="[task] Shared Bell work",
+            state="open",
+            labels=ParsedLabels(sender="feynman", targets=["bell"], issue_type="task"),
+        )
+
+        config = _make_monitor_config(registry=_make_role_registry())
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["bell-wf", "bell-loveble"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(
+                f"{_PEN}.get_agent_state",
+                new_callable=AsyncMock,
+                return_value=idle_snapshot,
+            ),
+            patch(
+                f"{_PEN}.check_pending_issues",
+                new_callable=AsyncMock,
+                return_value=[pending_issue],
+            ),
+            patch(
+                f"{_PEN}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+            patch(f"{_PEN}.has_commented_on_issue", return_value=False),
+        ):
+            result = await monitor_agents.fn()
+
+        assert result["bell:bell-wf"] == "delivered_#18"
+        assert result["bell:bell-loveble"] == "delivered_#18"
+        assert mock_deliver.await_count == 2
 
     @pytest.mark.asyncio
     async def test_monitor_skips_recently_delivered(self):
@@ -903,6 +986,80 @@ class TestCodingAgentSweep:
         mock_deliver.assert_called()
         deliver_calls = [c for c in mock_deliver.call_args_list if c[0][0] == "agent-backbone"]
         assert len(deliver_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_coding_agent_sweep_backfills_ack_from_github_comments(self):
+        """A GitHub comment from coding-agent should unblock the next queued issue."""
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+        acked_issue = IssueData(
+            number=693,
+            title="[task] agent-orchestration-dashboard: Support role-based entity instances",
+            state="open",
+            labels=ParsedLabels(sender="feynman", targets=["coding-agent"], issue_type="task"),
+        )
+        next_issue = IssueData(
+            number=694,
+            title=(
+                "[task] agent-orchestration-dashboard: "
+                "Align dashboard with role-based entity sessions"
+            ),
+            state="open",
+            labels=ParsedLabels(sender="coding-agent", targets=["coding-agent"], issue_type="task"),
+        )
+
+        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+            return idle_snapshot
+
+        async def mock_check_pending(config, entity, gh):
+            if entity == "coding-agent":
+                return [acked_issue, next_issue]
+            return []
+
+        config = _make_monitor_config(registry=_make_registry(["ike"]))
+        config.registry.add_repo(
+            RepoInfo(org="WF", name="agent-orchestration-dashboard", path="/some/path")
+        )
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+        mock_gh.list_comments.side_effect = [
+            [CommentData(body="[from:coding-agent]\nReviewed.", user_login="eandualem")],
+            [],
+        ]
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike", "agent-orchestration-dashboard"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch(
+                f"{_PEN}.check_pending_issues",
+                side_effect=mock_check_pending,
+            ),
+            patch(
+                f"{_PEN}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+            patch(f"{_PEN}.has_commented_on_issue", return_value=False),
+        ):
+            result = await monitor_agents.fn()
+
+        assert result["coding:agent-orchestration-dashboard"] == "delivered_#694"
+        mock_db.record_acknowledgment.assert_called_once_with(693, "coding-agent")
+        mock_deliver.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_coding_agent_sweep_skips_busy(self):

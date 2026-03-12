@@ -20,6 +20,7 @@ from agent_backbone.services.agents import (
     load_schedules,
     save_schedules,
 )
+from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry
 
 TZ = "Africa/Addis_Ababa"
 
@@ -379,3 +380,65 @@ class TestHeartbeatSchedulerFlow:
         result = await heartbeat_scheduler()
 
         assert result == {}
+
+    async def test_role_schedule_expands_to_instance_sessions(self, tmp_path):
+        """A role schedule key fans out to each concrete instance session."""
+        schedule_path = tmp_path / "schedules.json"
+        schedules = {"bell": {"cron": "0 * * * *", "timezone": TZ, "enabled": True}}
+        schedule_path.write_text(json.dumps(schedules))
+
+        config = BackboneConfig(
+            webhook_secret="test",
+            registry=EntityRegistry(
+                entities={
+                    "bell": EntityEntry(
+                        session="bell",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="",
+                        role="Org Orchestrator",
+                        entity_type="role",
+                        instances={
+                            "wf": EntityInstance(
+                                home="~/ws/core/code/WF/bell",
+                                session="bell-wf",
+                                organization="WF",
+                            ),
+                            "loveble": EntityInstance(
+                                home="~/ws/core/code/Loveble/bell",
+                                session="bell-loveble",
+                                organization="Loveble",
+                            ),
+                        },
+                    )
+                },
+                repos=[],
+            ),
+            heartbeat=HeartbeatConfig(
+                schedule_file=str(schedule_path),
+                default_timezone=TZ,
+            ),
+        )
+        idle_snapshot = StateSnapshot(state=AgentState.IDLE, source="push")
+        mock_db = AsyncMock()
+        mock_db.get_last_heartbeat = AsyncMock(return_value=None)
+        mock_db.record_heartbeat = AsyncMock(return_value=1)
+
+        from agent_backbone.services._locator import init as init_flow_services
+
+        init_flow_services(config=config, db=mock_db, gh=AsyncMock())
+
+        with (
+            patch(f"{_HB}.list_sessions", new_callable=AsyncMock) as mock_list,
+            patch(f"{_HB}.get_agent_state", new_callable=AsyncMock) as mock_state,
+            patch(f"{_HB}.send_message", new_callable=AsyncMock) as mock_send,
+        ):
+            mock_list.return_value = ["bell-wf", "bell-loveble"]
+            mock_state.return_value = idle_snapshot
+            mock_send.return_value = True
+
+            result = await heartbeat_scheduler()
+
+        assert result["bell-wf"] == "delivered"
+        assert result["bell-loveble"] == "delivered"
+        assert mock_send.await_count == 2

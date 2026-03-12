@@ -14,6 +14,7 @@ from agent_backbone.services.routing import (
     get_session_intelligence,
     list_sessions_full,
     resolve_entity_session,
+    resolve_entity_sessions,
     safe_deliver,
 )
 
@@ -52,6 +53,15 @@ def _patch_get_agent_state(snap: StateSnapshot):
         "agent_backbone.services.routing._intelligence.get_agent_state",
         new_callable=AsyncMock,
         return_value=snap,
+    )
+
+
+def _patch_capture_pane(content: str):
+    """Patch capture_pane in session_bridge to return pane content."""
+    return patch(
+        "agent_backbone.services.routing._intelligence.capture_pane",
+        new_callable=AsyncMock,
+        return_value=content,
     )
 
 
@@ -211,10 +221,72 @@ class TestGetSessionIntelligence:
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "0", "client_activity": recent_activity}),
             _patch_get_agent_state(_IDLE_SNAP),
+            _patch_capture_pane(""),
         ):
             profile = await get_session_intelligence("ike", config)
 
         assert profile.intelligence == SessionIntelligence.USER_INTERACTING
+
+    async def test_user_interacting_when_prompt_has_buffered_input(self):
+        """Buffered Codex input counts as active terminal interaction."""
+        config = _default_config()
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+            _patch_capture_pane("\u203a Review the routing fallback logic"),
+        ):
+            profile = await get_session_intelligence("ike", config)
+
+        assert profile.intelligence == SessionIntelligence.USER_INTERACTING
+
+    async def test_user_interacting_when_codex_status_line_is_below_prompt(self):
+        """Codex status chrome below the prompt should not hide pending input."""
+        config = _default_config()
+        pane = (
+            "\u203a Review the routing fallback logic\n\n"
+            "  gpt-5.4 xhigh \u00b7 91% left \u00b7 ~/ws/core/code/WF/agent-orchestration-dashboard"
+        )
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+            _patch_capture_pane(pane),
+        ):
+            profile = await get_session_intelligence("ike", config)
+
+        assert profile.intelligence == SessionIntelligence.USER_INTERACTING
+
+    async def test_codex_placeholder_prompt_is_idle_ready(self):
+        """Codex placeholder chrome should not be mistaken for buffered input."""
+        config = _default_config()
+        pane = "\x1b[1m\u203a\x1b[0m \x1b[2mImprove documentation in @filename\x1b[0m"
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+            _patch_capture_pane(pane),
+        ):
+            profile = await get_session_intelligence("ike", config)
+
+        assert profile.intelligence == SessionIntelligence.IDLE_READY
+
+    async def test_codex_placeholder_with_status_line_is_idle_ready(self):
+        """Codex placeholder plus status chrome should remain idle."""
+        config = _default_config()
+        pane = (
+            "\x1b[1m\u203a\x1b[0m \x1b[2mImprove documentation in @filename\x1b[0m\n\n"
+            "  gpt-5.4 xhigh \u00b7 91% left \u00b7 ~/ws/core/code/WF/agent-orchestration-dashboard"
+        )
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+            _patch_capture_pane(pane),
+        ):
+            profile = await get_session_intelligence("ike", config)
+
+        assert profile.intelligence == SessionIntelligence.IDLE_READY
 
     async def test_plan_waiting(self):
         """Agent state PLAN_WAITING returns PLAN_WAITING (priority 4)."""
@@ -384,6 +456,45 @@ class TestResolveEntitySession:
             )
 
         assert result == "bell-wf"
+
+    async def test_role_entity_delivery_sessions_include_all_instances(self):
+        """Role entity delivery fans out to all concrete instance sessions."""
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            registry=EntityRegistry(
+                entities={
+                    "bell": EntityEntry(
+                        session="bell",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="",
+                        role="Org Orchestrator",
+                        entity_type="role",
+                        instances={
+                            "wf": EntityInstance(
+                                home="~/ws/core/code/WF/bell",
+                                session="bell-wf",
+                                organization="WF",
+                            ),
+                            "loveble": EntityInstance(
+                                home="~/ws/core/code/Loveble/bell",
+                                session="bell-loveble",
+                                organization="Loveble",
+                            ),
+                        },
+                    )
+                },
+                repos=[],
+            ),
+        )
+
+        result = await resolve_entity_sessions(
+            "bell",
+            config,
+            issue_title="[task] WF/new-thing: follow-up",
+        )
+
+        assert result == ["bell-wf", "bell-loveble"]
 
     async def test_skip_set(self):
         """Entity in skip set ('elias') returns None."""

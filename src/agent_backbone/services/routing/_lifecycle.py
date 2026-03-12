@@ -19,10 +19,7 @@ from agent_backbone.services.routing._dedup import is_recent_notification
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_next_issue_notification
 from agent_backbone.services.routing._intelligence import is_http_target
-from agent_backbone.services.routing._resolution import (
-    resolve_entity_session,
-    resolve_entity_sessions,
-)
+from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.terminal import session_exists
 
 log = logging.getLogger(__name__)
@@ -206,13 +203,31 @@ async def on_issue_closed(
             result[target] = "skipped"
             continue
 
-        # Resolve session names (no title extraction — lifecycle uses fallback directly)
-        session_names = await resolve_entity_sessions(
-            target, config, event.issue.title, use_title_extraction=False
-        )
+        # Role-based targets fan out to concrete instance sessions. Other targets
+        # continue to use single-session resolution.
+        session_names = config.registry.delivery_sessions_for(target)
+        if not session_names:
+            session_name = await resolve_entity_session(
+                target, config, event.issue.title, use_title_extraction=False
+            )
+            session_names = [session_name] if session_name else []
 
         if not session_names:
             result[target] = "no_session"
+            continue
+
+        reachable_sessions: list[str] = []
+        all_http_targets = True
+        for session_name in session_names:
+            if is_http_target(session_name, config):
+                reachable_sessions.append(session_name)
+                continue
+            all_http_targets = False
+            if await session_exists(session_name):
+                reachable_sessions.append(session_name)
+
+        if not reachable_sessions and not all_http_targets:
+            result[target] = "offline"
             continue
 
         # Find the next issue (exclude just-closed issue — GitHub eventual consistency)

@@ -75,17 +75,18 @@ async def on_dependency_resolved(closed_issue_number: int) -> dict:
         for target in resolved["targets"]:
             if target in config.entities.skip:
                 continue
-            session_name = config.registry.sessions_map.get(target)
-            if not session_name:
+            session_names = config.registry.delivery_sessions_for(target)
+            if not session_names:
                 continue
-            outcome = await safe_deliver(
-                session_name,
-                message,
-                config,
-                db=db,
-            )
-            if outcome == "delivered":
-                delivered_to.append(session_name)
+            for session_name in session_names:
+                outcome = await safe_deliver(
+                    session_name,
+                    message,
+                    config,
+                    db=db,
+                )
+                if outcome == "delivered":
+                    delivered_to.append(session_name)
 
         if delivered_to:
             result[f"parent_{parent_num}"] = f"unblocked_delivered_to:{','.join(delivered_to)}"

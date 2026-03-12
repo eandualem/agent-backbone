@@ -47,7 +47,10 @@ from agent_backbone.services.routing._lifecycle import (
     on_issue_closed,
 )
 from agent_backbone.services.routing._priority import compute_priority_score
-from agent_backbone.services.routing._resolution import resolve_entity_session
+from agent_backbone.services.routing._resolution import (
+    resolve_entity_session,
+    resolve_entity_sessions,
+)
 from agent_backbone.services.routing._router import (
     DispatchResult,
     issue_dispatcher,
@@ -96,6 +99,7 @@ __all__ = [
     "is_recent_notification",
     "list_sessions_full",
     "resolve_entity_session",
+    "resolve_entity_sessions",
     "retry_delivery",
     "safe_deliver",
     "scheduled_delivery",

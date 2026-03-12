@@ -360,6 +360,62 @@ class TestEntityRegistrySessions:
         assert registry.entity_by_session == {"ike": "ike"}
         assert None not in registry.entity_by_session
 
+    def test_entity_by_session_includes_role_instances(self):
+        entities = {
+            "bell": EntityEntry(
+                session="bell",
+                home="~/ws/core/code/WF/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                entity_type="role",
+                instances={
+                    "wf": EntityInstance(
+                        home="~/ws/core/code/WF/bell/",
+                        session="bell-wf",
+                        organization="WF",
+                    ),
+                    "loveble": EntityInstance(
+                        home="~/ws/core/code/Loveble/bell/",
+                        session="bell-loveble",
+                        organization="Loveble",
+                    ),
+                },
+            )
+        }
+        registry = EntityRegistry(entities=entities, repos=[])
+
+        assert registry.entity_by_session["bell"] == "bell"
+        assert registry.entity_by_session["bell-wf"] == "bell"
+        assert registry.entity_by_session["bell-loveble"] == "bell"
+
+    def test_delivery_sessions_for_role_returns_concrete_instances(self):
+        entities = {
+            "bell": EntityEntry(
+                session="bell",
+                home="~/ws/core/code/WF/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                entity_type="role",
+                instances={
+                    "wf": EntityInstance(
+                        home="~/ws/core/code/WF/bell/",
+                        session="bell-wf",
+                        organization="WF",
+                    ),
+                    "loveble": EntityInstance(
+                        home="~/ws/core/code/Loveble/bell/",
+                        session="bell-loveble",
+                        organization="Loveble",
+                    ),
+                },
+            )
+        }
+        registry = EntityRegistry(entities=entities, repos=[])
+
+        assert registry.delivery_sessions_for("bell") == ["bell-wf", "bell-loveble"]
+
 
 class TestEntityRegistryAllEntities:
     def test_all_entities(self):
@@ -540,6 +596,36 @@ class TestEntityRegistryHome:
     def test_home_by_session_empty(self):
         registry = EntityRegistry()
         assert registry.home_by_session == {}
+
+    def test_home_by_session_includes_role_instances(self):
+        entities = {
+            "bell": EntityEntry(
+                session="bell",
+                home="~/ws/core/code/WF/bell/",
+                groups=[],
+                figure="",
+                role="",
+                entity_type="role",
+                instances={
+                    "wf": EntityInstance(
+                        home="~/ws/core/code/WF/bell/",
+                        session="bell-wf",
+                        organization="WF",
+                    ),
+                    "loveble": EntityInstance(
+                        home="~/ws/core/code/Loveble/bell/",
+                        session="bell-loveble",
+                        organization="Loveble",
+                    ),
+                },
+            )
+        }
+        registry = EntityRegistry(entities=entities, repos=[])
+
+        result = registry.home_by_session
+        assert result["bell"] == str(Path("~/ws/core/code/WF/bell/").expanduser())
+        assert result["bell-wf"] == str(Path("~/ws/core/code/WF/bell/").expanduser())
+        assert result["bell-loveble"] == str(Path("~/ws/core/code/Loveble/bell/").expanduser())
 
 
 class TestOrchestratorForRepo:

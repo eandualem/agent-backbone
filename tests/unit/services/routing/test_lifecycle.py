@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import EventType, IssueData, IssueEvent, ParsedLabels
+from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry
 from agent_backbone.services.routing import (
     _ONBOARDING_TITLE_PREFIX,
     _check_onboarding_chain,
@@ -133,6 +134,65 @@ class TestOnIssueClosed:
             result = await on_issue_closed.fn(event, config, mock_gh)
 
         assert result["ike"] == "delivered_#20"
+
+    async def test_role_target_delivers_to_all_instance_sessions(self):
+        event = make_close_event(["bell"])
+        next_issue = IssueData(
+            number=21,
+            title="[task] Next for Bell",
+            labels=ParsedLabels(sender="leo", targets=["bell"], issue_type="task"),
+        )
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            registry=EntityRegistry(
+                entities={
+                    "bell": EntityEntry(
+                        session="bell",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="",
+                        role="Org Orchestrator",
+                        entity_type="role",
+                        instances={
+                            "wf": EntityInstance(
+                                home="~/ws/core/code/WF/bell",
+                                session="bell-wf",
+                                organization="WF",
+                            ),
+                            "loveble": EntityInstance(
+                                home="~/ws/core/code/Loveble/bell",
+                                session="bell-loveble",
+                                organization="Loveble",
+                            ),
+                        },
+                    )
+                },
+                repos=[],
+            ),
+        )
+        mock_gh = AsyncMock()
+
+        with (
+            patch(
+                "agent_backbone.services.routing._lifecycle.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.routing._lifecycle.find_next_issue",
+                new_callable=AsyncMock,
+                return_value=next_issue,
+            ),
+            patch(
+                "agent_backbone.services.routing._lifecycle.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+        ):
+            result = await on_issue_closed.fn(event, config, mock_gh)
+
+        assert result["bell"] == "delivered_#21"
+        assert mock_deliver.await_count == 2
 
     async def test_dedup_prevents_redelivery(self, config):
         """Closing two issues in a row shouldn't re-deliver the same next issue."""

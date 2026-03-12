@@ -196,6 +196,17 @@ async def issue_dispatcher(
                 for session_name in target_sessions
                 if session_name in commenter_sessions
             ]
+            if not deliverable_sessions:
+                for suppressed in suppressed_sessions:
+                    log.info(
+                        "Suppressed comment self-notification for '%s' (session '%s') on #%d",
+                        target,
+                        suppressed,
+                        event.issue.number,
+                    )
+                result.skipped.append(target)
+                continue
+
             for suppressed in suppressed_sessions:
                 log.info(
                     "Suppressed comment self-notification for '%s' (session '%s') on #%d",
@@ -204,9 +215,6 @@ async def issue_dispatcher(
                     event.issue.number,
                 )
                 result.skipped.append(suppressed)
-
-            if not deliverable_sessions:
-                continue
 
             # Clear acknowledgment for the target (new info for them)
             try:
