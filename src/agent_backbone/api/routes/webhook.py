@@ -14,6 +14,7 @@ import os
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
+from agent_backbone.api.auth import require_api_key
 from agent_backbone.api.deps import (
     get_config,
     get_db,
@@ -143,8 +144,11 @@ async def handle_webhook(
     return Response(content=outcome, status_code=200)
 
 
-@router.post("/api/reply")
-async def handle_reply(request: Request, config: BackboneConfig = Depends(get_config)):
+@router.post("/api/reply", dependencies=[Depends(require_api_key)])
+async def handle_reply(
+    request: Request,
+    config: BackboneConfig = Depends(get_config),
+):
     """Route agent replies to Telegram topics."""
     body = await request.body()
 

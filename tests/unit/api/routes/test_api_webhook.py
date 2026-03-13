@@ -73,6 +73,23 @@ class TestHealthEndpoint:
         assert "healthy" in data
 
 
+class TestReplyRouting:
+    async def test_requires_auth(self, api_client, api_key):
+        resp = await api_client.post("/api/reply", json={"session": "ike", "text": "hello"})
+
+        assert resp.status_code == 401
+
+    async def test_reaches_handler_with_auth(self, api_client, auth_headers):
+        resp = await api_client.post(
+            "/api/reply",
+            content=b"not valid json {{",
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 400
+        assert resp.text == "Invalid JSON"
+
+
 class TestWebhookSignatureValidation:
     def setup_method(self):
         self._clear_dedup = True
