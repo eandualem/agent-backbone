@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Index, Integer, Text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_backbone.services.database.base import Base
@@ -159,4 +159,56 @@ class TelemetryCheckpointORM(Base):
     __table_args__ = (
         Index("idx_telemetry_checkpoints_runtime", "runtime"),
         Index("idx_telemetry_checkpoints_updated", "updated_at"),
+    )
+
+
+class SwarmORM(Base):
+    """Swarm lifecycle records."""
+
+    __tablename__ = "swarms"
+
+    swarm_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    repo: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    coding_agent_session: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'completing', 'completed', 'failed')",
+            name="ck_swarms_status",
+        ),
+        Index("idx_swarms_repo", "repo"),
+        Index("idx_swarms_status", "status"),
+        Index("idx_swarms_created", "created_at"),
+    )
+
+
+class SwarmWorkerORM(Base):
+    """Worker records for a swarm."""
+
+    __tablename__ = "swarm_workers"
+
+    worker_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    swarm_id: Mapped[str] = mapped_column(ForeignKey("swarms.swarm_id"), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    branch: Mapped[str] = mapped_column(Text, nullable=False)
+    worktree_path: Mapped[str] = mapped_column(Text, nullable=False)
+    session: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("swarm_id", "name", name="uq_swarm_workers_swarm_name"),
+        CheckConstraint(
+            "status IN ('pending', 'started', 'working', 'pr_created', 'done', 'failed')",
+            name="ck_swarm_workers_status",
+        ),
+        Index("idx_swarm_workers_swarm", "swarm_id"),
+        Index("idx_swarm_workers_session", "session"),
+        Index("idx_swarm_workers_status", "status"),
     )

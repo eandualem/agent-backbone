@@ -168,6 +168,7 @@ def create_app() -> socketio.ASGIApp:
     from agent_backbone.api.routes.rooms import router as rooms_router
     from agent_backbone.api.routes.schedule import router as schedule_router
     from agent_backbone.api.routes.status import router as status_router
+    from agent_backbone.api.routes.swarms import router as swarms_router
     from agent_backbone.api.routes.workflows import router as workflows_router
 
     api_routers = [
@@ -185,6 +186,7 @@ def create_app() -> socketio.ASGIApp:
         schedule_router,
         activity_router,
         messages_router,
+        swarms_router,
         notes_router,
         rooms_router,
         repos_router,

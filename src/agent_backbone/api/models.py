@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -231,6 +231,109 @@ class MessageResponse(BaseModel):
     ok: bool
     session: str
     outcome: str
+
+
+# --- Swarms ---
+
+
+SwarmStatus = Literal["active", "completing", "completed", "failed"]
+SwarmWorkerStatus = Literal["pending", "started", "working", "pr_created", "done", "failed"]
+
+
+class SwarmWorkerCreateRequest(BaseModel):
+    """Worker registration payload for swarm creation."""
+
+    name: str
+    branch: str
+    worktree_path: str
+    session: str
+
+
+class SwarmCreateRequest(BaseModel):
+    """Request body for creating a swarm."""
+
+    repo: str
+    task_id: str | None = None
+    coding_agent_session: str
+    workers: list[SwarmWorkerCreateRequest] = Field(default_factory=list)
+
+
+class SwarmCreateResponse(BaseModel):
+    """Response from swarm creation."""
+
+    swarm_id: str
+
+
+class SwarmProgress(BaseModel):
+    """Aggregated worker progress for one swarm."""
+
+    total: int = 0
+    finished: int = 0
+    percent: float = 0.0
+    pending: int = 0
+    started: int = 0
+    working: int = 0
+    pr_created: int = 0
+    done: int = 0
+    failed: int = 0
+
+
+class SwarmWorkerResponse(BaseModel):
+    """Worker record in swarm detail responses."""
+
+    worker_id: str
+    swarm_id: str
+    name: str
+    branch: str
+    worktree_path: str
+    session: str
+    status: SwarmWorkerStatus
+    pr_number: int | None = None
+    created_at: str
+    updated_at: str
+
+
+class SwarmSummaryResponse(BaseModel):
+    """Swarm summary for list responses."""
+
+    swarm_id: str
+    repo: str
+    task_id: str | None = None
+    coding_agent_session: str
+    status: SwarmStatus
+    created_at: str
+    completed_at: str | None = None
+    worker_count: int = 0
+    progress: SwarmProgress = Field(default_factory=SwarmProgress)
+
+
+class SwarmDetailResponse(SwarmSummaryResponse):
+    """Full swarm detail including workers."""
+
+    workers: list[SwarmWorkerResponse] = Field(default_factory=list)
+
+
+class SwarmWorkerStatusUpdateRequest(BaseModel):
+    """Request body for worker status updates."""
+
+    status: SwarmWorkerStatus
+    pr_number: int | None = None
+
+
+class SwarmBroadcastRequest(BaseModel):
+    """Request body for swarm lead broadcasts."""
+
+    from_entity: str
+    message: str
+
+
+class SwarmBroadcastResponse(BaseModel):
+    """Response from swarm broadcast delivery."""
+
+    ok: bool
+    delivered: int
+    failed: int
+    total: int
 
 
 # --- Status ---

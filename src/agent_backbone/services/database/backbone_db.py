@@ -21,6 +21,7 @@ from agent_backbone.services.database import (
     _delivery_repo,
     _queue_repo,
     _state_repo,
+    _swarm_repo,
     _telemetry_repo,
 )
 from agent_backbone.services.database.base import Base
@@ -33,6 +34,8 @@ from agent_backbone.services.database.models import (  # noqa: F401
     HeartbeatORM,
     IssueDependencyORM,
     MessageQueueORM,
+    SwarmORM,
+    SwarmWorkerORM,
     TelemetryCheckpointORM,
 )
 
@@ -526,3 +529,58 @@ class BackboneDB:
             )
             row = result.fetchone()
             return dict(row._mapping) if row else None
+
+    # --- Swarm registry (delegates to _swarm_repo) ---
+
+    async def create_swarm(
+        self,
+        repo: str,
+        task_id: str | None,
+        coding_agent_session: str,
+        workers: list[dict],
+    ) -> str:
+        """Create a swarm and its workers. Returns the swarm ID."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.create_swarm(
+                conn,
+                repo,
+                task_id,
+                coding_agent_session,
+                workers,
+            )
+
+    async def list_swarms(
+        self,
+        repo: str | None = None,
+        status: str | None = None,
+    ) -> list[dict]:
+        """List swarms with worker progress."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.list_swarms(conn, repo=repo, status=status)
+
+    async def get_swarm(self, swarm_id: str) -> dict | None:
+        """Get a single swarm with its workers."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.get_swarm(conn, swarm_id)
+
+    async def update_swarm_worker_status(
+        self,
+        swarm_id: str,
+        worker_name: str,
+        status: str,
+        pr_number: int | None = None,
+    ) -> dict | None:
+        """Update one worker status and return the refreshed swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.update_worker_status(
+                conn,
+                swarm_id,
+                worker_name,
+                status,
+                pr_number=pr_number,
+            )
+
+    async def complete_swarm(self, swarm_id: str) -> dict | None:
+        """Mark a swarm completed and return the refreshed swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.complete_swarm(conn, swarm_id)
