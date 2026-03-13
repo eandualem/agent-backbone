@@ -9,7 +9,7 @@ import time
 
 from prefect import task
 
-from agent_backbone.config import BackboneConfig
+from agent_backbone.config import REPO_NAME_PATTERN, BackboneConfig
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import BackboneDB
@@ -134,6 +134,40 @@ async def _record_plan_notification(
         log.exception("Failed to persist plan notification dedup marker (non-fatal)")
 
 
+async def _pending_count_for_session(
+    entity: str,
+    session_name: str,
+    config: BackboneConfig,
+    gh: object,
+    *,
+    coding_issues: list | None = None,
+) -> int:
+    """Count pending work for a monitored session.
+
+    Repo-backed coding sessions can receive both repo-local issues and
+    orchestration issues routed through ``for:coding-agent``. Named entities
+    only need their direct ``for:{entity}`` queue.
+    """
+    if session_name not in config.registry.repo_names:
+        issues = await gh.list_open_issues(f"for:{entity}")
+        return len(issues)
+
+    repo_full_name = f"{config.github.owner}/{session_name}"
+    pending = len(await gh.list_issues(state="open", repo_full_name=repo_full_name))
+    if not coding_issues:
+        return pending
+
+    repo_name = session_name.casefold()
+    return pending + sum(
+        1
+        for issue in coding_issues
+        if (
+            (match := REPO_NAME_PATTERN.match(issue.title or "")) is not None
+            and match.group(1).split("/", 1)[-1].casefold() == repo_name
+        )
+    )
+
+
 @task
 async def check_for_stalls(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB
@@ -147,8 +181,9 @@ async def check_for_stalls(
     state_path = config.agent_state.state_path
     stale_threshold = config.agent_state.stale_threshold_seconds
 
-    for entity in config.registry.all_entities:
-        session_name = config.registry.sessions_map.get(entity)
+    tracked_sessions = config.registry.tracked_sessions
+
+    for entity, session_name in tracked_sessions.items():
         if not session_name or session_name not in active_sessions:
             continue
 
@@ -179,8 +214,7 @@ async def check_for_stalls(
 
     # Persist current states to DB for offline detection
     try:
-        for entity in config.registry.all_entities:
-            session_name = config.registry.sessions_map.get(entity)
+        for entity, session_name in tracked_sessions.items():
             if not session_name or session_name not in active_sessions:
                 continue
             snapshot = await get_agent_state(state_path, session_name, stale_threshold)
@@ -188,6 +222,7 @@ async def check_for_stalls(
                 session_name=session_name,
                 state=snapshot.state.value,
                 current_issue=snapshot.current_issue,
+                entity=entity,
             )
     except Exception:
         log.exception("Failed to persist agent states (non-fatal)")
@@ -207,6 +242,10 @@ async def check_for_unexpected_offline(
     Returns list of offline records: {entity, session, pending_count}.
     """
     offline: list[dict] = []
+    tracked_by_session = {
+        session_name: entity for entity, session_name in config.registry.tracked_sessions.items()
+    }
+    coding_issues: list | None = None
 
     try:
         known_states = await db.get_all_agent_states()
@@ -226,21 +265,22 @@ async def check_for_unexpected_offline(
         if session_name in active_sessions:
             continue
 
-        # Map session back to entity
-        entity = None
-        for ent, sess in config.registry.sessions_map.items():
-            if sess == session_name:
-                entity = ent
-                break
-
+        entity = tracked_by_session.get(session_name)
         if not entity:
             continue
 
         # Count pending issues for context
         pending_count = 0
         try:
-            issues = await gh.list_open_issues(f"for:{entity}")
-            pending_count = len(issues)
+            if session_name in config.registry.repo_names and coding_issues is None:
+                coding_issues = await gh.list_open_issues("for:coding-agent")
+            pending_count = await _pending_count_for_session(
+                entity,
+                session_name,
+                config,
+                gh,
+                coding_issues=coding_issues,
+            )
         except Exception:
             log.exception("Failed to count pending issues for %s", entity)
 
@@ -353,8 +393,7 @@ async def check_plan_waiting(
     notification_chat_id = config.telegram.notification_chat_id
     telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
 
-    for entity in config.registry.all_entities:
-        session_name = config.registry.sessions_map.get(entity)
+    for entity, session_name in config.registry.tracked_sessions.items():
         if not session_name or session_name not in active_sessions:
             continue
 

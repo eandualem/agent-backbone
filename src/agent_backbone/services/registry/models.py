@@ -51,6 +51,8 @@ class EntityRegistry:
         """Concrete tmux sessions that should receive deliveries for an entity."""
         entry = self.entities.get(entity_name)
         if not entry or entry.entity_type == "role":
+            if entity_name in self.repo_names:
+                return [entity_name]
             return []
 
         if entry.session is None:
@@ -136,6 +138,26 @@ class EntityRegistry:
         """Repo name -> filesystem path."""
         return {r.name: r.path for r in self.repos}
 
+    @cached_property
+    def tracked_sessions(self) -> dict[str, str]:
+        """Logical monitor targets mapped to concrete tmux sessions.
+
+        Includes all concrete entity sessions plus coding-repo sessions that
+        are discovered from the filesystem. When an entity already maps to the
+        same tmux session as a repo, the entity mapping wins to avoid duplicate
+        monitor/escalation work for a single session.
+        """
+        tracked = dict(self.concrete_sessions_map)
+        seen_sessions = set(tracked.values())
+
+        for repo in self.repos:
+            if repo.name in seen_sessions:
+                continue
+            tracked[repo.name] = repo.name
+            seen_sessions.add(repo.name)
+
+        return tracked
+
     def entry_for_session(self, session: str) -> EntityEntry | None:
         """Return the concrete entity entry for a tmux session."""
         direct_entry = self.entities.get(session)
@@ -170,7 +192,7 @@ class EntityRegistry:
         if any(r.name == repo.name and r.org == repo.org for r in self.repos):
             return
         self.repos.append(repo)
-        for attr in ("repo_names", "orgs", "repo_path_by_name"):
+        for attr in ("repo_names", "orgs", "repo_path_by_name", "tracked_sessions"):
             self.__dict__.pop(attr, None)
 
     def orchestrator_for_repo(self, repo_name: str) -> str | None:

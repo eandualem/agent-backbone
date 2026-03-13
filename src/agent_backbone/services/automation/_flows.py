@@ -13,9 +13,32 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import format_digest, safe_deliver
-from agent_backbone.services.terminal import list_sessions, start_session, stop_session
+from agent_backbone.services.terminal import (
+    RUNTIME_ENV_KEY,
+    list_sessions,
+    resolve_agent_dir,
+    start_session,
+    stop_session,
+)
 
 log = logging.getLogger(__name__)
+
+_DEFAULT_AGENT_CLI = "claude"
+
+
+async def _start_workflow_agent_session(session_name: str, config: BackboneConfig) -> bool:
+    """Start a workflow-managed agent session with its resolved workspace."""
+    working_dir = resolve_agent_dir(session_name, config.registry)
+    if not working_dir:
+        log.warning("Workflow start skipped for %s: no working directory resolved", session_name)
+        return False
+
+    return await start_session(
+        session_name,
+        working_dir=working_dir,
+        command=[_DEFAULT_AGENT_CLI],
+        environment={RUNTIME_ENV_KEY: _DEFAULT_AGENT_CLI},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +52,7 @@ async def start_morning_agents(config: BackboneConfig) -> list[str]:
     started = []
     for agent in config.daily_routines.morning_agents:
         session_name = config.registry.sessions_map.get(agent, agent)
-        if await start_session(session_name):
+        if await _start_workflow_agent_session(session_name, config):
             started.append(session_name)
     return started
 
@@ -219,7 +242,7 @@ async def start_arclio_agents(config: BackboneConfig) -> list[str]:
     started = []
     for agent in ARCLIO_AGENTS:
         session_name = config.registry.sessions_map.get(agent, agent)
-        if await start_session(session_name):
+        if await _start_workflow_agent_session(session_name, config):
             started.append(session_name)
     return started
 
