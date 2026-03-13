@@ -511,3 +511,21 @@ class TestAppSettings:
         assert config.github_app_id == 3075015
         assert config.github_app_private_key_path == "/tmp/private-key.pem"
         assert config.github_app_webhook_secret == "app-secret"
+
+    def test_build_config_overlays_database_settings(self):
+        settings = AppSettings(
+            database_host="db.internal",
+            database_port=6543,
+            database_user="worker",
+            database_password="secret",
+            database_name="backbone_review",
+        )
+
+        config = settings.build_config()
+
+        assert config.database.host == "db.internal"
+        assert config.database.port == 6543
+        assert config.database.user == "worker"
+        assert config.database.password == "secret"
+        assert config.database.name == "backbone_review"
+        assert config.database.pool_size == 5

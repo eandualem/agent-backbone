@@ -6,11 +6,14 @@ Nested frozen dataclasses per section. Works without TOML file (falls back to de
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
+from typing import TypeVar, cast
 
 from dotenv import load_dotenv
 
@@ -24,6 +27,9 @@ REPO_NAME_PATTERN: re.Pattern[str] = re.compile(r"^\[[^\]]+\]\s+([\w/.-]+):")
 
 # Default TOML path: backbone.toml in repo root
 _DEFAULT_TOML_PATH = Path(__file__).resolve().parent.parent.parent / "backbone.toml"
+_ConfigT = TypeVar("_ConfigT")
+_Converter = Callable[[object], object]
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -258,151 +264,153 @@ class BackboneConfig:
 
         Falls back to defaults if TOML file doesn't exist.
         """
-        toml_path = path or _DEFAULT_TOML_PATH
-        raw: dict = {}
-        if toml_path.exists():
-            with open(toml_path, "rb") as f:
-                raw = tomllib.load(f)
-
-        gw = raw.get("gateway", {})
-        gh = raw.get("github", {})
-        ent = raw.get("entities", {})
-        reg = raw.get("registry", {})
-        dd = raw.get("dedup", {})
-        ag = raw.get("agent_state", {})
-        sc = raw.get("scheduling", {})
-        db = raw.get("database", {})
-        dl = raw.get("delivery", {})
-        tg = raw.get("telegram", {})
-        dr = raw.get("daily_routines", {})
-        ps = raw.get("priority_scoring", {})
-        cr = raw.get("capacity_routing", {})
-        es = raw.get("escalation", {})
-        hb = raw.get("heartbeat", {})
-        sb = raw.get("session_bridge", {})
-
-        # Build registry from JSON + filesystem
-        import logging
-
-        _log = logging.getLogger(__name__)
-        reg_cfg = RegistryConfig(
-            path=reg.get("path", "~/.claude/state/entity-registry.json"),
-            code_base_dir=reg.get("code_base_dir", "~/ws/core/code"),
+        raw = _load_raw_toml(path or _DEFAULT_TOML_PATH)
+        registry_config = _build_dataclass_config(
+            RegistryConfig(),
+            _section(raw, "registry"),
         )
-        try:
-            registry = build_registry(reg_cfg.registry_path, reg_cfg.code_base_path)
-        except FileNotFoundError:
-            _log.warning(
-                "Entity registry not found at %s — using empty registry",
-                reg_cfg.registry_path,
-            )
-            registry = EntityRegistry()
 
         return cls(
-            gateway=GatewayConfig(
-                port=gw.get("port", 7120),
-                max_delivery_ids=gw.get("max_delivery_ids", 100),
+            gateway=_build_dataclass_config(
+                GatewayConfig(),
+                _section(raw, "gateway"),
             ),
-            github=GitHubConfig(
-                owner=gh.get("owner", "eandualem"),
-                repo=gh.get("repo", "orchestration"),
+            github=_build_dataclass_config(
+                GitHubConfig(),
+                _section(raw, "github"),
             ),
-            entities=EntityConfig(
-                skip=frozenset(ent.get("skip", ["elias"])),
-                fallback=ent.get("fallback", {"coding-agent": "ike"}),
-                service_sessions=frozenset(
-                    ent.get(
-                        "service_sessions",
-                        [
-                            "ngrok",
-                            "prefect",
-                            "prefect-worker",
-                            "prefect-server",
-                            "telegram-bot",
-                            "gateway",
-                            "backbone-worker",
-                        ],
-                    )
-                ),
+            entities=_build_dataclass_config(
+                EntityConfig(),
+                _section(raw, "entities"),
+                converters={
+                    "skip": frozenset,
+                    "service_sessions": frozenset,
+                },
             ),
-            registry=registry,
-            dedup=DedupConfig(
-                notification_window_seconds=dd.get("notification_window_seconds", 10),
+            registry=_load_registry(registry_config),
+            dedup=_build_dataclass_config(
+                DedupConfig(),
+                _section(raw, "dedup"),
             ),
-            agent_state=AgentStateConfig(
-                state_dir=ag.get("state_dir", "~/.claude/state"),
-                stale_threshold_seconds=ag.get("stale_threshold_seconds", 300),
+            agent_state=_build_dataclass_config(
+                AgentStateConfig(),
+                _section(raw, "agent_state"),
             ),
-            scheduling=SchedulingConfig(
-                monitor_interval_seconds=sc.get("monitor_interval_seconds", 60),
-                delivery_retry_interval_seconds=sc.get("delivery_retry_interval_seconds", 300),
-                work_pool_name=sc.get("work_pool_name", "agent-pool"),
+            scheduling=_build_dataclass_config(
+                SchedulingConfig(),
+                _section(raw, "scheduling"),
             ),
-            database=DatabaseConfig(
-                host=db.get("host", "localhost"),
-                port=db.get("port", 5435),
-                user=db.get("user", "backbone"),
-                password=db.get("password", "backbone"),
-                name=db.get("name", "backbone"),
-                pool_size=db.get("pool_size", 5),
-                pool_overflow=db.get("pool_overflow", 10),
-                echo=db.get("echo", False),
+            database=_build_database_config(_section(raw, "database")),
+            delivery=_build_dataclass_config(
+                DeliveryConfig(),
+                _section(raw, "delivery"),
             ),
-            delivery=DeliveryConfig(
-                retention_days=dl.get("retention_days", 30),
+            telegram=_build_dataclass_config(
+                TelegramConfig(),
+                _section(raw, "telegram"),
+                converters={"topic_routes": _coerce_topic_routes},
             ),
-            telegram=TelegramConfig(
-                allowed_chat_ids=tg.get("allowed_chat_ids", []),
-                topic_routes={int(k): v for k, v in tg.get("topic_routes", {}).items()},
-                group_chat_id=tg.get("group_chat_id"),
-                notification_chat_id=tg.get("notification_chat_id"),
-                topic_discovery_file=tg.get(
-                    "topic_discovery_file",
-                    "~/.claude/state/telegram-topics.json",
-                ),
+            daily_routines=_build_dataclass_config(
+                DailyRoutineConfig(),
+                _section(raw, "daily_routines"),
             ),
-            daily_routines=DailyRoutineConfig(
-                morning_time=dr.get("morning_time", "08:00"),
-                evening_time=dr.get("evening_time", "18:00"),
-                morning_agents=dr.get("morning_agents", ["ike", "feynman"]),
-                timezone=dr.get("timezone", "Africa/Addis_Ababa"),
+            priority_scoring=_build_dataclass_config(
+                PriorityScoringConfig(),
+                _section(raw, "priority_scoring"),
             ),
-            priority_scoring=PriorityScoringConfig(
-                blocking_weight=ps.get("blocking_weight", 1000.0),
-                type_weights=ps.get(
-                    "type_weights",
-                    {
-                        "spec-gap": 100.0,
-                        "bug": 90.0,
-                        "task": 50.0,
-                        "question": 20.0,
-                        "optimization": 10.0,
-                    },
-                ),
-                dependents_multiplier=ps.get("dependents_multiplier", 1.5),
-                age_tiebreaker_weight=ps.get("age_tiebreaker_weight", 0.01),
+            capacity_routing=_build_dataclass_config(
+                CapacityRoutingConfig(),
+                _section(raw, "capacity_routing"),
             ),
-            capacity_routing=CapacityRoutingConfig(
-                busy_threshold_seconds=cr.get("busy_threshold_seconds", 1800),
+            escalation=_build_dataclass_config(
+                EscalationConfig(),
+                _section(raw, "escalation"),
             ),
-            escalation=EscalationConfig(
-                stall_threshold_seconds=es.get("stall_threshold_seconds", 5400),
-                escalation_target=es.get("escalation_target", "ike"),
-                escalation_dedup_seconds=es.get("escalation_dedup_seconds", 1800),
+            heartbeat=_build_dataclass_config(
+                HeartbeatConfig(),
+                _section(raw, "heartbeat"),
             ),
-            heartbeat=HeartbeatConfig(
-                schedule_file=hb.get("schedule_file", "~/.claude/state/heartbeat-schedules.json"),
-                default_timezone=hb.get("default_timezone", "Africa/Addis_Ababa"),
+            session_bridge=_build_dataclass_config(
+                SessionBridgeConfig(),
+                _section(raw, "session_bridge"),
             ),
-            session_bridge=SessionBridgeConfig(
-                grace_period_seconds=sb.get("grace_period_seconds", 5),
-                queue_retry_seconds=sb.get("queue_retry_seconds", 30),
-            ),
-            jarvis=JarvisConfig(
-                inject_url=os.environ.get("JARVIS_INJECT_URL", ""),
-                sessions_url=os.environ.get("JARVIS_SESSIONS_URL", ""),
-            ),
+            jarvis=_build_jarvis_config(),
         )
+
+
+def _load_raw_toml(path: Path) -> dict[str, object]:
+    """Load a TOML file if present, otherwise return an empty mapping."""
+    if not path.exists():
+        return {}
+    with path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
+def _section(raw: Mapping[str, object], name: str) -> Mapping[str, object]:
+    """Return one TOML section as a mapping."""
+    section = raw.get(name, {})
+    if isinstance(section, Mapping):
+        return cast(Mapping[str, object], section)
+    return {}
+
+
+def _build_dataclass_config(
+    defaults: _ConfigT,
+    section: Mapping[str, object],
+    *,
+    converters: Mapping[str, _Converter] | None = None,
+) -> _ConfigT:
+    """Apply known TOML keys onto a frozen dataclass instance."""
+    updates: dict[str, object] = {}
+    for dataclass_field in fields(defaults):
+        if dataclass_field.name not in section:
+            continue
+        value = section[dataclass_field.name]
+        if converters and dataclass_field.name in converters:
+            value = converters[dataclass_field.name](value)
+        updates[dataclass_field.name] = value
+    return replace(defaults, **updates) if updates else defaults
+
+
+def _build_database_config(section: Mapping[str, object]) -> DatabaseConfig:
+    """Apply known TOML keys onto the database model defaults."""
+    defaults = DatabaseConfig()
+    updates = {
+        field_name: section[field_name]
+        for field_name in DatabaseConfig.model_fields
+        if field_name in section
+    }
+    if not updates:
+        return defaults
+    return DatabaseConfig.model_validate({**defaults.model_dump(), **updates})
+
+
+def _coerce_topic_routes(value: object) -> dict[int, str]:
+    """Convert TOML topic route keys to integer thread IDs."""
+    return {
+        int(key): route
+        for key, route in cast(Mapping[object, str], value).items()
+    }
+
+
+def _build_jarvis_config() -> JarvisConfig:
+    """Build the env-only Jarvis integration config."""
+    return JarvisConfig(
+        inject_url=os.environ.get("JARVIS_INJECT_URL", ""),
+        sessions_url=os.environ.get("JARVIS_SESSIONS_URL", ""),
+    )
+
+
+def _load_registry(config: RegistryConfig) -> EntityRegistry:
+    """Build the entity registry from disk with the configured fallback."""
+    try:
+        return build_registry(config.registry_path, config.code_base_path)
+    except FileNotFoundError:
+        log.warning(
+            "Entity registry not found at %s — using empty registry",
+            config.registry_path,
+        )
+        return EntityRegistry()
 
 
 def _load_webhook_secret() -> str:

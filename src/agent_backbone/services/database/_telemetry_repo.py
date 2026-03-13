@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+from agent_backbone.services.database._repo_utils import row_to_dict, rows_to_dicts, utc_now_iso
 
 
 def _encode_checkpoint(checkpoint: Mapping[str, object] | None) -> str:
@@ -41,10 +38,9 @@ async def get_checkpoint(
         ),
         {"session": session, "source_ref": source_ref},
     )
-    row = result.fetchone()
-    if row is None:
+    payload = row_to_dict(result.fetchone())
+    if payload is None:
         return None
-    payload = dict(row._mapping)
     payload["checkpoint"] = _decode_checkpoint(payload.get("checkpoint"))
     return payload
 
@@ -70,8 +66,7 @@ async def query_checkpoints(
     query += " ORDER BY updated_at DESC LIMIT :lim"
     result = await conn.execute(text(query), params)
     rows = []
-    for row in result.fetchall():
-        payload = dict(row._mapping)
+    for payload in rows_to_dicts(result.fetchall()):
         payload["checkpoint"] = _decode_checkpoint(payload.get("checkpoint"))
         rows.append(payload)
     return rows
@@ -127,6 +122,6 @@ async def upsert_checkpoint(
             "entity": entity,
             "checkpoint": _encode_checkpoint(checkpoint),
             "last_event_ts": last_event_ts,
-            "updated_at": _now_iso(),
+            "updated_at": utc_now_iso(),
         },
     )

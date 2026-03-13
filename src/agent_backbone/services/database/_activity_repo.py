@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+from agent_backbone.services.database._repo_utils import (
+    named_placeholders,
+    rows_to_dicts,
+    utc_now_iso,
+)
 
 
 def _activity_params(
@@ -41,7 +42,7 @@ def _activity_params(
         "model": model,
         "data": data,
         "ts": ts,
-        "received_at": _now_iso(),
+        "received_at": utc_now_iso(),
     }
 
 
@@ -179,8 +180,7 @@ async def get_activity(
 
     query += " ORDER BY CAST(ts AS DOUBLE PRECISION) DESC, id DESC LIMIT :lim"
     result = await conn.execute(text(query), params)
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return rows_to_dicts(result.fetchall())
 
 
 async def query_activity(
@@ -191,20 +191,16 @@ async def query_activity(
 ) -> list[dict]:
     """Query activity events across all sessions, newest first."""
     query = """SELECT * FROM agent_activity WHERE 1 = 1"""
-    params: dict[str, str | int] = {"lim": limit}
+    params: dict[str, object] = {"lim": limit}
 
     if events:
-        placeholders = []
-        for idx, event in enumerate(events):
-            key = f"event_{idx}"
-            params[key] = event
-            placeholders.append(f":{key}")
-        query += f" AND event IN ({', '.join(placeholders)})"
+        placeholders, event_params = named_placeholders("event", events)
+        params.update(event_params)
+        query += f" AND event IN ({placeholders})"
 
     query += " ORDER BY CAST(ts AS DOUBLE PRECISION) DESC, id DESC LIMIT :lim"
     result = await conn.execute(text(query), params)
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return rows_to_dicts(result.fetchall())
 
 
 async def has_activity_event(
@@ -217,7 +213,7 @@ async def has_activity_event(
 ) -> bool:
     """Whether a matching activity event exists for the session."""
     query = """SELECT 1 FROM agent_activity WHERE session = :session AND event = :event"""
-    params: dict[str, str] = {
+    params: dict[str, object] = {
         "session": session,
         "event": event,
     }

@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+from agent_backbone.services.database._repo_utils import row_to_dict, rows_to_dicts, utc_now_iso
 
 
 async def get_agent_state(
@@ -21,8 +17,7 @@ async def get_agent_state(
         text("SELECT * FROM agent_states WHERE session_name = :session_name"),
         {"session_name": session_name},
     )
-    row = result.fetchone()
-    return dict(row._mapping) if row else None
+    return row_to_dict(result.fetchone())
 
 
 async def set_agent_state(
@@ -39,7 +34,7 @@ async def set_agent_state(
     plan_title: str | None = None,
 ) -> None:
     """Upsert agent state."""
-    now = _now_iso()
+    now = utc_now_iso()
     await conn.execute(
         text(
             """INSERT INTO agent_states
@@ -96,5 +91,4 @@ async def get_all_agent_states(
 ) -> list[dict]:
     """Get state records for all tracked agents."""
     result = await conn.execute(text("SELECT * FROM agent_states ORDER BY session_name"))
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return rows_to_dicts(result.fetchall())

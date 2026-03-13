@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from agent_backbone.services.database._repo_utils import (
+    named_placeholders,
+    row_to_dict,
+    rows_to_dicts,
+    utc_now_iso,
+)
+
 _ACTIVE_SWARM_STATUSES = {"active", "completing", "failed"}
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _group_workers(rows: list[dict]) -> dict[str, list[dict]]:
@@ -76,7 +78,7 @@ async def create_swarm(
     workers: list[dict],
 ) -> str:
     """Create a swarm and its workers. Returns the swarm ID."""
-    now = _now_iso()
+    now = utc_now_iso()
     swarm_id = str(uuid.uuid4())
     await conn.execute(
         text(
@@ -142,19 +144,19 @@ async def list_swarms(
         conditions.append("status = :status")
         params["status"] = status
     else:
-        active_names = []
-        for index, value in enumerate(sorted(_ACTIVE_SWARM_STATUSES)):
-            key = f"status_{index}"
-            active_names.append(f":{key}")
-            params[key] = value
-        conditions.append(f"status IN ({', '.join(active_names)})")
+        placeholders, active_status_params = named_placeholders(
+            "status",
+            sorted(_ACTIVE_SWARM_STATUSES),
+        )
+        params.update(active_status_params)
+        conditions.append(f"status IN ({placeholders})")
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     result = await conn.execute(
         text(f"SELECT * FROM swarms {where} ORDER BY created_at DESC"),
         params,
     )
-    swarms = [dict(row._mapping) for row in result.fetchall()]
+    swarms = rows_to_dicts(result.fetchall())
     if not swarms:
         return []
 
@@ -176,11 +178,10 @@ async def get_swarm(
         text("SELECT * FROM swarms WHERE swarm_id = :swarm_id"),
         {"swarm_id": swarm_id},
     )
-    row = result.fetchone()
-    if row is None:
+    swarm = row_to_dict(result.fetchone())
+    if swarm is None:
         return None
 
-    swarm = dict(row._mapping)
     workers = await _fetch_workers_for_swarms(conn, [swarm_id])
     return _build_swarm_detail(swarm, workers)
 
@@ -193,7 +194,7 @@ async def update_worker_status(
     pr_number: int | None = None,
 ) -> dict | None:
     """Update a worker status and recompute swarm aggregate status."""
-    now = _now_iso()
+    now = utc_now_iso()
     result = await conn.execute(
         text(
             """UPDATE swarm_workers
@@ -242,7 +243,7 @@ async def complete_swarm(
                WHERE swarm_id = :swarm_id
                RETURNING swarm_id"""
         ),
-        {"swarm_id": swarm_id, "completed_at": _now_iso()},
+        {"swarm_id": swarm_id, "completed_at": utc_now_iso()},
     )
     if result.fetchone() is None:
         return None
@@ -255,18 +256,13 @@ async def _fetch_workers_for_swarms(
 ) -> list[dict]:
     if not swarm_ids:
         return []
-    params: dict[str, object] = {}
-    placeholders: list[str] = []
-    for index, swarm_id in enumerate(swarm_ids):
-        key = f"swarm_id_{index}"
-        placeholders.append(f":{key}")
-        params[key] = swarm_id
+    placeholders, params = named_placeholders("swarm_id", swarm_ids)
     result = await conn.execute(
         text(
             "SELECT * FROM swarm_workers "
-            f"WHERE swarm_id IN ({', '.join(placeholders)}) "
+            f"WHERE swarm_id IN ({placeholders}) "
             "ORDER BY created_at ASC, name ASC"
         ),
         params,
     )
-    return [dict(row._mapping) for row in result.fetchall()]
+    return rows_to_dicts(result.fetchall())

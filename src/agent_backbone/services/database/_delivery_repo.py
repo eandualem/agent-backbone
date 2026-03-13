@@ -7,9 +7,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+from agent_backbone.services.database._repo_utils import rows_to_dicts, utc_now_iso
 
 
 async def record_delivery(
@@ -38,7 +36,7 @@ async def record_delivery(
             "outcome": outcome,
             "flow_name": flow_name,
             "flow_run_id": flow_run_id,
-            "created_at": _now_iso(),
+            "created_at": utc_now_iso(),
         },
     )
     return result.scalar_one()
@@ -73,8 +71,7 @@ async def query_deliveries(
     params["lim"] = limit
 
     result = await conn.execute(text(sql), params)
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return rows_to_dicts(result.fetchall())
 
 
 async def get_failed_deliveries(
@@ -100,8 +97,7 @@ async def get_failed_deliveries(
         ),
         {"lim": limit},
     )
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return rows_to_dicts(result.fetchall())
 
 
 async def prune_old_deliveries(
@@ -124,5 +120,4 @@ async def get_delivery_stats(
     result = await conn.execute(
         text("SELECT outcome, COUNT(*) as cnt FROM deliveries GROUP BY outcome")
     )
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return rows_to_dicts(result.fetchall())

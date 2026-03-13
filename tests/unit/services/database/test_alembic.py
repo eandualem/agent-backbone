@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.database.backbone_db import BackboneDB, metadata
-from agent_backbone.services.database.config import database_config_from_env
+from agent_backbone.services.database.config import DatabaseConfig, database_config_from_env
 
 _EXPECTED_TABLES = {
     "acknowledgments",
@@ -219,3 +219,28 @@ def test_database_config_from_env_reads_backbone_database_overrides(monkeypatch)
     assert config.async_url == (
         "postgresql+asyncpg://worker:secret@db.internal:6543/backbone_review"
     )
+
+
+def test_database_config_from_env_preserves_unspecified_defaults(monkeypatch):
+    """Partial env overrides only replace the provided database fields."""
+    monkeypatch.setenv("BACKBONE_DATABASE_HOST", "db.internal")
+    defaults = DatabaseConfig(
+        port=6544,
+        user="worker",
+        password="secret",
+        name="backbone_review",
+        pool_size=9,
+        pool_overflow=3,
+        echo=True,
+    )
+
+    config = database_config_from_env(defaults=defaults)
+
+    assert config.host == "db.internal"
+    assert config.port == 6544
+    assert config.user == "worker"
+    assert config.password == "secret"
+    assert config.name == "backbone_review"
+    assert config.pool_size == 9
+    assert config.pool_overflow == 3
+    assert config.echo is True

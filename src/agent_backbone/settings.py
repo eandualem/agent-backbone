@@ -13,6 +13,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agent_backbone.config import BackboneConfig
 
+_DIRECT_OVERRIDE_FIELDS = (
+    "webhook_secret",
+    "github_app_private_key_path",
+    "github_app_webhook_secret",
+)
+_DATABASE_OVERRIDE_FIELDS = (
+    ("host", "database_host"),
+    ("port", "database_port"),
+    ("user", "database_user"),
+    ("password", "database_password"),
+    ("name", "database_name"),
+)
+
 
 class AppSettings(BaseSettings):
     """Environment-sourced settings that wrap BackboneConfig."""
@@ -40,43 +53,53 @@ class AppSettings(BaseSettings):
         overlays env-sourced secrets via dataclass replace.
         """
         from dataclasses import replace
+        config = BackboneConfig.from_toml(path=self._config_path())
+        overrides = self._build_overrides(config)
+        return replace(config, **overrides) if overrides else config
+
+    def _config_path(self) -> Path | None:
+        """Return an explicit TOML path when configured."""
+        return Path(self.config_path) if self.config_path else None
+
+    def _build_overrides(self, config: BackboneConfig) -> dict[str, object]:
+        """Collect env-derived overrides for the frozen backbone config."""
+        overrides = {
+            field_name: value
+            for field_name in _DIRECT_OVERRIDE_FIELDS
+            if (value := getattr(self, field_name))
+        }
+        if self.github_app_id is not None:
+            overrides["github_app_id"] = self.github_app_id
+
+        jarvis_override = self._jarvis_override(config)
+        if jarvis_override is not None:
+            overrides["jarvis"] = jarvis_override
+
+        database_override = self._database_override(config)
+        if database_override is not None:
+            overrides["database"] = database_override
+
+        return overrides
+
+    def _jarvis_override(self, config: BackboneConfig) -> object | None:
+        """Build a Jarvis override only when env settings are present."""
+        if not (self.jarvis_inject_url or self.jarvis_sessions_url):
+            return None
 
         from agent_backbone.config import JarvisConfig
 
-        toml_path = Path(self.config_path) if self.config_path else None
-        config = BackboneConfig.from_toml(path=toml_path)
+        return JarvisConfig(
+            inject_url=self.jarvis_inject_url or config.jarvis.inject_url,
+            sessions_url=self.jarvis_sessions_url or config.jarvis.sessions_url,
+        )
 
-        # Overlay env-sourced secrets where provided
-        overrides: dict = {}
-        if self.webhook_secret:
-            overrides["webhook_secret"] = self.webhook_secret
-        if self.github_app_id is not None:
-            overrides["github_app_id"] = self.github_app_id
-        if self.github_app_private_key_path:
-            overrides["github_app_private_key_path"] = self.github_app_private_key_path
-        if self.github_app_webhook_secret:
-            overrides["github_app_webhook_secret"] = self.github_app_webhook_secret
-        if self.jarvis_inject_url or self.jarvis_sessions_url:
-            overrides["jarvis"] = JarvisConfig(
-                inject_url=self.jarvis_inject_url or config.jarvis.inject_url,
-                sessions_url=self.jarvis_sessions_url or config.jarvis.sessions_url,
-            )
-
-        # Overlay database fields if any env var is provided
-        db_overrides: dict = {}
-        if self.database_host:
-            db_overrides["host"] = self.database_host
-        if self.database_port:
-            db_overrides["port"] = self.database_port
-        if self.database_user:
-            db_overrides["user"] = self.database_user
-        if self.database_password:
-            db_overrides["password"] = self.database_password
-        if self.database_name:
-            db_overrides["name"] = self.database_name
-        if db_overrides:
-            overrides["database"] = config.database.model_copy(update=db_overrides)
-
-        if overrides:
-            config = replace(config, **overrides)
-        return config
+    def _database_override(self, config: BackboneConfig) -> object | None:
+        """Build a database model override only when env settings are present."""
+        updates = {
+            field_name: value
+            for field_name, settings_field in _DATABASE_OVERRIDE_FIELDS
+            if (value := getattr(self, settings_field))
+        }
+        if not updates:
+            return None
+        return config.database.model_copy(update=updates)

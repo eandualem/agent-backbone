@@ -7,10 +7,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
+from agent_backbone.services.database._repo_utils import (
+    named_placeholders,
+    rows_to_dicts,
+    utc_now_iso,
+)
 
 # --- Dedup ---
 
@@ -42,7 +43,7 @@ async def record_delivery_id(
                VALUES (:delivery_id, :received_at)
                ON CONFLICT DO NOTHING"""
         ),
-        {"delivery_id": delivery_id, "received_at": _now_iso()},
+        {"delivery_id": delivery_id, "received_at": utc_now_iso()},
     )
 
 
@@ -75,7 +76,7 @@ async def upsert_dependency(
                ON CONFLICT(parent_number, sub_issue_number) DO UPDATE SET
                  updated_at = excluded.updated_at"""
         ),
-        {"parent": parent, "sub": sub, "now": _now_iso()},
+        {"parent": parent, "sub": sub, "now": utc_now_iso()},
     )
 
 
@@ -98,7 +99,7 @@ async def sync_dependencies(
     sub_issues: list[int],
 ) -> None:
     """Sync the dependency table for a parent."""
-    now = _now_iso()
+    now = utc_now_iso()
     for sub in sub_issues:
         await conn.execute(
             text(
@@ -110,12 +111,8 @@ async def sync_dependencies(
             {"parent": parent, "sub": sub, "now": now},
         )
     if sub_issues:
-        # Build parameterized IN clause
-        param_names = [f":sub_{i}" for i in range(len(sub_issues))]
-        placeholders = ",".join(param_names)
-        params: dict[str, object] = {"parent": parent}
-        for i, sub in enumerate(sub_issues):
-            params[f"sub_{i}"] = sub
+        placeholders, params = named_placeholders("sub", sub_issues)
+        params["parent"] = parent
         await conn.execute(
             text(
                 f"DELETE FROM issue_dependencies WHERE parent_number = :parent "
@@ -150,7 +147,7 @@ async def record_acknowledgment(
         {
             "issue_number": issue_number,
             "target_entity": target_entity,
-            "acknowledged_at": _now_iso(),
+            "acknowledged_at": utc_now_iso(),
         },
     )
 
@@ -204,7 +201,7 @@ async def record_heartbeat(
         ),
         {
             "agent": agent,
-            "delivered_at": _now_iso(),
+            "delivered_at": utc_now_iso(),
             "outcome": outcome,
             "message": message,
         },
@@ -251,8 +248,7 @@ async def query_heartbeats(
     params["lim"] = limit
 
     result = await conn.execute(text(sql), params)
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return rows_to_dicts(result.fetchall())
 
 
 # --- Message queue ---
@@ -282,7 +278,7 @@ async def enqueue_message(
             "issue_number": issue_number,
             "target_entity": target_entity,
             "flow_name": flow_name,
-            "enqueued_at": _now_iso(),
+            "enqueued_at": utc_now_iso(),
         },
     )
     return result.scalar_one()
@@ -302,8 +298,7 @@ async def dequeue_messages(
         ),
         {"session_name": session_name, "lim": limit},
     )
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return rows_to_dicts(result.fetchall())
 
 
 async def mark_message_delivered(
@@ -317,5 +312,5 @@ async def mark_message_delivered(
                SET status = 'delivered', delivered_at = :delivered_at
                WHERE id = :id"""
         ),
-        {"delivered_at": _now_iso(), "id": message_id},
+        {"delivered_at": utc_now_iso(), "id": message_id},
     )
