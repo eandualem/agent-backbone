@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import EventType, IssueData, IssueEvent, ParsedLabels
-from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry
+from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry, RepoInfo
 from agent_backbone.services.routing import (
     _ONBOARDING_TITLE_PREFIX,
     _check_onboarding_chain,
@@ -360,6 +360,49 @@ class TestOnIssueClosed:
         assert mock_find_next_issue.await_args.kwargs["repo_full_name"] == "WF/agent-shell"
         mock_check_dependencies.assert_not_awaited()
         mock_check_onboarding_chain.assert_not_awaited()
+
+    async def test_repo_local_issue_falls_back_to_repo_target(self):
+        issue = IssueData(
+            number=10,
+            title="Done",
+            state="closed",
+            labels=ParsedLabels(sender="unknown", targets=[], issue_type="task"),
+            repo_full_name="eandualem/agent-backbone",
+        )
+        event = IssueEvent(event_type=EventType.ISSUE_CLOSED, issue=issue)
+        next_issue = IssueData(
+            number=11,
+            title="Next repo issue",
+            labels=ParsedLabels(sender="unknown", targets=[], issue_type="task"),
+            repo_full_name="eandualem/agent-backbone",
+        )
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            registry=EntityRegistry(
+                entities={},
+                repos=[RepoInfo(org="WF", name="agent-backbone", path="/some/path")],
+            ),
+        )
+        mock_gh = AsyncMock()
+        mock_gh.list_issues.return_value = [next_issue]
+
+        with (
+            patch(
+                "agent_backbone.services.routing._lifecycle.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.routing._lifecycle.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+        ):
+            result = await on_issue_closed.fn(event, config, mock_gh)
+
+        assert result["agent-backbone"] == "delivered_#11"
+        assert mock_gh.list_issues.await_count >= 1
+        assert mock_deliver.await_args.kwargs["target_entity"] == "agent-backbone"
 
 
 # ---------------------------------------------------------------------------

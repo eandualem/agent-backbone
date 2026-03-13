@@ -16,6 +16,7 @@ from agent_backbone.services._locator import ensure_initialized, get_config, get
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_next_issue_notification
+from agent_backbone.services.routing._targets import list_open_queue_for_target
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +39,14 @@ async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB,
 
     # Fetch current issue state from GitHub
     try:
-        issue = await gh.get_issue(issue_number)
+        issue = await gh.get_issue(
+            issue_number,
+            repo_full_name=(
+                f"{config.github.owner}/{target_entity}"
+                if target_entity in config.registry.repo_names
+                else None
+            ),
+        )
     except Exception:
         log.warning("Failed to fetch issue #%d for retry", issue_number)
         return "fetch_failed"
@@ -51,9 +59,11 @@ async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB,
     message = format_next_issue_notification(issue)
     queue_scope_issue_numbers = {
         item.number
-        for item in await gh.list_open_issues(
-            f"for:{target_entity}",
-            repo_full_name=issue.repo_full_name or None,
+        for item in await list_open_queue_for_target(
+            config,
+            target_entity,
+            gh,
+            issue_repo_full_name=issue.repo_full_name,
         )
     }
     outcome = await safe_deliver(
@@ -130,7 +140,11 @@ async def delivery_retry() -> dict:
                     enforce_issue_queue=True,
                     queue_scope_issue_numbers={
                         item.number
-                        for item in await gh.list_open_issues(f"for:{msg_record['target_entity']}")
+                        for item in await list_open_queue_for_target(
+                            config,
+                            msg_record["target_entity"],
+                            gh,
+                        )
                     }
                     if msg_record.get("target_entity")
                     else None,
@@ -165,7 +179,14 @@ async def scheduled_delivery(
     gh = get_gh()
 
     # Fetch current issue state
-    issue = await gh.get_issue(issue_number)
+    issue = await gh.get_issue(
+        issue_number,
+        repo_full_name=(
+            f"{config.github.owner}/{target_entity}"
+            if target_entity in config.registry.repo_names
+            else None
+        ),
+    )
 
     if issue.state == "closed":
         return "issue_closed"
@@ -174,9 +195,11 @@ async def scheduled_delivery(
     message = format_next_issue_notification(issue)
     queue_scope_issue_numbers = {
         item.number
-        for item in await gh.list_open_issues(
-            f"for:{target_entity}",
-            repo_full_name=issue.repo_full_name or None,
+        for item in await list_open_queue_for_target(
+            config,
+            target_entity,
+            gh,
+            issue_repo_full_name=issue.repo_full_name,
         )
     }
     outcome = await safe_deliver(

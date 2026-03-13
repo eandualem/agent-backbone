@@ -122,8 +122,41 @@ class AgentActivityORM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session: Mapped[str] = mapped_column(Text, nullable=False)
     event: Mapped[str] = mapped_column(Text, nullable=False)
+    entity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    runtime: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_event_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parent_trace_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
     data: Mapped[str | None] = mapped_column(Text, nullable=True)
     ts: Mapped[str] = mapped_column(Text, nullable=False)
     received_at: Mapped[str] = mapped_column(Text, nullable=False)
 
-    __table_args__ = (Index("idx_activity_session_ts", "session", "ts"),)
+    __table_args__ = (
+        Index("idx_activity_session_ts", "session", "ts"),
+        Index("idx_activity_runtime_ts", "runtime", "ts"),
+        Index("idx_activity_trace", "trace_id"),
+        Index("idx_activity_source", "source_ref", "source_event_id"),
+    )
+
+
+class TelemetryCheckpointORM(Base):
+    """Incremental ingestion checkpoints for runtime telemetry sources."""
+
+    __tablename__ = "telemetry_checkpoints"
+
+    session: Mapped[str] = mapped_column(Text, primary_key=True)
+    source_ref: Mapped[str] = mapped_column(Text, primary_key=True)
+    runtime: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    entity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checkpoint: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    last_event_ts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("idx_telemetry_checkpoints_runtime", "runtime"),
+        Index("idx_telemetry_checkpoints_updated", "updated_at"),
+    )

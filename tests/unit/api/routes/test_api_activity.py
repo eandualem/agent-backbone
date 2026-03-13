@@ -61,7 +61,7 @@ class TestGetActivityTimeline:
     """Tests for GET /api/activity/timeline."""
 
     async def test_returns_merged_timeline(self, api_client, auth_headers, tmp_path, api_app):
-        """Returns events from actions, deliveries, and heartbeats merged by timestamp."""
+        """Returns events from actions, deliveries, heartbeats, and telemetry."""
         # Setup actions file
         state_dir = tmp_path / "state"
         state_dir.mkdir()
@@ -80,16 +80,59 @@ class TestGetActivityTimeline:
             outcome="delivered",
         )
         await db.record_heartbeat("feynman", "delivered", "test heartbeat")
+        await db.record_activity(
+            "ike",
+            "task.started",
+            None,
+            "4000.0",
+            entity="ike",
+            runtime="claude",
+        )
 
         resp = await api_client.get("/api/activity/timeline", headers=auth_headers)
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] == 3
+        assert data["total"] == 4
         types = {item["type"] for item in data["items"]}
         assert "action" in types
         assert "delivery" in types
         assert "heartbeat" in types
+        assert "telemetry" in types
+
+    async def test_projects_only_frontend_relevant_telemetry(
+        self, api_client, auth_headers, api_app, tmp_path
+    ):
+        """Timeline projects selected telemetry events and omits low-level tool chatter."""
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        _set_state_dir(api_app, str(state_dir))
+
+        db = api_app.state.db
+        await db.record_activity(
+            "ike",
+            "tool.started",
+            None,
+            "1000.0",
+            entity="ike",
+            runtime="claude",
+        )
+        await db.record_activity(
+            "ike",
+            "task.completed",
+            None,
+            "2000.0",
+            entity="ike",
+            runtime="claude",
+        )
+
+        resp = await api_client.get("/api/activity/timeline", headers=auth_headers)
+
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert any(item["type"] == "telemetry" for item in items)
+        assert any(item["summary"] == "claude task completed" for item in items)
+        assert all(item["summary"] != "claude tool.started" for item in items)
 
     async def test_sorted_by_timestamp_descending(
         self, api_client, auth_headers, tmp_path, api_app

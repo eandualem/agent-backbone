@@ -410,3 +410,155 @@ class TestAgentActivity:
 
         events = await db.get_activity("ike")
         assert events[0]["data"] is None
+
+    async def test_record_with_telemetry_metadata(self, db):
+        row_id = await db.record_activity(
+            "ike",
+            "tool.started",
+            '{"name":"exec_command"}',
+            "1709500001.123456",
+            entity="coding-agent",
+            runtime="codex",
+            source_kind="jsonl",
+            source_ref="/tmp/codex.jsonl",
+            source_event_id="event-1",
+            trace_id="turn-123",
+            parent_trace_id="session-456",
+            model="gpt-5.4",
+        )
+        assert row_id > 0
+
+        events = await db.get_activity("ike")
+        assert events[0]["runtime"] == "codex"
+        assert events[0]["source_ref"] == "/tmp/codex.jsonl"
+        assert events[0]["trace_id"] == "turn-123"
+        assert events[0]["model"] == "gpt-5.4"
+
+    async def test_has_activity_event(self, db):
+        await db.record_activity(
+            "ike",
+            "plan_notification_delivered",
+            '{"channel":"tmux"}',
+            "1709500001.123456",
+            source_ref="tmux:ike:1709500001.123456:/tmp/plan.md",
+        )
+
+        assert (
+            await db.has_activity_event(
+                session="ike",
+                event="plan_notification_delivered",
+                source_ref="tmux:ike:1709500001.123456:/tmp/plan.md",
+                since=1709500000.0,
+            )
+            is True
+        )
+        assert (
+            await db.has_activity_event(
+                session="ike",
+                event="plan_notification_delivered",
+                source_ref="tmux:ike:1709500001.123456:/tmp/plan.md",
+                since=1709500002.0,
+            )
+            is False
+        )
+
+    async def test_record_batch(self, db):
+        count = await db.record_activity_batch(
+            [
+                {
+                    "session": "ike",
+                    "event": "message.user",
+                    "entity": "coding-agent",
+                    "runtime": "claude",
+                    "source_kind": "jsonl",
+                    "source_ref": "/tmp/claude.jsonl",
+                    "source_event_id": "event-1",
+                    "trace_id": "trace-1",
+                    "parent_trace_id": None,
+                    "model": None,
+                    "data": '{"content":"hello"}',
+                    "ts": "101.0",
+                    "received_at": "2026-03-13T00:00:00.000000Z",
+                },
+                {
+                    "session": "ike",
+                    "event": "message.assistant",
+                    "entity": "coding-agent",
+                    "runtime": "claude",
+                    "source_kind": "jsonl",
+                    "source_ref": "/tmp/claude.jsonl",
+                    "source_event_id": "event-2",
+                    "trace_id": "trace-1",
+                    "parent_trace_id": None,
+                    "model": "claude-opus-4-1",
+                    "data": '{"content":"world"}',
+                    "ts": "102.0",
+                    "received_at": "2026-03-13T00:00:01.000000Z",
+                },
+            ]
+        )
+        assert count == 2
+
+        events = await db.get_activity("ike")
+        assert [event["event"] for event in events] == ["message.assistant", "message.user"]
+
+
+class TestTelemetryCheckpoints:
+    async def test_upsert_and_get_checkpoint(self, db):
+        await db.upsert_telemetry_checkpoint(
+            session="ike",
+            source_ref="/tmp/claude.jsonl",
+            runtime="claude",
+            source_kind="jsonl",
+            checkpoint={"offset": 128},
+            entity="coding-agent",
+            last_event_ts="1709500001.0",
+        )
+
+        checkpoint = await db.get_telemetry_checkpoint("ike", "/tmp/claude.jsonl")
+        assert checkpoint is not None
+        assert checkpoint["runtime"] == "claude"
+        assert checkpoint["checkpoint"] == {"offset": 128}
+        assert checkpoint["last_event_ts"] == "1709500001.0"
+
+    async def test_upsert_checkpoint_overwrites_cursor(self, db):
+        await db.upsert_telemetry_checkpoint(
+            session="ike",
+            source_ref="/tmp/codex.jsonl",
+            runtime="codex",
+            source_kind="jsonl",
+            checkpoint={"offset": 10},
+        )
+        await db.upsert_telemetry_checkpoint(
+            session="ike",
+            source_ref="/tmp/codex.jsonl",
+            runtime="codex",
+            source_kind="jsonl",
+            checkpoint={"offset": 42},
+            last_event_ts="222.0",
+        )
+
+        checkpoint = await db.get_telemetry_checkpoint("ike", "/tmp/codex.jsonl")
+        assert checkpoint is not None
+        assert checkpoint["checkpoint"] == {"offset": 42}
+        assert checkpoint["last_event_ts"] == "222.0"
+
+    async def test_query_checkpoints_filters_by_runtime(self, db):
+        await db.upsert_telemetry_checkpoint(
+            session="ike",
+            source_ref="/tmp/claude.jsonl",
+            runtime="claude",
+            source_kind="jsonl",
+            checkpoint={"offset": 1},
+        )
+        await db.upsert_telemetry_checkpoint(
+            session="ike",
+            source_ref="/tmp/codex.jsonl",
+            runtime="codex",
+            source_kind="jsonl",
+            checkpoint={"offset": 2},
+        )
+
+        checkpoints = await db.query_telemetry_checkpoints(runtime="codex")
+        assert len(checkpoints) == 1
+        assert checkpoints[0]["source_ref"] == "/tmp/codex.jsonl"

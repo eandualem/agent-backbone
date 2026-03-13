@@ -174,6 +174,17 @@ class TestInferStateFromPane:
         result = infer_state_from_pane(pane)
         assert result.state == AgentState.IDLE
 
+    def test_idle_codex_prompt_ignores_stale_claude_history(self):
+        """Historical runtime text above the prompt must not force a wrong adapter."""
+        pane = (
+            "Previous diagnostic output: Claude Code runtime mismatch\n"
+            "More history about opus 4.6 and delivery retries\n\n"
+            "\u203a Explain this codebase\n\n"
+            "  gpt-5.4 xhigh \u00b7 88% left \u00b7 ~/ws/core/code/WF/agent-backbone"
+        )
+        result = infer_state_from_pane(pane)
+        assert result.state == AgentState.IDLE
+
     def test_codex_placeholder_is_not_pending_input(self):
         """Codex's dim placeholder suggestion should not count as typed input."""
         pane = "\x1b[1m\u203a\x1b[0m \x1b[2mImprove documentation in @filename\x1b[0m"

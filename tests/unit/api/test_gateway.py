@@ -130,3 +130,21 @@ class TestNormalizeEvent:
         payload = {"action": "deleted", "issue": {"number": 1, "labels": []}}
         event = normalize_event("issues", "deleted", payload, "delivery-4")
         assert event.event_type == EventType.UNKNOWN
+
+    def test_pull_request_opened(self):
+        payload = {
+            "action": "opened",
+            "repository": {"full_name": "eandualem/agent-backbone"},
+            "pull_request": {
+                "number": 73,
+                "title": "Add repo-local webhook routing",
+                "state": "open",
+                "html_url": "https://github.com/eandualem/agent-backbone/pull/73",
+                "labels": [],
+            },
+        }
+        event = normalize_event("pull_request", "opened", payload, "delivery-pr-1")
+        assert event.event_type == EventType.PULL_REQUEST_OPENED
+        assert event.issue.number == 73
+        assert event.issue.is_pull_request is True
+        assert event.issue.repo_full_name == "eandualem/agent-backbone"

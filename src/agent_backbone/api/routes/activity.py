@@ -17,6 +17,15 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["activity"])
 
+_TIMELINE_TELEMETRY_EVENTS = [
+    "session.started",
+    "session.stopped",
+    "task.started",
+    "task.completed",
+    "runtime.error",
+    "tool.error",
+]
+
 
 def _load_action_events(config: BackboneConfig, limit: int) -> list[ActivityEvent]:
     """Load action events from github-actions.jsonl."""
@@ -92,6 +101,43 @@ async def _load_heartbeat_events(db: BackboneDB, limit: int) -> list[ActivityEve
     return events
 
 
+async def _load_telemetry_events(db: BackboneDB, limit: int) -> list[ActivityEvent]:
+    """Load lightweight timeline projections from normalized telemetry rows."""
+    rows = await db.query_activity(limit=limit, events=_TIMELINE_TELEMETRY_EVENTS)
+    events: list[ActivityEvent] = []
+    for row in rows:
+        try:
+            ts = float(row.get("ts", 0.0))
+        except (TypeError, ValueError):
+            ts = 0.0
+        events.append(
+            ActivityEvent(
+                ts=ts,
+                type="telemetry",
+                entity=row.get("entity") or row.get("session", "unknown"),
+                summary=_summarize_telemetry_row(row),
+            )
+        )
+    return events
+
+
+def _summarize_telemetry_row(row: dict) -> str:
+    """Render a concise activity timeline summary from a telemetry row."""
+    event = str(row.get("event") or "activity")
+    runtime = str(row.get("runtime") or "").strip()
+    runtime_prefix = f"{runtime} " if runtime else ""
+
+    labels = {
+        "session.started": "session started",
+        "session.stopped": "session stopped",
+        "task.started": "task started",
+        "task.completed": "task completed",
+        "runtime.error": "runtime error",
+        "tool.error": "tool error",
+    }
+    return f"{runtime_prefix}{labels.get(event, event)}".strip()
+
+
 @router.get("/activity", response_model=ListEnvelope[ActivityEvent])
 @router.get("/activity/timeline", response_model=ListEnvelope[ActivityEvent])
 async def get_activity_timeline(
@@ -100,15 +146,16 @@ async def get_activity_timeline(
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
 ):
-    """Merged activity timeline from actions, deliveries, and heartbeats."""
-    # Load from all three sources (fetch more than limit to allow merging)
+    """Merged activity timeline from actions, deliveries, heartbeats, and telemetry."""
+    # Load from all sources (fetch more than limit to allow merging)
     fetch_limit = limit + offset
     actions = _load_action_events(config, fetch_limit)
     deliveries = await _load_delivery_events(db, fetch_limit)
     heartbeats = await _load_heartbeat_events(db, fetch_limit)
+    telemetry = await _load_telemetry_events(db, fetch_limit)
 
     # Merge and sort
-    all_events = actions + deliveries + heartbeats
+    all_events = actions + deliveries + heartbeats + telemetry
     all_events.sort(key=lambda e: e.ts, reverse=True)
 
     # Apply offset and limit

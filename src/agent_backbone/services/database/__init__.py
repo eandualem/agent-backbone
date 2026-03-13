@@ -14,6 +14,7 @@ from agent_backbone.services.database.models import (
     HeartbeatORM,
     IssueDependencyORM,
     MessageQueueORM,
+    TelemetryCheckpointORM,
 )
 
 __all__ = [
@@ -31,4 +32,5 @@ __all__ = [
     "IssueDependencyORM",
     "MessageQueueORM",
     "PersistenceError",
+    "TelemetryCheckpointORM",
 ]

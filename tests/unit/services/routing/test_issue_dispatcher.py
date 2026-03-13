@@ -15,7 +15,7 @@ from agent_backbone.models import (
     ParsedLabels,
     parse_from_tag,
 )
-from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry
+from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry, RepoInfo
 from agent_backbone.services.routing import issue_dispatcher, resolve_session
 
 
@@ -281,6 +281,60 @@ class TestIssueDispatcher:
             result = await issue_dispatcher.fn(event, config, mock_db)
 
         assert "ike" in result.delivered
+
+    async def test_repo_local_issue_without_targets_routes_to_repo_session(self, mock_db):
+        registry = EntityRegistry(
+            entities={},
+            repos=[RepoInfo(org="WF", name="agent-backbone", path="/some/path")],
+        )
+        config = BackboneConfig(webhook_secret="test-secret", registry=registry)
+        labels = ParsedLabels(sender="unknown", targets=[], issue_type="")
+        issue = IssueData(
+            number=77,
+            title="Fix webhook fallback",
+            labels=labels,
+            repo_full_name="eandualem/agent-backbone",
+        )
+        event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
+        mock_gh = AsyncMock()
+        mock_gh.list_issues.return_value = [issue]
+
+        with (
+            _patch_resolve_sessions(["agent-backbone"]),
+            _patch_safe_deliver("delivered") as mock_deliver,
+        ):
+            result = await issue_dispatcher.fn(event, config, mock_db, mock_gh)
+
+        assert result.delivered == ["agent-backbone"]
+        mock_deliver.assert_awaited_once()
+        assert mock_gh.list_issues.await_args.kwargs["repo_full_name"] == "eandualem/agent-backbone"
+
+    async def test_pull_request_routes_to_repo_session_without_queue_gate(self, mock_db):
+        registry = EntityRegistry(
+            entities={},
+            repos=[RepoInfo(org="WF", name="agent-backbone", path="/some/path")],
+        )
+        config = BackboneConfig(webhook_secret="test-secret", registry=registry)
+        issue = IssueData(
+            number=78,
+            title="Add PR notification path",
+            labels=ParsedLabels(),
+            html_url="https://github.com/eandualem/agent-backbone/pull/78",
+            repo_full_name="eandualem/agent-backbone",
+            is_pull_request=True,
+        )
+        event = IssueEvent(event_type=EventType.PULL_REQUEST_OPENED, issue=issue)
+        mock_gh = AsyncMock()
+
+        with (
+            _patch_resolve_sessions(["agent-backbone"]),
+            _patch_safe_deliver("delivered") as mock_deliver,
+        ):
+            result = await issue_dispatcher.fn(event, config, mock_db, mock_gh)
+
+        assert result.delivered == ["agent-backbone"]
+        assert mock_deliver.await_args.kwargs["delivery_kind"] == "pull_request"
+        assert mock_deliver.await_args.kwargs["enforce_issue_queue"] is False
 
     async def test_comment_event_unknown_commenter(self, config, mock_db):
         """When the commenter is unknown (no from-tag, no JSONL), both sender

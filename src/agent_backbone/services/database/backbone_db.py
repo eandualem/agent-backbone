@@ -21,6 +21,7 @@ from agent_backbone.services.database import (
     _delivery_repo,
     _queue_repo,
     _state_repo,
+    _telemetry_repo,
 )
 from agent_backbone.services.database.base import Base
 from agent_backbone.services.database.models import (  # noqa: F401
@@ -32,6 +33,7 @@ from agent_backbone.services.database.models import (  # noqa: F401
     HeartbeatORM,
     IssueDependencyORM,
     MessageQueueORM,
+    TelemetryCheckpointORM,
 )
 
 metadata = Base.metadata
@@ -301,10 +303,41 @@ class BackboneDB:
         event: str,
         data: str | None,
         ts: str,
+        *,
+        entity: str | None = None,
+        runtime: str | None = None,
+        source_kind: str | None = None,
+        source_ref: str | None = None,
+        source_event_id: str | None = None,
+        trace_id: str | None = None,
+        parent_trace_id: str | None = None,
+        model: str | None = None,
     ) -> int:
         """Record an agent activity event. Returns the row ID."""
         async with self._engine.begin() as conn:
-            return await _activity_repo.record_activity(conn, session, event, data, ts)
+            return await _activity_repo.record_activity(
+                conn,
+                session,
+                event,
+                data,
+                ts,
+                entity=entity,
+                runtime=runtime,
+                source_kind=source_kind,
+                source_ref=source_ref,
+                source_event_id=source_event_id,
+                trace_id=trace_id,
+                parent_trace_id=parent_trace_id,
+                model=model,
+            )
+
+    async def record_activity_batch(
+        self,
+        rows: list[dict[str, str | None]],
+    ) -> int:
+        """Record a batch of activity events. Returns the number of inserted rows."""
+        async with self._engine.begin() as conn:
+            return await _activity_repo.record_activity_batch(conn, rows)
 
     async def get_activity(
         self,
@@ -315,6 +348,83 @@ class BackboneDB:
         """Query activity events for a session."""
         async with self._engine.begin() as conn:
             return await _activity_repo.get_activity(conn, session, limit, since)
+
+    async def query_activity(
+        self,
+        *,
+        limit: int = 50,
+        events: list[str] | None = None,
+    ) -> list[dict]:
+        """Query activity events across all sessions."""
+        async with self._engine.begin() as conn:
+            return await _activity_repo.query_activity(conn, limit=limit, events=events)
+
+    async def has_activity_event(
+        self,
+        *,
+        session: str,
+        event: str,
+        source_ref: str | None = None,
+        since: float | None = None,
+    ) -> bool:
+        """Whether a matching activity event exists for the session."""
+        async with self._engine.begin() as conn:
+            return await _activity_repo.has_activity_event(
+                conn,
+                session=session,
+                event=event,
+                source_ref=source_ref,
+                since=since,
+            )
+
+    async def get_telemetry_checkpoint(
+        self,
+        session: str,
+        source_ref: str,
+    ) -> dict | None:
+        """Fetch the checkpoint for one telemetry source."""
+        async with self._engine.begin() as conn:
+            return await _telemetry_repo.get_checkpoint(conn, session, source_ref)
+
+    async def query_telemetry_checkpoints(
+        self,
+        *,
+        session: str | None = None,
+        runtime: str | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        """List telemetry checkpoints with optional filters."""
+        async with self._engine.begin() as conn:
+            return await _telemetry_repo.query_checkpoints(
+                conn,
+                session=session,
+                runtime=runtime,
+                limit=limit,
+            )
+
+    async def upsert_telemetry_checkpoint(
+        self,
+        *,
+        session: str,
+        source_ref: str,
+        runtime: str,
+        source_kind: str,
+        checkpoint: dict[str, object] | None,
+        entity: str | None = None,
+        last_event_ts: str | None = None,
+    ) -> None:
+        """Create or update a telemetry checkpoint."""
+        async with self._engine.begin() as conn:
+            await _telemetry_repo.upsert_checkpoint(
+                conn,
+                session=session,
+                source_ref=source_ref,
+                runtime=runtime,
+                source_kind=source_kind,
+                checkpoint=checkpoint,
+                entity=entity,
+                last_event_ts=last_event_ts,
+            )
 
     # --- Issue dependencies (delegates to _queue_repo) ---
 

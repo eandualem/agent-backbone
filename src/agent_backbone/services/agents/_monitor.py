@@ -21,6 +21,7 @@ from agent_backbone.services.agents._escalation import (
 )
 from agent_backbone.services.agents._pending import deliver_pending_issues
 from agent_backbone.services.routing._dependencies import sync_dependencies
+from agent_backbone.services.telemetry import collect_active_session_telemetry
 from agent_backbone.services.terminal import handle_copy_mode_recovery, list_sessions
 
 log = logging.getLogger(__name__)
@@ -89,6 +90,16 @@ async def _monitor_agents_impl() -> dict:
         await handle_copy_mode_recovery(config, active_sessions)
     except Exception:
         log.exception("Copy-mode recovery failed (non-fatal)")
+
+    # Collect runtime-native telemetry into agent_activity.
+    try:
+        await collect_active_session_telemetry(
+            config=config,
+            db=db,
+            active_sessions=active_sessions,
+        )
+    except Exception:
+        log.exception("Telemetry collection failed (non-fatal)")
 
     # State-aware delivery loop
     return await deliver_pending_issues(config, active_sessions, db, gh)

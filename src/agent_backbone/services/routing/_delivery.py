@@ -153,7 +153,11 @@ async def safe_deliver(
     """
     allow_comment_interrupt = delivery_kind == "comment"
 
-    if enforce_issue_queue and _can_track_issue_delivery(db, issue_number, target_entity):
+    if (
+        delivery_kind == "issue"
+        and enforce_issue_queue
+        and _can_track_issue_delivery(db, issue_number, target_entity)
+    ):
         if await _has_successful_issue_delivery(db, issue_number, session_name):
             log.info(
                 "Suppressed duplicate issue delivery for #%d -> %s",
@@ -194,7 +198,15 @@ async def safe_deliver(
                 delivery_kind=delivery_kind,
             )
             return "delivered"
-        await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+        await _maybe_enqueue(
+            session_name,
+            message,
+            issue_number,
+            target_entity,
+            flow_name,
+            db,
+            delivery_kind=delivery_kind,
+        )
         await _record_issue_attempt(
             db,
             issue_number,
@@ -213,7 +225,15 @@ async def safe_deliver(
 
     # Determine deliverability
     if intelligence == SessionIntelligence.OFFLINE:
-        await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+        await _maybe_enqueue(
+            session_name,
+            message,
+            issue_number,
+            target_entity,
+            flow_name,
+            db,
+            delivery_kind=delivery_kind,
+        )
         await _record_issue_attempt(
             db,
             issue_number,
@@ -262,7 +282,15 @@ async def safe_deliver(
         return "grace_period"
 
     if intelligence == SessionIntelligence.COPY_MODE and not priority:
-        await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+        await _maybe_enqueue(
+            session_name,
+            message,
+            issue_number,
+            target_entity,
+            flow_name,
+            db,
+            delivery_kind=delivery_kind,
+        )
         await _record_issue_attempt(
             db,
             issue_number,
@@ -275,7 +303,15 @@ async def safe_deliver(
         return "copy_mode"
 
     if intelligence == SessionIntelligence.USER_INTERACTING and not priority:
-        await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+        await _maybe_enqueue(
+            session_name,
+            message,
+            issue_number,
+            target_entity,
+            flow_name,
+            db,
+            delivery_kind=delivery_kind,
+        )
         await _record_issue_attempt(
             db,
             issue_number,
@@ -288,7 +324,15 @@ async def safe_deliver(
         return "user_interacting"
 
     if intelligence == SessionIntelligence.UNKNOWN:
-        await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+        await _maybe_enqueue(
+            session_name,
+            message,
+            issue_number,
+            target_entity,
+            flow_name,
+            db,
+            delivery_kind=delivery_kind,
+        )
         await _record_issue_attempt(
             db,
             issue_number,
@@ -314,7 +358,15 @@ async def safe_deliver(
         return "delivered"
 
     # Delivery failed
-    await _maybe_enqueue(session_name, message, issue_number, target_entity, flow_name, db)
+    await _maybe_enqueue(
+        session_name,
+        message,
+        issue_number,
+        target_entity,
+        flow_name,
+        db,
+        delivery_kind=delivery_kind,
+    )
     await _record_issue_attempt(
         db,
         issue_number,
@@ -334,8 +386,12 @@ async def _maybe_enqueue(
     target_entity: str | None,
     flow_name: str,
     db: BackboneDB | None = None,
+    *,
+    delivery_kind: str = "issue",
 ) -> None:
     """Enqueue a message to SQLite if tracking info and db are provided."""
+    if delivery_kind != "issue":
+        return
     if issue_number is None or target_entity is None:
         return
     if db is None:

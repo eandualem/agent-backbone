@@ -15,10 +15,14 @@ _EXPECTED_TABLES = {
     "heartbeats",
     "issue_dependencies",
     "message_queue",
+    "telemetry_checkpoints",
 }
 
 _EXPECTED_INDEXES = {
     "idx_activity_session_ts",
+    "idx_activity_runtime_ts",
+    "idx_activity_source",
+    "idx_activity_trace",
     "idx_deliveries_issue",
     "idx_deliveries_entity",
     "idx_deliveries_outcome",
@@ -27,6 +31,8 @@ _EXPECTED_INDEXES = {
     "idx_heartbeats_agent",
     "idx_mq_status",
     "idx_mq_session",
+    "idx_telemetry_checkpoints_runtime",
+    "idx_telemetry_checkpoints_updated",
 }
 
 

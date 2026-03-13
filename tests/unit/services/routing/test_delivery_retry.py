@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.registry import RepoInfo
 
 
 @pytest.fixture
@@ -104,3 +105,28 @@ class TestRetryDeliveryAckCheck:
         mock_gh = AsyncMock()
         result = await retry_delivery.fn(config, delivery, db, mock_gh)
         assert result == "acknowledged"
+
+    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    async def test_retry_repo_local_issue_fetches_from_repo(self, mock_deliver, db, config):
+        await db.record_delivery(77, "agent-backbone", "agent-backbone", "offline")
+
+        mock_issue = MagicMock()
+        mock_issue.state = "open"
+        mock_issue.repo_full_name = "eandualem/agent-backbone"
+        mock_gh = AsyncMock()
+        mock_gh.get_issue = AsyncMock(return_value=mock_issue)
+        mock_gh.list_issues = AsyncMock(return_value=[MagicMock(number=77)])
+        mock_deliver.return_value = "delivered"
+
+        config.registry.add_repo(RepoInfo(org="WF", name="agent-backbone", path="/some/path"))
+        delivery = {
+            "session_name": "agent-backbone",
+            "issue_number": 77,
+            "target_entity": "agent-backbone",
+        }
+
+        from agent_backbone.services.routing import retry_delivery
+
+        result = await retry_delivery.fn(config, delivery, db, mock_gh)
+        assert result == "retried"
+        assert mock_gh.get_issue.await_args.kwargs["repo_full_name"] == "eandualem/agent-backbone"

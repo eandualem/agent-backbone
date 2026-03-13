@@ -26,6 +26,7 @@ _MAX_SUBMIT_ATTEMPTS = 2
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
 _BOX_CHARS = "\u2500\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u253c\u2501"
+_PROMPT_START_CHARS = ">$\u276f\u203a%#"
 _WORKING_STATES = frozenset({AgentState.PROCESSING_ISSUE, AgentState.BUSY, AgentState.STARTING})
 
 
@@ -126,6 +127,36 @@ def _runtime_from_prompt_line(pane_content: str) -> TerminalRuntime:
             return TerminalRuntime.CODEX
         break
     return TerminalRuntime.UNKNOWN
+
+
+def _runtime_analysis_line_pairs(pane_content: str) -> list[tuple[str, str]]:
+    """Narrow runtime matching to the active prompt region near the pane tail."""
+    pairs = _prompt_tail_line_pairs(pane_content)
+    if not pairs:
+        return []
+
+    prompt_idx: int | None = None
+    for i in range(len(pairs) - 1, -1, -1):
+        stripped = pairs[i][1].strip()
+        if not stripped or all(ch in _BOX_CHARS for ch in stripped):
+            continue
+        if stripped[0] in _PROMPT_START_CHARS:
+            prompt_idx = i
+            break
+
+    if prompt_idx is None:
+        return pairs[-6:]
+
+    return pairs[prompt_idx : min(len(pairs), prompt_idx + 3)]
+
+
+def _runtime_analysis_text(pane_content: str) -> str:
+    """Sanitized active-tail text used for runtime marker detection."""
+    return "\n".join(
+        sanitized.strip().lower()
+        for _, sanitized in _runtime_analysis_line_pairs(pane_content)
+        if sanitized.strip()
+    )
 
 
 def _normalize_runtime(value: str | None) -> TerminalRuntime:
@@ -296,7 +327,7 @@ class TerminalAdapter(ABC):
 
     def matches_runtime(self, pane_content: str) -> bool:
         """Whether the pane appears to belong to this runtime."""
-        lowered = sanitize_pane_content(pane_content).lower()
+        lowered = _runtime_analysis_text(pane_content)
         return any(marker in lowered for marker in self.runtime_markers)
 
     def _matches_prompt_line(self, line: str) -> bool:
@@ -417,10 +448,10 @@ def detect_runtime_from_pane(pane_content: str) -> TerminalRuntime:
 
     for runtime in (
         TerminalRuntime.GEMINI,
-        TerminalRuntime.CLAUDE,
-        TerminalRuntime.CODEX,
         TerminalRuntime.OPENCODE,
         TerminalRuntime.CURSOR,
+        TerminalRuntime.CODEX,
+        TerminalRuntime.CLAUDE,
     ):
         adapter = get_terminal_adapter(runtime)
         if adapter.matches_runtime(pane_content):

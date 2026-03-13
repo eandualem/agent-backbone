@@ -83,6 +83,16 @@ def format_issue_notification(issue: IssueData) -> str:
     )
 
 
+def format_pull_request_notification(issue: IssueData) -> str:
+    """Format a new pull-request notification for repo-local delivery."""
+    repo_full_name = issue.repo_full_name or _repo_from_html_url(issue.html_url) or "unknown repo"
+    return (
+        f"[via:github pr:{issue.number}] "
+        f'New pull request in {repo_full_name}: #{issue.number} "{issue.title}". '
+        f"Review at: {issue.html_url}"
+    )
+
+
 def format_comment_notification(
     issue: IssueData,
     comment: CommentData,

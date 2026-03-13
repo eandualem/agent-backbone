@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -25,6 +26,7 @@ _escalation_dedup: dict[tuple[str, str], float] = {}
 
 # Module-level plan notification dedup: (session, plan_file) → monotonic timestamp
 _plan_notify_dedup: dict[tuple[str, str], float] = {}
+_PLAN_NOTIFY_EVENT = "plan_notification_delivered"
 
 
 async def safe_deliver(*args, **kwargs):
@@ -63,6 +65,73 @@ def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
 
     _escalation_dedup[key] = now
     return True
+
+
+def _plan_notification_source_ref(
+    *,
+    channel: str,
+    recipient: str,
+    plan_file: str,
+    plan_title: str,
+    plan_timestamp: float,
+) -> str:
+    """Stable identity for one plan-notification delivery target."""
+    plan_identity = plan_file or plan_title or "<untitled>"
+    return f"{channel}:{recipient}:{plan_timestamp:.6f}:{plan_identity}"
+
+
+async def _plan_notification_already_sent(
+    session_name: str,
+    source_ref: str,
+    dedup_seconds: int,
+    db: BackboneDB | None,
+) -> bool:
+    """Check in-memory and persisted dedup for plan notifications."""
+    cache_key = (session_name, source_ref)
+    if cache_key in _plan_notify_dedup:
+        return True
+    if db is None:
+        return False
+
+    try:
+        recent = await db.has_activity_event(
+            session=session_name,
+            event=_PLAN_NOTIFY_EVENT,
+            source_ref=source_ref,
+            since=time.time() - dedup_seconds,
+        )
+        if recent is True:
+            _plan_notify_dedup[cache_key] = time.monotonic()
+            return True
+    except Exception:
+        log.exception("Failed to query persisted plan notification dedup (non-fatal)")
+    return False
+
+
+async def _record_plan_notification(
+    session_name: str,
+    entity: str,
+    source_ref: str,
+    payload: dict[str, str],
+    db: BackboneDB | None,
+) -> None:
+    """Record successful plan notification delivery for reload-safe dedup."""
+    _plan_notify_dedup[(session_name, source_ref)] = time.monotonic()
+    if db is None:
+        return
+
+    try:
+        await db.record_activity(
+            session_name,
+            _PLAN_NOTIFY_EVENT,
+            json.dumps(payload, sort_keys=True),
+            str(time.time()),
+            entity=entity,
+            source_kind="plan_notification",
+            source_ref=source_ref,
+        )
+    except Exception:
+        log.exception("Failed to persist plan notification dedup marker (non-fatal)")
 
 
 @task
@@ -297,8 +366,22 @@ async def check_plan_waiting(
         plan_title = snapshot.plan_title or "Untitled plan"
 
         # Telegram notification
-        tg_dedup_key = (session_name, plan_file)
-        if notification_chat_id and telegram_token and tg_dedup_key not in _plan_notify_dedup:
+        plan_timestamp = snapshot.timestamp or 0.0
+
+        tg_source_ref = _plan_notification_source_ref(
+            channel="telegram",
+            recipient=str(notification_chat_id),
+            plan_file=plan_file,
+            plan_title=plan_title,
+            plan_timestamp=plan_timestamp,
+        )
+        if (
+            notification_chat_id
+            and telegram_token
+            and not await _plan_notification_already_sent(
+                session_name, tg_source_ref, plan_dedup_seconds, db
+            )
+        ):
             msg = (
                 f"\U0001f4cb Plan waiting — {entity}\n"
                 f"Title: {plan_title}\n\n"
@@ -309,19 +392,47 @@ async def check_plan_waiting(
                 telegram_token, notification_chat_id, msg
             )
             if sent:
-                _plan_notify_dedup[tg_dedup_key] = now
+                await _record_plan_notification(
+                    session_name,
+                    entity,
+                    tg_source_ref,
+                    {
+                        "channel": "telegram",
+                        "recipient": str(notification_chat_id),
+                        "plan_file": plan_file,
+                        "plan_title": plan_title,
+                    },
+                    db,
+                )
                 log.info("Sent plan-waiting Telegram notification for %s", entity)
 
         # Orchestrator tmux notification
         orchestrator = _resolve_orchestrator(session_name, config)
         if orchestrator:
             orch_session = config.registry.sessions_map.get(orchestrator)
-            orch_dedup_key = (session_name, f"orch:{plan_file}")
             if (
                 orch_session
                 and orch_session in active_sessions
-                and orch_dedup_key not in _plan_notify_dedup
+                and not await _plan_notification_already_sent(
+                    session_name,
+                    _plan_notification_source_ref(
+                        channel="tmux",
+                        recipient=orch_session,
+                        plan_file=plan_file,
+                        plan_title=plan_title,
+                        plan_timestamp=plan_timestamp,
+                    ),
+                    plan_dedup_seconds,
+                    db,
+                )
             ):
+                orch_source_ref = _plan_notification_source_ref(
+                    channel="tmux",
+                    recipient=orch_session,
+                    plan_file=plan_file,
+                    plan_title=plan_title,
+                    plan_timestamp=plan_timestamp,
+                )
                 orch_msg = format_plan_notification(
                     session_name,
                     entity,
@@ -331,7 +442,18 @@ async def check_plan_waiting(
                 )
                 outcome = await safe_deliver(orch_session, orch_msg, config, db=db, priority=True)
                 if outcome == "delivered":
-                    _plan_notify_dedup[orch_dedup_key] = now
+                    await _record_plan_notification(
+                        session_name,
+                        entity,
+                        orch_source_ref,
+                        {
+                            "channel": "tmux",
+                            "recipient": orch_session,
+                            "plan_file": plan_file,
+                            "plan_title": plan_title,
+                        },
+                        db,
+                    )
                     log.info(
                         "Sent plan notification to orchestrator %s for %s",
                         orchestrator,
