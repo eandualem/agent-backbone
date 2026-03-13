@@ -32,7 +32,7 @@ from agent_backbone.services.agents import (
     check_plan_waiting,
     monitor_agents,
 )
-from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry, RepoInfo
+from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
 
 # Patch target prefixes (keep patch() lines under 100 chars)
 _MON = "agent_backbone.services.agents._monitor"
@@ -52,28 +52,26 @@ def _make_registry(names: list[str]) -> EntityRegistry:
 
 
 def _make_role_registry() -> EntityRegistry:
-    """Registry with a shared Bell role and two concrete sessions."""
+    """Registry with two concrete Bell role-instance sessions."""
     return EntityRegistry(
         entities={
-            "bell": EntityEntry(
-                session="bell",
+            "bell-wf": EntityEntry(
+                session="bell-wf",
                 home="~/ws/core/code/WF/bell",
                 groups=["orchestrators"],
                 figure="",
                 role="",
-                entity_type="role",
-                instances={
-                    "wf": EntityInstance(
-                        home="~/ws/core/code/WF/bell",
-                        session="bell-wf",
-                        organization="WF",
-                    ),
-                    "loveble": EntityInstance(
-                        home="~/ws/core/code/Loveble/bell",
-                        session="bell-loveble",
-                        organization="Loveble",
-                    ),
-                },
+                organization="WF",
+                entity_type="role-instance",
+            ),
+            "bell-loveble": EntityEntry(
+                session="bell-loveble",
+                home="~/ws/core/code/Loveble/bell",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                organization="Loveble",
+                entity_type="role-instance",
             )
         },
         repos=[],
@@ -88,6 +86,13 @@ def clear_escalation_dedup():
     yield
     _escalation_dedup.clear()
     _plan_notify_dedup.clear()
+
+
+@pytest.fixture(autouse=True)
+def patch_copy_mode_recovery():
+    """Keep monitor tests focused on the behavior under test."""
+    with patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock) as mock_recovery:
+        yield mock_recovery
 
 
 @pytest.fixture
@@ -389,6 +394,46 @@ class TestMonitorAgentsIntegration:
         assert result["ike"] == f"delivered_#{pending_issue.number}"
 
     @pytest.mark.asyncio
+    async def test_monitor_runs_copy_mode_recovery(self, patch_copy_mode_recovery):
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+
+        config = _make_monitor_config()
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(
+                f"{_PEN}.get_agent_state",
+                new_callable=AsyncMock,
+                return_value=idle_snapshot,
+            ),
+            patch(
+                f"{_PEN}.check_pending_issues",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            await monitor_agents.fn()
+
+        patch_copy_mode_recovery.assert_awaited_once_with(config, {"ike"})
+
+    @pytest.mark.asyncio
     async def test_delivers_to_idle_agent(self):
         idle_snapshot = StateSnapshot(
             state=AgentState.IDLE,
@@ -442,16 +487,22 @@ class TestMonitorAgentsIntegration:
         mock_deliver.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_role_target_delivers_to_each_idle_instance_session(self):
+    async def test_role_instance_targets_query_concrete_labels(self):
         idle_snapshot = StateSnapshot(
             state=AgentState.IDLE,
             source="pull",
         )
-        pending_issue = IssueData(
+        wf_issue = IssueData(
             number=18,
-            title="[task] Shared Bell work",
+            title="[task] Bell WF work",
             state="open",
-            labels=ParsedLabels(sender="feynman", targets=["bell"], issue_type="task"),
+            labels=ParsedLabels(sender="feynman", targets=["bell-wf"], issue_type="task"),
+        )
+        loveble_issue = IssueData(
+            number=19,
+            title="[task] Bell Loveble work",
+            state="open",
+            labels=ParsedLabels(sender="feynman", targets=["bell-loveble"], issue_type="task"),
         )
 
         config = _make_monitor_config(registry=_make_role_registry())
@@ -459,6 +510,14 @@ class TestMonitorAgentsIntegration:
         mock_db.is_acknowledged.return_value = False
         mock_db.query_deliveries.return_value = []
         mock_gh = AsyncMock()
+        queried_entities: list[str] = []
+
+        async def mock_check_pending(config, entity, gh):
+            queried_entities.append(entity)
+            return {
+                "bell-wf": [wf_issue],
+                "bell-loveble": [loveble_issue],
+            }.get(entity, [])
 
         init_flow_services(config=config, db=mock_db, gh=mock_gh)
 
@@ -479,8 +538,7 @@ class TestMonitorAgentsIntegration:
             ),
             patch(
                 f"{_PEN}.check_pending_issues",
-                new_callable=AsyncMock,
-                return_value=[pending_issue],
+                side_effect=mock_check_pending,
             ),
             patch(
                 f"{_PEN}.safe_deliver",
@@ -491,9 +549,10 @@ class TestMonitorAgentsIntegration:
         ):
             result = await monitor_agents.fn()
 
-        assert result["bell:bell-wf"] == "delivered_#18"
-        assert result["bell:bell-loveble"] == "delivered_#18"
+        assert result["bell-wf"] == "delivered_#18"
+        assert result["bell-loveble"] == "delivered_#19"
         assert mock_deliver.await_count == 2
+        assert queried_entities == ["bell-wf", "bell-loveble"]
 
     @pytest.mark.asyncio
     async def test_monitor_skips_recently_delivered(self):

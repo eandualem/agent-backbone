@@ -15,7 +15,11 @@ from agent_backbone.api.deps import (
     get_tmux_service,
 )
 from agent_backbone.api.models import EnrichedAgent, ServiceHealth, SystemDigest
-from agent_backbone.api.routes.agents import _build_enriched_agent
+from agent_backbone.api.routes.agents import (
+    _build_enriched_agent,
+    _listable_registry_sessions,
+    _reserved_agent_sessions,
+)
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
@@ -40,7 +44,8 @@ async def get_system_status(
     active_set = set(active)
 
     agents: list[EnrichedAgent] = []
-    for entity, session in config.registry.sessions_map.items():
+    registry_sessions = _listable_registry_sessions(config)
+    for entity, session in registry_sessions.items():
         agent = await _build_enriched_agent(
             session,
             entity,
@@ -50,7 +55,7 @@ async def get_system_status(
             agent_type="named_entity",
         )
         agents.append(agent)
-    named_sessions = set(config.registry.sessions_map.values())
+    named_sessions = _reserved_agent_sessions(config)
     service_sessions = config.entities.service_sessions
     for session in active:
         if session not in named_sessions and session not in service_sessions:

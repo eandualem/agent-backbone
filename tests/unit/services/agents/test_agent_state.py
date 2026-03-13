@@ -184,6 +184,25 @@ class TestInferStateFromPane:
         pane = "\u203a Review the delivery retry logic"
         assert prompt_has_pending_input(pane) is True
 
+    def test_codex_queued_input_footer_is_ignored_for_prompt_detection(self):
+        """Codex's queue footer below the prompt should not hide pending input."""
+        pane = (
+            "\u203a Second live inbound delivery test.\n\n"
+            "  tab to queue message                                        98% context left"
+        )
+        assert prompt_has_pending_input(pane) is True
+
+    def test_codex_queued_message_banner_is_ignored_for_prompt_detection(self):
+        """Queued-message instructional chrome should not hide the live prompt."""
+        pane = (
+            "\u2022 Messages to be submitted after next tool call "
+            "(press esc to interrupt and send immediately)\n"
+            "  \u21b3 [via:backbone from:bell] delivery check only.\n\n"
+            "\u203a Summarize recent commits\n\n"
+            "  gpt-5.4 xhigh \u00b7 59% left \u00b7 ~/ws/core/code/WF/agent-backbone"
+        )
+        assert prompt_has_pending_input(pane) is True
+
     def test_idle_standard_prompt_with_trailing_lines(self):
         """Non-prompt trailing content returns UNKNOWN."""
         pane = "user@host $\nsome trailing output"

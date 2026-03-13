@@ -50,14 +50,8 @@ class EntityRegistry:
     def delivery_sessions_for(self, entity_name: str) -> list[str]:
         """Concrete tmux sessions that should receive deliveries for an entity."""
         entry = self.entities.get(entity_name)
-        if not entry:
+        if not entry or entry.entity_type == "role":
             return []
-
-        sessions: list[str] = [
-            instance.session for instance in entry.instances.values() if instance.session
-        ]
-        if sessions:
-            return list(dict.fromkeys(sessions))
 
         if entry.session is None:
             return []
@@ -77,12 +71,38 @@ class EntityRegistry:
         """Session name -> entity name, including concrete role-instance sessions."""
         reverse: dict[str, str] = {}
         for name, entry in self.entities.items():
-            if entry.session is not None:
+            if (
+                entry.session is not None
+                and entry.entity_type != "role"
+                and entry.session not in reverse
+            ):
                 reverse[entry.session] = name
             for instance in entry.instances.values():
-                if instance.session is not None:
-                    reverse[instance.session] = name
+                if instance.session is not None and instance.session not in reverse:
+                    reverse[instance.session] = instance.session
         return reverse
+
+    @cached_property
+    def concrete_sessions_map(self) -> dict[str, str]:
+        """Listable entity/session pairs for concrete tmux sessions only."""
+        sessions: dict[str, str] = {}
+        seen_sessions: set[str] = set()
+
+        for name, entry in self.entities.items():
+            if entry.entity_type == "role":
+                for instance in entry.instances.values():
+                    if instance.session is None or instance.session in seen_sessions:
+                        continue
+                    sessions[instance.session] = instance.session
+                    seen_sessions.add(instance.session)
+                continue
+
+            if entry.session is None or entry.session in seen_sessions:
+                continue
+            sessions[name] = entry.session
+            seen_sessions.add(entry.session)
+
+        return sessions
 
     @cached_property
     def all_entities(self) -> list[str]:
@@ -116,6 +136,35 @@ class EntityRegistry:
         """Repo name -> filesystem path."""
         return {r.name: r.path for r in self.repos}
 
+    def entry_for_session(self, session: str) -> EntityEntry | None:
+        """Return the concrete entity entry for a tmux session."""
+        direct_entry = self.entities.get(session)
+        if (
+            direct_entry is not None
+            and direct_entry.session == session
+            and direct_entry.entity_type != "role"
+        ):
+            return direct_entry
+
+        for entry in self.entities.values():
+            if entry.entity_type != "role":
+                continue
+            for instance in entry.instances.values():
+                if instance.session != session:
+                    continue
+                return EntityEntry(
+                    session=instance.session,
+                    home=instance.home or entry.home,
+                    groups=list(entry.groups),
+                    figure=entry.figure,
+                    role=entry.role,
+                    organization=instance.organization,
+                    entity_type="role-instance",
+                    role_definition=entry.role_definition,
+                )
+
+        return None
+
     def add_repo(self, repo: RepoInfo) -> None:
         """Add a repo to the registry and invalidate cached properties."""
         if any(r.name == repo.name and r.org == repo.org for r in self.repos):
@@ -127,7 +176,7 @@ class EntityRegistry:
     def orchestrator_for_repo(self, repo_name: str) -> str | None:
         """Find the orchestrator entity for a repo by org matching.
 
-        Returns entity name (e.g., 'bell') or None if no match.
+        Returns the concrete orchestrator session/entity name or None if no match.
         """
         org = None
         for repo in self.repos:
@@ -141,6 +190,16 @@ class EntityRegistry:
                 continue
             if entry.organization == org:
                 return name
-            if any(instance.organization == org for instance in entry.instances.values()):
-                return name
         return None
+
+    def organizations_for_repo(self, repo_name: str) -> frozenset[str]:
+        """Return all known organizations for a repo name."""
+        repo_key = repo_name.casefold()
+        return frozenset(repo.org for repo in self.repos if repo.name.casefold() == repo_key)
+
+    def organization_for_repo(self, repo_name: str) -> str | None:
+        """Return the unique organization for a repo name, if it maps cleanly."""
+        organizations = self.organizations_for_repo(repo_name)
+        if len(organizations) != 1:
+            return None
+        return next(iter(organizations))

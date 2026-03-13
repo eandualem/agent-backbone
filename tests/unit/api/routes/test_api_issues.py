@@ -8,9 +8,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from agent_backbone.api.deps import get_db, get_delivery_service, get_github
+from agent_backbone.api.deps import get_config, get_db, get_delivery_service, get_github
+from agent_backbone.config import BackboneConfig
 from agent_backbone.models import CommentData, IssueData, ParsedLabels
 from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.registry import EntityEntry, EntityRegistry
 
 # --- Fixtures ---
 
@@ -254,6 +256,46 @@ class TestCreateIssue:
         payload = {"title": "", "body": "empty title"}
         resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
         assert resp.status_code == 400
+
+    async def test_create_issue_rejects_abstract_shared_role_target(
+        self, api_app, issues_client, auth_headers
+    ):
+        api_app.dependency_overrides[get_config] = lambda: BackboneConfig(
+            webhook_secret="test-secret",
+            registry=EntityRegistry(
+                entities={
+                    "bell-wf": EntityEntry(
+                        session="bell-wf",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="Bell",
+                        role="Org Orchestrator",
+                        organization="WF",
+                        entity_type="role-instance",
+                    ),
+                    "bell-loveble": EntityEntry(
+                        session="bell-loveble",
+                        home="~/ws/core/code/Loveble/bell",
+                        groups=["orchestrators"],
+                        figure="Bell",
+                        role="Org Orchestrator",
+                        organization="Loveble",
+                        entity_type="role-instance",
+                    ),
+                },
+                repos=[],
+            ),
+        )
+        payload = {
+            "title": "[task] Legacy shared role target",
+            "body": "## Context\nTest",
+            "labels": ["from:leo", "for:bell", "task"],
+        }
+        resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
+        api_app.dependency_overrides.pop(get_config, None)
+
+        assert resp.status_code == 400
+        assert "invalid issue target 'bell'" in resp.json()["detail"]
 
 
 class TestAddComment:

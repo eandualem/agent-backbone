@@ -5,9 +5,11 @@ from __future__ import annotations
 import time
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent_backbone.config import BackboneConfig, JarvisConfig, SessionBridgeConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry, RepoInfo
+from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
 from agent_backbone.services.routing import (
     SessionIntelligence,
     SessionProfile,
@@ -17,6 +19,7 @@ from agent_backbone.services.routing import (
     resolve_entity_sessions,
     safe_deliver,
 )
+from agent_backbone.services.routing._resolution import validate_issue_targets
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,6 +30,28 @@ _BUSY_SNAP = StateSnapshot(state=AgentState.BUSY, source="push")
 _PROCESSING_SNAP = StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="push")
 _PLAN_WAITING_SNAP = StateSnapshot(state=AgentState.PLAN_WAITING, source="push")
 _UNKNOWN_SNAP = StateSnapshot(state=AgentState.UNKNOWN, source="default")
+
+
+@pytest.fixture(autouse=True)
+def _patch_tmux_runtime_env():
+    """Keep runtime resolution inside unit tests by disabling tmux env lookups."""
+    with patch(
+        "agent_backbone.services.terminal._adapters.query_environment_var",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _patch_default_capture_pane():
+    """Default pane capture is empty unless a test provides a specific prompt surface."""
+    with patch(
+        "agent_backbone.services.routing._intelligence.capture_pane",
+        new_callable=AsyncMock,
+        return_value="",
+    ):
+        yield
 
 
 def _patch_list_sessions(sessions: list[str]):
@@ -410,91 +435,61 @@ class TestResolveEntitySession:
         result = await resolve_entity_session("ike", config)
         assert result == "ike"
 
-    async def test_role_entity_prefers_active_instance_session(self):
-        """Role entities can resolve through instance sessions when the base session is absent."""
+    async def test_validate_issue_targets_rejects_abstract_shared_roles(self):
+        """New issue creation must reject abstract shared-role aliases."""
         config = BackboneConfig(
             webhook_secret="test-secret",
             registry=EntityRegistry(
                 entities={
-                    "bell": EntityEntry(
-                        session="bell",
+                    "bell-wf": EntityEntry(
+                        session="bell-wf",
                         home="~/ws/core/code/WF/bell",
                         groups=["orchestrators"],
                         figure="",
                         role="Org Orchestrator",
-                        entity_type="role",
-                        instances={
-                            "wf": EntityInstance(
-                                home="~/ws/core/code/WF/bell",
-                                session="bell-wf",
-                                organization="WF",
-                            ),
-                            "loveble": EntityInstance(
-                                home="~/ws/core/code/Loveble/bell",
-                                session="bell-loveble",
-                                organization="Loveble",
-                            ),
-                        },
-                    )
+                        organization="WF",
+                        entity_type="role-instance",
+                    ),
+                    "bell-loveble": EntityEntry(
+                        session="bell-loveble",
+                        home="~/ws/core/code/Loveble/bell",
+                        groups=["orchestrators"],
+                        figure="",
+                        role="Org Orchestrator",
+                        organization="Loveble",
+                        entity_type="role-instance",
+                    ),
                 },
                 repos=[],
             ),
         )
 
-        async def _exists(session_name: str) -> bool:
-            return session_name == "bell-wf"
+        with pytest.raises(ValueError, match="invalid issue target 'bell'"):
+            validate_issue_targets(["bell"], config)
 
-        with patch(
-            "agent_backbone.services.routing._resolution.session_exists",
-            new_callable=AsyncMock,
-            side_effect=_exists,
-        ):
-            result = await resolve_entity_session(
-                "bell",
-                config,
-                issue_title="[task] WF/new-thing: follow-up",
-            )
-
-        assert result == "bell-wf"
-
-    async def test_role_entity_delivery_sessions_include_all_instances(self):
-        """Role entity delivery fans out to all concrete instance sessions."""
+    async def test_concrete_role_instance_target_resolves_directly(self):
+        """Concrete role-instance targets resolve like any other named entity."""
         config = BackboneConfig(
             webhook_secret="test-secret",
             registry=EntityRegistry(
                 entities={
-                    "bell": EntityEntry(
-                        session="bell",
+                    "bell-wf": EntityEntry(
+                        session="bell-wf",
                         home="~/ws/core/code/WF/bell",
                         groups=["orchestrators"],
                         figure="",
                         role="Org Orchestrator",
-                        entity_type="role",
-                        instances={
-                            "wf": EntityInstance(
-                                home="~/ws/core/code/WF/bell",
-                                session="bell-wf",
-                                organization="WF",
-                            ),
-                            "loveble": EntityInstance(
-                                home="~/ws/core/code/Loveble/bell",
-                                session="bell-loveble",
-                                organization="Loveble",
-                            ),
-                        },
-                    )
+                        organization="WF",
+                        entity_type="role-instance",
+                    ),
                 },
                 repos=[],
             ),
         )
 
-        result = await resolve_entity_sessions(
-            "bell",
-            config,
-            issue_title="[task] WF/new-thing: follow-up",
-        )
+        result = await resolve_entity_sessions("bell-wf", config)
 
-        assert result == ["bell-wf", "bell-loveble"]
+        assert result == ["bell-wf"]
 
     async def test_skip_set(self):
         """Entity in skip set ('elias') returns None."""
@@ -607,7 +602,7 @@ class TestSafeDeliver:
             result = await safe_deliver("ike", "Hello", config)
 
         assert result == "delivered"
-        mock_send.assert_called_once_with("ike", "Hello")
+        mock_send.assert_called_once_with("ike", "Hello", runtime_hint="unknown")
 
     async def test_offline_enqueues(self):
         """OFFLINE with issue_number + target_entity enqueues to DB."""

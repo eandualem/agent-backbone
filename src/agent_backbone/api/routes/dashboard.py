@@ -22,7 +22,11 @@ from agent_backbone.api.models import (
     EnrichedAgent,
     ServiceHealth,
 )
-from agent_backbone.api.routes.agents import _build_enriched_agent
+from agent_backbone.api.routes.agents import (
+    _build_enriched_agent,
+    _listable_registry_sessions,
+    _reserved_agent_sessions,
+)
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
@@ -60,9 +64,12 @@ async def _fetch_agents(
 
     coros: list = []
 
-    # Named entities (skip service entities)
-    for entity, session in config.registry.sessions_map.items():
-        reg_entry = config.registry.entities.get(entity)
+    # Registry-backed entities, including concrete role-instance sessions.
+    registry_sessions = _listable_registry_sessions(config)
+    for entity, session in registry_sessions.items():
+        reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(
+            entity
+        )
         if reg_entry and reg_entry.entity_type == "service":
             continue
         coros.append(
@@ -78,7 +85,7 @@ async def _fetch_agents(
         )
 
     # Discover coding agents from active tmux sessions
-    named_sessions = set(config.registry.sessions_map.values())
+    named_sessions = _reserved_agent_sessions(config)
     service_sessions = config.entities.service_sessions
     seen_coding: set[str] = set()
     for session in active_sessions:

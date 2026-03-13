@@ -135,12 +135,44 @@ class TestLoadEntityRegistry:
         entities = load_entity_registry(registry_file)
 
         assert entities["bell"].entity_type == "role"
-        assert entities["bell"].session == "bell"
+        assert entities["bell"].session is None
         assert entities["bell"].home == "~/ws/core/code/WF/bell"
         assert entities["bell"].role_definition == "~/orchestration/roles/bell/"
         assert entities["bell"].instances["wf"].session == "bell-wf"
         assert entities["bell"].instances["wf"].organization == "WF"
         assert entities["bell"].instances["loveble"].session == "bell-loveble"
+
+    def test_keeps_flat_role_instances_concrete(self, tmp_path):
+        data = {
+            "bell-wf": {
+                "session": "bell-wf",
+                "home": "~/ws/core/code/WF/bell",
+                "groups": ["orchestrators"],
+                "figure": "Alexander Graham Bell",
+                "role": "Org Orchestrator",
+                "organization": "WF",
+                "type": "role-instance",
+                "roleDefinition": "~/orchestration/roles/bell/",
+                "roleEntity": "bell",
+            },
+            "bell-loveble": {
+                "session": "bell-loveble",
+                "home": "~/ws/core/code/Loveble/bell",
+                "groups": ["orchestrators"],
+                "figure": "Alexander Graham Bell",
+                "role": "Org Orchestrator",
+                "organization": "Loveble",
+                "type": "role-instance",
+                "roleDefinition": "~/orchestration/roles/bell/",
+                "roleEntity": "bell",
+            },
+        }
+        registry_file = _write_registry_json(tmp_path / "entities.json", data)
+
+        entities = load_entity_registry(registry_file)
+
+        assert "bell" not in entities
+        assert entities["bell-wf"].entity_type == "role-instance"
 
     def test_raises_file_not_found_on_missing_file(self, tmp_path):
         missing = tmp_path / "does_not_exist.json"
@@ -275,6 +307,42 @@ class TestBuildRegistry:
         assert len(registry.entities) == 2
         assert len(registry.repos) == 0
 
+    def test_excludes_entity_home_paths_from_repo_discovery(self, tmp_path):
+        data = {
+            "bell-wf": {
+                "session": "bell-wf",
+                "home": str(tmp_path / "code" / "WF" / "bell"),
+                "groups": ["orchestrators"],
+                "figure": "Alexander Graham Bell",
+                "role": "Org Orchestrator",
+                "organization": "WF",
+                "type": "role-instance",
+                "roleDefinition": "~/orchestration/roles/bell/",
+                "roleEntity": "bell",
+            },
+            "bell-loveble": {
+                "session": "bell-loveble",
+                "home": str(tmp_path / "code" / "Loveble" / "bell"),
+                "groups": ["orchestrators"],
+                "figure": "Alexander Graham Bell",
+                "role": "Org Orchestrator",
+                "organization": "Loveble",
+                "type": "role-instance",
+                "roleDefinition": "~/orchestration/roles/bell/",
+                "roleEntity": "bell",
+            },
+        }
+        registry_file = _write_registry_json(tmp_path / "entities.json", data)
+
+        code_dir = tmp_path / "code"
+        (code_dir / "WF" / "bell").mkdir(parents=True)
+        (code_dir / "Loveble" / "bell").mkdir(parents=True)
+        (code_dir / "WF" / "agent-backbone").mkdir(parents=True)
+
+        registry = build_registry(registry_file, code_dir)
+
+        assert [(repo.org, repo.name) for repo in registry.repos] == [("WF", "agent-backbone")]
+
 
 # --- EntityRegistry computed properties ---
 
@@ -363,7 +431,7 @@ class TestEntityRegistrySessions:
     def test_entity_by_session_includes_role_instances(self):
         entities = {
             "bell": EntityEntry(
-                session="bell",
+                session=None,
                 home="~/ws/core/code/WF/bell/",
                 groups=["orchestrators"],
                 figure="",
@@ -385,16 +453,110 @@ class TestEntityRegistrySessions:
         }
         registry = EntityRegistry(entities=entities, repos=[])
 
-        assert registry.entity_by_session["bell"] == "bell"
-        assert registry.entity_by_session["bell-wf"] == "bell"
-        assert registry.entity_by_session["bell-loveble"] == "bell"
+        assert "bell" not in registry.entity_by_session
+        assert registry.entity_by_session["bell-wf"] == "bell-wf"
+        assert registry.entity_by_session["bell-loveble"] == "bell-loveble"
 
-    def test_delivery_sessions_for_role_returns_concrete_instances(self):
+    def test_entity_by_session_prefers_concrete_session_name(self):
+        entities = {
+            "bell": EntityEntry(
+                session=None,
+                home="~/ws/core/code/WF/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                entity_type="role",
+                instances={
+                    "wf": EntityInstance(
+                        home="~/ws/core/code/WF/bell/",
+                        session="bell-wf",
+                        organization="WF",
+                    ),
+                    "loveble": EntityInstance(
+                        home="~/ws/core/code/Loveble/bell/",
+                        session="bell-loveble",
+                        organization="Loveble",
+                    ),
+                },
+            ),
+            "bell-wf": EntityEntry(
+                session="bell-wf",
+                home="~/ws/core/code/WF/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                organization="WF",
+                entity_type="role-instance",
+            ),
+        }
+        registry = EntityRegistry(entities=entities, repos=[])
+
+        assert registry.entity_by_session["bell-wf"] == "bell-wf"
+
+    def test_concrete_sessions_map_prefers_role_instances_over_role_alias(self):
         entities = {
             "bell": EntityEntry(
                 session="bell",
                 home="~/ws/core/code/WF/bell/",
                 groups=["orchestrators"],
+                figure="Alexander Graham Bell",
+                role="Org Orchestrator",
+                entity_type="role",
+                instances={
+                    "wf": EntityInstance(
+                        home="~/ws/core/code/WF/bell/",
+                        session="bell-wf",
+                        organization="WF",
+                    ),
+                    "loveble": EntityInstance(
+                        home="~/ws/core/code/Loveble/bell/",
+                        session="bell-loveble",
+                        organization="Loveble",
+                    ),
+                },
+            )
+        }
+        registry = EntityRegistry(entities=entities, repos=[])
+
+        assert registry.concrete_sessions_map == {
+            "bell-wf": "bell-wf",
+            "bell-loveble": "bell-loveble",
+        }
+    def test_entry_for_session_materializes_role_instance(self):
+        entities = {
+            "bell": EntityEntry(
+                session=None,
+                home="~/ws/core/code/WF/bell/",
+                groups=["orchestrators"],
+                figure="Alexander Graham Bell",
+                role="Org Orchestrator",
+                entity_type="role",
+                role_definition="~/orchestration/roles/bell/",
+                instances={
+                    "wf": EntityInstance(
+                        home="~/ws/core/code/WF/bell/",
+                        session="bell-wf",
+                        organization="WF",
+                    ),
+                },
+            )
+        }
+        registry = EntityRegistry(entities=entities, repos=[])
+
+        entry = registry.entry_for_session("bell-wf")
+
+        assert entry is not None
+        assert entry.session == "bell-wf"
+        assert entry.entity_type == "role-instance"
+        assert entry.organization == "WF"
+        assert entry.role_definition == "~/orchestration/roles/bell/"
+
+    def test_delivery_sessions_for_role_returns_empty(self):
+        entities = {
+            "bell": EntityEntry(
+                session=None,
+                home="~/ws/core/code/WF/bell/",
+                groups=["orchestrators"],
                 figure="",
                 role="",
                 entity_type="role",
@@ -414,7 +576,7 @@ class TestEntityRegistrySessions:
         }
         registry = EntityRegistry(entities=entities, repos=[])
 
-        assert registry.delivery_sessions_for("bell") == ["bell-wf", "bell-loveble"]
+        assert registry.delivery_sessions_for("bell") == []
 
 
 class TestEntityRegistryAllEntities:
@@ -629,11 +791,11 @@ class TestEntityRegistryHome:
 
 
 class TestOrchestratorForRepo:
-    def test_role_instance_org_match_returns_base_entity(self):
-        """Role-based orchestrator entries resolve by instance organization."""
+    def test_role_entry_without_concrete_instance_returns_none(self):
+        """Abstract role entries are ignored for orchestrator resolution."""
         entities = {
             "bell": EntityEntry(
-                session="bell",
+                session=None,
                 home="~/ws/core/code/WF/bell/",
                 groups=["orchestrators"],
                 figure="",
@@ -653,7 +815,7 @@ class TestOrchestratorForRepo:
         ]
         registry = EntityRegistry(entities=entities, repos=repos)
 
-        assert registry.orchestrator_for_repo("agent-backbone") == "bell"
+        assert registry.orchestrator_for_repo("agent-backbone") is None
 
     def test_wf_repo_returns_bell(self):
         """WF org repo resolves to bell (WF orchestrator)."""
@@ -681,6 +843,54 @@ class TestOrchestratorForRepo:
         registry = EntityRegistry(entities=entities, repos=repos)
 
         assert registry.orchestrator_for_repo("agent-backbone") == "bell"
+
+    def test_flat_role_instances_return_concrete_session(self):
+        entities = {
+            "bell": EntityEntry(
+                session="bell",
+                home="~/ws/core/code/WF/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                entity_type="role",
+                instances={
+                    "wf": EntityInstance(
+                        home="~/ws/core/code/WF/bell/",
+                        session="bell-wf",
+                        organization="WF",
+                    ),
+                    "loveble": EntityInstance(
+                        home="~/ws/core/code/Loveble/bell/",
+                        session="bell-loveble",
+                        organization="Loveble",
+                    ),
+                },
+            ),
+            "bell-wf": EntityEntry(
+                session="bell-wf",
+                home="~/ws/core/code/WF/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                organization="WF",
+                entity_type="role-instance",
+            ),
+            "bell-loveble": EntityEntry(
+                session="bell-loveble",
+                home="~/ws/core/code/Loveble/bell/",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                organization="Loveble",
+                entity_type="role-instance",
+            ),
+        }
+        repos = [
+            RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+        ]
+        registry = EntityRegistry(entities=entities, repos=repos)
+
+        assert registry.orchestrator_for_repo("agent-backbone") == "bell-wf"
 
     def test_arclio_repo_returns_hamilton(self):
         """Arclio org repo resolves to hamilton."""
@@ -743,3 +953,26 @@ class TestOrchestratorForRepo:
         registry = EntityRegistry(entities=entities, repos=repos)
 
         assert registry.orchestrator_for_repo("platform-api") is None
+
+    def test_organization_for_repo_returns_unique_org(self):
+        entities = {}
+        repos = [
+            RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+        ]
+        registry = EntityRegistry(entities=entities, repos=repos)
+
+        assert registry.organization_for_repo("agent-backbone") == "WF"
+
+    def test_organization_for_repo_returns_none_when_ambiguous(self):
+        entities = {}
+        repos = [
+            RepoInfo(org="WF", name="shared-repo", path="/ws/core/code/WF/shared-repo"),
+            RepoInfo(
+                org="Loveble",
+                name="shared-repo",
+                path="/ws/core/code/Loveble/shared-repo",
+            ),
+        ]
+        registry = EntityRegistry(entities=entities, repos=repos)
+
+        assert registry.organization_for_repo("shared-repo") is None

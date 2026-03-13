@@ -9,10 +9,13 @@ import pytest
 
 from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
 from agent_backbone.services.terminal import (
+    TerminalRuntime,
     close_pane,
     close_window,
     create_layout,
     create_window,
+    detect_runtime_from_pane,
+    get_terminal_adapter,
     graceful_close,
     list_panes,
     list_sessions,
@@ -76,90 +79,178 @@ class TestSessionExists:
 
 class TestSendMessage:
     async def test_send_success(self):
-        with (
-            patch(
-                "agent_backbone.services.terminal._core.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.services.terminal._core.asyncio.create_subprocess_exec",
-                new_callable=AsyncMock,
-            ) as mock_exec,
-        ):
-            proc = AsyncMock()
-            proc.returncode = 0
-            proc.communicate = AsyncMock(return_value=(b"", b""))
-            mock_exec.return_value = proc
-
+        mock_adapter = AsyncMock()
+        mock_adapter.deliver_message = AsyncMock(return_value=True)
+        with patch(
+            "agent_backbone.services.terminal._core.capture_pane",
+            new_callable=AsyncMock,
+            return_value="\u203a ",
+        ), patch(
+            "agent_backbone.services.terminal._adapters.get_terminal_adapter_for_session",
+            new_callable=AsyncMock,
+            return_value=mock_adapter,
+        ) as mock_get_adapter:
             assert await send_message("ike", "hello") is True
-            # Called 3 times: load-buffer, paste-buffer, send-keys Enter
-            assert mock_exec.call_count == 3
+        mock_get_adapter.assert_awaited_once_with(
+            "ike",
+            runtime_hint=None,
+            pane_content="\u203a ",
+        )
+        mock_adapter.deliver_message.assert_awaited_once_with("ike", "hello")
 
     async def test_send_session_offline(self):
+        mock_adapter = AsyncMock()
+        mock_adapter.deliver_message = AsyncMock(return_value=False)
         with patch(
-            "agent_backbone.services.terminal._core.session_exists",
+            "agent_backbone.services.terminal._core.capture_pane",
             new_callable=AsyncMock,
-            return_value=False,
+            return_value="",
+        ), patch(
+            "agent_backbone.services.terminal._adapters.get_terminal_adapter_for_session",
+            new_callable=AsyncMock,
+            return_value=mock_adapter,
         ):
             assert await send_message("offline", "hello") is False
 
-    async def test_send_keys_failure(self):
+    async def test_passes_runtime_hint_to_adapter_resolution(self):
+        mock_adapter = AsyncMock()
+        mock_adapter.deliver_message = AsyncMock(return_value=True)
         with (
             patch(
-                "agent_backbone.services.terminal._core.session_exists",
+                "agent_backbone.services.terminal._core.capture_pane",
                 new_callable=AsyncMock,
-                return_value=True,
+                return_value="",
             ),
             patch(
-                "agent_backbone.services.terminal._core.asyncio.create_subprocess_exec",
+                "agent_backbone.services.terminal._adapters.get_terminal_adapter_for_session",
                 new_callable=AsyncMock,
-            ) as mock_exec,
+                return_value=mock_adapter,
+            ) as mock_get_adapter,
         ):
-            proc = AsyncMock()
-            proc.returncode = 1
-            proc.communicate = AsyncMock(return_value=(b"", b"error"))
-            mock_exec.return_value = proc
+            assert await send_message("ike", "hello", runtime_hint="codex") is True
+        mock_get_adapter.assert_awaited_once_with(
+            "ike",
+            runtime_hint="codex",
+            pane_content="",
+        )
 
-            assert await send_message("ike", "hello") is False
 
-    async def test_load_buffer_receives_stdin_data(self):
-        """load-buffer is called with stdin_data containing the encoded message."""
-        with (
-            patch(
-                "agent_backbone.services.terminal._core.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.services.terminal._core.asyncio.create_subprocess_exec",
-                new_callable=AsyncMock,
-            ) as mock_exec,
+class TestTerminalAdapters:
+    async def test_claude_adapter_submits_with_enter(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        with patch(
+            "agent_backbone.services.terminal._adapters._write_message_buffer",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_write, patch(
+            "agent_backbone.services.terminal._adapters._send_submit_key",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_submit, patch(
+            "agent_backbone.services.terminal._adapters.capture_pane",
+            new_callable=AsyncMock,
+            return_value="\u276f ",
+        ), patch(
+            "agent_backbone.services.terminal._adapters.asyncio.sleep",
+            new_callable=AsyncMock,
         ):
-            proc = AsyncMock()
-            proc.returncode = 0
-            proc.communicate = AsyncMock(return_value=(b"", b""))
-            mock_exec.return_value = proc
+            assert await adapter.deliver_message("ike", "hello") is True
+        mock_write.assert_awaited_once_with("ike", "hello")
+        mock_submit.assert_awaited_once_with("ike")
 
-            assert await send_message("ike", "test message") is True
+    async def test_codex_adapter_submits_and_retries_buffered_input(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CODEX)
+        with patch(
+            "agent_backbone.services.terminal._adapters._write_message_buffer",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "agent_backbone.services.terminal._adapters._send_submit_key",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_submit, patch(
+            "agent_backbone.services.terminal._adapters.capture_pane",
+            new_callable=AsyncMock,
+            side_effect=["\u203a follow up", "\u203a "],
+        ), patch(
+            "agent_backbone.services.terminal._adapters.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
+            assert await adapter.deliver_message("codex-repo", "hello") is True
+        assert mock_submit.await_count == 2
 
-            # First call is load-buffer — verify stdin pipe and message data
-            first_call = mock_exec.call_args_list[0]
-            assert "load-buffer" in first_call[0]
-            assert "-" in first_call[0]
-            assert first_call[1]["stdin"] == -1  # PIPE
-            # communicate was called with the message bytes
-            proc.communicate.assert_any_call(input=b"test message")
+    async def test_codex_adapter_interrupts_queued_delivery(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CODEX)
+        with patch(
+            "agent_backbone.services.terminal._adapters._write_message_buffer",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "agent_backbone.services.terminal._adapters._send_submit_key",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_submit, patch(
+            "agent_backbone.services.terminal._adapters._send_escape_key",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_escape, patch(
+            "agent_backbone.services.terminal._adapters.capture_pane",
+            new_callable=AsyncMock,
+            side_effect=[
+                "\u2022 Messages to be submitted after next tool call\n\u203a hello",
+                "\u203a ",
+            ],
+        ), patch(
+            "agent_backbone.services.terminal._adapters.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
+            assert await adapter.deliver_message("codex-repo", "hello") is True
+        mock_escape.assert_awaited_once_with("codex-repo")
+        assert mock_submit.await_count == 2
 
-            # Second call is paste-buffer
-            second_call = mock_exec.call_args_list[1]
-            assert "paste-buffer" in second_call[0]
-            assert "-d" in second_call[0]
+    async def test_gemini_adapter_submits_with_enter(self):
+        adapter = get_terminal_adapter(TerminalRuntime.GEMINI)
+        with patch(
+            "agent_backbone.services.terminal._adapters._write_message_buffer",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "agent_backbone.services.terminal._adapters._send_submit_key",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_submit, patch(
+            "agent_backbone.services.terminal._adapters.capture_pane",
+            new_callable=AsyncMock,
+            return_value="> ",
+        ), patch(
+            "agent_backbone.services.terminal._adapters.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
+            assert await adapter.deliver_message("gemini-repo", "hello") is True
+        mock_submit.assert_awaited_once_with("gemini-repo")
 
-            # Third call is send-keys Enter
-            third_call = mock_exec.call_args_list[2]
-            assert "send-keys" in third_call[0]
-            assert "Enter" in third_call[0]
+    def test_runtime_detection_matches_live_prompt_samples(self):
+        assert (
+            detect_runtime_from_pane(
+                "\u203a Explain this codebase\n"
+                "gpt-5.4 xhigh \u00b7 42% left \u00b7 ~/ws/core/code/WF/agent-backbone"
+            )
+            == TerminalRuntime.CODEX
+        )
+        assert (
+            detect_runtime_from_pane(
+                ">   Press 'Esc' for NORMAL mode.\n"
+                "[INSERT] /model Auto (Gemini 3)\n"
+                "? for shortcuts"
+            )
+            == TerminalRuntime.GEMINI
+        )
+        assert (
+            detect_runtime_from_pane(
+                "OpenCode\nAsk anything...\nctrl+t variants  tab agents  ctrl+p commands"
+            )
+            == TerminalRuntime.OPENCODE
+        )
 
 
 class TestListSessions:
@@ -207,6 +298,28 @@ class TestSendKeys:
             assert "-l" not in call_args
             assert "Enter" not in call_args
             assert "Escape" in call_args
+
+    async def test_send_keys_literal_uses_dash_l(self):
+        with (
+            patch(
+                "agent_backbone.services.terminal._core.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal._core.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+            ) as mock_exec,
+        ):
+            proc = AsyncMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_exec.return_value = proc
+
+            assert await send_keys("ike", "hello", literal=True) is True
+            call_args = mock_exec.call_args[0]
+            assert "-l" in call_args
+            assert "hello" in call_args
 
     async def test_send_keys_session_offline(self):
         with patch(

@@ -301,7 +301,7 @@ async def safe_deliver(
         return "unknown_state"
 
     # Deliverable: IDLE_READY or priority-bypassed COPY_MODE/USER_INTERACTING
-    if await send_message(session_name, message):
+    if await send_message(session_name, message, runtime_hint=profile.runtime):
         await _record_issue_attempt(
             db,
             issue_number,

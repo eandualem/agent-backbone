@@ -51,51 +51,76 @@ async def session_exists(session_name: str) -> bool:
     return rc == 0
 
 
-async def send_message(session_name: str, message: str) -> bool:
-    """Send a message to a tmux session.
+async def _send_submit_key(session_name: str) -> bool:
+    """Send Enter to submit the currently buffered prompt input."""
+    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, "Enter")
+    if rc != 0:
+        log.error("tmux send-keys Enter failed for '%s': %s", session_name, stderr.decode())
+        return False
+    return True
 
-    Returns True if delivery succeeded, False otherwise.
-    Uses load-buffer/paste-buffer to avoid keystroke interpretation.
-    """
+
+async def _send_escape_key(session_name: str) -> bool:
+    """Send Escape to interrupt active work and expose queued input."""
+    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, "Escape")
+    if rc != 0:
+        log.error("tmux send-keys Escape failed for '%s': %s", session_name, stderr.decode())
+        return False
+    return True
+
+
+async def _write_message_buffer(session_name: str, message: str) -> bool:
+    """Paste a message into the tmux session input buffer."""
     if not await session_exists(session_name):
         log.warning("tmux session '%s' not found — notification dropped", session_name)
         return False
 
-    # Load message into tmux buffer via stdin
     rc, _, stderr = await _run_tmux("load-buffer", "-", stdin_data=message.encode())
     if rc != 0:
         log.error("tmux load-buffer failed for '%s': %s", session_name, stderr.decode())
         return False
 
-    # Paste buffer into target session and delete it
     rc, _, stderr = await _run_tmux("paste-buffer", "-t", session_name, "-d")
     if rc != 0:
         log.error("tmux paste-buffer failed for '%s': %s", session_name, stderr.decode())
         return False
-
-    # Send Enter separately to submit
-    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, "Enter")
-    if rc != 0:
-        log.error("tmux send-keys Enter failed for '%s': %s", session_name, stderr.decode())
-        return False
-
-    log.info("Notification sent to tmux session '%s'", session_name)
     return True
 
 
-async def send_keys(session_name: str, keys: str) -> bool:
-    """Send raw tmux key sequence to a session (no -l flag, no Enter).
+async def send_message(
+    session_name: str,
+    message: str,
+    *,
+    runtime_hint: str | None = None,
+) -> bool:
+    """Send a message to a tmux session via the runtime-specific adapter."""
+    from agent_backbone.services.terminal._adapters import get_terminal_adapter_for_session
 
-    Unlike send_message(), this sends keys that tmux interprets as key names
-    or escape sequences. Used for special keys like Shift+Tab (Escape + [Z).
+    pane_content = await capture_pane(session_name, lines=80)
+    adapter = await get_terminal_adapter_for_session(
+        session_name,
+        runtime_hint=runtime_hint,
+        pane_content=pane_content,
+    )
+    return await adapter.deliver_message(session_name, message)
 
-    Returns True if delivery succeeded, False otherwise.
+
+async def send_keys(session_name: str, keys: str, *, literal: bool = False) -> bool:
+    """Send raw tmux keys to a session.
+
+    When ``literal`` is False, tmux interprets ``keys`` as key names or
+    escape sequences (for example ``Enter`` or ``Escape``). When True, the
+    characters are sent literally with ``send-keys -l``.
     """
     if not await session_exists(session_name):
         log.warning("tmux session '%s' not found — key send dropped", session_name)
         return False
 
-    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, keys)
+    args = ["send-keys", "-t", session_name]
+    if literal:
+        args.append("-l")
+    args.append(keys)
+    rc, _, stderr = await _run_tmux(*args)
     if rc != 0:
         log.error("tmux send-keys failed for '%s': %s", session_name, stderr.decode())
         return False

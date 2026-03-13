@@ -92,6 +92,7 @@ class TestStartAgent:
         assert call_args[0][0] == "ike"
         assert "ike" in call_args[1]["working_dir"]
         assert call_args[1]["command"] == ["claude"]
+        assert call_args[1]["environment"] == {"BACKBONE_RUNTIME": "claude"}
 
     @pytest.mark.asyncio
     async def test_already_running(self, agent_config):
@@ -137,6 +138,7 @@ class TestStartAgent:
                 await start_agent("ike", agent_config, cli="gemini", model="pro")
         cmd = mock_start.call_args[1]["command"]
         assert cmd == ["gemini", "--model", "pro"]
+        assert mock_start.call_args[1]["environment"] == {"BACKBONE_RUNTIME": "gemini"}
 
     @pytest.mark.asyncio
     async def test_dir_not_exists(self, agent_config, tmp_path):
@@ -195,6 +197,7 @@ class TestStartGroup:
                 count = await start_group("Test", ["ike", "leo"], agent_config)
         assert count == 1  # Only leo started
         assert mock_start.call_args[0][0] == "leo"
+        assert mock_start.call_args[1]["environment"] == {"BACKBONE_RUNTIME": "claude"}
 
     @pytest.mark.asyncio
     async def test_skips_agents_with_missing_dirs(self, agent_config, tmp_path):

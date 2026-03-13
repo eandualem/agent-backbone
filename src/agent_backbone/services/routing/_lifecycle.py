@@ -203,8 +203,8 @@ async def on_issue_closed(
             result[target] = "skipped"
             continue
 
-        # Role-based targets fan out to concrete instance sessions. Other targets
-        # continue to use single-session resolution.
+        # Concrete role-instance entries resolve directly through the registry.
+        # Other special targets continue to use the standard resolution path.
         session_names = config.registry.delivery_sessions_for(target)
         if not session_names:
             session_name = await resolve_entity_session(

@@ -623,19 +623,20 @@ class TestRunOnboarding:
         cfg = BackboneConfig(
             github_app_id=None,
             github_app_private_key_path="",
-            registry=EntityRegistry(
-                entities={
-                    "bell": EntityEntry(
-                        session="bell",
-                        home="~/ws/core/code/WF/bell",
-                        groups=["orchestrators"],
-                        figure="Bell",
-                        role="WF Orchestrator",
-                        organization="WF",
-                    )
-                }
-            ),
-        )
+                registry=EntityRegistry(
+                    entities={
+                        "bell-wf": EntityEntry(
+                            session="bell-wf",
+                            home="~/ws/core/code/WF/bell",
+                            groups=["orchestrators"],
+                            figure="Bell",
+                            role="WF Orchestrator",
+                            organization="WF",
+                            entity_type="role-instance",
+                        )
+                    }
+                ),
+            )
 
         mock_create_notify = AsyncMock()
 
@@ -661,14 +662,14 @@ class TestRunOnboarding:
         assert step10.step == 10
         assert step10.name == "notify_orchestrator"
         assert step10.status == "done"
-        assert step10.detail == "Created onboarding issue for bell"
+        assert step10.detail == "Created onboarding issue for bell-wf"
         assert mock_create_notify.call_count == 2
         brunel_call = mock_create_notify.call_args_list[0].kwargs
         orchestrator_call = mock_create_notify.call_args_list[1].kwargs
         assert "for:brunel" in brunel_call["labels"]
         assert brunel_call["flow_name"] == "onboarding"
         assert brunel_call["config"] is cfg
-        assert "for:bell" in orchestrator_call["labels"]
+        assert "for:bell-wf" in orchestrator_call["labels"]
         assert orchestrator_call["flow_name"] == "onboarding"
         assert orchestrator_call["config"] is cfg
         assert (

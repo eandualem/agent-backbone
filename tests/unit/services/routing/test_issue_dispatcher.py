@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from agent_backbone.config import BackboneConfig
 from agent_backbone.models import (
     CommentData,
     EventType,
@@ -14,6 +15,7 @@ from agent_backbone.models import (
     ParsedLabels,
     parse_from_tag,
 )
+from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry
 from agent_backbone.services.routing import issue_dispatcher, resolve_session
 
 
@@ -188,19 +190,54 @@ class TestIssueDispatcher:
 
         assert len(result.delivered) == 2
 
-    async def test_role_target_fans_out_to_multiple_sessions(self, config, mock_db):
-        labels = ParsedLabels(sender="leo", targets=["bell"], issue_type="task")
-        issue = IssueData(number=15, title="[task] Shared role", labels=labels)
+    async def test_concrete_role_instance_target_delivers(self, config, mock_db):
+        labels = ParsedLabels(sender="leo", targets=["bell-wf"], issue_type="task")
+        issue = IssueData(number=15, title="[task] WF role instance", labels=labels)
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
         with (
-            _patch_resolve_sessions(["bell-wf", "bell-loveble"]),
+            _patch_resolve_sessions(["bell-wf"]),
             _patch_safe_deliver("delivered") as mock_deliver,
         ):
             result = await issue_dispatcher.fn(event, config, mock_db)
 
-        assert result.delivered == ["bell-wf", "bell-loveble"]
-        assert mock_deliver.await_count == 2
+        assert result.delivered == ["bell-wf"]
+        assert mock_deliver.await_count == 1
+
+    async def test_abstract_role_target_is_skipped(self, mock_db):
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            registry=EntityRegistry(
+                entities={
+                    "bell": EntityEntry(
+                        session="bell",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="",
+                        role="Org Orchestrator",
+                        entity_type="role",
+                        instances={
+                            "wf": EntityInstance(
+                                home="~/ws/core/code/WF/bell",
+                                session="bell-wf",
+                                organization="WF",
+                            ),
+                        },
+                    )
+                },
+                repos=[],
+            ),
+        )
+        labels = ParsedLabels(sender="leo", targets=["bell"], issue_type="task")
+        issue = IssueData(number=16, title="[task] Legacy shared role", labels=labels)
+        event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
+
+        with _patch_safe_deliver("delivered") as mock_deliver:
+            result = await issue_dispatcher.fn(event, config, mock_db)
+
+        assert result.delivered == []
+        assert result.skipped == ["bell"]
+        assert mock_deliver.await_count == 0
 
     async def test_ignores_unknown_event(self, config, mock_db):
         labels = ParsedLabels(sender="leo", targets=["ike"])
@@ -463,3 +500,40 @@ class TestCommentRouting:
         # Leo (sender) and Ike (target) should both be notified
         assert "leo" in result.delivered
         assert "ike" in result.delivered
+
+    async def test_concrete_role_instance_sender_comment_routes_back(self, mock_db):
+        """Comments back to a concrete role-instance sender route directly."""
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            registry=EntityRegistry(
+                entities={
+                    "bell-wf": EntityEntry(
+                        session="bell-wf",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="Alexander Graham Bell",
+                        role="Org Orchestrator",
+                        organization="WF",
+                        entity_type="role-instance",
+                    ),
+                },
+                repos=[],
+            ),
+        )
+        labels = ParsedLabels(sender="bell-wf", targets=["coding-agent"], issue_type="bug")
+        issue = IssueData(number=17, title="[bug] agent-backbone: Fix dispatch", labels=labels)
+        comment = CommentData(body="[from:coding-agent] Done.", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            patch(
+                "agent_backbone.services.routing._resolution.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            _patch_safe_deliver("delivered") as mock_deliver,
+        ):
+            result = await issue_dispatcher.fn(event, config, mock_db)
+
+        assert result.delivered == ["bell-wf"]
+        assert [call.args[0] for call in mock_deliver.await_args_list] == ["bell-wf"]

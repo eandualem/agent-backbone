@@ -14,46 +14,56 @@ from agent_backbone.services.terminal import session_exists
 log = logging.getLogger(__name__)
 
 
-def _role_instance_sessions(target: str, issue_title: str, config: BackboneConfig) -> list[str]:
-    """Build ordered concrete instance sessions for a role-based entity."""
-    entry = config.registry.entities.get(target)
-    if not entry or not entry.instances:
-        return []
-
-    org_hint = ""
+def _repo_reference(issue_title: str) -> str:
+    """Extract the repo token embedded in an issue title."""
     match = REPO_NAME_PATTERN.match(issue_title)
-    if match:
-        repo_name = match.group(1)
-        if "/" in repo_name:
-            org_hint = repo_name.split("/", 1)[0].lower()
-
-    preferred: list[str] = []
-    fallback: list[str] = []
-
-    for instance_name, instance in entry.instances.items():
-        if not instance.session:
-            continue
-        if org_hint and (
-            instance.organization.lower() == org_hint or instance_name.lower() == org_hint
-        ):
-            preferred.append(instance.session)
-        else:
-            fallback.append(instance.session)
-
-    return list(dict.fromkeys(preferred + fallback))
+    if not match:
+        return ""
+    return match.group(1).strip()
 
 
-def _role_session_candidates(target: str, issue_title: str, config: BackboneConfig) -> list[str]:
-    """Build candidate tmux sessions for a role-based entity."""
+def _suggested_targets(target: str, config: BackboneConfig) -> list[str]:
+    """Best-effort concrete suggestions for an invalid target."""
+    prefix = f"{target.lower()}-"
+    suggestions = [
+        name
+        for name, entry in config.registry.entities.items()
+        if entry.entity_type == "role-instance" and name.lower().startswith(prefix)
+    ]
+    return sorted(dict.fromkeys(suggestions))
+
+
+def _invalid_target_error(target: str, config: BackboneConfig) -> str:
+    """Build a validation error for an unknown or invalid issue target."""
+    suggestions = _suggested_targets(target, config)
+    if suggestions:
+        return (
+            f"invalid issue target '{target}'; "
+            f"use a concrete instance target ({', '.join(suggestions)})"
+        )
+    return f"invalid issue target '{target}'"
+
+
+def is_valid_issue_target(target: str, config: BackboneConfig) -> bool:
+    """Whether a `for:` issue target is valid under the concrete-target model."""
     entry = config.registry.entities.get(target)
-    if not entry:
-        return []
+    return bool(
+        target in config.entities.skip
+        or (entry is not None and entry.entity_type != "role" and entry.session is not None)
+        or target in config.registry.repo_names
+        or target in {"coding-agent", "jarvis"}
+    )
 
-    candidates = _role_instance_sessions(target, issue_title, config)
-    if entry.session:
-        candidates.append(entry.session)
-    candidates.append(target)
-    return list(dict.fromkeys(candidates))
+
+def validate_issue_targets(targets: list[str], config: BackboneConfig) -> None:
+    """Reject issue targets that are not concrete, routable identities."""
+    invalid = [
+        _invalid_target_error(target, config)
+        for target in targets
+        if not is_valid_issue_target(target, config)
+    ]
+    if invalid:
+        raise ValueError("; ".join(invalid))
 
 
 async def resolve_entity_sessions(
@@ -63,19 +73,7 @@ async def resolve_entity_sessions(
     *,
     use_title_extraction: bool = True,
 ) -> list[str]:
-    """Resolve a target entity to concrete delivery sessions.
-
-    Role-based entities fan out to all configured instance sessions. Other
-    targets resolve to at most one session using the existing single-session
-    resolution rules.
-    """
-    if target in config.entities.skip:
-        return []
-
-    role_sessions = _role_instance_sessions(target, issue_title, config)
-    if role_sessions:
-        return role_sessions
-
+    """Resolve a target entity to concrete delivery sessions."""
     session = await resolve_entity_session(
         target,
         config,
@@ -94,37 +92,17 @@ async def resolve_entity_session(
     *,
     use_title_extraction: bool = True,
 ) -> str | None:
-    """Resolve a target entity to a tmux session name.
-
-    Unified resolution logic replacing duplicated code in dispatcher and lifecycle.
-
-    Named entities map directly via config. 'coding-agent' extracts repo name
-    from issue title (when use_title_extraction=True) and checks session existence,
-    falling back to config. Entities in the skip set return None.
-
-    Args:
-        target: entity name (e.g. "ike", "coding-agent").
-        config: backbone configuration.
-        issue_title: issue title for repo name extraction.
-        use_title_extraction: if False, skip title parsing for coding-agent
-            (used by lifecycle where title format differs).
-    """
-    # Skip set
+    """Resolve a target entity to a tmux session name."""
     if target in config.entities.skip:
         return None
 
-    role_candidates = _role_session_candidates(target, issue_title, config)
-    for candidate in role_candidates:
-        if await session_exists(candidate):
-            return candidate
-    if role_candidates:
-        return role_candidates[0]
+    entry = config.registry.entities.get(target)
+    if entry is not None and entry.entity_type == "role":
+        return None
 
-    # Named entity direct mapping
     if target in config.registry.sessions_map:
         return config.registry.sessions_map[target]
 
-    # Coding agent repo name (e.g. "agent-backbone", "lovely-assistant")
     if target in config.registry.repo_names:
         if await session_exists(target):
             log.info("Resolved repo name '%s' to session '%s'", target, target)
@@ -132,47 +110,24 @@ async def resolve_entity_session(
         log.info("Repo '%s' recognized but session not running", target)
         return None
 
-    # Jarvis: HTTP injection target (no tmux session)
     if target == "jarvis":
         if config.jarvis.enabled:
             return "jarvis"
         log.info("Jarvis target disabled (JARVIS_INJECT_URL not set)")
         return None
 
-    # Coding agent resolution
-    if target == "coding-agent":
-        if use_title_extraction and issue_title:
-            match = REPO_NAME_PATTERN.match(issue_title)
-            if match:
-                repo_name = match.group(1)
-                last_segment = repo_name.rsplit("/", 1)[-1] if "/" in repo_name else repo_name
-                candidates = list(
-                    dict.fromkeys(
-                        [repo_name, repo_name.lower(), last_segment, last_segment.lower()]
-                    )
-                )
-                for candidate in candidates:
-                    if await session_exists(candidate):
-                        log.info(
-                            "Resolved coding-agent -> repo session '%s' (from '%s')",
-                            candidate,
-                            repo_name,
-                        )
-                        return candidate
-                log.info(
-                    "No session found for repo '%s' (tried: %s), using fallback",
-                    repo_name,
-                    candidates,
-                )
-            else:
-                log.info("Could not extract repo name from title: %s", issue_title)
+    if target == "coding-agent" and use_title_extraction:
+        repo_ref = _repo_reference(issue_title)
+        if repo_ref:
+            repo_name = repo_ref.split("/", 1)[-1].strip()
+            if repo_name:
+                if await session_exists(repo_name):
+                    log.info("Resolved coding-agent via title repo '%s'", repo_name)
+                    return repo_name
+                log.info("coding-agent title repo '%s' has no active session", repo_name)
 
-        # Fallback
-        fallback = config.entities.fallback.get(target)
-        if fallback:
-            log.info("Routing coding-agent -> fallback '%s'", fallback)
-            return fallback
-        return None
-
-    # Unknown entity
+    fallback = config.entities.fallback.get(target)
+    if fallback:
+        log.info("Resolved '%s' via fallback '%s'", target, fallback)
+        return fallback
     return None

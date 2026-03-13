@@ -19,6 +19,7 @@ from agent_backbone.models import parse_from_tag
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.routing import DeliveryService
+from agent_backbone.services.routing._resolution import validate_issue_targets
 
 log = logging.getLogger(__name__)
 
@@ -137,6 +138,11 @@ async def create_issue(
     labels = body.get("labels", [])
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
+    targets = [label.removeprefix("for:") for label in labels if label.startswith("for:")]
+    try:
+        validate_issue_targets(targets, config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     issue = await delivery_svc.create_and_notify(
         gh,
         title,

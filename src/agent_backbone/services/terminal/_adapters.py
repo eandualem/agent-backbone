@@ -1,0 +1,530 @@
+"""CLI adapter layer for tmux-backed terminal sessions."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from abc import ABC
+from enum import StrEnum
+
+from agent_backbone.services.agents.models import AgentState, StateSnapshot
+from agent_backbone.services.terminal._core import (
+    _run_tmux,
+    _send_escape_key,
+    _send_submit_key,
+    _write_message_buffer,
+    capture_pane,
+)
+from agent_backbone.services.terminal._sessions import query_environment_var
+
+log = logging.getLogger(__name__)
+
+RUNTIME_ENV_KEY = "BACKBONE_RUNTIME"
+_SUBMIT_RECHECK_DELAY_SECONDS = 0.1
+_MAX_SUBMIT_ATTEMPTS = 2
+_ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
+_BOX_CHARS = "\u2500\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u253c\u2501"
+_WORKING_STATES = frozenset({AgentState.PROCESSING_ISSUE, AgentState.BUSY, AgentState.STARTING})
+
+
+class TerminalRuntime(StrEnum):
+    """Known interactive CLI runtimes."""
+
+    CLAUDE = "claude"
+    GEMINI = "gemini"
+    CODEX = "codex"
+    CURSOR = "cursor"
+    OPENCODE = "opencode"
+    SHELL = "shell"
+    UNKNOWN = "unknown"
+
+
+def sanitize_pane_content(pane_content: str) -> str:
+    """Strip ANSI escape sequences for prompt/runtime analysis."""
+    return _ANSI_ESCAPE_RE.sub("", pane_content).replace("\xa0", " ")
+
+
+def _prompt_tail_line_pairs(pane_content: str) -> list[tuple[str, str]]:
+    """Tail raw/sanitized line pairs used for prompt detection."""
+    raw_lines = pane_content.strip().splitlines()
+    sanitized_lines = sanitize_pane_content(pane_content).strip().splitlines()
+
+    pairs = [
+        (raw.rstrip(), sanitized.rstrip())
+        for raw, sanitized in zip(raw_lines, sanitized_lines, strict=False)
+        if sanitized.strip()
+    ]
+    tail = pairs[-8:]
+
+    last_sep = -1
+    for i, (_, sanitized) in enumerate(tail):
+        stripped = sanitized.strip()
+        if stripped and all(ch in _BOX_CHARS for ch in stripped):
+            last_sep = i
+
+    return tail[: last_sep + 1] if last_sep >= 0 else tail
+
+
+def _prompt_line_is_dim_placeholder(raw_prompt_line: str) -> bool:
+    """Whether the visible prompt tail is purely dim placeholder chrome."""
+    prompt_seen = False
+    dim = False
+    visible_tail_seen = False
+    non_dim_tail_seen = False
+    i = 0
+
+    while i < len(raw_prompt_line):
+        if raw_prompt_line[i] == "\x1b":
+            match = _ANSI_SGR_RE.match(raw_prompt_line, i)
+            if match:
+                params = match.group(1)
+                codes = [0] if params == "" else [int(part or 0) for part in params.split(";")]
+                for code in codes:
+                    if code == 0:
+                        dim = False
+                    elif code == 2:
+                        dim = True
+                    elif code == 22:
+                        dim = False
+                i = match.end()
+                continue
+
+        ch = raw_prompt_line[i]
+        if not prompt_seen:
+            if ch in ">$\u276f\u203a%":
+                prompt_seen = True
+            i += 1
+            continue
+
+        if ch == "\n":
+            break
+        if ch.isspace():
+            i += 1
+            continue
+
+        visible_tail_seen = True
+        if not dim:
+            non_dim_tail_seen = True
+        i += 1
+
+    return prompt_seen and visible_tail_seen and not non_dim_tail_seen
+
+
+def _runtime_from_prompt_line(pane_content: str) -> TerminalRuntime:
+    """Infer runtime from a bare prompt line when no richer markers are visible."""
+    for _, candidate in reversed(_prompt_tail_line_pairs(pane_content)):
+        stripped = candidate.strip()
+        if not stripped:
+            continue
+        if all(ch in _BOX_CHARS for ch in stripped):
+            continue
+        if stripped.startswith("\u276f"):
+            return TerminalRuntime.CLAUDE
+        if stripped.startswith("\u203a"):
+            return TerminalRuntime.CODEX
+        break
+    return TerminalRuntime.UNKNOWN
+
+
+def _normalize_runtime(value: str | None) -> TerminalRuntime:
+    """Normalize a free-form runtime label to a known runtime."""
+    if not value:
+        return TerminalRuntime.UNKNOWN
+    normalized = value.strip().lower()
+    aliases = {
+        "claude-code": TerminalRuntime.CLAUDE,
+        "claude code": TerminalRuntime.CLAUDE,
+        "gemini-cli": TerminalRuntime.GEMINI,
+        "open-code": TerminalRuntime.OPENCODE,
+        "open_code": TerminalRuntime.OPENCODE,
+    }
+    try:
+        return TerminalRuntime(normalized)
+    except ValueError:
+        return aliases.get(normalized, TerminalRuntime.UNKNOWN)
+
+
+class TerminalAdapter(ABC):
+    """Behavioral contract for a single interactive CLI."""
+
+    runtime: TerminalRuntime = TerminalRuntime.UNKNOWN
+    prompt_prefixes: tuple[str, ...] = ()
+    prompt_suffixes: tuple[str, ...] = ()
+    runtime_markers: tuple[str, ...] = ()
+    placeholder_fragments: tuple[str, ...] = ()
+    status_fragments: tuple[str, ...] = ()
+    queue_markers: tuple[str, ...] = ()
+    auto_submit: bool = False
+    submit_attempts: int = 1
+    interrupt_queued_delivery: bool = False
+    paste_settle_seconds: float = 0.0
+
+    def detect_prompt(self, pane_content: str) -> str | None:
+        """Return the visible prompt line when this adapter recognizes one."""
+        for raw_candidate, candidate in reversed(_prompt_tail_line_pairs(pane_content)):
+            stripped = candidate.strip()
+            if not stripped:
+                continue
+            if all(ch in _BOX_CHARS for ch in stripped):
+                continue
+            if self._is_status_chrome_line(stripped):
+                continue
+            if self._matches_prompt_line(stripped):
+                return raw_candidate.strip()
+            break
+
+        fallback = self._detect_idle_placeholder_line(pane_content)
+        if fallback:
+            return fallback
+        return None
+
+    def detect_idle(self, pane_content: str) -> bool:
+        """Whether the pane currently shows an interactive prompt surface."""
+        return self.detect_prompt(pane_content) is not None
+
+    def prompt_has_pending_input(self, pane_content: str) -> bool:
+        """Whether the prompt currently contains buffered user input."""
+        prompt_line = self.detect_prompt(pane_content)
+        if not prompt_line:
+            return False
+
+        sanitized = sanitize_pane_content(prompt_line).strip()
+        lowered = sanitized.lower()
+        if any(lowered.endswith(suffix) for suffix in self.prompt_suffixes):
+            return False
+        if any(lowered == prefix for prefix in self.prompt_prefixes):
+            return False
+        if any(fragment in lowered for fragment in self.placeholder_fragments):
+            return False
+        if self.runtime == TerminalRuntime.CODEX and _prompt_line_is_dim_placeholder(prompt_line):
+            return False
+        return True
+
+    def detect_copy_mode(self, tmux_vars: dict[str, str], agent_state: AgentState) -> bool:
+        """Whether copy mode should block delivery for this adapter."""
+        return tmux_vars.get("pane_in_mode") == "1" and agent_state not in _WORKING_STATES
+
+    async def exit_copy_mode(self, session_name: str) -> bool:
+        """Immediately attempt to leave copy mode."""
+        return await _send_named_key(session_name, "q")
+
+    def detect_plan_waiting(
+        self,
+        snapshot: StateSnapshot,
+        pane_content: str = "",
+    ) -> bool:
+        """Whether the session is in plan-approval state."""
+        del pane_content
+        return snapshot.state == AgentState.PLAN_WAITING
+
+    async def deliver_message(self, session_name: str, message: str) -> bool:
+        """Paste a message and submit it according to runtime-specific rules."""
+        if not await _write_message_buffer(session_name, message):
+            return False
+
+        if self.paste_settle_seconds > 0:
+            await asyncio.sleep(self.paste_settle_seconds)
+
+        if self.auto_submit:
+            log.info(
+                "Terminal delivery sent to '%s' via %s adapter (auto-submit)",
+                session_name,
+                self.runtime.value,
+            )
+            return True
+
+        state = "submitted"
+        for _attempt in range(self.submit_attempts):
+            if not await _send_submit_key(session_name):
+                return False
+
+            await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)
+            state = await self.delivery_submission_state(session_name)
+            if state == "submitted":
+                log.info(
+                    "Terminal delivery sent to '%s' via %s adapter",
+                    session_name,
+                    self.runtime.value,
+                )
+                return True
+
+            if state == "queued" and self.interrupt_queued_delivery:
+                log.debug(
+                    "Queued delivery detected for '%s' via %s adapter; interrupting",
+                    session_name,
+                    self.runtime.value,
+                )
+                if not await _send_escape_key(session_name):
+                    return False
+                await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)
+                if not await _send_submit_key(session_name):
+                    return False
+                await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)
+                state = await self.delivery_submission_state(session_name)
+                break
+
+        if state != "submitted":
+            log.warning(
+                "Terminal delivery remained unsent in '%s' via %s adapter (state=%s)",
+                session_name,
+                self.runtime.value,
+                state,
+            )
+            return False
+
+        log.info(
+            "Terminal delivery sent to '%s' via %s adapter",
+            session_name,
+            self.runtime.value,
+        )
+        return True
+
+    async def delivery_submission_state(self, session_name: str) -> str:
+        """Best-effort state after a submit attempt."""
+        pane_content = await capture_pane(session_name, lines=30)
+        if not pane_content:
+            return "submitted"
+
+        lowered = sanitize_pane_content(pane_content).lower()
+        if any(marker in lowered for marker in self.queue_markers):
+            return "queued"
+        if self.prompt_has_pending_input(pane_content):
+            return "prompt_buffered"
+        return "submitted"
+
+    def matches_runtime(self, pane_content: str) -> bool:
+        """Whether the pane appears to belong to this runtime."""
+        lowered = sanitize_pane_content(pane_content).lower()
+        return any(marker in lowered for marker in self.runtime_markers)
+
+    def _matches_prompt_line(self, line: str) -> bool:
+        lowered = line.lower()
+        return any(lowered.startswith(prefix) for prefix in self.prompt_prefixes) or any(
+            lowered.endswith(suffix) for suffix in self.prompt_suffixes
+        )
+
+    def _is_status_chrome_line(self, line: str) -> bool:
+        lowered = line.lower()
+        return any(fragment in lowered for fragment in self.status_fragments)
+
+    def _detect_idle_placeholder_line(self, pane_content: str) -> str | None:
+        lowered = sanitize_pane_content(pane_content).lower()
+        for fragment in self.placeholder_fragments:
+            if fragment in lowered:
+                return fragment
+        return None
+
+
+class ClaudeCodeAdapter(TerminalAdapter):
+    runtime = TerminalRuntime.CLAUDE
+    prompt_prefixes = ("\u276f",)
+    prompt_suffixes = ("$", "%")
+    runtime_markers = ("claude code", "claude max", "opus 4.6")
+    status_fragments = ("for shortcuts", "medium · /effort", "accept edits on")
+    submit_attempts = _MAX_SUBMIT_ATTEMPTS
+    paste_settle_seconds = 0.2
+
+
+class GeminiAdapter(TerminalAdapter):
+    runtime = TerminalRuntime.GEMINI
+    prompt_prefixes = (">",)
+    runtime_markers = (
+        "gemini cli",
+        "gemini code assist",
+        "[insert]",
+        "press 'esc' for normal mode",
+    )
+    placeholder_fragments = ("press 'esc' for normal mode",)
+    status_fragments = (
+        "[insert]",
+        "shift+tab to accept edits",
+        "? for shortcuts",
+        "gemini 3",
+    )
+    submit_attempts = _MAX_SUBMIT_ATTEMPTS
+    paste_settle_seconds = 0.2
+
+
+class CodexAdapter(TerminalAdapter):
+    runtime = TerminalRuntime.CODEX
+    prompt_prefixes = ("\u203a",)
+    runtime_markers = ("openai codex", "gpt-5.", "context left")
+    placeholder_fragments = ("implement {feature}", "explain this codebase")
+    status_fragments = (
+        "gpt-5.",
+        "context left",
+        "for shortcuts",
+        "messages to be submitted after next tool call",
+    )
+    queue_markers = (
+        "tab to queue message",
+        "messages to be submitted after next tool call",
+        "press esc to interrupt and send immediately",
+    )
+    submit_attempts = _MAX_SUBMIT_ATTEMPTS
+    interrupt_queued_delivery = True
+    paste_settle_seconds = 0.2
+
+
+class CursorAdapter(TerminalAdapter):
+    runtime = TerminalRuntime.CURSOR
+    prompt_prefixes = ("\u276f", ">", "$", "%")
+    runtime_markers = ("cursor", "cursor agent", "cursor composer")
+    status_fragments = ("for shortcuts", "accept edits on")
+    submit_attempts = _MAX_SUBMIT_ATTEMPTS
+    paste_settle_seconds = 0.2
+
+
+class OpenCodeAdapter(TerminalAdapter):
+    runtime = TerminalRuntime.OPENCODE
+    runtime_markers = ("opencode", "ask anything...", "ctrl+t variants", "tab agents")
+    placeholder_fragments = ("ask anything...",)
+    status_fragments = ("ctrl+t variants", "tab agents", "ctrl+p commands")
+    submit_attempts = _MAX_SUBMIT_ATTEMPTS
+    paste_settle_seconds = 0.2
+
+
+class ShellAdapter(TerminalAdapter):
+    runtime = TerminalRuntime.SHELL
+    prompt_suffixes = ("$", "%", ">", "#")
+    submit_attempts = _MAX_SUBMIT_ATTEMPTS
+    paste_settle_seconds = 0.2
+
+
+_ADAPTERS: dict[TerminalRuntime, TerminalAdapter] = {
+    TerminalRuntime.CLAUDE: ClaudeCodeAdapter(),
+    TerminalRuntime.GEMINI: GeminiAdapter(),
+    TerminalRuntime.CODEX: CodexAdapter(),
+    TerminalRuntime.CURSOR: CursorAdapter(),
+    TerminalRuntime.OPENCODE: OpenCodeAdapter(),
+    TerminalRuntime.SHELL: ShellAdapter(),
+    TerminalRuntime.UNKNOWN: ShellAdapter(),
+}
+
+
+def get_terminal_adapter(runtime: TerminalRuntime | str) -> TerminalAdapter:
+    """Return the adapter for a known runtime."""
+    runtime_enum = runtime if isinstance(runtime, TerminalRuntime) else _normalize_runtime(runtime)
+    return _ADAPTERS.get(runtime_enum, _ADAPTERS[TerminalRuntime.SHELL])
+
+
+def detect_runtime_from_pane(pane_content: str) -> TerminalRuntime:
+    """Best-effort runtime detection from visible pane content."""
+    if not pane_content.strip():
+        return TerminalRuntime.UNKNOWN
+
+    for runtime in (
+        TerminalRuntime.GEMINI,
+        TerminalRuntime.CLAUDE,
+        TerminalRuntime.CODEX,
+        TerminalRuntime.OPENCODE,
+        TerminalRuntime.CURSOR,
+    ):
+        adapter = get_terminal_adapter(runtime)
+        if adapter.matches_runtime(pane_content):
+            return runtime
+
+    prompt_runtime = _runtime_from_prompt_line(pane_content)
+    if prompt_runtime != TerminalRuntime.UNKNOWN:
+        return prompt_runtime
+
+    shell_adapter = get_terminal_adapter(TerminalRuntime.SHELL)
+    if shell_adapter.detect_idle(pane_content):
+        return TerminalRuntime.SHELL
+
+    return TerminalRuntime.UNKNOWN
+
+
+async def resolve_terminal_runtime(
+    session_name: str,
+    *,
+    runtime_hint: str | None = None,
+    pane_content: str | None = None,
+) -> TerminalRuntime:
+    """Resolve the runtime for a tmux session using hint, env, then prompt."""
+    hinted = _normalize_runtime(runtime_hint)
+    if hinted != TerminalRuntime.UNKNOWN:
+        return hinted
+
+    env_runtime = _normalize_runtime(await query_environment_var(session_name, RUNTIME_ENV_KEY))
+    if env_runtime != TerminalRuntime.UNKNOWN:
+        return env_runtime
+
+    if pane_content is None:
+        pane_content = await capture_pane(session_name, lines=80)
+
+    return detect_runtime_from_pane(pane_content)
+
+
+async def get_terminal_adapter_for_session(
+    session_name: str,
+    *,
+    runtime_hint: str | None = None,
+    pane_content: str | None = None,
+) -> TerminalAdapter:
+    """Resolve and return the adapter for a running session."""
+    runtime = await resolve_terminal_runtime(
+        session_name,
+        runtime_hint=runtime_hint,
+        pane_content=pane_content,
+    )
+    return get_terminal_adapter(runtime)
+
+
+def prompt_has_pending_input(pane_content: str, runtime_hint: str | None = None) -> bool:
+    """Whether the current runtime prompt holds buffered input."""
+    runtime = _normalize_runtime(runtime_hint)
+    if runtime == TerminalRuntime.UNKNOWN:
+        runtime = detect_runtime_from_pane(pane_content)
+    return get_terminal_adapter(runtime).prompt_has_pending_input(pane_content)
+
+
+def infer_state_from_pane(
+    pane_content: str,
+    runtime_hint: str | None = None,
+) -> StateSnapshot:
+    """Infer the agent state from visible terminal output."""
+    sanitized = sanitize_pane_content(pane_content)
+    lines = sanitized.strip().splitlines()
+    if not lines:
+        return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
+
+    runtime = _normalize_runtime(runtime_hint)
+    if runtime == TerminalRuntime.UNKNOWN:
+        runtime = detect_runtime_from_pane(pane_content)
+    adapter = get_terminal_adapter(runtime)
+
+    if adapter.detect_idle(pane_content):
+        return StateSnapshot(state=AgentState.IDLE, source="pull")
+
+    non_empty = [ln.strip().lower() for ln in lines if ln.strip()]
+    recent_lines = [ln.strip().lower() for ln in non_empty[-20:]]
+    recent_content = "\n".join(recent_lines)
+
+    if "thinking..." in recent_content or "tool call" in recent_content:
+        return StateSnapshot(state=AgentState.BUSY, source="pull")
+
+    for stripped in reversed(recent_lines):
+        if "working on issue #" in stripped or "processing issue #" in stripped:
+            for word in stripped.split("#"):
+                if word and word.split()[0].isdigit():
+                    issue_num = int(word.split()[0])
+                    return StateSnapshot(
+                        state=AgentState.PROCESSING_ISSUE,
+                        current_issue=issue_num,
+                        source="pull",
+                    )
+            return StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="pull")
+
+    return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
+
+
+async def _send_named_key(session_name: str, key: str) -> bool:
+    """Send a named tmux key to a session."""
+    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, key)
+    if rc != 0:
+        log.error("tmux send-keys %s failed for '%s': %s", key, session_name, stderr.decode())
+        return False
+    return True

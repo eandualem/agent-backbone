@@ -41,7 +41,9 @@ async def count_pending_issues(
 ) -> dict[str, int]:
     """Count pending issues per entity."""
     counts: dict[str, int] = {}
-    for entity in config.registry.all_entities:
+    for entity, entry in config.registry.entities.items():
+        if entry.entity_type == "role" or entry.session is None:
+            continue
         label = f"for:{entity}"
         issues = await gh.list_open_issues(label)
         if issues:
@@ -150,7 +152,9 @@ async def capture_delivery_stats(config: BackboneConfig, db: BackboneDB) -> dict
 async def _count_pending_evening(config: BackboneConfig, gh: object) -> dict[str, int]:
     """Count pending issues per entity (evening variant)."""
     counts: dict[str, int] = {}
-    for entity in config.registry.all_entities:
+    for entity, entry in config.registry.entities.items():
+        if entry.entity_type == "role" or entry.session is None:
+            continue
         label = f"for:{entity}"
         issues = await gh.list_open_issues(label)
         if issues:

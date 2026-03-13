@@ -17,6 +17,7 @@ from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.telegram._routing import _delivery_reply
 from agent_backbone.services.telegram._topic_discovery import process_message_for_discovery
 from agent_backbone.services.terminal import (
+    RUNTIME_ENV_KEY,
     list_sessions,
     resolve_agent_dir,
     send_keys,
@@ -116,7 +117,12 @@ async def cmd_start_agent(
         await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
         return
 
-    ok = await start_session(agent, working_dir=working_dir, command=["claude"])
+    ok = await start_session(
+        agent,
+        working_dir=working_dir,
+        command=["claude"],
+        environment={RUNTIME_ENV_KEY: "claude"},
+    )
     status = "Started" if ok else "Failed to start"
     await update.message.reply_text(f"{status} `{agent}`", parse_mode="Markdown")
 

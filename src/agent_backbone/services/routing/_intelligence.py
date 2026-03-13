@@ -9,17 +9,16 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
 
-from agent_backbone.services.agents._inference import (
-    get_agent_state,
-    prompt_has_pending_input,
-)
+from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.terminal import (
     SESSION_FORMAT_STR,
     capture_pane,
+    get_terminal_adapter,
     list_sessions,
     query_format_vars,
+    resolve_terminal_runtime,
 )
 
 log = logging.getLogger(__name__)
@@ -72,6 +71,7 @@ async def get_session_intelligence(
         return SessionProfile(
             session_name=session_name,
             intelligence=SessionIntelligence.OFFLINE,
+            runtime="unknown",
         )
 
     # Step 2: Query tmux format vars (non-fatal on failure)
@@ -80,6 +80,20 @@ async def get_session_intelligence(
         tmux_vars = await query_format_vars(session_name, SESSION_FORMAT_STR)
     except Exception:
         log.debug("Failed to query tmux vars for '%s' (non-fatal)", session_name)
+
+    pane_content = ""
+    try:
+        pane_content = await capture_pane(session_name)
+    except Exception:
+        log.debug("Failed to capture pane for '%s' (non-fatal)", session_name)
+
+    runtime = (
+        await resolve_terminal_runtime(
+            session_name,
+            pane_content=pane_content,
+        )
+    ).value
+    adapter = get_terminal_adapter(runtime)
 
     # Step 3: Get agent state via push/pull reconciliation
     state_snap = await get_agent_state(
@@ -93,10 +107,11 @@ async def get_session_intelligence(
     # 2. Copy mode — only when agent is NOT in a working state.
     # A working agent whose pane is in copy/scroll mode must still resolve
     # to AGENT_WORKING, not COPY_MODE (which priority=True can bypass).
-    if tmux_vars.get("pane_in_mode") == "1" and agent_state not in _WORKING_STATES:
+    if adapter.detect_copy_mode(tmux_vars, agent_state):
         return SessionProfile(
             session_name=session_name,
             intelligence=SessionIntelligence.COPY_MODE,
+            runtime=runtime,
             agent_state=agent_state,
             tmux_vars=tmux_vars,
         )
@@ -110,30 +125,30 @@ async def get_session_intelligence(
                 return SessionProfile(
                     session_name=session_name,
                     intelligence=SessionIntelligence.USER_INTERACTING,
+                    runtime=runtime,
                     agent_state=agent_state,
                     tmux_vars=tmux_vars,
                 )
         except (ValueError, TypeError):
             pass
 
-    if agent_state == AgentState.IDLE:
-        try:
-            pane_content = await capture_pane(session_name)
-        except Exception:
-            pane_content = ""
-        if pane_content and prompt_has_pending_input(pane_content):
-            return SessionProfile(
-                session_name=session_name,
-                intelligence=SessionIntelligence.USER_INTERACTING,
-                agent_state=agent_state,
-                tmux_vars=tmux_vars,
-            )
+    if agent_state == AgentState.IDLE and pane_content and adapter.prompt_has_pending_input(
+        pane_content
+    ):
+        return SessionProfile(
+            session_name=session_name,
+            intelligence=SessionIntelligence.USER_INTERACTING,
+            runtime=runtime,
+            agent_state=agent_state,
+            tmux_vars=tmux_vars,
+        )
 
     # 4. Plan waiting
-    if agent_state == AgentState.PLAN_WAITING:
+    if adapter.detect_plan_waiting(state_snap, pane_content):
         return SessionProfile(
             session_name=session_name,
             intelligence=SessionIntelligence.PLAN_WAITING,
+            runtime=runtime,
             agent_state=agent_state,
             tmux_vars=tmux_vars,
         )
@@ -143,6 +158,7 @@ async def get_session_intelligence(
         return SessionProfile(
             session_name=session_name,
             intelligence=SessionIntelligence.AGENT_WORKING,
+            runtime=runtime,
             agent_state=agent_state,
             tmux_vars=tmux_vars,
         )
@@ -155,12 +171,14 @@ async def get_session_intelligence(
                 return SessionProfile(
                     session_name=session_name,
                     intelligence=SessionIntelligence.IDLE_GRACE,
+                    runtime=runtime,
                     agent_state=agent_state,
                     tmux_vars=tmux_vars,
                 )
         return SessionProfile(
             session_name=session_name,
             intelligence=SessionIntelligence.IDLE_READY,
+            runtime=runtime,
             agent_state=agent_state,
             tmux_vars=tmux_vars,
         )
@@ -169,6 +187,7 @@ async def get_session_intelligence(
     return SessionProfile(
         session_name=session_name,
         intelligence=SessionIntelligence.UNKNOWN,
+        runtime=runtime,
         agent_state=agent_state,
         tmux_vars=tmux_vars,
     )

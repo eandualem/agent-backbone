@@ -368,6 +368,45 @@ class TestStartBackbone:
         assert result is False
 
     @pytest.mark.asyncio
+    async def test_uses_short_probe_retry_interval(self, bb_config):
+        """start_backbone probes Prefect health with a 100ms retry interval."""
+        with patch(
+            "agent_backbone.services.infrastructure._backbone.start_prefect",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            with patch(
+                "agent_backbone.services.infrastructure._backbone.wait_for_health",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_wait:
+                with patch(
+                    "agent_backbone.services.infrastructure._backbone.start_gateway",
+                    new_callable=AsyncMock,
+                    return_value=True,
+                ):
+                    with patch(
+                        "agent_backbone.services.infrastructure._backbone.start_worker",
+                        new_callable=AsyncMock,
+                        return_value=True,
+                    ):
+                        with patch(
+                            "agent_backbone.services.infrastructure._backbone.start_telegram",
+                            new_callable=AsyncMock,
+                            return_value=True,
+                        ):
+                            from agent_backbone.services.infrastructure._backbone import (
+                                start_backbone,
+                            )
+
+                            result = await start_backbone(bb_config)
+        assert result is True
+        mock_wait.assert_awaited_once_with(
+            "http://127.0.0.1:4200/api/health",
+            interval=0.1,
+        )
+
+    @pytest.mark.asyncio
     async def test_continues_when_health_fails(self, bb_config):
         """start_backbone continues even when health check fails (logs warning)."""
         with patch(
@@ -575,6 +614,27 @@ class TestWaitForHealth:
                     interval=0.01,
                 )
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_uses_default_retry_interval(self):
+        """wait_for_health uses the default retry interval when none is provided."""
+        import httpx
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.side_effect = httpx.ConnectError("refused")
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                from agent_backbone.services.infrastructure._backbone import (
+                    wait_for_health,
+                )
+
+                result = await wait_for_health("http://localhost:4200/api/health", retries=2)
+        assert result is False
+        mock_sleep.assert_awaited_once_with(0.4)
 
     @pytest.mark.asyncio
     async def test_returns_false_on_500(self):

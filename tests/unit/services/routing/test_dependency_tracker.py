@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, patch
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import IssueData, ParsedLabels
 from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry
 from agent_backbone.services.routing import on_dependency_resolved
+from agent_backbone.services.routing._dependencies import sync_dependencies
 
 
 def _make_issue(number: int, state: str = "closed", targets: list[str] | None = None) -> IssueData:
@@ -135,6 +137,45 @@ class TestLifecycleDependencyIntegration:
         ):
             # Should not raise
             await _check_dependencies(42)
+
+    async def test_sync_dependencies_skips_abstract_role_targets(self):
+        config = BackboneConfig(
+            webhook_secret="test",
+            registry=EntityRegistry(
+                entities={
+                    "feynman": EntityEntry(
+                        session="feynman",
+                        home="~/orchestration",
+                        groups=["orchestrators"],
+                        figure="",
+                        role="",
+                    ),
+                    "bell": EntityEntry(
+                        session=None,
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="",
+                        role="Org Orchestrator",
+                        entity_type="role",
+                        instances={
+                            "wf": EntityInstance(
+                                home="~/ws/core/code/WF/bell",
+                                session="bell-wf",
+                                organization="WF",
+                            ),
+                        },
+                    ),
+                },
+                repos=[],
+            ),
+        )
+        gh = AsyncMock()
+        gh.list_open_issues.side_effect = lambda label: []
+        db = AsyncMock()
+
+        await sync_dependencies(config, db, gh)
+
+        assert [call.args[0] for call in gh.list_open_issues.await_args_list] == ["for:feynman"]
 
 
 class TestPersistenceDependencies:

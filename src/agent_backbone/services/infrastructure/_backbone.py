@@ -29,9 +29,15 @@ BACKBONE_DIR = str(Path(__file__).resolve().parents[4])
 
 PREFECT_PORT = 4200
 PREFECT_API_URL = f"http://127.0.0.1:{PREFECT_PORT}/api"
+PREFECT_HEALTH_PROBE_RETRY_INTERVAL_SECONDS = 0.4
+PREFECT_STARTUP_PROBE_RETRY_INTERVAL_SECONDS = 0.1
 
 
-async def wait_for_health(url: str, retries: int = 10, interval: float = 1.0) -> bool:
+async def wait_for_health(
+    url: str,
+    retries: int = 10,
+    interval: float = PREFECT_HEALTH_PROBE_RETRY_INTERVAL_SECONDS,
+) -> bool:
     """Wait for an HTTP endpoint to return a successful response."""
     async with httpx.AsyncClient(timeout=5.0) as client:
         for i in range(retries):
@@ -249,7 +255,10 @@ async def start_backbone(config: BackboneConfig) -> bool:
         return False
 
     log.info("Waiting for Prefect server health...")
-    healthy = await wait_for_health(f"http://127.0.0.1:{PREFECT_PORT}/api/health")
+    healthy = await wait_for_health(
+        f"http://127.0.0.1:{PREFECT_PORT}/api/health",
+        interval=PREFECT_STARTUP_PROBE_RETRY_INTERVAL_SECONDS,
+    )
     if not healthy:
         log.warning("Prefect server health check failed, continuing anyway")
 

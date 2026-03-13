@@ -35,16 +35,13 @@ def _load_instances(data: dict) -> dict[str, EntityInstance]:
 
 
 def _default_session(name: str, data: dict, instances: dict[str, EntityInstance]) -> str | None:
-    """Derive a stable entity session from flat or role-based registry entries."""
+    """Derive a stable entity session from a registry entry."""
     session = data.get("session")
     if session is not None:
         return session
 
     if data.get("type") == "role":
-        # Generic role labels still target the base entity name (for example
-        # `for:bell`). Use that as the stable session alias, and let resolution
-        # inspect per-org instances when it needs a more specific session.
-        return name
+        return None
 
     if len(instances) == 1:
         return next(iter(instances.values())).session
@@ -62,6 +59,18 @@ def _default_home(data: dict, instances: dict[str, EntityInstance]) -> str:
         if first.home:
             return first.home
     return data.get("roleDefinition", "")
+
+
+def _entity_home_paths(entities: dict[str, EntityEntry]) -> set[Path]:
+    """Collect entity home directories that should not be treated as coding repos."""
+    excluded: set[Path] = set()
+    for entry in entities.values():
+        if entry.home:
+            excluded.add(Path(entry.home).expanduser().resolve(strict=False))
+        for instance in entry.instances.values():
+            if instance.home:
+                excluded.add(Path(instance.home).expanduser().resolve(strict=False))
+    return excluded
 
 
 def load_entity_registry(path: Path) -> dict[str, EntityEntry]:
@@ -88,21 +97,31 @@ def load_entity_registry(path: Path) -> dict[str, EntityEntry]:
     return entities
 
 
-def discover_coding_repos(base_dir: Path) -> list[RepoInfo]:
+def discover_coding_repos(
+    base_dir: Path,
+    *,
+    exclude_paths: set[Path] | None = None,
+) -> list[RepoInfo]:
     """Scan base_dir for org subdirectories, then repos within each org.
 
     Structure expected: base_dir/{OrgName}/{repo-name}/
-    Skips hidden directories and non-directory entries.
+    Skips hidden directories, non-directory entries, and entity home paths.
     """
     repos: list[RepoInfo] = []
     if not base_dir.is_dir():
         return repos
+    normalized_excludes = {
+        path.expanduser().resolve(strict=False) for path in (exclude_paths or set())
+    }
 
     for org_dir in sorted(base_dir.iterdir()):
         if not org_dir.is_dir() or org_dir.name.startswith("."):
             continue
         for repo_dir in sorted(org_dir.iterdir()):
             if not repo_dir.is_dir() or repo_dir.name.startswith("."):
+                continue
+            if repo_dir.resolve(strict=False) in normalized_excludes:
+                log.debug("Skipping entity home during repo discovery: %s", repo_dir)
                 continue
             repos.append(
                 RepoInfo(
@@ -124,5 +143,5 @@ def build_registry(
     Raises FileNotFoundError if registry_path doesn't exist.
     """
     entities = load_entity_registry(registry_path)
-    repos = discover_coding_repos(code_base_dir)
+    repos = discover_coding_repos(code_base_dir, exclude_paths=_entity_home_paths(entities))
     return EntityRegistry(entities=entities, repos=repos)

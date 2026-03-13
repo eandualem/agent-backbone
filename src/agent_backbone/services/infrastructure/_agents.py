@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.terminal import (
+    RUNTIME_ENV_KEY,
     list_sessions,
     resolve_agent_dir,
     session_exists,
@@ -46,7 +47,12 @@ async def start_agent(
     if model:
         command.extend(["--model", model])
 
-    ok = await start_session(name, working_dir=working_dir, command=command)
+    ok = await start_session(
+        name,
+        working_dir=working_dir,
+        command=command,
+        environment={RUNTIME_ENV_KEY: cli},
+    )
     if ok:
         extra = f", model: {model}" if model else ""
         log.info("Agent '%s' started (cli: %s%s)", name, cli, extra)
@@ -85,7 +91,12 @@ async def start_group(
         if model:
             command.extend(["--model", model])
 
-        ok = await start_session(name, working_dir=working_dir, command=command)
+        ok = await start_session(
+            name,
+            working_dir=working_dir,
+            command=command,
+            environment={RUNTIME_ENV_KEY: cli},
+        )
         if ok:
             extra = f", model: {model}" if model else ""
             log.info("  Started: %s (cli: %s%s)", name, cli, extra)

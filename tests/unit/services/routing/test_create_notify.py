@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from agent_backbone.config import BackboneConfig
 from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.services.registry import EntityEntry, EntityRegistry
 from agent_backbone.services.routing import create_and_notify
 
 
@@ -32,9 +36,9 @@ class TestCreateAndNotify:
 
         with (
             patch(
-                "agent_backbone.services.routing._create_notify.resolve_entity_session",
+                "agent_backbone.services.routing._create_notify.resolve_entity_sessions",
                 new_callable=AsyncMock,
-                return_value="brunel",
+                return_value=["brunel"],
             ) as mock_resolve,
             patch(
                 "agent_backbone.services.routing._create_notify.safe_deliver",
@@ -71,11 +75,12 @@ class TestCreateAndNotify:
         session_map = {"brunel": "brunel", "leo": "leo"}
 
         async def _resolve(target, cfg, title):
-            return session_map.get(target)
+            session = session_map.get(target)
+            return [session] if session else []
 
         with (
             patch(
-                "agent_backbone.services.routing._create_notify.resolve_entity_session",
+                "agent_backbone.services.routing._create_notify.resolve_entity_sessions",
                 side_effect=_resolve,
             ),
             patch(
@@ -97,24 +102,12 @@ class TestCreateAndNotify:
         delivered_targets = {call.kwargs["target_entity"] for call in mock_deliver.call_args_list}
         assert delivered_targets == {"brunel", "leo"}
 
-    async def test_skips_unresolvable_target(self, config):
-        """Targets with no session are skipped, not errored."""
-        created = _make_issue(60, ["unknown-entity"])
+    async def test_rejects_unknown_target(self, config):
+        """Unknown targets now fail fast during issue creation."""
         mock_gh = AsyncMock()
-        mock_gh.create_issue.return_value = created
 
-        with (
-            patch(
-                "agent_backbone.services.routing._create_notify.resolve_entity_session",
-                new_callable=AsyncMock,
-                return_value=None,
-            ),
-            patch(
-                "agent_backbone.services.routing._create_notify.safe_deliver",
-                new_callable=AsyncMock,
-            ) as mock_deliver,
-        ):
-            result = await create_and_notify(
+        with pytest.raises(ValueError, match="invalid issue target 'unknown-entity'"):
+            await create_and_notify(
                 mock_gh,
                 title="[task] Unknown target",
                 body="body",
@@ -122,8 +115,7 @@ class TestCreateAndNotify:
                 config=config,
             )
 
-        assert result.number == 60
-        mock_deliver.assert_not_called()
+        mock_gh.create_issue.assert_not_called()
 
     async def test_no_for_labels_skips_notification(self, config):
         """Issue with no for: labels still creates but skips notification."""
@@ -156,9 +148,9 @@ class TestCreateAndNotify:
 
         with (
             patch(
-                "agent_backbone.services.routing._create_notify.resolve_entity_session",
+                "agent_backbone.services.routing._create_notify.resolve_entity_sessions",
                 new_callable=AsyncMock,
-                return_value="brunel",
+                return_value=["brunel"],
             ),
             patch(
                 "agent_backbone.services.routing._create_notify.safe_deliver",
@@ -186,9 +178,9 @@ class TestCreateAndNotify:
 
         with (
             patch(
-                "agent_backbone.services.routing._create_notify.resolve_entity_session",
+                "agent_backbone.services.routing._create_notify.resolve_entity_sessions",
                 new_callable=AsyncMock,
-                return_value="brunel",
+                return_value=["brunel"],
             ),
             patch(
                 "agent_backbone.services.routing._create_notify.safe_deliver",
@@ -216,9 +208,9 @@ class TestCreateAndNotify:
 
         with (
             patch(
-                "agent_backbone.services.routing._create_notify.resolve_entity_session",
+                "agent_backbone.services.routing._create_notify.resolve_entity_sessions",
                 new_callable=AsyncMock,
-                return_value="brunel",
+                return_value=["brunel"],
             ),
             patch(
                 "agent_backbone.services.routing._create_notify.safe_deliver",
@@ -251,9 +243,9 @@ class TestCreateAndNotify:
 
         with (
             patch(
-                "agent_backbone.services.routing._create_notify.resolve_entity_session",
+                "agent_backbone.services.routing._create_notify.resolve_entity_sessions",
                 new_callable=AsyncMock,
-                return_value="brunel",
+                return_value=["brunel"],
             ),
             patch(
                 "agent_backbone.services.routing._create_notify.safe_deliver",
@@ -271,3 +263,46 @@ class TestCreateAndNotify:
 
         actual_message = mock_deliver.call_args.args[1]
         assert actual_message == expected_message
+
+    async def test_rejects_invalid_shared_role_targets(self):
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            registry=EntityRegistry(
+                entities={
+                    "bell-wf": EntityEntry(
+                        session="bell-wf",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="Bell",
+                        role="Org Orchestrator",
+                        organization="WF",
+                        entity_type="role-instance",
+                    ),
+                    "bell-loveble": EntityEntry(
+                        session="bell-loveble",
+                        home="~/ws/core/code/Loveble/bell",
+                        groups=["orchestrators"],
+                        figure="Bell",
+                        role="Org Orchestrator",
+                        organization="Loveble",
+                        entity_type="role-instance",
+                    ),
+                }
+            ),
+        )
+        mock_gh = AsyncMock()
+
+        try:
+            await create_and_notify(
+                mock_gh,
+                title="[task] Invalid legacy target",
+                body="body",
+                labels=["from:coding-agent", "for:bell", "task"],
+                config=config,
+            )
+        except ValueError as exc:
+            assert "invalid issue target 'bell'" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for invalid issue target")
+
+        mock_gh.create_issue.assert_not_called()

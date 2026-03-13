@@ -21,6 +21,28 @@ log = logging.getLogger(__name__)
 SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}\nclient_activity=#{client_activity}"
 
 
+async def query_environment_var(session_name: str, key: str) -> str | None:
+    """Read a tmux session environment variable."""
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        "show-environment",
+        "-t",
+        session_name,
+        key,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return None
+
+    value = stdout.decode().strip()
+    if not value or value.startswith("-"):
+        return None
+    _, _, env_value = value.partition("=")
+    return env_value or None
+
+
 def resolve_agent_dir(session_name: str, registry: EntityRegistry | None = None) -> str:
     """Resolve the working directory for an agent session.
 

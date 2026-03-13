@@ -28,7 +28,7 @@ from agent_backbone.api.models import (
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.terminal import TmuxService, resolve_agent_dir
+from agent_backbone.services.terminal import RUNTIME_ENV_KEY, TmuxService, resolve_agent_dir
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +64,8 @@ _RUNTIMES = {
     "claude": {"display_name": "Claude Code", "command": "claude"},
     "gemini": {"display_name": "Gemini CLI", "command": "gemini"},
     "codex": {"display_name": "Codex", "command": "codex"},
+    "cursor": {"display_name": "Cursor Agent", "command": "cursor"},
+    "opencode": {"display_name": "OpenCode", "command": "opencode"},
     "shell": {"display_name": "Plain Shell", "command": None},
 }
 
@@ -86,7 +88,7 @@ async def _build_enriched_agent(
     """Build an EnrichedAgent from session name and entity."""
     online = session in active_sessions
     snapshot = await state_svc.get_state(session)
-    reg_entry = config.registry.entities.get(entity)
+    reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(entity)
     display_name = reg_entry.figure.split()[-1] if reg_entry else session
     role = reg_entry.role if reg_entry else "Coding Agent"
     figure = reg_entry.figure if reg_entry else ""
@@ -161,6 +163,16 @@ _AGENTS_CACHE_TTL = 5.0
 _agents_cache_lock = asyncio.Lock()
 
 
+def _listable_registry_sessions(config: BackboneConfig) -> dict[str, str]:
+    """Concrete registry-backed sessions that should appear as named agents."""
+    return config.registry.concrete_sessions_map
+
+
+def _reserved_agent_sessions(config: BackboneConfig) -> set[str]:
+    """Sessions reserved by registry-backed agents."""
+    return set(_listable_registry_sessions(config).values())
+
+
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
 async def list_agents(
     config: BackboneConfig = Depends(get_config),
@@ -187,9 +199,12 @@ async def list_agents(
         # Collect all coroutines, then execute concurrently with asyncio.gather
         coros: list = []
 
-        # Named entities (skip service entities — they have no tmux sessions)
-        for entity, session in config.registry.sessions_map.items():
-            reg_entry = config.registry.entities.get(entity)
+        # Registry-backed entities, including concrete role-instance sessions.
+        registry_sessions = _listable_registry_sessions(config)
+        for entity, session in registry_sessions.items():
+            reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(
+                entity
+            )
             if reg_entry and reg_entry.entity_type == "service":
                 continue
             coros.append(
@@ -205,7 +220,7 @@ async def list_agents(
             )
 
         # Discover coding agents from tmux sessions (exclude services)
-        named_sessions = set(config.registry.sessions_map.values())
+        named_sessions = _reserved_agent_sessions(config)
         service_sessions = config.entities.service_sessions
         seen_coding: set[str] = set()
         for session in active_sessions:
@@ -330,6 +345,7 @@ async def start_agent(
         session,
         working_dir=working_dir,
         command=command,
+        environment={RUNTIME_ENV_KEY: req.runtime},
     )
     return AgentStartResponse(
         ok=ok,

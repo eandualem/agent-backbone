@@ -13,7 +13,10 @@ if TYPE_CHECKING:
 from agent_backbone.models import IssueData
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_issue_notification
-from agent_backbone.services.routing._resolution import resolve_entity_sessions
+from agent_backbone.services.routing._resolution import (
+    resolve_entity_sessions,
+    validate_issue_targets,
+)
 
 log = logging.getLogger(__name__)
 
@@ -46,10 +49,11 @@ async def create_and_notify(
     Returns:
         The created IssueData.
     """
-    issue = await gh.create_issue(title, body, labels)
-
     # Extract target entities from for: labels
     targets = [label.removeprefix("for:") for label in labels if label.startswith("for:")]
+    validate_issue_targets(targets, config)
+
+    issue = await gh.create_issue(title, body, labels)
 
     if not targets:
         log.info("Created issue #%d with no for: targets — skipping notification", issue.number)

@@ -135,36 +135,25 @@ class TestOnIssueClosed:
 
         assert result["ike"] == "delivered_#20"
 
-    async def test_role_target_delivers_to_all_instance_sessions(self):
-        event = make_close_event(["bell"])
+    async def test_concrete_role_instance_target_delivers_next_issue(self):
+        event = make_close_event(["bell-wf"])
         next_issue = IssueData(
             number=21,
-            title="[task] Next for Bell",
-            labels=ParsedLabels(sender="leo", targets=["bell"], issue_type="task"),
+            title="[task] Next for Bell WF",
+            labels=ParsedLabels(sender="leo", targets=["bell-wf"], issue_type="task"),
         )
         config = BackboneConfig(
             webhook_secret="test-secret",
             registry=EntityRegistry(
                 entities={
-                    "bell": EntityEntry(
-                        session="bell",
+                    "bell-wf": EntityEntry(
+                        session="bell-wf",
                         home="~/ws/core/code/WF/bell",
                         groups=["orchestrators"],
                         figure="",
                         role="Org Orchestrator",
-                        entity_type="role",
-                        instances={
-                            "wf": EntityInstance(
-                                home="~/ws/core/code/WF/bell",
-                                session="bell-wf",
-                                organization="WF",
-                            ),
-                            "loveble": EntityInstance(
-                                home="~/ws/core/code/Loveble/bell",
-                                session="bell-loveble",
-                                organization="Loveble",
-                            ),
-                        },
+                        organization="WF",
+                        entity_type="role-instance",
                     )
                 },
                 repos=[],
@@ -191,8 +180,39 @@ class TestOnIssueClosed:
         ):
             result = await on_issue_closed.fn(event, config, mock_gh)
 
-        assert result["bell"] == "delivered_#21"
-        assert mock_deliver.await_count == 2
+        assert result["bell-wf"] == "delivered_#21"
+        assert mock_deliver.await_count == 1
+
+    async def test_abstract_role_target_has_no_session(self):
+        event = make_close_event(["bell"])
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            registry=EntityRegistry(
+                entities={
+                    "bell": EntityEntry(
+                        session=None,
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="",
+                        role="Org Orchestrator",
+                        entity_type="role",
+                        instances={
+                            "wf": EntityInstance(
+                                home="~/ws/core/code/WF/bell",
+                                session="bell-wf",
+                                organization="WF",
+                            ),
+                        },
+                    )
+                },
+                repos=[],
+            ),
+        )
+        mock_gh = AsyncMock()
+
+        result = await on_issue_closed.fn(event, config, mock_gh)
+
+        assert result["bell"] == "no_session"
 
     async def test_dedup_prevents_redelivery(self, config):
         """Closing two issues in a row shouldn't re-deliver the same next issue."""

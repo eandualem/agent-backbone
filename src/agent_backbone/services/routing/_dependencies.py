@@ -104,7 +104,9 @@ async def on_dependency_resolved(closed_issue_number: int) -> dict:
 async def sync_dependencies(config: BackboneConfig, db: BackboneDB, gh: object) -> None:
     """Sync sub-issue relationships to SQLite for close-time lookups."""
     checked: set[int] = set()
-    for entity in config.registry.all_entities:
+    for entity, entry in config.registry.entities.items():
+        if entry.entity_type == "role" or entry.session is None:
+            continue
         label = f"for:{entity}"
         issues = await gh.list_open_issues(label)
         for issue in issues:

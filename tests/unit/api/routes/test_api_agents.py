@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -337,6 +338,85 @@ class TestListAgents:
         # Other named entities still present
         assert "ike" in entities
 
+    async def test_role_instances_do_not_emit_role_alias_or_repo_phantom(
+        self, api_app, api_client, auth_headers, tmp_path
+    ):
+        """Flat role-instance registries surface concrete sessions only."""
+        from dataclasses import replace as dc_replace
+
+        from agent_backbone.services.registry import build_registry
+
+        registry_file = tmp_path / "entities.json"
+        code_dir = tmp_path / "code"
+        (code_dir / "WF" / "bell").mkdir(parents=True)
+        (code_dir / "Loveble" / "bell").mkdir(parents=True)
+        (code_dir / "WF" / "agent-backbone").mkdir(parents=True)
+        registry_file.write_text(
+            json.dumps(
+                {
+                    "bell-wf": {
+                        "session": "bell-wf",
+                        "home": str(code_dir / "WF" / "bell"),
+                        "groups": ["orchestrators"],
+                        "figure": "Alexander Graham Bell",
+                        "role": "Org Orchestrator",
+                        "organization": "WF",
+                        "type": "role-instance",
+                        "roleDefinition": "~/orchestration/roles/bell/",
+                        "roleEntity": "bell",
+                    },
+                    "bell-loveble": {
+                        "session": "bell-loveble",
+                        "home": str(code_dir / "Loveble" / "bell"),
+                        "groups": ["orchestrators"],
+                        "figure": "Alexander Graham Bell",
+                        "role": "Org Orchestrator",
+                        "organization": "Loveble",
+                        "type": "role-instance",
+                        "roleDefinition": "~/orchestration/roles/bell/",
+                        "roleEntity": "bell",
+                    },
+                }
+            )
+        )
+
+        old_config = api_app.state.config
+        new_registry = build_registry(registry_file, code_dir)
+        api_app.state.config = dc_replace(old_config, registry=new_registry)
+
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(),
+            tmux_svc=_make_mock_tmux_svc(
+                rich_sessions=[
+                    _tmux("bell-wf"),
+                    _tmux("bell-loveble"),
+                ],
+            ),
+        )
+        try:
+            resp = await api_client.get("/api/agents", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+            api_app.state.config = old_config
+
+        assert resp.status_code == 200
+        data = resp.json()
+        sessions = [agent["session"] for agent in data["items"]]
+
+        assert "bell" not in sessions
+        assert "agent-backbone" in sessions
+
+        bell_wf = next(agent for agent in data["items"] if agent["session"] == "bell-wf")
+        bell_loveble = next(agent for agent in data["items"] if agent["session"] == "bell-loveble")
+        assert bell_wf["type"] == "named_entity"
+        assert bell_wf["entity_type"] == "role-instance"
+        assert bell_loveble["type"] == "named_entity"
+        assert bell_loveble["entity_type"] == "role-instance"
+
+        coding = next(agent for agent in data["items"] if agent["session"] == "agent-backbone")
+        assert coding["type"] == "coding_agent"
+
     async def test_entity_type_field_returned(self, api_app, api_client, auth_headers):
         """EnrichedAgent includes entity_type field defaulting to 'agent'."""
         _set_di_overrides(
@@ -466,7 +546,7 @@ class TestListRuntimes:
         assert resp.status_code == 200
         data = resp.json()
         ids = [r["id"] for r in data]
-        assert ids == ["claude", "gemini", "codex", "shell"]
+        assert ids == ["claude", "gemini", "codex", "cursor", "opencode", "shell"]
         # Verify structure
         claude = next(r for r in data if r["id"] == "claude")
         assert claude["display_name"] == "Claude Code"
@@ -564,6 +644,8 @@ class TestStartAgent:
         assert data["working_directory"] == "/ws/code/WF/my-repo"
         assert data["already_existed"] is False
         tmux_svc.start_session.assert_awaited_once()
+        call_kwargs = tmux_svc.start_session.call_args.kwargs
+        assert call_kwargs["environment"] == {"BACKBONE_RUNTIME": "claude"}
 
     async def test_start_with_model_and_resume(self, api_app, api_client, auth_headers):
         """Model and resume flags are passed into the command list."""
@@ -591,6 +673,7 @@ class TestStartAgent:
         assert "--model" in cmd
         assert "claude-opus-4-6" in cmd
         assert "--resume" in cmd
+        assert call_kwargs["environment"] == {"BACKBONE_RUNTIME": "claude"}
 
     async def test_start_preserves_session_case(self, api_app, api_client, auth_headers):
         """Mixed-case session names are preserved through start."""
@@ -720,6 +803,7 @@ class TestStartAgent:
         assert data["runtime"] == "shell"
         call_kwargs = tmux_svc.start_session.call_args[1]
         assert call_kwargs["command"] is None
+        assert call_kwargs["environment"] == {"BACKBONE_RUNTIME": "shell"}
 
     async def test_start_shell_ignores_model(self, api_app, api_client, auth_headers):
         """Shell runtime ignores model — response model is null."""
