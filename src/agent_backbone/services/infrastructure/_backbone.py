@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 
+from agent_backbone.services.infrastructure._commands import (
+    build_gateway_command,
+    build_prefect_deploy_command,
+    build_prefect_pool_create_command,
+    build_prefect_server_command,
+    build_telegram_command,
+    build_worker_command,
+    inherited_environment,
+    prefect_environment,
+)
 from agent_backbone.services.infrastructure._processes import (
     check_port_free,
     kill_port_process,
@@ -48,14 +59,13 @@ async def wait_for_health(
             except httpx.HTTPError:
                 pass
             if i < retries - 1:
-                import asyncio
-
                 await asyncio.sleep(interval)
     return False
 
 
 async def start_prefect(config: BackboneConfig) -> bool:
     """Start Prefect server in a tmux session."""
+    del config
     if await session_exists("prefect"):
         log.info("Prefect server already running")
         return True
@@ -72,7 +82,7 @@ async def start_prefect(config: BackboneConfig) -> bool:
     ok = await start_session(
         "prefect",
         working_dir=BACKBONE_DIR,
-        command=["uv", "run", "prefect", "server", "start"],
+        command=build_prefect_server_command(),
     )
     if ok:
         await record_tmux_pid("prefect", "prefect")
@@ -104,25 +114,8 @@ async def start_gateway(config: BackboneConfig) -> bool:
     ok = await start_session(
         "gateway",
         working_dir=BACKBONE_DIR,
-        command=[
-            "uv",
-            "run",
-            "uvicorn",
-            "agent_backbone.api.app:create_app",
-            "--factory",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--reload",
-            "--reload-dir",
-            "src",
-            "--reload-include",
-            "*.toml",
-            "--log-level",
-            "info",
-        ],
-        environment={"PREFECT_API_URL": PREFECT_API_URL},
+        command=build_gateway_command(port),
+        environment=prefect_environment(PREFECT_API_URL),
     )
     if ok:
         await record_tmux_pid("gateway", "gateway")
@@ -156,46 +149,33 @@ async def start_worker(config: BackboneConfig) -> bool:
     # Clean stale PID
     await stop_by_pid("worker")
 
-    import asyncio
-
     work_pool_name = config.scheduling.work_pool_name
 
     # Create work pool (idempotent)
     pool_proc = await asyncio.create_subprocess_exec(
-        "uv",
-        "run",
-        "prefect",
-        "work-pool",
-        "create",
-        work_pool_name,
-        "--type",
-        "process",
+        *build_prefect_pool_create_command(work_pool_name),
         cwd=BACKBONE_DIR,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
-        env={**__import__("os").environ, "PREFECT_API_URL": PREFECT_API_URL},
+        env=inherited_environment(prefect_environment(PREFECT_API_URL)),
     )
     await pool_proc.wait()
 
     # Deploy all scheduled flows
     deploy_proc = await asyncio.create_subprocess_exec(
-        "uv",
-        "run",
-        "prefect",
-        "deploy",
-        "--all",
+        *build_prefect_deploy_command(),
         cwd=BACKBONE_DIR,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
-        env={**__import__("os").environ, "PREFECT_API_URL": PREFECT_API_URL},
+        env=inherited_environment(prefect_environment(PREFECT_API_URL)),
     )
     await deploy_proc.wait()
 
     ok = await start_session(
         "backbone-worker",
         working_dir=BACKBONE_DIR,
-        command=["uv", "run", "prefect", "worker", "start", "--pool", work_pool_name],
-        environment={"PREFECT_API_URL": PREFECT_API_URL},
+        command=build_worker_command(work_pool_name),
+        environment=prefect_environment(PREFECT_API_URL),
     )
     if ok:
         await record_tmux_pid("worker", "backbone-worker")
@@ -214,6 +194,7 @@ async def stop_worker(config: BackboneConfig) -> bool:
 
 async def start_telegram(config: BackboneConfig) -> bool:
     """Start Telegram bot in a tmux session."""
+    del config
     if await session_exists("telegram-bot"):
         log.info("Telegram bot already running")
         return True
@@ -224,14 +205,7 @@ async def start_telegram(config: BackboneConfig) -> bool:
     ok = await start_session(
         "telegram-bot",
         working_dir=BACKBONE_DIR,
-        command=[
-            "uv",
-            "run",
-            "python",
-            "-m",
-            "agent_backbone.services.infrastructure",
-            "run-telegram-bot",
-        ],
+        command=build_telegram_command(),
     )
     if ok:
         await record_tmux_pid("telegram", "telegram-bot")

@@ -24,6 +24,12 @@ import termios
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from agent_backbone.services.terminal._pty_pid_tracking import (
+    append_pid,
+    clear_orphaned_pids,
+    remove_pid,
+)
+
 log = logging.getLogger(__name__)
 
 # Max queued output chunks before dropping oldest
@@ -280,27 +286,7 @@ class PtyManager:
         Uses a PID tracking file to only kill processes spawned by this
         application — not the user's own tmux attach terminals.
         """
-        try:
-            if not _PID_FILE.exists():
-                return
-            content = _PID_FILE.read_text().strip()
-            if not content:
-                return
-            pids = [int(p) for p in content.split("\n") if p.strip()]
-            killed = 0
-            for pid in pids:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    killed += 1
-                    log.info("Killed orphaned tmux attach-session (pid=%d)", pid)
-                except OSError:
-                    pass  # Already dead
-            if killed:
-                log.info("Cleaned up %d orphaned PTY process(es)", killed)
-            # Clear the PID file
-            _PID_FILE.write_text("")
-        except Exception:
-            log.warning("Failed to clean up orphaned PTY processes", exc_info=True)
+        clear_orphaned_pids(_PID_FILE, kill_pid=os.kill, logger=log)
 
     async def create(
         self,
@@ -352,20 +338,9 @@ class PtyManager:
 
 def _record_pid(pid: int) -> None:
     """Append a PID to the tracking file."""
-    try:
-        with _PID_FILE.open("a") as f:
-            f.write(f"{pid}\n")
-    except OSError:
-        log.debug("Failed to record PID %d", pid)
+    append_pid(_PID_FILE, pid, logger=log)
 
 
 def _unrecord_pid(pid: int) -> None:
     """Remove a PID from the tracking file."""
-    try:
-        if not _PID_FILE.exists():
-            return
-        lines = _PID_FILE.read_text().strip().split("\n")
-        remaining = [ln for ln in lines if ln.strip() and ln.strip() != str(pid)]
-        _PID_FILE.write_text("\n".join(remaining) + "\n" if remaining else "")
-    except OSError:
-        log.debug("Failed to unrecord PID %d", pid)
+    remove_pid(_PID_FILE, pid, logger=log)

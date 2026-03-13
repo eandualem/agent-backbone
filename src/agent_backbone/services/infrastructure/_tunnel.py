@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from agent_backbone.services.infrastructure._commands import build_ngrok_command
 from agent_backbone.services.infrastructure._processes import kill_port_process
 from agent_backbone.services.terminal import session_exists, start_session, stop_session
 
@@ -30,7 +31,7 @@ async def start_tunnel(config: BackboneConfig) -> bool:
     port = config.gateway.port
     ok = await start_session(
         "ngrok",
-        command=["ngrok", "http", str(port)],
+        command=build_ngrok_command(port),
     )
     if ok:
         log.info("ngrok tunnel started (port %d)", port)

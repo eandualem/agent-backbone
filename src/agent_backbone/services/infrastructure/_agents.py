@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agent_backbone.services.infrastructure._agent_launch import build_agent_launch_plan
 from agent_backbone.services.terminal import (
-    RUNTIME_ENV_KEY,
     list_sessions,
     resolve_agent_dir,
     session_exists,
@@ -39,19 +39,16 @@ async def start_agent(
     if not working_dir:
         log.error("Unknown agent '%s' — not in registry", name)
         return False
-    if not Path(working_dir).is_dir():
+    launch_plan = build_agent_launch_plan(name, config, cli=cli, model=model)
+    if launch_plan is None:
         log.error("Directory '%s' does not exist for agent '%s'", working_dir, name)
         return False
 
-    command = [cli]
-    if model:
-        command.extend(["--model", model])
-
     ok = await start_session(
-        name,
-        working_dir=working_dir,
-        command=command,
-        environment={RUNTIME_ENV_KEY: cli},
+        launch_plan.name,
+        working_dir=launch_plan.working_dir,
+        command=launch_plan.command,
+        environment=launch_plan.environment,
     )
     if ok:
         extra = f", model: {model}" if model else ""
@@ -82,20 +79,16 @@ async def start_group(
             log.info("  Already running: %s", name)
             continue
 
-        working_dir = resolve_agent_dir(name, config.registry)
-        if not working_dir or not Path(working_dir).is_dir():
+        launch_plan = build_agent_launch_plan(name, config, cli=cli, model=model)
+        if launch_plan is None:
             log.warning("  Skipped (dir not found): %s", name)
             continue
 
-        command = [cli]
-        if model:
-            command.extend(["--model", model])
-
         ok = await start_session(
-            name,
-            working_dir=working_dir,
-            command=command,
-            environment={RUNTIME_ENV_KEY: cli},
+            launch_plan.name,
+            working_dir=launch_plan.working_dir,
+            command=launch_plan.command,
+            environment=launch_plan.environment,
         )
         if ok:
             extra = f", model: {model}" if model else ""
