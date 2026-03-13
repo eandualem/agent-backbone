@@ -9,9 +9,9 @@ import respx
 
 from agent_backbone.config import AgentStateConfig, BackboneConfig, TelegramConfig
 from agent_backbone.services.registry import EntityEntry, EntityRegistry
-from agent_backbone.services.terminal import RUNTIME_ENV_KEY
 from agent_backbone.services.telegram import TelegramService, _delivery_reply
 from agent_backbone.services.telegram._topic_discovery import TopicDiscovery
+from agent_backbone.services.terminal import RUNTIME_ENV_KEY
 
 
 def _make_topic_update(thread_id: int | None, text: str, chat_id: int = 100) -> MagicMock:
