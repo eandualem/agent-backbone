@@ -48,9 +48,9 @@ def upgrade() -> None:
                     sa.Column("phase", sa.Text(), nullable=False, server_default="created")
                 )
 
-            if "ck_swarms_status" in swarm_checks:
+            if "ck_swarms_ck_swarms_status" in swarm_checks:
                 batch_op.drop_constraint("ck_swarms_status", type_="check")
-            if "ck_swarms_phase" in swarm_checks:
+            if "ck_swarms_ck_swarms_phase" in swarm_checks:
                 batch_op.drop_constraint("ck_swarms_phase", type_="check")
             batch_op.create_check_constraint(
                 "ck_swarms_phase",
@@ -123,10 +123,16 @@ def upgrade() -> None:
                 nullable=False,
                 server_default=None,
             )
-            if "ck_swarm_workers_role" in worker_checks:
-                batch_op.drop_constraint("ck_swarm_workers_role", type_="check")
-            if "ck_swarm_workers_status" in worker_checks:
-                batch_op.drop_constraint("ck_swarm_workers_status", type_="check")
+            if "ck_swarm_workers_ck_swarm_workers_role" in worker_checks:
+                batch_op.drop_constraint(
+                    "ck_swarm_workers_role",
+                    type_="check",
+                )
+            if "ck_swarm_workers_ck_swarm_workers_status" in worker_checks:
+                batch_op.drop_constraint(
+                    "ck_swarm_workers_status",
+                    type_="check",
+                )
             batch_op.create_check_constraint(
                 "ck_swarm_workers_role",
                 "role IN ('lead', 'coder', 'tester', 'validator', 'scout')",
