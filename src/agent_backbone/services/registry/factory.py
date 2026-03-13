@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agent_backbone.base import LifecycleManager
-    from agent_backbone.services.registry.interface import EntityRegistry, RegistryService
+    from agent_backbone.services.registry.interface import RegistryService
+    from agent_backbone.services.registry.models import EntityRegistry
 
 
 async def register_registry(

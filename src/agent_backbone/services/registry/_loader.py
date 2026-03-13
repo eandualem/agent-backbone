@@ -73,6 +73,22 @@ def _entity_home_paths(entities: dict[str, EntityEntry]) -> set[Path]:
     return excluded
 
 
+def _build_entity_entry(name: str, data: dict) -> EntityEntry:
+    """Normalize a single entity payload into an EntityEntry."""
+    instances = _load_instances(data)
+    return EntityEntry(
+        session=_default_session(name, data, instances),
+        home=_default_home(data, instances),
+        groups=data.get("groups", []),
+        figure=data.get("figure", ""),
+        role=data.get("role", ""),
+        organization=data.get("organization", ""),
+        entity_type=data.get("type", "agent"),
+        role_definition=data.get("roleDefinition", ""),
+        instances=instances,
+    )
+
+
 def load_entity_registry(path: Path) -> dict[str, EntityEntry]:
     """Read entity-registry.json and return entity dict.
 
@@ -80,21 +96,22 @@ def load_entity_registry(path: Path) -> dict[str, EntityEntry]:
     Raises ValueError on malformed JSON.
     """
     raw = json.loads(path.read_text())
-    entities: dict[str, EntityEntry] = {}
-    for name, data in raw.items():
-        instances = _load_instances(data)
-        entities[name] = EntityEntry(
-            session=_default_session(name, data, instances),
-            home=_default_home(data, instances),
-            groups=data.get("groups", []),
-            figure=data.get("figure", ""),
-            role=data.get("role", ""),
-            organization=data.get("organization", ""),
-            entity_type=data.get("type", "agent"),
-            role_definition=data.get("roleDefinition", ""),
-            instances=instances,
-        )
-    return entities
+    return {name: _build_entity_entry(name, data) for name, data in raw.items()}
+
+
+def _normalized_paths(paths: set[Path] | None) -> set[Path]:
+    """Normalize optional path exclusions for repo discovery."""
+    return {path.expanduser().resolve(strict=False) for path in (paths or set())}
+
+
+def _iter_coding_repo_dirs(base_dir: Path):
+    """Yield org and repo directories that match the coding-repo layout."""
+    for org_dir in sorted(base_dir.iterdir()):
+        if not org_dir.is_dir() or org_dir.name.startswith("."):
+            continue
+        for repo_dir in sorted(org_dir.iterdir()):
+            if repo_dir.is_dir() and not repo_dir.name.startswith("."):
+                yield org_dir, repo_dir
 
 
 def discover_coding_repos(
@@ -110,26 +127,19 @@ def discover_coding_repos(
     repos: list[RepoInfo] = []
     if not base_dir.is_dir():
         return repos
-    normalized_excludes = {
-        path.expanduser().resolve(strict=False) for path in (exclude_paths or set())
-    }
+    normalized_excludes = _normalized_paths(exclude_paths)
 
-    for org_dir in sorted(base_dir.iterdir()):
-        if not org_dir.is_dir() or org_dir.name.startswith("."):
+    for org_dir, repo_dir in _iter_coding_repo_dirs(base_dir):
+        if repo_dir.resolve(strict=False) in normalized_excludes:
+            log.debug("Skipping entity home during repo discovery: %s", repo_dir)
             continue
-        for repo_dir in sorted(org_dir.iterdir()):
-            if not repo_dir.is_dir() or repo_dir.name.startswith("."):
-                continue
-            if repo_dir.resolve(strict=False) in normalized_excludes:
-                log.debug("Skipping entity home during repo discovery: %s", repo_dir)
-                continue
-            repos.append(
-                RepoInfo(
-                    org=org_dir.name,
-                    name=repo_dir.name,
-                    path=str(repo_dir),
-                )
+        repos.append(
+            RepoInfo(
+                org=org_dir.name,
+                name=repo_dir.name,
+                path=str(repo_dir),
             )
+        )
 
     return repos
 

@@ -47,6 +47,56 @@ class EntityRegistry:
     entities: dict[str, EntityEntry] = field(default_factory=dict)
     repos: list[RepoInfo] = field(default_factory=list)
 
+    @staticmethod
+    def _materialize_role_instance(entry: EntityEntry, instance: EntityInstance) -> EntityEntry:
+        """Convert a role instance definition into a concrete entity entry."""
+        return EntityEntry(
+            session=instance.session,
+            home=instance.home or entry.home,
+            groups=list(entry.groups),
+            figure=entry.figure,
+            role=entry.role,
+            organization=instance.organization,
+            entity_type="role-instance",
+            role_definition=entry.role_definition,
+        )
+
+    def _iter_role_instances(self):
+        """Yield all abstract-role instance definitions in declaration order."""
+        for entry in self.entities.values():
+            if entry.entity_type != "role":
+                continue
+            for instance in entry.instances.values():
+                yield entry, instance
+
+    def _iter_concrete_entries(self):
+        """Yield concrete entity/session mappings in entity declaration order."""
+        for name, entry in self.entities.items():
+            if entry.session is not None and entry.entity_type != "role":
+                yield name, entry
+            if entry.entity_type == "role":
+                for instance in entry.instances.values():
+                    concrete = self._materialize_role_instance(entry, instance)
+                    if concrete.session is not None:
+                        yield concrete.session, concrete
+
+    def _iter_home_entries(self):
+        """Yield session/home pairs in the same order the registry declares them."""
+        for entry in self.entities.values():
+            if entry.session is not None:
+                yield entry.session, entry.home
+            if entry.entity_type == "role":
+                for instance in entry.instances.values():
+                    if instance.session is not None:
+                        yield instance.session, instance.home
+
+    def _repo_info_for_name(self, repo_name: str) -> RepoInfo | None:
+        """Return the first repo info entry whose name matches exactly."""
+        for repo in self.repos:
+            if repo.name == repo_name:
+                return repo
+        return None
+
     def delivery_sessions_for(self, entity_name: str) -> list[str]:
         """Concrete tmux sessions that should receive deliveries for an entity."""
         entry = self.entities.get(entity_name)
@@ -72,16 +122,9 @@ class EntityRegistry:
     def entity_by_session(self) -> dict[str, str]:
         """Session name -> entity name, including concrete role-instance sessions."""
         reverse: dict[str, str] = {}
-        for name, entry in self.entities.items():
-            if (
-                entry.session is not None
-                and entry.entity_type != "role"
-                and entry.session not in reverse
-            ):
+        for name, entry in self._iter_concrete_entries():
+            if entry.session is not None and entry.session not in reverse:
                 reverse[entry.session] = name
-            for instance in entry.instances.values():
-                if instance.session is not None and instance.session not in reverse:
-                    reverse[instance.session] = instance.session
         return reverse
 
     @cached_property
@@ -90,15 +133,7 @@ class EntityRegistry:
         sessions: dict[str, str] = {}
         seen_sessions: set[str] = set()
 
-        for name, entry in self.entities.items():
-            if entry.entity_type == "role":
-                for instance in entry.instances.values():
-                    if instance.session is None or instance.session in seen_sessions:
-                        continue
-                    sessions[instance.session] = instance.session
-                    seen_sessions.add(instance.session)
-                continue
-
+        for name, entry in self._iter_concrete_entries():
             if entry.session is None or entry.session in seen_sessions:
                 continue
             sessions[name] = entry.session
@@ -125,12 +160,8 @@ class EntityRegistry:
     def home_by_session(self) -> dict[str, str]:
         """Session name -> home directory, including role-instance sessions."""
         homes: dict[str, str] = {}
-        for entry in self.entities.values():
-            if entry.session is not None:
-                homes[entry.session] = str(Path(entry.home).expanduser())
-            for instance in entry.instances.values():
-                if instance.session is not None:
-                    homes[instance.session] = str(Path(instance.home).expanduser())
+        for session, home in self._iter_home_entries():
+            homes[session] = str(Path(home).expanduser())
         return homes
 
     @cached_property
@@ -168,22 +199,10 @@ class EntityRegistry:
         ):
             return direct_entry
 
-        for entry in self.entities.values():
-            if entry.entity_type != "role":
+        for entry, instance in self._iter_role_instances():
+            if instance.session != session:
                 continue
-            for instance in entry.instances.values():
-                if instance.session != session:
-                    continue
-                return EntityEntry(
-                    session=instance.session,
-                    home=instance.home or entry.home,
-                    groups=list(entry.groups),
-                    figure=entry.figure,
-                    role=entry.role,
-                    organization=instance.organization,
-                    entity_type="role-instance",
-                    role_definition=entry.role_definition,
-                )
+            return self._materialize_role_instance(entry, instance)
 
         return None
 
@@ -200,17 +219,13 @@ class EntityRegistry:
 
         Returns the concrete orchestrator session/entity name or None if no match.
         """
-        org = None
-        for repo in self.repos:
-            if repo.name == repo_name:
-                org = repo.org
-                break
-        if not org:
+        repo = self._repo_info_for_name(repo_name)
+        if repo is None:
             return None
         for name, entry in self.entities.items():
             if "orchestrators" not in entry.groups:
                 continue
-            if entry.organization == org:
+            if entry.organization == repo.org:
                 return name
         return None
 

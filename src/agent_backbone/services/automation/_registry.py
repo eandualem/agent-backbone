@@ -21,6 +21,28 @@ log = logging.getLogger(__name__)
 _FLOWS_MODULE = "agent_backbone.services.automation._flows"
 
 
+def _workflow_description(flow: Flow) -> str:
+    """Return the first available human-readable workflow description."""
+    return (flow.description or flow.fn.__doc__ or "").strip()
+
+
+def _json_workflow_entry(path: Path) -> WorkflowEntry | None:
+    """Load a JSON workflow definition from disk."""
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        log.warning("Failed to read workflow JSON: %s", path)
+        return None
+
+    return WorkflowEntry(
+        name=data.get("name", path.stem),
+        description=data.get("description", ""),
+        source="json",
+        last_run=data.get("last_run"),
+        steps=data.get("steps", []),
+    )
+
+
 class WorkflowRegistry:
     """Discovers and provides access to workflow templates.
 
@@ -34,6 +56,10 @@ class WorkflowRegistry:
     @property
     def workflows(self) -> dict[str, WorkflowEntry]:
         return dict(self._workflows)
+
+    def _register(self, entry: WorkflowEntry) -> None:
+        """Register or replace a workflow entry by name."""
+        self._workflows[entry.name] = entry
 
     def _discover_prefect_flows(self) -> int:
         """Scan _flows module and register all @flow functions.
@@ -54,12 +80,12 @@ class WorkflowRegistry:
             if isinstance(obj, Flow):
                 entry = WorkflowEntry(
                     name=obj.name or attr_name,
-                    description=(obj.description or obj.fn.__doc__ or "").strip(),
+                    description=_workflow_description(obj),
                     module=_FLOWS_MODULE,
                     flow_fn=obj,
                     source="prefect",
                 )
-                self._workflows[entry.name] = entry
+                self._register(entry)
                 count += 1
                 log.debug("Registered workflow: %s from %s", entry.name, _FLOWS_MODULE)
 
@@ -78,23 +104,13 @@ class WorkflowRegistry:
             return 0
 
         for path in sorted(json_dir.glob("*.json")):
-            try:
-                data = json.loads(path.read_text())
-            except (json.JSONDecodeError, OSError):
-                log.warning("Failed to read workflow JSON: %s", path)
+            entry = _json_workflow_entry(path)
+            if entry is None:
                 continue
 
-            name = data.get("name", path.stem)
-            entry = WorkflowEntry(
-                name=name,
-                description=data.get("description", ""),
-                source="json",
-                last_run=data.get("last_run"),
-                steps=data.get("steps", []),
-            )
-            self._workflows[entry.name] = entry
+            self._register(entry)
             count += 1
-            log.debug("Registered JSON workflow: %s from %s", name, path)
+            log.debug("Registered JSON workflow: %s from %s", entry.name, path)
 
         return count
 
