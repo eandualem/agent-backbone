@@ -76,15 +76,24 @@ class TestDeliveryTracking:
         assert outcomes == {"offline", "delivery_failed", "deferred"}
 
     async def test_get_failed_deliveries_includes_transient(self, db):
-        """Transient outcomes (copy_mode, user_interacting) are included in retry query."""
+        """Transient outcomes, including busy-state deferrals, are retryable."""
         await db.record_delivery(1, "ike", "ike", "delivered")
         await db.record_delivery(2, "feynman", "feynman", "copy_mode")
         await db.record_delivery(3, "leo", "leo", "user_interacting")
+        await db.record_delivery(4, "ada", "ada", "agent_working")
+        await db.record_delivery(5, "brunel", "brunel", "plan_waiting")
+        await db.record_delivery(6, "darwin", "darwin", "grace_period")
 
         failed = await db.get_failed_deliveries()
-        assert len(failed) == 2
+        assert len(failed) == 5
         outcomes = {r["outcome"] for r in failed}
-        assert outcomes == {"copy_mode", "user_interacting"}
+        assert outcomes == {
+            "agent_working",
+            "copy_mode",
+            "grace_period",
+            "plan_waiting",
+            "user_interacting",
+        }
         # 'delivered' must not appear
         assert "delivered" not in outcomes
 
@@ -250,6 +259,7 @@ class TestMessageQueue:
             message="Test message",
             issue_number=42,
             target_entity="ike",
+            delivery_kind="comment",
             flow_name="test-flow",
         )
         assert row_id > 0
@@ -258,6 +268,7 @@ class TestMessageQueue:
         assert len(messages) == 1
         assert messages[0]["message"] == "Test message"
         assert messages[0]["issue_number"] == 42
+        assert messages[0]["delivery_kind"] == "comment"
         assert messages[0]["status"] == "pending"
 
     async def test_dequeue_empty(self, db):
@@ -300,6 +311,7 @@ class TestMessageQueue:
 
         messages = await db.dequeue_messages("ike")
         assert len(messages) == 1
+        assert messages[0]["delivery_kind"] == "issue"
         assert messages[0]["issue_number"] is None
         assert messages[0]["target_entity"] is None
 

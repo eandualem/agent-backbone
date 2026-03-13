@@ -19,6 +19,11 @@ log = logging.getLogger(__name__)
 _SUCCESSFUL_ISSUE_OUTCOMES = frozenset({"delivered", "retried"})
 
 
+def _comment_matches_active_issue(issue_number: int | None, current_issue: int | None) -> bool:
+    """Whether a comment belongs to the issue the agent is actively working on."""
+    return issue_number is not None and current_issue is not None and issue_number == current_issue
+
+
 def _can_track_issue_delivery(
     db: BackboneDB | None,
     issue_number: int | None,
@@ -151,8 +156,6 @@ async def safe_deliver(
         "agent_working", "plan_waiting", "grace_period", "unknown_state",
         "already_delivered", "awaiting_ack", "delivery_failed".
     """
-    allow_comment_interrupt = delivery_kind == "comment"
-
     if (
         delivery_kind == "issue"
         and enforce_issue_queue
@@ -222,6 +225,11 @@ async def safe_deliver(
     profile = await get_session_intelligence(session_name, config)
 
     intelligence = profile.intelligence
+    allow_comment_interrupt = delivery_kind == "comment"
+    allow_busy_comment_interrupt = allow_comment_interrupt and _comment_matches_active_issue(
+        issue_number,
+        profile.current_issue,
+    )
 
     # Determine deliverability
     if intelligence == SessionIntelligence.OFFLINE:
@@ -245,7 +253,17 @@ async def safe_deliver(
         )
         return "offline"
 
-    if intelligence == SessionIntelligence.PLAN_WAITING and not allow_comment_interrupt:
+    if intelligence == SessionIntelligence.PLAN_WAITING and not allow_busy_comment_interrupt:
+        if delivery_kind != "issue":
+            await _maybe_enqueue(
+                session_name,
+                message,
+                issue_number,
+                target_entity,
+                flow_name,
+                db,
+                delivery_kind=delivery_kind,
+            )
         await _record_issue_attempt(
             db,
             issue_number,
@@ -257,7 +275,17 @@ async def safe_deliver(
         )
         return "plan_waiting"
 
-    if intelligence == SessionIntelligence.AGENT_WORKING and not allow_comment_interrupt:
+    if intelligence == SessionIntelligence.AGENT_WORKING and not allow_busy_comment_interrupt:
+        if delivery_kind != "issue":
+            await _maybe_enqueue(
+                session_name,
+                message,
+                issue_number,
+                target_entity,
+                flow_name,
+                db,
+                delivery_kind=delivery_kind,
+            )
         await _record_issue_attempt(
             db,
             issue_number,
@@ -390,8 +418,6 @@ async def _maybe_enqueue(
     delivery_kind: str = "issue",
 ) -> None:
     """Enqueue a message to SQLite if tracking info and db are provided."""
-    if delivery_kind != "issue":
-        return
     if issue_number is None or target_entity is None:
         return
     if db is None:
@@ -403,6 +429,7 @@ async def _maybe_enqueue(
             message=message,
             issue_number=issue_number,
             target_entity=target_entity,
+            delivery_kind=delivery_kind,
             flow_name=flow_name,
         )
         log.info(

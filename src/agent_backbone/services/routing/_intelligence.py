@@ -72,6 +72,7 @@ async def get_session_intelligence(
             session_name=session_name,
             intelligence=SessionIntelligence.OFFLINE,
             runtime="unknown",
+            current_issue=None,
         )
 
     # Step 2: Query tmux format vars (non-fatal on failure)
@@ -113,6 +114,7 @@ async def get_session_intelligence(
             intelligence=SessionIntelligence.COPY_MODE,
             runtime=runtime,
             agent_state=agent_state,
+            current_issue=state_snap.current_issue,
             tmux_vars=tmux_vars,
         )
 
@@ -127,6 +129,7 @@ async def get_session_intelligence(
                     intelligence=SessionIntelligence.USER_INTERACTING,
                     runtime=runtime,
                     agent_state=agent_state,
+                    current_issue=state_snap.current_issue,
                     tmux_vars=tmux_vars,
                 )
         except (ValueError, TypeError):
@@ -140,6 +143,7 @@ async def get_session_intelligence(
             intelligence=SessionIntelligence.USER_INTERACTING,
             runtime=runtime,
             agent_state=agent_state,
+            current_issue=state_snap.current_issue,
             tmux_vars=tmux_vars,
         )
 
@@ -150,6 +154,7 @@ async def get_session_intelligence(
             intelligence=SessionIntelligence.PLAN_WAITING,
             runtime=runtime,
             agent_state=agent_state,
+            current_issue=state_snap.current_issue,
             tmux_vars=tmux_vars,
         )
 
@@ -160,6 +165,7 @@ async def get_session_intelligence(
             intelligence=SessionIntelligence.AGENT_WORKING,
             runtime=runtime,
             agent_state=agent_state,
+            current_issue=state_snap.current_issue,
             tmux_vars=tmux_vars,
         )
 
@@ -173,6 +179,7 @@ async def get_session_intelligence(
                     intelligence=SessionIntelligence.IDLE_GRACE,
                     runtime=runtime,
                     agent_state=agent_state,
+                    current_issue=state_snap.current_issue,
                     tmux_vars=tmux_vars,
                 )
         return SessionProfile(
@@ -180,6 +187,7 @@ async def get_session_intelligence(
             intelligence=SessionIntelligence.IDLE_READY,
             runtime=runtime,
             agent_state=agent_state,
+            current_issue=state_snap.current_issue,
             tmux_vars=tmux_vars,
         )
 
@@ -189,5 +197,6 @@ async def get_session_intelligence(
         intelligence=SessionIntelligence.UNKNOWN,
         runtime=runtime,
         agent_state=agent_state,
+        current_issue=state_snap.current_issue,
         tmux_vars=tmux_vars,
     )

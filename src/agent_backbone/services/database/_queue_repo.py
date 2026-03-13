@@ -264,6 +264,7 @@ async def enqueue_message(
     message: str,
     issue_number: int | None = None,
     target_entity: str | None = None,
+    delivery_kind: str = "issue",
     flow_name: str = "",
 ) -> int:
     """Enqueue a message for later delivery. Returns the row ID."""
@@ -271,9 +272,9 @@ async def enqueue_message(
         text(
             """INSERT INTO message_queue
                (session_name, message, issue_number, target_entity,
-                flow_name, enqueued_at, status)
+                delivery_kind, flow_name, enqueued_at, status)
                VALUES (:session_name, :message, :issue_number, :target_entity,
-                       :flow_name, :enqueued_at, 'pending')
+                       :delivery_kind, :flow_name, :enqueued_at, 'pending')
                RETURNING id"""
         ),
         {
@@ -281,6 +282,7 @@ async def enqueue_message(
             "message": message,
             "issue_number": issue_number,
             "target_entity": target_entity,
+            "delivery_kind": delivery_kind,
             "flow_name": flow_name,
             "enqueued_at": _now_iso(),
         },

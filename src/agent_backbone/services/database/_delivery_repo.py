@@ -87,7 +87,8 @@ async def get_failed_deliveries(
             """SELECT d.* FROM deliveries d
                WHERE d.outcome IN (
                    'offline', 'delivery_failed', 'deferred',
-                   'copy_mode', 'user_interacting', 'unknown_state'
+                   'copy_mode', 'user_interacting', 'unknown_state',
+                   'agent_working', 'plan_waiting', 'grace_period'
                )
                  AND NOT EXISTS (
                    SELECT 1 FROM deliveries d2

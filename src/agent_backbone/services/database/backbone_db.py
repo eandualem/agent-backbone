@@ -507,6 +507,7 @@ class BackboneDB:
         message: str,
         issue_number: int | None = None,
         target_entity: str | None = None,
+        delivery_kind: str = "issue",
         flow_name: str = "",
     ) -> int:
         """Enqueue a message for later delivery. Returns the row ID."""
@@ -517,6 +518,7 @@ class BackboneDB:
                 message,
                 issue_number,
                 target_entity,
+                delivery_kind,
                 flow_name,
             )
 

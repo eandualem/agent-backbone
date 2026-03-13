@@ -111,15 +111,13 @@ async def delivery_retry() -> dict:
 
     failed = await db.get_failed_deliveries(limit=20)
 
-    if not failed:
-        log.info("No failed deliveries to retry")
-        return summary
-
-    log.info("Found %d failed deliveries to retry", len(failed))
-
-    for delivery in failed:
-        outcome = await retry_delivery(config, delivery, db, gh)
-        summary[outcome] = summary.get(outcome, 0) + 1
+    if failed:
+        log.info("Found %d failed deliveries to retry", len(failed))
+        for delivery in failed:
+            outcome = await retry_delivery(config, delivery, db, gh)
+            summary[outcome] = summary.get(outcome, 0) + 1
+    else:
+        log.info("No failed deliveries to retry; draining queued messages only")
 
     # Drain message queue: deliver pending queued messages
     try:
@@ -148,10 +146,14 @@ async def delivery_retry() -> dict:
                     }
                     if msg_record.get("target_entity")
                     else None,
+                    delivery_kind=msg_record.get("delivery_kind", "issue"),
                 )
                 if q_outcome == "delivered":
                     await db.mark_message_delivered(msg_record["id"])
                     summary["queue_delivered"] = summary.get("queue_delivered", 0) + 1
+                elif q_outcome == "already_delivered":
+                    await db.mark_message_delivered(msg_record["id"])
+                    summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
                 else:
                     break  # Stop draining this session if delivery fails
     except Exception:

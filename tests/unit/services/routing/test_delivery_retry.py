@@ -130,3 +130,69 @@ class TestRetryDeliveryAckCheck:
         result = await retry_delivery.fn(config, delivery, db, mock_gh)
         assert result == "retried"
         assert mock_gh.get_issue.await_args.kwargs["repo_full_name"] == "eandualem/agent-backbone"
+
+    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    async def test_retry_retries_agent_working_deliveries(self, mock_deliver, db, config):
+        await db.record_delivery(88, "coding-agent", "ike", "agent_working")
+
+        mock_issue = MagicMock()
+        mock_issue.state = "open"
+        mock_issue.repo_full_name = "eandualem/orchestration"
+        mock_gh = AsyncMock()
+        mock_gh.get_issue = AsyncMock(return_value=mock_issue)
+        mock_gh.list_issues = AsyncMock(return_value=[MagicMock(number=88)])
+        mock_deliver.return_value = "delivered"
+
+        delivery = {
+            "session_name": "ike",
+            "issue_number": 88,
+            "target_entity": "coding-agent",
+        }
+
+        from agent_backbone.services.routing import retry_delivery
+
+        result = await retry_delivery.fn(config, delivery, db, mock_gh)
+        assert result == "retried"
+        mock_deliver.assert_called_once()
+
+
+class TestDeliveryRetryQueueDrain:
+    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch(
+        "agent_backbone.services.routing._flows.list_open_queue_for_target",
+        new_callable=AsyncMock,
+    )
+    @patch("agent_backbone.services.terminal.list_sessions", new_callable=AsyncMock)
+    async def test_queue_drain_runs_without_failed_issue_rows(
+        self,
+        mock_list_sessions,
+        mock_list_open_queue_for_target,
+        mock_deliver,
+        db,
+        config,
+    ):
+        await db.enqueue_message(
+            session_name="ike",
+            message="Comment payload",
+            issue_number=91,
+            target_entity="coding-agent",
+            delivery_kind="comment",
+            flow_name="issue-dispatcher",
+        )
+
+        mock_list_sessions.return_value = ["ike"]
+        mock_list_open_queue_for_target.return_value = [MagicMock(number=91)]
+        mock_deliver.return_value = "delivered"
+
+        from agent_backbone.services._locator import init as init_flow_services
+        from agent_backbone.services.routing import delivery_retry
+
+        mock_gh = AsyncMock()
+        init_flow_services(config=config, db=db, gh=mock_gh)
+
+        summary = await delivery_retry.fn()
+
+        assert summary["queue_delivered"] == 1
+        assert mock_deliver.await_args.kwargs["delivery_kind"] == "comment"
+        row = await db.get_message_by_id(1)
+        assert row["status"] == "delivered"

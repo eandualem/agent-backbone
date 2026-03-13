@@ -103,6 +103,7 @@ class MessageQueueORM(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     target_entity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivery_kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="issue")
     flow_name: Mapped[str | None] = mapped_column(Text, server_default="")
     enqueued_at: Mapped[str] = mapped_column(Text, nullable=False)
     delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)

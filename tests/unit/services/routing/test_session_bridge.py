@@ -30,6 +30,8 @@ _BUSY_SNAP = StateSnapshot(state=AgentState.BUSY, source="push")
 _PROCESSING_SNAP = StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="push")
 _PLAN_WAITING_SNAP = StateSnapshot(state=AgentState.PLAN_WAITING, source="push")
 _UNKNOWN_SNAP = StateSnapshot(state=AgentState.UNKNOWN, source="default")
+_BUSY_ISSUE_42_SNAP = StateSnapshot(state=AgentState.BUSY, current_issue=42, source="push")
+_BUSY_ISSUE_99_SNAP = StateSnapshot(state=AgentState.BUSY, current_issue=99, source="push")
 
 
 @pytest.fixture(autouse=True)
@@ -625,6 +627,7 @@ class TestSafeDeliver:
             message="Hello",
             issue_number=42,
             target_entity="ike",
+            delivery_kind="issue",
             flow_name="test_flow",
         )
 
@@ -727,6 +730,7 @@ class TestSafeDeliver:
             message="Hello",
             issue_number=42,
             target_entity="ike",
+            delivery_kind="issue",
             flow_name="test_flow",
         )
 
@@ -756,6 +760,7 @@ class TestSafeDeliver:
             message="Hello",
             issue_number=42,
             target_entity="ike",
+            delivery_kind="issue",
             flow_name="test_flow",
         )
 
@@ -785,6 +790,7 @@ class TestSafeDeliver:
             message="Hello",
             issue_number=42,
             target_entity="ike",
+            delivery_kind="issue",
             flow_name="test_flow",
         )
 
@@ -813,6 +819,7 @@ class TestSafeDeliver:
             message="Hello",
             issue_number=42,
             target_entity="ike",
+            delivery_kind="issue",
             flow_name="test_flow",
         )
         mock_db.record_delivery.assert_called_once_with(
@@ -988,15 +995,15 @@ class TestSafeDeliver:
             flow_name="test_flow",
         )
 
-    async def test_comment_delivery_bypasses_agent_working(self):
-        """Comments should reach a working agent without waiting for idle."""
+    async def test_comment_delivery_bypasses_agent_working_for_current_issue(self):
+        """Comments on the active issue should reach a working agent immediately."""
         config = _default_config()
         mock_db = AsyncMock()
 
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
-            _patch_get_agent_state(_BUSY_SNAP),
+            _patch_get_agent_state(_BUSY_ISSUE_42_SNAP),
             _patch_send_message(True),
         ):
             result = await safe_deliver(
@@ -1016,6 +1023,44 @@ class TestSafeDeliver:
             target_entity="ike",
             session_name="ike",
             outcome="comment_delivered",
+            flow_name="test_flow",
+        )
+
+    async def test_comment_delivery_to_different_issue_is_queued_while_busy(self):
+        """Comments on a different issue should defer durably while the agent is busy."""
+        config = _default_config()
+        mock_db = AsyncMock()
+
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_BUSY_ISSUE_99_SNAP),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Comment",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+                delivery_kind="comment",
+            )
+
+        assert result == "agent_working"
+        mock_db.enqueue_message.assert_called_once_with(
+            session_name="ike",
+            message="Comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+            flow_name="test_flow",
+        )
+        mock_db.record_delivery.assert_called_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="comment_agent_working",
             flow_name="test_flow",
         )
 
@@ -1103,6 +1148,7 @@ class TestSafeDeliver:
             message="Hello",
             issue_number=42,
             target_entity="jarvis",
+            delivery_kind="issue",
             flow_name="test_flow",
         )
 
