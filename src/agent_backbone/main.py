@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 
+from agent_backbone.api.bootstrap import load_settings_and_config
+
 
 def main() -> None:
     logging.basicConfig(
@@ -19,10 +21,8 @@ def main() -> None:
     import uvicorn
 
     from agent_backbone.api.app import create_app
-    from agent_backbone.settings import AppSettings
 
-    settings = AppSettings()
-    config = settings.build_config()
+    _, config = load_settings_and_config()
     app = create_app()
     uvicorn.run(app, host="127.0.0.1", port=config.gateway.port, log_level="info")
 

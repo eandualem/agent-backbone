@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,6 +20,16 @@ from agent_backbone.api.models import (
     RoomMessage,
     RoomStateUpdate,
 )
+from agent_backbone.api.room_messages import (
+    compute_context_delta,
+    format_meeting_setup_envelope,
+    format_room_message,
+    read_meeting_skill,
+)
+from agent_backbone.api.room_store import list_rooms as list_rooms_from_store
+from agent_backbone.api.room_store import load_room as load_room_from_store
+from agent_backbone.api.room_store import now_iso as room_now_iso
+from agent_backbone.api.room_store import save_room as save_room_to_store
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.routing import DeliveryService, resolve_entity_session
 
@@ -40,55 +48,27 @@ _VALID_STATES = {"active", "paused", "closed"}
 
 async def _load_room(room_id: str) -> Room | None:
     """Load a room from its JSON file. Returns None if not found."""
-    path = _ROOM_DIR / f"{room_id}.json"
-    if not path.exists():
-        return None
-    try:
-        text = await asyncio.to_thread(path.read_text)
-        return Room.model_validate_json(text)
-    except (json.JSONDecodeError, OSError, ValueError):
-        return None
+    return await load_room_from_store(room_id, room_dir=_ROOM_DIR)
 
 
 def _now_iso() -> str:
     """Return current UTC time as ISO 8601 string."""
-    return datetime.now(UTC).isoformat()
+    return room_now_iso()
 
 
 async def _save_room(room: Room) -> None:
     """Write a room to its JSON file, updating updated_at."""
-    _ROOM_DIR.mkdir(parents=True, exist_ok=True)
-    room.updated_at = _now_iso()
-    path = _ROOM_DIR / f"{room.id}.json"
-    await asyncio.to_thread(path.write_text, room.model_dump_json(indent=2))
+    await save_room_to_store(room, room_dir=_ROOM_DIR, now=_now_iso)
 
 
 async def _list_rooms(state_filter: str | None = None) -> list[Room]:
     """List all rooms, optionally filtered by state."""
-    if not _ROOM_DIR.exists():
-        return []
-    rooms: list[Room] = []
-    paths = await asyncio.to_thread(lambda: list(_ROOM_DIR.glob("*.json")))
-    for path in paths:
-        try:
-            text = await asyncio.to_thread(path.read_text)
-            room = Room.model_validate_json(text)
-            if state_filter is None or room.state == state_filter:
-                rooms.append(room)
-        except (json.JSONDecodeError, OSError, ValueError):
-            continue
-    return rooms
+    return await list_rooms_from_store(room_dir=_ROOM_DIR, state_filter=state_filter)
 
 
 def _compute_context_delta(room: Room, participant: str) -> list[RoomMessage]:
     """Return transcript messages since the participant's last delivery cursor."""
-    cursor = room.cursors.get(participant, 0)
-    return room.transcript[cursor:]
-
-
-def _format_context_section(messages: list[RoomMessage]) -> str:
-    """Format messages as '[sender]: content' lines."""
-    return "\n".join(f"[{m.sender}]: {m.content}" for m in messages)
+    return compute_context_delta(room, participant)
 
 
 def _format_room_message(
@@ -99,19 +79,7 @@ def _format_room_message(
     context_delta: list[RoomMessage],
 ) -> str:
     """Format the full tmux delivery envelope."""
-    parts = [f"[via:room room:{room.id} from:{sender}]"]
-    parts.append(f"\nTitle: {room.title}")
-    if room.description:
-        parts.append(f"Description: {room.description}")
-
-    if context_delta:
-        parts.append("\n--- Context (since your last participation) ---")
-        parts.append(_format_context_section(context_delta))
-
-    parts.append(f"\n[meeting: {room.title}] [from: {sender}]")
-    parts.append(content)
-
-    return "\n".join(parts)
+    return format_room_message(room, sender, content, participant, context_delta)
 
 
 def _check_room_active(room: Room) -> None:
@@ -127,36 +95,12 @@ def _check_room_active(room: Room) -> None:
 
 def _read_meeting_skill() -> str | None:
     """Read the meeting-participant skill file. Returns content or None."""
-    try:
-        return _MEETING_SKILL_PATH.read_text()
-    except FileNotFoundError:
-        log.warning("Meeting skill not found at %s", _MEETING_SKILL_PATH)
-        return None
-    except OSError as exc:
-        log.warning("Failed to read meeting skill: %s", exc)
-        return None
+    return read_meeting_skill(_MEETING_SKILL_PATH, logger=log)
 
 
 def _format_meeting_setup_envelope(room: Room, skill_content: str) -> str:
     """Format the meeting-setup envelope per ROOM-18."""
-    participant_list = ", ".join(room.participants)
-    return (
-        f"[via:meeting-setup room:{room.id}]\n"
-        f'You are joining meeting: "{room.title}"\n'
-        f"Moderator: {room.moderator}\n"
-        f"Participants: {participant_list}\n"
-        f"\n--- Meeting Participant Protocol ---\n"
-        f"{skill_content}\n"
-        f"---\n"
-        f"\n--- How to Reply ---\n"
-        f"To respond in this meeting, run:\n"
-        f"~/.claude/bin/room-respond.sh --room {room.id} "
-        f'--from {{your_name}} --message "your response"\n'
-        f"\n"
-        f"Replace {{your_name}} with your entity name. "
-        f"Always reply to the room — do not just respond in your terminal.\n"
-        f"---"
-    )
+    return format_meeting_setup_envelope(room, skill_content)
 
 
 async def _inject_meeting_skill(
