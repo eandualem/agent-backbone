@@ -15,6 +15,8 @@ _EXPECTED_TABLES = {
     "heartbeats",
     "issue_dependencies",
     "message_queue",
+    "swarms",
+    "swarm_workers",
     "telemetry_checkpoints",
 }
 
@@ -31,6 +33,12 @@ _EXPECTED_INDEXES = {
     "idx_heartbeats_agent",
     "idx_mq_status",
     "idx_mq_session",
+    "idx_swarms_created",
+    "idx_swarms_repo",
+    "idx_swarms_status",
+    "idx_swarm_workers_session",
+    "idx_swarm_workers_status",
+    "idx_swarm_workers_swarm",
     "idx_telemetry_checkpoints_runtime",
     "idx_telemetry_checkpoints_updated",
 }

@@ -2249,33 +2249,15 @@ class TestForwardOutputUnhandledException:
     async def test_unexpected_exception_logged(self, caplog):
         """An unexpected exception in the forwarding loop is logged."""
         ns = _make_namespace()
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
-
-        # Put data that will trigger an emit
-        await queue.put("data")
-        await queue.put(None)
-
-        # Make emit raise an unexpected (non-Exception-derived won't happen,
-        # but we can make the queue.get raise after the first iteration)
-        original_emit = ns.emit
-
-        call_count = 0
-
-        async def exploding_emit(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                # First emit (terminal_output) succeeds
-                return await original_emit(*args, **kwargs)
-            # Second emit triggers an unexpected path — raise before session_ended
-            raise RuntimeError("unexpected boom")
-
-        ns.emit = exploding_emit
+        queue = MagicMock()
+        queue.empty.return_value = True
+        queue.get = AsyncMock(side_effect=["data", RuntimeError("unexpected boom")])
 
         with caplog.at_level(logging.ERROR):
             await ns._forward_pty_output("sid1", "ike", queue)
 
-        assert "Unhandled exception" in caplog.text or call_count >= 1
+        assert "Unhandled exception in _forward_pty_output" in caplog.text
+        ns.emit.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

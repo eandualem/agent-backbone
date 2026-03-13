@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from agent_backbone.services.registry import EntityEntry
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -32,6 +34,19 @@ def _selective_create_subprocess_exec(real_func, clone_proc):
         return await real_func(*args, **kwargs)
 
     return _side_effect
+
+
+def _enable_wf_onboarding_success(client):
+    """Add a concrete WF orchestrator so onboarding can complete route-side."""
+    client._transport.app.state.config.registry.entities["bell-wf"] = EntityEntry(
+        session="bell-wf",
+        home="~/ws/core/code/WF/bell",
+        groups=["orchestrators"],
+        figure="Bell",
+        role="WF Orchestrator",
+        organization="WF",
+        entity_type="role-instance",
+    )
 
 
 @pytest.fixture
@@ -131,6 +146,7 @@ class TestListRepos:
 class TestOnboardRepo:
     async def test_creates_scaffolding(self, client, auth_headers, repo_workspace):
         """Creates spec dir, orch config, registry entries."""
+        _enable_wf_onboarding_success(client)
         clone_proc = _mock_subprocess_ok()
         mock_gh = AsyncMock()
         mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
@@ -158,7 +174,11 @@ class TestOnboardRepo:
         assert data["org"] == "WF"
         assert data["repo"] == "new-thing"
         assert data["success"] is True
-        assert len(data["steps"]) == 9
+        assert len(data["steps"]) == 10
+        assert data["steps"][-2]["name"] == "notify_brunel"
+        assert data["steps"][-2]["status"] == "done"
+        assert data["steps"][-1]["name"] == "notify_orchestrator"
+        assert data["steps"][-1]["status"] == "done"
 
         # Verify spec dir created
         spec_path = repo_workspace["spec"] / "WF" / "new-thing" / "docs" / "specifications"
@@ -275,6 +295,7 @@ class TestOnboardRepo:
 
     async def test_registry_refreshed_after_onboard(self, client, auth_headers, repo_workspace):
         """After successful onboard, config.registry includes the new repo."""
+        _enable_wf_onboarding_success(client)
         clone_proc = _mock_subprocess_ok()
         mock_gh = AsyncMock()
         mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
