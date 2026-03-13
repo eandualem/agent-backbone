@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.database.backbone_db import BackboneDB, metadata
+from agent_backbone.services.database.config import database_config_from_env
 
 _EXPECTED_TABLES = {
     "acknowledgments",
@@ -128,6 +129,42 @@ async def test_file_db_runs_migrations(tmp_path):
         await engine.dispose()
 
 
+async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
+    """_run_migrations() upgrades a fresh persistent database instead of stamping it empty."""
+    db_path = tmp_path / "fresh.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    db = BackboneDB(engine)
+
+    try:
+        await db._run_migrations()
+
+        delivery_id = await db.record_delivery(
+            issue_number=7,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivered",
+        )
+        assert delivery_id > 0
+
+        swarm_id = await db.create_swarm(
+            repo="agent-backbone",
+            task_id="744",
+            coding_agent_session="lead",
+            workers=[
+                {
+                    "name": "db-review",
+                    "branch": "swarm/744/db-review",
+                    "worktree_path": str(tmp_path / "db-review"),
+                    "session": "db-review",
+                }
+            ],
+        )
+        assert swarm_id
+    finally:
+        db._engine = None
+        await engine.dispose()
+
+
 async def test_file_db_idempotent_start(tmp_path):
     """Calling start() twice on a file DB is safe (idempotent)."""
     db_path = tmp_path / "idem.db"
@@ -156,3 +193,29 @@ async def test_file_db_idempotent_start(tmp_path):
     finally:
         db2._engine = None
         await engine2.dispose()
+
+
+def test_database_config_from_env_reads_backbone_database_overrides(monkeypatch):
+    """Alembic CLI picks up BACKBONE_DATABASE_* overrides before building the URL."""
+    monkeypatch.setenv("BACKBONE_DATABASE_HOST", "db.internal")
+    monkeypatch.setenv("BACKBONE_DATABASE_PORT", "6543")
+    monkeypatch.setenv("BACKBONE_DATABASE_USER", "worker")
+    monkeypatch.setenv("BACKBONE_DATABASE_PASSWORD", "secret")
+    monkeypatch.setenv("BACKBONE_DATABASE_NAME", "backbone_review")
+    monkeypatch.setenv("BACKBONE_DATABASE_POOL_SIZE", "9")
+    monkeypatch.setenv("BACKBONE_DATABASE_POOL_OVERFLOW", "3")
+    monkeypatch.setenv("BACKBONE_DATABASE_ECHO", "true")
+
+    config = database_config_from_env()
+
+    assert config.host == "db.internal"
+    assert config.port == 6543
+    assert config.user == "worker"
+    assert config.password == "secret"
+    assert config.name == "backbone_review"
+    assert config.pool_size == 9
+    assert config.pool_overflow == 3
+    assert config.echo is True
+    assert config.async_url == (
+        "postgresql+asyncpg://worker:secret@db.internal:6543/backbone_review"
+    )

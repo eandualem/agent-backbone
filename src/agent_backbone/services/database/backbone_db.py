@@ -143,17 +143,29 @@ class BackboneDB:
         async with self._engine.begin() as async_conn:
 
             def _run_alembic(sync_conn):
-                # Check if alembic_version table exists
                 from sqlalchemy import inspect
 
                 inspector = inspect(sync_conn)
-                has_alembic = "alembic_version" in inspector.get_table_names()
+                existing_tables = set(inspector.get_table_names())
+                has_alembic = "alembic_version" in existing_tables
+                app_tables = {table.name for table in metadata.sorted_tables}
+                existing_app_tables = existing_tables & app_tables
 
                 alembic_cfg.attributes["connection"] = sync_conn
                 if has_alembic:
                     command.upgrade(alembic_cfg, "head")
-                else:
+                elif not existing_app_tables:
+                    command.upgrade(alembic_cfg, "head")
+                elif existing_app_tables == app_tables:
+                    # SQLite file tests initialize schema with metadata.create_all()
+                    # before this method runs, so stamp that full schema as current.
                     command.stamp(alembic_cfg, "head")
+                else:
+                    partial_tables = ", ".join(sorted(existing_app_tables))
+                    raise RuntimeError(
+                        "Database contains application tables but no alembic_version table; "
+                        f"refusing to stamp partial schema: {partial_tables}"
+                    )
 
             await async_conn.run_sync(_run_alembic)
 
