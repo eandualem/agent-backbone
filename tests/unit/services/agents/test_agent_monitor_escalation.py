@@ -483,6 +483,47 @@ class TestMonitorAgentsIntegration:
         )
 
     @pytest.mark.asyncio
+    async def test_monitor_reconciles_lost_swarm_workers(self):
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+
+        config = _make_monitor_config()
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_db.reconcile_swarm_worker_sessions.return_value = 1
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(
+                f"{_PEN}.get_agent_state",
+                new_callable=AsyncMock,
+                return_value=idle_snapshot,
+            ),
+            patch(
+                f"{_PEN}.check_pending_issues",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            await monitor_agents.fn()
+
+        mock_db.reconcile_swarm_worker_sessions.assert_awaited_once_with({"ike"})
+
+    @pytest.mark.asyncio
     async def test_delivers_to_idle_agent(self):
         idle_snapshot = StateSnapshot(
             state=AgentState.IDLE,

@@ -17,6 +17,8 @@ _EXPECTED_TABLES = {
     "issue_dependencies",
     "message_queue",
     "swarms",
+    "swarm_messages",
+    "swarm_phase_history",
     "swarm_workers",
     "telemetry_checkpoints",
 }
@@ -35,8 +37,13 @@ _EXPECTED_INDEXES = {
     "idx_mq_status",
     "idx_mq_session",
     "idx_swarms_created",
+    "idx_swarms_phase",
     "idx_swarms_repo",
-    "idx_swarms_status",
+    "idx_swarm_messages_created",
+    "idx_swarm_messages_swarm",
+    "idx_swarm_phase_history_swarm",
+    "idx_swarm_phase_history_timestamp",
+    "idx_swarm_workers_role",
     "idx_swarm_workers_session",
     "idx_swarm_workers_status",
     "idx_swarm_workers_swarm",
@@ -153,6 +160,7 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
             workers=[
                 {
                     "name": "db-review",
+                    "role": "validator",
                     "branch": "swarm/744/db-review",
                     "worktree_path": str(tmp_path / "db-review"),
                     "session": "db-review",

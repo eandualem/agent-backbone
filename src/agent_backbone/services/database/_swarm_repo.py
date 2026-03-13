@@ -8,30 +8,63 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-_ACTIVE_SWARM_STATUSES = {"active", "completing", "failed"}
+_SWARM_PHASE_ORDER = (
+    "created",
+    "planning",
+    "working",
+    "validating",
+    "pr_open",
+    "awaiting_review",
+    "merged",
+    "cleaned_up",
+    "failed",
+    "discarded",
+)
+_SWARM_PHASE_INDEX = {phase: index for index, phase in enumerate(_SWARM_PHASE_ORDER)}
+_SWARM_WORKER_ROLES = ("lead", "coder", "tester", "validator", "scout")
+_NONTERMINAL_WORKER_STATUSES = {"pending", "started", "working", "pr_created"}
+_TERMINAL_WORKER_STATUSES = {"done", "failed"}
+_VISIBLE_SWARM_PHASES = {
+    "created",
+    "planning",
+    "working",
+    "validating",
+    "pr_open",
+    "awaiting_review",
+    "merged",
+    "failed",
+}
+_MANUAL_PHASE_TRANSITIONS = {
+    "created": {"planning", "failed", "discarded"},
+    "planning": {"working", "failed", "discarded"},
+    "working": {"validating", "failed", "discarded"},
+    "validating": {"working", "pr_open", "failed", "discarded"},
+    "pr_open": {"working", "awaiting_review", "failed", "discarded"},
+    "awaiting_review": {"working", "merged", "failed", "discarded"},
+    "merged": {"cleaned_up"},
+    "cleaned_up": set(),
+    "failed": set(),
+    "discarded": set(),
+}
+_COMPLETION_PHASES = {"merged", "cleaned_up", "failed", "discarded"}
 
 
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def _group_workers(rows: list[dict]) -> dict[str, list[dict]]:
+def _group_rows(rows: list[dict], key: str) -> dict[str, list[dict]]:
     grouped: dict[str, list[dict]] = {}
     for row in rows:
-        grouped.setdefault(row["swarm_id"], []).append(row)
+        grouped.setdefault(row[key], []).append(row)
     return grouped
 
 
-def _compute_swarm_status(worker_statuses: list[str]) -> str:
-    if not worker_statuses:
-        return "active"
-    if all(status == "done" for status in worker_statuses):
-        return "completing"
-    if all(status in {"done", "failed"} for status in worker_statuses) and any(
-        status == "failed" for status in worker_statuses
-    ):
-        return "failed"
-    return "active"
+def _group_workers_by_role(rows: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {role: [] for role in _SWARM_WORKER_ROLES}
+    for row in rows:
+        grouped.setdefault(row["role"], []).append(row)
+    return grouped
 
 
 def _build_progress(workers: list[dict]) -> dict:
@@ -58,14 +91,31 @@ def _build_progress(workers: list[dict]) -> dict:
     }
 
 
-def _build_swarm_detail(swarm: dict, workers: list[dict]) -> dict:
+def _build_swarm_detail(swarm: dict, workers: list[dict], phase_history: list[dict]) -> dict:
     ordered_workers = sorted(workers, key=lambda worker: (worker["created_at"], worker["name"]))
+    workers_by_role = _group_workers_by_role(ordered_workers)
     return {
         **swarm,
         "worker_count": len(ordered_workers),
         "progress": _build_progress(ordered_workers),
         "workers": ordered_workers,
+        "workers_by_role": workers_by_role,
+        "phase_history": phase_history,
     }
+
+
+def _can_auto_promote_validating(phase: str, workers: list[dict]) -> bool:
+    if not workers:
+        return False
+    if all(worker["status"] in _TERMINAL_WORKER_STATUSES for worker in workers):
+        return _SWARM_PHASE_INDEX.get(phase, 0) < _SWARM_PHASE_INDEX["validating"]
+    return False
+
+
+def _phase_completed_at(current_completed_at: str | None, phase: str, now: str) -> str | None:
+    if phase in _COMPLETION_PHASES:
+        return current_completed_at or now
+    return None
 
 
 async def create_swarm(
@@ -81,13 +131,13 @@ async def create_swarm(
     await conn.execute(
         text(
             """INSERT INTO swarms
-               (swarm_id, repo, task_id, coding_agent_session, status, created_at, completed_at)
+               (swarm_id, repo, task_id, coding_agent_session, phase, created_at, completed_at)
                VALUES (
                    :swarm_id,
                    :repo,
                    :task_id,
                    :coding_agent_session,
-                   :status,
+                   :phase,
                    :created_at,
                    NULL
                )"""
@@ -97,29 +147,43 @@ async def create_swarm(
             "repo": repo,
             "task_id": task_id,
             "coding_agent_session": coding_agent_session,
-            "status": "active",
+            "phase": "created",
             "created_at": now,
         },
+    )
+    await _insert_phase_history(
+        conn,
+        swarm_id=swarm_id,
+        from_phase=None,
+        to_phase="created",
+        triggered_by=coding_agent_session,
+        timestamp=now,
     )
 
     for worker in workers:
         await conn.execute(
             text(
                 """INSERT INTO swarm_workers
-                   (worker_id, swarm_id, name, branch, worktree_path, session,
-                    status, pr_number, created_at, updated_at)
-                   VALUES (:worker_id, :swarm_id, :name, :branch, :worktree_path, :session,
-                           :status, :pr_number, :created_at, :updated_at)"""
+                   (worker_id, swarm_id, name, role, branch, worktree_path, session,
+                    status, pr_number, summary, failure_reason, completed_at,
+                    created_at, updated_at)
+                   VALUES (:worker_id, :swarm_id, :name, :role, :branch, :worktree_path, :session,
+                           :status, :pr_number, :summary, :failure_reason, :completed_at,
+                           :created_at, :updated_at)"""
             ),
             {
                 "worker_id": str(uuid.uuid4()),
                 "swarm_id": swarm_id,
                 "name": worker["name"],
+                "role": worker["role"],
                 "branch": worker["branch"],
                 "worktree_path": worker["worktree_path"],
                 "session": worker["session"],
                 "status": "pending",
                 "pr_number": None,
+                "summary": None,
+                "failure_reason": None,
+                "completed_at": None,
                 "created_at": now,
                 "updated_at": now,
             },
@@ -130,7 +194,7 @@ async def create_swarm(
 async def list_swarms(
     conn: AsyncConnection,
     repo: str | None = None,
-    status: str | None = None,
+    phase: str | None = None,
 ) -> list[dict]:
     """List swarms with aggregated worker progress."""
     conditions: list[str] = []
@@ -138,16 +202,16 @@ async def list_swarms(
     if repo:
         conditions.append("repo = :repo")
         params["repo"] = repo
-    if status:
-        conditions.append("status = :status")
-        params["status"] = status
+    if phase:
+        conditions.append("phase = :phase")
+        params["phase"] = phase
     else:
-        active_names = []
-        for index, value in enumerate(sorted(_ACTIVE_SWARM_STATUSES)):
-            key = f"status_{index}"
-            active_names.append(f":{key}")
+        visible_names = []
+        for index, value in enumerate(sorted(_VISIBLE_SWARM_PHASES)):
+            key = f"phase_{index}"
+            visible_names.append(f":{key}")
             params[key] = value
-        conditions.append(f"status IN ({', '.join(active_names)})")
+        conditions.append(f"phase IN ({', '.join(visible_names)})")
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     result = await conn.execute(
@@ -160,9 +224,15 @@ async def list_swarms(
 
     swarm_ids = [swarm["swarm_id"] for swarm in swarms]
     worker_rows = await _fetch_workers_for_swarms(conn, swarm_ids)
-    grouped_workers = _group_workers(worker_rows)
+    history_rows = await _fetch_phase_history_for_swarms(conn, swarm_ids)
+    grouped_workers = _group_rows(worker_rows, "swarm_id")
+    grouped_history = _group_rows(history_rows, "swarm_id")
     return [
-        _build_swarm_detail(swarm, grouped_workers.get(swarm["swarm_id"], []))
+        _build_swarm_detail(
+            swarm,
+            grouped_workers.get(swarm["swarm_id"], []),
+            grouped_history.get(swarm["swarm_id"], []),
+        )
         for swarm in swarms
     ]
 
@@ -172,17 +242,13 @@ async def get_swarm(
     swarm_id: str,
 ) -> dict | None:
     """Get a single swarm with worker details."""
-    result = await conn.execute(
-        text("SELECT * FROM swarms WHERE swarm_id = :swarm_id"),
-        {"swarm_id": swarm_id},
-    )
-    row = result.fetchone()
-    if row is None:
+    swarm = await _fetch_swarm_row(conn, swarm_id)
+    if swarm is None:
         return None
 
-    swarm = dict(row._mapping)
     workers = await _fetch_workers_for_swarms(conn, [swarm_id])
-    return _build_swarm_detail(swarm, workers)
+    phase_history = await _fetch_phase_history_for_swarms(conn, [swarm_id])
+    return _build_swarm_detail(swarm, workers, phase_history)
 
 
 async def update_worker_status(
@@ -192,16 +258,24 @@ async def update_worker_status(
     status: str,
     pr_number: int | None = None,
 ) -> dict | None:
-    """Update a worker status and recompute swarm aggregate status."""
+    """Update a worker's non-terminal status."""
+    if status not in _NONTERMINAL_WORKER_STATUSES:
+        raise ValueError("Use the completion endpoint for done/failed worker states")
+
+    worker = await _fetch_worker_row(conn, swarm_id, worker_name)
+    if worker is None:
+        return None
+    if worker["status"] in _TERMINAL_WORKER_STATUSES:
+        raise ValueError("Cannot change status of a completed worker")
+
     now = _now_iso()
-    result = await conn.execute(
+    await conn.execute(
         text(
             """UPDATE swarm_workers
                SET status = :status,
                    pr_number = COALESCE(:pr_number, pr_number),
                    updated_at = :updated_at
-               WHERE swarm_id = :swarm_id AND name = :worker_name
-               RETURNING *"""
+               WHERE swarm_id = :swarm_id AND name = :worker_name"""
         ),
         {
             "swarm_id": swarm_id,
@@ -211,21 +285,83 @@ async def update_worker_status(
             "updated_at": now,
         },
     )
-    updated = result.fetchone()
-    if updated is None:
-        return None
 
-    workers = await _fetch_workers_for_swarms(conn, [swarm_id])
-    swarm_status = _compute_swarm_status([worker["status"] for worker in workers])
+    await _auto_promote_validating_if_ready(
+        conn,
+        swarm_id,
+        triggered_by=f"worker:{worker_name}",
+    )
+    return await get_swarm(conn, swarm_id)
+
+
+async def complete_worker(
+    conn: AsyncConnection,
+    swarm_id: str,
+    worker_name: str,
+    status: str,
+    summary: str,
+    pr_number: int | None = None,
+    *,
+    failure_reason: str | None = None,
+) -> dict | None:
+    """Mark a worker done or failed."""
+    if status not in _TERMINAL_WORKER_STATUSES:
+        raise ValueError("Worker completion status must be done or failed")
+
+    worker = await _fetch_worker_row(conn, swarm_id, worker_name)
+    if worker is None:
+        return None
+    if worker["status"] in _TERMINAL_WORKER_STATUSES and worker["status"] != status:
+        raise ValueError("Cannot change a terminal worker outcome")
+
+    now = _now_iso()
     await conn.execute(
         text(
-            """UPDATE swarms
-               SET status = :status
-               WHERE swarm_id = :swarm_id AND status != 'completed'"""
+            """UPDATE swarm_workers
+               SET status = :status,
+                   summary = :summary,
+                   failure_reason = :failure_reason,
+                   pr_number = COALESCE(:pr_number, pr_number),
+                   completed_at = COALESCE(completed_at, :completed_at),
+                   updated_at = :updated_at
+               WHERE swarm_id = :swarm_id AND name = :worker_name"""
         ),
-        {"swarm_id": swarm_id, "status": swarm_status},
+        {
+            "swarm_id": swarm_id,
+            "worker_name": worker_name,
+            "status": status,
+            "summary": summary,
+            "failure_reason": failure_reason if status == "failed" else None,
+            "pr_number": pr_number,
+            "completed_at": now,
+            "updated_at": now,
+        },
     )
 
+    await _auto_promote_validating_if_ready(
+        conn,
+        swarm_id,
+        triggered_by=f"worker:{worker_name}",
+    )
+    return await get_swarm(conn, swarm_id)
+
+
+async def update_swarm_phase(
+    conn: AsyncConnection,
+    swarm_id: str,
+    phase: str,
+) -> dict | None:
+    """Update swarm phase with legal transition validation."""
+    swarm = await _fetch_swarm_row(conn, swarm_id)
+    if swarm is None:
+        return None
+    await _set_swarm_phase(
+        conn,
+        swarm,
+        phase,
+        triggered_by=swarm["coding_agent_session"],
+        validate_transition=True,
+    )
     return await get_swarm(conn, swarm_id)
 
 
@@ -233,20 +369,146 @@ async def complete_swarm(
     conn: AsyncConnection,
     swarm_id: str,
 ) -> dict | None:
-    """Mark a swarm completed."""
+    """Mark a merged swarm cleaned up."""
+    swarm = await _fetch_swarm_row(conn, swarm_id)
+    if swarm is None:
+        return None
+    await _set_swarm_phase(
+        conn,
+        swarm,
+        "cleaned_up",
+        triggered_by="system:cleanup",
+        validate_transition=True,
+    )
+    return await get_swarm(conn, swarm_id)
+
+
+async def record_swarm_message(
+    conn: AsyncConnection,
+    swarm_id: str,
+    *,
+    target_kind: str,
+    from_entity: str,
+    message: str,
+    delivered: int,
+    failed: int,
+    total: int,
+    target_role: str | None = None,
+    target_worker_name: str | None = None,
+) -> dict:
+    """Persist one swarm message log entry."""
+    now = _now_iso()
     result = await conn.execute(
         text(
-            """UPDATE swarms
-               SET status = 'completed',
-                   completed_at = :completed_at
-               WHERE swarm_id = :swarm_id
-               RETURNING swarm_id"""
+            """INSERT INTO swarm_messages
+               (swarm_id, target_kind, target_role, target_worker_name, from_entity,
+                message, delivered, failed, total, created_at)
+               VALUES (
+                   :swarm_id,
+                   :target_kind,
+                   :target_role,
+                   :target_worker_name,
+                   :from_entity,
+                   :message,
+                   :delivered,
+                   :failed,
+                   :total,
+                   :created_at
+               )
+               RETURNING *"""
         ),
-        {"swarm_id": swarm_id, "completed_at": _now_iso()},
+        {
+            "swarm_id": swarm_id,
+            "target_kind": target_kind,
+            "target_role": target_role,
+            "target_worker_name": target_worker_name,
+            "from_entity": from_entity,
+            "message": message,
+            "delivered": delivered,
+            "failed": failed,
+            "total": total,
+            "created_at": now,
+        },
     )
-    if result.fetchone() is None:
-        return None
-    return await get_swarm(conn, swarm_id)
+    return dict(result.fetchone()._mapping)
+
+
+async def list_swarm_messages(conn: AsyncConnection, swarm_id: str) -> list[dict]:
+    """List all swarm messages in timestamp order."""
+    result = await conn.execute(
+        text(
+            """SELECT *
+               FROM swarm_messages
+               WHERE swarm_id = :swarm_id
+               ORDER BY created_at ASC, message_id ASC"""
+        ),
+        {"swarm_id": swarm_id},
+    )
+    return [dict(row._mapping) for row in result.fetchall()]
+
+
+async def reconcile_swarm_worker_sessions(
+    conn: AsyncConnection,
+    active_sessions: set[str],
+) -> int:
+    """Mark non-terminal workers failed when their tmux session disappears."""
+    result = await conn.execute(
+        text(
+            """SELECT swarm_id, name, session
+               FROM swarm_workers
+               WHERE status NOT IN ('done', 'failed')"""
+        )
+    )
+    candidate_rows = [dict(row._mapping) for row in result.fetchall()]
+    lost_workers = [row for row in candidate_rows if row["session"] not in active_sessions]
+    if not lost_workers:
+        return 0
+
+    touched_swarms: set[str] = set()
+    for worker in lost_workers:
+        await complete_worker(
+            conn,
+            worker["swarm_id"],
+            worker["name"],
+            "failed",
+            "Worker session exited before reporting completion.",
+            failure_reason="session_lost",
+        )
+        touched_swarms.add(worker["swarm_id"])
+
+    for swarm_id in touched_swarms:
+        await _auto_promote_validating_if_ready(
+            conn,
+            swarm_id,
+            triggered_by="system:session_lost",
+        )
+    return len(lost_workers)
+
+
+async def _fetch_swarm_row(conn: AsyncConnection, swarm_id: str) -> dict | None:
+    result = await conn.execute(
+        text("SELECT * FROM swarms WHERE swarm_id = :swarm_id"),
+        {"swarm_id": swarm_id},
+    )
+    row = result.fetchone()
+    return dict(row._mapping) if row else None
+
+
+async def _fetch_worker_row(
+    conn: AsyncConnection,
+    swarm_id: str,
+    worker_name: str,
+) -> dict | None:
+    result = await conn.execute(
+        text(
+            """SELECT *
+               FROM swarm_workers
+               WHERE swarm_id = :swarm_id AND name = :worker_name"""
+        ),
+        {"swarm_id": swarm_id, "worker_name": worker_name},
+    )
+    row = result.fetchone()
+    return dict(row._mapping) if row else None
 
 
 async def _fetch_workers_for_swarms(
@@ -270,3 +532,111 @@ async def _fetch_workers_for_swarms(
         params,
     )
     return [dict(row._mapping) for row in result.fetchall()]
+
+
+async def _fetch_phase_history_for_swarms(
+    conn: AsyncConnection,
+    swarm_ids: list[str],
+) -> list[dict]:
+    if not swarm_ids:
+        return []
+    params: dict[str, object] = {}
+    placeholders: list[str] = []
+    for index, swarm_id in enumerate(swarm_ids):
+        key = f"swarm_id_{index}"
+        placeholders.append(f":{key}")
+        params[key] = swarm_id
+    result = await conn.execute(
+        text(
+            "SELECT * FROM swarm_phase_history "
+            f"WHERE swarm_id IN ({', '.join(placeholders)}) "
+            "ORDER BY timestamp ASC, history_id ASC"
+        ),
+        params,
+    )
+    return [dict(row._mapping) for row in result.fetchall()]
+
+
+async def _insert_phase_history(
+    conn: AsyncConnection,
+    *,
+    swarm_id: str,
+    from_phase: str | None,
+    to_phase: str,
+    triggered_by: str,
+    timestamp: str,
+) -> None:
+    await conn.execute(
+        text(
+            """INSERT INTO swarm_phase_history
+               (swarm_id, from_phase, to_phase, timestamp, triggered_by)
+               VALUES (:swarm_id, :from_phase, :to_phase, :timestamp, :triggered_by)"""
+        ),
+        {
+            "swarm_id": swarm_id,
+            "from_phase": from_phase,
+            "to_phase": to_phase,
+            "timestamp": timestamp,
+            "triggered_by": triggered_by,
+        },
+    )
+
+
+async def _set_swarm_phase(
+    conn: AsyncConnection,
+    swarm: dict,
+    to_phase: str,
+    *,
+    triggered_by: str,
+    validate_transition: bool,
+) -> None:
+    current_phase = swarm["phase"]
+    if current_phase == to_phase:
+        return
+    if validate_transition and to_phase not in _MANUAL_PHASE_TRANSITIONS.get(current_phase, set()):
+        raise ValueError(f"Illegal phase transition: {current_phase} -> {to_phase}")
+
+    now = _now_iso()
+    completed_at = _phase_completed_at(swarm.get("completed_at"), to_phase, now)
+    await conn.execute(
+        text(
+            """UPDATE swarms
+               SET phase = :phase,
+                   completed_at = :completed_at
+               WHERE swarm_id = :swarm_id"""
+        ),
+        {
+            "swarm_id": swarm["swarm_id"],
+            "phase": to_phase,
+            "completed_at": completed_at,
+        },
+    )
+    await _insert_phase_history(
+        conn,
+        swarm_id=swarm["swarm_id"],
+        from_phase=current_phase,
+        to_phase=to_phase,
+        triggered_by=triggered_by,
+        timestamp=now,
+    )
+
+
+async def _auto_promote_validating_if_ready(
+    conn: AsyncConnection,
+    swarm_id: str,
+    *,
+    triggered_by: str,
+) -> None:
+    swarm = await _fetch_swarm_row(conn, swarm_id)
+    if swarm is None:
+        return
+    workers = await _fetch_workers_for_swarms(conn, [swarm_id])
+    if not _can_auto_promote_validating(swarm["phase"], workers):
+        return
+    await _set_swarm_phase(
+        conn,
+        swarm,
+        "validating",
+        triggered_by=triggered_by,
+        validate_transition=False,
+    )

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 T = TypeVar("T")
 
@@ -236,7 +236,19 @@ class MessageResponse(BaseModel):
 # --- Swarms ---
 
 
-SwarmStatus = Literal["active", "completing", "completed", "failed"]
+SwarmPhase = Literal[
+    "created",
+    "planning",
+    "working",
+    "validating",
+    "pr_open",
+    "awaiting_review",
+    "merged",
+    "cleaned_up",
+    "failed",
+    "discarded",
+]
+SwarmWorkerRole = Literal["lead", "coder", "tester", "validator", "scout"]
 SwarmWorkerStatus = Literal["pending", "started", "working", "pr_created", "done", "failed"]
 
 
@@ -244,6 +256,7 @@ class SwarmWorkerCreateRequest(BaseModel):
     """Worker registration payload for swarm creation."""
 
     name: str
+    role: SwarmWorkerRole
     branch: str
     worktree_path: str
     session: str
@@ -284,13 +297,28 @@ class SwarmWorkerResponse(BaseModel):
     worker_id: str
     swarm_id: str
     name: str
+    role: SwarmWorkerRole
     branch: str
     worktree_path: str
     session: str
     status: SwarmWorkerStatus
     pr_number: int | None = None
+    summary: str | None = None
+    failure_reason: str | None = None
+    completed_at: str | None = None
     created_at: str
     updated_at: str
+
+
+class SwarmPhaseHistoryResponse(BaseModel):
+    """One swarm phase transition record."""
+
+    history_id: int
+    swarm_id: str
+    from_phase: SwarmPhase | None = None
+    to_phase: SwarmPhase
+    timestamp: str
+    triggered_by: str
 
 
 class SwarmSummaryResponse(BaseModel):
@@ -300,7 +328,7 @@ class SwarmSummaryResponse(BaseModel):
     repo: str
     task_id: str | None = None
     coding_agent_session: str
-    status: SwarmStatus
+    phase: SwarmPhase
     created_at: str
     completed_at: str | None = None
     worker_count: int = 0
@@ -311,6 +339,8 @@ class SwarmDetailResponse(SwarmSummaryResponse):
     """Full swarm detail including workers."""
 
     workers: list[SwarmWorkerResponse] = Field(default_factory=list)
+    workers_by_role: dict[SwarmWorkerRole, list[SwarmWorkerResponse]] = Field(default_factory=dict)
+    phase_history: list[SwarmPhaseHistoryResponse] = Field(default_factory=list)
 
 
 class SwarmWorkerStatusUpdateRequest(BaseModel):
@@ -318,6 +348,51 @@ class SwarmWorkerStatusUpdateRequest(BaseModel):
 
     status: SwarmWorkerStatus
     pr_number: int | None = None
+
+
+class SwarmPhaseUpdateRequest(BaseModel):
+    """Request body for swarm phase updates."""
+
+    phase: SwarmPhase
+
+
+class SwarmWorkerCompleteRequest(BaseModel):
+    """Request body for worker completion updates."""
+
+    status: Literal["done", "failed"]
+    summary: str = Field(min_length=1)
+    pr_number: int | None = None
+
+
+class SwarmMessageRequest(BaseModel):
+    """Request body for directed swarm messages."""
+
+    role: SwarmWorkerRole | None = None
+    worker_name: str | None = None
+    from_entity: str
+    message: str
+
+    @model_validator(mode="after")
+    def validate_target(self) -> SwarmMessageRequest:
+        if (self.role is None) == (self.worker_name is None):
+            raise ValueError("Exactly one of role or worker_name is required")
+        return self
+
+
+class SwarmMessageLogEntry(BaseModel):
+    """Recorded message delivered within a swarm."""
+
+    message_id: int
+    swarm_id: str
+    target_kind: Literal["broadcast", "role", "worker"]
+    target_role: SwarmWorkerRole | None = None
+    target_worker_name: str | None = None
+    from_entity: str
+    message: str
+    delivered: int
+    failed: int
+    total: int
+    created_at: str
 
 
 class SwarmBroadcastRequest(BaseModel):
@@ -331,6 +406,7 @@ class SwarmBroadcastResponse(BaseModel):
     """Response from swarm broadcast delivery."""
 
     ok: bool
+    message_id: int | None = None
     delivered: int
     failed: int
     total: int

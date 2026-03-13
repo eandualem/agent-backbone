@@ -79,6 +79,14 @@ async def _monitor_agents_impl() -> dict:
     except Exception:
         log.exception("Offline detection failed (non-fatal)")
 
+    # Mark swarm workers failed if their tmux session vanished mid-run.
+    try:
+        lost_workers = await db.reconcile_swarm_worker_sessions(active_sessions)
+        if lost_workers:
+            log.warning("Marked %d swarm worker session(s) lost", lost_workers)
+    except Exception:
+        log.exception("Swarm worker session reconciliation failed (non-fatal)")
+
     # Detect plan-waiting agents and send Telegram notification
     try:
         await check_plan_waiting(config, active_sessions, db=db)

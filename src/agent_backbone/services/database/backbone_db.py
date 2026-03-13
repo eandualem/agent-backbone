@@ -34,7 +34,9 @@ from agent_backbone.services.database.models import (  # noqa: F401
     HeartbeatORM,
     IssueDependencyORM,
     MessageQueueORM,
+    SwarmMessageORM,
     SwarmORM,
+    SwarmPhaseHistoryORM,
     SwarmWorkerORM,
     TelemetryCheckpointORM,
 )
@@ -564,11 +566,11 @@ class BackboneDB:
     async def list_swarms(
         self,
         repo: str | None = None,
-        status: str | None = None,
+        phase: str | None = None,
     ) -> list[dict]:
         """List swarms with worker progress."""
         async with self._engine.begin() as conn:
-            return await _swarm_repo.list_swarms(conn, repo=repo, status=status)
+            return await _swarm_repo.list_swarms(conn, repo=repo, phase=phase)
 
     async def get_swarm(self, swarm_id: str) -> dict | None:
         """Get a single swarm with its workers."""
@@ -592,7 +594,69 @@ class BackboneDB:
                 pr_number=pr_number,
             )
 
+    async def complete_swarm_worker(
+        self,
+        swarm_id: str,
+        worker_name: str,
+        status: str,
+        summary: str,
+        pr_number: int | None = None,
+    ) -> dict | None:
+        """Mark a worker done/failed and return the refreshed swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.complete_worker(
+                conn,
+                swarm_id,
+                worker_name,
+                status,
+                summary,
+                pr_number=pr_number,
+            )
+
+    async def update_swarm_phase(self, swarm_id: str, phase: str) -> dict | None:
+        """Update swarm phase and return the refreshed swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.update_swarm_phase(conn, swarm_id, phase)
+
     async def complete_swarm(self, swarm_id: str) -> dict | None:
-        """Mark a swarm completed and return the refreshed swarm."""
+        """Mark a swarm cleaned up and return the refreshed swarm."""
         async with self._engine.begin() as conn:
             return await _swarm_repo.complete_swarm(conn, swarm_id)
+
+    async def record_swarm_message(
+        self,
+        swarm_id: str,
+        *,
+        target_kind: str,
+        from_entity: str,
+        message: str,
+        delivered: int,
+        failed: int,
+        total: int,
+        target_role: str | None = None,
+        target_worker_name: str | None = None,
+    ) -> dict:
+        """Persist one swarm message log entry."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.record_swarm_message(
+                conn,
+                swarm_id,
+                target_kind=target_kind,
+                from_entity=from_entity,
+                message=message,
+                delivered=delivered,
+                failed=failed,
+                total=total,
+                target_role=target_role,
+                target_worker_name=target_worker_name,
+            )
+
+    async def list_swarm_messages(self, swarm_id: str) -> list[dict]:
+        """List all recorded messages for one swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.list_swarm_messages(conn, swarm_id)
+
+    async def reconcile_swarm_worker_sessions(self, active_sessions: set[str]) -> int:
+        """Mark lost swarm worker sessions failed when they disappear mid-swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.reconcile_swarm_worker_sessions(conn, active_sessions)
