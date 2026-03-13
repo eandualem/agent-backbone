@@ -682,6 +682,54 @@ class TestPostResponse:
         finally:
             api_app.dependency_overrides.pop(get_delivery_service, None)
 
+    @pytest.mark.parametrize("state", ["paused", "closed"])
+    async def test_post_response_rejects_inactive_room(
+        self, api_client, auth_headers, room_dir, api_app, state
+    ):
+        """400 when posting to a paused or closed room."""
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            room = _make_room(state=state)
+            _save_room_file(room_dir, room)
+
+            resp = await api_client.post(
+                f"/api/rooms/{room.id}/respond",
+                headers=auth_headers,
+                json={"sender": "leo", "content": "Still there?"},
+            )
+
+            assert resp.status_code == 400
+            saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
+            assert saved.transcript == []
+            mock_svc.safe_deliver.assert_not_called()
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+    async def test_post_response_sender_not_participant(
+        self, api_client, auth_headers, room_dir, api_app
+    ):
+        """400 when sender is not a room participant or moderator."""
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            room = _make_room(participants=["leo", "feynman"])
+            _save_room_file(room_dir, room)
+
+            resp = await api_client.post(
+                f"/api/rooms/{room.id}/respond",
+                headers=auth_headers,
+                json={"sender": "ada", "content": "Let me in"},
+            )
+
+            assert resp.status_code == 400
+            assert "Sender is not a room participant or moderator" in resp.json()["detail"]
+            saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
+            assert saved.transcript == []
+            mock_svc.safe_deliver.assert_not_called()
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
     async def test_post_response_moderator_no_self_delivery(
         self, api_client, auth_headers, room_dir, api_app
     ):

@@ -435,6 +435,11 @@ async def post_response(
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
+    _check_room_active(room)
+
+    if body.sender != room.moderator and body.sender not in room.participants:
+        raise HTTPException(status_code=400, detail="Sender is not a room participant or moderator")
+
     msg = RoomMessage(
         id=str(uuid.uuid4()),
         sender=body.sender,
