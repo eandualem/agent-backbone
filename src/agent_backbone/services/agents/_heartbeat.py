@@ -97,6 +97,13 @@ def _schedule_targets(agent: str, config: BackboneConfig) -> list[str]:
     sessions = config.registry.delivery_sessions_for(agent)
     if sessions:
         return sessions
+    entry = config.registry.entities.get(agent)
+    if entry and entry.entity_type == "role":
+        return [
+            instance.session
+            for instance in entry.instances.values()
+            if instance.session is not None
+        ]
     return [agent]
 
 

@@ -15,8 +15,12 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
+from agent_backbone.services.routing._delivery_policy import (
+    load_queue_scope_issue_numbers,
+    normalize_retry_delivery_outcome,
+    normalize_scheduled_delivery_outcome,
+)
 from agent_backbone.services.routing._format import format_next_issue_notification
-from agent_backbone.services.routing._targets import list_open_queue_for_target
 
 log = logging.getLogger(__name__)
 
@@ -57,15 +61,12 @@ async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB,
 
     # Deliver via safe_deliver (handles state checks + enqueue on failure)
     message = format_next_issue_notification(issue)
-    queue_scope_issue_numbers = {
-        item.number
-        for item in await list_open_queue_for_target(
-            config,
-            target_entity,
-            gh,
-            issue_repo_full_name=issue.repo_full_name,
-        )
-    }
+    queue_scope_issue_numbers = await load_queue_scope_issue_numbers(
+        config,
+        target_entity,
+        gh,
+        issue_repo_full_name=issue.repo_full_name,
+    )
     outcome = await safe_deliver(
         session_name,
         message,
@@ -77,23 +78,15 @@ async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB,
         enforce_issue_queue=True,
         queue_scope_issue_numbers=queue_scope_issue_numbers,
     )
-
-    if outcome == "delivered":
+    normalized_outcome = normalize_retry_delivery_outcome(outcome)
+    if normalized_outcome == "retried":
         log.info(
             "Retry delivered #%d to %s (%s)",
             issue_number,
             target_entity,
             session_name,
         )
-        return "retried"
-    if outcome == "offline":
-        return "still_offline"
-    busy_states = ("agent_working", "plan_waiting", "copy_mode", "user_interacting", "grace_period")
-    if outcome in busy_states:
-        return "still_busy"
-    if outcome in ("already_delivered", "awaiting_ack", "unknown_state"):
-        return outcome
-    return "delivery_failed"
+    return normalized_outcome
 
 
 @flow(name="delivery-retry")
@@ -138,14 +131,11 @@ async def delivery_retry() -> dict:
                     target_entity=msg_record.get("target_entity"),
                     flow_name="delivery-retry-queue",
                     enforce_issue_queue=True,
-                    queue_scope_issue_numbers={
-                        item.number
-                        for item in await list_open_queue_for_target(
-                            config,
-                            msg_record["target_entity"],
-                            gh,
-                        )
-                    }
+                    queue_scope_issue_numbers=await load_queue_scope_issue_numbers(
+                        config,
+                        msg_record["target_entity"],
+                        gh,
+                    )
                     if msg_record.get("target_entity")
                     else None,
                 )
@@ -193,15 +183,12 @@ async def scheduled_delivery(
 
     # Deliver via safe_deliver (handles state checks)
     message = format_next_issue_notification(issue)
-    queue_scope_issue_numbers = {
-        item.number
-        for item in await list_open_queue_for_target(
-            config,
-            target_entity,
-            gh,
-            issue_repo_full_name=issue.repo_full_name,
-        )
-    }
+    queue_scope_issue_numbers = await load_queue_scope_issue_numbers(
+        config,
+        target_entity,
+        gh,
+        issue_repo_full_name=issue.repo_full_name,
+    )
     outcome = await safe_deliver(
         session_name,
         message,
@@ -214,16 +201,7 @@ async def scheduled_delivery(
         enforce_issue_queue=True,
         queue_scope_issue_numbers=queue_scope_issue_numbers,
     )
-
-    if outcome == "delivered":
+    normalized_outcome = normalize_scheduled_delivery_outcome(outcome)
+    if normalized_outcome == "delivered":
         log.info("Scheduled delivery of #%d to %s", issue_number, session_name)
-        return "delivered"
-
-    if outcome == "offline":
-        return "offline"
-    busy_states = ("agent_working", "plan_waiting", "copy_mode", "user_interacting", "grace_period")
-    if outcome in busy_states:
-        return "busy"
-    if outcome in ("already_delivered", "awaiting_ack", "unknown_state"):
-        return outcome
-    return "delivery_failed"
+    return normalized_outcome

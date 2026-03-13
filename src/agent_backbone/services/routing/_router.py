@@ -18,6 +18,10 @@ from agent_backbone.models import EventType, IssueEvent, parse_from_tag
 from agent_backbone.services.agents._delivery_check import find_outgoing_comment
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
+from agent_backbone.services.routing._delivery_policy import (
+    load_queue_scope_issue_numbers,
+    record_dispatch_outcome,
+)
 from agent_backbone.services.routing._format import (
     format_comment_notification,
     format_issue_notification,
@@ -28,7 +32,6 @@ from agent_backbone.services.routing._resolution import (
     resolve_entity_sessions,
 )
 from agent_backbone.services.routing._targets import (
-    list_open_queue_for_target,
     resolve_event_targets,
 )
 from agent_backbone.services.routing.models import DispatchResult
@@ -124,19 +127,7 @@ async def _deliver_to_entity(
             delivery_kind=delivery_kind,
         )
 
-        # Map safe_deliver outcomes to DispatchResult fields
-        if outcome == "delivered":
-            result.delivered.append(session_name)
-        elif outcome == "already_delivered":
-            result.skipped.append(session_name)
-        elif outcome == "offline":
-            result.offline.append(session_name)
-        elif outcome == "delivery_failed":
-            result.offline.append(session_name)
-        else:
-            # awaiting_ack, agent_working, plan_waiting, copy_mode,
-            # user_interacting, grace_period, unknown_state
-            result.deferred.append(session_name)
+        record_dispatch_outcome(result, session_name, outcome)
 
         log.info(
             "Decision: #%d → %s (%s) = %s",
@@ -286,13 +277,12 @@ async def issue_dispatcher(
         queue_scope_issue_numbers: set[int] | None = None
         if gh is not None and delivery_kind == "issue":
             try:
-                open_issues = await list_open_queue_for_target(
+                queue_scope_issue_numbers = await load_queue_scope_issue_numbers(
                     config,
                     target,
                     gh,
                     issue_repo_full_name=event.issue.repo_full_name,
                 )
-                queue_scope_issue_numbers = {issue.number for issue in open_issues}
                 queue_scope_cache[target] = queue_scope_issue_numbers
             except Exception:
                 log.exception("Failed to load queue scope for %s (non-fatal)", target)

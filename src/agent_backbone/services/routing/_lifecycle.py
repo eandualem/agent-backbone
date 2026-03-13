@@ -17,6 +17,7 @@ from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.routing._create_notify import create_and_notify
 from agent_backbone.services.routing._dedup import is_recent_notification
 from agent_backbone.services.routing._delivery import safe_deliver
+from agent_backbone.services.routing._delivery_policy import load_queue_scope_issue_numbers
 from agent_backbone.services.routing._format import format_next_issue_notification
 from agent_backbone.services.routing._intelligence import is_http_target
 from agent_backbone.services.routing._resolution import resolve_entity_session
@@ -251,16 +252,13 @@ async def on_issue_closed(
             result[target] = "queue_empty"
             continue
 
-        queue_scope_issue_numbers = {
-            issue.number
-            for issue in await list_open_queue_for_target(
-                config,
-                target,
-                gh,
-                issue_repo_full_name=_issue_repo_full_name(event.issue, config),
-            )
-            if issue.number != event.issue.number
-        }
+        queue_scope_issue_numbers = await load_queue_scope_issue_numbers(
+            config,
+            target,
+            gh,
+            issue_repo_full_name=_issue_repo_full_name(event.issue, config),
+        )
+        queue_scope_issue_numbers.discard(event.issue.number)
         session_results: list[str] = []
         for session_name in session_names:
             # Check if session is reachable (HTTP targets are always reachable)

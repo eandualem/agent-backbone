@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 from agent_backbone.models import IssueData
 from agent_backbone.services.routing._delivery import safe_deliver
+from agent_backbone.services.routing._delivery_policy import load_queue_scope_issue_numbers
 from agent_backbone.services.routing._format import format_issue_notification
 from agent_backbone.services.routing._resolution import (
     resolve_entity_sessions,
@@ -71,13 +72,12 @@ async def create_and_notify(
             )
             continue
 
-        queue_scope_issue_numbers = {
-            item.number
-            for item in await gh.list_open_issues(
-                f"for:{target}",
-                repo_full_name=issue.repo_full_name or None,
-            )
-        }
+        queue_scope_issue_numbers = await load_queue_scope_issue_numbers(
+            config,
+            target,
+            gh,
+            issue_repo_full_name=issue.repo_full_name or "",
+        )
         for session_name in session_names:
             outcome = await safe_deliver(
                 session_name,

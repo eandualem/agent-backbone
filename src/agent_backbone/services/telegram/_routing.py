@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from agent_backbone.services.telegram.interface import TelegramService
 
 from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.telegram._helpers import authorized_message
 from agent_backbone.services.telegram._topic_discovery import process_message_for_discovery
 
 
@@ -31,10 +32,11 @@ async def handle_topic_message(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Route plain text messages in forum topics to mapped tmux sessions."""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    chat_message = authorized_message(bot, update)
+    if chat_message is None:
         return
 
-    thread_id = getattr(update.message, "message_thread_id", None)
+    thread_id = getattr(chat_message, "message_thread_id", None)
     if thread_id is None:
         return
 
@@ -51,7 +53,7 @@ async def handle_topic_message(
     if target is None:
         return
 
-    text = (update.message.text or "").strip()
+    text = (chat_message.text or "").strip()
     if not text:
         return
 
@@ -62,16 +64,16 @@ async def handle_topic_message(
         # Parse "agent-name: message" or "agent-name message"
         parts = text.split(":", 1) if ":" in text else text.split(None, 1)
         if len(parts) < 2 or not parts[1].strip():
-            await update.message.reply_text(
+            await chat_message.reply_text(
                 "Usage: `agent-name: message` or `agent-name message`",
                 parse_mode="Markdown",
             )
             return
         agent = parts[0].strip()
-        message = f"{tag} {parts[1].strip()}"
+        outbound_message = f"{tag} {parts[1].strip()}"
     else:
         agent = target
-        message = f"{tag} {text}"
+        outbound_message = f"{tag} {text}"
 
-    result = await safe_deliver(agent, message, bot._config)
-    await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")
+    result = await safe_deliver(agent, outbound_message, bot._config)
+    await chat_message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")

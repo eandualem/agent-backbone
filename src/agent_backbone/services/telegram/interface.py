@@ -30,6 +30,20 @@ from agent_backbone.services.telegram._topic_discovery import (
 
 log = logging.getLogger(__name__)
 
+_COMMAND_HANDLERS = (
+    ("help", "cmd_help"),
+    ("status", "cmd_status"),
+    ("queue", "cmd_queue"),
+    ("start", "cmd_start_agent"),
+    ("stop", "cmd_stop_agent"),
+    ("tell", "cmd_tell"),
+    ("digest", "cmd_digest"),
+    ("workflow", "cmd_workflow"),
+    ("identify", "cmd_identify"),
+    ("viewplan", "cmd_viewplan"),
+    ("approve", "cmd_approve"),
+)
+
 
 # Module-level convenience alias for TelegramService.send_notification
 async def send_notification(token: str, chat_id: int, text: str) -> bool:
@@ -167,17 +181,8 @@ class TelegramService:
             raise ValueError("TELEGRAM_TOKEN environment variable not set")
 
         self._app = Application.builder().token(token).build()
-        self._app.add_handler(CommandHandler("help", self.cmd_help))
-        self._app.add_handler(CommandHandler("status", self.cmd_status))
-        self._app.add_handler(CommandHandler("queue", self.cmd_queue))
-        self._app.add_handler(CommandHandler("start", self.cmd_start_agent))
-        self._app.add_handler(CommandHandler("stop", self.cmd_stop_agent))
-        self._app.add_handler(CommandHandler("tell", self.cmd_tell))
-        self._app.add_handler(CommandHandler("digest", self.cmd_digest))
-        self._app.add_handler(CommandHandler("workflow", self.cmd_workflow))
-        self._app.add_handler(CommandHandler("identify", self.cmd_identify))
-        self._app.add_handler(CommandHandler("viewplan", self.cmd_viewplan))
-        self._app.add_handler(CommandHandler("approve", self.cmd_approve))
+        for command_name, handler_name in _COMMAND_HANDLERS:
+            self._app.add_handler(CommandHandler(command_name, getattr(self, handler_name)))
         self._app.add_handler(
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND & filters.IS_TOPIC_MESSAGE,
