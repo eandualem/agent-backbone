@@ -574,26 +574,51 @@ class AnalyticsService:
 
         events_filter = [event] if event else None
 
-        # Over-fetch to account for dedup removal, then trim.
-        # Fetch 2x+1 so after dedup we likely still have enough.
-        fetch_limit = (limit * 2) + 1
-        rows = await db.query_analytics_rows(
-            sessions=sessions,
-            since=since,
-            until=until,
-            events=events_filter,
-            runtime=runtime,
-            model=model,
-            source_kind=source_kind,
-            source_ref=source_ref,
-            trace_id=trace_id,
-            parent_trace_id=parent_trace_id,
-            cursor_ts=cursor_ts,
-            cursor_id=cursor_id,
-            limit=fetch_limit,
-        )
+        # Dedup-correct pagination: keep fetching forward until we
+        # have limit+1 unique rows (to detect has_more) or the DB
+        # is exhausted.  Each iteration advances the cursor past
+        # the last raw row fetched.
+        need = limit + 1  # one extra to detect has_more
+        batch_size = max(need, 200)
+        deduped: list[dict] = []
+        seen: set[tuple] = set()
+        iter_cursor_ts = cursor_ts
+        iter_cursor_id = cursor_id
+        _MAX_ITERATIONS = 20  # safety cap
 
-        deduped, _ = deduplicate_rows(rows)
+        for _ in range(_MAX_ITERATIONS):
+            batch = await db.query_analytics_rows(
+                sessions=sessions,
+                since=since,
+                until=until,
+                events=events_filter,
+                runtime=runtime,
+                model=model,
+                source_kind=source_kind,
+                source_ref=source_ref,
+                trace_id=trace_id,
+                parent_trace_id=parent_trace_id,
+                cursor_ts=iter_cursor_ts,
+                cursor_id=iter_cursor_id,
+                limit=batch_size,
+            )
+            if not batch:
+                break
+            for row in batch:
+                key = _dedup_key(row)
+                if key is not None:
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                deduped.append(row)
+                if len(deduped) >= need:
+                    break
+            # Advance cursor past the last raw row we examined
+            last_raw = batch[-1]
+            iter_cursor_ts = str(last_raw["ts"])
+            iter_cursor_id = last_raw["id"]
+            if len(deduped) >= need or len(batch) < batch_size:
+                break
 
         has_more = len(deduped) > limit
         if has_more:

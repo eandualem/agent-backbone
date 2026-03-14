@@ -891,6 +891,72 @@ class TestEventsDedup:
         ids2 = {e["id"] for e in page2["events"]}
         assert ids1.isdisjoint(ids2)
 
+    async def test_events_dedup_heavy_burst(self, db, svc):
+        """Dup burst larger than fetch window must not truncate.
+
+        10 duplicate rows (same source key) followed by 3 unique
+        rows. Requesting limit=3 must return all 4 unique events
+        (1 deduped dup + 3 unique) with has_more=True trimmed to 3.
+        """
+        # 10 duplicates of dup1 at ts_offset=0
+        for i in range(10):
+            await _insert_rows(db, [
+                _activity_row(
+                    event="token.usage",
+                    data={"dup": True},
+                    source_ref="c.jsonl",
+                    source_event_id="dup1",
+                    ts_offset=0,
+                ),
+            ])
+        # 3 unique rows after the burst
+        for i in range(3):
+            await _insert_rows(db, [
+                _activity_row(
+                    event="token.usage",
+                    data={"i": i},
+                    source_ref="c.jsonl",
+                    source_event_id=f"uniq{i + 2}",
+                    ts_offset=i + 1,
+                ),
+            ])
+
+        result = await svc.get_events(
+            db, "agent-backbone",
+            include_swarm_workers=False, limit=3,
+        )
+        # Should see 3 events (dup1 + uniq2 + uniq3) with
+        # has_more=True (uniq4 still available)
+        assert len(result["events"]) == 3
+        assert result["has_more"] is True
+
+        source_ids = [
+            e["data"].get("dup") or e["data"].get("i")
+            for e in result["events"]
+        ]
+        # First event is the deduped dup1
+        assert source_ids[0] is True  # dup=True
+
+    async def test_events_dedup_exhaust(self, db, svc):
+        """When all rows are duplicates, pagination terminates."""
+        for i in range(5):
+            await _insert_rows(db, [
+                _activity_row(
+                    event="token.usage",
+                    data={"only": True},
+                    source_ref="d.jsonl",
+                    source_event_id="same",
+                    ts_offset=0,
+                ),
+            ])
+
+        result = await svc.get_events(
+            db, "agent-backbone",
+            include_swarm_workers=False, limit=3,
+        )
+        assert len(result["events"]) == 1
+        assert result["has_more"] is False
+
 
 class TestDirectWorkerDrilldown:
     """Querying a worker session directly must resolve swarm context."""
