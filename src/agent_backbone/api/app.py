@@ -155,6 +155,7 @@ def create_app() -> socketio.ASGIApp:
     from agent_backbone.api.routes.actions import router as actions_router
     from agent_backbone.api.routes.activity import router as activity_router
     from agent_backbone.api.routes.agents import router as agents_router
+    from agent_backbone.api.routes.analytics import router as analytics_router
     from agent_backbone.api.routes.dashboard import router as dashboard_router
     from agent_backbone.api.routes.deliveries import router as deliveries_router
     from agent_backbone.api.routes.files import router as files_router
@@ -187,6 +188,7 @@ def create_app() -> socketio.ASGIApp:
         actions_router,
         schedule_router,
         activity_router,
+        analytics_router,
         messages_router,
         swarms_router,
         notes_router,
