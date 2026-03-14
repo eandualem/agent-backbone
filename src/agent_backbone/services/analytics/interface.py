@@ -50,16 +50,36 @@ def _safe_json(data_str: str | None) -> dict:
         return {}
 
 
-def _extract_tokens(data: dict) -> dict[str, int]:
-    """Extract normalized token counts from a data payload."""
-    tokens: dict[str, int] = {}
+def _extract_tokens_from_flat(source: dict, tokens: dict[str, int]) -> None:
+    """Extract token counts from a flat dict into tokens accumulator."""
     for raw_key, canonical in _TOKEN_ALIASES.items():
-        val = data.get(raw_key)
+        val = source.get(raw_key)
         if val is not None:
             try:
                 tokens[canonical] = tokens.get(canonical, 0) + int(val)
             except (ValueError, TypeError):
                 pass
+
+
+def _extract_tokens(data: dict) -> dict[str, int]:
+    """Extract normalized token counts from a data payload.
+
+    Handles flat keys (Claude/Gemini) and Codex nested
+    ``{"total": {"input_tokens": ...}, "last": {...}}`` shapes.
+    When a ``total`` sub-dict is present its values take priority.
+    """
+    tokens: dict[str, int] = {}
+
+    # Check for Codex nested structure first
+    total_sub = data.get("total")
+    if isinstance(total_sub, dict) and total_sub:
+        _extract_tokens_from_flat(total_sub, tokens)
+        # If we got tokens from nested, return early — don't double-count
+        if tokens:
+            return tokens
+
+    # Flat keys (Claude, Gemini, OpenAI, or any direct posting)
+    _extract_tokens_from_flat(data, tokens)
     return tokens
 
 
@@ -165,6 +185,20 @@ class SwarmAttribution:
     task_id: str | None = None
 
 
+def _apply_swarm_attribution(entry: dict, sa: SwarmAttribution) -> None:
+    """Add swarm attribution fields to an output dict."""
+    if sa.is_swarm_worker:
+        entry["is_swarm_worker"] = True
+        entry["swarm_id"] = sa.swarm_id
+        entry["swarm_worker_name"] = sa.swarm_worker_name
+        entry["swarm_worker_role"] = sa.swarm_worker_role
+        entry["coding_agent_session"] = sa.coding_agent_session
+        entry["repo"] = sa.repo
+        entry["task_id"] = sa.task_id
+    else:
+        entry["is_swarm_worker"] = False
+
+
 # ---------------------------------------------------------------------------
 # Aggregation results
 # ---------------------------------------------------------------------------
@@ -235,12 +269,16 @@ class AnalyticsService:
     Extraction and aggregation happen in Python.
     """
 
-    # -- Error event categories --
-    _ERROR_EVENTS = frozenset({"tool.error", "runtime.error", "turn.aborted"})
+    # -- Event category sets --
+    _ERROR_EVENTS = frozenset({
+        "tool.error", "runtime.error", "turn.aborted",
+    })
     _TOOL_EVENTS = frozenset({"tool.started", "tool.finished"})
     _TOKEN_EVENTS = frozenset({"token.usage"})
-    _SESSION_EVENTS = frozenset({"session.started", "session.stopped"})
-    _TASK_EVENTS = frozenset({"task.started", "task.completed"})
+    # Events that may carry cost_usd even though they aren't token.usage
+    _COST_BEARING_EVENTS = frozenset({
+        "token.usage", "message.assistant",
+    })
 
     async def resolve_sessions(
         self,
@@ -262,16 +300,12 @@ class AnalyticsService:
         }
 
         if include_swarm_workers:
-            async with db._engine.begin() as conn:
-                from agent_backbone.services.database import _analytics_repo
-
-                workers = await _analytics_repo.get_swarm_sessions_for_agent(
-                    conn,
-                    session,
-                    swarm_id=swarm_id,
-                    worker_name=worker_name,
-                    worker_role=worker_role,
-                )
+            workers = await db.get_swarm_sessions_for_agent(
+                session,
+                swarm_id=swarm_id,
+                worker_name=worker_name,
+                worker_role=worker_role,
+            )
             for w in workers:
                 worker_session = w["session"]
                 if worker_session not in attr_map:
@@ -314,12 +348,9 @@ class AnalyticsService:
             worker_role=worker_role,
         )
 
-        async with db._engine.begin() as conn:
-            from agent_backbone.services.database import _analytics_repo
-
-            rows = await _analytics_repo.query_analytics_rows(
-                conn, sessions=sessions, since=since, until=until,
-            )
+        rows = await db.query_analytics_rows(
+            sessions=sessions, since=since, until=until,
+        )
 
         deduped, original_count = deduplicate_rows(rows)
 
@@ -370,19 +401,25 @@ class AnalyticsService:
                 tokens = _extract_tokens(data)
                 for bucket, count in tokens.items():
                     bd.tokens[bucket] = bd.tokens.get(bucket, 0) + count
-                    totals.tokens[bucket] = totals.tokens.get(bucket, 0) + count
+                    totals.tokens[bucket] = (
+                        totals.tokens.get(bucket, 0) + count
+                    )
 
+            # Cost — check on any cost-bearing event (token.usage,
+            # message.assistant, etc.)
+            if event in self._COST_BEARING_EVENTS:
                 cost = _extract_cost(data)
                 if cost is not None:
                     bd.cost_usd += cost
                     bd.has_cost = True
                     any_cost = True
                     totals.captured_cost_usd += cost
-                else:
+                elif event in self._TOKEN_EVENTS:
+                    # Only token.usage lacking cost affects the flag
                     all_have_cost = False
 
             # Error events
-            elif event in self._ERROR_EVENTS:
+            if event in self._ERROR_EVENTS:
                 bd.error_count += 1
                 totals.errors[event] = totals.errors.get(event, 0) + 1
 
@@ -517,25 +554,21 @@ class AnalyticsService:
 
         events_filter = [event] if event else None
 
-        async with db._engine.begin() as conn:
-            from agent_backbone.services.database import _analytics_repo
-
-            rows = await _analytics_repo.query_analytics_rows(
-                conn,
-                sessions=sessions,
-                since=since,
-                until=until,
-                events=events_filter,
-                runtime=runtime,
-                model=model,
-                source_kind=source_kind,
-                source_ref=source_ref,
-                trace_id=trace_id,
-                parent_trace_id=parent_trace_id,
-                cursor_ts=cursor_ts,
-                cursor_id=cursor_id,
-                limit=limit + 1,  # fetch one extra to detect has_more
-            )
+        rows = await db.query_analytics_rows(
+            sessions=sessions,
+            since=since,
+            until=until,
+            events=events_filter,
+            runtime=runtime,
+            model=model,
+            source_kind=source_kind,
+            source_ref=source_ref,
+            trace_id=trace_id,
+            parent_trace_id=parent_trace_id,
+            cursor_ts=cursor_ts,
+            cursor_id=cursor_id,
+            limit=limit + 1,  # fetch one extra to detect has_more
+        )
 
         has_more = len(rows) > limit
         if has_more:
@@ -565,13 +598,7 @@ class AnalyticsService:
                 "data": _safe_json(row.get("data")),
             }
             sa = attr_map.get(row["session"], SwarmAttribution())
-            if sa.is_swarm_worker:
-                entry["is_swarm_worker"] = True
-                entry["swarm_id"] = sa.swarm_id
-                entry["swarm_worker_name"] = sa.swarm_worker_name
-                entry["swarm_worker_role"] = sa.swarm_worker_role
-            else:
-                entry["is_swarm_worker"] = False
+            _apply_swarm_attribution(entry, sa)
             enriched.append(entry)
 
         return {
@@ -602,16 +629,12 @@ class AnalyticsService:
             worker_role=worker_role,
         )
 
-        async with db._engine.begin() as conn:
-            from agent_backbone.services.database import _analytics_repo
-
-            rows = await _analytics_repo.query_analytics_rows(
-                conn,
-                sessions=sessions,
-                since=since,
-                until=until,
-                events=["tool.started", "tool.finished", "tool.error"],
-            )
+        rows = await db.query_analytics_rows(
+            sessions=sessions,
+            since=since,
+            until=until,
+            events=["tool.started", "tool.finished", "tool.error"],
+        )
 
         deduped, _ = deduplicate_rows(rows)
 
@@ -696,16 +719,12 @@ class AnalyticsService:
             worker_role=worker_role,
         )
 
-        async with db._engine.begin() as conn:
-            from agent_backbone.services.database import _analytics_repo
-
-            rows = await _analytics_repo.query_analytics_rows(
-                conn,
-                sessions=sessions,
-                since=since,
-                until=until,
-                events=list(self._ERROR_EVENTS),
-            )
+        rows = await db.query_analytics_rows(
+            sessions=sessions,
+            since=since,
+            until=until,
+            events=list(self._ERROR_EVENTS),
+        )
 
         deduped, _ = deduplicate_rows(rows)
 
@@ -728,13 +747,7 @@ class AnalyticsService:
                 "message": error_info["message"],
                 "tool_name": error_info.get("tool_name"),
             }
-            if sa.is_swarm_worker:
-                entry["is_swarm_worker"] = True
-                entry["swarm_id"] = sa.swarm_id
-                entry["swarm_worker_name"] = sa.swarm_worker_name
-                entry["swarm_worker_role"] = sa.swarm_worker_role
-            else:
-                entry["is_swarm_worker"] = False
+            _apply_swarm_attribution(entry, sa)
             feed.append(entry)
 
         return {

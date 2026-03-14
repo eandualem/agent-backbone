@@ -650,3 +650,171 @@ class TestSwarmAttribution:
         # Should include agent-backbone + swarm-767-coder, but NOT scout
         assert "swarm-767-coder" in result["scope"]["sessions_queried"]
         assert "swarm-767-scout" not in result["scope"]["sessions_queried"]
+
+
+class TestCodexNestedTokens:
+    """Codex puts token usage under {"total": {...}, "last": {...}}."""
+
+    def test_extract_tokens_from_codex_nested(self):
+        data = {
+            "total": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "reasoning_output_tokens": 10,
+            },
+            "last": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+            },
+        }
+        tokens = _extract_tokens(data)
+        assert tokens["input_tokens"] == 100
+        assert tokens["output_tokens"] == 50
+
+    def test_extract_tokens_codex_empty_total(self):
+        """Empty total dict falls through to flat keys."""
+        data = {"total": {}, "input_tokens": 200}
+        tokens = _extract_tokens(data)
+        assert tokens["input_tokens"] == 200
+
+    async def test_overview_codex_tokens(self, db, svc):
+        """Codex nested token payloads aggregate correctly."""
+        rows = [
+            _activity_row(
+                event="token.usage",
+                runtime="codex",
+                data={
+                    "total": {
+                        "input_tokens": 300,
+                        "output_tokens": 150,
+                    },
+                    "last": {
+                        "input_tokens": 100,
+                        "output_tokens": 50,
+                    },
+                },
+                ts_offset=0,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_overview(
+            db, "agent-backbone", include_swarm_workers=False,
+        )
+        assert result["totals"]["tokens"]["input_tokens"] == 300
+        assert result["totals"]["tokens"]["output_tokens"] == 150
+
+
+class TestOpenCodeCostOnMessageAssistant:
+    """OpenCode records cost on message.assistant, not token.usage."""
+
+    async def test_cost_from_message_assistant(self, db, svc):
+        rows = [
+            _activity_row(
+                event="message.assistant",
+                runtime="opencode",
+                data={"cost": 1.25, "agent": "default"},
+                ts_offset=0,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_overview(
+            db, "agent-backbone", include_swarm_workers=False,
+        )
+        assert result["totals"]["captured_cost_usd"] == pytest.approx(1.25)
+        assert result["totals"]["cost_status"] == "partial"
+
+    async def test_cost_from_mixed_events(self, db, svc):
+        """Cost from both token.usage and message.assistant sums."""
+        rows = [
+            _activity_row(
+                event="token.usage",
+                data={"input_tokens": 100, "cost_usd": 0.05},
+                ts_offset=0,
+            ),
+            _activity_row(
+                event="message.assistant",
+                runtime="opencode",
+                data={"cost": 1.25},
+                ts_offset=1,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_overview(
+            db, "agent-backbone", include_swarm_workers=False,
+        )
+        assert result["totals"]["captured_cost_usd"] == pytest.approx(1.30)
+
+
+class TestSwarmAttributionInEventsAndErrors:
+    """Full swarm context must appear on events and errors."""
+
+    async def _setup_swarm(self, db):
+        swarm_id = await db.create_swarm(
+            repo="agent-backbone",
+            task_id="767",
+            coding_agent_session="agent-backbone",
+            workers=[
+                {
+                    "name": "coder",
+                    "role": "coder",
+                    "branch": "swarm/767/coder",
+                    "worktree_path": "/tmp/coder",
+                    "session": "swarm-767-coder",
+                },
+            ],
+        )
+        return swarm_id
+
+    async def test_events_include_parent_context(self, db, svc):
+        swarm_id = await self._setup_swarm(db)
+        rows = [
+            _activity_row(
+                session="swarm-767-coder",
+                event="token.usage",
+                data={"input_tokens": 50},
+                ts_offset=0,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_events(
+            db, "agent-backbone",
+            include_swarm_workers=True, limit=10,
+        )
+        worker_ev = next(
+            e for e in result["events"]
+            if e["session"] == "swarm-767-coder"
+        )
+        assert worker_ev["is_swarm_worker"] is True
+        assert worker_ev["swarm_id"] == swarm_id
+        assert worker_ev["swarm_worker_name"] == "coder"
+        assert worker_ev["swarm_worker_role"] == "coder"
+        assert worker_ev["coding_agent_session"] == "agent-backbone"
+        assert worker_ev["repo"] == "agent-backbone"
+        assert worker_ev["task_id"] == "767"
+
+    async def test_errors_include_parent_context(self, db, svc):
+        swarm_id = await self._setup_swarm(db)
+        rows = [
+            _activity_row(
+                session="swarm-767-coder",
+                event="tool.error",
+                data={"message": "fail"},
+                ts_offset=0,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_errors(
+            db, "agent-backbone",
+            include_swarm_workers=True,
+        )
+        worker_err = result["errors"][0]
+        assert worker_err["is_swarm_worker"] is True
+        assert worker_err["swarm_id"] == swarm_id
+        assert worker_err["coding_agent_session"] == "agent-backbone"
+        assert worker_err["repo"] == "agent-backbone"
+        assert worker_err["task_id"] == "767"
