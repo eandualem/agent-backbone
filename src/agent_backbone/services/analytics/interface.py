@@ -577,16 +577,17 @@ class AnalyticsService:
         # Dedup-correct pagination: keep fetching forward until we
         # have limit+1 unique rows (to detect has_more) or the DB
         # is exhausted.  Each iteration advances the cursor past
-        # the last raw row fetched.
+        # the last raw row fetched.  No iteration cap — the loop
+        # terminates when the source runs out (batch < batch_size)
+        # or enough unique rows are collected.
         need = limit + 1  # one extra to detect has_more
-        batch_size = max(need, 200)
+        batch_size = max(need, 500)
         deduped: list[dict] = []
         seen: set[tuple] = set()
         iter_cursor_ts = cursor_ts
         iter_cursor_id = cursor_id
-        _MAX_ITERATIONS = 20  # safety cap
 
-        for _ in range(_MAX_ITERATIONS):
+        while True:
             batch = await db.query_analytics_rows(
                 sessions=sessions,
                 since=since,

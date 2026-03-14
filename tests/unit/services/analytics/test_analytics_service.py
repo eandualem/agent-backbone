@@ -957,6 +957,54 @@ class TestEventsDedup:
         assert len(result["events"]) == 1
         assert result["has_more"] is False
 
+    async def test_events_dedup_massive_burst(self, db, svc):
+        """4001 duplicate rows + 1 unique must not false-exhaust.
+
+        This is the exact repro from external review: a burst
+        larger than any fixed iteration cap must still scan
+        through to find unique rows after the burst.
+        """
+        # Batch-insert 4001 duplicates in chunks for SQLite compat
+        dup = _activity_row(
+            event="token.usage",
+            data={"dup": True},
+            source_ref="burst.jsonl",
+            source_event_id="dup1",
+            ts_offset=0,
+        )
+        chunk_size = 200
+        for start in range(0, 4001, chunk_size):
+            end = min(start + chunk_size, 4001)
+            await _insert_rows(db, [dict(dup) for _ in range(end - start)])
+
+        # 1 unique row after the burst
+        await _insert_rows(db, [
+            _activity_row(
+                event="token.usage",
+                data={"unique": True},
+                source_ref="burst.jsonl",
+                source_event_id="uniq2",
+                ts_offset=1,
+            ),
+        ])
+
+        result = await svc.get_events(
+            db, "agent-backbone",
+            include_swarm_workers=False, limit=3,
+        )
+        # Must find both unique events (dup1 deduped + uniq2)
+        assert len(result["events"]) == 2
+        assert result["has_more"] is False
+        sids = [
+            e["data"].get("source_event_id")
+            or e.get("source_event_id")
+            for e in result["events"]
+        ]
+        assert "dup1" in sids or result["events"][0][
+            "source_event_id"
+        ] == "dup1"
+        assert result["events"][1]["source_event_id"] == "uniq2"
+
 
 class TestDirectWorkerDrilldown:
     """Querying a worker session directly must resolve swarm context."""
