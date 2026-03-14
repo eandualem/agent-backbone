@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Collection
 from typing import TYPE_CHECKING
@@ -11,12 +12,13 @@ if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
 
 from agent_backbone.services.routing._intelligence import get_session_intelligence, is_http_target
-from agent_backbone.services.routing.models import SessionIntelligence
-from agent_backbone.services.terminal import send_message
+from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+from agent_backbone.services.terminal import get_terminal_adapter, send_message
 
 log = logging.getLogger(__name__)
 
 _SUCCESSFUL_ISSUE_OUTCOMES = frozenset({"delivered", "retried"})
+_COPY_MODE_RECHECK_DELAY_SECONDS = 0.1
 
 
 def _comment_matches_active_issue(issue_number: int | None, current_issue: int | None) -> bool:
@@ -114,6 +116,28 @@ async def _record_issue_attempt(
         log.exception("Failed to record delivery attempt (non-fatal)")
 
 
+async def _recover_copy_mode(
+    session_name: str,
+    config: BackboneConfig,
+    profile: SessionProfile,
+    idle_since: float | None = None,
+) -> SessionProfile:
+    """Attempt to clear copy mode and refresh session intelligence."""
+    adapter = get_terminal_adapter(profile.runtime)
+    if not await adapter.exit_copy_mode(session_name):
+        return profile
+
+    await asyncio.sleep(_COPY_MODE_RECHECK_DELAY_SECONDS)
+    refreshed = await get_session_intelligence(session_name, config, idle_since=idle_since)
+    log.info(
+        "Copy mode recovery for '%s': %s -> %s",
+        session_name,
+        profile.intelligence,
+        refreshed.intelligence,
+    )
+    return refreshed
+
+
 async def safe_deliver(
     session_name: str,
     message: str,
@@ -124,6 +148,7 @@ async def safe_deliver(
     target_entity: str | None = None,
     flow_name: str = "",
     priority: bool = False,
+    idle_since: float | None = None,
     enforce_issue_queue: bool = False,
     queue_scope_issue_numbers: Collection[int] | None = None,
     delivery_kind: str = "issue",
@@ -141,6 +166,7 @@ async def safe_deliver(
         target_entity: entity name for queue tracking (optional).
         flow_name: originating flow for logging/tracking.
         priority: if True, bypass COPY_MODE and USER_INTERACTING checks.
+        idle_since: monotonic timestamp when the session became idle.
         enforce_issue_queue: if True, apply session-level dedup and
             acknowledgment gating before attempting delivery.
         queue_scope_issue_numbers: current open queue for the target entity.
@@ -152,8 +178,8 @@ async def safe_deliver(
             assignment gating.
 
     Returns:
-        Outcome string: "delivered", "offline", "copy_mode", "user_interacting",
-        "agent_working", "plan_waiting", "grace_period", "unknown_state",
+        Outcome string: "delivered", "offline", "user_interacting", "agent_working",
+        "plan_waiting", "permission_waiting", "grace_period",
         "already_delivered", "awaiting_ack", "delivery_failed".
     """
     if (
@@ -221,12 +247,10 @@ async def safe_deliver(
         )
         return "delivery_failed"
 
-    # Get composite state (safe_deliver skips grace — passes idle_since=None)
-    profile = await get_session_intelligence(session_name, config)
+    profile = await get_session_intelligence(session_name, config, idle_since=idle_since)
 
     intelligence = profile.intelligence
-    allow_comment_interrupt = delivery_kind == "comment"
-    allow_busy_comment_interrupt = allow_comment_interrupt and _comment_matches_active_issue(
+    allow_same_issue_comment = delivery_kind == "comment" and _comment_matches_active_issue(
         issue_number,
         profile.current_issue,
     )
@@ -253,7 +277,7 @@ async def safe_deliver(
         )
         return "offline"
 
-    if intelligence == SessionIntelligence.PLAN_WAITING and not allow_busy_comment_interrupt:
+    if intelligence == SessionIntelligence.PLAN_WAITING and not allow_same_issue_comment:
         if delivery_kind != "issue":
             await _maybe_enqueue(
                 session_name,
@@ -275,7 +299,29 @@ async def safe_deliver(
         )
         return "plan_waiting"
 
-    if intelligence == SessionIntelligence.AGENT_WORKING and not allow_busy_comment_interrupt:
+    if intelligence == SessionIntelligence.PERMISSION_WAITING and not allow_same_issue_comment:
+        if delivery_kind != "issue":
+            await _maybe_enqueue(
+                session_name,
+                message,
+                issue_number,
+                target_entity,
+                flow_name,
+                db,
+                delivery_kind=delivery_kind,
+            )
+        await _record_issue_attempt(
+            db,
+            issue_number,
+            target_entity,
+            session_name,
+            "permission_waiting",
+            flow_name,
+            delivery_kind=delivery_kind,
+        )
+        return "permission_waiting"
+
+    if intelligence == SessionIntelligence.AGENT_WORKING and not allow_same_issue_comment:
         if delivery_kind != "issue":
             await _maybe_enqueue(
                 session_name,
@@ -297,7 +343,7 @@ async def safe_deliver(
         )
         return "agent_working"
 
-    if intelligence == SessionIntelligence.IDLE_GRACE and not allow_comment_interrupt:
+    if intelligence == SessionIntelligence.IDLE_GRACE and not allow_same_issue_comment:
         await _record_issue_attempt(
             db,
             issue_number,
@@ -309,26 +355,29 @@ async def safe_deliver(
         )
         return "grace_period"
 
-    if intelligence == SessionIntelligence.COPY_MODE and not priority:
-        await _maybe_enqueue(
-            session_name,
-            message,
-            issue_number,
-            target_entity,
-            flow_name,
-            db,
-            delivery_kind=delivery_kind,
-        )
-        await _record_issue_attempt(
-            db,
-            issue_number,
-            target_entity,
-            session_name,
-            "copy_mode",
-            flow_name,
-            delivery_kind=delivery_kind,
-        )
-        return "copy_mode"
+    if intelligence == SessionIntelligence.COPY_MODE:
+        profile = await _recover_copy_mode(session_name, config, profile, idle_since=idle_since)
+        intelligence = profile.intelligence
+        if intelligence == SessionIntelligence.COPY_MODE:
+            await _maybe_enqueue(
+                session_name,
+                message,
+                issue_number,
+                target_entity,
+                flow_name,
+                db,
+                delivery_kind=delivery_kind,
+            )
+            await _record_issue_attempt(
+                db,
+                issue_number,
+                target_entity,
+                session_name,
+                "delivery_failed",
+                flow_name,
+                delivery_kind=delivery_kind,
+            )
+            return "delivery_failed"
 
     if intelligence == SessionIntelligence.USER_INTERACTING and not priority:
         await _maybe_enqueue(
@@ -351,28 +400,7 @@ async def safe_deliver(
         )
         return "user_interacting"
 
-    if intelligence == SessionIntelligence.UNKNOWN:
-        await _maybe_enqueue(
-            session_name,
-            message,
-            issue_number,
-            target_entity,
-            flow_name,
-            db,
-            delivery_kind=delivery_kind,
-        )
-        await _record_issue_attempt(
-            db,
-            issue_number,
-            target_entity,
-            session_name,
-            "unknown_state",
-            flow_name,
-            delivery_kind=delivery_kind,
-        )
-        return "unknown_state"
-
-    # Deliverable: IDLE_READY or priority-bypassed COPY_MODE/USER_INTERACTING
+    # Deliverable: IDLE_READY, UNKNOWN, or priority-bypassed COPY_MODE/USER_INTERACTING
     if await send_message(session_name, message, runtime_hint=profile.runtime):
         await _record_issue_attempt(
             db,

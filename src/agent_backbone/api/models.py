@@ -233,6 +233,113 @@ class MessageResponse(BaseModel):
     outcome: str
 
 
+# --- Hierarchy ---
+
+
+HierarchyTier = Literal[
+    "root",
+    "assistant",
+    "strategic",
+    "orchestrator",
+    "sub-orchestrator",
+    "independent-peer",
+    "knowledge-worker",
+    "coding-agent",
+    "swarm-worker",
+]
+
+HierarchyState = Literal["idle", "busy", "processing", "plan_waiting", "offline", "starting"]
+
+
+class HierarchySwarmWorkerNode(BaseModel):
+    """Swarm worker attached under a coding agent."""
+
+    id: str
+    name: str
+    role: str
+    session: str
+    branch: str
+    status: str
+
+
+class CodingAgentNode(BaseModel):
+    """Dynamic coding agent attached to a hierarchy node."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    label: str
+    org: str
+    state: HierarchyState
+    online: bool
+    current_issue: int | None = Field(
+        default=None,
+        alias="currentIssue",
+        serialization_alias="currentIssue",
+    )
+    swarm_workers: list[HierarchySwarmWorkerNode] | None = Field(
+        default=None,
+        alias="swarmWorkers",
+        serialization_alias="swarmWorkers",
+    )
+
+
+class HierarchyNode(BaseModel):
+    """Static named node in the organizational hierarchy."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    label: str
+    role: str
+    tier: HierarchyTier
+    state: HierarchyState
+    session: str | None
+    online: bool
+    managed_org: str | None = Field(
+        default=None,
+        alias="managedOrg",
+        serialization_alias="managedOrg",
+    )
+    children: list[HierarchyNode] | None = None
+    coding_agents: list[CodingAgentNode] | None = Field(
+        default=None,
+        alias="codingAgents",
+        serialization_alias="codingAgents",
+    )
+
+
+class HierarchySection(BaseModel):
+    """Display section for rendering named hierarchy groups."""
+
+    id: str
+    title: str
+    nodes: list[HierarchyNode] = Field(default_factory=list)
+
+
+class HierarchyResponse(BaseModel):
+    """Full hierarchy response for the org-chart API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    root: HierarchyNode
+    strategy: HierarchyNode
+    independent_peers: list[HierarchyNode] = Field(
+        default_factory=list,
+        alias="independentPeers",
+        serialization_alias="independentPeers",
+    )
+    sections: list[HierarchySection] = Field(default_factory=list)
+    unassigned_coding_agents: list[CodingAgentNode] = Field(
+        default_factory=list,
+        alias="unassignedCodingAgents",
+        serialization_alias="unassignedCodingAgents",
+    )
+
+
+HierarchyNode.model_rebuild()
+
+
 # --- Swarms ---
 
 
@@ -250,6 +357,7 @@ SwarmPhase = Literal[
 ]
 SwarmWorkerRole = Literal["lead", "coder", "tester", "validator", "scout"]
 SwarmWorkerStatus = Literal["pending", "started", "working", "pr_created", "done", "failed"]
+SwarmAssignmentStatus = Literal["active", "completed", "superseded", "cancelled"]
 
 
 class SwarmWorkerCreateRequest(BaseModel):
@@ -310,6 +418,20 @@ class SwarmWorkerResponse(BaseModel):
     updated_at: str
 
 
+class SwarmAssignmentResponse(BaseModel):
+    """One persisted worker assignment within a swarm."""
+
+    assignment_id: int
+    swarm_id: str
+    worker_name: str
+    assigned_by: str
+    summary: str
+    file_paths: list[str] = Field(default_factory=list)
+    status: SwarmAssignmentStatus
+    created_at: str
+    completed_at: str | None = None
+
+
 class SwarmPhaseHistoryResponse(BaseModel):
     """One swarm phase transition record."""
 
@@ -340,6 +462,7 @@ class SwarmDetailResponse(SwarmSummaryResponse):
 
     workers: list[SwarmWorkerResponse] = Field(default_factory=list)
     workers_by_role: dict[SwarmWorkerRole, list[SwarmWorkerResponse]] = Field(default_factory=dict)
+    assignments: list[SwarmAssignmentResponse] = Field(default_factory=list)
     phase_history: list[SwarmPhaseHistoryResponse] = Field(default_factory=list)
 
 
@@ -362,6 +485,29 @@ class SwarmWorkerCompleteRequest(BaseModel):
     status: Literal["done", "failed"]
     summary: str = Field(min_length=1)
     pr_number: int | None = None
+
+
+class SwarmAssignmentCreateRequest(BaseModel):
+    """Request body for lead-issued worker assignments."""
+
+    worker_name: str
+    from_entity: str
+    summary: str = Field(min_length=1)
+    file_paths: list[str] = Field(default_factory=list)
+
+    @field_validator("file_paths")
+    @classmethod
+    def validate_file_paths(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_path in value:
+            path = raw_path.strip()
+            if not path:
+                raise ValueError("file_paths cannot include empty paths")
+            if path not in seen:
+                normalized.append(path)
+                seen.add(path)
+        return normalized
 
 
 class SwarmMessageRequest(BaseModel):
@@ -410,6 +556,18 @@ class SwarmBroadcastResponse(BaseModel):
     delivered: int
     failed: int
     total: int
+
+
+class SwarmAssignmentDispatchResponse(BaseModel):
+    """Response from creating and dispatching one worker assignment."""
+
+    ok: bool
+    assignment_id: int
+    message_id: int | None = None
+    delivered: int
+    failed: int
+    total: int
+    assignment: SwarmAssignmentResponse
 
 
 # --- Status ---
@@ -742,3 +900,163 @@ class RepoOnboardResponse(BaseModel):
     success: bool = False
     error: str = ""
     steps: list[OnboardingStepDetail] = Field(default_factory=list)
+
+
+# --- Analytics ---
+
+
+class AnalyticsScope(BaseModel):
+    """Scope metadata for an analytics query."""
+
+    session: str
+    since: float | None = None
+    until: float | None = None
+    include_swarm_workers: bool = True
+    sessions_queried: list[str] = Field(default_factory=list)
+
+
+class AnalyticsDuration(BaseModel):
+    """Duration summary (all values are best-effort)."""
+
+    observed_window_seconds: float = 0.0
+    session_seconds: float = 0.0
+    task_seconds: float = 0.0
+    tool_seconds: float = 0.0
+    best_effort: bool = True
+
+
+class AnalyticsTotals(BaseModel):
+    """Aggregate totals for an analytics overview."""
+
+    tokens: dict[str, int] = Field(default_factory=dict)
+    captured_cost_usd: float = 0.0
+    cost_status: str = "unavailable"
+    errors: dict[str, int] = Field(default_factory=dict)
+    tool_count: int = 0
+    duration: AnalyticsDuration = Field(
+        default_factory=AnalyticsDuration,
+    )
+
+
+class AnalyticsSessionBreakdown(BaseModel):
+    """Per-session breakdown within an overview."""
+
+    model_config = ConfigDict(extra="allow")
+
+    session: str
+    event_count: int = 0
+    tokens: dict[str, int] = Field(default_factory=dict)
+    cost_usd: float = 0.0
+    error_count: int = 0
+    tool_count: int = 0
+    is_swarm_worker: bool = False
+    swarm_id: str | None = None
+    swarm_worker_name: str | None = None
+    swarm_worker_role: str | None = None
+    coding_agent_session: str | None = None
+    repo: str | None = None
+    task_id: str | None = None
+
+
+class AnalyticsOverviewResponse(BaseModel):
+    """Response for GET /api/analytics/agents/{session}/overview."""
+
+    scope: AnalyticsScope
+    rows_scanned: int = 0
+    deduped_rows: int = 0
+    totals: AnalyticsTotals = Field(
+        default_factory=AnalyticsTotals,
+    )
+    breakdown_by_session: list[AnalyticsSessionBreakdown] = Field(
+        default_factory=list,
+    )
+
+
+class AnalyticsEventEntry(BaseModel):
+    """Single event in the analytics event feed."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    session: str
+    event: str
+    entity: str | None = None
+    runtime: str | None = None
+    model: str | None = None
+    source_kind: str | None = None
+    source_ref: str | None = None
+    source_event_id: str | None = None
+    trace_id: str | None = None
+    parent_trace_id: str | None = None
+    ts: str
+    data: dict = Field(default_factory=dict)
+    is_swarm_worker: bool = False
+    swarm_id: str | None = None
+    swarm_worker_name: str | None = None
+    swarm_worker_role: str | None = None
+    coding_agent_session: str | None = None
+    repo: str | None = None
+    task_id: str | None = None
+
+
+class AnalyticsCursor(BaseModel):
+    """Pagination cursor for the event feed."""
+
+    ts: str
+    id: int
+
+
+class AnalyticsEventsResponse(BaseModel):
+    """Response for GET /api/analytics/agents/{session}/events."""
+
+    events: list[AnalyticsEventEntry] = Field(
+        default_factory=list,
+    )
+    has_more: bool = False
+    next_cursor: AnalyticsCursor | None = None
+
+
+class AnalyticsToolStat(BaseModel):
+    """Aggregated stats for one tool."""
+
+    tool_name: str
+    call_count: int = 0
+    error_count: int = 0
+    total_duration_seconds: float = 0.0
+
+
+class AnalyticsToolsResponse(BaseModel):
+    """Response for GET /api/analytics/agents/{session}/tools."""
+
+    tools: list[AnalyticsToolStat] = Field(default_factory=list)
+    total_tools: int = 0
+
+
+class AnalyticsErrorEntry(BaseModel):
+    """Single error in the analytics error feed."""
+
+    model_config = ConfigDict(extra="allow")
+
+    session: str
+    event: str
+    ts: str
+    error_type: str = "unknown"
+    message: str = ""
+    tool_name: str | None = None
+    is_swarm_worker: bool = False
+    swarm_id: str | None = None
+    swarm_worker_name: str | None = None
+    swarm_worker_role: str | None = None
+    coding_agent_session: str | None = None
+    repo: str | None = None
+    task_id: str | None = None
+
+
+class AnalyticsErrorsResponse(BaseModel):
+    """Response for GET /api/analytics/agents/{session}/errors."""
+
+    summary: dict[str, int] = Field(default_factory=dict)
+    total_errors: int = 0
+    errors: list[AnalyticsErrorEntry] = Field(
+        default_factory=list,
+    )

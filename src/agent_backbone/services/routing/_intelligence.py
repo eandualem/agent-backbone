@@ -27,8 +27,16 @@ log = logging.getLogger(__name__)
 # Agent states considered "working" — not available for new deliveries
 _WORKING_STATES = frozenset({AgentState.PROCESSING_ISSUE, AgentState.BUSY, AgentState.STARTING})
 
-# User interaction recency threshold (seconds)
-_USER_ACTIVITY_THRESHOLD = 10.0
+
+def _profile_current_issue(agent_state: AgentState, current_issue: int | None) -> int | None:
+    """Only expose current_issue for states where the spec says it is meaningful."""
+    if agent_state in (
+        AgentState.PROCESSING_ISSUE,
+        AgentState.PLAN_WAITING,
+        AgentState.PERMISSION_WAITING,
+    ):
+        return current_issue
+    return None
 
 
 def is_http_target(session_name: str, config: BackboneConfig) -> bool:
@@ -47,17 +55,18 @@ async def get_session_intelligence(
     SessionIntelligence value. Derivation priority (first match wins):
 
     1. Session not active -> OFFLINE
-    2. pane_in_mode == "1" AND agent NOT working -> COPY_MODE
-    3. Recent client_activity + agent idle -> USER_INTERACTING
-    4. Agent plan_waiting -> PLAN_WAITING
-    5. Agent processing/busy/starting -> AGENT_WORKING
-    6. Agent idle + grace not elapsed -> IDLE_GRACE
-    7. Agent idle + grace elapsed (or no idle_since) -> IDLE_READY
-    8. Otherwise -> UNKNOWN
+    2. Agent plan_waiting -> PLAN_WAITING
+    3. Agent permission_waiting -> PERMISSION_WAITING
+    4. Agent processing/busy/starting -> AGENT_WORKING
+    5. pane_in_mode == "1" AND agent not busy -> COPY_MODE
+    6. Buffered prompt input + agent idle -> USER_INTERACTING
+    7. Agent idle + grace not elapsed -> IDLE_GRACE
+    8. Agent idle + grace elapsed (or no idle_since) -> IDLE_READY
+    9. Otherwise -> UNKNOWN
 
-    Invariant: Steps 4-5 (plan_waiting, agent_working) MUST take priority
+    Invariant: Steps 2-4 (plan_waiting, permission_waiting, agent_working) MUST take priority
     over tmux-only signals (copy_mode, user_interacting). Any tmux-signal
-    step that precedes them must guard against working states.
+    step that precedes them must guard against those states.
 
     Args:
         session_name: tmux session to query.
@@ -103,38 +112,54 @@ async def get_session_intelligence(
         config.agent_state.stale_threshold_seconds,
     )
     agent_state = state_snap.state
+    current_issue = _profile_current_issue(agent_state, state_snap.current_issue)
 
     # Derivation priority chain
-    # 2. Copy mode — only when agent is NOT in a working state.
-    # A working agent whose pane is in copy/scroll mode must still resolve
-    # to AGENT_WORKING, not COPY_MODE (which priority=True can bypass).
+    # 2. Plan waiting
+    if adapter.detect_plan_waiting(state_snap, pane_content):
+        return SessionProfile(
+            session_name=session_name,
+            intelligence=SessionIntelligence.PLAN_WAITING,
+            runtime=runtime,
+            agent_state=agent_state,
+            current_issue=current_issue,
+            tmux_vars=tmux_vars,
+        )
+
+    # 3. Permission waiting
+    if agent_state == AgentState.PERMISSION_WAITING:
+        return SessionProfile(
+            session_name=session_name,
+            intelligence=SessionIntelligence.PERMISSION_WAITING,
+            runtime=runtime,
+            agent_state=agent_state,
+            current_issue=current_issue,
+            tmux_vars=tmux_vars,
+        )
+
+    # 4. Agent working
+    if agent_state in _WORKING_STATES:
+        return SessionProfile(
+            session_name=session_name,
+            intelligence=SessionIntelligence.AGENT_WORKING,
+            runtime=runtime,
+            agent_state=agent_state,
+            current_issue=current_issue,
+            tmux_vars=tmux_vars,
+        )
+
+    # 5. Copy mode — tmux signal only after higher-priority agent states.
     if adapter.detect_copy_mode(tmux_vars, agent_state):
         return SessionProfile(
             session_name=session_name,
             intelligence=SessionIntelligence.COPY_MODE,
             runtime=runtime,
             agent_state=agent_state,
-            current_issue=state_snap.current_issue,
+            current_issue=current_issue,
             tmux_vars=tmux_vars,
         )
 
-    # 3. User interacting (recent keyboard activity or buffered prompt input)
-    client_activity_str = tmux_vars.get("client_activity", "")
-    if client_activity_str and agent_state == AgentState.IDLE:
-        try:
-            client_activity = float(client_activity_str)
-            if (time.time() - client_activity) < _USER_ACTIVITY_THRESHOLD:
-                return SessionProfile(
-                    session_name=session_name,
-                    intelligence=SessionIntelligence.USER_INTERACTING,
-                    runtime=runtime,
-                    agent_state=agent_state,
-                    current_issue=state_snap.current_issue,
-                    tmux_vars=tmux_vars,
-                )
-        except (ValueError, TypeError):
-            pass
-
+    # 6. User interacting — only buffered prompt input counts.
     if agent_state == AgentState.IDLE and pane_content and adapter.prompt_has_pending_input(
         pane_content
     ):
@@ -143,33 +168,11 @@ async def get_session_intelligence(
             intelligence=SessionIntelligence.USER_INTERACTING,
             runtime=runtime,
             agent_state=agent_state,
-            current_issue=state_snap.current_issue,
+            current_issue=current_issue,
             tmux_vars=tmux_vars,
         )
 
-    # 4. Plan waiting
-    if adapter.detect_plan_waiting(state_snap, pane_content):
-        return SessionProfile(
-            session_name=session_name,
-            intelligence=SessionIntelligence.PLAN_WAITING,
-            runtime=runtime,
-            agent_state=agent_state,
-            current_issue=state_snap.current_issue,
-            tmux_vars=tmux_vars,
-        )
-
-    # 5. Agent working
-    if agent_state in _WORKING_STATES:
-        return SessionProfile(
-            session_name=session_name,
-            intelligence=SessionIntelligence.AGENT_WORKING,
-            runtime=runtime,
-            agent_state=agent_state,
-            current_issue=state_snap.current_issue,
-            tmux_vars=tmux_vars,
-        )
-
-    # 6-7. Idle with/without grace
+    # 7-8. Idle with/without grace
     if agent_state == AgentState.IDLE:
         if idle_since is not None:
             elapsed = time.monotonic() - idle_since
@@ -179,7 +182,7 @@ async def get_session_intelligence(
                     intelligence=SessionIntelligence.IDLE_GRACE,
                     runtime=runtime,
                     agent_state=agent_state,
-                    current_issue=state_snap.current_issue,
+                    current_issue=current_issue,
                     tmux_vars=tmux_vars,
                 )
         return SessionProfile(
@@ -187,16 +190,16 @@ async def get_session_intelligence(
             intelligence=SessionIntelligence.IDLE_READY,
             runtime=runtime,
             agent_state=agent_state,
-            current_issue=state_snap.current_issue,
+            current_issue=current_issue,
             tmux_vars=tmux_vars,
         )
 
-    # 8. Unknown
+    # 9. Unknown
     return SessionProfile(
         session_name=session_name,
         intelligence=SessionIntelligence.UNKNOWN,
         runtime=runtime,
         agent_state=agent_state,
-        current_issue=state_snap.current_issue,
+        current_issue=current_issue,
         tmux_vars=tmux_vars,
     )

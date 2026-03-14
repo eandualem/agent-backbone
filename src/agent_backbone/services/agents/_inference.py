@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.agents.models import StateSnapshot
+from agent_backbone.services.agents.models import AgentState, StateSnapshot
 from agent_backbone.services.terminal._adapters import (
     infer_state_from_pane as _infer_state_from_pane,
 )
@@ -17,6 +17,18 @@ from agent_backbone.services.terminal._adapters import (
 from agent_backbone.services.terminal._core import capture_pane
 
 log = logging.getLogger(__name__)
+
+
+def _trust_stale_push(snapshot: StateSnapshot) -> bool:
+    """Whether a stale push snapshot is still trustworthy enough to reuse."""
+    match snapshot.state:
+        case AgentState.IDLE | AgentState.STARTING | AgentState.BUSY | AgentState.PROCESSING_ISSUE:
+            return True
+        case AgentState.PLAN_WAITING:
+            return bool(snapshot.plan_file and Path(snapshot.plan_file).exists())
+        case AgentState.PERMISSION_WAITING | AgentState.UNKNOWN:
+            return False
+    return False
 
 
 def prompt_has_pending_input(pane_content: str) -> bool:
@@ -47,14 +59,21 @@ async def get_agent_state(
     if pane_content:
         pull = infer_state_from_pane(pane_content)
         pull.timestamp = time.time()
+        if pull.state != AgentState.UNKNOWN:
+            return pull
+        if push and _trust_stale_push(push):
+            log.info(
+                "Pane inference unknown for %s; falling back to stale push state '%s'",
+                session,
+                push.state.value,
+            )
+            return push
         return pull
 
-    if push:
+    if push and _trust_stale_push(push):
         log.info(
             "Using stale push state for %s (age: %.0fs)", session, time.time() - push.timestamp
         )
         return push
-
-    from agent_backbone.services.agents.models import AgentState
 
     return StateSnapshot(state=AgentState.UNKNOWN, source="default")

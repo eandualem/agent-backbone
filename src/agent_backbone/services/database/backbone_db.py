@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from agent_backbone.services.database import (
     _activity_repo,
+    _analytics_repo,
     _delivery_repo,
     _queue_repo,
     _state_repo,
@@ -443,6 +444,72 @@ class BackboneDB:
                 last_event_ts=last_event_ts,
             )
 
+    # --- Analytics queries (delegates to _analytics_repo) ---
+
+    async def query_analytics_rows(
+        self,
+        *,
+        sessions: list[str],
+        since: float | None = None,
+        until: float | None = None,
+        events: list[str] | None = None,
+        runtime: str | None = None,
+        model: str | None = None,
+        source_kind: str | None = None,
+        source_ref: str | None = None,
+        trace_id: str | None = None,
+        parent_trace_id: str | None = None,
+        limit: int | None = None,
+        cursor_ts: str | None = None,
+        cursor_id: int | None = None,
+    ) -> list[dict]:
+        """Query activity rows for analytics aggregation."""
+        async with self._engine.begin() as conn:
+            return await _analytics_repo.query_analytics_rows(
+                conn,
+                sessions=sessions,
+                since=since,
+                until=until,
+                events=events,
+                runtime=runtime,
+                model=model,
+                source_kind=source_kind,
+                source_ref=source_ref,
+                trace_id=trace_id,
+                parent_trace_id=parent_trace_id,
+                limit=limit,
+                cursor_ts=cursor_ts,
+                cursor_id=cursor_id,
+            )
+
+    async def get_swarm_sessions_for_agent(
+        self,
+        coding_agent_session: str,
+        *,
+        swarm_id: str | None = None,
+        worker_name: str | None = None,
+        worker_role: str | None = None,
+    ) -> list[dict]:
+        """Find swarm worker sessions for a coding agent."""
+        async with self._engine.begin() as conn:
+            return await _analytics_repo.get_swarm_sessions_for_agent(
+                conn,
+                coding_agent_session,
+                swarm_id=swarm_id,
+                worker_name=worker_name,
+                worker_role=worker_role,
+            )
+
+    async def get_worker_swarm_attribution(
+        self,
+        worker_session: str,
+    ) -> dict | None:
+        """Look up swarm context for a session that is itself a worker."""
+        async with self._engine.begin() as conn:
+            return await _analytics_repo.get_worker_swarm_attribution(
+                conn, worker_session,
+            )
+
     # --- Issue dependencies (delegates to _queue_repo) ---
 
     async def upsert_dependency(self, parent: int, sub: int) -> None:
@@ -624,6 +691,31 @@ class BackboneDB:
         """Mark a swarm cleaned up and return the refreshed swarm."""
         async with self._engine.begin() as conn:
             return await _swarm_repo.complete_swarm(conn, swarm_id)
+
+    async def create_swarm_assignment(
+        self,
+        swarm_id: str,
+        worker_name: str,
+        *,
+        assigned_by: str,
+        summary: str,
+        file_paths: list[str],
+    ) -> dict | None:
+        """Create one worker assignment in a collaborative swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.create_assignment(
+                conn,
+                swarm_id,
+                worker_name,
+                assigned_by=assigned_by,
+                summary=summary,
+                file_paths=file_paths,
+            )
+
+    async def list_swarm_assignments(self, swarm_id: str) -> list[dict]:
+        """List all assignments for one swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.list_assignments(conn, swarm_id)
 
     async def record_swarm_message(
         self,

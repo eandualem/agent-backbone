@@ -6,8 +6,9 @@ import asyncio
 import logging
 import os
 import signal
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from agent_backbone.api.socketio_server import (
     INPUT_RATE_LIMIT,
@@ -17,9 +18,6 @@ from agent_backbone.api.socketio_server import (
     MIN_COLS,
     MIN_ROWS,
     TerminalNamespace,
-    _load_persisted_dims,
-    _persist_dims,
-    _remove_persisted_dims,
 )
 from agent_backbone.services.terminal._pty import (
     PtyManager,
@@ -43,6 +41,7 @@ def _mock_pty_session():
     """Create a mock PtySession for the 1:1 model."""
     session = MagicMock()
     session.output_queue = asyncio.Queue()
+    session.tty_name = "/dev/ttys123"
     session.write = MagicMock()
     session.resize = MagicMock()
     session.cleanup = AsyncMock()
@@ -61,12 +60,23 @@ def _mock_pty_manager(pty_session=None):
     return mgr
 
 
+@pytest.fixture(autouse=True)
+def mock_window_size_mode():
+    """Keep socket tests isolated from the real tmux server."""
+    with patch(
+        "agent_backbone.api.socketio_server.set_window_size_mode",
+        new_callable=AsyncMock,
+        return_value=True,
+    ) as mock_mode:
+        yield mock_mode
+
+
 # ---------------------------------------------------------------------------
 # Standard join/connect test context managers
 # ---------------------------------------------------------------------------
 
 
-def _join_patches(mgr, panes=None, resize_ok=True, win_size=(200, 50)):
+def _join_patches(mgr, panes=None, resize_ok=True):
     """Return a combined context manager for all join-related patches."""
     if panes is None:
         panes = [
@@ -94,11 +104,6 @@ def _join_patches(mgr, panes=None, resize_ok=True, win_size=(200, 50)):
             "agent_backbone.api.socketio_server.resize_window",
             new_callable=AsyncMock,
             return_value=resize_ok,
-        ),
-        patch(
-            "agent_backbone.api.socketio_server.get_window_size",
-            new_callable=AsyncMock,
-            return_value=win_size,
         ),
     )
 
@@ -190,25 +195,12 @@ class TestOnJoin:
                 "agent_backbone.api.socketio_server.list_panes",
                 new_callable=AsyncMock,
             ) as mock_panes,
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_resize_win,
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
         ):
             mock_panes.return_value = [mock_pane]
             await ns.on_join("sid1", {"session": "ike"})
 
             # Should have created a dedicated PTY with pane dimensions
             mgr.create.assert_awaited_once_with("sid1", "ike", 120, 40)
-
-            # Should have called tmux resize-window
-            mock_resize_win.assert_awaited_once_with("ike", 120, 40)
 
             # Should have entered room
             ns.enter_room.assert_called_once_with("sid1", "session:ike")
@@ -241,23 +233,12 @@ class TestOnJoin:
                 "agent_backbone.api.socketio_server.list_panes",
                 new_callable=AsyncMock,
             ) as mock_panes,
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_resize_win,
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
         ):
             # list_panes should NOT be called when client provides dimensions
             await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
 
             mock_panes.assert_not_called()
             mgr.create.assert_awaited_once_with("sid1", "ike", 160, 35)
-            mock_resize_win.assert_awaited_once_with("ike", 160, 35)
 
             await asyncio.sleep(0.15)
 
@@ -279,21 +260,10 @@ class TestOnJoin:
                 return_value=True,
             ),
             patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_resize_win,
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
         ):
             await ns.on_join("sid1", {"session": "ike", "cols": 9999, "rows": 0})
 
             mgr.create.assert_awaited_once_with("sid1", "ike", MAX_COLS, MIN_ROWS)
-            mock_resize_win.assert_awaited_once_with("ike", MAX_COLS, MIN_ROWS)
 
             await asyncio.sleep(0.15)
 
@@ -324,14 +294,8 @@ class TestOrphanGuard:
                 return_value=[],
             ),
             patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
+                "agent_backbone.api.socketio_server.asyncio.create_task",
                 side_effect=RuntimeError("boom"),
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
             ),
         ):
             try:
@@ -375,11 +339,6 @@ class TestOrphanGuard:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
         ):
             try:
                 await ns.on_join("sid1", {"session": "ike", "cols": 80, "rows": 24})
@@ -414,11 +373,6 @@ class TestOrphanGuard:
                 "agent_backbone.api.socketio_server.resize_window",
                 new_callable=AsyncMock,
                 return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
             ),
         ):
             await ns.on_join("sid1", {"session": "ike", "cols": 80, "rows": 24})
@@ -474,7 +428,7 @@ class TestOnResize:
         await ns.on_resize("sid1", {"session": "ike"})
         ns.emit.assert_not_awaited()
 
-    async def test_resize_calls_pty_and_tmux_resize(self):
+    async def test_resize_calls_pty_and_tmux_resize(self, mock_window_size_mode):
         """Calls PTY resize and tmux resize-window directly (no min-dims)."""
         ns = _make_namespace()
         ns._subscriptions["sid1"] = {"ike": MagicMock()}
@@ -494,6 +448,7 @@ class TestOnResize:
             mgr.get.assert_called_once_with("sid1", "ike")
             pty_session.resize.assert_called_once_with(140, 35)
             mock_resize_win.assert_awaited_once_with("ike", 140, 35)
+            mock_window_size_mode.assert_awaited_once_with("ike", "latest")
             ns.emit.assert_not_awaited()
 
 
@@ -800,287 +755,11 @@ class TestOutputBackpressure:
         assert ns.emit.await_count == 2
 
 
-class TestDimensionTracking:
-    """Original dims save/restore and per-client active session tracking."""
-
-    async def _join_client(self, ns, sid, session_name, cols, rows, mgr, pty_session):
-        """Helper: join a client with given dimensions, mocking all dependencies."""
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue.put(None)
-        pty_session.output_queue = queue
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
-        ):
-            await ns.on_join(sid, {"session": session_name, "cols": cols, "rows": rows})
-            await asyncio.sleep(0.1)
-
-    async def test_join_saves_original_dims(self):
-        """First join queries and stores original tmux window dimensions."""
-        ns = _make_namespace()
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
-
-        assert ns._original_dims["ike"] == (200, 50)
-        assert "sid1" in ns._active_sessions["ike"]
-
-    async def test_join_second_client_does_not_overwrite_original_dims(self):
-        """Second join does NOT re-query dims when active sessions exist."""
-        ns = _make_namespace()
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
-        assert ns._original_dims["ike"] == (200, 50)
-
-        # Second join: get_window_size returns a different value, but
-        # original_dims should NOT be overwritten.
-        queue2: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue2.put(None)
-        pty_session.output_queue = queue2
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(180, 45),
-            ) as mock_get_size,
-        ):
-            await ns.on_join("sid2", {"session": "ike", "cols": 140, "rows": 30})
-            await asyncio.sleep(0.1)
-
-            # Original dims still (200, 50), not overwritten by (180, 45)
-            assert ns._original_dims["ike"] == (200, 50)
-            # get_window_size should NOT have been called for the second join
-            mock_get_size.assert_not_awaited()
-
-        # Both clients should be tracked
-        assert "sid1" in ns._active_sessions["ike"]
-        assert "sid2" in ns._active_sessions["ike"]
-
-    async def test_each_client_gets_own_pty(self):
-        """Two clients joining same session each get their own PTY via mgr.create."""
-        ns = _make_namespace()
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
-        await self._join_client(ns, "sid2", "ike", 140, 30, mgr, pty_session)
-
-        # mgr.create called twice — once per client
-        assert mgr.create.call_count == 2
-        calls = mgr.create.call_args_list
-        assert calls[0][0] == ("sid1", "ike", 160, 35)
-        assert calls[1][0] == ("sid2", "ike", 140, 30)
-
-    async def test_cleanup_last_client_restores_dims(self):
-        """Last client disconnect calls resize_window with original dims."""
-        ns = _make_namespace()
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
-
-        with (
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_resize_win,
-        ):
-            await ns.on_leave("sid1", {"session": "ike"})
-
-            # Should restore original dims (200, 50)
-            mock_resize_win.assert_awaited_once_with("ike", 200, 50)
-
-        # Tracking state should be cleaned up
-        assert "ike" not in ns._active_sessions
-        assert "ike" not in ns._original_dims
-
-    async def test_client_leave_kills_only_its_pty(self):
-        """When one of two clients leaves, only their PTY is removed."""
-        ns = _make_namespace()
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
-        await self._join_client(ns, "sid2", "ike", 140, 30, mgr, pty_session)
-
-        mgr.remove.reset_mock()
-
-        with (
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            await ns.on_leave("sid2", {"session": "ike"})
-
-            # Only sid2's PTY should be removed
-            mgr.remove.assert_awaited_once_with("sid2", "ike")
-
-        # sid1 should still be active, original dims still tracked
-        assert "sid1" in ns._active_sessions.get("ike", set())
-        assert "ike" in ns._original_dims
-
-    async def test_cleanup_clears_dim_tracking(self):
-        """Full disconnect clears all dimension tracking for the client."""
-        ns = _make_namespace()
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        await self._join_client(ns, "sid1", "ike", 160, 35, mgr, pty_session)
-
-        with (
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            await ns.on_disconnect("sid1")
-
-        assert "ike" not in ns._active_sessions
-        assert "ike" not in ns._original_dims
-        assert "sid1" not in ns._subscriptions
-
-
-class TestReloadDimsRecovery:
-    """Original dimensions are re-queried on reload when dict was wiped."""
-
-    async def test_join_requeires_original_dims_on_reload(self):
-        """After reload (dict wiped), next join re-captures original dims."""
-        ns = _make_namespace()
-
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue.put(None)
-
-        pty_session = _mock_pty_session()
-        pty_session.output_queue = queue
-        mgr = _mock_pty_manager(pty_session)
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-            ) as mock_get_size,
-            patch("agent_backbone.api.socketio_server._load_persisted_dims", return_value=None),
-            patch("agent_backbone.api.socketio_server._persist_dims"),
-        ):
-            # First join: returns (200, 50)
-            mock_get_size.return_value = (200, 50)
-            await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
-            await asyncio.sleep(0.1)
-
-            assert ns._original_dims["ike"] == (200, 50)
-            assert mock_get_size.await_count == 1
-
-            # Simulate reload: wipe dicts, change what tmux reports
-            ns._original_dims.clear()
-            ns._active_sessions.clear()
-            mock_get_size.return_value = (180, 45)
-
-            queue2: asyncio.Queue[str | None] = asyncio.Queue()
-            await queue2.put(None)
-            pty_session.output_queue = queue2
-
-            await ns.on_join("sid2", {"session": "ike", "cols": 140, "rows": 30})
-            await asyncio.sleep(0.1)
-
-            # Should have re-queried and gotten the new value
-            assert ns._original_dims["ike"] == (180, 45)
-            assert mock_get_size.await_count == 2
-
-    async def test_reload_recovery_when_original_dims_missing(self):
-        """Reload recovery branch: _active_sessions present but _original_dims missing."""
-        ns = _make_namespace()
-
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        # Simulate state where _active_sessions has entries but _original_dims lost
-        ns._active_sessions["ike"] = {"sid-old"}
-
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue.put(None)
-        pty_session.output_queue = queue
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(180, 45),
-            ) as mock_get_size,
-            patch("agent_backbone.api.socketio_server._load_persisted_dims", return_value=None),
-            patch("agent_backbone.api.socketio_server._persist_dims"),
-        ):
-            await ns.on_join("sid2", {"session": "ike", "cols": 140, "rows": 30})
-            await asyncio.sleep(0.1)
-
-            # Should have queried original dims (reload recovery branch)
-            mock_get_size.assert_awaited_once()
-            assert ns._original_dims["ike"] == (180, 45)
-
-
 class TestResizeFailureLogging:
     """Resize failures logged at ERROR level."""
 
     async def test_join_logs_resize_failure(self, caplog):
-        """Resize failure on join is logged at ERROR level."""
+        """Join no longer drives tmux resize-window directly."""
         ns = _make_namespace()
 
         queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -1097,22 +776,11 @@ class TestResizeFailureLogging:
                 return_value=True,
             ),
             patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
         ):
-            with caplog.at_level(logging.ERROR, logger="agent_backbone.api.socketio_server"):
-                await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
-                await asyncio.sleep(0.1)
+            await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
+            await asyncio.sleep(0.1)
 
-            assert any("resize_window failed on join" in r.message for r in caplog.records)
+        assert "resize_window failed on join" not in caplog.text
 
     async def test_resize_logs_failure(self, caplog):
         """Resize failure on resize event is logged at ERROR level."""
@@ -1136,7 +804,7 @@ class TestResizeFailureLogging:
             assert any("resize_window failed on resize" in r.message for r in caplog.records)
 
     async def test_cleanup_logs_restore_failure(self, caplog):
-        """Resize failure on dim restore (last client leave) is logged at ERROR level."""
+        """Cleanup no longer restores remembered tmux dimensions."""
         ns = _make_namespace()
 
         pty_session = _mock_pty_session()
@@ -1148,7 +816,6 @@ class TestResizeFailureLogging:
         task = asyncio.create_task(_block())
         ns._subscriptions["sid1"] = {"ike": task}
         ns._active_sessions["ike"] = {"sid1"}
-        ns._original_dims["ike"] = (200, 50)
 
         with (
             patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
@@ -1158,10 +825,9 @@ class TestResizeFailureLogging:
                 return_value=False,
             ),
         ):
-            with caplog.at_level(logging.ERROR, logger="agent_backbone.api.socketio_server"):
-                await ns.on_leave("sid1", {"session": "ike"})
+            await ns.on_leave("sid1", {"session": "ike"})
 
-            assert any("Failed to restore original dims" in r.message for r in caplog.records)
+        assert "Failed to restore original dims" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -1201,11 +867,6 @@ class TestDoubleJoinBugFix:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
         ):
             await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
             await asyncio.sleep(0.15)
@@ -1233,11 +894,6 @@ class TestDoubleJoinBugFix:
                 "agent_backbone.api.socketio_server.resize_window",
                 new_callable=AsyncMock,
                 return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
             ),
         ):
             await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
@@ -1282,11 +938,6 @@ class TestDoubleJoinBugFix:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
         ):
             await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
             await asyncio.sleep(0.15)
@@ -1313,11 +964,6 @@ class TestDoubleJoinBugFix:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
         ):
             await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
             await asyncio.sleep(0.15)
@@ -1325,343 +971,6 @@ class TestDoubleJoinBugFix:
         # Should have exactly one entry in subscriptions for this session
         assert len(ns._subscriptions["sid1"]) == 1
         assert "ike" in ns._subscriptions["sid1"]
-
-
-class TestOriginalDimsOverwriteFix:
-    """_original_dims only saved when no browser clients connected."""
-
-    async def test_first_client_saves_original_dims(self):
-        """First client join saves original dims."""
-        ns = _make_namespace()
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue.put(None)
-        pty_session.output_queue = queue
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ) as mock_get_size,
-            patch("agent_backbone.api.socketio_server._load_persisted_dims", return_value=None),
-            patch("agent_backbone.api.socketio_server._persist_dims"),
-        ):
-            await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
-            await asyncio.sleep(0.1)
-
-            mock_get_size.assert_awaited_once()
-            assert ns._original_dims["ike"] == (200, 50)
-
-    async def test_second_client_does_not_overwrite_original_dims(self):
-        """Second client join does NOT overwrite original dims."""
-        ns = _make_namespace()
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        # First join
-        queue1: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue1.put(None)
-        pty_session.output_queue = queue1
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
-        ):
-            await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
-            await asyncio.sleep(0.1)
-
-        assert ns._original_dims["ike"] == (200, 50)
-
-        # Second join -- tmux now reports different size (after resize)
-        queue2: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue2.put(None)
-        pty_session.output_queue = queue2
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(160, 35),
-            ) as mock_get_size,
-        ):
-            await ns.on_join("sid2", {"session": "ike", "cols": 140, "rows": 30})
-            await asyncio.sleep(0.1)
-
-            # get_window_size should NOT be called -- original dims already captured
-            mock_get_size.assert_not_awaited()
-
-        # Original dims should still be the first value
-        assert ns._original_dims["ike"] == (200, 50)
-
-    async def test_original_dims_recaptured_after_all_leave_and_rejoin(self):
-        """After all clients leave, original dims are re-captured on rejoin."""
-        ns = _make_namespace()
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        # First join
-        queue1: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue1.put(None)
-        pty_session.output_queue = queue1
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
-        ):
-            await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
-            await asyncio.sleep(0.1)
-
-        # Leave (last client)
-        with (
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            await ns.on_leave("sid1", {"session": "ike"})
-
-        assert "ike" not in ns._original_dims
-        assert "ike" not in ns._active_sessions
-
-        # Rejoin -- should re-capture original dims with new tmux size
-        queue2: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue2.put(None)
-        pty_session.output_queue = queue2
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(180, 45),
-            ) as mock_get_size,
-        ):
-            await ns.on_join("sid2", {"session": "ike", "cols": 140, "rows": 30})
-            await asyncio.sleep(0.1)
-
-            mock_get_size.assert_awaited_once()
-            assert ns._original_dims["ike"] == (180, 45)
-
-
-class TestDimsFilePersistence:
-    """File-based persistence of original tmux dimensions across reloads."""
-
-    async def test_persist_and_load_roundtrip(self, tmp_path: Path):
-        """Persist dims then load them back — values must match."""
-        dims_file = tmp_path / "dims.json"
-        with patch("agent_backbone.api.socketio_server._DIMS_FILE", dims_file):
-            _persist_dims("ike", 200, 50)
-            result = _load_persisted_dims("ike")
-
-        assert result == (200, 50)
-
-    async def test_load_missing_file_returns_none(self, tmp_path: Path):
-        """Loading from a non-existent file returns None."""
-        dims_file = tmp_path / "dims.json"
-        with patch("agent_backbone.api.socketio_server._DIMS_FILE", dims_file):
-            result = _load_persisted_dims("ike")
-
-        assert result is None
-
-    async def test_load_missing_session_returns_none(self, tmp_path: Path):
-        """File exists but requested session is not in it — returns None."""
-        dims_file = tmp_path / "dims.json"
-        with patch("agent_backbone.api.socketio_server._DIMS_FILE", dims_file):
-            _persist_dims("leo", 180, 45)
-            result = _load_persisted_dims("ike")
-
-        assert result is None
-
-    async def test_persist_multiple_sessions(self, tmp_path: Path):
-        """Persist two sessions, load each independently."""
-        dims_file = tmp_path / "dims.json"
-        with patch("agent_backbone.api.socketio_server._DIMS_FILE", dims_file):
-            _persist_dims("ike", 200, 50)
-            _persist_dims("leo", 180, 45)
-
-            result_ike = _load_persisted_dims("ike")
-            result_leo = _load_persisted_dims("leo")
-
-        assert result_ike == (200, 50)
-        assert result_leo == (180, 45)
-
-    async def test_remove_persisted_dims(self, tmp_path: Path):
-        """Persist, remove, verify load returns None."""
-        dims_file = tmp_path / "dims.json"
-        with patch("agent_backbone.api.socketio_server._DIMS_FILE", dims_file):
-            _persist_dims("ike", 200, 50)
-            _remove_persisted_dims("ike")
-            result = _load_persisted_dims("ike")
-
-        assert result is None
-
-    async def test_remove_nonexistent_session_is_noop(self, tmp_path: Path):
-        """Remove a session not in the file — no crash, other data preserved."""
-        dims_file = tmp_path / "dims.json"
-        with patch("agent_backbone.api.socketio_server._DIMS_FILE", dims_file):
-            _persist_dims("ike", 200, 50)
-            _remove_persisted_dims("leo")  # not in file — should not crash
-            result = _load_persisted_dims("ike")
-
-        assert result == (200, 50)
-
-    async def test_load_corrupted_file_returns_none(self, tmp_path: Path):
-        """Corrupted JSON in dims file returns None without crashing."""
-        dims_file = tmp_path / "dims.json"
-        dims_file.write_text("not valid json {{{")
-        with patch("agent_backbone.api.socketio_server._DIMS_FILE", dims_file):
-            result = _load_persisted_dims("ike")
-
-        assert result is None
-
-    async def test_reload_recovery_uses_persisted_dims(self):
-        """First join persists dims, reload wipes dicts, second join loads from file."""
-        ns = _make_namespace()
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        # --- First join: fresh, no persisted file ---
-        queue1: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue1.put(None)
-        pty_session.output_queue = queue1
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ) as mock_get_size,
-            patch(
-                "agent_backbone.api.socketio_server._load_persisted_dims",
-                return_value=None,
-            ) as mock_load,
-            patch("agent_backbone.api.socketio_server._persist_dims") as mock_persist,
-        ):
-            await ns.on_join("sid1", {"session": "ike", "cols": 160, "rows": 35})
-            await asyncio.sleep(0.1)
-
-            # First join: no persisted dims, so get_window_size queried and persist called
-            mock_load.assert_called_once_with("ike")
-            mock_get_size.assert_awaited_once()
-            mock_persist.assert_called_once_with("ike", 200, 50)
-            assert ns._original_dims["ike"] == (200, 50)
-
-        # --- Simulate uvicorn reload: wipe in-memory dicts ---
-        ns._original_dims.clear()
-        ns._active_sessions.clear()
-
-        # --- Second join: persisted file has the dims ---
-        queue2: asyncio.Queue[str | None] = asyncio.Queue()
-        await queue2.put(None)
-        pty_session.output_queue = queue2
-
-        with (
-            patch(
-                "agent_backbone.api.socketio_server.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(999, 999),
-            ) as mock_get_size_2,
-            patch(
-                "agent_backbone.api.socketio_server._load_persisted_dims",
-                return_value=(200, 50),
-            ) as mock_load_2,
-            patch("agent_backbone.api.socketio_server._persist_dims") as mock_persist_2,
-        ):
-            await ns.on_join("sid2", {"session": "ike", "cols": 140, "rows": 30})
-            await asyncio.sleep(0.1)
-
-            # Reload recovery: persisted dims found, so get_window_size NOT called
-            mock_load_2.assert_called_once_with("ike")
-            mock_get_size_2.assert_not_awaited()
-            mock_persist_2.assert_not_called()
-            assert ns._original_dims["ike"] == (200, 50)
 
 
 class TestPtyDeathNotification:
@@ -1959,11 +1268,6 @@ class TestDataLossNotification:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
         ):
             await ns.on_join("sid1", {"session": "ike", "cols": 80, "rows": 24})
             await asyncio.sleep(0.15)
@@ -2128,11 +1432,6 @@ class TestReadOnlyMode:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
         ):
             await ns.on_join(
                 sid,
@@ -2266,46 +1565,65 @@ class TestForwardOutputUnhandledException:
 
 
 class TestReleaseDims:
-    """Tests for on_release_dims — restore original tmux dims without disconnecting."""
+    """Tests for on_release_dims — collapse detaches the browser PTY client."""
 
-    async def test_release_dims_restores_original(self):
-        """release_dims calls resize_window with original dims."""
+    async def test_release_dims_detaches_pty_but_keeps_subscription(self):
+        """Collapse removes the PTY client and leaves a detached subscription marker."""
+        ns = _make_namespace()
+
+        async def _block():
+            await asyncio.get_event_loop().create_future()
+
+        task = asyncio.create_task(_block())
+        ns._subscriptions["sid1"] = {"ike": task}
+        ns._active_sessions["ike"] = {"sid1"}
+        mgr = _mock_pty_manager(_mock_pty_session())
+
+        with patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr):
+            await ns.on_release_dims("sid1", {"session": "ike"})
+
+        assert task.cancelled()
+        mgr.remove.assert_awaited_once_with("sid1", "ike")
+        assert "ike" in ns._subscriptions["sid1"]
+        assert ns._subscriptions["sid1"]["ike"] is None
+        assert "ike" not in ns._active_sessions
+
+    async def test_release_dims_does_not_resize_tmux_window(self):
+        """Collapse does not try to restore or resize tmux geometry."""
         ns = _make_namespace()
         ns._subscriptions["sid1"] = {"ike": MagicMock()}
         ns._active_sessions["ike"] = {"sid1"}
-        ns._original_dims["ike"] = (200, 50)
+        mgr = _mock_pty_manager(_mock_pty_session())
 
-        with patch(
-            "agent_backbone.api.socketio_server.resize_window",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_resize:
-            await ns.on_release_dims("sid1", {"session": "ike"})
-            mock_resize.assert_awaited_once_with("ike", 200, 50)
-
-        # Original dims should be cleared
-        assert "ike" not in ns._original_dims
-        # Client should still be in active_sessions (not disconnected)
-        assert "sid1" in ns._active_sessions["ike"]
-
-    async def test_release_dims_does_not_remove_pty(self):
-        """release_dims preserves PTY and subscriptions — socket stays alive."""
-        ns = _make_namespace()
-        task_mock = MagicMock()
-        ns._subscriptions["sid1"] = {"ike": task_mock}
-        ns._active_sessions["ike"] = {"sid1"}
-        ns._original_dims["ike"] = (200, 50)
-
-        with patch(
-            "agent_backbone.api.socketio_server.resize_window",
-            new_callable=AsyncMock,
-            return_value=True,
+        with (
+            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
+            patch(
+                "agent_backbone.api.socketio_server.resize_window",
+                new_callable=AsyncMock,
+            ) as mock_resize,
         ):
             await ns.on_release_dims("sid1", {"session": "ike"})
 
-        # Subscription and task still present
-        assert "ike" in ns._subscriptions["sid1"]
-        assert ns._subscriptions["sid1"]["ike"] is task_mock
+        mock_resize.assert_not_awaited()
+
+    async def test_release_dims_without_original_still_detaches(self):
+        """Collapse detaches even when there is no remembered dimension snapshot."""
+        ns = _make_namespace()
+
+        async def _block():
+            await asyncio.get_event_loop().create_future()
+
+        task = asyncio.create_task(_block())
+        ns._subscriptions["sid1"] = {"ike": task}
+        ns._active_sessions["ike"] = {"sid1"}
+        mgr = _mock_pty_manager(_mock_pty_session())
+
+        with patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr):
+            await ns.on_release_dims("sid1", {"session": "ike"})
+
+        assert task.cancelled()
+        mgr.remove.assert_awaited_once_with("sid1", "ike")
+        assert ns._subscriptions["sid1"]["ike"] is None
 
     async def test_release_dims_not_subscribed(self):
         """release_dims emits error when sid is not subscribed."""
@@ -2315,66 +1633,63 @@ class TestReleaseDims:
         args = ns.emit.call_args[0]
         assert args[0] == "error"
 
-    async def test_release_dims_no_original(self):
-        """release_dims with no stored original dims is a no-op (no crash)."""
-        ns = _make_namespace()
-        ns._subscriptions["sid1"] = {"ike": MagicMock()}
-        ns._active_sessions["ike"] = {"sid1"}
-        # No _original_dims set
-
-        with patch(
-            "agent_backbone.api.socketio_server.resize_window",
-            new_callable=AsyncMock,
-        ) as mock_resize:
-            await ns.on_release_dims("sid1", {"session": "ike"})
-            mock_resize.assert_not_awaited()
-
     async def test_release_dims_missing_session(self):
         """release_dims with empty session name is a no-op."""
         ns = _make_namespace()
         await ns.on_release_dims("sid1", {"session": ""})
         ns.emit.assert_not_awaited()
 
-    async def test_release_dims_logs_failure(self, caplog):
-        """Resize failure on release_dims is logged at ERROR level."""
+    async def test_release_dims_when_already_detached_is_noop(self):
+        """A second collapse on an already-detached subscription is harmless."""
         ns = _make_namespace()
-        ns._subscriptions["sid1"] = {"ike": MagicMock()}
+        ns._subscriptions["sid1"] = {"ike": None}
         ns._active_sessions["ike"] = {"sid1"}
-        ns._original_dims["ike"] = (200, 50)
+        mgr = _mock_pty_manager(_mock_pty_session())
 
-        with patch(
-            "agent_backbone.api.socketio_server.resize_window",
-            new_callable=AsyncMock,
-            return_value=False,
-        ):
-            with caplog.at_level(logging.ERROR, logger="agent_backbone.api.socketio_server"):
-                await ns.on_release_dims("sid1", {"session": "ike"})
+        with patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr):
+            await ns.on_release_dims("sid1", {"session": "ike"})
 
-            assert any(
-                "Failed to restore dims on release_dims" in r.message for r in caplog.records
-            )
+        mgr.remove.assert_awaited_once_with("sid1", "ike")
+        assert ns._subscriptions["sid1"]["ike"] is None
 
 
 class TestResizeAfterRelease:
-    """Tests for resize re-capturing original dims after release_dims."""
+    """Tests for lazy PTY reattach after collapse."""
 
-    async def test_resize_recaptures_after_release(self):
-        """After release_dims, next resize re-captures current tmux dims as original."""
+    async def test_resize_reattaches_after_release(self):
+        """A detached subscription creates a fresh PTY on the next resize."""
+        ns = _make_namespace()
+        ns._subscriptions["sid1"] = {"ike": None}
+
+        pty_session = _mock_pty_session()
+        mgr = _mock_pty_manager(pty_session)
+        mgr.get.return_value = None
+
+        with (
+            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
+            patch(
+                "agent_backbone.api.socketio_server.resize_window",
+                new_callable=AsyncMock,
+            ) as mock_resize,
+        ):
+            await ns.on_resize("sid1", {"session": "ike", "cols": 140, "rows": 35})
+
+        mgr.create.assert_awaited_once_with("sid1", "ike", 140, 35)
+        mock_resize.assert_not_awaited()
+        assert "sid1" in ns._active_sessions["ike"]
+        assert ns._subscriptions["sid1"]["ike"] is not None
+
+    async def test_resize_existing_client_still_resizes_tmux(self, mock_window_size_mode):
+        """When the PTY is already attached, resize still drives tmux reflow."""
         ns = _make_namespace()
         ns._subscriptions["sid1"] = {"ike": MagicMock()}
         ns._active_sessions["ike"] = {"sid1"}
-        # No _original_dims — simulates post-release state
 
         pty_session = _mock_pty_session()
         mgr = _mock_pty_manager(pty_session)
 
         with (
             patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ) as mock_get_size,
             patch(
                 "agent_backbone.api.socketio_server.resize_window",
                 new_callable=AsyncMock,
@@ -2383,70 +1698,44 @@ class TestResizeAfterRelease:
         ):
             await ns.on_resize("sid1", {"session": "ike", "cols": 140, "rows": 35})
 
-            # Should have captured current dims before resizing
-            mock_get_size.assert_awaited_once_with("ike")
-            assert ns._original_dims["ike"] == (200, 50)
-            # And then applied the requested resize
-            mock_resize.assert_awaited_once_with("ike", 140, 35)
-
-    async def test_resize_does_not_recapture_when_original_exists(self):
-        """Resize does NOT re-capture when original dims already exist."""
-        ns = _make_namespace()
-        ns._subscriptions["sid1"] = {"ike": MagicMock()}
-        ns._active_sessions["ike"] = {"sid1"}
-        ns._original_dims["ike"] = (200, 50)
-
-        pty_session = _mock_pty_session()
-        mgr = _mock_pty_manager(pty_session)
-
-        with (
-            patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
-            patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-            ) as mock_get_size,
-            patch(
-                "agent_backbone.api.socketio_server.resize_window",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            await ns.on_resize("sid1", {"session": "ike", "cols": 140, "rows": 35})
-            mock_get_size.assert_not_awaited()
+        pty_session.resize.assert_called_once_with(140, 35)
+        mock_resize.assert_awaited_once_with("ike", 140, 35)
+        mock_window_size_mode.assert_awaited_once_with("ike", "latest")
 
     async def test_full_cycle_release_then_resize(self):
-        """Full cycle: join → release_dims → resize re-captures → cleanup restores."""
+        """Collapse detaches the PTY; next resize reattaches a fresh client."""
         ns = _make_namespace()
-        ns._subscriptions["sid1"] = {"ike": MagicMock()}
+
+        async def _block():
+            await asyncio.get_event_loop().create_future()
+
+        task = asyncio.create_task(_block())
+        ns._subscriptions["sid1"] = {"ike": task}
         ns._active_sessions["ike"] = {"sid1"}
-        ns._original_dims["ike"] = (200, 50)
 
         pty_session = _mock_pty_session()
         mgr = _mock_pty_manager(pty_session)
 
-        # Step 1: release_dims — restores to (200, 50)
-        with patch(
-            "agent_backbone.api.socketio_server.resize_window",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_resize:
+        with patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr):
             await ns.on_release_dims("sid1", {"session": "ike"})
-            mock_resize.assert_awaited_once_with("ike", 200, 50)
-        assert "ike" not in ns._original_dims
 
-        # Step 2: resize (re-expand) — re-captures (200, 50) then resizes to (140, 35)
+        assert task.cancelled()
+        assert ns._subscriptions["sid1"]["ike"] is None
+        assert "ike" not in ns._active_sessions
+        mgr.remove.reset_mock()
+        mgr.create.reset_mock()
+        mgr.get.return_value = None
+
         with (
             patch("agent_backbone.api.socketio_server.get_pty_manager", return_value=mgr),
             patch(
-                "agent_backbone.api.socketio_server.get_window_size",
-                new_callable=AsyncMock,
-                return_value=(200, 50),
-            ),
-            patch(
                 "agent_backbone.api.socketio_server.resize_window",
                 new_callable=AsyncMock,
-                return_value=True,
-            ),
+            ) as mock_resize,
         ):
             await ns.on_resize("sid1", {"session": "ike", "cols": 140, "rows": 35})
-        assert ns._original_dims["ike"] == (200, 50)
+
+        mgr.create.assert_awaited_once_with("sid1", "ike", 140, 35)
+        mock_resize.assert_not_awaited()
+        assert "sid1" in ns._active_sessions["ike"]
+        assert ns._subscriptions["sid1"]["ike"] is not None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 
@@ -24,6 +25,7 @@ _SWARM_PHASE_INDEX = {phase: index for index, phase in enumerate(_SWARM_PHASE_OR
 _SWARM_WORKER_ROLES = ("lead", "coder", "tester", "validator", "scout")
 _NONTERMINAL_WORKER_STATUSES = {"pending", "started", "working", "pr_created"}
 _TERMINAL_WORKER_STATUSES = {"done", "failed"}
+_TERMINAL_ASSIGNMENT_STATUSES = {"completed", "superseded", "cancelled"}
 _VISIBLE_SWARM_PHASES = {
     "created",
     "planning",
@@ -91,7 +93,47 @@ def _build_progress(workers: list[dict]) -> dict:
     }
 
 
-def _build_swarm_detail(swarm: dict, workers: list[dict], phase_history: list[dict]) -> dict:
+def _decode_file_paths(raw_value: str | None) -> list[str]:
+    if not raw_value:
+        return []
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    paths: list[str] = []
+    for value in parsed:
+        if isinstance(value, str) and value:
+            paths.append(value)
+    return paths
+
+
+def _encode_file_paths(file_paths: list[str]) -> str:
+    return json.dumps(file_paths)
+
+
+def _decode_assignment_row(row: dict) -> dict:
+    return {
+        **row,
+        "file_paths": _decode_file_paths(row.get("file_paths")),
+    }
+
+
+def _lead_workers(workers: list[dict]) -> list[dict]:
+    return [worker for worker in workers if worker["role"] == "lead"]
+
+
+def _is_collaborative_swarm(workers: list[dict]) -> bool:
+    return bool(_lead_workers(workers))
+
+
+def _build_swarm_detail(
+    swarm: dict,
+    workers: list[dict],
+    phase_history: list[dict],
+    assignments: list[dict] | None = None,
+) -> dict:
     ordered_workers = sorted(workers, key=lambda worker: (worker["created_at"], worker["name"]))
     workers_by_role = _group_workers_by_role(ordered_workers)
     return {
@@ -100,6 +142,7 @@ def _build_swarm_detail(swarm: dict, workers: list[dict], phase_history: list[di
         "progress": _build_progress(ordered_workers),
         "workers": ordered_workers,
         "workers_by_role": workers_by_role,
+        "assignments": assignments or [],
         "phase_history": phase_history,
     }
 
@@ -248,7 +291,8 @@ async def get_swarm(
 
     workers = await _fetch_workers_for_swarms(conn, [swarm_id])
     phase_history = await _fetch_phase_history_for_swarms(conn, [swarm_id])
-    return _build_swarm_detail(swarm, workers, phase_history)
+    assignments = await list_assignments(conn, swarm_id)
+    return _build_swarm_detail(swarm, workers, phase_history, assignments)
 
 
 async def update_worker_status(
@@ -262,11 +306,23 @@ async def update_worker_status(
     if status not in _NONTERMINAL_WORKER_STATUSES:
         raise ValueError("Use the completion endpoint for done/failed worker states")
 
+    if await _fetch_swarm_row(conn, swarm_id) is None:
+        return None
     worker = await _fetch_worker_row(conn, swarm_id, worker_name)
     if worker is None:
         return None
     if worker["status"] in _TERMINAL_WORKER_STATUSES:
         raise ValueError("Cannot change status of a completed worker")
+
+    workers = await _fetch_workers_for_swarms(conn, [swarm_id])
+    if _is_collaborative_swarm(workers):
+        if worker["role"] == "lead":
+            if status in {"working", "pr_created"}:
+                raise ValueError("Lead workers cannot enter implementation statuses")
+        else:
+            active_assignment = await _fetch_active_assignment_row(conn, swarm_id, worker_name)
+            if active_assignment is None and status != "pending":
+                raise ValueError("Worker must have an active assignment before starting work")
 
     now = _now_iso()
     await conn.execute(
@@ -308,11 +364,20 @@ async def complete_worker(
     if status not in _TERMINAL_WORKER_STATUSES:
         raise ValueError("Worker completion status must be done or failed")
 
+    swarm = await _fetch_swarm_row(conn, swarm_id)
+    if swarm is None:
+        return None
     worker = await _fetch_worker_row(conn, swarm_id, worker_name)
     if worker is None:
         return None
     if worker["status"] in _TERMINAL_WORKER_STATUSES and worker["status"] != status:
         raise ValueError("Cannot change a terminal worker outcome")
+
+    workers = await _fetch_workers_for_swarms(conn, [swarm_id])
+    if _is_collaborative_swarm(workers) and worker["role"] != "lead":
+        active_assignment = await _fetch_active_assignment_row(conn, swarm_id, worker_name)
+        if active_assignment is None:
+            raise ValueError("Worker must have an active assignment before reporting completion")
 
     now = _now_iso()
     await conn.execute(
@@ -336,6 +401,13 @@ async def complete_worker(
             "completed_at": now,
             "updated_at": now,
         },
+    )
+    await _close_active_assignments_for_worker(
+        conn,
+        swarm_id,
+        worker_name,
+        assignment_status="completed" if status == "done" else "cancelled",
+        completed_at=now,
     )
 
     await _auto_promote_validating_if_ready(
@@ -381,6 +453,106 @@ async def complete_swarm(
         validate_transition=True,
     )
     return await get_swarm(conn, swarm_id)
+
+
+async def create_assignment(
+    conn: AsyncConnection,
+    swarm_id: str,
+    worker_name: str,
+    *,
+    assigned_by: str,
+    summary: str,
+    file_paths: list[str],
+) -> dict | None:
+    """Create or replace the active assignment for one worker."""
+    swarm = await _fetch_swarm_row(conn, swarm_id)
+    if swarm is None:
+        return None
+
+    workers = await _fetch_workers_for_swarms(conn, [swarm_id])
+    lead_workers = _lead_workers(workers)
+    if len(lead_workers) != 1:
+        raise ValueError("Assignments require a collaborative swarm with exactly one lead")
+
+    lead = lead_workers[0]
+    if assigned_by not in {lead["name"], lead["session"]}:
+        raise ValueError("Only the swarm lead can issue assignments")
+
+    worker = await _fetch_worker_row(conn, swarm_id, worker_name)
+    if worker is None:
+        return None
+    if worker["role"] == "lead":
+        raise ValueError("Lead workers cannot receive implementation assignments")
+    if worker["status"] in _TERMINAL_WORKER_STATUSES:
+        raise ValueError("Cannot assign work to a completed worker")
+
+    now = _now_iso()
+    active_assignments = await _fetch_active_assignments(conn, swarm_id)
+    conflicting_paths = _find_file_conflicts(active_assignments, worker_name, file_paths)
+    if conflicting_paths:
+        conflicted_path, conflicting_worker = conflicting_paths[0]
+        raise ValueError(
+            f"File '{conflicted_path}' is already assigned to worker '{conflicting_worker}'"
+        )
+
+    await _close_active_assignments_for_worker(
+        conn,
+        swarm_id,
+        worker_name,
+        assignment_status="superseded",
+        completed_at=now,
+    )
+
+    result = await conn.execute(
+        text(
+            """INSERT INTO swarm_assignments
+               (
+                   swarm_id,
+                   worker_name,
+                   assigned_by,
+                   summary,
+                   file_paths,
+                   status,
+                   created_at,
+                   completed_at
+               )
+               VALUES (
+                   :swarm_id,
+                   :worker_name,
+                   :assigned_by,
+                   :summary,
+                   :file_paths,
+                   :status,
+                   :created_at,
+                   NULL
+               )
+               RETURNING *"""
+        ),
+        {
+            "swarm_id": swarm_id,
+            "worker_name": worker_name,
+            "assigned_by": assigned_by,
+            "summary": summary,
+            "file_paths": _encode_file_paths(file_paths),
+            "status": "active",
+            "created_at": now,
+        },
+    )
+    return _decode_assignment_row(dict(result.fetchone()._mapping))
+
+
+async def list_assignments(conn: AsyncConnection, swarm_id: str) -> list[dict]:
+    """List all swarm assignments in timestamp order."""
+    result = await conn.execute(
+        text(
+            """SELECT *
+               FROM swarm_assignments
+               WHERE swarm_id = :swarm_id
+               ORDER BY created_at ASC, assignment_id ASC"""
+        ),
+        {"swarm_id": swarm_id},
+    )
+    return [_decode_assignment_row(dict(row._mapping)) for row in result.fetchall()]
 
 
 async def record_swarm_message(
@@ -511,6 +683,61 @@ async def _fetch_worker_row(
     return dict(row._mapping) if row else None
 
 
+async def _fetch_active_assignment_row(
+    conn: AsyncConnection,
+    swarm_id: str,
+    worker_name: str,
+) -> dict | None:
+    result = await conn.execute(
+        text(
+            """SELECT *
+               FROM swarm_assignments
+               WHERE swarm_id = :swarm_id
+                 AND worker_name = :worker_name
+                 AND status = 'active'
+               ORDER BY created_at DESC, assignment_id DESC
+               LIMIT 1"""
+        ),
+        {"swarm_id": swarm_id, "worker_name": worker_name},
+    )
+    row = result.fetchone()
+    if row is None:
+        return None
+    return _decode_assignment_row(dict(row._mapping))
+
+
+async def _fetch_active_assignments(conn: AsyncConnection, swarm_id: str) -> list[dict]:
+    result = await conn.execute(
+        text(
+            """SELECT *
+               FROM swarm_assignments
+               WHERE swarm_id = :swarm_id
+                 AND status = 'active'
+               ORDER BY created_at ASC, assignment_id ASC"""
+        ),
+        {"swarm_id": swarm_id},
+    )
+    return [_decode_assignment_row(dict(row._mapping)) for row in result.fetchall()]
+
+
+def _find_file_conflicts(
+    assignments: list[dict],
+    worker_name: str,
+    file_paths: list[str],
+) -> list[tuple[str, str]]:
+    if not file_paths:
+        return []
+    conflicts: list[tuple[str, str]] = []
+    requested_paths = set(file_paths)
+    for assignment in assignments:
+        if assignment["worker_name"] == worker_name:
+            continue
+        for path in assignment.get("file_paths", []):
+            if path in requested_paths:
+                conflicts.append((path, assignment["worker_name"]))
+    return conflicts
+
+
 async def _fetch_workers_for_swarms(
     conn: AsyncConnection,
     swarm_ids: list[str],
@@ -532,6 +759,34 @@ async def _fetch_workers_for_swarms(
         params,
     )
     return [dict(row._mapping) for row in result.fetchall()]
+
+
+async def _close_active_assignments_for_worker(
+    conn: AsyncConnection,
+    swarm_id: str,
+    worker_name: str,
+    *,
+    assignment_status: str,
+    completed_at: str,
+) -> None:
+    if assignment_status not in _TERMINAL_ASSIGNMENT_STATUSES:
+        raise ValueError(f"Unsupported terminal assignment status: {assignment_status}")
+    await conn.execute(
+        text(
+            """UPDATE swarm_assignments
+               SET status = :status,
+                   completed_at = COALESCE(completed_at, :completed_at)
+               WHERE swarm_id = :swarm_id
+                 AND worker_name = :worker_name
+                 AND status = 'active'"""
+        ),
+        {
+            "swarm_id": swarm_id,
+            "worker_name": worker_name,
+            "status": assignment_status,
+            "completed_at": completed_at,
+        },
+    )
 
 
 async def _fetch_phase_history_for_swarms(

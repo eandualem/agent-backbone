@@ -50,10 +50,10 @@ async def ensure_initialized() -> None:
         if _config is not None and _db is not None and _gh is not None:
             return
 
-        from agent_backbone.settings import AppSettings
         from agent_backbone.services.database.backbone_db import BackboneDB
         from agent_backbone.services.database.interface import DatabaseService
         from agent_backbone.services.github.interface import GitHubClient
+        from agent_backbone.settings import AppSettings
 
         config = AppSettings().build_config()
         database_service = DatabaseService(config.database)

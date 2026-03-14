@@ -10,6 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from agent_backbone.api.deps import get_config, get_db, get_delivery_service
 from agent_backbone.api.models import (
     ListEnvelope,
+    SwarmAssignmentCreateRequest,
+    SwarmAssignmentDispatchResponse,
+    SwarmAssignmentResponse,
     SwarmBroadcastRequest,
     SwarmBroadcastResponse,
     SwarmCreateRequest,
@@ -65,6 +68,20 @@ def _to_phase_history_response(entry: dict) -> SwarmPhaseHistoryResponse:
     )
 
 
+def _to_swarm_assignment_response(assignment: dict) -> SwarmAssignmentResponse:
+    return SwarmAssignmentResponse(
+        assignment_id=assignment["assignment_id"],
+        swarm_id=assignment["swarm_id"],
+        worker_name=assignment["worker_name"],
+        assigned_by=assignment["assigned_by"],
+        summary=assignment["summary"],
+        file_paths=assignment.get("file_paths", []),
+        status=assignment["status"],
+        created_at=assignment["created_at"],
+        completed_at=assignment.get("completed_at"),
+    )
+
+
 def _to_swarm_summary_response(swarm: dict) -> SwarmSummaryResponse:
     return SwarmSummaryResponse(
         swarm_id=swarm["swarm_id"],
@@ -86,10 +103,14 @@ def _to_swarm_detail_response(swarm: dict) -> SwarmDetailResponse:
         role: [_to_swarm_worker_response(worker) for worker in role_workers]
         for role, role_workers in swarm.get("workers_by_role", {}).items()
     }
+    assignments = [
+        _to_swarm_assignment_response(assignment) for assignment in swarm.get("assignments", [])
+    ]
     return SwarmDetailResponse(
         **summary.model_dump(),
         workers=workers,
         workers_by_role=workers_by_role,
+        assignments=assignments,
         phase_history=[
             _to_phase_history_response(entry) for entry in swarm.get("phase_history", [])
         ],
@@ -128,6 +149,15 @@ def _format_swarm_message(
     parts.append("")
     parts.append(message)
     return "\n".join(parts)
+
+
+def _format_assignment_message(summary: str, file_paths: list[str]) -> str:
+    lines = [f"Assignment: {summary}"]
+    if file_paths:
+        lines.append("")
+        lines.append("Owned files:")
+        lines.extend(f"- {path}" for path in file_paths)
+    return "\n".join(lines)
 
 
 async def _deliver_to_workers(
@@ -180,6 +210,9 @@ async def create_swarm(
     worker_names = [worker.name for worker in body.workers]
     if len(set(worker_names)) != len(worker_names):
         raise HTTPException(status_code=400, detail="Worker names must be unique within a swarm")
+    lead_count = sum(1 for worker in body.workers if worker.role == "lead")
+    if lead_count > 1:
+        raise HTTPException(status_code=400, detail="Collaborative swarms can only have one lead")
 
     swarm_id = await db.create_swarm(
         repo=body.repo,
@@ -291,6 +324,97 @@ async def complete_swarm(
     if swarm is None:
         raise HTTPException(status_code=404, detail="Swarm not found")
     return _to_swarm_detail_response(swarm)
+
+
+@router.post(
+    "/swarms/{swarm_id}/assignments",
+    response_model=SwarmAssignmentDispatchResponse,
+)
+async def create_swarm_assignment(
+    swarm_id: str,
+    body: SwarmAssignmentCreateRequest,
+    config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
+    delivery_svc: DeliveryService = Depends(get_delivery_service),
+):
+    """Create and dispatch one lead-owned assignment for a worker."""
+    swarm = await db.get_swarm(swarm_id)
+    if swarm is None:
+        raise HTTPException(status_code=404, detail="Swarm not found")
+
+    try:
+        assignment = await db.create_swarm_assignment(
+            swarm_id,
+            body.worker_name,
+            assigned_by=body.from_entity,
+            summary=body.summary,
+            file_paths=body.file_paths,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if assignment is None:
+        raise HTTPException(status_code=404, detail="Swarm worker not found")
+
+    target_workers = [
+        worker
+        for worker in swarm.get("workers", [])
+        if worker["name"] == body.worker_name
+    ]
+    if not target_workers:
+        raise HTTPException(status_code=404, detail="Swarm worker not found")
+
+    message = _format_assignment_message(body.summary, body.file_paths)
+    envelope = _format_swarm_message(
+        swarm,
+        body.from_entity,
+        message,
+        target_label=f"worker:{body.worker_name}",
+    )
+    delivered, failed = await _deliver_to_workers(
+        target_workers,
+        envelope,
+        config=config,
+        delivery_svc=delivery_svc,
+    )
+    message_log = await db.record_swarm_message(
+        swarm_id,
+        target_kind="worker",
+        target_worker_name=body.worker_name,
+        from_entity=body.from_entity,
+        message=message,
+        delivered=delivered,
+        failed=failed,
+        total=len(target_workers),
+    )
+    return SwarmAssignmentDispatchResponse(
+        ok=failed == 0,
+        assignment_id=assignment["assignment_id"],
+        message_id=message_log["message_id"],
+        delivered=delivered,
+        failed=failed,
+        total=len(target_workers),
+        assignment=_to_swarm_assignment_response(assignment),
+    )
+
+
+@router.get(
+    "/swarms/{swarm_id}/assignments",
+    response_model=ListEnvelope[SwarmAssignmentResponse],
+)
+async def list_swarm_assignments(
+    swarm_id: str,
+    db: BackboneDB = Depends(get_db),
+):
+    """List all persisted assignments for one swarm."""
+    swarm = await db.get_swarm(swarm_id)
+    if swarm is None:
+        raise HTTPException(status_code=404, detail="Swarm not found")
+
+    items = [
+        _to_swarm_assignment_response(assignment)
+        for assignment in await db.list_swarm_assignments(swarm_id)
+    ]
+    return ListEnvelope(items=items, total=len(items))
 
 
 @router.post("/swarms/{swarm_id}/broadcast", response_model=SwarmBroadcastResponse)

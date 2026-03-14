@@ -134,7 +134,7 @@ async def _deliver_to_entity(
         elif outcome == "delivery_failed":
             result.offline.append(session_name)
         else:
-            # awaiting_ack, agent_working, plan_waiting, copy_mode,
+            # awaiting_ack, agent_working, plan_waiting,
             # user_interacting, grace_period, unknown_state
             result.deferred.append(session_name)
 

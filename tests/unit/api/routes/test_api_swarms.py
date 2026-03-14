@@ -71,6 +71,35 @@ class TestCreateSwarm:
 
         assert resp.status_code == 422
 
+    async def test_create_swarm_rejects_multiple_leads(self, api_client, auth_headers):
+        resp = await api_client.post(
+            "/api/swarms",
+            headers=auth_headers,
+            json={
+                "repo": "agent-backbon",
+                "coding_agent_session": "agent-backbon",
+                "workers": [
+                    {
+                        "name": "lead-a",
+                        "role": "lead",
+                        "branch": "swarm/764/lead-a",
+                        "worktree_path": "/tmp/lead-a",
+                        "session": "lead-a",
+                    },
+                    {
+                        "name": "lead-b",
+                        "role": "lead",
+                        "branch": "swarm/764/lead-b",
+                        "worktree_path": "/tmp/lead-b",
+                        "session": "lead-b",
+                    },
+                ],
+            },
+        )
+
+        assert resp.status_code == 400
+        assert "one lead" in resp.json()["detail"]
+
 
 class TestListAndGetSwarms:
     async def test_list_swarms_returns_progress_summary(self, api_client, auth_headers):
@@ -236,6 +265,223 @@ class TestLifecycle:
         assert default_resp.json()["total"] == 0
         assert cleaned_resp.status_code == 200
         assert cleaned_resp.json()["total"] == 1
+
+
+class TestAssignmentDiscipline:
+    async def test_worker_status_requires_active_assignment_in_collaborative_swarm(
+        self, api_client, auth_headers
+    ):
+        swarm_id = await _create_swarm(api_client, auth_headers)
+
+        resp = await api_client.post(
+            f"/api/swarms/{swarm_id}/workers/tester-worker/status",
+            headers=auth_headers,
+            json={"status": "started"},
+        )
+
+        assert resp.status_code == 400
+        assert "active assignment" in resp.json()["detail"]
+
+    async def test_lead_cannot_enter_implementation_status(self, api_client, auth_headers):
+        swarm_id = await _create_swarm(api_client, auth_headers)
+
+        resp = await api_client.post(
+            f"/api/swarms/{swarm_id}/workers/lead-worker/status",
+            headers=auth_headers,
+            json={"status": "working"},
+        )
+
+        assert resp.status_code == 400
+        assert "Lead workers cannot enter implementation statuses" in resp.json()["detail"]
+
+    async def test_assignment_dispatch_persists_and_unblocks_worker(
+        self, api_client, auth_headers, api_app
+    ):
+        swarm_id = await _create_swarm(api_client, auth_headers)
+        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(return_value="delivered"))
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            assign_resp = await api_client.post(
+                f"/api/swarms/{swarm_id}/assignments",
+                headers=auth_headers,
+                json={
+                    "worker_name": "tester-worker",
+                    "from_entity": "lead-worker",
+                    "summary": "Run API regression coverage.",
+                    "file_paths": ["tests/unit/api/routes/test_api_swarms.py"],
+                },
+            )
+            detail_resp = await api_client.get(f"/api/swarms/{swarm_id}", headers=auth_headers)
+            list_resp = await api_client.get(
+                f"/api/swarms/{swarm_id}/assignments",
+                headers=auth_headers,
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+        assert assign_resp.status_code == 200
+        assignment = assign_resp.json()["assignment"]
+        assert assignment["worker_name"] == "tester-worker"
+        assert assignment["status"] == "active"
+        assert assignment["file_paths"] == ["tests/unit/api/routes/test_api_swarms.py"]
+        assert mock_svc.safe_deliver.await_count == 1
+
+        assert detail_resp.status_code == 200
+        assert len(detail_resp.json()["assignments"]) == 1
+        assert list_resp.status_code == 200
+        assert list_resp.json()["total"] == 1
+
+        status_resp = await api_client.post(
+            f"/api/swarms/{swarm_id}/workers/tester-worker/status",
+            headers=auth_headers,
+            json={"status": "started"},
+        )
+        assert status_resp.status_code == 200
+        assert status_resp.json()["workers"][1]["status"] == "started"
+
+    async def test_assignment_rejects_lead_target(self, api_client, auth_headers, api_app):
+        swarm_id = await _create_swarm(api_client, auth_headers)
+        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(return_value="delivered"))
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            resp = await api_client.post(
+                f"/api/swarms/{swarm_id}/assignments",
+                headers=auth_headers,
+                json={
+                    "worker_name": "lead-worker",
+                    "from_entity": "lead-worker",
+                    "summary": "Do the implementation.",
+                    "file_paths": ["src/agent_backbone/api/routes/swarms.py"],
+                },
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+        assert resp.status_code == 409
+        assert "Lead workers cannot receive implementation assignments" in resp.json()["detail"]
+
+    async def test_assignment_rejects_file_conflicts(self, api_client, auth_headers, api_app):
+        swarm_id = await _create_swarm(
+            api_client,
+            auth_headers,
+            workers=[
+                {
+                    "name": "lead-worker",
+                    "role": "lead",
+                    "branch": "swarm/764/lead-worker",
+                    "worktree_path": "/tmp/lead-worker",
+                    "session": "lead-worker",
+                },
+                {
+                    "name": "coder-a",
+                    "role": "coder",
+                    "branch": "swarm/764/coder-a",
+                    "worktree_path": "/tmp/coder-a",
+                    "session": "coder-a",
+                },
+                {
+                    "name": "coder-b",
+                    "role": "coder",
+                    "branch": "swarm/764/coder-b",
+                    "worktree_path": "/tmp/coder-b",
+                    "session": "coder-b",
+                },
+            ],
+        )
+        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(return_value="delivered"))
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            first = await api_client.post(
+                f"/api/swarms/{swarm_id}/assignments",
+                headers=auth_headers,
+                json={
+                    "worker_name": "coder-a",
+                    "from_entity": "lead-worker",
+                    "summary": "Own the delivery router changes.",
+                    "file_paths": ["src/agent_backbone/api/routes/swarms.py"],
+                },
+            )
+            second = await api_client.post(
+                f"/api/swarms/{swarm_id}/assignments",
+                headers=auth_headers,
+                json={
+                    "worker_name": "coder-b",
+                    "from_entity": "lead-worker",
+                    "summary": "Also edit the same route.",
+                    "file_paths": ["src/agent_backbone/api/routes/swarms.py"],
+                },
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+        assert first.status_code == 200
+        assert second.status_code == 409
+        assert "already assigned" in second.json()["detail"]
+
+    async def test_reassigning_same_worker_supersedes_previous_assignment(
+        self, api_client, auth_headers, api_app
+    ):
+        swarm_id = await _create_swarm(api_client, auth_headers)
+        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(return_value="delivered"))
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            first = await api_client.post(
+                f"/api/swarms/{swarm_id}/assignments",
+                headers=auth_headers,
+                json={
+                    "worker_name": "tester-worker",
+                    "from_entity": "lead-worker",
+                    "summary": "Check API coverage.",
+                    "file_paths": ["tests/unit/api/routes/test_api_swarms.py"],
+                },
+            )
+            second = await api_client.post(
+                f"/api/swarms/{swarm_id}/assignments",
+                headers=auth_headers,
+                json={
+                    "worker_name": "tester-worker",
+                    "from_entity": "lead-worker",
+                    "summary": "Switch to DB regression coverage.",
+                    "file_paths": ["tests/unit/services/database/test_alembic.py"],
+                },
+            )
+            list_resp = await api_client.get(
+                f"/api/swarms/{swarm_id}/assignments",
+                headers=auth_headers,
+            )
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        items = list_resp.json()["items"]
+        assert [item["status"] for item in items] == ["superseded", "active"]
+
+    async def test_non_collaborative_swarms_keep_existing_status_behavior(
+        self, api_client, auth_headers
+    ):
+        swarm_id = await _create_swarm(
+            api_client,
+            auth_headers,
+            workers=[
+                {
+                    "name": "coder-worker",
+                    "role": "coder",
+                    "branch": "swarm/764/coder-worker",
+                    "worktree_path": "/tmp/coder-worker",
+                    "session": "coder-worker",
+                }
+            ],
+        )
+
+        resp = await api_client.post(
+            f"/api/swarms/{swarm_id}/workers/coder-worker/status",
+            headers=auth_headers,
+            json={"status": "started"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["workers"][0]["status"] == "started"
 
 
 class TestSwarmMessaging:

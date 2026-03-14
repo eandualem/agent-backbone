@@ -8,6 +8,7 @@ agent is now online and not busy.
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 
 from prefect import flow, task
 
@@ -19,6 +20,55 @@ from agent_backbone.services.routing._format import format_next_issue_notificati
 from agent_backbone.services.routing._targets import list_open_queue_for_target
 
 log = logging.getLogger(__name__)
+
+
+async def drain_message_queue(
+    config: BackboneConfig,
+    db: BackboneDB,
+    gh: object,
+    *,
+    active_sessions: Collection[str],
+) -> dict[str, int]:
+    """Drain queued messages for active sessions, oldest first."""
+    summary: dict[str, int] = {}
+
+    for session_name in active_sessions:
+        queued = await db.dequeue_messages(session_name, limit=5)
+        if not isinstance(queued, list) or not queued:
+            continue
+
+        for msg_record in queued:
+            q_outcome = await safe_deliver(
+                session_name,
+                msg_record["message"],
+                config,
+                db=db,
+                issue_number=msg_record.get("issue_number"),
+                target_entity=msg_record.get("target_entity"),
+                flow_name="delivery-retry-queue",
+                enforce_issue_queue=True,
+                queue_scope_issue_numbers={
+                    item.number
+                    for item in await list_open_queue_for_target(
+                        config,
+                        msg_record["target_entity"],
+                        gh,
+                    )
+                }
+                if msg_record.get("target_entity")
+                else None,
+                delivery_kind=msg_record.get("delivery_kind", "issue"),
+            )
+            if q_outcome == "delivered":
+                await db.mark_message_delivered(msg_record["id"])
+                summary["queue_delivered"] = summary.get("queue_delivered", 0) + 1
+            elif q_outcome == "already_delivered":
+                await db.mark_message_delivered(msg_record["id"])
+                summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
+            else:
+                break  # Stop draining this session if delivery fails
+
+    return summary
 
 
 @task
@@ -88,7 +138,13 @@ async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB,
         return "retried"
     if outcome == "offline":
         return "still_offline"
-    busy_states = ("agent_working", "plan_waiting", "copy_mode", "user_interacting", "grace_period")
+    busy_states = (
+        "agent_working",
+        "plan_waiting",
+        "permission_waiting",
+        "user_interacting",
+        "grace_period",
+    )
     if outcome in busy_states:
         return "still_busy"
     if outcome in ("already_delivered", "awaiting_ack", "unknown_state"):
@@ -124,38 +180,9 @@ async def delivery_retry() -> dict:
         from agent_backbone.services.terminal import list_sessions as _list_sessions
 
         active_sessions = set(await _list_sessions())
-        for session_name in active_sessions:
-            queued = await db.dequeue_messages(session_name, limit=5)
-            for msg_record in queued:
-                q_outcome = await safe_deliver(
-                    session_name,
-                    msg_record["message"],
-                    config,
-                    db=db,
-                    issue_number=msg_record.get("issue_number"),
-                    target_entity=msg_record.get("target_entity"),
-                    flow_name="delivery-retry-queue",
-                    enforce_issue_queue=True,
-                    queue_scope_issue_numbers={
-                        item.number
-                        for item in await list_open_queue_for_target(
-                            config,
-                            msg_record["target_entity"],
-                            gh,
-                        )
-                    }
-                    if msg_record.get("target_entity")
-                    else None,
-                    delivery_kind=msg_record.get("delivery_kind", "issue"),
-                )
-                if q_outcome == "delivered":
-                    await db.mark_message_delivered(msg_record["id"])
-                    summary["queue_delivered"] = summary.get("queue_delivered", 0) + 1
-                elif q_outcome == "already_delivered":
-                    await db.mark_message_delivered(msg_record["id"])
-                    summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
-                else:
-                    break  # Stop draining this session if delivery fails
+        drained = await drain_message_queue(config, db, gh, active_sessions=active_sessions)
+        for key, value in drained.items():
+            summary[key] = summary.get(key, 0) + value
     except Exception:
         log.exception("Queue drain failed (non-fatal)")
 
@@ -223,7 +250,13 @@ async def scheduled_delivery(
 
     if outcome == "offline":
         return "offline"
-    busy_states = ("agent_working", "plan_waiting", "copy_mode", "user_interacting", "grace_period")
+    busy_states = (
+        "agent_working",
+        "plan_waiting",
+        "permission_waiting",
+        "user_interacting",
+        "grace_period",
+    )
     if outcome in busy_states:
         return "busy"
     if outcome in ("already_delivered", "awaiting_ack", "unknown_state"):
