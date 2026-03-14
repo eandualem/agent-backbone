@@ -78,6 +78,22 @@ class TestReadStateFile:
         assert result.plan_file == "/tmp/plan.md"
         assert result.plan_title == "Add caching layer"
 
+    def test_permission_waiting_state(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "state": "permission_waiting",
+                    "issue": 42,
+                    "ts": time.time(),
+                }
+            )
+        )
+        result = read_state_file(tmp_path, "ike")
+        assert result is not None
+        assert result.state == AgentState.PERMISSION_WAITING
+        assert result.current_issue == 42
+
 
 class TestPlanWaiting:
     def test_plan_waiting_enum_value(self):
@@ -92,6 +108,13 @@ class TestPlanWaiting:
 
     def test_should_deliver_plan_waiting_require_idle(self):
         assert should_deliver(AgentState.PLAN_WAITING, require_idle=True) is False
+
+    def test_permission_waiting_enum_value(self):
+        assert AgentState.PERMISSION_WAITING == "permission_waiting"
+        assert AgentState("permission_waiting") == AgentState.PERMISSION_WAITING
+
+    def test_should_deliver_permission_waiting_default(self):
+        assert should_deliver(AgentState.PERMISSION_WAITING) is False
 
 
 class TestInferStateFromPane:
@@ -274,14 +297,14 @@ class TestGetAgentState:
         assert result.source == "default"
 
     async def test_stale_idle_verified_via_tmux(self, tmp_path):
-        """Stale idle push state is re-checked from tmux before fallback."""
+        """Stale known push state is reused when pane inference cannot classify."""
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "idle", "issue": None, "ts": time.time() - 600}))
         mock_capture = AsyncMock(return_value="random stuff")
         with patch(f"{_INF}.capture_pane", mock_capture):
             result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
-        assert result.state == AgentState.UNKNOWN
-        assert result.source == "pull"
+        assert result.state == AgentState.IDLE
+        assert result.source == "push"
         mock_capture.assert_awaited_once()
 
     async def test_stale_busy_verified_via_tmux(self, tmp_path):
@@ -307,6 +330,61 @@ class TestGetAgentState:
         assert result.state == AgentState.IDLE
         assert result.source == "pull"
         mock_capture.assert_awaited_once()
+
+    async def test_stale_plan_waiting_without_plan_file_does_not_resurrect(self, tmp_path):
+        """A missing plan file must not keep a dead plan_waiting snapshot alive."""
+        state_file = tmp_path / "feynman.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "state": "plan_waiting",
+                    "ts": time.time() - 600,
+                    "plan_file": str(tmp_path / "missing-plan.md"),
+                    "plan_title": "Add caching",
+                }
+            )
+        )
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
+            result = await get_agent_state(tmp_path, "feynman", stale_threshold=300)
+        assert result.state == AgentState.UNKNOWN
+        assert result.source == "pull"
+
+    async def test_stale_plan_waiting_with_existing_plan_file_falls_back(self, tmp_path):
+        """An unresolved plan can still be trusted when the backing file exists."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan\n")
+        state_file = tmp_path / "feynman.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "state": "plan_waiting",
+                    "ts": time.time() - 600,
+                    "plan_file": str(plan_file),
+                    "plan_title": "Add caching",
+                }
+            )
+        )
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
+            result = await get_agent_state(tmp_path, "feynman", stale_threshold=300)
+        assert result.state == AgentState.PLAN_WAITING
+        assert result.source == "push"
+
+    async def test_stale_permission_waiting_does_not_resurrect(self, tmp_path):
+        """Permission prompts are transient and must never be revived from stale push data."""
+        state_file = tmp_path / "feynman.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "state": "permission_waiting",
+                    "issue": 42,
+                    "ts": time.time() - 600,
+                }
+            )
+        )
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
+            result = await get_agent_state(tmp_path, "feynman", stale_threshold=300)
+        assert result.state == AgentState.UNKNOWN
+        assert result.source == "pull"
 
 
 class TestRowToSnapshot:

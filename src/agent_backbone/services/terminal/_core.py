@@ -153,6 +153,29 @@ async def resize_window(session_name: str, cols: int, rows: int) -> bool:
     return True
 
 
+async def set_window_size_mode(session_name: str, mode: str) -> bool:
+    """Set tmux's window-size policy for a session window."""
+    if mode not in {"latest", "largest", "smallest", "manual"}:
+        raise ValueError(f"Unsupported tmux window-size mode: {mode}")
+
+    rc, _, stderr = await _run_tmux(
+        "set-window-option",
+        "-t",
+        session_name,
+        "window-size",
+        mode,
+    )
+    if rc != 0:
+        log.warning(
+            "set-window-option window-size failed for '%s' (%s): %s",
+            session_name,
+            mode,
+            stderr.decode(),
+        )
+        return False
+    return True
+
+
 async def get_window_size(session_name: str) -> tuple[int, int] | None:
     """Query current tmux window dimensions (cols, rows).
 

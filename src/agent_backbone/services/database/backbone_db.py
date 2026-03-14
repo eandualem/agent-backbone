@@ -625,6 +625,31 @@ class BackboneDB:
         async with self._engine.begin() as conn:
             return await _swarm_repo.complete_swarm(conn, swarm_id)
 
+    async def create_swarm_assignment(
+        self,
+        swarm_id: str,
+        worker_name: str,
+        *,
+        assigned_by: str,
+        summary: str,
+        file_paths: list[str],
+    ) -> dict | None:
+        """Create one worker assignment in a collaborative swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.create_assignment(
+                conn,
+                swarm_id,
+                worker_name,
+                assigned_by=assigned_by,
+                summary=summary,
+                file_paths=file_paths,
+            )
+
+    async def list_swarm_assignments(self, swarm_id: str) -> list[dict]:
+        """List all assignments for one swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.list_assignments(conn, swarm_id)
+
     async def record_swarm_message(
         self,
         swarm_id: str,

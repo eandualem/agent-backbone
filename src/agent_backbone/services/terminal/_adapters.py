@@ -239,7 +239,16 @@ class TerminalAdapter(ABC):
 
     async def exit_copy_mode(self, session_name: str) -> bool:
         """Immediately attempt to leave copy mode."""
-        return await _send_named_key(session_name, "q")
+        rc, _, stderr = await _run_tmux("send-keys", "-X", "-t", session_name, "cancel")
+        if rc == 0:
+            return True
+
+        err = stderr.decode().strip().lower()
+        if "not in a mode" in err:
+            return True
+
+        log.error("tmux copy-mode cancel failed for '%s': %s", session_name, stderr.decode())
+        return False
 
     def detect_plan_waiting(
         self,

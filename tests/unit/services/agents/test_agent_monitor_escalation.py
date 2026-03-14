@@ -1868,3 +1868,65 @@ class TestPlanOrchestratorNotification:
         # Should deliver to ike (escalation target)
         mock_deliver.assert_called_once()
         assert mock_deliver.call_args[0][0] == "ike"
+
+    @pytest.mark.asyncio
+    async def test_stale_plan_waiting_without_plan_file_does_not_notify_escalation_target(
+        self, tmp_path
+    ):
+        """A dead plan_waiting file must not page Ike for named entities."""
+        state_file = tmp_path / "feynman.json"
+        state_file.write_text(
+            '{"state":"plan_waiting","ts":1.0,"plan_file":"%s","plan_title":"Add caching"}'
+            % (tmp_path / "missing-plan.md")
+        )
+
+        registry = EntityRegistry(
+            entities={
+                "feynman": EntityEntry(
+                    session="feynman",
+                    home="~/ws/feynman/",
+                    groups=["optimization"],
+                    figure="",
+                    role="",
+                ),
+                "ike": EntityEntry(
+                    session="ike",
+                    home="~/ws/core/ike/",
+                    groups=["orchestrators"],
+                    figure="",
+                    role="",
+                    organization="",
+                ),
+            },
+            repos=[],
+        )
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            github=GitHubConfig(owner="eandualem", repo="orchestration"),
+            entities=EntityConfig(skip=frozenset({"elias"})),
+            registry=registry,
+            agent_state=AgentStateConfig(
+                state_dir=str(tmp_path),
+                stale_threshold_seconds=300,
+            ),
+            escalation=EscalationConfig(escalation_target="ike"),
+            delivery=DeliveryConfig(),
+            capacity_routing=CapacityRoutingConfig(),
+            telegram=TelegramConfig(notification_chat_id=0),
+        )
+
+        with (
+            patch(
+                "agent_backbone.services.agents._inference.capture_pane",
+                new_callable=AsyncMock,
+                return_value="random output",
+            ),
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+        ):
+            await check_plan_waiting(config, {"feynman", "ike"})
+
+        mock_deliver.assert_not_called()

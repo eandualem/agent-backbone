@@ -268,3 +268,29 @@ class SwarmMessageORM(Base):
         Index("idx_swarm_messages_swarm", "swarm_id"),
         Index("idx_swarm_messages_created", "created_at"),
     )
+
+
+class SwarmAssignmentORM(Base):
+    """Lead-issued worker assignments for collaborative swarms."""
+
+    __tablename__ = "swarm_assignments"
+
+    assignment_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    swarm_id: Mapped[str] = mapped_column(ForeignKey("swarms.swarm_id"), nullable=False)
+    worker_name: Mapped[str] = mapped_column(Text, nullable=False)
+    assigned_by: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    file_paths: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'completed', 'superseded', 'cancelled')",
+            name="ck_swarm_assignments_status",
+        ),
+        Index("idx_swarm_assignments_swarm", "swarm_id"),
+        Index("idx_swarm_assignments_worker", "worker_name"),
+        Index("idx_swarm_assignments_status", "status"),
+    )

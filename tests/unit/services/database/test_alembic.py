@@ -17,6 +17,7 @@ _EXPECTED_TABLES = {
     "issue_dependencies",
     "message_queue",
     "swarms",
+    "swarm_assignments",
     "swarm_messages",
     "swarm_phase_history",
     "swarm_workers",
@@ -39,6 +40,9 @@ _EXPECTED_INDEXES = {
     "idx_swarms_created",
     "idx_swarms_phase",
     "idx_swarms_repo",
+    "idx_swarm_assignments_status",
+    "idx_swarm_assignments_swarm",
+    "idx_swarm_assignments_worker",
     "idx_swarm_messages_created",
     "idx_swarm_messages_swarm",
     "idx_swarm_phase_history_swarm",
@@ -159,6 +163,13 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
             coding_agent_session="lead",
             workers=[
                 {
+                    "name": "lead",
+                    "role": "lead",
+                    "branch": "swarm/744/lead",
+                    "worktree_path": str(tmp_path / "lead"),
+                    "session": "lead",
+                },
+                {
                     "name": "db-review",
                     "role": "validator",
                     "branch": "swarm/744/db-review",
@@ -168,6 +179,16 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
             ],
         )
         assert swarm_id
+
+        assignment = await db.create_swarm_assignment(
+            swarm_id,
+            "db-review",
+            assigned_by="lead",
+            summary="Validate the migration-backed swarm persistence path.",
+            file_paths=["tests/unit/services/database/test_alembic.py"],
+        )
+        assert assignment is not None
+        assert assignment["status"] == "active"
     finally:
         db._engine = None
         await engine.dispose()

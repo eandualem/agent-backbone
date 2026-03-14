@@ -27,6 +27,7 @@ class SessionIntelligence(StrEnum):
     USER_INTERACTING = "user_interacting"
     AGENT_WORKING = "agent_working"
     PLAN_WAITING = "plan_waiting"
+    PERMISSION_WAITING = "permission_waiting"
     OFFLINE = "offline"
     UNKNOWN = "unknown"
 

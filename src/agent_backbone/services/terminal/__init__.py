@@ -19,6 +19,7 @@ from agent_backbone.services.terminal._core import (
     send_keys,
     send_message,
     session_exists,
+    set_window_size_mode,
 )
 from agent_backbone.services.terminal._panes import (
     close_pane,
@@ -95,6 +96,7 @@ __all__ = [
     "send_keys",
     "send_message",
     "session_exists",
+    "set_window_size_mode",
     "set_layout",
     "split_pane",
     "start_pipe_pane",

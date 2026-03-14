@@ -45,6 +45,7 @@ class PtySession:
     def __init__(self, session_name: str) -> None:
         self.session_name = session_name
         self.master_fd: int | None = None
+        self.tty_name: str | None = None
         self._process: subprocess.Popen | None = None
         self._reader_task: asyncio.Task | None = None
         # Single output queue for the 1:1 connection
@@ -79,6 +80,10 @@ class PtySession:
             # Set initial terminal size before spawning
             winsize = struct.pack("HHHH", rows, cols, 0, 0)
             fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+            try:
+                self.tty_name = os.ttyname(slave_fd)
+            except OSError:
+                self.tty_name = None
 
             env = {**os.environ, "TERM": "xterm-256color", "COLORTERM": "truecolor"}
             env.pop("TMUX", None)  # Prevent tmux nesting guard when gateway runs inside tmux

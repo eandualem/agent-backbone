@@ -29,9 +29,28 @@ _IDLE_SNAP = StateSnapshot(state=AgentState.IDLE, source="push")
 _BUSY_SNAP = StateSnapshot(state=AgentState.BUSY, source="push")
 _PROCESSING_SNAP = StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="push")
 _PLAN_WAITING_SNAP = StateSnapshot(state=AgentState.PLAN_WAITING, source="push")
+_PERMISSION_WAITING_SNAP = StateSnapshot(state=AgentState.PERMISSION_WAITING, source="push")
 _UNKNOWN_SNAP = StateSnapshot(state=AgentState.UNKNOWN, source="default")
-_BUSY_ISSUE_42_SNAP = StateSnapshot(state=AgentState.BUSY, current_issue=42, source="push")
-_BUSY_ISSUE_99_SNAP = StateSnapshot(state=AgentState.BUSY, current_issue=99, source="push")
+_PROCESSING_ISSUE_42_SNAP = StateSnapshot(
+    state=AgentState.PROCESSING_ISSUE,
+    current_issue=42,
+    source="push",
+)
+_PROCESSING_ISSUE_99_SNAP = StateSnapshot(
+    state=AgentState.PROCESSING_ISSUE,
+    current_issue=99,
+    source="push",
+)
+_PLAN_WAITING_ISSUE_42_SNAP = StateSnapshot(
+    state=AgentState.PLAN_WAITING,
+    current_issue=42,
+    source="push",
+)
+_PERMISSION_WAITING_ISSUE_42_SNAP = StateSnapshot(
+    state=AgentState.PERMISSION_WAITING,
+    current_issue=42,
+    source="push",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -240,10 +259,10 @@ class TestGetSessionIntelligence:
         assert profile.agent_state == AgentState.IDLE
         assert profile.tmux_vars["pane_in_mode"] == "1"
 
-    async def test_user_interacting(self):
-        """Recent client_activity + agent IDLE returns USER_INTERACTING (priority 3)."""
+    async def test_recent_client_activity_does_not_trigger_user_interacting(self):
+        """Attached-or-reading tmux activity alone must not block delivery."""
         config = _default_config()
-        recent_activity = str(time.time() - 2)  # 2 seconds ago (within 10s threshold)
+        recent_activity = str(time.time() - 2)
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "0", "client_activity": recent_activity}),
@@ -252,7 +271,7 @@ class TestGetSessionIntelligence:
         ):
             profile = await get_session_intelligence("ike", config)
 
-        assert profile.intelligence == SessionIntelligence.USER_INTERACTING
+        assert profile.intelligence == SessionIntelligence.IDLE_READY
 
     async def test_user_interacting_when_prompt_has_buffered_input(self):
         """Buffered Codex input counts as active terminal interaction."""
@@ -316,11 +335,37 @@ class TestGetSessionIntelligence:
         assert profile.intelligence == SessionIntelligence.IDLE_READY
 
     async def test_plan_waiting(self):
-        """Agent state PLAN_WAITING returns PLAN_WAITING (priority 4)."""
+        """Agent state PLAN_WAITING returns PLAN_WAITING before tmux-only signals."""
         config = _default_config()
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_PLAN_WAITING_SNAP),
+        ):
+            profile = await get_session_intelligence("ike", config)
+
+        assert profile.intelligence == SessionIntelligence.PLAN_WAITING
+        assert profile.agent_state == AgentState.PLAN_WAITING
+
+    async def test_permission_waiting(self):
+        """Agent state PERMISSION_WAITING returns PERMISSION_WAITING."""
+        config = _default_config()
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_PERMISSION_WAITING_SNAP),
+        ):
+            profile = await get_session_intelligence("ike", config)
+
+        assert profile.intelligence == SessionIntelligence.PERMISSION_WAITING
+        assert profile.agent_state == AgentState.PERMISSION_WAITING
+
+    async def test_copy_mode_does_not_mask_plan_waiting(self):
+        """PLAN_WAITING must outrank pane_in_mode copy-mode signals."""
+        config = _default_config()
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
             _patch_get_agent_state(_PLAN_WAITING_SNAP),
         ):
             profile = await get_session_intelligence("ike", config)
@@ -340,6 +385,20 @@ class TestGetSessionIntelligence:
 
         assert profile.intelligence == SessionIntelligence.AGENT_WORKING
         assert profile.agent_state == AgentState.BUSY
+
+    async def test_busy_profile_drops_stale_current_issue(self):
+        """BUSY snapshots should not expose a current_issue in the session profile."""
+        config = _default_config()
+        busy_with_issue = StateSnapshot(state=AgentState.BUSY, current_issue=42, source="push")
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(busy_with_issue),
+        ):
+            profile = await get_session_intelligence("ike", config)
+
+        assert profile.intelligence == SessionIntelligence.AGENT_WORKING
+        assert profile.current_issue is None
 
     async def test_agent_working_processing(self):
         """Agent state PROCESSING_ISSUE returns AGENT_WORKING (priority 5)."""
@@ -643,43 +702,103 @@ class TestSafeDeliver:
         assert result == "offline"
         mock_db.enqueue_message.assert_not_called()
 
-    async def test_copy_mode_blocks(self):
-        """COPY_MODE without priority returns 'copy_mode'."""
+    async def test_copy_mode_recovers_and_delivers(self):
+        """COPY_MODE triggers recovery and delivers when tmux leaves copy mode."""
         config = _default_config()
+        copy_profile = SessionProfile(
+            session_name="ike",
+            intelligence=SessionIntelligence.COPY_MODE,
+            runtime="codex",
+            agent_state=AgentState.IDLE,
+        )
+        idle_profile = SessionProfile(
+            session_name="ike",
+            intelligence=SessionIntelligence.IDLE_READY,
+            runtime="codex",
+            agent_state=AgentState.IDLE,
+        )
+        adapter = AsyncMock()
+        adapter.exit_copy_mode.return_value = True
+
         with (
-            _patch_list_sessions(["ike"]),
-            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
-            _patch_get_agent_state(_IDLE_SNAP),
+            patch(
+                "agent_backbone.services.routing._delivery.get_session_intelligence",
+                new_callable=AsyncMock,
+                side_effect=[copy_profile, idle_profile],
+            ),
+            patch(
+                "agent_backbone.services.routing._delivery.get_terminal_adapter",
+                return_value=adapter,
+            ),
+            _patch_send_message(True),
         ):
             result = await safe_deliver("ike", "Hello", config, priority=False)
 
-        assert result == "copy_mode"
+        assert result == "delivered"
+        adapter.exit_copy_mode.assert_awaited_once_with("ike")
 
     async def test_copy_mode_priority_bypasses(self):
-        """COPY_MODE + priority=True bypasses and delivers."""
+        """Priority delivery still recovers copy mode before delivering."""
         config = _default_config()
+        copy_profile = SessionProfile(
+            session_name="ike",
+            intelligence=SessionIntelligence.COPY_MODE,
+            runtime="codex",
+            agent_state=AgentState.IDLE,
+        )
+        idle_profile = SessionProfile(
+            session_name="ike",
+            intelligence=SessionIntelligence.IDLE_READY,
+            runtime="codex",
+            agent_state=AgentState.IDLE,
+        )
+        adapter = AsyncMock()
+        adapter.exit_copy_mode.return_value = True
+
         with (
-            _patch_list_sessions(["ike"]),
-            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
-            _patch_get_agent_state(_IDLE_SNAP),
+            patch(
+                "agent_backbone.services.routing._delivery.get_session_intelligence",
+                new_callable=AsyncMock,
+                side_effect=[copy_profile, idle_profile],
+            ),
+            patch(
+                "agent_backbone.services.routing._delivery.get_terminal_adapter",
+                return_value=adapter,
+            ),
             _patch_send_message(True),
         ):
             result = await safe_deliver("ike", "Hello", config, priority=True)
 
         assert result == "delivered"
+        adapter.exit_copy_mode.assert_awaited_once_with("ike")
 
     async def test_user_interacting_blocks(self):
-        """USER_INTERACTING without priority returns 'user_interacting'."""
+        """Buffered prompt input without priority returns 'user_interacting'."""
+        config = _default_config()
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+            _patch_capture_pane("\u203a Review the fallback routing logic"),
+        ):
+            result = await safe_deliver("ike", "Hello", config, priority=False)
+
+        assert result == "user_interacting"
+
+    async def test_recent_client_activity_alone_does_not_block(self):
+        """Recent tmux activity with an empty prompt should still deliver."""
         config = _default_config()
         recent_activity = str(time.time() - 2)
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "0", "client_activity": recent_activity}),
             _patch_get_agent_state(_IDLE_SNAP),
+            _patch_capture_pane(""),
+            _patch_send_message(True),
         ):
             result = await safe_deliver("ike", "Hello", config, priority=False)
 
-        assert result == "user_interacting"
+        assert result == "delivered"
 
     async def test_agent_working_blocks(self):
         """AGENT_WORKING returns 'agent_working'."""
@@ -705,14 +824,41 @@ class TestSafeDeliver:
 
         assert result == "plan_waiting"
 
-    async def test_copy_mode_enqueues(self):
-        """COPY_MODE enqueues message to DB when tracking info provided."""
+    async def test_permission_waiting_blocks_even_priority(self):
+        """PERMISSION_WAITING blocks delivery even with priority=True."""
         config = _default_config()
-        mock_db = AsyncMock()
         with (
             _patch_list_sessions(["ike"]),
-            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
-            _patch_get_agent_state(_IDLE_SNAP),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_PERMISSION_WAITING_SNAP),
+        ):
+            result = await safe_deliver("ike", "Hello", config, priority=True)
+
+        assert result == "permission_waiting"
+
+    async def test_persistent_copy_mode_fails_and_enqueues(self):
+        """COPY_MODE that persists after recovery is queued as a normal failure."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        copy_profile = SessionProfile(
+            session_name="ike",
+            intelligence=SessionIntelligence.COPY_MODE,
+            runtime="codex",
+            agent_state=AgentState.IDLE,
+        )
+        adapter = AsyncMock()
+        adapter.exit_copy_mode.return_value = True
+
+        with (
+            patch(
+                "agent_backbone.services.routing._delivery.get_session_intelligence",
+                new_callable=AsyncMock,
+                side_effect=[copy_profile, copy_profile],
+            ),
+            patch(
+                "agent_backbone.services.routing._delivery.get_terminal_adapter",
+                return_value=adapter,
+            ),
         ):
             result = await safe_deliver(
                 "ike",
@@ -724,7 +870,7 @@ class TestSafeDeliver:
                 flow_name="test_flow",
             )
 
-        assert result == "copy_mode"
+        assert result == "delivery_failed"
         mock_db.enqueue_message.assert_called_once_with(
             session_name="ike",
             message="Hello",
@@ -733,16 +879,23 @@ class TestSafeDeliver:
             delivery_kind="issue",
             flow_name="test_flow",
         )
+        mock_db.record_delivery.assert_called_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivery_failed",
+            flow_name="test_flow",
+        )
 
     async def test_user_interacting_enqueues(self):
-        """USER_INTERACTING enqueues message to DB when tracking info provided."""
+        """Buffered prompt input enqueues message to DB when tracking info provided."""
         config = _default_config()
         mock_db = AsyncMock()
-        recent_activity = str(time.time() - 2)
         with (
             _patch_list_sessions(["ike"]),
-            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": recent_activity}),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
             _patch_get_agent_state(_IDLE_SNAP),
+            _patch_capture_pane("\u203a Review the fallback routing logic"),
         ):
             result = await safe_deliver(
                 "ike",
@@ -794,14 +947,15 @@ class TestSafeDeliver:
             flow_name="test_flow",
         )
 
-    async def test_unknown_enqueues_and_defers(self):
-        """UNKNOWN state is not deliverable and is queued for retry."""
+    async def test_unknown_state_still_delivers(self):
+        """UNKNOWN is a deliverable fallback under the hardened spec."""
         config = _default_config()
         mock_db = AsyncMock()
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
             _patch_get_agent_state(_UNKNOWN_SNAP),
+            _patch_send_message(True),
         ):
             result = await safe_deliver(
                 "ike",
@@ -813,20 +967,13 @@ class TestSafeDeliver:
                 flow_name="test_flow",
             )
 
-        assert result == "unknown_state"
-        mock_db.enqueue_message.assert_called_once_with(
-            session_name="ike",
-            message="Hello",
-            issue_number=42,
-            target_entity="ike",
-            delivery_kind="issue",
-            flow_name="test_flow",
-        )
+        assert result == "delivered"
+        mock_db.enqueue_message.assert_not_called()
         mock_db.record_delivery.assert_called_once_with(
             issue_number=42,
             target_entity="ike",
             session_name="ike",
-            outcome="unknown_state",
+            outcome="delivered",
             flow_name="test_flow",
         )
 
@@ -996,14 +1143,14 @@ class TestSafeDeliver:
         )
 
     async def test_comment_delivery_bypasses_agent_working_for_current_issue(self):
-        """Comments on the active issue should reach a working agent immediately."""
+        """Comments on the active processing issue should deliver immediately."""
         config = _default_config()
         mock_db = AsyncMock()
 
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
-            _patch_get_agent_state(_BUSY_ISSUE_42_SNAP),
+            _patch_get_agent_state(_PROCESSING_ISSUE_42_SNAP),
             _patch_send_message(True),
         ):
             result = await safe_deliver(
@@ -1027,14 +1174,14 @@ class TestSafeDeliver:
         )
 
     async def test_comment_delivery_to_different_issue_is_queued_while_busy(self):
-        """Comments on a different issue should defer durably while the agent is busy."""
+        """Comments on a different processing issue should defer durably."""
         config = _default_config()
         mock_db = AsyncMock()
 
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
-            _patch_get_agent_state(_BUSY_ISSUE_99_SNAP),
+            _patch_get_agent_state(_PROCESSING_ISSUE_99_SNAP),
         ):
             result = await safe_deliver(
                 "ike",
@@ -1064,15 +1211,16 @@ class TestSafeDeliver:
             flow_name="test_flow",
         )
 
-    async def test_comment_delivery_still_respects_copy_mode(self):
-        """Comments should not interrupt an actively manipulated pane."""
+    async def test_comment_delivery_bypasses_plan_waiting_for_current_issue(self):
+        """Same-issue comments should reach plan_waiting sessions."""
         config = _default_config()
         mock_db = AsyncMock()
 
         with (
             _patch_list_sessions(["ike"]),
-            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
-            _patch_get_agent_state(_IDLE_SNAP),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_PLAN_WAITING_ISSUE_42_SNAP),
+            _patch_send_message(True),
         ):
             result = await safe_deliver(
                 "ike",
@@ -1085,7 +1233,68 @@ class TestSafeDeliver:
                 delivery_kind="comment",
             )
 
-        assert result == "copy_mode"
+        assert result == "delivered"
+
+    async def test_comment_delivery_bypasses_permission_waiting_for_current_issue(self):
+        """Same-issue comments should reach permission-waiting sessions."""
+        config = _default_config()
+        mock_db = AsyncMock()
+
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_PERMISSION_WAITING_ISSUE_42_SNAP),
+            _patch_send_message(True),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Comment",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+                delivery_kind="comment",
+            )
+
+        assert result == "delivered"
+
+    async def test_comment_delivery_still_respects_copy_mode(self):
+        """Comments should attempt recovery before falling back to queue/failure."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        copy_profile = SessionProfile(
+            session_name="ike",
+            intelligence=SessionIntelligence.COPY_MODE,
+            runtime="codex",
+            agent_state=AgentState.IDLE,
+        )
+        adapter = AsyncMock()
+        adapter.exit_copy_mode.return_value = True
+
+        with (
+            patch(
+                "agent_backbone.services.routing._delivery.get_session_intelligence",
+                new_callable=AsyncMock,
+                side_effect=[copy_profile, copy_profile],
+            ),
+            patch(
+                "agent_backbone.services.routing._delivery.get_terminal_adapter",
+                return_value=adapter,
+            ),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Comment",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+                delivery_kind="comment",
+            )
+
+        assert result == "delivery_failed"
 
     async def test_grace_period_defers(self):
         """IDLE_GRACE intelligence returns 'grace_period' outcome."""

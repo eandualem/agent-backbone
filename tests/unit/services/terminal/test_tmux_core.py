@@ -11,6 +11,7 @@ from agent_backbone.services.terminal._core import (
     get_window_size,
     resize_window,
     session_exists,
+    set_window_size_mode,
 )
 
 _CORE = "agent_backbone.services.terminal._core"
@@ -101,6 +102,40 @@ class TestResizeWindowDelegatesToRunTmux:
             result = await resize_window("ghost", 80, 24)
 
         assert result is False
+
+
+class TestSetWindowSizeMode:
+    async def test_sets_latest_mode(self):
+        """Sets tmux window-size mode on the target session."""
+        with patch(f"{_CORE}._run_tmux", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = (0, b"", b"")
+            result = await set_window_size_mode("ike", "latest")
+
+        assert result is True
+        mock_run.assert_called_once_with(
+            "set-window-option",
+            "-t",
+            "ike",
+            "window-size",
+            "latest",
+        )
+
+    async def test_returns_false_on_tmux_error(self):
+        """tmux failures are reported as False."""
+        with patch(f"{_CORE}._run_tmux", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = (1, b"", b"bad target")
+            result = await set_window_size_mode("ike", "latest")
+
+        assert result is False
+
+    async def test_rejects_unknown_mode(self):
+        """Unsupported window-size policies fail fast."""
+        try:
+            await set_window_size_mode("ike", "sideways")
+        except ValueError as exc:
+            assert "Unsupported tmux window-size mode" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for unsupported mode")
 
 
 class TestGetWindowSize:
