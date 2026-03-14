@@ -196,3 +196,43 @@ class TestDeliveryRetryQueueDrain:
         assert mock_deliver.await_args.kwargs["delivery_kind"] == "comment"
         row = await db.get_message_by_id(1)
         assert row["status"] == "delivered"
+
+    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch(
+        "agent_backbone.services.routing._flows.list_open_queue_for_target",
+        new_callable=AsyncMock,
+    )
+    @patch("agent_backbone.services.terminal.list_sessions", new_callable=AsyncMock)
+    async def test_queue_drain_delivers_direct_messages_without_issue_metadata(
+        self,
+        mock_list_sessions,
+        mock_list_open_queue_for_target,
+        mock_deliver,
+        db,
+        config,
+    ):
+        await db.enqueue_message(
+            session_name="ike",
+            message="Direct payload",
+            delivery_kind="direct_message",
+            flow_name="api-messages",
+        )
+
+        mock_list_sessions.return_value = ["ike"]
+        mock_deliver.return_value = "delivered"
+
+        from agent_backbone.services._locator import init as init_flow_services
+        from agent_backbone.services.routing import delivery_retry
+
+        mock_gh = AsyncMock()
+        init_flow_services(config=config, db=db, gh=mock_gh)
+
+        summary = await delivery_retry.fn()
+
+        assert summary["queue_delivered"] == 1
+        assert mock_deliver.await_args.kwargs["issue_number"] is None
+        assert mock_deliver.await_args.kwargs["target_entity"] is None
+        assert mock_deliver.await_args.kwargs["delivery_kind"] == "direct_message"
+        mock_list_open_queue_for_target.assert_not_called()
+        row = await db.get_message_by_id(1)
+        assert row["status"] == "delivered"

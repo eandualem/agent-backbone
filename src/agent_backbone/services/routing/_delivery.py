@@ -445,8 +445,8 @@ async def _maybe_enqueue(
     *,
     delivery_kind: str = "issue",
 ) -> None:
-    """Enqueue a message to SQLite if tracking info and db are provided."""
-    if issue_number is None or target_entity is None:
+    """Enqueue a message to SQLite when the delivery kind supports deferral."""
+    if delivery_kind == "issue" and (issue_number is None or target_entity is None):
         return
     if db is None:
         log.debug("No DB provided to _maybe_enqueue — skipping enqueue for %s", session_name)

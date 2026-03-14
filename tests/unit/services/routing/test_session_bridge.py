@@ -812,6 +812,34 @@ class TestSafeDeliver:
 
         assert result == "agent_working"
 
+    async def test_direct_message_defers_durably_while_agent_working(self):
+        """Direct messages should queue even without issue metadata."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_BUSY_SNAP),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Hello",
+                config,
+                db=mock_db,
+                flow_name="api-messages",
+                delivery_kind="direct_message",
+            )
+
+        assert result == "agent_working"
+        mock_db.enqueue_message.assert_called_once_with(
+            session_name="ike",
+            message="Hello",
+            issue_number=None,
+            target_entity=None,
+            delivery_kind="direct_message",
+            flow_name="api-messages",
+        )
+
     async def test_plan_waiting_blocks_even_priority(self):
         """PLAN_WAITING blocks delivery even with priority=True."""
         config = _default_config()
