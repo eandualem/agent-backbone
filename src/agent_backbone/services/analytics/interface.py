@@ -586,6 +586,12 @@ class AnalyticsService:
         seen: set[tuple] = set()
         iter_cursor_ts = cursor_ts
         iter_cursor_id = cursor_id
+        # Track the last raw row scanned up to (but not including)
+        # the extra has_more probe row.  This is the cursor for
+        # the next page: it must skip past every raw row that
+        # contributed to the current page, including duplicates.
+        page_scan_ts: str | None = None
+        page_scan_id: int | None = None
 
         while True:
             batch = await db.query_analytics_rows(
@@ -609,12 +615,22 @@ class AnalyticsService:
                 key = _dedup_key(row)
                 if key is not None:
                     if key in seen:
+                        # Duplicate — skip but track scan position
+                        # (still within the current page's window)
+                        if len(deduped) < need:
+                            page_scan_ts = str(row["ts"])
+                            page_scan_id = row["id"]
                         continue
                     seen.add(key)
                 deduped.append(row)
+                if len(deduped) < need:
+                    # This row is part of the current page
+                    page_scan_ts = str(row["ts"])
+                    page_scan_id = row["id"]
                 if len(deduped) >= need:
+                    # We have our has_more probe — stop scanning
                     break
-            # Advance cursor past the last raw row we examined
+            # Advance iteration cursor past the last raw row
             last_raw = batch[-1]
             iter_cursor_ts = str(last_raw["ts"])
             iter_cursor_id = last_raw["id"]
@@ -626,9 +642,11 @@ class AnalyticsService:
             deduped = deduped[:limit]
 
         next_cursor = None
-        if has_more and deduped:
-            last = deduped[-1]
-            next_cursor = {"ts": str(last["ts"]), "id": last["id"]}
+        if has_more and page_scan_ts is not None:
+            next_cursor = {
+                "ts": page_scan_ts,
+                "id": page_scan_id,
+            }
 
         rows = deduped
 

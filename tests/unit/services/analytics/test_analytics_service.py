@@ -957,6 +957,54 @@ class TestEventsDedup:
         assert len(result["events"]) == 1
         assert result["has_more"] is False
 
+    async def test_events_cursor_skips_scanned_dups(self, db, svc):
+        """Cursor must advance past scanned dups, not emitted rows.
+
+        5 dup rows for dup1, then 1 unique row uniq2.
+        Page 1 (limit=1) returns dup1 with a cursor.
+        Page 2 with that cursor must return uniq2, not dup1 again.
+        """
+        for _ in range(5):
+            await _insert_rows(db, [
+                _activity_row(
+                    event="token.usage",
+                    data={"v": "dup1"},
+                    source_ref="e.jsonl",
+                    source_event_id="dup1",
+                    ts_offset=0,
+                ),
+            ])
+        await _insert_rows(db, [
+            _activity_row(
+                event="token.usage",
+                data={"v": "uniq2"},
+                source_ref="e.jsonl",
+                source_event_id="uniq2",
+                ts_offset=1,
+            ),
+        ])
+
+        # Page 1
+        page1 = await svc.get_events(
+            db, "agent-backbone",
+            include_swarm_workers=False, limit=1,
+        )
+        assert len(page1["events"]) == 1
+        assert page1["events"][0]["source_event_id"] == "dup1"
+        assert page1["has_more"] is True
+        cursor = page1["next_cursor"]
+
+        # Page 2 — must advance past all dup1 rows
+        page2 = await svc.get_events(
+            db, "agent-backbone",
+            include_swarm_workers=False, limit=1,
+            cursor_ts=cursor["ts"],
+            cursor_id=cursor["id"],
+        )
+        assert len(page2["events"]) == 1
+        assert page2["events"][0]["source_event_id"] == "uniq2"
+        assert page2["has_more"] is False
+
     async def test_events_dedup_massive_burst(self, db, svc):
         """4001 duplicate rows + 1 unique must not false-exhaust.
 
