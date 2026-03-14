@@ -500,6 +500,16 @@ class BackboneDB:
                 worker_role=worker_role,
             )
 
+    async def get_worker_swarm_attribution(
+        self,
+        worker_session: str,
+    ) -> dict | None:
+        """Look up swarm context for a session that is itself a worker."""
+        async with self._engine.begin() as conn:
+            return await _analytics_repo.get_worker_swarm_attribution(
+                conn, worker_session,
+            )
+
     # --- Issue dependencies (delegates to _queue_repo) ---
 
     async def upsert_dependency(self, parent: int, sub: int) -> None:

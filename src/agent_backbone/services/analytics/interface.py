@@ -295,9 +295,27 @@ class AnalyticsService:
         Returns (session_list, attribution_map).
         """
         sessions = [session]
-        attr_map: dict[str, SwarmAttribution] = {
-            session: SwarmAttribution(is_swarm_worker=False),
-        }
+
+        # Check if the queried session itself is a swarm worker
+        self_attr = await db.get_worker_swarm_attribution(session)
+        if self_attr is not None:
+            attr_map: dict[str, SwarmAttribution] = {
+                session: SwarmAttribution(
+                    is_swarm_worker=True,
+                    swarm_id=self_attr["swarm_id"],
+                    swarm_worker_name=self_attr["worker_name"],
+                    swarm_worker_role=self_attr["worker_role"],
+                    coding_agent_session=self_attr[
+                        "coding_agent_session"
+                    ],
+                    repo=self_attr["repo"],
+                    task_id=self_attr["task_id"],
+                ),
+            }
+        else:
+            attr_map = {
+                session: SwarmAttribution(is_swarm_worker=False),
+            }
 
         if include_swarm_workers:
             workers = await db.get_swarm_sessions_for_agent(
@@ -315,7 +333,9 @@ class AnalyticsService:
                         swarm_id=w["swarm_id"],
                         swarm_worker_name=w["worker_name"],
                         swarm_worker_role=w["worker_role"],
-                        coding_agent_session=w["coding_agent_session"],
+                        coding_agent_session=w[
+                            "coding_agent_session"
+                        ],
                         repo=w["repo"],
                         task_id=w["task_id"],
                     )
@@ -554,6 +574,9 @@ class AnalyticsService:
 
         events_filter = [event] if event else None
 
+        # Over-fetch to account for dedup removal, then trim.
+        # Fetch 2x+1 so after dedup we likely still have enough.
+        fetch_limit = (limit * 2) + 1
         rows = await db.query_analytics_rows(
             sessions=sessions,
             since=since,
@@ -567,17 +590,21 @@ class AnalyticsService:
             parent_trace_id=parent_trace_id,
             cursor_ts=cursor_ts,
             cursor_id=cursor_id,
-            limit=limit + 1,  # fetch one extra to detect has_more
+            limit=fetch_limit,
         )
 
-        has_more = len(rows) > limit
+        deduped, _ = deduplicate_rows(rows)
+
+        has_more = len(deduped) > limit
         if has_more:
-            rows = rows[:limit]
+            deduped = deduped[:limit]
 
         next_cursor = None
-        if has_more and rows:
-            last = rows[-1]
+        if has_more and deduped:
+            last = deduped[-1]
             next_cursor = {"ts": str(last["ts"]), "id": last["id"]}
+
+        rows = deduped
 
         # Enrich rows with swarm attribution
         enriched = []

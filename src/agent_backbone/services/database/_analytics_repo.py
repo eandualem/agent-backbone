@@ -148,3 +148,30 @@ async def get_swarm_sessions_for_agent(
 
     result = await conn.execute(text(query), params)
     return [dict(row._mapping) for row in result.fetchall()]
+
+
+async def get_worker_swarm_attribution(
+    conn: AsyncConnection,
+    worker_session: str,
+) -> dict | None:
+    """Look up swarm context for a session that is itself a worker.
+
+    Returns None if the session is not a swarm worker.
+    """
+    query = """
+        SELECT
+            sw.session,
+            sw.swarm_id,
+            sw.name AS worker_name,
+            sw.role AS worker_role,
+            s.coding_agent_session,
+            s.repo,
+            s.task_id
+        FROM swarm_workers sw
+        JOIN swarms s ON sw.swarm_id = s.swarm_id
+        WHERE sw.session = :ws
+        LIMIT 1
+    """
+    result = await conn.execute(text(query), {"ws": worker_session})
+    row = result.fetchone()
+    return dict(row._mapping) if row else None

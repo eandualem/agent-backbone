@@ -818,3 +818,189 @@ class TestSwarmAttributionInEventsAndErrors:
         assert worker_err["coding_agent_session"] == "agent-backbone"
         assert worker_err["repo"] == "agent-backbone"
         assert worker_err["task_id"] == "767"
+
+
+class TestEventsDedup:
+    """Events endpoint must deduplicate replayed rows."""
+
+    async def test_events_dedup_replayed_rows(self, db, svc):
+        """Duplicate source events should yield one row in /events."""
+        rows = [
+            _activity_row(
+                event="token.usage",
+                data={"input_tokens": 50},
+                source_ref="a.jsonl",
+                source_event_id="ev1",
+                ts_offset=0,
+            ),
+            _activity_row(
+                event="token.usage",
+                data={"input_tokens": 50},
+                source_ref="a.jsonl",
+                source_event_id="ev1",
+                ts_offset=0,
+            ),
+            _activity_row(
+                event="token.usage",
+                data={"input_tokens": 75},
+                source_ref="a.jsonl",
+                source_event_id="ev2",
+                ts_offset=1,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_events(
+            db, "agent-backbone",
+            include_swarm_workers=False, limit=10,
+        )
+        # Should have deduped ev1 → 2 unique events
+        assert len(result["events"]) == 2
+
+    async def test_events_dedup_preserves_pagination(self, db, svc):
+        """Cursor pagination still works after dedup."""
+        for i in range(6):
+            rows = [
+                _activity_row(
+                    event="token.usage",
+                    data={"i": i},
+                    source_ref="b.jsonl",
+                    source_event_id=f"ev{i}",
+                    ts_offset=i,
+                ),
+            ]
+            await _insert_rows(db, rows)
+
+        page1 = await svc.get_events(
+            db, "agent-backbone",
+            include_swarm_workers=False, limit=3,
+        )
+        assert len(page1["events"]) == 3
+        assert page1["has_more"] is True
+        cursor = page1["next_cursor"]
+
+        page2 = await svc.get_events(
+            db, "agent-backbone",
+            include_swarm_workers=False, limit=3,
+            cursor_ts=cursor["ts"],
+            cursor_id=cursor["id"],
+        )
+        assert len(page2["events"]) == 3
+
+        ids1 = {e["id"] for e in page1["events"]}
+        ids2 = {e["id"] for e in page2["events"]}
+        assert ids1.isdisjoint(ids2)
+
+
+class TestDirectWorkerDrilldown:
+    """Querying a worker session directly must resolve swarm context."""
+
+    async def _setup_swarm(self, db):
+        return await db.create_swarm(
+            repo="agent-backbone",
+            task_id="767",
+            coding_agent_session="agent-backbone",
+            workers=[
+                {
+                    "name": "coder",
+                    "role": "coder",
+                    "branch": "swarm/767/coder",
+                    "worktree_path": "/tmp/coder",
+                    "session": "swarm-767-coder",
+                },
+            ],
+        )
+
+    async def test_direct_worker_errors_has_attribution(
+        self, db, svc,
+    ):
+        swarm_id = await self._setup_swarm(db)
+        rows = [
+            _activity_row(
+                session="swarm-767-coder",
+                event="tool.error",
+                data={"message": "fail"},
+                ts_offset=0,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_errors(
+            db, "swarm-767-coder",
+            include_swarm_workers=True,
+        )
+        assert result["total_errors"] == 1
+        err = result["errors"][0]
+        assert err["is_swarm_worker"] is True
+        assert err["swarm_id"] == swarm_id
+        assert err["swarm_worker_name"] == "coder"
+        assert err["swarm_worker_role"] == "coder"
+        assert err["coding_agent_session"] == "agent-backbone"
+        assert err["repo"] == "agent-backbone"
+        assert err["task_id"] == "767"
+
+    async def test_direct_worker_events_has_attribution(
+        self, db, svc,
+    ):
+        swarm_id = await self._setup_swarm(db)
+        rows = [
+            _activity_row(
+                session="swarm-767-coder",
+                event="token.usage",
+                data={"input_tokens": 50},
+                ts_offset=0,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_events(
+            db, "swarm-767-coder",
+            include_swarm_workers=True, limit=10,
+        )
+        ev = result["events"][0]
+        assert ev["is_swarm_worker"] is True
+        assert ev["swarm_id"] == swarm_id
+        assert ev["coding_agent_session"] == "agent-backbone"
+        assert ev["repo"] == "agent-backbone"
+        assert ev["task_id"] == "767"
+
+    async def test_direct_worker_overview_has_attribution(
+        self, db, svc,
+    ):
+        swarm_id = await self._setup_swarm(db)
+        rows = [
+            _activity_row(
+                session="swarm-767-coder",
+                event="token.usage",
+                data={"input_tokens": 50},
+                ts_offset=0,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_overview(
+            db, "swarm-767-coder",
+            include_swarm_workers=True,
+        )
+        bd = result["breakdown_by_session"][0]
+        assert bd["is_swarm_worker"] is True
+        assert bd["swarm_id"] == swarm_id
+        assert bd["coding_agent_session"] == "agent-backbone"
+
+    async def test_non_worker_session_unaffected(self, db, svc):
+        """A non-worker session should still show is_swarm_worker=False."""
+        rows = [
+            _activity_row(
+                event="token.usage",
+                data={"input_tokens": 50},
+                ts_offset=0,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_overview(
+            db, "agent-backbone",
+            include_swarm_workers=False,
+        )
+        bd = result["breakdown_by_session"][0]
+        assert bd["is_swarm_worker"] is False
