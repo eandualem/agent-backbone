@@ -32,6 +32,15 @@ async def drain_message_queue(
     """Drain queued messages for active sessions, oldest first."""
     summary: dict[str, int] = {}
 
+    # Auto-expire stale pending messages to prevent infinite retry loops
+    try:
+        expired = await db.expire_stale_pending(max_age_minutes=30)
+        if expired:
+            log.info("Expired %d stale queued messages (>30min old)", expired)
+            summary["queue_expired"] = expired
+    except Exception:
+        log.exception("Failed to expire stale messages (non-fatal)")
+
     for session_name in active_sessions:
         queued = await db.dequeue_messages(session_name, limit=5)
         if not isinstance(queued, list) or not queued:

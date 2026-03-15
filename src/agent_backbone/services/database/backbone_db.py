@@ -609,6 +609,11 @@ class BackboneDB:
         async with self._engine.begin() as conn:
             return await _queue_repo.purge_pending_for_issue(conn, issue_number)
 
+    async def expire_stale_pending(self, max_age_minutes: int = 30) -> int:
+        """Expire pending queue messages older than max_age_minutes."""
+        async with self._engine.begin() as conn:
+            return await _queue_repo.expire_stale_pending(conn, max_age_minutes)
+
     async def get_message_by_id(self, message_id: int) -> dict | None:
         """Get a single message by ID (for verification)."""
         async with self._engine.begin() as conn:

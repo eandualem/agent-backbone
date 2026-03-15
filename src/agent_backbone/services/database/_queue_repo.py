@@ -323,6 +323,32 @@ async def mark_message_delivered(
     )
 
 
+async def expire_stale_pending(
+    conn: AsyncConnection,
+    max_age_minutes: int = 30,
+) -> int:
+    """Mark pending messages older than max_age_minutes as expired.
+
+    Prevents stale messages from looping indefinitely in the drain cycle.
+    Returns the number of expired messages.
+    """
+    result = await conn.execute(
+        text(
+            """UPDATE message_queue
+               SET status = 'expired', delivered_at = :now
+               WHERE status = 'pending'
+                 AND enqueued_at < :cutoff"""
+        ),
+        {
+            "now": _now_iso(),
+            "cutoff": (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+        },
+    )
+    return result.rowcount
+
+
 async def purge_pending_for_issue(
     conn: AsyncConnection,
     issue_number: int,
