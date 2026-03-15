@@ -249,6 +249,8 @@ class TestHierarchyEndpoint:
         assert [node["id"] for node in data["independentPeers"]] == ["feynman", "brunel"]
         assert [section["id"] for section in data["sections"]] == [
             "operations",
+            "review",
+            "architecture",
             "knowledge-workers",
         ]
 
@@ -291,7 +293,7 @@ class TestHierarchyEndpoint:
         euclid_wf = next(node for node in ada["children"] if node["id"] == "euclid-wf")
         assert euclid_wf["codingAgents"] is None
 
-        knowledge_workers = data["sections"][1]["nodes"]
+        knowledge_workers = data["sections"][3]["nodes"]
         assert [node["id"] for node in knowledge_workers] == [
             "darwin",
             "gallup",

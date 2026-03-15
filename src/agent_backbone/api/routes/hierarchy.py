@@ -150,6 +150,68 @@ _SECTIONS = (
         ),
     ),
     _HierarchySectionSpec(
+        id="review",
+        title="Review",
+        nodes=(
+            _HierarchyNodeSpec(
+                id="oppenheimer",
+                label="Oppenheimer",
+                role="Review Process Architect",
+                tier="reviewer",
+                session="oppenheimer",
+                children=(
+                    _HierarchyNodeSpec(
+                        id="hemingway-wf",
+                        label="Hemingway (WF)",
+                        role="Code Reviewer",
+                        tier="reviewer",
+                        session="hemingway-wf",
+                        managed_org="WF",
+                    ),
+                    _HierarchyNodeSpec(
+                        id="hemingway-loveble",
+                        label="Hemingway (Loveble)",
+                        role="Code Reviewer",
+                        tier="reviewer",
+                        session="hemingway-loveble",
+                        managed_org="Loveble",
+                    ),
+                ),
+            ),
+        ),
+    ),
+    _HierarchySectionSpec(
+        id="architecture",
+        title="Architecture",
+        nodes=(
+            _HierarchyNodeSpec(
+                id="wright",
+                label="Wright",
+                role="System Architect",
+                tier="architect",
+                session="wright",
+                children=(
+                    _HierarchyNodeSpec(
+                        id="gaudi-wf",
+                        label="Gaudi (WF)",
+                        role="Repo Architect",
+                        tier="architect",
+                        session="gaudi-wf",
+                        managed_org="WF",
+                    ),
+                    _HierarchyNodeSpec(
+                        id="gaudi-loveble",
+                        label="Gaudi (Loveble)",
+                        role="Repo Architect",
+                        tier="architect",
+                        session="gaudi-loveble",
+                        managed_org="Loveble",
+                    ),
+                ),
+            ),
+        ),
+    ),
+    _HierarchySectionSpec(
         id="knowledge-workers",
         title="Knowledge Workers",
         nodes=(

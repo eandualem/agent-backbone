@@ -244,6 +244,8 @@ HierarchyTier = Literal[
     "sub-orchestrator",
     "independent-peer",
     "knowledge-worker",
+    "reviewer",
+    "architect",
     "coding-agent",
     "swarm-worker",
 ]
