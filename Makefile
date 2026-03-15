@@ -2,7 +2,7 @@
        test test-file test-unit test-integration cov cov-html check build \
        run-gateway run-prefect setup-pool deploy run-worker \
        db-up db-down db-upgrade db-migrate db-revision db-history db-current db-downgrade \
-       start-backbone stop-backbone restart-backbone start-tunnel stop-tunnel status \
+       start-backbone stop-backbone restart-backbone status \
        start-agent stop-agent start-orchestrators start-arclio start-loveble start-wf \
        start-all stop-all list
 
@@ -194,12 +194,6 @@ stop-backbone: ## Stop all services
 
 restart-backbone: ## Restart all services
 	@uv run python -m agent_backbone.services.infrastructure restart-backbone
-
-start-tunnel: ## Start ngrok tunnel
-	@uv run python -m agent_backbone.services.infrastructure start-tunnel
-
-stop-tunnel: ## Stop ngrok tunnel
-	@uv run python -m agent_backbone.services.infrastructure stop-tunnel
 
 status: ## Show all services and agent sessions
 	@uv run python -m agent_backbone.services.infrastructure status

@@ -6,7 +6,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.infrastructure._processes import pid_for_port, read_pid
-from agent_backbone.services.infrastructure._tunnel import get_tunnel_url
 from agent_backbone.services.terminal import list_sessions, session_exists
 
 if TYPE_CHECKING:
@@ -37,13 +36,15 @@ async def show_status(config: BackboneConfig) -> str:
     else:
         lines.append("  prefect    : not running")
 
-    # Gateway — use port as ground truth
+    # Gateway — check both tmux session and port
     gateway_port = config.gateway.port
     gateway_pid = await pid_for_port(gateway_port)
     gateway_session = await session_exists("gateway")
     if gateway_pid:
         ctx = "tmux session" if gateway_session else "outside tmux"
         lines.append(f"  gateway    : running ({ctx}, port {gateway_port}, pid {gateway_pid})")
+    elif gateway_session:
+        lines.append(f"  gateway    : starting (tmux session, port {gateway_port} not yet bound)")
     else:
         lines.append("  gateway    : not running")
 
@@ -68,15 +69,6 @@ async def show_status(config: BackboneConfig) -> str:
         lines.append(f"  telegram   : running (outside tmux{tpid_info})")
     else:
         lines.append("  telegram   : not running")
-
-    # Ngrok
-    ngrok_running = await session_exists("ngrok")
-    if ngrok_running:
-        url = await get_tunnel_url()
-        url_str = url if url else "URL pending..."
-        lines.append(f"  ngrok      : running ({url_str})")
-    else:
-        lines.append("  ngrok      : not running")
 
     # --- Named Entities ---
     lines.append("")

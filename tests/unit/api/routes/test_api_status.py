@@ -145,7 +145,7 @@ class TestGetSystemStatus:
         assert named["type"] == "named_entity"
 
     async def test_excludes_service_sessions(self, api_client, auth_headers, config, api_app):
-        """Service sessions (ngrok, prefect-*) are excluded from status digest."""
+        """Service sessions (prefect-*) are excluded from status digest."""
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[])
         mock_state_svc = _make_mock_state_svc()
@@ -154,7 +154,6 @@ class TestGetSystemStatus:
                 "feynman",
                 "ike",
                 "platform-api",
-                "ngrok",
                 "prefect-worker",
                 "prefect-server",
                 "telegram-bot",
@@ -174,7 +173,7 @@ class TestGetSystemStatus:
         data = resp.json()
         sessions = [a["session"] for a in data["agents"]]
         assert "platform-api" in sessions
-        for svc in ("ngrok", "prefect-worker", "prefect-server", "telegram-bot"):
+        for svc in ("prefect-worker", "prefect-server", "telegram-bot"):
             assert svc not in sessions
         # 9 named + 1 coding agent (platform-api), no services
         assert data["agent_count"] == 10

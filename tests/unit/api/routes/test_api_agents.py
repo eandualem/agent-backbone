@@ -206,7 +206,7 @@ class TestListAgents:
         assert coding["tmux_created"] is not None
 
     async def test_excludes_service_sessions(self, api_app, api_client, auth_headers):
-        """Service sessions (ngrok, prefect, etc.) are filtered from agents list."""
+        """Service sessions (prefect, etc.) are filtered from agents list."""
         _set_di_overrides(
             api_app,
             state_svc=_make_mock_state_svc(),
@@ -218,7 +218,6 @@ class TestListAgents:
                     _tmux("ada"),
                     _tmux("brunel"),
                     _tmux("platform-api"),
-                    _tmux("ngrok"),
                     _tmux("prefect-worker"),
                     _tmux("prefect-server"),
                     _tmux("telegram-bot"),
@@ -236,7 +235,7 @@ class TestListAgents:
         # Coding agent is included
         assert "platform-api" in sessions
         # Services are excluded
-        for svc in ("ngrok", "prefect-worker", "prefect-server", "telegram-bot"):
+        for svc in ("prefect-worker", "prefect-server", "telegram-bot"):
             assert svc not in sessions
 
     async def test_includes_offline_repos_from_registry(self, api_app, api_client, auth_headers):

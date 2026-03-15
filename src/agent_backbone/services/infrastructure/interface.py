@@ -66,15 +66,6 @@ from agent_backbone.services.infrastructure._backbone import (
     stop_worker as _stop_worker,
 )
 from agent_backbone.services.infrastructure._status import show_status as _show_status
-from agent_backbone.services.infrastructure._tunnel import (
-    get_tunnel_url as _get_tunnel_url,
-)
-from agent_backbone.services.infrastructure._tunnel import (
-    start_tunnel as _start_tunnel,
-)
-from agent_backbone.services.infrastructure._tunnel import (
-    stop_tunnel as _stop_tunnel,
-)
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -86,7 +77,7 @@ class InfrastructureService:
     """Infrastructure service implementing LifecycleAware.
 
     Manages OS-level infrastructure: backbone process orchestration,
-    ngrok tunnel, port/PID management, and agent group operations.
+    port/PID management, and agent group operations.
     """
 
     def __init__(self, config: BackboneConfig) -> None:
@@ -197,12 +188,3 @@ class InfrastructureService:
 
     async def stop_telegram(self) -> bool:
         return await _stop_telegram(self._config)
-
-    async def start_tunnel(self) -> bool:
-        return await _start_tunnel(self._config)
-
-    async def stop_tunnel(self) -> bool:
-        return await _stop_tunnel()
-
-    async def get_tunnel_url(self) -> str | None:
-        return await _get_tunnel_url()

@@ -66,7 +66,6 @@ class EntityConfig:
     fallback: dict[str, str] = field(default_factory=lambda: {"coding-agent": "ike"})
     service_sessions: frozenset[str] = frozenset(
         {
-            "ngrok",
             "prefect",
             "prefect-worker",
             "prefect-server",
@@ -241,9 +240,7 @@ class BackboneConfig:
         """Return the configured webhook secrets in validation order."""
         return tuple(
             dict.fromkeys(
-                secret
-                for secret in (self.webhook_secret, self.github_app_webhook_secret)
-                if secret
+                secret for secret in (self.webhook_secret, self.github_app_webhook_secret) if secret
             )
         )
 
@@ -314,7 +311,6 @@ class BackboneConfig:
                     ent.get(
                         "service_sessions",
                         [
-                            "ngrok",
                             "prefect",
                             "prefect-worker",
                             "prefect-server",

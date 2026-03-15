@@ -31,11 +31,6 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start-telegram", help="Start Telegram bot")
     sub.add_parser("stop-telegram", help="Stop Telegram bot")
 
-    # Tunnel
-    sub.add_parser("start-tunnel", help="Start ngrok tunnel")
-    sub.add_parser("stop-tunnel", help="Stop ngrok tunnel")
-    sub.add_parser("show-tunnel-url", help="Show ngrok tunnel URL")
-
     # Agent management
     sa = sub.add_parser("start-agent", help="Start a single agent session")
     sa.add_argument("name", help="Agent name")
@@ -70,7 +65,7 @@ async def _dispatch(args: argparse.Namespace) -> None:
 
     config = BackboneConfig.from_toml()
 
-    from agent_backbone.services.infrastructure import _agents, _backbone, _status, _tunnel
+    from agent_backbone.services.infrastructure import _agents, _backbone, _status
 
     cmd = args.command
 
@@ -108,19 +103,6 @@ async def _dispatch(args: argparse.Namespace) -> None:
         sys.exit(0 if ok else 1)
     elif cmd == "stop-telegram":
         await _backbone.stop_telegram(config)
-
-    # Tunnel
-    elif cmd == "start-tunnel":
-        ok = await _tunnel.start_tunnel(config)
-        sys.exit(0 if ok else 1)
-    elif cmd == "stop-tunnel":
-        await _tunnel.stop_tunnel()
-    elif cmd == "show-tunnel-url":
-        url = await _tunnel.get_tunnel_url()
-        if url:
-            print(f"Public URL: {url}/")
-        else:
-            print("Tunnel URL not available")
 
     # Agent management
     elif cmd == "start-agent":

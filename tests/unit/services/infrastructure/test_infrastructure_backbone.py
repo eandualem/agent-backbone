@@ -445,7 +445,7 @@ class TestStartBackbone:
 class TestStopBackbone:
     @pytest.mark.asyncio
     async def test_reverse_stop_order(self, bb_config):
-        """stop_backbone stops services, then the legacy ngrok tunnel."""
+        """stop_backbone stops services in reverse order."""
         order = []
 
         async def mock_stop_telegram(config):
@@ -464,10 +464,6 @@ class TestStopBackbone:
             order.append("prefect")
             return True
 
-        async def mock_stop_tunnel():
-            order.append("ngrok")
-            return True
-
         with patch(
             "agent_backbone.services.infrastructure._backbone.stop_telegram",
             side_effect=mock_stop_telegram,
@@ -484,17 +480,13 @@ class TestStopBackbone:
                         "agent_backbone.services.infrastructure._backbone.stop_prefect",
                         side_effect=mock_stop_prefect,
                     ):
-                        with patch(
-                            "agent_backbone.services.infrastructure._backbone.stop_tunnel",
-                            side_effect=mock_stop_tunnel,
-                        ):
-                            from agent_backbone.services.infrastructure._backbone import (
-                                stop_backbone,
-                            )
+                        from agent_backbone.services.infrastructure._backbone import (
+                            stop_backbone,
+                        )
 
-                            await stop_backbone(bb_config)
+                        await stop_backbone(bb_config)
 
-        assert order == ["telegram", "gateway", "worker", "prefect", "ngrok"]
+        assert order == ["telegram", "gateway", "worker", "prefect"]
 
 
 class TestRestartBackbone:
