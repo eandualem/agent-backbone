@@ -226,6 +226,41 @@ class TestInferStateFromPane:
         )
         assert prompt_has_pending_input(pane) is True
 
+    def test_stuck_backbone_envelope_not_pending_input(self):
+        """A stuck backbone delivery in the prompt buffer is not user input (#766)."""
+        pane = "\u276f [via:backbone from:ike] Can you check the status?"
+        assert prompt_has_pending_input(pane) is False
+
+    def test_stuck_github_envelope_not_pending_input(self):
+        """Stuck github notification envelope is not user input."""
+        pane = "\u276f [via:github issue:51] [task] agent-backbone: Add topic routing"
+        assert prompt_has_pending_input(pane) is False
+
+    def test_stuck_telegram_envelope_not_pending_input(self):
+        """Stuck telegram envelope is not user input."""
+        pane = "\u276f [via:telegram from:elias] What's the status?"
+        assert prompt_has_pending_input(pane) is False
+
+    def test_stuck_heartbeat_envelope_not_pending_input(self):
+        """Stuck heartbeat envelope is not user input."""
+        pane = "\u276f [via:heartbeat] periodic check"
+        assert prompt_has_pending_input(pane) is False
+
+    def test_real_user_input_still_detected(self):
+        """Regression guard: actual user text after prompt is still pending input."""
+        pane = "\u276f hello"
+        assert prompt_has_pending_input(pane) is True
+
+    def test_prefix_guard_suffix_matched_output_not_pending(self):
+        """A suffix-matched output line (no prompt prefix) is not pending input."""
+        from agent_backbone.services.terminal._adapters import TerminalRuntime, get_terminal_adapter
+
+        # Claude adapter has prefix ❯ and suffix $. A line ending with $
+        # but not starting with ❯ matched via suffix only — prefix guard
+        # should reject it as not real user input.
+        claude = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        assert claude.prompt_has_pending_input("some output line $") is False
+
     def test_codex_queued_message_banner_is_ignored_for_prompt_detection(self):
         """Queued-message instructional chrome should not hide the live prompt."""
         pane = (

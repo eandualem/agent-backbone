@@ -28,6 +28,7 @@ _ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
 _BOX_CHARS = "\u2500\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u253c\u2501"
 _PROMPT_START_CHARS = ">$\u276f\u203a%#"
 _WORKING_STATES = frozenset({AgentState.PROCESSING_ISSUE, AgentState.BUSY, AgentState.STARTING})
+_BACKBONE_ENVELOPE_PREFIX = "[via:"
 
 
 class TerminalRuntime(StrEnum):
@@ -231,6 +232,27 @@ class TerminalAdapter(ABC):
             return False
         if self.runtime == TerminalRuntime.CODEX and _prompt_line_is_dim_placeholder(prompt_line):
             return False
+
+        # --- Stuck delivery guards (issue #766) ---
+
+        # Prefix guard: if the adapter defines prompt_prefixes and the sanitized
+        # line doesn't start with any of them, we matched via a suffix — the
+        # "pending text" is just trailing output, not user input.
+        if self.prompt_prefixes:
+            if not any(sanitized.startswith(prefix) for prefix in self.prompt_prefixes):
+                return False
+
+        # Stuck envelope: text after the prompt char that begins with a backbone
+        # message envelope tag is a prior delivery that wasn't consumed, not user
+        # input.  Strip the prompt prefix before checking.
+        remainder = sanitized
+        for prefix in self.prompt_prefixes:
+            if sanitized.startswith(prefix):
+                remainder = sanitized[len(prefix) :].lstrip()
+                break
+        if remainder.startswith(_BACKBONE_ENVELOPE_PREFIX):
+            return False
+
         return True
 
     def detect_copy_mode(self, tmux_vars: dict[str, str], agent_state: AgentState) -> bool:
