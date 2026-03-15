@@ -46,9 +46,7 @@ class TestWorkflowPendingCounts:
     async def test_count_pending_issues_skips_abstract_role_targets(self):
         config = _config_with_abstract_role()
         gh = AsyncMock()
-        gh.list_open_issues.side_effect = (
-            lambda label: [object()] if label == "for:feynman" else []
-        )
+        gh.list_open_issues.side_effect = lambda label: [object()] if label == "for:feynman" else []
 
         result = await count_pending_issues.fn(config, gh)
 
@@ -58,9 +56,7 @@ class TestWorkflowPendingCounts:
     async def test_evening_count_skips_abstract_role_targets(self):
         config = _config_with_abstract_role()
         gh = AsyncMock()
-        gh.list_open_issues.side_effect = (
-            lambda label: [object()] if label == "for:feynman" else []
-        )
+        gh.list_open_issues.side_effect = lambda label: [object()] if label == "for:feynman" else []
 
         result = await _count_pending_evening.fn(config, gh)
 

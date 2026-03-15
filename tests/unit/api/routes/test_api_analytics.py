@@ -42,7 +42,9 @@ class TestOverviewEndpoint:
 
     async def test_overview_with_tokens(self, api_client, auth_headers, api_app):
         await _insert_activity(
-            api_app, "test-agent", "token.usage",
+            api_app,
+            "test-agent",
+            "token.usage",
             data={"input_tokens": 150, "output_tokens": 75, "cost_usd": 0.02},
         )
 
@@ -60,8 +62,11 @@ class TestOverviewEndpoint:
     async def test_overview_with_errors(self, api_client, auth_headers, api_app):
         await _insert_activity(api_app, "test-agent", "tool.error", data={"message": "fail"})
         await _insert_activity(
-            api_app, "test-agent", "runtime.error",
-            data={"message": "crash"}, ts_offset=1,
+            api_app,
+            "test-agent",
+            "runtime.error",
+            data={"message": "crash"},
+            ts_offset=1,
         )
 
         resp = await api_client.get(
@@ -76,12 +81,18 @@ class TestOverviewEndpoint:
 
     async def test_overview_time_filter(self, api_client, auth_headers, api_app):
         await _insert_activity(
-            api_app, "test-agent", "token.usage",
-            data={"input_tokens": 50}, ts_offset=0,
+            api_app,
+            "test-agent",
+            "token.usage",
+            data={"input_tokens": 50},
+            ts_offset=0,
         )
         await _insert_activity(
-            api_app, "test-agent", "token.usage",
-            data={"input_tokens": 100}, ts_offset=100,
+            api_app,
+            "test-agent",
+            "token.usage",
+            data={"input_tokens": 100},
+            ts_offset=100,
         )
 
         resp = await api_client.get(
@@ -120,8 +131,11 @@ class TestEventsEndpoint:
     async def test_events_pagination(self, api_client, auth_headers, api_app):
         for i in range(5):
             await _insert_activity(
-                api_app, "test-agent", "token.usage",
-                data={"i": i}, ts_offset=i,
+                api_app,
+                "test-agent",
+                "token.usage",
+                data={"i": i},
+                ts_offset=i,
             )
 
         # First page
@@ -168,12 +182,18 @@ class TestEventsEndpoint:
 
     async def test_events_runtime_filter(self, api_client, auth_headers, api_app):
         await _insert_activity(
-            api_app, "test-agent", "token.usage",
-            runtime="claude", ts_offset=0,
+            api_app,
+            "test-agent",
+            "token.usage",
+            runtime="claude",
+            ts_offset=0,
         )
         await _insert_activity(
-            api_app, "test-agent", "token.usage",
-            runtime="gemini", ts_offset=1,
+            api_app,
+            "test-agent",
+            "token.usage",
+            runtime="gemini",
+            ts_offset=1,
         )
 
         resp = await api_client.get(
@@ -188,20 +208,36 @@ class TestEventsEndpoint:
 class TestToolsEndpoint:
     async def test_tools_grouped(self, api_client, auth_headers, api_app):
         await _insert_activity(
-            api_app, "test-agent", "tool.started",
-            data={"tool_name": "Read"}, trace_id="t1", ts_offset=0,
+            api_app,
+            "test-agent",
+            "tool.started",
+            data={"tool_name": "Read"},
+            trace_id="t1",
+            ts_offset=0,
         )
         await _insert_activity(
-            api_app, "test-agent", "tool.finished",
-            data={"tool_name": "Read", "duration_ms": 100}, trace_id="t1", ts_offset=1,
+            api_app,
+            "test-agent",
+            "tool.finished",
+            data={"tool_name": "Read", "duration_ms": 100},
+            trace_id="t1",
+            ts_offset=1,
         )
         await _insert_activity(
-            api_app, "test-agent", "tool.started",
-            data={"tool_name": "Read"}, trace_id="t2", ts_offset=2,
+            api_app,
+            "test-agent",
+            "tool.started",
+            data={"tool_name": "Read"},
+            trace_id="t2",
+            ts_offset=2,
         )
         await _insert_activity(
-            api_app, "test-agent", "tool.finished",
-            data={"tool_name": "Read", "duration_ms": 200}, trace_id="t2", ts_offset=3,
+            api_app,
+            "test-agent",
+            "tool.finished",
+            data={"tool_name": "Read", "duration_ms": 200},
+            trace_id="t2",
+            ts_offset=3,
         )
 
         resp = await api_client.get(
@@ -228,12 +264,17 @@ class TestToolsEndpoint:
 class TestErrorsEndpoint:
     async def test_errors_summary_and_feed(self, api_client, auth_headers, api_app):
         await _insert_activity(
-            api_app, "test-agent", "tool.error",
+            api_app,
+            "test-agent",
+            "tool.error",
             data={"error_type": "permission", "message": "denied", "tool_name": "Bash"},
         )
         await _insert_activity(
-            api_app, "test-agent", "runtime.error",
-            data={"message": "crash"}, ts_offset=1,
+            api_app,
+            "test-agent",
+            "runtime.error",
+            data={"message": "crash"},
+            ts_offset=1,
         )
 
         resp = await api_client.get(
@@ -276,12 +317,18 @@ class TestSwarmAttributionInRoutes:
         )
 
         await _insert_activity(
-            api_app, "test-agent", "token.usage",
-            data={"input_tokens": 100}, ts_offset=0,
+            api_app,
+            "test-agent",
+            "token.usage",
+            data={"input_tokens": 100},
+            ts_offset=0,
         )
         await _insert_activity(
-            api_app, "swarm-100-coder", "token.usage",
-            data={"input_tokens": 200}, ts_offset=1,
+            api_app,
+            "swarm-100-coder",
+            "token.usage",
+            data={"input_tokens": 200},
+            ts_offset=1,
         )
 
         resp = await api_client.get(
@@ -295,8 +342,7 @@ class TestSwarmAttributionInRoutes:
         assert len(data["breakdown_by_session"]) == 2
 
         worker_bd = next(
-            bd for bd in data["breakdown_by_session"]
-            if bd["session"] == "swarm-100-coder"
+            bd for bd in data["breakdown_by_session"] if bd["session"] == "swarm-100-coder"
         )
         assert worker_bd["is_swarm_worker"] is True
         assert worker_bd["swarm_worker_name"] == "coder"

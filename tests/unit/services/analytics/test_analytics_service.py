@@ -214,21 +214,28 @@ class TestOverview:
     async def test_tool_counting(self, db, svc):
         rows = [
             _activity_row(
-                event="tool.started", data={"tool_name": "Read"},
-                ts_offset=0, trace_id="t1",
+                event="tool.started",
+                data={"tool_name": "Read"},
+                ts_offset=0,
+                trace_id="t1",
             ),
             _activity_row(
                 event="tool.finished",
                 data={"tool_name": "Read", "duration_ms": 500},
-                ts_offset=1, trace_id="t1",
+                ts_offset=1,
+                trace_id="t1",
             ),
             _activity_row(
-                event="tool.started", data={"tool_name": "Write"},
-                ts_offset=2, trace_id="t2",
+                event="tool.started",
+                data={"tool_name": "Write"},
+                ts_offset=2,
+                trace_id="t2",
             ),
             _activity_row(
-                event="tool.finished", data={"tool_name": "Write"},
-                ts_offset=3, trace_id="t2",
+                event="tool.finished",
+                data={"tool_name": "Write"},
+                ts_offset=3,
+                trace_id="t2",
             ),
         ]
         await _insert_rows(db, rows)
@@ -270,7 +277,8 @@ class TestOverview:
         await _insert_rows(db, rows)
 
         result = await svc.get_overview(
-            db, "agent-backbone",
+            db,
+            "agent-backbone",
             since=1710000005.0,
             until=1710000015.0,
             include_swarm_workers=False,
@@ -339,9 +347,7 @@ class TestEvents:
         ]
         await _insert_rows(db, rows)
 
-        result = await svc.get_events(
-            db, "agent-backbone", include_swarm_workers=False, limit=10
-        )
+        result = await svc.get_events(db, "agent-backbone", include_swarm_workers=False, limit=10)
         assert len(result["events"]) == 2
         assert result["has_more"] is False
         assert result["next_cursor"] is None
@@ -354,16 +360,15 @@ class TestEvents:
         await _insert_rows(db, rows)
 
         # First page
-        page1 = await svc.get_events(
-            db, "agent-backbone", include_swarm_workers=False, limit=2
-        )
+        page1 = await svc.get_events(db, "agent-backbone", include_swarm_workers=False, limit=2)
         assert len(page1["events"]) == 2
         assert page1["has_more"] is True
         cursor = page1["next_cursor"]
 
         # Second page
         page2 = await svc.get_events(
-            db, "agent-backbone",
+            db,
+            "agent-backbone",
             include_swarm_workers=False,
             limit=2,
             cursor_ts=cursor["ts"],
@@ -385,7 +390,8 @@ class TestEvents:
         await _insert_rows(db, rows)
 
         result = await svc.get_events(
-            db, "agent-backbone",
+            db,
+            "agent-backbone",
             include_swarm_workers=False,
             event="token.usage",
             limit=10,
@@ -401,7 +407,8 @@ class TestEvents:
         await _insert_rows(db, rows)
 
         result = await svc.get_events(
-            db, "agent-backbone",
+            db,
+            "agent-backbone",
             include_swarm_workers=False,
             runtime="claude",
             limit=10,
@@ -414,9 +421,7 @@ class TestEvents:
         ]
         await _insert_rows(db, rows)
 
-        result = await svc.get_events(
-            db, "agent-backbone", include_swarm_workers=False, limit=10
-        )
+        result = await svc.get_events(db, "agent-backbone", include_swarm_workers=False, limit=10)
         assert result["events"][0]["data"]["input_tokens"] == 42
 
 
@@ -424,31 +429,40 @@ class TestTools:
     async def test_tool_stats_grouped(self, db, svc):
         rows = [
             _activity_row(
-                event="tool.started", data={"tool_name": "Read"},
-                ts_offset=0, trace_id="t1",
+                event="tool.started",
+                data={"tool_name": "Read"},
+                ts_offset=0,
+                trace_id="t1",
             ),
             _activity_row(
                 event="tool.finished",
                 data={"tool_name": "Read", "duration_ms": 100},
-                ts_offset=1, trace_id="t1",
+                ts_offset=1,
+                trace_id="t1",
             ),
             _activity_row(
-                event="tool.started", data={"tool_name": "Read"},
-                ts_offset=2, trace_id="t2",
+                event="tool.started",
+                data={"tool_name": "Read"},
+                ts_offset=2,
+                trace_id="t2",
             ),
             _activity_row(
                 event="tool.finished",
                 data={"tool_name": "Read", "duration_ms": 200},
-                ts_offset=3, trace_id="t2",
+                ts_offset=3,
+                trace_id="t2",
             ),
             _activity_row(
-                event="tool.started", data={"tool_name": "Write"},
-                ts_offset=4, trace_id="t3",
+                event="tool.started",
+                data={"tool_name": "Write"},
+                ts_offset=4,
+                trace_id="t3",
             ),
             _activity_row(
                 event="tool.finished",
                 data={"tool_name": "Write", "duration_ms": 50},
-                ts_offset=5, trace_id="t3",
+                ts_offset=5,
+                trace_id="t3",
             ),
         ]
         await _insert_rows(db, rows)
@@ -549,7 +563,9 @@ class TestSwarmAttribution:
         await _insert_rows(db, rows)
 
         result = await svc.get_overview(
-            db, "agent-backbone", include_swarm_workers=True,
+            db,
+            "agent-backbone",
+            include_swarm_workers=True,
         )
 
         # Should have queried both sessions
@@ -562,8 +578,7 @@ class TestSwarmAttribution:
         # Breakdown should show swarm attribution
         assert len(result["breakdown_by_session"]) == 2
         worker_bd = next(
-            bd for bd in result["breakdown_by_session"]
-            if bd["session"] == "swarm-767-coder"
+            bd for bd in result["breakdown_by_session"] if bd["session"] == "swarm-767-coder"
         )
         assert worker_bd["is_swarm_worker"] is True
         assert worker_bd["swarm_id"] == swarm_id
@@ -590,18 +605,24 @@ class TestSwarmAttribution:
 
         rows = [
             _activity_row(
-                session="agent-backbone", event="token.usage",
-                data={"input_tokens": 100}, ts_offset=0,
+                session="agent-backbone",
+                event="token.usage",
+                data={"input_tokens": 100},
+                ts_offset=0,
             ),
             _activity_row(
-                session="swarm-767-coder", event="token.usage",
-                data={"input_tokens": 200}, ts_offset=1,
+                session="swarm-767-coder",
+                event="token.usage",
+                data={"input_tokens": 200},
+                ts_offset=1,
             ),
         ]
         await _insert_rows(db, rows)
 
         result = await svc.get_overview(
-            db, "agent-backbone", include_swarm_workers=False,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
         )
         assert result["totals"]["tokens"]["input_tokens"] == 100
         assert len(result["scope"]["sessions_queried"]) == 1
@@ -632,18 +653,23 @@ class TestSwarmAttribution:
 
         rows = [
             _activity_row(
-                session="swarm-767-coder", event="token.usage",
-                data={"input_tokens": 100}, ts_offset=0,
+                session="swarm-767-coder",
+                event="token.usage",
+                data={"input_tokens": 100},
+                ts_offset=0,
             ),
             _activity_row(
-                session="swarm-767-scout", event="token.usage",
-                data={"input_tokens": 200}, ts_offset=1,
+                session="swarm-767-scout",
+                event="token.usage",
+                data={"input_tokens": 200},
+                ts_offset=1,
             ),
         ]
         await _insert_rows(db, rows)
 
         result = await svc.get_overview(
-            db, "agent-backbone",
+            db,
+            "agent-backbone",
             include_swarm_workers=True,
             worker_role="coder",
         )
@@ -699,7 +725,9 @@ class TestCodexNestedTokens:
         await _insert_rows(db, rows)
 
         result = await svc.get_overview(
-            db, "agent-backbone", include_swarm_workers=False,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
         )
         assert result["totals"]["tokens"]["input_tokens"] == 300
         assert result["totals"]["tokens"]["output_tokens"] == 150
@@ -720,7 +748,9 @@ class TestOpenCodeCostOnMessageAssistant:
         await _insert_rows(db, rows)
 
         result = await svc.get_overview(
-            db, "agent-backbone", include_swarm_workers=False,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
         )
         assert result["totals"]["captured_cost_usd"] == pytest.approx(1.25)
         assert result["totals"]["cost_status"] == "partial"
@@ -743,7 +773,9 @@ class TestOpenCodeCostOnMessageAssistant:
         await _insert_rows(db, rows)
 
         result = await svc.get_overview(
-            db, "agent-backbone", include_swarm_workers=False,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
         )
         assert result["totals"]["captured_cost_usd"] == pytest.approx(1.30)
 
@@ -781,13 +813,12 @@ class TestSwarmAttributionInEventsAndErrors:
         await _insert_rows(db, rows)
 
         result = await svc.get_events(
-            db, "agent-backbone",
-            include_swarm_workers=True, limit=10,
+            db,
+            "agent-backbone",
+            include_swarm_workers=True,
+            limit=10,
         )
-        worker_ev = next(
-            e for e in result["events"]
-            if e["session"] == "swarm-767-coder"
-        )
+        worker_ev = next(e for e in result["events"] if e["session"] == "swarm-767-coder")
         assert worker_ev["is_swarm_worker"] is True
         assert worker_ev["swarm_id"] == swarm_id
         assert worker_ev["swarm_worker_name"] == "coder"
@@ -809,7 +840,8 @@ class TestSwarmAttributionInEventsAndErrors:
         await _insert_rows(db, rows)
 
         result = await svc.get_errors(
-            db, "agent-backbone",
+            db,
+            "agent-backbone",
             include_swarm_workers=True,
         )
         worker_err = result["errors"][0]
@@ -851,8 +883,10 @@ class TestEventsDedup:
         await _insert_rows(db, rows)
 
         result = await svc.get_events(
-            db, "agent-backbone",
-            include_swarm_workers=False, limit=10,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
+            limit=10,
         )
         # Should have deduped ev1 → 2 unique events
         assert len(result["events"]) == 2
@@ -872,16 +906,20 @@ class TestEventsDedup:
             await _insert_rows(db, rows)
 
         page1 = await svc.get_events(
-            db, "agent-backbone",
-            include_swarm_workers=False, limit=3,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
+            limit=3,
         )
         assert len(page1["events"]) == 3
         assert page1["has_more"] is True
         cursor = page1["next_cursor"]
 
         page2 = await svc.get_events(
-            db, "agent-backbone",
-            include_swarm_workers=False, limit=3,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
+            limit=3,
             cursor_ts=cursor["ts"],
             cursor_id=cursor["id"],
         )
@@ -900,59 +938,69 @@ class TestEventsDedup:
         """
         # 10 duplicates of dup1 at ts_offset=0
         for i in range(10):
-            await _insert_rows(db, [
-                _activity_row(
-                    event="token.usage",
-                    data={"dup": True},
-                    source_ref="c.jsonl",
-                    source_event_id="dup1",
-                    ts_offset=0,
-                ),
-            ])
+            await _insert_rows(
+                db,
+                [
+                    _activity_row(
+                        event="token.usage",
+                        data={"dup": True},
+                        source_ref="c.jsonl",
+                        source_event_id="dup1",
+                        ts_offset=0,
+                    ),
+                ],
+            )
         # 3 unique rows after the burst
         for i in range(3):
-            await _insert_rows(db, [
-                _activity_row(
-                    event="token.usage",
-                    data={"i": i},
-                    source_ref="c.jsonl",
-                    source_event_id=f"uniq{i + 2}",
-                    ts_offset=i + 1,
-                ),
-            ])
+            await _insert_rows(
+                db,
+                [
+                    _activity_row(
+                        event="token.usage",
+                        data={"i": i},
+                        source_ref="c.jsonl",
+                        source_event_id=f"uniq{i + 2}",
+                        ts_offset=i + 1,
+                    ),
+                ],
+            )
 
         result = await svc.get_events(
-            db, "agent-backbone",
-            include_swarm_workers=False, limit=3,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
+            limit=3,
         )
         # Should see 3 events (dup1 + uniq2 + uniq3) with
         # has_more=True (uniq4 still available)
         assert len(result["events"]) == 3
         assert result["has_more"] is True
 
-        source_ids = [
-            e["data"].get("dup") or e["data"].get("i")
-            for e in result["events"]
-        ]
+        source_ids = [e["data"].get("dup") or e["data"].get("i") for e in result["events"]]
         # First event is the deduped dup1
         assert source_ids[0] is True  # dup=True
 
     async def test_events_dedup_exhaust(self, db, svc):
         """When all rows are duplicates, pagination terminates."""
         for i in range(5):
-            await _insert_rows(db, [
-                _activity_row(
-                    event="token.usage",
-                    data={"only": True},
-                    source_ref="d.jsonl",
-                    source_event_id="same",
-                    ts_offset=0,
-                ),
-            ])
+            await _insert_rows(
+                db,
+                [
+                    _activity_row(
+                        event="token.usage",
+                        data={"only": True},
+                        source_ref="d.jsonl",
+                        source_event_id="same",
+                        ts_offset=0,
+                    ),
+                ],
+            )
 
         result = await svc.get_events(
-            db, "agent-backbone",
-            include_swarm_workers=False, limit=3,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
+            limit=3,
         )
         assert len(result["events"]) == 1
         assert result["has_more"] is False
@@ -965,29 +1013,37 @@ class TestEventsDedup:
         Page 2 with that cursor must return uniq2, not dup1 again.
         """
         for _ in range(5):
-            await _insert_rows(db, [
+            await _insert_rows(
+                db,
+                [
+                    _activity_row(
+                        event="token.usage",
+                        data={"v": "dup1"},
+                        source_ref="e.jsonl",
+                        source_event_id="dup1",
+                        ts_offset=0,
+                    ),
+                ],
+            )
+        await _insert_rows(
+            db,
+            [
                 _activity_row(
                     event="token.usage",
-                    data={"v": "dup1"},
+                    data={"v": "uniq2"},
                     source_ref="e.jsonl",
-                    source_event_id="dup1",
-                    ts_offset=0,
+                    source_event_id="uniq2",
+                    ts_offset=1,
                 ),
-            ])
-        await _insert_rows(db, [
-            _activity_row(
-                event="token.usage",
-                data={"v": "uniq2"},
-                source_ref="e.jsonl",
-                source_event_id="uniq2",
-                ts_offset=1,
-            ),
-        ])
+            ],
+        )
 
         # Page 1
         page1 = await svc.get_events(
-            db, "agent-backbone",
-            include_swarm_workers=False, limit=1,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
+            limit=1,
         )
         assert len(page1["events"]) == 1
         assert page1["events"][0]["source_event_id"] == "dup1"
@@ -996,8 +1052,10 @@ class TestEventsDedup:
 
         # Page 2 — must advance past all dup1 rows
         page2 = await svc.get_events(
-            db, "agent-backbone",
-            include_swarm_workers=False, limit=1,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
+            limit=1,
             cursor_ts=cursor["ts"],
             cursor_id=cursor["id"],
         )
@@ -1026,31 +1084,32 @@ class TestEventsDedup:
             await _insert_rows(db, [dict(dup) for _ in range(end - start)])
 
         # 1 unique row after the burst
-        await _insert_rows(db, [
-            _activity_row(
-                event="token.usage",
-                data={"unique": True},
-                source_ref="burst.jsonl",
-                source_event_id="uniq2",
-                ts_offset=1,
-            ),
-        ])
+        await _insert_rows(
+            db,
+            [
+                _activity_row(
+                    event="token.usage",
+                    data={"unique": True},
+                    source_ref="burst.jsonl",
+                    source_event_id="uniq2",
+                    ts_offset=1,
+                ),
+            ],
+        )
 
         result = await svc.get_events(
-            db, "agent-backbone",
-            include_swarm_workers=False, limit=3,
+            db,
+            "agent-backbone",
+            include_swarm_workers=False,
+            limit=3,
         )
         # Must find both unique events (dup1 deduped + uniq2)
         assert len(result["events"]) == 2
         assert result["has_more"] is False
         sids = [
-            e["data"].get("source_event_id")
-            or e.get("source_event_id")
-            for e in result["events"]
+            e["data"].get("source_event_id") or e.get("source_event_id") for e in result["events"]
         ]
-        assert "dup1" in sids or result["events"][0][
-            "source_event_id"
-        ] == "dup1"
+        assert "dup1" in sids or result["events"][0]["source_event_id"] == "dup1"
         assert result["events"][1]["source_event_id"] == "uniq2"
 
 
@@ -1074,7 +1133,9 @@ class TestDirectWorkerDrilldown:
         )
 
     async def test_direct_worker_errors_has_attribution(
-        self, db, svc,
+        self,
+        db,
+        svc,
     ):
         swarm_id = await self._setup_swarm(db)
         rows = [
@@ -1088,7 +1149,8 @@ class TestDirectWorkerDrilldown:
         await _insert_rows(db, rows)
 
         result = await svc.get_errors(
-            db, "swarm-767-coder",
+            db,
+            "swarm-767-coder",
             include_swarm_workers=True,
         )
         assert result["total_errors"] == 1
@@ -1102,7 +1164,9 @@ class TestDirectWorkerDrilldown:
         assert err["task_id"] == "767"
 
     async def test_direct_worker_events_has_attribution(
-        self, db, svc,
+        self,
+        db,
+        svc,
     ):
         swarm_id = await self._setup_swarm(db)
         rows = [
@@ -1116,8 +1180,10 @@ class TestDirectWorkerDrilldown:
         await _insert_rows(db, rows)
 
         result = await svc.get_events(
-            db, "swarm-767-coder",
-            include_swarm_workers=True, limit=10,
+            db,
+            "swarm-767-coder",
+            include_swarm_workers=True,
+            limit=10,
         )
         ev = result["events"][0]
         assert ev["is_swarm_worker"] is True
@@ -1127,7 +1193,9 @@ class TestDirectWorkerDrilldown:
         assert ev["task_id"] == "767"
 
     async def test_direct_worker_overview_has_attribution(
-        self, db, svc,
+        self,
+        db,
+        svc,
     ):
         swarm_id = await self._setup_swarm(db)
         rows = [
@@ -1141,7 +1209,8 @@ class TestDirectWorkerDrilldown:
         await _insert_rows(db, rows)
 
         result = await svc.get_overview(
-            db, "swarm-767-coder",
+            db,
+            "swarm-767-coder",
             include_swarm_workers=True,
         )
         bd = result["breakdown_by_session"][0]
@@ -1161,7 +1230,8 @@ class TestDirectWorkerDrilldown:
         await _insert_rows(db, rows)
 
         result = await svc.get_overview(
-            db, "agent-backbone",
+            db,
+            "agent-backbone",
             include_swarm_workers=False,
         )
         bd = result["breakdown_by_session"][0]

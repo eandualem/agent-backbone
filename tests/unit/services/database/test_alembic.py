@@ -175,7 +175,7 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
                     "branch": "swarm/744/db-review",
                     "worktree_path": str(tmp_path / "db-review"),
                     "session": "db-review",
-                }
+                },
             ],
         )
         assert swarm_id

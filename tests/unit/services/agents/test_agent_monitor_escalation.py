@@ -72,7 +72,7 @@ def _make_role_registry() -> EntityRegistry:
                 role="",
                 organization="Loveble",
                 entity_type="role-instance",
-            )
+            ),
         },
         repos=[],
     )

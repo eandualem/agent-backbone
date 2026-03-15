@@ -358,9 +358,7 @@ class TestHierarchyEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         bell_wf = next(
-            node
-            for node in data["sections"][0]["nodes"][0]["children"]
-            if node["id"] == "bell-wf"
+            node for node in data["sections"][0]["nodes"][0]["children"] if node["id"] == "bell-wf"
         )
         agent_backbone = bell_wf["codingAgents"][0]
         workers = agent_backbone["swarmWorkers"]

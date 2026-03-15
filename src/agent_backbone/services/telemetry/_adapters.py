@@ -292,12 +292,15 @@ class ClaudeTelemetryAdapter(TelemetryAdapter):
             for idx, part in enumerate(content):
                 if part.get("type") != "tool_result":
                     continue
-                tool_trace_id = str(
-                    part.get("tool_use_id")
-                    or part.get("toolUseID")
-                    or record.get("toolUseID")
-                    or ""
-                ) or trace_id
+                tool_trace_id = (
+                    str(
+                        part.get("tool_use_id")
+                        or part.get("toolUseID")
+                        or record.get("toolUseID")
+                        or ""
+                    )
+                    or trace_id
+                )
                 is_error = bool(part.get("is_error")) or bool(record.get("isApiErrorMessage"))
                 events.append(
                     event(
@@ -471,12 +474,9 @@ class CodexTelemetryAdapter(TelemetryAdapter):
             or record.get("id")
             or f"{source.path.name}:{line_offset}"
         )
-        trace_id = str(
-            payload.get("turn_id")
-            or payload.get("call_id")
-            or payload.get("id")
-            or ""
-        ) or None
+        trace_id = (
+            str(payload.get("turn_id") or payload.get("call_id") or payload.get("id") or "") or None
+        )
 
         def event(
             name: str,

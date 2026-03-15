@@ -167,10 +167,8 @@ async def get_activity(
     since: str | None = None,
 ) -> list[dict]:
     """Query activity events for a session, newest first."""
-    query = (
-        """SELECT * FROM agent_activity
+    query = """SELECT * FROM agent_activity
            WHERE session = :session"""
-    )
     params: dict[str, str | int] = {"session": session, "lim": limit}
 
     if since is not None:

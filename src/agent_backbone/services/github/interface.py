@@ -294,10 +294,7 @@ class GitHubClient:
             log.warning("Timeout fetching sub-issues for #%d", issue_number)
             return []
 
-        return [
-            self._build_issue(item, repo_full_name=repo_full_name)
-            for item in resp.json()
-        ]
+        return [self._build_issue(item, repo_full_name=repo_full_name) for item in resp.json()]
 
     async def count_open_sub_issues(
         self, issue_number: int, repo_full_name: str | None = None

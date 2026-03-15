@@ -41,14 +41,17 @@ async def agent_overview(
     since: float | None = Query(None, description="Unix epoch lower bound"),
     until: float | None = Query(None, description="Unix epoch upper bound"),
     include_swarm_workers: bool = Query(
-        True, description="Include swarm worker sessions",
+        True,
+        description="Include swarm worker sessions",
     ),
     swarm_id: str | None = Query(None, description="Filter to specific swarm"),
     worker_name: str | None = Query(
-        None, description="Filter to specific worker name",
+        None,
+        description="Filter to specific worker name",
     ),
     worker_role: str | None = Query(
-        None, description="Filter to specific worker role",
+        None,
+        description="Filter to specific worker role",
     ),
 ):
     """Aggregated overview: tokens, costs, errors, tools, duration."""
@@ -78,7 +81,8 @@ async def agent_events(
     worker_name: str | None = Query(None),
     worker_role: str | None = Query(None),
     event: str | None = Query(
-        None, description="Filter by event type",
+        None,
+        description="Filter by event type",
     ),
     runtime: str | None = Query(None),
     model: str | None = Query(None),
@@ -87,10 +91,12 @@ async def agent_events(
     trace_id: str | None = Query(None),
     parent_trace_id: str | None = Query(None),
     cursor_ts: str | None = Query(
-        None, description="Cursor: timestamp from previous page",
+        None,
+        description="Cursor: timestamp from previous page",
     ),
     cursor_id: int | None = Query(
-        None, description="Cursor: id from previous page",
+        None,
+        description="Cursor: id from previous page",
     ),
     limit: int = Query(100, ge=1, le=1000),
 ):

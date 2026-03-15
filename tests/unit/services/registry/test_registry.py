@@ -522,6 +522,7 @@ class TestEntityRegistrySessions:
             "bell-wf": "bell-wf",
             "bell-loveble": "bell-loveble",
         }
+
     def test_entry_for_session_materializes_role_instance(self):
         entities = {
             "bell": EntityEntry(

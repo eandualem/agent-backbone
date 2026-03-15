@@ -208,7 +208,7 @@ async def test_collects_codex_session_incrementally(monkeypatch, tmp_path):
                     "type": "function_call",
                     "call_id": "call-1",
                     "name": "exec_command",
-                    "arguments": "{\"cmd\":\"rg telemetry\"}",
+                    "arguments": '{"cmd":"rg telemetry"}',
                 },
             },
             {

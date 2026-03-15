@@ -270,15 +270,22 @@ class AnalyticsService:
     """
 
     # -- Event category sets --
-    _ERROR_EVENTS = frozenset({
-        "tool.error", "runtime.error", "turn.aborted",
-    })
+    _ERROR_EVENTS = frozenset(
+        {
+            "tool.error",
+            "runtime.error",
+            "turn.aborted",
+        }
+    )
     _TOOL_EVENTS = frozenset({"tool.started", "tool.finished"})
     _TOKEN_EVENTS = frozenset({"token.usage"})
     # Events that may carry cost_usd even though they aren't token.usage
-    _COST_BEARING_EVENTS = frozenset({
-        "token.usage", "message.assistant",
-    })
+    _COST_BEARING_EVENTS = frozenset(
+        {
+            "token.usage",
+            "message.assistant",
+        }
+    )
 
     async def resolve_sessions(
         self,
@@ -305,9 +312,7 @@ class AnalyticsService:
                     swarm_id=self_attr["swarm_id"],
                     swarm_worker_name=self_attr["worker_name"],
                     swarm_worker_role=self_attr["worker_role"],
-                    coding_agent_session=self_attr[
-                        "coding_agent_session"
-                    ],
+                    coding_agent_session=self_attr["coding_agent_session"],
                     repo=self_attr["repo"],
                     task_id=self_attr["task_id"],
                 ),
@@ -333,9 +338,7 @@ class AnalyticsService:
                         swarm_id=w["swarm_id"],
                         swarm_worker_name=w["worker_name"],
                         swarm_worker_role=w["worker_role"],
-                        coding_agent_session=w[
-                            "coding_agent_session"
-                        ],
+                        coding_agent_session=w["coding_agent_session"],
                         repo=w["repo"],
                         task_id=w["task_id"],
                     )
@@ -369,7 +372,9 @@ class AnalyticsService:
         )
 
         rows = await db.query_analytics_rows(
-            sessions=sessions, since=since, until=until,
+            sessions=sessions,
+            since=since,
+            until=until,
         )
 
         deduped, original_count = deduplicate_rows(rows)
@@ -421,9 +426,7 @@ class AnalyticsService:
                 tokens = _extract_tokens(data)
                 for bucket, count in tokens.items():
                     bd.tokens[bucket] = bd.tokens.get(bucket, 0) + count
-                    totals.tokens[bucket] = (
-                        totals.tokens.get(bucket, 0) + count
-                    )
+                    totals.tokens[bucket] = totals.tokens.get(bucket, 0) + count
 
             # Cost — check on any cost-bearing event (token.usage,
             # message.assistant, etc.)

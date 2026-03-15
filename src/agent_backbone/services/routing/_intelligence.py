@@ -160,8 +160,10 @@ async def get_session_intelligence(
         )
 
     # 6. User interacting — only buffered prompt input counts.
-    if agent_state == AgentState.IDLE and pane_content and adapter.prompt_has_pending_input(
-        pane_content
+    if (
+        agent_state == AgentState.IDLE
+        and pane_content
+        and adapter.prompt_has_pending_input(pane_content)
     ):
         return SessionProfile(
             session_name=session_name,

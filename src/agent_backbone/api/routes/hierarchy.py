@@ -204,11 +204,7 @@ def _iter_specs() -> list[_HierarchyNodeSpec]:
 
 def _managed_orgs() -> set[str]:
     """Managed organizations owned by sub-orchestrator nodes."""
-    return {
-        node.managed_org
-        for node in _iter_specs()
-        if node.managed_org is not None
-    }
+    return {node.managed_org for node in _iter_specs() if node.managed_org is not None}
 
 
 def _normalize_state(raw_state: AgentState, online: bool) -> HierarchyState:
@@ -246,8 +242,7 @@ async def _load_snapshot_details(
         *(state_svc.get_state(session) for session in ordered_sessions)
     )
     return {
-        session: snapshot
-        for session, snapshot in zip(ordered_sessions, snapshots, strict=False)
+        session: snapshot for session, snapshot in zip(ordered_sessions, snapshots, strict=False)
     }
 
 
@@ -261,11 +256,7 @@ async def _load_active_swarm_workers(
         log.exception("Failed to list swarms for hierarchy")
         return {}
 
-    active_swarms = [
-        swarm
-        for swarm in swarms
-        if swarm.get("phase") not in _TERMINAL_SWARM_PHASES
-    ]
+    active_swarms = [swarm for swarm in swarms if swarm.get("phase") not in _TERMINAL_SWARM_PHASES]
     if not active_swarms:
         return {}
 
@@ -451,11 +442,7 @@ async def get_hierarchy(
         ],
         sections=sections,
         unassigned_coding_agents=sorted(
-            (
-                agent
-                for agent in coding_agents
-                if agent.org not in assigned_orgs
-            ),
+            (agent for agent in coding_agents if agent.org not in assigned_orgs),
             key=lambda agent: (agent.org.casefold(), agent.label.casefold()),
         ),
     )

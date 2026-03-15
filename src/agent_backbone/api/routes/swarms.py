@@ -356,9 +356,7 @@ async def create_swarm_assignment(
         raise HTTPException(status_code=404, detail="Swarm worker not found")
 
     target_workers = [
-        worker
-        for worker in swarm.get("workers", [])
-        if worker["name"] == body.worker_name
+        worker for worker in swarm.get("workers", []) if worker["name"] == body.worker_name
     ]
     if not target_workers:
         raise HTTPException(status_code=404, detail="Swarm worker not found")

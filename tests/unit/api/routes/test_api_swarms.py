@@ -516,9 +516,7 @@ class TestSwarmMessaging:
 
     async def test_role_message_targets_matching_workers(self, api_client, auth_headers, api_app):
         swarm_id = await _create_swarm(api_client, auth_headers)
-        mock_svc = SimpleNamespace(
-            safe_deliver=AsyncMock(side_effect=["agent_working"])
-        )
+        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(side_effect=["agent_working"]))
         api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
         try:
             resp = await api_client.post(
