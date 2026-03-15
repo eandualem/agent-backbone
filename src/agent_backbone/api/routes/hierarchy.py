@@ -310,8 +310,13 @@ async def _load_snapshot_details(
 
 async def _load_active_swarm_workers(
     db: BackboneDB,
+    active_sessions: set[str],
 ) -> dict[str, list[HierarchySwarmWorkerNode]]:
-    """Group active swarm workers by parent coding-agent session."""
+    """Group active swarm workers by parent coding-agent session.
+
+    Filters out swarms in terminal phases AND swarms where no worker
+    session is alive (catches cleaned-up swarms stuck in non-terminal phase).
+    """
     try:
         swarms = await db.list_swarms()
     except Exception:
@@ -339,7 +344,13 @@ async def _load_active_swarm_workers(
         if not isinstance(session_name, str):
             continue
 
-        for worker in detail.get("workers", []):
+        workers = detail.get("workers", [])
+
+        # Skip swarms with no live worker sessions (#15)
+        if not any(w["session"] in active_sessions for w in workers):
+            continue
+
+        for worker in workers:
             grouped[session_name].append(
                 HierarchySwarmWorkerNode(
                     id=worker.get("worker_id") or worker["name"],
@@ -460,7 +471,7 @@ async def get_hierarchy(
 
     active_sessions = set(await tmux_svc.list_sessions())
     snapshots = await _load_snapshot_details(state_svc, sessions)
-    swarm_workers_by_agent = await _load_active_swarm_workers(db)
+    swarm_workers_by_agent = await _load_active_swarm_workers(db, active_sessions)
 
     coding_agents = _build_coding_agent_nodes(
         config,

@@ -348,7 +348,7 @@ class TestHierarchyEndpoint:
                 "agent-backbone": _snapshot(AgentState.IDLE, issue=755),
             }
         )
-        tmux_svc = _make_tmux_service(["agent-backbone"])
+        tmux_svc = _make_tmux_service(["agent-backbone", "lead-worker", "tester-worker"])
         _set_di_overrides(api_app, state_svc=state_svc, tmux_svc=tmux_svc)
 
         try:
