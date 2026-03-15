@@ -39,6 +39,7 @@ class TerminalRuntime(StrEnum):
     CODEX = "codex"
     CURSOR = "cursor"
     OPENCODE = "opencode"
+    AIDER = "aider"
     SHELL = "shell"
     UNKNOWN = "unknown"
 
@@ -171,6 +172,7 @@ def _normalize_runtime(value: str | None) -> TerminalRuntime:
         "gemini-cli": TerminalRuntime.GEMINI,
         "open-code": TerminalRuntime.OPENCODE,
         "open_code": TerminalRuntime.OPENCODE,
+        "aider-chat": TerminalRuntime.AIDER,
     }
     try:
         return TerminalRuntime(normalized)
@@ -448,6 +450,15 @@ class OpenCodeAdapter(TerminalAdapter):
     paste_settle_seconds = 0.2
 
 
+class AiderAdapter(TerminalAdapter):
+    runtime = TerminalRuntime.AIDER
+    prompt_prefixes = ("aider>", ">")
+    runtime_markers = ("aider", "aider v", "model:", "/help")
+    status_fragments = ("tokens:", "cost:")
+    submit_attempts = _MAX_SUBMIT_ATTEMPTS
+    paste_settle_seconds = 0.2
+
+
 class ShellAdapter(TerminalAdapter):
     runtime = TerminalRuntime.SHELL
     prompt_suffixes = ("$", "%", ">", "#")
@@ -461,6 +472,7 @@ _ADAPTERS: dict[TerminalRuntime, TerminalAdapter] = {
     TerminalRuntime.CODEX: CodexAdapter(),
     TerminalRuntime.CURSOR: CursorAdapter(),
     TerminalRuntime.OPENCODE: OpenCodeAdapter(),
+    TerminalRuntime.AIDER: AiderAdapter(),
     TerminalRuntime.SHELL: ShellAdapter(),
     TerminalRuntime.UNKNOWN: ShellAdapter(),
 }
@@ -480,6 +492,7 @@ def detect_runtime_from_pane(pane_content: str) -> TerminalRuntime:
     for runtime in (
         TerminalRuntime.GEMINI,
         TerminalRuntime.OPENCODE,
+        TerminalRuntime.AIDER,
         TerminalRuntime.CURSOR,
         TerminalRuntime.CODEX,
         TerminalRuntime.CLAUDE,

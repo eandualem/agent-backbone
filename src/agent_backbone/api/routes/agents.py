@@ -66,6 +66,7 @@ _RUNTIMES = {
     "codex": {"display_name": "Codex", "command": "codex"},
     "cursor": {"display_name": "Cursor Agent", "command": "cursor"},
     "opencode": {"display_name": "OpenCode", "command": "opencode"},
+    "aider": {"display_name": "Aider", "command": "aider"},
     "shell": {"display_name": "Plain Shell", "command": None},
 }
 

@@ -545,7 +545,7 @@ class TestListRuntimes:
         assert resp.status_code == 200
         data = resp.json()
         ids = [r["id"] for r in data]
-        assert ids == ["claude", "gemini", "codex", "cursor", "opencode", "shell"]
+        assert ids == ["claude", "gemini", "codex", "cursor", "opencode", "aider", "shell"]
         # Verify structure
         claude = next(r for r in data if r["id"] == "claude")
         assert claude["display_name"] == "Claude Code"
