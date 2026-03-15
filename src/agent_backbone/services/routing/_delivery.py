@@ -185,14 +185,17 @@ async def safe_deliver(
         "already_delivered", "awaiting_ack", "delivery_failed".
     """
     if _can_track_issue_delivery(db, issue_number, target_entity):
-        if await _has_successful_issue_delivery(db, issue_number, session_name):
-            log.info(
-                "Suppressed duplicate delivery for #%d -> %s (kind=%s)",
-                issue_number,
-                session_name,
-                delivery_kind,
-            )
-            return "already_delivered"
+        # Issue-level dedup: only for issue deliveries. Comments are distinct
+        # per webhook delivery_id — a prior comment_delivered on the same issue
+        # must NOT block future comments on that issue.
+        if delivery_kind == "issue":
+            if await _has_successful_issue_delivery(db, issue_number, session_name):
+                log.info(
+                    "Suppressed duplicate issue delivery for #%d -> %s",
+                    issue_number,
+                    session_name,
+                )
+                return "already_delivered"
 
         # Issue queue gating: only for issue deliveries with enforcement
         if delivery_kind == "issue" and enforce_issue_queue:

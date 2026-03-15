@@ -321,18 +321,27 @@ class TestDeliveryDedupPrefixedOutcomes:
         "agent_backbone.services.routing._delivery.send_message",
         new_callable=AsyncMock,
     )
-    async def test_safe_deliver_dedup_applies_to_comments(
+    async def test_comment_dedup_does_not_block_new_comments(
         self, mock_send, mock_intel, db, config
     ):
-        """safe_deliver suppresses duplicate comment delivery when a success exists."""
-        # Record a prior successful comment delivery
+        """A prior comment_delivered must NOT block new comments on same issue (#17)."""
+        from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
         await db.record_delivery(200, "feynman", "feynman", "comment_delivered")
+
+        mock_intel.return_value = SessionProfile(
+            session_name="feynman",
+            intelligence=SessionIntelligence.IDLE_READY,
+            agent_state="idle",
+            runtime="shell",
+        )
+        mock_send.return_value = True
 
         from agent_backbone.services.routing._delivery import safe_deliver
 
         outcome = await safe_deliver(
             "feynman",
-            "Duplicate comment",
+            "New comment on same issue",
             config,
             db=db,
             issue_number=200,
@@ -341,5 +350,5 @@ class TestDeliveryDedupPrefixedOutcomes:
             delivery_kind="comment",
         )
 
-        assert outcome == "already_delivered"
-        mock_send.assert_not_called()
+        assert outcome == "delivered"
+        mock_send.assert_called_once()
