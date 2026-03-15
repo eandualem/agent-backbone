@@ -565,9 +565,10 @@ class TestRestartBackbone:
 class TestWaitForHealth:
     @pytest.mark.asyncio
     async def test_succeeds_on_healthy_response(self):
-        """wait_for_health returns True on status < 500."""
+        """wait_for_health returns True on 2xx response."""
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.is_success = True
 
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
@@ -633,6 +634,34 @@ class TestWaitForHealth:
         """wait_for_health retries on HTTP 500 responses."""
         mock_response = MagicMock()
         mock_response.status_code = 500
+        mock_response.is_success = False
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                from agent_backbone.services.infrastructure._backbone import (
+                    wait_for_health,
+                )
+
+                result = await wait_for_health(
+                    "http://localhost:4200/api/health",
+                    retries=1,
+                    interval=0.01,
+                )
+        assert result is False
+
+
+    @pytest.mark.asyncio
+    async def test_returns_false_on_401(self):
+        """wait_for_health rejects 401 — not a healthy endpoint (#782 finding)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.is_success = False
 
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()

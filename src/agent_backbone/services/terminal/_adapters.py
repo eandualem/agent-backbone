@@ -594,12 +594,3 @@ def infer_state_from_pane(
             return StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="pull")
 
     return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
-
-
-async def _send_named_key(session_name: str, key: str) -> bool:
-    """Send a named tmux key to a session."""
-    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, key)
-    if rc != 0:
-        log.error("tmux send-keys %s failed for '%s': %s", key, session_name, stderr.decode())
-        return False
-    return True

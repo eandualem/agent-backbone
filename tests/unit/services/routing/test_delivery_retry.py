@@ -313,8 +313,14 @@ class TestDeliveryDedupPrefixedOutcomes:
         issue_numbers = [row["issue_number"] for row in failed]
         assert 102 in issue_numbers
 
-    @patch("agent_backbone.services.routing._delivery.get_session_intelligence", new_callable=AsyncMock)
-    @patch("agent_backbone.services.routing._delivery.send_message", new_callable=AsyncMock)
+    @patch(
+        "agent_backbone.services.routing._delivery.get_session_intelligence",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "agent_backbone.services.routing._delivery.send_message",
+        new_callable=AsyncMock,
+    )
     async def test_safe_deliver_dedup_applies_to_comments(
         self, mock_send, mock_intel, db, config
     ):

@@ -76,7 +76,7 @@ async def get_system_status(
         pending_issues = len(open_issues)
     except Exception:
         log.warning("Failed to fetch pending issues from GitHub")
-        pending_issues = 0
+        pending_issues = None
 
     return SystemDigest(
         active_sessions=active,

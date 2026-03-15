@@ -586,7 +586,7 @@ class SystemDigest(BaseModel):
 
     active_sessions: list[str] = Field(default_factory=list)
     agent_count: int = 0
-    pending_issues: int = 0
+    pending_issues: int | None = 0
     failed_deliveries: int = 0
     agents: list[EnrichedAgent] = Field(default_factory=list)
 

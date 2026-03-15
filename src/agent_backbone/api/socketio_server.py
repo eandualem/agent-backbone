@@ -527,7 +527,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
                             to=sid,
                         )
                     except Exception:
-                        pass
+                        log.debug("session_ended emit failed for sid=%s (client gone)", sid)
                     break
 
                 buffer = [data]
@@ -545,7 +545,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
                                     to=sid,
                                 )
                             except Exception:
-                                pass
+                                log.debug("terminal_output flush failed for sid=%s", sid)
                         try:
                             await self.emit(
                                 "session_ended",
@@ -553,7 +553,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
                                 to=sid,
                             )
                         except Exception:
-                            pass
+                            log.debug("session_ended emit failed for sid=%s (client gone)", sid)
                         return
                     buffer.append(more)
 
@@ -570,7 +570,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
                                         to=sid,
                                     )
                                 except Exception:
-                                    pass
+                                    log.debug("terminal_output flush failed for sid=%s", sid)
                             try:
                                 await self.emit(
                                     "session_ended",
@@ -578,7 +578,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
                                     to=sid,
                                 )
                             except Exception:
-                                pass
+                                log.debug("session_ended emit failed for sid=%s (client gone)", sid)
                             return
                         buffer.append(more)
                 except TimeoutError:

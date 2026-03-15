@@ -42,8 +42,9 @@ async def wait_for_health(
         for i in range(retries):
             try:
                 resp = await client.get(url)
-                if resp.status_code < 500:
+                if resp.is_success:
                     return True
+                log.debug("Health probe %s returned %d", url, resp.status_code)
             except httpx.HTTPError:
                 pass
             if i < retries - 1:
