@@ -236,3 +236,48 @@ class TestDeliveryRetryQueueDrain:
         mock_list_open_queue_for_target.assert_not_called()
         row = await db.get_message_by_id(1)
         assert row["status"] == "delivered"
+
+
+class TestPurgePendingForIssue:
+    async def test_purges_pending_messages_for_issue(self, db):
+        """purge_pending_for_issue marks all pending messages for an issue as delivered (#780)."""
+        await db.enqueue_message(
+            session_name="feynman",
+            message="Comment A",
+            issue_number=775,
+            target_entity="feynman",
+            delivery_kind="comment",
+            flow_name="issue-dispatcher",
+        )
+        await db.enqueue_message(
+            session_name="ike",
+            message="Comment B",
+            issue_number=775,
+            target_entity="ike",
+            delivery_kind="comment",
+            flow_name="issue-dispatcher",
+        )
+        # Different issue — should not be purged
+        await db.enqueue_message(
+            session_name="feynman",
+            message="Comment C",
+            issue_number=776,
+            target_entity="feynman",
+            delivery_kind="comment",
+            flow_name="issue-dispatcher",
+        )
+
+        purged = await db.purge_pending_for_issue(775)
+
+        assert purged == 2
+        row1 = await db.get_message_by_id(1)
+        assert row1["status"] == "delivered"
+        row2 = await db.get_message_by_id(2)
+        assert row2["status"] == "delivered"
+        row3 = await db.get_message_by_id(3)
+        assert row3["status"] == "pending"
+
+    async def test_purge_returns_zero_when_no_pending(self, db):
+        """Returns 0 when there are no pending messages for the issue."""
+        purged = await db.purge_pending_for_issue(999)
+        assert purged == 0

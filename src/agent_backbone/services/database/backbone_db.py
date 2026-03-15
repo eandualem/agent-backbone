@@ -507,7 +507,8 @@ class BackboneDB:
         """Look up swarm context for a session that is itself a worker."""
         async with self._engine.begin() as conn:
             return await _analytics_repo.get_worker_swarm_attribution(
-                conn, worker_session,
+                conn,
+                worker_session,
             )
 
     # --- Issue dependencies (delegates to _queue_repo) ---
@@ -602,6 +603,11 @@ class BackboneDB:
         """Mark a queued message as delivered."""
         async with self._engine.begin() as conn:
             await _queue_repo.mark_message_delivered(conn, message_id)
+
+    async def purge_pending_for_issue(self, issue_number: int) -> int:
+        """Mark all pending queue messages for an issue as delivered."""
+        async with self._engine.begin() as conn:
+            return await _queue_repo.purge_pending_for_issue(conn, issue_number)
 
     async def get_message_by_id(self, message_id: int) -> dict | None:
         """Get a single message by ID (for verification)."""

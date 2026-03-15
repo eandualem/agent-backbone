@@ -405,6 +405,31 @@ class TestOnIssueClosed:
         assert mock_deliver.await_args.kwargs["target_entity"] == "agent-backbone"
 
 
+    async def test_purges_queued_messages_on_close(self, config):
+        """Closing an issue purges pending queue messages for that issue (#780)."""
+        event = make_close_event(["feynman"])
+        mock_gh = AsyncMock()
+        mock_db = AsyncMock()
+        mock_db.purge_pending_for_issue = AsyncMock(return_value=2)
+
+        with (
+            patch(
+                "agent_backbone.services.routing._lifecycle.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.routing._lifecycle.find_next_issue",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = await on_issue_closed.fn(event, config, mock_gh, db=mock_db)
+
+        mock_db.purge_pending_for_issue.assert_awaited_once_with(10)
+        assert result["feynman"] == "queue_empty"
+
+
 # ---------------------------------------------------------------------------
 # Onboarding chain: Brunel closure → Leo notification
 # ---------------------------------------------------------------------------

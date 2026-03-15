@@ -66,6 +66,15 @@ async def dispatch_event_async(
         result = await dispatch_svc.on_issue_closed(event, config, gh, db)
         return f"lifecycle: {result}"
 
+    # Skip comments on closed issues — they cannot be actionable and would
+    # loop in the queue if delivery is deferred (see #780).
+    if event.event_type == EventType.COMMENT_CREATED and event.issue.state == "closed":
+        log.info(
+            "Ignoring comment on closed issue #%d",
+            event.issue.number,
+        )
+        return f"ignored: comment on closed issue #{event.issue.number}"
+
     if event.event_type in (
         EventType.ISSUE_OPENED,
         EventType.ISSUE_LABELED,

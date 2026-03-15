@@ -237,6 +237,45 @@ class TestWebhookDeduplication:
         mock_delivery_svc.is_recent_notification.assert_not_called()
 
 
+    async def test_comment_on_closed_issue_ignored(
+        self, api_client, api_app, mock_dispatch_svc
+    ):
+        """Comments on closed issues are rejected at intake (#780)."""
+        api_app.state.db._seen_deliveries.clear()
+        payload = {
+            "action": "created",
+            "repository": {"full_name": "eandualem/orchestration"},
+            "issue": {
+                "number": 775,
+                "title": "[task] orchestration: Something",
+                "state": "closed",
+                "html_url": "https://github.com/eandualem/orchestration/issues/775",
+                "labels": [
+                    {"name": "from:ike"},
+                    {"name": "for:feynman"},
+                    {"name": "task"},
+                ],
+            },
+            "comment": {
+                "id": 999,
+                "body": "[from:bell-wf]\nVerification complete.",
+                "user": {"login": "eandualem"},
+            },
+        }
+        payload_bytes = json.dumps(payload).encode()
+        headers = _webhook_headers(
+            payload_bytes,
+            event="issue_comment",
+            delivery_id="comment-closed-issue",
+        )
+
+        resp = await api_client.post("/", content=payload_bytes, headers=headers)
+
+        assert resp.status_code == 200
+        assert "ignored: comment on closed issue" in resp.text
+        mock_dispatch_svc.issue_dispatcher.assert_not_awaited()
+
+
 class TestWebhookPayloadParsing:
     async def test_invalid_json_returns_400(self, api_client, api_app):
         api_app.state.db._seen_deliveries.clear()

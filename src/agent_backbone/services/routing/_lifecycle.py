@@ -207,6 +207,20 @@ async def on_issue_closed(
     """
     result: dict[str, str] = {}  # entity -> outcome
 
+    # Purge any pending queue messages for the closed issue so they don't
+    # loop in the retry cycle (#780).
+    if db is not None:
+        try:
+            purged = await db.purge_pending_for_issue(event.issue.number)
+            if purged:
+                log.info(
+                    "Purged %d queued messages for closed issue #%d",
+                    purged,
+                    event.issue.number,
+                )
+        except Exception:
+            log.exception("Failed to purge queue for issue #%d (non-fatal)", event.issue.number)
+
     for target in resolve_event_targets(event, config):
         if target in config.entities.skip:
             result[target] = "skipped"

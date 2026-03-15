@@ -321,3 +321,22 @@ async def mark_message_delivered(
         ),
         {"delivered_at": _now_iso(), "id": message_id},
     )
+
+
+async def purge_pending_for_issue(
+    conn: AsyncConnection,
+    issue_number: int,
+) -> int:
+    """Mark all pending messages for an issue as delivered (issue closed).
+
+    Returns the number of purged messages.
+    """
+    result = await conn.execute(
+        text(
+            """UPDATE message_queue
+               SET status = 'delivered', delivered_at = :delivered_at
+               WHERE issue_number = :issue_number AND status = 'pending'"""
+        ),
+        {"delivered_at": _now_iso(), "issue_number": issue_number},
+    )
+    return result.rowcount
