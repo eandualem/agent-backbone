@@ -664,6 +664,7 @@ class TestMonitorAgentsIntegration:
         recent_delivery = {
             "created_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "flow_name": "issue-dispatcher",
+            "outcome": "delivered",
         }
 
         config = _make_monitor_config(

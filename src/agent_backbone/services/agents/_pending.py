@@ -85,29 +85,34 @@ async def deliver_pending_issues(
     ) -> bool:
         """Whether the same target/session got this issue very recently."""
         try:
+            # Query without outcome filter — outcomes may be prefixed
+            # (e.g. "comment_delivered") so exact match misses them.
             recent = await db.query_deliveries(
                 issue_number=issue_number,
                 target_entity=target_entity,
                 session_name=session_name,
-                outcome="delivered",
-                limit=1,
+                limit=10,
             )
             if recent and isinstance(recent, list):
-                delivered_at = datetime.fromisoformat(recent[0]["created_at"])
-                now = datetime.now(UTC)
-                if delivered_at.tzinfo is None:
-                    delivered_at = delivered_at.replace(tzinfo=UTC)
-                age = (now - delivered_at).total_seconds()
-                if age < config.scheduling.monitor_interval_seconds * 2:
-                    log.info(
-                        "Skipping #%d for %s (%s) — delivered %ds ago by %s",
-                        issue_number,
-                        target_entity,
-                        session_name,
-                        int(age),
-                        recent[0].get("flow_name", "?"),
-                    )
-                    return True
+                for row in recent:
+                    outcome = row.get("outcome", "")
+                    if not outcome.endswith(("delivered", "retried")):
+                        continue
+                    delivered_at = datetime.fromisoformat(row["created_at"])
+                    now = datetime.now(UTC)
+                    if delivered_at.tzinfo is None:
+                        delivered_at = delivered_at.replace(tzinfo=UTC)
+                    age = (now - delivered_at).total_seconds()
+                    if age < config.scheduling.monitor_interval_seconds * 2:
+                        log.info(
+                            "Skipping #%d for %s (%s) — delivered %ds ago by %s",
+                            issue_number,
+                            target_entity,
+                            session_name,
+                            int(age),
+                            row.get("flow_name", "?"),
+                        )
+                        return True
         except Exception:
             log.exception(
                 "Failed to check recent deliveries for #%d (non-fatal)",
