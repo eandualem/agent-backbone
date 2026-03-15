@@ -17,7 +17,7 @@ from agent_backbone.services.terminal import get_terminal_adapter, send_message
 
 log = logging.getLogger(__name__)
 
-_SUCCESSFUL_ISSUE_OUTCOMES = frozenset({"delivered", "retried"})
+_SUCCESSFUL_OUTCOME_SUFFIXES = ("delivered", "retried")
 _COPY_MODE_RECHECK_DELAY_SECONDS = 0.1
 
 
@@ -60,7 +60,9 @@ async def _has_successful_issue_delivery(
         session_name=session_name,
         limit=25,
     )
-    return any(row.get("outcome") in _SUCCESSFUL_ISSUE_OUTCOMES for row in rows)
+    return any(
+        (row.get("outcome") or "").endswith(_SUCCESSFUL_OUTCOME_SUFFIXES) for row in rows
+    )
 
 
 async def _get_unacknowledged_gate_issue(
@@ -81,7 +83,7 @@ async def _get_unacknowledged_gate_issue(
             continue
         if issue_number == current_issue:
             continue
-        if row.get("outcome") not in _SUCCESSFUL_ISSUE_OUTCOMES:
+        if not (row.get("outcome") or "").endswith(_SUCCESSFUL_OUTCOME_SUFFIXES):
             continue
         if await _is_acknowledged_for_session(db, issue_number, target_entity, session_name):
             continue
@@ -182,33 +184,32 @@ async def safe_deliver(
         "plan_waiting", "permission_waiting", "grace_period",
         "already_delivered", "awaiting_ack", "delivery_failed".
     """
-    if (
-        delivery_kind == "issue"
-        and enforce_issue_queue
-        and _can_track_issue_delivery(db, issue_number, target_entity)
-    ):
+    if _can_track_issue_delivery(db, issue_number, target_entity):
         if await _has_successful_issue_delivery(db, issue_number, session_name):
             log.info(
-                "Suppressed duplicate issue delivery for #%d -> %s",
+                "Suppressed duplicate delivery for #%d -> %s (kind=%s)",
                 issue_number,
                 session_name,
+                delivery_kind,
             )
             return "already_delivered"
 
-        blocking_issue = await _get_unacknowledged_gate_issue(
-            db,
-            session_name,
-            issue_number,
-            queue_scope_issue_numbers=queue_scope_issue_numbers,
-        )
-        if blocking_issue is not None:
-            log.info(
-                "Blocked #%d -> %s pending acknowledgment for #%d",
-                issue_number,
+        # Issue queue gating: only for issue deliveries with enforcement
+        if delivery_kind == "issue" and enforce_issue_queue:
+            blocking_issue = await _get_unacknowledged_gate_issue(
+                db,
                 session_name,
-                blocking_issue,
+                issue_number,
+                queue_scope_issue_numbers=queue_scope_issue_numbers,
             )
-            return "awaiting_ack"
+            if blocking_issue is not None:
+                log.info(
+                    "Blocked #%d -> %s pending acknowledgment for #%d",
+                    issue_number,
+                    session_name,
+                    blocking_issue,
+                )
+                return "awaiting_ack"
 
     # HTTP delivery targets bypass tmux intelligence entirely
     if is_http_target(session_name, config):

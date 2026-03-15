@@ -94,7 +94,7 @@ async def get_failed_deliveries(
                    SELECT 1 FROM deliveries d2
                    WHERE d2.issue_number = d.issue_number
                      AND d2.target_entity = d.target_entity
-                     AND d2.outcome IN ('delivered', 'retried')
+                     AND (d2.outcome LIKE '%delivered' OR d2.outcome LIKE '%retried')
                      AND d2.created_at > d.created_at
                  )
                ORDER BY d.created_at ASC LIMIT :lim"""

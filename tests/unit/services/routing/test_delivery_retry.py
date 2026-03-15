@@ -281,3 +281,59 @@ class TestPurgePendingForIssue:
         """Returns 0 when there are no pending messages for the issue."""
         purged = await db.purge_pending_for_issue(999)
         assert purged == 0
+
+
+class TestDeliveryDedupPrefixedOutcomes:
+    """Tests for dedup with prefixed outcomes (comment_delivered, etc.) — #785."""
+
+    async def test_comment_delivered_suppresses_retry(self, db):
+        """A comment_delivered outcome should suppress the failed row in get_failed_deliveries."""
+        # Record a failed comment delivery, then a successful one
+        await db.record_delivery(100, "feynman", "feynman", "comment_offline")
+        await db.record_delivery(100, "feynman", "feynman", "comment_delivered")
+
+        failed = await db.get_failed_deliveries(limit=50)
+        issue_numbers = [row["issue_number"] for row in failed]
+        assert 100 not in issue_numbers
+
+    async def test_unprefixed_delivered_still_suppresses(self, db):
+        """Standard delivered outcome still suppresses failed rows."""
+        await db.record_delivery(101, "ike", "ike", "offline")
+        await db.record_delivery(101, "ike", "ike", "delivered")
+
+        failed = await db.get_failed_deliveries(limit=50)
+        issue_numbers = [row["issue_number"] for row in failed]
+        assert 101 not in issue_numbers
+
+    async def test_unsuppressed_failure_still_retried(self, db):
+        """A failed delivery without any later success still appears for retry."""
+        await db.record_delivery(102, "ike", "ike", "offline")
+
+        failed = await db.get_failed_deliveries(limit=50)
+        issue_numbers = [row["issue_number"] for row in failed]
+        assert 102 in issue_numbers
+
+    @patch("agent_backbone.services.routing._delivery.get_session_intelligence", new_callable=AsyncMock)
+    @patch("agent_backbone.services.routing._delivery.send_message", new_callable=AsyncMock)
+    async def test_safe_deliver_dedup_applies_to_comments(
+        self, mock_send, mock_intel, db, config
+    ):
+        """safe_deliver suppresses duplicate comment delivery when a success exists."""
+        # Record a prior successful comment delivery
+        await db.record_delivery(200, "feynman", "feynman", "comment_delivered")
+
+        from agent_backbone.services.routing._delivery import safe_deliver
+
+        outcome = await safe_deliver(
+            "feynman",
+            "Duplicate comment",
+            config,
+            db=db,
+            issue_number=200,
+            target_entity="feynman",
+            flow_name="test",
+            delivery_kind="comment",
+        )
+
+        assert outcome == "already_delivered"
+        mock_send.assert_not_called()
