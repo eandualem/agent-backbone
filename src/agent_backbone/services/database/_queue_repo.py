@@ -258,6 +258,25 @@ async def query_heartbeats(
 # --- Message queue ---
 
 
+async def has_pending_duplicate(
+    conn: AsyncConnection,
+    session_name: str,
+    message: str,
+) -> bool:
+    """Check if an identical pending message already exists for this session."""
+    result = await conn.execute(
+        text(
+            """SELECT 1 FROM message_queue
+               WHERE session_name = :session_name
+                 AND message = :message
+                 AND status = 'pending'
+               LIMIT 1"""
+        ),
+        {"session_name": session_name, "message": message},
+    )
+    return result.fetchone() is not None
+
+
 async def enqueue_message(
     conn: AsyncConnection,
     session_name: str,
@@ -267,7 +286,12 @@ async def enqueue_message(
     delivery_kind: str = "issue",
     flow_name: str = "",
 ) -> int:
-    """Enqueue a message for later delivery. Returns the row ID."""
+    """Enqueue a message for later delivery. Returns the row ID.
+
+    Skips enqueue if an identical pending message already exists (returns -1).
+    """
+    if await has_pending_duplicate(conn, session_name, message):
+        return -1
     result = await conn.execute(
         text(
             """INSERT INTO message_queue
