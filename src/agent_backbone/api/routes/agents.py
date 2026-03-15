@@ -28,7 +28,12 @@ from agent_backbone.api.models import (
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.terminal import RUNTIME_ENV_KEY, TmuxService, resolve_agent_dir
+from agent_backbone.services.terminal import (
+    RUNTIME_ENV_KEY,
+    TmuxService,
+    query_environment_var,
+    resolve_agent_dir,
+)
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +138,14 @@ async def _build_enriched_agent(
 
     entity_type = reg_entry.entity_type if reg_entry else "agent"
 
+    # Resolve runtime for online sessions via tmux environment variable
+    runtime: str | None = None
+    if online:
+        try:
+            runtime = await query_environment_var(session, RUNTIME_ENV_KEY) or None
+        except Exception:
+            pass
+
     return EnrichedAgent(
         session=session,
         entity=entity,
@@ -150,6 +163,7 @@ async def _build_enriched_agent(
         plan_file=snapshot.plan_file,
         plan_title=snapshot.plan_title,
         tmux_created=tmux_created,
+        runtime=runtime,
         tmux_attached=tmux_attached,
         tmux_windows=tmux_windows,
         last_activity=last_activity,

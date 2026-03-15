@@ -50,6 +50,7 @@ class EnrichedAgent(BaseModel):
     tmux_windows: int = 0
     last_activity: float | None = None
     state_since: float | None = None
+    runtime: str | None = None
 
 
 class AgentStartRequest(BaseModel):
