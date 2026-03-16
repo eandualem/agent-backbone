@@ -31,7 +31,8 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
-from agent_backbone.services.terminal import TmuxService
+from agent_backbone.services.infrastructure._processes import read_pid
+from agent_backbone.services.terminal import TmuxService, session_exists
 
 log = logging.getLogger(__name__)
 
@@ -158,7 +159,16 @@ async def _fetch_service_health(db: BackboneDB) -> ServiceHealth:
             resp = await client.get("http://localhost:4200/api/health", timeout=3)
             health.prefect_server = "up" if resp.status_code == 200 else "degraded"
     except Exception:
-        health.prefect_server = "down"
+        health.prefect_server = (
+            "degraded" if await session_exists("prefect") or read_pid("prefect") else "down"
+        )
+
+    if read_pid("worker") is not None:
+        health.prefect_worker = "up"
+    elif await session_exists("backbone-worker"):
+        health.prefect_worker = "degraded"
+    else:
+        health.prefect_worker = "down"
 
     try:
         if await db.check_connection():

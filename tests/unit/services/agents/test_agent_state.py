@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.agents import (
     AgentState,
+    StateSnapshot,
     find_outgoing_comment,
     get_agent_state,
     has_commented_on_issue,
@@ -23,6 +24,7 @@ from agent_backbone.services.agents.interface import StateService, _row_to_snaps
 from agent_backbone.services.database import BackboneDB
 
 _INF = "agent_backbone.services.agents._inference"
+_IFACE = "agent_backbone.services.agents.interface"
 
 
 class TestReadStateFile:
@@ -291,9 +293,47 @@ class TestGetAgentState:
         state_file.write_text(
             json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
         )
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock):
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
             result = await get_agent_state(tmp_path, "ike")
         assert result.state == AgentState.PROCESSING_ISSUE
+        assert result.source == "push"
+
+    async def test_fresh_busy_push_reconciles_when_pane_is_idle(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
+        with patch(
+            f"{_INF}.capture_pane",
+            new_callable=AsyncMock,
+            return_value="user@host $",
+        ):
+            result = await get_agent_state(tmp_path, "ike")
+        assert result.state == AgentState.IDLE
+        assert result.source == "pull"
+
+    async def test_fresh_processing_push_reconciles_when_pane_is_idle(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(
+            json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
+        )
+        with patch(
+            f"{_INF}.capture_pane",
+            new_callable=AsyncMock,
+            return_value="user@host $",
+        ):
+            result = await get_agent_state(tmp_path, "ike")
+        assert result.state == AgentState.IDLE
+        assert result.source == "pull"
+
+    async def test_fresh_busy_push_survives_unknown_pane(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
+        with patch(
+            f"{_INF}.capture_pane",
+            new_callable=AsyncMock,
+            return_value="random output",
+        ):
+            result = await get_agent_state(tmp_path, "ike")
+        assert result.state == AgentState.BUSY
         assert result.source == "push"
 
     async def test_stale_push_triggers_pull(self, tmp_path):
@@ -479,14 +519,38 @@ class TestStateServiceDBFirst:
             db._engine = None
             await engine.dispose()
 
-    async def test_db_first_returns_db_state(self, db, tmp_path):
-        """When DB has state, it's returned without file fallback."""
-        await db.set_agent_state("ike", "processing_issue", current_issue=42, ts="1709500000.0")
+    async def test_db_first_returns_idle_db_state(self, db, tmp_path):
+        """Stable idle snapshots are served from DB without live reconciliation."""
+        await db.set_agent_state("ike", "idle", current_issue=None, ts="1709500000.0")
         svc = StateService(state_dir=str(tmp_path), db=db)
         snap = await svc.get_state("ike")
-        assert snap.state == AgentState.PROCESSING_ISSUE
-        assert snap.current_issue == 42
+        assert snap.state == AgentState.IDLE
+        assert snap.current_issue is None
         assert snap.source == "db"
+
+    async def test_db_working_state_uses_live_reconciliation(self, db, tmp_path):
+        """Cached working states are refreshed from the live reconciler."""
+        await db.set_agent_state("ike", "busy", current_issue=42, ts="1709500000.0")
+        svc = StateService(state_dir=str(tmp_path), db=db)
+        live_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+            timestamp=1709500100.0,
+        )
+        with patch(
+            f"{_IFACE}._get_agent_state",
+            new_callable=AsyncMock,
+            return_value=live_snapshot,
+        ):
+            snap = await svc.get_state("ike")
+        assert snap.state == AgentState.IDLE
+        assert snap.source == "pull"
+
+        row = await db.get_agent_state("ike")
+        assert row is not None
+        assert row["state"] == "idle"
+        assert row["current_issue"] is None
+        assert row["ts"] == "1709500100.0"
 
     async def test_fallback_to_file_when_no_db_row(self, db, tmp_path):
         """When DB has no row, falls back to file+tmux."""
@@ -503,7 +567,7 @@ class TestStateServiceDBFirst:
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
         svc = StateService(state_dir=str(tmp_path), db=None)
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock):
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
             snap = await svc.get_state("ike")
         assert snap.state == AgentState.BUSY
         assert snap.source == "push"

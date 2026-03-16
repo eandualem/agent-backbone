@@ -143,7 +143,7 @@ run-gateway: ## Start gateway server (prefer 'make dev' for auto-reload)
 	@uv run python -m agent_backbone.services.infrastructure start-gateway
 
 run-prefect: ## Start Prefect server (port 4200)
-	uv run prefect server start
+	uv run python -m agent_backbone.services.infrastructure run-prefect-server
 
 setup-pool: ## Create agent-pool work pool (one-time)
 	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect work-pool create agent-pool --type process
@@ -152,7 +152,7 @@ deploy: ## Deploy all scheduled flows
 	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect deploy --all
 
 run-worker: ## Start Prefect worker for agent-pool
-	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect worker start --pool agent-pool
+	PREFECT_API_URL=$(PREFECT_API_URL) uv run python -m agent_backbone.services.infrastructure run-prefect-worker
 
 # ─── Database ───────────────────────────────────────────
 

@@ -93,16 +93,15 @@ class InfrastructureService:
 
     async def health_check(self) -> dict:
         """Check infrastructure health — reports which backbone processes are running."""
-        from agent_backbone.services.infrastructure._processes import pid_for_port
-        from agent_backbone.services.terminal import session_exists
+        from agent_backbone.services.infrastructure._processes import pid_for_port, read_pid
 
-        prefect_up = await session_exists("prefect")
+        prefect_up = await pid_for_port(4200) is not None
         gateway_up = await pid_for_port(self._config.gateway.port) is not None
-        worker_up = await session_exists("backbone-worker")
-        telegram_up = await session_exists("telegram-bot")
+        worker_up = read_pid("worker") is not None
+        telegram_up = read_pid("telegram") is not None
 
         return {
-            "healthy": prefect_up and gateway_up,
+            "healthy": prefect_up and gateway_up and worker_up,
             "service": "infrastructure",
             "prefect": prefect_up,
             "gateway": gateway_up,

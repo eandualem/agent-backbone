@@ -26,13 +26,16 @@ async def show_status(config: BackboneConfig) -> str:
     # Prefect
     prefect_pid = read_pid("prefect")
     prefect_running = await session_exists("prefect")
+    prefect_port_pid = await pid_for_port(PREFECT_PORT)
     pid_info = f", pid {prefect_pid}" if prefect_pid else ""
-    if prefect_running:
+    if prefect_port_pid:
         lines.append(
-            f"  prefect    : running (tmux session, http://localhost:{PREFECT_PORT}{pid_info})"
+            f"  prefect    : running (http://localhost:{PREFECT_PORT}, pid {prefect_port_pid})"
         )
-    elif prefect_pid:
-        lines.append(f"  prefect    : running (outside tmux{pid_info})")
+    elif prefect_running or prefect_pid:
+        lines.append(
+            f"  prefect    : down (session present, port {PREFECT_PORT} not bound{pid_info})"
+        )
     else:
         lines.append("  prefect    : not running")
 
@@ -52,10 +55,10 @@ async def show_status(config: BackboneConfig) -> str:
     worker_pid = read_pid("worker")
     worker_running = await session_exists("backbone-worker")
     wpid_info = f", pid {worker_pid}" if worker_pid else ""
-    if worker_running:
+    if worker_pid:
         lines.append(f"  worker     : running (tmux session, pool: agent-pool{wpid_info})")
-    elif worker_pid:
-        lines.append(f"  worker     : running (outside tmux{wpid_info})")
+    elif worker_running:
+        lines.append("  worker     : down (tmux session present, worker process exited)")
     else:
         lines.append("  worker     : not running")
 

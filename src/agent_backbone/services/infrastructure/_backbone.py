@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,6 +34,93 @@ PREFECT_PORT = 4200
 PREFECT_API_URL = f"http://127.0.0.1:{PREFECT_PORT}/api"
 PREFECT_HEALTH_PROBE_RETRY_INTERVAL_SECONDS = 0.4
 PREFECT_STARTUP_PROBE_RETRY_INTERVAL_SECONDS = 0.1
+PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS = 2.0
+
+
+def _prefect_env() -> dict[str, str]:
+    """Environment for Prefect subprocesses."""
+    return {**os.environ, "PREFECT_API_URL": PREFECT_API_URL}
+
+
+async def _run_prefect_process(*args: str) -> int:
+    """Run a Prefect subprocess attached to the current tmux pane."""
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        cwd=BACKBONE_DIR,
+        env=_prefect_env(),
+    )
+    return await proc.wait()
+
+
+async def _wait_for_prefect_api() -> None:
+    """Wait until the local Prefect API answers health probes."""
+    health_url = f"http://127.0.0.1:{PREFECT_PORT}/api/health"
+    while not await wait_for_health(health_url, retries=1, interval=0):
+        log.warning(
+            "Prefect API unavailable at %s; retrying worker bootstrap in %.1fs",
+            health_url,
+            PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS,
+        )
+        await asyncio.sleep(PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS)
+
+
+async def run_prefect_server_supervisor() -> None:
+    """Keep the Prefect server running inside a tmux session."""
+    while True:
+        log.info("Starting Prefect server")
+        exit_code = await _run_prefect_process("uv", "run", "prefect", "server", "start")
+        log.warning(
+            "Prefect server exited with code %s; restarting in %.1fs",
+            exit_code,
+            PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS,
+        )
+        await asyncio.sleep(PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS)
+
+
+async def run_prefect_worker_supervisor(config: BackboneConfig) -> None:
+    """Keep the Prefect worker running and re-bootstrap deployments after outages."""
+    work_pool_name = config.scheduling.work_pool_name
+
+    while True:
+        await _wait_for_prefect_api()
+
+        pool_exit = await _run_prefect_process(
+            "uv",
+            "run",
+            "prefect",
+            "work-pool",
+            "create",
+            work_pool_name,
+            "--type",
+            "process",
+        )
+        if pool_exit != 0:
+            log.warning(
+                "Prefect work-pool create exited with code %s for pool '%s'",
+                pool_exit,
+                work_pool_name,
+            )
+
+        deploy_exit = await _run_prefect_process("uv", "run", "prefect", "deploy", "--all")
+        if deploy_exit != 0:
+            log.warning("Prefect deploy --all exited with code %s", deploy_exit)
+
+        log.info("Starting Prefect worker (pool: %s)", work_pool_name)
+        worker_exit = await _run_prefect_process(
+            "uv",
+            "run",
+            "prefect",
+            "worker",
+            "start",
+            "--pool",
+            work_pool_name,
+        )
+        log.warning(
+            "Prefect worker exited with code %s; restarting in %.1fs",
+            worker_exit,
+            PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS,
+        )
+        await asyncio.sleep(PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS)
 
 
 async def wait_for_health(
@@ -83,7 +172,15 @@ async def start_prefect(config: BackboneConfig) -> bool:
     ok = await start_session(
         "prefect",
         working_dir=BACKBONE_DIR,
-        command=["uv", "run", "prefect", "server", "start"],
+        command=[
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "agent_backbone.services.infrastructure",
+            "run-prefect-server",
+        ],
+        environment={"PREFECT_API_URL": PREFECT_API_URL},
     )
     if ok:
         await record_tmux_pid("prefect", "prefect")
@@ -181,50 +278,22 @@ async def start_worker(config: BackboneConfig) -> bool:
     # Clean stale PID
     await stop_by_pid("worker")
 
-    import asyncio
-
-    work_pool_name = config.scheduling.work_pool_name
-
-    # Create work pool (idempotent)
-    pool_proc = await asyncio.create_subprocess_exec(
-        "uv",
-        "run",
-        "prefect",
-        "work-pool",
-        "create",
-        work_pool_name,
-        "--type",
-        "process",
-        cwd=BACKBONE_DIR,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        env={**__import__("os").environ, "PREFECT_API_URL": PREFECT_API_URL},
-    )
-    await pool_proc.wait()
-
-    # Deploy all scheduled flows
-    deploy_proc = await asyncio.create_subprocess_exec(
-        "uv",
-        "run",
-        "prefect",
-        "deploy",
-        "--all",
-        cwd=BACKBONE_DIR,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        env={**__import__("os").environ, "PREFECT_API_URL": PREFECT_API_URL},
-    )
-    await deploy_proc.wait()
-
     ok = await start_session(
         "backbone-worker",
         working_dir=BACKBONE_DIR,
-        command=["uv", "run", "prefect", "worker", "start", "--pool", work_pool_name],
+        command=[
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "agent_backbone.services.infrastructure",
+            "run-prefect-worker",
+        ],
         environment={"PREFECT_API_URL": PREFECT_API_URL},
     )
     if ok:
         await record_tmux_pid("worker", "backbone-worker")
-        log.info("Worker started (pool: %s)", work_pool_name)
+        log.info("Worker supervisor started (pool: %s)", config.scheduling.work_pool_name)
     return ok
 
 

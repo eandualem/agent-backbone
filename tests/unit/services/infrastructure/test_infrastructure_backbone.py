@@ -105,7 +105,7 @@ class TestStartPrefect:
 
     @pytest.mark.asyncio
     async def test_creates_session_with_prefect_command(self, bb_config):
-        """start_prefect creates tmux session with 'uv run prefect server start'."""
+        """start_prefect creates tmux session with the internal supervisor command."""
         with patch(
             "agent_backbone.services.infrastructure._backbone.pid_for_port",
             new_callable=AsyncMock,
@@ -147,10 +147,12 @@ class TestStartPrefect:
         assert call_args[1]["command"] == [
             "uv",
             "run",
-            "prefect",
-            "server",
-            "start",
+            "python",
+            "-m",
+            "agent_backbone.services.infrastructure",
+            "run-prefect-server",
         ]
+        assert call_args[1]["environment"] == {"PREFECT_API_URL": "http://127.0.0.1:4200/api"}
 
 
 class TestStopPrefect:
@@ -315,10 +317,8 @@ class TestStopGateway:
 
 class TestStartWorker:
     @pytest.mark.asyncio
-    async def test_creates_pool_deploys_and_starts(self, bb_config):
-        """start_worker creates work-pool, deploys, and starts worker session."""
-        mock_subprocess = AsyncMock()
-        mock_subprocess.wait.return_value = 0
+    async def test_starts_worker_supervisor_session(self, bb_config):
+        """start_worker starts the internal worker supervisor session."""
         bb_config = BackboneConfig(
             gateway=GatewayConfig(port=7120),
             scheduling=SchedulingConfig(work_pool_name="custom-pool"),
@@ -338,31 +338,32 @@ class TestStartWorker:
                     new_callable=AsyncMock,
                 ):
                     with patch(
-                        "asyncio.create_subprocess_exec", return_value=mock_subprocess
-                    ) as mock_create_subprocess:
+                        "agent_backbone.services.infrastructure._backbone.start_session",
+                        new_callable=AsyncMock,
+                        return_value=True,
+                    ) as mock_start:
                         with patch(
-                            "agent_backbone.services.infrastructure._backbone.start_session",
+                            "agent_backbone.services.infrastructure._backbone.record_tmux_pid",
                             new_callable=AsyncMock,
-                            return_value=True,
-                        ) as mock_start:
-                            with patch(
-                                "agent_backbone.services.infrastructure._backbone.record_tmux_pid",
-                                new_callable=AsyncMock,
-                            ):
-                                from agent_backbone.services.infrastructure._backbone import (
-                                    PREFECT_API_URL,
-                                    start_worker,
-                                )
+                        ):
+                            from agent_backbone.services.infrastructure._backbone import (
+                                PREFECT_API_URL,
+                                start_worker,
+                            )
 
-                                result = await start_worker(bb_config)
+                            result = await start_worker(bb_config)
         assert result is True
         call_args = mock_start.call_args
         assert call_args[0][0] == "backbone-worker"
-        assert "custom-pool" in call_args[1]["command"]
+        assert call_args[1]["command"] == [
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "agent_backbone.services.infrastructure",
+            "run-prefect-worker",
+        ]
         assert call_args[1]["environment"] == {"PREFECT_API_URL": PREFECT_API_URL}
-        pool_create_call = mock_create_subprocess.call_args_list[0]
-        assert pool_create_call.args[5] == "custom-pool"
-        assert pool_create_call.kwargs["env"]["PREFECT_API_URL"] == PREFECT_API_URL
 
     @pytest.mark.asyncio
     async def test_skips_if_already_running(self, bb_config):
@@ -384,8 +385,6 @@ class TestStartWorker:
     @pytest.mark.asyncio
     async def test_cleans_stale_session(self, bb_config):
         """start_worker cleans up stale session when PID is dead but session exists."""
-        mock_subprocess = AsyncMock()
-        mock_subprocess.wait.return_value = 0
         bb_config = BackboneConfig(
             gateway=GatewayConfig(port=7120),
             scheduling=SchedulingConfig(work_pool_name="agent-pool"),
@@ -410,23 +409,19 @@ class TestStartWorker:
                         new_callable=AsyncMock,
                     ):
                         with patch(
-                            "asyncio.create_subprocess_exec",
-                            return_value=mock_subprocess,
+                            "agent_backbone.services.infrastructure._backbone.start_session",
+                            new_callable=AsyncMock,
+                            return_value=True,
                         ):
                             with patch(
-                                "agent_backbone.services.infrastructure._backbone.start_session",
+                                "agent_backbone.services.infrastructure._backbone.record_tmux_pid",
                                 new_callable=AsyncMock,
-                                return_value=True,
                             ):
-                                with patch(
-                                    "agent_backbone.services.infrastructure._backbone.record_tmux_pid",
-                                    new_callable=AsyncMock,
-                                ):
-                                    from agent_backbone.services.infrastructure._backbone import (
-                                        start_worker,
-                                    )
+                                from agent_backbone.services.infrastructure._backbone import (
+                                    start_worker,
+                                )
 
-                                    result = await start_worker(bb_config)
+                                result = await start_worker(bb_config)
         assert result is True
         mock_stop.assert_called_once_with("backbone-worker")
 

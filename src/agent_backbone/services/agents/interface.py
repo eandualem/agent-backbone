@@ -20,6 +20,14 @@ if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
 
 log = logging.getLogger(__name__)
+_LIVE_RECONCILIATION_STATES = frozenset(
+    {
+        AgentState.STARTING,
+        AgentState.BUSY,
+        AgentState.PROCESSING_ISSUE,
+        AgentState.UNKNOWN,
+    }
+)
 
 
 def _row_to_snapshot(row: dict) -> StateSnapshot:
@@ -43,6 +51,23 @@ def _row_to_snapshot(row: dict) -> StateSnapshot:
         started_at=started_at,
         plan_file=row.get("plan_file"),
         plan_title=row.get("plan_title"),
+    )
+
+
+def _should_use_db_snapshot(snapshot: StateSnapshot) -> bool:
+    """Whether a persisted snapshot is safe to reuse without live verification."""
+    return snapshot.state not in _LIVE_RECONCILIATION_STATES
+
+
+def _should_sync_db_snapshot(current: StateSnapshot | None, live: StateSnapshot) -> bool:
+    """Whether a live reconciliation result should refresh the persisted cache."""
+    if current is None or live.state == AgentState.UNKNOWN:
+        return False
+    return (
+        current.state != live.state
+        or current.current_issue != live.current_issue
+        or current.plan_file != live.plan_file
+        or current.plan_title != live.plan_title
     )
 
 
@@ -76,14 +101,30 @@ class StateService:
 
     async def get_state(self, session: str) -> StateSnapshot:
         """Get reconciled agent state — DB first, file+tmux fallback."""
+        db_snapshot: StateSnapshot | None = None
         if self._db is not None:
             try:
                 row = await self._db.get_agent_state(session)
                 if row is not None:
-                    return _row_to_snapshot(row)
+                    db_snapshot = _row_to_snapshot(row)
+                    if _should_use_db_snapshot(db_snapshot):
+                        return db_snapshot
             except Exception:
                 log.warning("DB state read failed for %s, falling back to file", session)
-        return await _get_agent_state(self._state_dir, session, self._stale_threshold)
+        live_snapshot = await _get_agent_state(self._state_dir, session, self._stale_threshold)
+        if self._db is not None and _should_sync_db_snapshot(db_snapshot, live_snapshot):
+            try:
+                await self._db.set_agent_state(
+                    session,
+                    live_snapshot.state.value,
+                    current_issue=live_snapshot.current_issue,
+                    ts=str(live_snapshot.timestamp) if live_snapshot.timestamp else None,
+                    plan_file=live_snapshot.plan_file,
+                    plan_title=live_snapshot.plan_title,
+                )
+            except Exception:
+                log.warning("DB state refresh failed for %s after live reconciliation", session)
+        return live_snapshot
 
     def read_state(self, session: str) -> StateSnapshot | None:
         """Read push-based state file for a session."""

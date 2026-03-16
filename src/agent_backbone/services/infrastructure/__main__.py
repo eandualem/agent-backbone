@@ -57,6 +57,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Internal
     sub.add_parser("run-telegram-bot", help="Run Telegram bot (internal, blocks)")
+    sub.add_parser("run-prefect-server", help="Run Prefect server supervisor (internal, blocks)")
+    sub.add_parser("run-prefect-worker", help="Run Prefect worker supervisor (internal, blocks)")
 
     return parser
 
@@ -142,6 +144,10 @@ async def _dispatch(args: argparse.Namespace) -> None:
     # Internal
     elif cmd == "run-telegram-bot":
         await _run_telegram_bot(config)
+    elif cmd == "run-prefect-server":
+        await _backbone.run_prefect_server_supervisor()
+    elif cmd == "run-prefect-worker":
+        await _backbone.run_prefect_worker_supervisor(config)
 
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)

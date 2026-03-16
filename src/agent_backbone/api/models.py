@@ -581,6 +581,7 @@ class ServiceHealth(BaseModel):
 
     gateway: str = "up"
     prefect_server: str = "unknown"
+    prefect_worker: str = "unknown"
     database: str = "unknown"
 
 

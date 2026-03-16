@@ -188,7 +188,7 @@ class TestDashboardEndpoint:
         assert resp.json()["failed_deliveries"] == 4
 
     async def test_service_health_included(self, api_app, api_client, auth_headers):
-        """Services field includes gateway, prefect, and database health."""
+        """Services field includes gateway, prefect, worker, and database health."""
         _set_overrides(
             api_app,
             state_svc=_make_state_svc(),
@@ -207,6 +207,7 @@ class TestDashboardEndpoint:
         assert services["database"] == "up"
         # prefect_server will be "down" in test env (no Prefect running)
         assert services["prefect_server"] in ("up", "down", "degraded")
+        assert services["prefect_worker"] in ("up", "down", "degraded")
 
     async def test_cache_returns_same_within_ttl(self, api_app, api_client, auth_headers):
         """Two rapid calls return same data (cache hit)."""

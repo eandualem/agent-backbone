@@ -17,6 +17,9 @@ from agent_backbone.services.terminal._adapters import (
 from agent_backbone.services.terminal._core import capture_pane
 
 log = logging.getLogger(__name__)
+_WORKING_STATES = frozenset(
+    {AgentState.STARTING, AgentState.BUSY, AgentState.PROCESSING_ISSUE}
+)
 
 
 def _trust_stale_push(snapshot: StateSnapshot) -> bool:
@@ -51,14 +54,34 @@ async def get_agent_state(
     stale fallback is trusted.
     """
     push = read_state_file(state_dir, session)
+    push_age = (time.time() - push.timestamp) if push else None
 
-    if push and (time.time() - push.timestamp) < stale_threshold:
+    if (
+        push
+        and push_age is not None
+        and push_age < stale_threshold
+        and push.state not in _WORKING_STATES
+    ):
         return push
 
     pane_content = await capture_pane(session)
     if pane_content:
         pull = infer_state_from_pane(pane_content)
         pull.timestamp = time.time()
+        if (
+            push
+            and push_age is not None
+            and push_age < stale_threshold
+            and push.state in _WORKING_STATES
+        ):
+            if pull.state == AgentState.IDLE:
+                log.warning(
+                    "Recovered %s from stuck '%s' push state using live prompt detection",
+                    session,
+                    push.state.value,
+                )
+                return pull
+            return push
         if pull.state != AgentState.UNKNOWN:
             return pull
         if push and _trust_stale_push(push):
@@ -69,6 +92,9 @@ async def get_agent_state(
             )
             return push
         return pull
+
+    if push and push_age is not None and push_age < stale_threshold:
+        return push
 
     if push and _trust_stale_push(push):
         log.info(
