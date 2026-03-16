@@ -60,9 +60,7 @@ async def _has_successful_issue_delivery(
         session_name=session_name,
         limit=25,
     )
-    return any(
-        (row.get("outcome") or "").endswith(_SUCCESSFUL_OUTCOME_SUFFIXES) for row in rows
-    )
+    return any((row.get("outcome") or "").endswith(_SUCCESSFUL_OUTCOME_SUFFIXES) for row in rows)
 
 
 async def _get_unacknowledged_gate_issue(

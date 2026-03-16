@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,6 +21,63 @@ if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
 
 log = logging.getLogger(__name__)
+
+PREFECT_API_URL = "http://127.0.0.1:4200/api"
+
+# Deployments that start agent sessions — paused on stop-all, resumed on start-all
+AGENT_STARTING_DEPLOYMENTS = ["morning-startup"]
+
+
+async def _prefect_deployment_cmd(action: str, deployment_name: str) -> bool:
+    """Run a Prefect deployment command (pause/resume). Returns True on success."""
+    proc = await asyncio.create_subprocess_exec(
+        "uv",
+        "run",
+        "prefect",
+        "deployment",
+        action,
+        deployment_name,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, "PREFECT_API_URL": PREFECT_API_URL},
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.warning(
+            "Failed to %s deployment '%s': %s",
+            action,
+            deployment_name,
+            stderr.decode().strip() if stderr else "unknown error",
+        )
+        return False
+    return True
+
+
+async def pause_agent_deployments() -> int:
+    """Pause Prefect deployments that start agent sessions.
+
+    Returns the number of deployments paused. Failures are logged but not raised —
+    if Prefect isn't running, there's nothing to pause.
+    """
+    paused = 0
+    for name in AGENT_STARTING_DEPLOYMENTS:
+        if await _prefect_deployment_cmd("pause", name):
+            log.info("Paused deployment: %s", name)
+            paused += 1
+    return paused
+
+
+async def resume_agent_deployments() -> int:
+    """Resume Prefect deployments that start agent sessions.
+
+    Returns the number of deployments resumed. Failures are logged but not raised.
+    """
+    resumed = 0
+    for name in AGENT_STARTING_DEPLOYMENTS:
+        if await _prefect_deployment_cmd("resume", name):
+            log.info("Resumed deployment: %s", name)
+            resumed += 1
+    return resumed
 
 
 async def start_agent(
@@ -107,7 +166,12 @@ async def start_group(
 
 
 async def stop_all_agents(config: BackboneConfig) -> int:
-    """Stop all agent sessions (excluding service sessions)."""
+    """Stop all agent sessions (excluding service sessions).
+
+    Pauses agent-starting Prefect deployments first to prevent auto-restart.
+    """
+    await pause_agent_deployments()
+
     sessions = await list_sessions()
     service_sessions = config.entities.service_sessions
     stopped = 0
@@ -159,7 +223,12 @@ async def start_all(
     cli: str = "claude",
     model: str | None = None,
 ) -> int:
-    """Start all orchestrators + standalone agents + all coding agents."""
+    """Start all orchestrators + standalone agents + all coding agents.
+
+    Resumes agent-starting Prefect deployments that may have been paused by stop-all.
+    """
+    await resume_agent_deployments()
+
     total = 0
     total += await start_orchestrators(config, cli=cli, model=model)
 

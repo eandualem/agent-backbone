@@ -4,7 +4,7 @@
        db-up db-down db-upgrade db-migrate db-revision db-history db-current db-downgrade \
        start-backbone stop-backbone restart-backbone status \
        start-agent stop-agent start-orchestrators start-arclio start-loveble start-wf \
-       start-all stop-all list
+       start-all stop-all stop-agents stop-everything list
 
 .DEFAULT_GOAL := help
 
@@ -221,8 +221,12 @@ start-wf: ## Start WF coding agents
 start-all: ## Start all agents (orchestrators + coding)
 	@uv run python -m agent_backbone.services.infrastructure start-all
 
-stop-all: ## Stop all agent sessions
-	@uv run python -m agent_backbone.services.infrastructure stop-all
+stop-agents: ## Stop all agent sessions (pauses scheduled startups)
+	@uv run python -m agent_backbone.services.infrastructure stop-agents
+
+stop-all: stop-agents ## Stop all agent sessions (alias for stop-agents)
+
+stop-everything: stop-agents stop-backbone ## Stop all agents + all backbone services
 
 list: ## List all known agents and directories
 	@uv run python -m agent_backbone.services.infrastructure list

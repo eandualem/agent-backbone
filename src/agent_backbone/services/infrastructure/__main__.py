@@ -47,7 +47,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start-loveble", help="Start Loveble coding agents")
     sub.add_parser("start-wf", help="Start WF coding agents")
     sub.add_parser("start-all", help="Start all agents")
-    sub.add_parser("stop-all", help="Stop all agent sessions")
+    sub.add_parser("stop-all", help="Stop all agent sessions (pauses scheduled startups)")
+    sub.add_parser("stop-agents", help="Stop all agent sessions (alias for stop-all)")
+    sub.add_parser("stop-everything", help="Stop all agents + all backbone services")
 
     # Info
     sub.add_parser("list", help="List available agents")
@@ -125,8 +127,11 @@ async def _dispatch(args: argparse.Namespace) -> None:
         await _agents.start_org("WF", config)
     elif cmd == "start-all":
         await _agents.start_all(config)
-    elif cmd == "stop-all":
+    elif cmd in ("stop-all", "stop-agents"):
         await _agents.stop_all_agents(config)
+    elif cmd == "stop-everything":
+        await _agents.stop_all_agents(config)
+        await _backbone.stop_backbone(config)
 
     # Info
     elif cmd == "list":

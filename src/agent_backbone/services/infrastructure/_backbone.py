@@ -11,6 +11,8 @@ import httpx
 from agent_backbone.services.infrastructure._processes import (
     check_port_free,
     kill_port_process,
+    pid_for_port,
+    read_pid,
     record_tmux_pid,
     remove_pid,
     stop_by_pid,
@@ -56,9 +58,18 @@ async def wait_for_health(
 
 async def start_prefect(config: BackboneConfig) -> bool:
     """Start Prefect server in a tmux session."""
-    if await session_exists("prefect"):
-        log.info("Prefect server already running")
+    prefect_pid = await pid_for_port(PREFECT_PORT)
+    if prefect_pid:
+        log.info("Prefect server already running (port %d, pid %d)", PREFECT_PORT, prefect_pid)
         return True
+
+    # Session exists but port not bound = stale session, clean it up
+    if await session_exists("prefect"):
+        log.warning(
+            "Prefect session exists but port %d not bound — cleaning up stale session",
+            PREFECT_PORT,
+        )
+        await stop_session("prefect")
 
     # Clean stale PID
     stop_by_pid_result = await stop_by_pid("prefect")
@@ -93,9 +104,17 @@ async def stop_prefect(config: BackboneConfig) -> bool:
 async def start_gateway(config: BackboneConfig) -> bool:
     """Start gateway server in a tmux session."""
     port = config.gateway.port
-    if await session_exists("gateway"):
-        log.info("Gateway already running")
+    gateway_pid = await pid_for_port(port)
+    if gateway_pid:
+        log.info("Gateway already running (port %d, pid %d)", port, gateway_pid)
         return True
+
+    # Session exists but port not bound = stale session, clean it up
+    if await session_exists("gateway"):
+        log.warning(
+            "Gateway session exists but port %d not bound — cleaning up stale session", port
+        )
+        await stop_session("gateway")
 
     # Clean stale state
     await stop_by_pid("gateway")
@@ -149,9 +168,15 @@ async def restart_gateway(config: BackboneConfig) -> bool:
 
 async def start_worker(config: BackboneConfig) -> bool:
     """Start Prefect worker in a tmux session."""
-    if await session_exists("backbone-worker"):
-        log.info("Worker already running")
+    worker_pid = read_pid("worker")
+    if worker_pid and await session_exists("backbone-worker"):
+        log.info("Worker already running (pid %d)", worker_pid)
         return True
+
+    # Session exists but process dead = stale session, clean it up
+    if await session_exists("backbone-worker"):
+        log.warning("Worker session exists but process not alive — cleaning up stale session")
+        await stop_session("backbone-worker")
 
     # Clean stale PID
     await stop_by_pid("worker")
@@ -214,9 +239,15 @@ async def stop_worker(config: BackboneConfig) -> bool:
 
 async def start_telegram(config: BackboneConfig) -> bool:
     """Start Telegram bot in a tmux session."""
-    if await session_exists("telegram-bot"):
-        log.info("Telegram bot already running")
+    telegram_pid = read_pid("telegram")
+    if telegram_pid and await session_exists("telegram-bot"):
+        log.info("Telegram bot already running (pid %d)", telegram_pid)
         return True
+
+    # Session exists but process dead = stale session, clean it up
+    if await session_exists("telegram-bot"):
+        log.warning("Telegram session exists but process not alive — cleaning up stale session")
+        await stop_session("telegram-bot")
 
     # Clean stale PID
     await stop_by_pid("telegram")

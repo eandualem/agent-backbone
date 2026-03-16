@@ -236,10 +236,7 @@ class TestWebhookDeduplication:
         mock_dispatch_svc.issue_dispatcher.assert_awaited_once()
         mock_delivery_svc.is_recent_notification.assert_not_called()
 
-
-    async def test_comment_on_closed_issue_ignored(
-        self, api_client, api_app, mock_dispatch_svc
-    ):
+    async def test_comment_on_closed_issue_ignored(self, api_client, api_app, mock_dispatch_svc):
         """Comments on closed issues are rejected at intake (#780)."""
         api_app.state.db._seen_deliveries.clear()
         payload = {

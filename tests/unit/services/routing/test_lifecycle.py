@@ -404,7 +404,6 @@ class TestOnIssueClosed:
         assert mock_gh.list_issues.await_count >= 1
         assert mock_deliver.await_args.kwargs["target_entity"] == "agent-backbone"
 
-
     async def test_purges_queued_messages_on_close(self, config):
         """Closing an issue purges pending queue messages for that issue (#780)."""
         event = make_close_event(["feynman"])
