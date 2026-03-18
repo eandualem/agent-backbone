@@ -197,7 +197,7 @@ class TestSendBroadcast:
         """When some participants are offline, counts reflect partial delivery."""
         room_id = _create_room(tmp_path, participants=["ike", "feynman"])
 
-        async def _side_effect(session, msg, config):
+        async def _side_effect(session, msg, config, **kwargs):
             return "delivered" if session == "ike" else "offline"
 
         mock_svc = _make_mock_delivery_svc(safe_deliver_side_effect=_side_effect)

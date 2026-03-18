@@ -158,12 +158,12 @@ class TestStartPrefect:
 class TestStopPrefect:
     @pytest.mark.asyncio
     async def test_stops_all_components(self, bb_config):
-        """stop_prefect calls stop_session, stop_by_pid, kill_port_process, remove_pid."""
+        """stop_prefect closes the tmux session, then stops the pid/port and clears state."""
         with patch(
-            "agent_backbone.services.infrastructure._backbone.stop_session",
+            "agent_backbone.services.terminal.graceful_close",
             new_callable=AsyncMock,
             return_value=True,
-        ) as mock_stop_session:
+        ) as mock_graceful_close:
             with patch(
                 "agent_backbone.services.infrastructure._backbone.stop_by_pid",
                 new_callable=AsyncMock,
@@ -183,7 +183,7 @@ class TestStopPrefect:
 
                         result = await stop_prefect(bb_config)
         assert result is True
-        mock_stop_session.assert_called_once_with("prefect")
+        mock_graceful_close.assert_called_once_with("prefect", timeout=10.0)
         mock_stop_pid.assert_called_once_with("prefect")
         mock_kill.assert_called_once_with(4200)
         mock_remove.assert_called_once_with("prefect")
