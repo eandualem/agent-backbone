@@ -33,8 +33,10 @@ _EXPECTED_INDEXES = {
     "idx_deliveries_entity",
     "idx_deliveries_outcome",
     "idx_deliveries_created",
+    "uq_deliveries_active_owner",
     "idx_deps_sub",
     "idx_heartbeats_agent",
+    "idx_mq_leased",
     "idx_mq_status",
     "idx_mq_session",
     "idx_swarms_created",
@@ -53,6 +55,9 @@ _EXPECTED_INDEXES = {
     "idx_swarm_workers_swarm",
     "idx_telemetry_checkpoints_runtime",
     "idx_telemetry_checkpoints_updated",
+    "uq_mq_comment_dedup",
+    "uq_mq_dm_dedup",
+    "uq_mq_issue_dedup",
 }
 
 
