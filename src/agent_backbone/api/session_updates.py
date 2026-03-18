@@ -46,7 +46,15 @@ async def build_enriched_agent(
 ) -> EnrichedAgent:
     """Build an EnrichedAgent from session name and entity."""
     online = session in active_sessions
-    snapshot = await state_svc.get_state(session)
+    if online:
+        snapshot = await state_svc.get_state(session)
+    else:
+        # Avoid syncing stale push snapshots back into the DB for offline
+        # sessions. That can overwrite the monitor's "unknown" marker and
+        # re-arm repeated offline escalations on every refresh cycle.
+        snapshot = state_svc.read_state(session)
+        if snapshot is None:
+            snapshot = await state_svc.get_state(session)
     reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(entity)
     display_name = reg_entry.figure.split()[-1] if reg_entry else session
     role = reg_entry.role if reg_entry else "Coding Agent"

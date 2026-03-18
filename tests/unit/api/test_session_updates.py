@@ -12,11 +12,13 @@ from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.api.session_updates import (
     SESSIONS_NAMESPACE,
     SESSIONS_UPDATE_EVENT,
+    build_enriched_agent,
     emit_sessions_update,
     get_cached_session_snapshot,
     invalidate_session_snapshot_caches,
     reset_sessions_update_state,
 )
+from agent_backbone.services.agents.models import AgentState, StateSnapshot
 
 
 @pytest.fixture(autouse=True)
@@ -232,3 +234,37 @@ class TestEmitSessionsUpdate:
         assert second is False
         assert mock_get_snapshot.await_count == 2
         sio.emit.assert_awaited_once()
+
+
+class TestBuildEnrichedAgent:
+    @pytest.mark.asyncio
+    async def test_offline_session_uses_read_state_without_db_sync(self):
+        """Offline snapshot building must not sync stale push state back into DB."""
+        config = MagicMock()
+        config.registry.entry_for_session.return_value = None
+        config.registry.entities.get.return_value = None
+        config.registry.repo_path_by_name = {}
+        config.registry.repos = []
+
+        state_svc = MagicMock()
+        state_svc.read_state.return_value = StateSnapshot(
+            state=AgentState.IDLE,
+            current_issue=42,
+            timestamp=123.0,
+            source="push",
+        )
+        state_svc.get_state = AsyncMock()
+
+        agent = await build_enriched_agent(
+            session="ada",
+            entity="ada",
+            config=config,
+            active_sessions=set(),
+            state_svc=state_svc,
+            agent_type="coding_agent",
+        )
+
+        state_svc.read_state.assert_called_once_with("ada")
+        state_svc.get_state.assert_not_awaited()
+        assert agent.state == "offline"
+        assert agent.current_issue == 42
