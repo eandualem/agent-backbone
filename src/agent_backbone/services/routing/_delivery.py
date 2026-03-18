@@ -116,6 +116,34 @@ async def _record_issue_attempt(
         log.exception("Failed to record delivery attempt (non-fatal)")
 
 
+async def _persist_delivery_outcome(
+    db: BackboneDB | None,
+    issue_number: int | None,
+    target_entity: str | None,
+    session_name: str,
+    outcome: str,
+    flow_name: str,
+    delivery_kind: str,
+    delivery_claim_id: int | None,
+) -> None:
+    """Finalize a claimed issue delivery or fall back to standard attempt logging."""
+    if delivery_claim_id is not None and db is not None:
+        try:
+            await db.finalize_delivery_attempt(delivery_claim_id, outcome)
+        except Exception:
+            log.exception("Failed to finalize delivery attempt (non-fatal)")
+        return
+    await _record_issue_attempt(
+        db,
+        issue_number,
+        target_entity,
+        session_name,
+        outcome,
+        flow_name,
+        delivery_kind=delivery_kind,
+    )
+
+
 async def _recover_copy_mode(
     session_name: str,
     config: BackboneConfig,
@@ -212,6 +240,20 @@ async def safe_deliver(
                 )
                 return "awaiting_ack"
 
+    # Pre-send reservation for issue deliveries to close the send-time race window.
+    delivery_claim_id: int | None = None
+    if delivery_kind == "issue" and _can_track_issue_delivery(db, issue_number, target_entity):
+        claim_result = await db.claim_delivery_attempt(
+            issue_number=issue_number,
+            target_entity=target_entity,
+            session_name=session_name,
+            flow_name=flow_name,
+        )
+        if claim_result is None:
+            return "already_delivered"
+        if isinstance(claim_result, int):
+            delivery_claim_id = claim_result
+
     # HTTP delivery targets bypass tmux intelligence entirely
     if is_http_target(session_name, config):
         from agent_backbone.jarvis import inject_message
@@ -219,14 +261,15 @@ async def safe_deliver(
         if await inject_message(
             config.jarvis.inject_url, message, sessions_url=config.jarvis.sessions_url
         ):
-            await _record_issue_attempt(
+            await _persist_delivery_outcome(
                 db,
                 issue_number,
                 target_entity,
                 session_name,
                 "delivered",
                 flow_name,
-                delivery_kind=delivery_kind,
+                delivery_kind,
+                delivery_claim_id,
             )
             return "delivered"
         await _maybe_enqueue(
@@ -238,14 +281,15 @@ async def safe_deliver(
             db,
             delivery_kind=delivery_kind,
         )
-        await _record_issue_attempt(
+        await _persist_delivery_outcome(
             db,
             issue_number,
             target_entity,
             session_name,
             "delivery_failed",
             flow_name,
-            delivery_kind=delivery_kind,
+            delivery_kind,
+            delivery_claim_id,
         )
         return "delivery_failed"
 
@@ -268,14 +312,15 @@ async def safe_deliver(
             db,
             delivery_kind=delivery_kind,
         )
-        await _record_issue_attempt(
+        await _persist_delivery_outcome(
             db,
             issue_number,
             target_entity,
             session_name,
             "offline",
             flow_name,
-            delivery_kind=delivery_kind,
+            delivery_kind,
+            delivery_claim_id,
         )
         return "offline"
 
@@ -290,14 +335,15 @@ async def safe_deliver(
                 db,
                 delivery_kind=delivery_kind,
             )
-        await _record_issue_attempt(
+        await _persist_delivery_outcome(
             db,
             issue_number,
             target_entity,
             session_name,
             "plan_waiting",
             flow_name,
-            delivery_kind=delivery_kind,
+            delivery_kind,
+            delivery_claim_id,
         )
         return "plan_waiting"
 
@@ -312,14 +358,15 @@ async def safe_deliver(
                 db,
                 delivery_kind=delivery_kind,
             )
-        await _record_issue_attempt(
+        await _persist_delivery_outcome(
             db,
             issue_number,
             target_entity,
             session_name,
             "permission_waiting",
             flow_name,
-            delivery_kind=delivery_kind,
+            delivery_kind,
+            delivery_claim_id,
         )
         return "permission_waiting"
 
@@ -334,14 +381,15 @@ async def safe_deliver(
                 db,
                 delivery_kind=delivery_kind,
             )
-        await _record_issue_attempt(
+        await _persist_delivery_outcome(
             db,
             issue_number,
             target_entity,
             session_name,
             "agent_working",
             flow_name,
-            delivery_kind=delivery_kind,
+            delivery_kind,
+            delivery_claim_id,
         )
         return "agent_working"
 
@@ -356,14 +404,15 @@ async def safe_deliver(
                 db,
                 delivery_kind=delivery_kind,
             )
-        await _record_issue_attempt(
+        await _persist_delivery_outcome(
             db,
             issue_number,
             target_entity,
             session_name,
             "grace_period",
             flow_name,
-            delivery_kind=delivery_kind,
+            delivery_kind,
+            delivery_claim_id,
         )
         return "grace_period"
 
@@ -380,14 +429,15 @@ async def safe_deliver(
                 db,
                 delivery_kind=delivery_kind,
             )
-            await _record_issue_attempt(
+            await _persist_delivery_outcome(
                 db,
                 issue_number,
                 target_entity,
                 session_name,
                 "delivery_failed",
                 flow_name,
-                delivery_kind=delivery_kind,
+                delivery_kind,
+                delivery_claim_id,
             )
             return "delivery_failed"
 
@@ -401,27 +451,29 @@ async def safe_deliver(
             db,
             delivery_kind=delivery_kind,
         )
-        await _record_issue_attempt(
+        await _persist_delivery_outcome(
             db,
             issue_number,
             target_entity,
             session_name,
             "user_interacting",
             flow_name,
-            delivery_kind=delivery_kind,
+            delivery_kind,
+            delivery_claim_id,
         )
         return "user_interacting"
 
     # Deliverable: IDLE_READY, UNKNOWN, or priority-bypassed COPY_MODE/USER_INTERACTING
     if await send_message(session_name, message, runtime_hint=profile.runtime):
-        await _record_issue_attempt(
+        await _persist_delivery_outcome(
             db,
             issue_number,
             target_entity,
             session_name,
             "delivered",
             flow_name,
-            delivery_kind=delivery_kind,
+            delivery_kind,
+            delivery_claim_id,
         )
         return "delivered"
 
@@ -435,14 +487,15 @@ async def safe_deliver(
         db,
         delivery_kind=delivery_kind,
     )
-    await _record_issue_attempt(
+    await _persist_delivery_outcome(
         db,
         issue_number,
         target_entity,
         session_name,
         "delivery_failed",
         flow_name,
-        delivery_kind=delivery_kind,
+        delivery_kind,
+        delivery_claim_id,
     )
     return "delivery_failed"
 

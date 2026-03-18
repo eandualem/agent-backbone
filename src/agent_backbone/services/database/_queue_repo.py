@@ -328,6 +328,14 @@ async def enqueue_message(
     return row._mapping["id"] if row else -1
 
 
+async def get_sessions_with_pending(conn: AsyncConnection) -> list[str]:
+    """List sessions that currently have pending queue rows."""
+    result = await conn.execute(
+        text("SELECT DISTINCT session_name FROM message_queue WHERE status = 'pending'")
+    )
+    return [row._mapping["session_name"] for row in result.fetchall()]
+
+
 async def dequeue_messages(
     conn: AsyncConnection,
     session_name: str,

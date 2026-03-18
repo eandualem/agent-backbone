@@ -134,6 +134,69 @@ class TestDeliveryTracking:
         results = await db.query_deliveries()
         assert len(results) == 0
 
+    async def test_claim_delivery_attempt_success(self, db):
+        claim_id = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        assert isinstance(claim_id, int)
+        rows = await db.query_deliveries(issue_number=42, session_name="ike")
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "attempting"
+
+    async def test_claim_delivery_attempt_conflict(self, db):
+        first = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+        second = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        assert isinstance(first, int)
+        assert second is None
+
+    async def test_finalize_delivery_attempt(self, db):
+        claim_id = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        await db.finalize_delivery_attempt(claim_id, "delivered")
+
+        rows = await db.query_deliveries(issue_number=42, session_name="ike")
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "delivered"
+
+    async def test_reclaim_stale_attempts(self, db):
+        claim_id = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        async with db._engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE deliveries SET created_at = :created_at WHERE id = :id"),
+                {"created_at": "2000-01-01T00:00:00.000000Z", "id": claim_id},
+            )
+
+        reclaimed = await db.reclaim_stale_attempts(max_age_minutes=5)
+
+        assert reclaimed == 1
+        assert await db.query_deliveries(issue_number=42, session_name="ike") == []
+
 
 class TestDedupLog:
     async def test_first_delivery_not_duplicate(self, db):
@@ -434,6 +497,14 @@ class TestMessageQueue:
         row = await db.get_message_by_id(row_id)
 
         assert row["content_hash"] == hashlib.sha256(message.encode()).hexdigest()
+
+    async def test_get_sessions_with_pending(self, db):
+        await db.enqueue_message("ike", "pending one", issue_number=42, target_entity="ike")
+        await db.enqueue_message("jarvis", "pending two", delivery_kind="direct_message")
+
+        sessions = await db.get_sessions_with_pending()
+
+        assert set(sessions) == {"ike", "jarvis"}
 
     async def test_dequeue_marks_in_progress(self, db):
         row_id = await db.enqueue_message("ike", "claim me", issue_number=42, target_entity="ike")

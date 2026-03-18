@@ -158,6 +158,30 @@ class TestRetryDeliveryAckCheck:
 
 class TestDeliveryRetryQueueDrain:
     @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    async def test_drain_includes_queued_sessions(self, mock_deliver, db, config):
+        await db.enqueue_message(
+            session_name="jarvis",
+            message="Queued for jarvis",
+            delivery_kind="direct_message",
+            flow_name="api-messages",
+        )
+        mock_deliver.return_value = "delivered"
+
+        from agent_backbone.services.routing._flows import drain_message_queue
+
+        summary = await drain_message_queue(
+            config,
+            db,
+            AsyncMock(),
+            active_sessions=set(),
+        )
+
+        assert summary["queue_delivered"] == 1
+        assert mock_deliver.await_args.args[0] == "jarvis"
+        row = await db.get_message_by_id(1)
+        assert row["status"] == "delivered"
+
+    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
     async def test_drain_releases_lease_on_failure(self, mock_deliver, db, config):
         await db.enqueue_message(
             session_name="ike",

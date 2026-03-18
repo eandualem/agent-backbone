@@ -1095,6 +1095,97 @@ class TestSafeDeliver:
             flow_name="test_flow",
         )
 
+    async def test_safe_deliver_claims_before_send(self):
+        """Issue deliveries claim the slot before sending and finalize afterward."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        mock_db.query_deliveries.return_value = []
+        order: list[str] = []
+
+        def _claim(*args, **kwargs):
+            order.append("claim")
+            return 123
+
+        def _send(*args, **kwargs):
+            order.append("send")
+            return True
+
+        def _finalize(*args, **kwargs):
+            order.append("finalize")
+            return None
+
+        mock_db.claim_delivery_attempt = AsyncMock(side_effect=_claim)
+        mock_db.finalize_delivery_attempt = AsyncMock(side_effect=_finalize)
+
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
+            _patch_get_agent_state(_IDLE_SNAP),
+            patch(
+                "agent_backbone.services.routing._delivery.send_message",
+                new_callable=AsyncMock,
+                side_effect=_send,
+            ),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Hello",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+            )
+
+        assert result == "delivered"
+        assert order[:2] == ["claim", "send"]
+        assert order[-1] == "finalize"
+        mock_db.claim_delivery_attempt.assert_awaited_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="test_flow",
+        )
+        mock_db.finalize_delivery_attempt.assert_awaited_once_with(123, "delivered")
+        mock_db.record_delivery.assert_not_called()
+
+    async def test_safe_deliver_claim_conflict_returns_already_delivered(self):
+        """A failed claim means another worker already reserved the issue delivery."""
+        config = _default_config()
+        mock_db = AsyncMock()
+        mock_db.query_deliveries.return_value = []
+        mock_db.claim_delivery_attempt.return_value = None
+
+        with (
+            patch(
+                "agent_backbone.services.routing._delivery.get_session_intelligence",
+                new_callable=AsyncMock,
+            ) as mock_intelligence,
+            patch(
+                "agent_backbone.services.routing._delivery.send_message",
+                new_callable=AsyncMock,
+            ) as mock_send,
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Hello",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+            )
+
+        assert result == "already_delivered"
+        mock_db.claim_delivery_attempt.assert_awaited_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="test_flow",
+        )
+        mock_intelligence.assert_not_called()
+        mock_send.assert_not_called()
+
     async def test_enforce_issue_queue_ignores_stale_delivery_outside_open_queue(self):
         """Closed or unrelated historical deliveries must not block the current queue."""
         config = _default_config()

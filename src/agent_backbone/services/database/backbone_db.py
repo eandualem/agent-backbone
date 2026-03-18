@@ -195,6 +195,33 @@ class BackboneDB:
                 flow_run_id,
             )
 
+    async def claim_delivery_attempt(
+        self,
+        issue_number: int,
+        target_entity: str,
+        session_name: str,
+        flow_name: str,
+    ) -> int | None:
+        """Reserve an issue delivery attempt before sending."""
+        async with self._engine.begin() as conn:
+            return await _delivery_repo.claim_delivery_attempt(
+                conn,
+                issue_number,
+                target_entity,
+                session_name,
+                flow_name,
+            )
+
+    async def finalize_delivery_attempt(self, delivery_id: int, outcome: str) -> None:
+        """Finalize a previously claimed delivery attempt."""
+        async with self._engine.begin() as conn:
+            await _delivery_repo.finalize_delivery_attempt(conn, delivery_id, outcome)
+
+    async def reclaim_stale_attempts(self, max_age_minutes: int = 5) -> int:
+        """Delete stale attempting rows so new claims can proceed."""
+        async with self._engine.begin() as conn:
+            return await _delivery_repo.reclaim_stale_attempts(conn, max_age_minutes)
+
     async def query_deliveries(
         self,
         issue_number: int | None = None,
@@ -598,6 +625,11 @@ class BackboneDB:
         """Atomically claim pending messages for a session, oldest first."""
         async with self._engine.begin() as conn:
             return await _queue_repo.dequeue_messages(conn, session_name, limit)
+
+    async def get_sessions_with_pending(self) -> list[str]:
+        """List sessions that currently have pending queue rows."""
+        async with self._engine.begin() as conn:
+            return await _queue_repo.get_sessions_with_pending(conn)
 
     async def release_lease(self, message_id: int) -> None:
         """Return a claimed queued message to pending."""
