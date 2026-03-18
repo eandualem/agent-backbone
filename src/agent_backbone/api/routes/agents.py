@@ -186,7 +186,7 @@ async def start_agent(
         environment={RUNTIME_ENV_KEY: req.runtime},
     )
     if ok:
-        invalidate_session_snapshot_caches()
+        await invalidate_session_snapshot_caches()
         await emit_sessions_update(
             getattr(request.app.state, "sio", None),
             config,
@@ -212,7 +212,7 @@ async def stop_agent(
     """Stop an agent tmux session."""
     ok = await tmux_svc.stop_session(session)
     if ok:
-        invalidate_session_snapshot_caches()
+        await invalidate_session_snapshot_caches()
         await emit_sessions_update(
             getattr(request.app.state, "sio", None),
             config,
@@ -265,7 +265,7 @@ async def post_agent_state(
         plan_file=body.plan_file,
         plan_title=body.plan_title,
     )
-    invalidate_session_snapshot_caches()
+    await invalidate_session_snapshot_caches()
     await emit_sessions_update(
         getattr(request.app.state, "sio", None),
         config,

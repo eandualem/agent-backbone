@@ -216,21 +216,30 @@ async def get_cached_session_snapshot(
         return _snapshot_cache
 
 
-def invalidate_session_snapshot_caches() -> None:
-    """Reset the shared cached agent snapshot."""
+def _invalidate_session_snapshot_caches_unlocked() -> None:
+    """Reset the shared cached agent snapshot.
+
+    Caller must already hold any required synchronization.
+    """
     global _snapshot_cache, _snapshot_cache_ts  # noqa: PLW0603
 
     _snapshot_cache = []
     _snapshot_cache_ts = 0.0
 
 
+async def invalidate_session_snapshot_caches() -> None:
+    """Reset the shared cached agent snapshot under the shared lock."""
+    async with _snapshot_cache_lock:
+        _invalidate_session_snapshot_caches_unlocked()
+
+
 def reset_sessions_update_state() -> None:
     """Reset module-level update dedup state for test isolation."""
     global _last_sessions_update_signature, _sessions_update_lock, _snapshot_cache_lock  # noqa: PLW0603
-    invalidate_session_snapshot_caches()
+    _snapshot_cache_lock = asyncio.Lock()
+    _invalidate_session_snapshot_caches_unlocked()
     _last_sessions_update_signature = None
     _sessions_update_lock = asyncio.Lock()
-    _snapshot_cache_lock = asyncio.Lock()
 
 
 def _serialize_snapshot(snapshot: list[EnrichedAgent]) -> list[dict]:

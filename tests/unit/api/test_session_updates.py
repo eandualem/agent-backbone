@@ -115,7 +115,7 @@ class TestGetCachedSessionSnapshot:
         assert session_updates_module._snapshot_cache == snapshot
         assert session_updates_module._snapshot_cache_ts > 0
 
-        invalidate_session_snapshot_caches()
+        await invalidate_session_snapshot_caches()
 
         assert session_updates_module._snapshot_cache == []
         assert session_updates_module._snapshot_cache_ts == 0.0
@@ -141,6 +141,34 @@ class TestGetCachedSessionSnapshot:
         assert second == snapshot
         assert third == snapshot
         assert build_fn.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_invalidation_waits_for_inflight_rebuild(self):
+        """Invalidation must not be overwritten by a rebuild that already holds the lock."""
+        snapshot = _sample_snapshot()
+        build_started = asyncio.Event()
+        release_build = asyncio.Event()
+
+        async def slow_build():
+            build_started.set()
+            await release_build.wait()
+            return snapshot
+
+        rebuild_task = asyncio.create_task(
+            get_cached_session_snapshot(AsyncMock(side_effect=slow_build), force_refresh=True)
+        )
+
+        await build_started.wait()
+        invalidate_task = asyncio.create_task(invalidate_session_snapshot_caches())
+        await asyncio.sleep(0)
+        assert invalidate_task.done() is False
+
+        release_build.set()
+        await rebuild_task
+        await invalidate_task
+
+        assert session_updates_module._snapshot_cache == []
+        assert session_updates_module._snapshot_cache_ts == 0.0
 
 
 class TestEmitSessionsUpdate:
