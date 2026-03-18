@@ -333,29 +333,74 @@ async def dequeue_messages(
     session_name: str,
     limit: int = 10,
 ) -> list[dict]:
-    """Get pending messages for a session, oldest first."""
+    """Atomically claim pending messages for a session, oldest first."""
+    dialect = conn.dialect.name
+    now = _now_iso()
+    if dialect == "postgresql":
+        sql = """UPDATE message_queue SET status='in_progress', leased_at=:now
+                 WHERE id IN (
+                     SELECT id FROM message_queue
+                     WHERE session_name=:session AND status='pending'
+                     ORDER BY enqueued_at ASC LIMIT :lim
+                     FOR UPDATE SKIP LOCKED
+                 ) RETURNING *"""
+    else:
+        sql = """UPDATE message_queue SET status='in_progress', leased_at=:now
+                 WHERE id IN (
+                     SELECT id FROM message_queue
+                     WHERE session_name=:session AND status='pending'
+                     ORDER BY enqueued_at ASC LIMIT :lim
+                 ) RETURNING *"""
+    result = await conn.execute(text(sql), {"session": session_name, "lim": limit, "now": now})
+    rows = [dict(row._mapping) for row in result.fetchall()]
+    rows.sort(key=lambda row: row["enqueued_at"])
+    return rows
+
+
+async def release_lease(
+    conn: AsyncConnection,
+    message_id: int,
+) -> None:
+    """Return an in-progress queue row to pending."""
+    await conn.execute(
+        text(
+            """UPDATE message_queue SET status='pending', leased_at=NULL
+               WHERE id = :id AND status = 'in_progress'"""
+        ),
+        {"id": message_id},
+    )
+
+
+async def expire_stale_leases(
+    conn: AsyncConnection,
+    max_age_minutes: int = 5,
+) -> int:
+    """Return abandoned in-progress rows to pending."""
     result = await conn.execute(
         text(
-            """SELECT * FROM message_queue
-               WHERE session_name = :session_name AND status = 'pending'
-               ORDER BY enqueued_at ASC LIMIT :lim"""
+            """UPDATE message_queue SET status='pending', leased_at=NULL
+               WHERE status = 'in_progress'
+                 AND leased_at < :cutoff"""
         ),
-        {"session_name": session_name, "lim": limit},
+        {
+            "cutoff": (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            )
+        },
     )
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return result.rowcount
 
 
 async def mark_message_delivered(
     conn: AsyncConnection,
     message_id: int,
 ) -> None:
-    """Mark a queued message as delivered."""
+    """Mark a claimed queued message as delivered."""
     await conn.execute(
         text(
             """UPDATE message_queue
                SET status = 'delivered', delivered_at = :delivered_at
-               WHERE id = :id"""
+               WHERE id = :id AND status = 'in_progress'"""
         ),
         {"delivered_at": _now_iso(), "id": message_id},
     )
@@ -365,12 +410,16 @@ async def expire_stale_pending(
     conn: AsyncConnection,
     max_age_minutes: int = 30,
 ) -> int:
-    """Mark pending messages older than max_age_minutes as expired.
+    """Mark stale pending and in-progress messages as expired.
 
     Prevents stale messages from looping indefinitely in the drain cycle.
     Returns the number of expired messages.
     """
-    result = await conn.execute(
+    now = _now_iso()
+    cutoff_str = (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
+    pending_result = await conn.execute(
         text(
             """UPDATE message_queue
                SET status = 'expired', delivered_at = :now
@@ -378,20 +427,25 @@ async def expire_stale_pending(
                  AND enqueued_at < :cutoff"""
         ),
         {
-            "now": _now_iso(),
-            "cutoff": (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
-                "%Y-%m-%dT%H:%M:%S.%fZ"
-            ),
+            "now": now,
+            "cutoff": cutoff_str,
         },
     )
-    return result.rowcount
+    in_progress_result = await conn.execute(
+        text(
+            """UPDATE message_queue SET status='expired', delivered_at=:now
+               WHERE status='in_progress' AND leased_at < :cutoff"""
+        ),
+        {"now": now, "cutoff": cutoff_str},
+    )
+    return (pending_result.rowcount or 0) + (in_progress_result.rowcount or 0)
 
 
 async def purge_pending_for_issue(
     conn: AsyncConnection,
     issue_number: int,
 ) -> int:
-    """Mark all pending messages for an issue as delivered (issue closed).
+    """Mark all pending or leased messages for an issue as delivered (issue closed).
 
     Returns the number of purged messages.
     """
@@ -399,7 +453,8 @@ async def purge_pending_for_issue(
         text(
             """UPDATE message_queue
                SET status = 'delivered', delivered_at = :delivered_at
-               WHERE issue_number = :issue_number AND status = 'pending'"""
+               WHERE issue_number = :issue_number
+                 AND status IN ('pending', 'in_progress')"""
         ),
         {"delivered_at": _now_iso(), "issue_number": issue_number},
     )

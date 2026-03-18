@@ -595,9 +595,19 @@ class BackboneDB:
         session_name: str,
         limit: int = 10,
     ) -> list[dict]:
-        """Get pending messages for a session, oldest first."""
+        """Atomically claim pending messages for a session, oldest first."""
         async with self._engine.begin() as conn:
             return await _queue_repo.dequeue_messages(conn, session_name, limit)
+
+    async def release_lease(self, message_id: int) -> None:
+        """Return a claimed queued message to pending."""
+        async with self._engine.begin() as conn:
+            await _queue_repo.release_lease(conn, message_id)
+
+    async def expire_stale_leases(self, max_age_minutes: int = 5) -> int:
+        """Recover stale queue leases older than max_age_minutes."""
+        async with self._engine.begin() as conn:
+            return await _queue_repo.expire_stale_leases(conn, max_age_minutes)
 
     async def mark_message_delivered(self, message_id: int) -> None:
         """Mark a queued message as delivered."""

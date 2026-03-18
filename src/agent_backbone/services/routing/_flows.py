@@ -32,6 +32,14 @@ async def drain_message_queue(
     """Drain queued messages for active sessions, oldest first."""
     summary: dict[str, int] = {}
 
+    try:
+        stale_leases = await db.expire_stale_leases(max_age_minutes=5)
+        if stale_leases:
+            log.info("Recovered %d stale leased messages", stale_leases)
+            summary["leases_recovered"] = stale_leases
+    except Exception:
+        log.exception("Failed to recover stale leases (non-fatal)")
+
     # Auto-expire stale pending messages to prevent infinite retry loops
     try:
         expired = await db.expire_stale_pending(max_age_minutes=30)
@@ -75,6 +83,7 @@ async def drain_message_queue(
                 await db.mark_message_delivered(msg_record["id"])
                 summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
             else:
+                await db.release_lease(msg_record["id"])
                 break  # Stop draining this session if delivery fails
 
     return summary
