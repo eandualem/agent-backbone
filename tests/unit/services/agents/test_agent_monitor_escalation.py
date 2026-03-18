@@ -579,7 +579,7 @@ class TestMonitorAgentsIntegration:
             patch(
                 f"{_MON}.list_sessions",
                 new_callable=AsyncMock,
-                return_value=["ike"],
+                side_effect=[["ike"], ["ike", "swarm-24-worker"]],
             ),
             patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
@@ -598,7 +598,9 @@ class TestMonitorAgentsIntegration:
         ):
             await monitor_agents.fn()
 
-        mock_db.reconcile_swarm_worker_sessions.assert_awaited_once_with({"ike"})
+        mock_db.reconcile_swarm_worker_sessions.assert_awaited_once_with(
+            {"ike", "swarm-24-worker"}
+        )
 
     @pytest.mark.asyncio
     async def test_delivers_to_idle_agent(self):

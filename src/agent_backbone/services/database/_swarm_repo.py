@@ -623,12 +623,12 @@ async def reconcile_swarm_worker_sessions(
     conn: AsyncConnection,
     active_sessions: set[str],
 ) -> int:
-    """Mark non-terminal workers failed when their tmux session disappears."""
+    """Mark session-bearing workers failed when their tmux session disappears."""
     result = await conn.execute(
         text(
             """SELECT swarm_id, name, session
                FROM swarm_workers
-               WHERE status NOT IN ('done', 'failed')"""
+               WHERE status IN ('started', 'working', 'pr_created')"""
         )
     )
     candidate_rows = [dict(row._mapping) for row in result.fetchall()]

@@ -574,3 +574,89 @@ class TestTelemetryCheckpoints:
         checkpoints = await db.query_telemetry_checkpoints(runtime="codex")
         assert len(checkpoints) == 1
         assert checkpoints[0]["source_ref"] == "/tmp/codex.jsonl"
+
+
+async def _create_swarm_with_worker(db: BackboneDB, *, status: str = "pending") -> tuple[str, str]:
+    """Create a minimal non-collaborative swarm and optionally set worker status."""
+    worker_name = "worker-1"
+    swarm_id = await db.create_swarm(
+        repo="agent-backbone",
+        task_id="24",
+        coding_agent_session="agent-backbone",
+        workers=[
+            {
+                "name": worker_name,
+                "role": "coder",
+                "branch": "swarm/24/worker-1",
+                "worktree_path": "/tmp/worker-1",
+                "session": "swarm-24-worker-1",
+            }
+        ],
+    )
+    if status in {"started", "working", "pr_created"}:
+        await db.update_swarm_worker_status(swarm_id, worker_name, status)
+    elif status in {"done", "failed"}:
+        await db.complete_swarm_worker(swarm_id, worker_name, status, f"{status} summary")
+    return swarm_id, worker_name
+
+
+def _worker_from_swarm(swarm: dict, worker_name: str) -> dict:
+    """Extract one worker row from a swarm detail payload."""
+    return next(worker for worker in swarm["workers"] if worker["name"] == worker_name)
+
+
+class TestSwarmWorkerSessionReconciliation:
+    async def test_reconcile_skips_pending_workers(self, db):
+        swarm_id, worker_name = await _create_swarm_with_worker(db, status="pending")
+
+        result = await db.reconcile_swarm_worker_sessions(set())
+        swarm = await db.get_swarm(swarm_id)
+        worker = _worker_from_swarm(swarm, worker_name)
+
+        assert result == 0
+        assert worker["status"] == "pending"
+        assert worker["failure_reason"] is None
+
+    async def test_reconcile_fails_started_worker_without_session(self, db):
+        swarm_id, worker_name = await _create_swarm_with_worker(db, status="started")
+
+        result = await db.reconcile_swarm_worker_sessions(set())
+        swarm = await db.get_swarm(swarm_id)
+        worker = _worker_from_swarm(swarm, worker_name)
+
+        assert result == 1
+        assert worker["status"] == "failed"
+        assert worker["failure_reason"] == "session_lost"
+
+    async def test_reconcile_fails_working_worker_without_session(self, db):
+        swarm_id, worker_name = await _create_swarm_with_worker(db, status="working")
+
+        result = await db.reconcile_swarm_worker_sessions(set())
+        swarm = await db.get_swarm(swarm_id)
+        worker = _worker_from_swarm(swarm, worker_name)
+
+        assert result == 1
+        assert worker["status"] == "failed"
+        assert worker["failure_reason"] == "session_lost"
+
+    async def test_reconcile_skips_done_workers(self, db):
+        swarm_id, worker_name = await _create_swarm_with_worker(db, status="done")
+
+        result = await db.reconcile_swarm_worker_sessions(set())
+        swarm = await db.get_swarm(swarm_id)
+        worker = _worker_from_swarm(swarm, worker_name)
+
+        assert result == 0
+        assert worker["status"] == "done"
+        assert worker["failure_reason"] is None
+
+    async def test_reconcile_skips_failed_workers(self, db):
+        swarm_id, worker_name = await _create_swarm_with_worker(db, status="failed")
+
+        result = await db.reconcile_swarm_worker_sessions(set())
+        swarm = await db.get_swarm(swarm_id)
+        worker = _worker_from_swarm(swarm, worker_name)
+
+        assert result == 0
+        assert worker["status"] == "failed"
+        assert worker["failure_reason"] is None
