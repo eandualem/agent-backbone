@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from agent_backbone.api.deps import get_config, get_delivery_service
+from agent_backbone.api.deps import get_config, get_db, get_delivery_service
 from agent_backbone.api.models import (
     BroadcastMessageRequest,
     DirectedMessageRequest,
@@ -23,6 +23,7 @@ from agent_backbone.api.models import (
     RoomStateUpdate,
 )
 from agent_backbone.config import BackboneConfig
+from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import DeliveryService, resolve_entity_session
 
 log = logging.getLogger(__name__)
@@ -162,6 +163,7 @@ def _format_meeting_setup_envelope(room: Room, skill_content: str) -> str:
 async def _inject_meeting_skill(
     room: Room,
     config: BackboneConfig,
+    db: BackboneDB,
     delivery_svc: DeliveryService,
 ) -> None:
     """Deliver meeting-participant skill to all room participants. Fire-and-forget."""
@@ -179,7 +181,14 @@ async def _inject_meeting_skill(
                 participant,
             )
             return False
-        result = await delivery_svc.safe_deliver(session_name, envelope, config)
+        result = await delivery_svc.safe_deliver(
+            session_name,
+            envelope,
+            config,
+            db=db,
+            delivery_kind="direct_message",
+            flow_name="room-inject-meeting-skill",
+        )
         if result != "delivered":
             log.warning("Meeting skill injection failed for '%s': %s", participant, result)
             return False
@@ -211,6 +220,7 @@ async def _inject_meeting_skill(
 async def create_room(
     body: RoomCreate,
     config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Create a new meeting room."""
@@ -227,7 +237,7 @@ async def create_room(
         updated_at=now,
     )
     await _save_room(room)
-    asyncio.create_task(_inject_meeting_skill(room, config, delivery_svc))
+    asyncio.create_task(_inject_meeting_skill(room, config, db, delivery_svc))
     return room
 
 
@@ -252,6 +262,7 @@ async def send_directed(
     room_id: str,
     body: DirectedMessageRequest,
     config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Send a directed message from any room member to another."""
@@ -289,7 +300,14 @@ async def send_directed(
             return (recipient, "unresolvable")
         delta = _compute_context_delta(room, recipient)
         envelope = _format_room_message(room, effective_sender, body.content, recipient, delta)
-        result = await delivery_svc.safe_deliver(session_name, envelope, config)
+        result = await delivery_svc.safe_deliver(
+            session_name,
+            envelope,
+            config,
+            db=db,
+            delivery_kind="direct_message",
+            flow_name="room-send-directed",
+        )
         if result != "delivered":
             log.error("Room directed delivery failed for '%s': %s", recipient, result)
         return (recipient, result)
@@ -341,6 +359,7 @@ async def send_broadcast(
     room_id: str,
     body: BroadcastMessageRequest,
     config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Broadcast a message to all participants with per-participant context deltas."""
@@ -368,7 +387,14 @@ async def send_broadcast(
             participant,
             delta,
         )
-        result = await delivery_svc.safe_deliver(session_name, envelope, config)
+        result = await delivery_svc.safe_deliver(
+            session_name,
+            envelope,
+            config,
+            db=db,
+            delivery_kind="direct_message",
+            flow_name="room-send-broadcast",
+        )
         if result != "delivered":
             log.error(
                 "Room broadcast delivery failed for '%s' (session '%s'): %s",
@@ -428,6 +454,7 @@ async def post_response(
     room_id: str,
     body: ResponseMessageRequest,
     config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Post a participant response and deliver to moderator."""
@@ -464,7 +491,14 @@ async def post_response(
         else:
             delta = _compute_context_delta(room, room.moderator)
             envelope = _format_room_message(room, body.sender, body.content, room.moderator, delta)
-            result = await delivery_svc.safe_deliver(session_name, envelope, config)
+            result = await delivery_svc.safe_deliver(
+                session_name,
+                envelope,
+                config,
+                db=db,
+                delivery_kind="direct_message",
+                flow_name="room-post-response",
+            )
             if result == "delivered":
                 room.cursors[room.moderator] = len(room.transcript)
             else:
@@ -484,6 +518,7 @@ async def update_room_state(
     room_id: str,
     body: RoomStateUpdate,
     config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Update room state (active/paused/closed)."""
@@ -503,6 +538,6 @@ async def update_room_state(
     await _save_room(room)
 
     if body.state == "active" and old_state != "active":
-        asyncio.create_task(_inject_meeting_skill(room, config, delivery_svc))
+        asyncio.create_task(_inject_meeting_skill(room, config, db, delivery_svc))
 
     return room

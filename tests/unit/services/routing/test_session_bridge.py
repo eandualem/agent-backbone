@@ -1339,6 +1339,83 @@ class TestSafeDeliver:
             result = await safe_deliver("ike", "Hello", config)
         assert result == "grace_period"
 
+    async def test_idle_grace_enqueues_non_issue(self):
+        """Non-issue deliveries defer durably during the IDLE_GRACE window."""
+        config = _default_config()
+        mock_db = AsyncMock()
+
+        with patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            new_callable=AsyncMock,
+            return_value=SessionProfile(
+                session_name="ike",
+                intelligence=SessionIntelligence.IDLE_GRACE,
+                agent_state=AgentState.IDLE,
+            ),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Comment",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+                delivery_kind="comment",
+            )
+
+        assert result == "grace_period"
+        mock_db.enqueue_message.assert_called_once_with(
+            session_name="ike",
+            message="Comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+            flow_name="test_flow",
+        )
+        mock_db.record_delivery.assert_called_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="comment_grace_period",
+            flow_name="test_flow",
+        )
+
+    async def test_idle_grace_no_enqueue_for_issue(self):
+        """Issue deliveries stay in the retry flow and do not queue on IDLE_GRACE."""
+        config = _default_config()
+        mock_db = AsyncMock()
+
+        with patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            new_callable=AsyncMock,
+            return_value=SessionProfile(
+                session_name="ike",
+                intelligence=SessionIntelligence.IDLE_GRACE,
+                agent_state=AgentState.IDLE,
+            ),
+        ):
+            result = await safe_deliver(
+                "ike",
+                "Issue delivery",
+                config,
+                db=mock_db,
+                issue_number=42,
+                target_entity="ike",
+                flow_name="test_flow",
+                delivery_kind="issue",
+            )
+
+        assert result == "grace_period"
+        mock_db.enqueue_message.assert_not_called()
+        mock_db.record_delivery.assert_called_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="grace_period",
+            flow_name="test_flow",
+        )
+
     async def test_jarvis_http_delivery(self):
         """Jarvis HTTP target delivers via inject_message, returns 'delivered'."""
         config = BackboneConfig(

@@ -346,6 +346,16 @@ async def safe_deliver(
         return "agent_working"
 
     if intelligence == SessionIntelligence.IDLE_GRACE and not allow_same_issue_comment:
+        if delivery_kind != "issue":
+            await _maybe_enqueue(
+                session_name,
+                message,
+                issue_number,
+                target_entity,
+                flow_name,
+                db,
+                delivery_kind=delivery_kind,
+            )
         await _record_issue_attempt(
             db,
             issue_number,

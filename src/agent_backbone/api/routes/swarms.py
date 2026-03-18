@@ -165,10 +165,18 @@ async def _deliver_to_workers(
     envelope: str,
     *,
     config: BackboneConfig,
+    db: BackboneDB,
     delivery_svc: DeliveryService,
 ) -> tuple[int, int]:
     async def _deliver(worker: dict) -> str:
-        result = await delivery_svc.safe_deliver(worker["session"], envelope, config)
+        result = await delivery_svc.safe_deliver(
+            worker["session"],
+            envelope,
+            config,
+            db=db,
+            delivery_kind="direct_message",
+            flow_name="swarm-delivery",
+        )
         if result != "delivered":
             log.warning(
                 "Swarm message delivery failed for '%s' (%s): %s",
@@ -372,6 +380,7 @@ async def create_swarm_assignment(
         target_workers,
         envelope,
         config=config,
+        db=db,
         delivery_svc=delivery_svc,
     )
     message_log = await db.record_swarm_message(
@@ -439,6 +448,7 @@ async def broadcast_swarm_message(
         workers,
         envelope,
         config=config,
+        db=db,
         delivery_svc=delivery_svc,
     )
     message_log = await db.record_swarm_message(
@@ -506,6 +516,7 @@ async def send_swarm_message(
         target_workers,
         envelope,
         config=config,
+        db=db,
         delivery_svc=delivery_svc,
     )
     message_log = await db.record_swarm_message(
