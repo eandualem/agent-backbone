@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.config import BackboneConfig
@@ -27,6 +29,10 @@ SESSIONS_UPDATE_EVENT = "sessions:update"
 
 _sessions_update_lock = asyncio.Lock()
 _last_sessions_update_signature: str | None = None
+_snapshot_cache: list[Any] = []
+_snapshot_cache_ts: float = 0.0
+_snapshot_cache_lock = asyncio.Lock()
+_SNAPSHOT_CACHE_TTL = 5.0
 
 
 async def build_enriched_agent(
@@ -188,21 +194,52 @@ async def build_session_snapshot(
     return list(await asyncio.gather(*coros))
 
 
-def invalidate_session_snapshot_caches() -> None:
-    """Reset both cached agent snapshots before rebuilding a live update."""
-    from agent_backbone.api.routes import agents as agents_routes
-    from agent_backbone.api.routes import dashboard as dashboard_routes
+async def get_cached_session_snapshot(
+    build_fn: Callable[[], Awaitable[list[Any]]],
+    ttl: float = _SNAPSHOT_CACHE_TTL,
+    force_refresh: bool = False,
+) -> list[Any]:
+    """Return a cached session snapshot, rebuilding under a shared lock when needed."""
+    global _snapshot_cache, _snapshot_cache_ts  # noqa: PLW0603
 
-    agents_routes._agents_cache = []
-    agents_routes._agents_cache_ts = 0
-    dashboard_routes._agents_cache = []
-    dashboard_routes._agents_cache_ts = 0
+    now = time.monotonic()
+    if not force_refresh and now - _snapshot_cache_ts < ttl and _snapshot_cache:
+        return _snapshot_cache
+
+    async with _snapshot_cache_lock:
+        now = time.monotonic()
+        if not force_refresh and now - _snapshot_cache_ts < ttl and _snapshot_cache:
+            return _snapshot_cache
+
+        _snapshot_cache = await build_fn()
+        _snapshot_cache_ts = now
+        return _snapshot_cache
+
+
+def _invalidate_session_snapshot_caches_unlocked() -> None:
+    """Reset the shared cached agent snapshot.
+
+    Caller must already hold any required synchronization.
+    """
+    global _snapshot_cache, _snapshot_cache_ts  # noqa: PLW0603
+
+    _snapshot_cache = []
+    _snapshot_cache_ts = 0.0
+
+
+async def invalidate_session_snapshot_caches() -> None:
+    """Reset the shared cached agent snapshot under the shared lock."""
+    async with _snapshot_cache_lock:
+        _invalidate_session_snapshot_caches_unlocked()
 
 
 def reset_sessions_update_state() -> None:
     """Reset module-level update dedup state for test isolation."""
-    global _last_sessions_update_signature  # noqa: PLW0603
+    global _last_sessions_update_signature, _sessions_update_lock, _snapshot_cache_lock  # noqa: PLW0603
+    _snapshot_cache_lock = asyncio.Lock()
+    _invalidate_session_snapshot_caches_unlocked()
     _last_sessions_update_signature = None
+    _sessions_update_lock = asyncio.Lock()
 
 
 def _serialize_snapshot(snapshot: list[EnrichedAgent]) -> list[dict]:
@@ -227,8 +264,10 @@ async def emit_sessions_update(
         return False
 
     async with _sessions_update_lock:
-        invalidate_session_snapshot_caches()
-        snapshot = await build_session_snapshot(config, state_svc, tmux_svc)
+        snapshot = await get_cached_session_snapshot(
+            lambda: build_session_snapshot(config, state_svc, tmux_svc),
+            force_refresh=True,
+        )
         payload = _serialize_snapshot(snapshot)
         signature = _snapshot_signature(payload)
 

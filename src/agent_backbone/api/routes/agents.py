@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import shutil
-import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -27,6 +25,7 @@ from agent_backbone.api.models import (
 from agent_backbone.api.session_updates import (
     build_session_snapshot,
     emit_sessions_update,
+    get_cached_session_snapshot,
     invalidate_session_snapshot_caches,
 )
 from agent_backbone.config import BackboneConfig
@@ -84,13 +83,6 @@ for _rt_id, _rt_entry in _RUNTIMES.items():
     if _rt_entry["command"] and not _rt_entry["resolved_path"]:
         log.warning("Runtime '%s': binary '%s' not found", _rt_id, _rt_entry["command"])
 
-# TTL cache for /api/agents — avoids subprocess storms from dashboard polling
-_agents_cache: list[EnrichedAgent] = []
-_agents_cache_ts: float = 0
-_AGENTS_CACHE_TTL = 5.0
-_agents_cache_lock = asyncio.Lock()
-
-
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
 async def list_agents(
     config: BackboneConfig = Depends(get_config),
@@ -98,22 +90,10 @@ async def list_agents(
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """List all agents (named entities + discovered coding agents) with live state."""
-    global _agents_cache, _agents_cache_ts  # noqa: PLW0603
-    now = time.monotonic()
-    if now - _agents_cache_ts < _AGENTS_CACHE_TTL and _agents_cache:
-        return ListEnvelope(items=_agents_cache, total=len(_agents_cache))
-
-    async with _agents_cache_lock:
-        # Re-check after acquiring lock (another request may have populated)
-        now = time.monotonic()
-        if now - _agents_cache_ts < _AGENTS_CACHE_TTL and _agents_cache:
-            return ListEnvelope(items=_agents_cache, total=len(_agents_cache))
-
-        agents = await build_session_snapshot(config, state_svc, tmux_svc)
-
-        _agents_cache = agents
-        _agents_cache_ts = now
-        return ListEnvelope(items=agents, total=len(agents))
+    agents = await get_cached_session_snapshot(
+        lambda: build_session_snapshot(config, state_svc, tmux_svc)
+    )
+    return ListEnvelope(items=agents, total=len(agents))
 
 
 @router.get("/agents/{session}/state", response_model=AgentStateDetail)
@@ -206,7 +186,7 @@ async def start_agent(
         environment={RUNTIME_ENV_KEY: req.runtime},
     )
     if ok:
-        invalidate_session_snapshot_caches()
+        await invalidate_session_snapshot_caches()
         await emit_sessions_update(
             getattr(request.app.state, "sio", None),
             config,
@@ -232,7 +212,7 @@ async def stop_agent(
     """Stop an agent tmux session."""
     ok = await tmux_svc.stop_session(session)
     if ok:
-        invalidate_session_snapshot_caches()
+        await invalidate_session_snapshot_caches()
         await emit_sessions_update(
             getattr(request.app.state, "sio", None),
             config,
@@ -285,7 +265,7 @@ async def post_agent_state(
         plan_file=body.plan_file,
         plan_title=body.plan_title,
     )
-    invalidate_session_snapshot_caches()
+    await invalidate_session_snapshot_caches()
     await emit_sessions_update(
         getattr(request.app.state, "sio", None),
         config,

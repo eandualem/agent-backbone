@@ -80,6 +80,62 @@ def _plan_notification_source_ref(
     return f"{channel}:{recipient}:{plan_timestamp:.6f}:{plan_identity}"
 
 
+def _organization_for_session(session_name: str, config: BackboneConfig) -> str | None:
+    """Resolve the organization owning a monitored session, if known."""
+    entry = config.registry.entry_for_session(session_name)
+    if entry is not None and entry.organization:
+        return entry.organization
+
+    entity_name = config.registry.entity_by_session.get(session_name)
+    if entity_name is not None:
+        mapped_entry = config.registry.entities.get(entity_name)
+        if mapped_entry is not None and mapped_entry.organization:
+            return mapped_entry.organization
+
+    return config.registry.organization_for_repo(session_name)
+
+
+def _resolve_target_session(
+    target_name: str,
+    source_session: str,
+    config: BackboneConfig,
+) -> str | None:
+    """Resolve a notification target to one concrete session for the source org."""
+    target_entry = config.registry.entities.get(target_name)
+    if target_entry is not None and target_entry.entity_type == "role":
+        source_org = _organization_for_session(source_session, config)
+        if not source_org:
+            log.warning(
+                "Could not resolve organization for %s while targeting role %s",
+                source_session,
+                target_name,
+            )
+            return None
+
+        for candidate in config.registry.resolve_entity_sessions(target_name):
+            candidate_entry = config.registry.entry_for_session(candidate)
+            if candidate_entry is not None and candidate_entry.organization == source_org:
+                return candidate
+
+        log.warning(
+            "Role target %s has no concrete instance for org %s (source session %s)",
+            target_name,
+            source_org,
+            source_session,
+        )
+        return None
+
+    session = config.registry.sessions_map.get(target_name)
+    if session:
+        return session
+    if (
+        target_name in config.registry.entity_by_session
+        or target_name in config.registry.repo_names
+    ):
+        return target_name
+    return None
+
+
 async def _plan_notification_already_sent(
     session_name: str,
     source_ref: str,
@@ -299,13 +355,17 @@ async def handle_stalls(config: BackboneConfig, active_sessions: set[str], db: B
     """Detect stalled agents and escalate to the configured target."""
     stalls = await check_for_stalls(config, active_sessions, db)
     escalation_target = config.escalation.escalation_target
-    escalation_session = config.registry.sessions_map.get(escalation_target)
 
     for stall in stalls:
         event_key = f"stall:{stall['issue_number']}"
         if _should_escalate(
             stall["session"], event_key, config.escalation.escalation_dedup_seconds
         ):
+            escalation_session = _resolve_target_session(
+                escalation_target,
+                stall["session"],
+                config,
+            )
             if escalation_session and escalation_session in active_sessions:
                 msg = format_stall_notification(
                     stall["session"],
@@ -331,13 +391,17 @@ async def handle_offline(
     """Detect unexpectedly offline agents and escalate."""
     offline_agents = await check_for_unexpected_offline(config, active_sessions, db, gh)
     escalation_target = config.escalation.escalation_target
-    escalation_session = config.registry.sessions_map.get(escalation_target)
 
     for agent in offline_agents:
         event_key = "offline"
         if _should_escalate(
             agent["session"], event_key, config.escalation.escalation_dedup_seconds
         ):
+            escalation_session = _resolve_target_session(
+                escalation_target,
+                agent["session"],
+                config,
+            )
             if escalation_session and escalation_session in active_sessions:
                 msg = format_unexpected_offline_notification(
                     agent["session"],
@@ -448,7 +512,7 @@ async def check_plan_waiting(
         # Orchestrator tmux notification
         orchestrator = _resolve_orchestrator(session_name, config)
         if orchestrator:
-            orch_session = config.registry.sessions_map.get(orchestrator)
+            orch_session = _resolve_target_session(orchestrator, session_name, config)
             if (
                 orch_session
                 and orch_session in active_sessions

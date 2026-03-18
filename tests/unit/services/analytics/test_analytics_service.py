@@ -197,6 +197,25 @@ class TestOverview:
         assert result["totals"]["tokens"]["input_tokens"] == 300
         assert result["totals"]["tokens"]["output_tokens"] == 125
         assert result["totals"]["captured_cost_usd"] == pytest.approx(0.03)
+        assert result["totals"]["cost_status"] == "complete"
+
+    async def test_cost_status_partial_when_some_missing(self, db, svc):
+        rows = [
+            _activity_row(
+                event="token.usage",
+                data={"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.01},
+                ts_offset=0,
+            ),
+            _activity_row(
+                event="token.usage",
+                data={"input_tokens": 200, "output_tokens": 75},
+                ts_offset=1,
+            ),
+        ]
+        await _insert_rows(db, rows)
+
+        result = await svc.get_overview(db, "agent-backbone", include_swarm_workers=False)
+        assert result["totals"]["captured_cost_usd"] == pytest.approx(0.01)
         assert result["totals"]["cost_status"] == "partial"
 
     async def test_error_counting(self, db, svc):
@@ -753,7 +772,7 @@ class TestOpenCodeCostOnMessageAssistant:
             include_swarm_workers=False,
         )
         assert result["totals"]["captured_cost_usd"] == pytest.approx(1.25)
-        assert result["totals"]["cost_status"] == "partial"
+        assert result["totals"]["cost_status"] == "complete"
 
     async def test_cost_from_mixed_events(self, db, svc):
         """Cost from both token.usage and message.assistant sums."""
@@ -778,6 +797,7 @@ class TestOpenCodeCostOnMessageAssistant:
             include_swarm_workers=False,
         )
         assert result["totals"]["captured_cost_usd"] == pytest.approx(1.30)
+        assert result["totals"]["cost_status"] == "complete"
 
 
 class TestSwarmAttributionInEventsAndErrors:

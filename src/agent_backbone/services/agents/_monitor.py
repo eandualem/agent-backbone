@@ -84,7 +84,8 @@ async def _monitor_agents_impl() -> dict:
 
     # Mark swarm workers failed if their tmux session vanished mid-run.
     try:
-        lost_workers = await db.reconcile_swarm_worker_sessions(active_sessions)
+        fresh_active_sessions = set(await list_sessions())
+        lost_workers = await db.reconcile_swarm_worker_sessions(fresh_active_sessions)
         if lost_workers:
             log.warning("Marked %d swarm worker session(s) lost", lost_workers)
     except Exception:

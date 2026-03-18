@@ -156,6 +156,34 @@ class TestOnConnect:
             result = await ns.on_connect("sid1", {}, auth={})
             assert result is False
 
+    async def test_socket_auth_rejects_non_string_api_key(self):
+        """Connections reject non-string api_key values."""
+        ns = _make_namespace()
+        with patch.dict(os.environ, {"BACKBONE_API_KEY": "secret-key"}):
+            result = await ns.on_connect("sid1", {}, auth={"api_key": 12345})
+            assert result is False
+
+    async def test_socket_auth_rejects_null_api_key(self):
+        """Connections reject null api_key values."""
+        ns = _make_namespace()
+        with patch.dict(os.environ, {"BACKBONE_API_KEY": "secret-key"}):
+            result = await ns.on_connect("sid1", {}, auth={"api_key": None})
+            assert result is False
+
+    async def test_socket_auth_rejects_non_dict_auth(self):
+        """Connections reject non-dict auth payloads."""
+        ns = _make_namespace()
+        with patch.dict(os.environ, {"BACKBONE_API_KEY": "secret-key"}):
+            result = await ns.on_connect("sid1", {}, auth="bad")
+            assert result is False
+
+    async def test_socket_auth_rejects_list_auth(self):
+        """Connections reject list auth payloads."""
+        ns = _make_namespace()
+        with patch.dict(os.environ, {"BACKBONE_API_KEY": "secret-key"}):
+            result = await ns.on_connect("sid1", {}, auth=["list"])
+            assert result is False
+
 
 class TestSessionsNamespace:
     async def test_connect_valid_key(self):

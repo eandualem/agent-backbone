@@ -59,6 +59,21 @@ class EntityRegistry:
             return []
         return [entry.session]
 
+    def resolve_entity_sessions(self, entity_name: str) -> list[str]:
+        """Resolve an entity to its concrete tmux sessions, expanding role entries."""
+        entry = self.entities.get(entity_name)
+        if not entry:
+            if entity_name in self.repo_names:
+                return [entity_name]
+            return []
+        if entry.entity_type == "role":
+            return [
+                inst.session for inst in entry.instances.values() if inst.session is not None
+            ]
+        if entry.session is None:
+            return []
+        return [entry.session]
+
     @cached_property
     def sessions_map(self) -> dict[str, str]:
         """Entity name -> session name mapping (excludes entities with no session)."""
@@ -73,15 +88,16 @@ class EntityRegistry:
         """Session name -> entity name, including concrete role-instance sessions."""
         reverse: dict[str, str] = {}
         for name, entry in self.entities.items():
-            if (
-                entry.session is not None
-                and entry.entity_type != "role"
-                and entry.session not in reverse
-            ):
-                reverse[entry.session] = name
+            if entry.entity_type != "role":
+                continue
             for instance in entry.instances.values():
                 if instance.session is not None and instance.session not in reverse:
-                    reverse[instance.session] = instance.session
+                    reverse[instance.session] = name
+
+        for name, entry in self.entities.items():
+            if entry.session is None or entry.entity_type == "role":
+                continue
+            reverse[entry.session] = name
         return reverse
 
     @cached_property
@@ -212,6 +228,10 @@ class EntityRegistry:
                 continue
             if entry.organization == org:
                 return name
+            if entry.entity_type == "role":
+                for inst_name, instance in entry.instances.items():
+                    if instance.organization == org:
+                        return instance.session or inst_name
         return None
 
     def organizations_for_repo(self, repo_name: str) -> frozenset[str]:

@@ -94,10 +94,13 @@ def is_due(schedule: dict, last_fired: str | None, default_tz: str) -> bool:
 
 def _schedule_targets(agent: str, config: BackboneConfig) -> list[str]:
     """Expand a heartbeat schedule key to concrete runtime sessions."""
-    sessions = config.registry.delivery_sessions_for(agent)
+    sessions = config.registry.resolve_entity_sessions(agent)
     if sessions:
         return sessions
-    return [agent]
+    if agent not in config.registry.entities:
+        return [agent]
+    log.warning("Registry entity %s has no concrete sessions", agent)
+    return []
 
 
 @task
@@ -191,6 +194,9 @@ async def _heartbeat_scheduler_impl() -> dict:
 
     for agent, schedule in schedules.items():
         targets = _schedule_targets(agent, config)
+        if not targets:
+            log.info("Heartbeat skipped for %s — no deliverable targets", agent)
+            continue
         target_outcomes: list[str] = []
         for target in targets:
             outcome = await evaluate_agent_heartbeat(

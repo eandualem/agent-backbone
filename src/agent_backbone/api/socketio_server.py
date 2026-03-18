@@ -8,6 +8,7 @@ Provides bidirectional real-time terminal access via PTY-based
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import time
@@ -73,7 +74,9 @@ def _socket_auth_valid(auth: dict | None = None) -> bool:
     api_key = os.environ.get("BACKBONE_API_KEY", "")
     if not api_key:
         return True
-    return bool(auth and auth.get("api_key") == api_key)
+    raw = auth.get("api_key") if isinstance(auth, dict) else None
+    token = raw if isinstance(raw, str) else ""
+    return hmac.compare_digest(token, api_key)
 
 
 class SessionsNamespace(socketio.AsyncNamespace):

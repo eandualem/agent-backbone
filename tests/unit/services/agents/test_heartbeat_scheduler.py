@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
@@ -442,3 +443,53 @@ class TestHeartbeatSchedulerFlow:
         assert result["bell-wf"] == "delivered"
         assert result["bell-loveble"] == "delivered"
         assert mock_send.await_count == 2
+
+    async def test_unresolved_role_entity_skips_delivery_and_logs_warning(
+        self, tmp_path, caplog
+    ):
+        """Registry-known roles without concrete instances are skipped cleanly."""
+        schedule_path = tmp_path / "schedules.json"
+        schedules = {"bell": {"cron": "0 * * * *", "timezone": TZ, "enabled": True}}
+        schedule_path.write_text(json.dumps(schedules))
+
+        config = BackboneConfig(
+            webhook_secret="test",
+            registry=EntityRegistry(
+                entities={
+                    "bell": EntityEntry(
+                        session=None,
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="",
+                        role="Org Orchestrator",
+                        entity_type="role",
+                        instances={},
+                    )
+                },
+                repos=[],
+            ),
+            heartbeat=HeartbeatConfig(
+                schedule_file=str(schedule_path),
+                default_timezone=TZ,
+            ),
+        )
+        mock_db = AsyncMock()
+
+        from agent_backbone.services._locator import init as init_flow_services
+
+        init_flow_services(config=config, db=mock_db, gh=AsyncMock())
+        caplog.set_level(logging.WARNING, logger=_HB)
+
+        with (
+            patch(f"{_HB}.list_sessions", new_callable=AsyncMock) as mock_list,
+            patch(f"{_HB}.get_agent_state", new_callable=AsyncMock) as mock_state,
+            patch(f"{_HB}.send_message", new_callable=AsyncMock) as mock_send,
+        ):
+            mock_list.return_value = []
+
+            result = await heartbeat_scheduler()
+
+        assert result == {}
+        mock_state.assert_not_called()
+        mock_send.assert_not_called()
+        assert "Registry entity bell has no concrete sessions" in caplog.text

@@ -7,6 +7,8 @@ from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from agent_backbone.api.routes import notes as notes_routes
+
 
 @pytest.fixture
 async def client(api_app):
@@ -230,3 +232,76 @@ class TestDeleteNote:
         resp = await client.delete("/api/notes/../../etc/passwd", headers=auth_headers)
 
         assert resp.status_code in (403, 404)
+
+
+class TestNotesUseToThread:
+    async def test_list_notes_uses_to_thread(self, client, auth_headers, notes_tmp):
+        (notes_tmp / "threaded.md").write_text("# Threaded\ncontent")
+
+        with patch(
+            "agent_backbone.api.routes.notes.asyncio.to_thread",
+            side_effect=lambda func, *args: func(*args),
+        ) as mock_to_thread:
+            resp = await client.get("/api/notes", headers=auth_headers)
+
+        assert resp.status_code == 200
+        mock_to_thread.assert_awaited_once()
+        assert mock_to_thread.await_args.args[0] is notes_routes._list_notes_sync
+
+    async def test_get_note_uses_to_thread(self, client, auth_headers, notes_tmp):
+        (notes_tmp / "threaded.md").write_text("# Threaded\ncontent")
+
+        with patch(
+            "agent_backbone.api.routes.notes.asyncio.to_thread",
+            side_effect=lambda func, *args: func(*args),
+        ) as mock_to_thread:
+            resp = await client.get("/api/notes/threaded.md", headers=auth_headers)
+
+        assert resp.status_code == 200
+        mock_to_thread.assert_awaited_once()
+        assert mock_to_thread.await_args.args[0] is notes_routes._read_note_sync
+
+    async def test_create_note_uses_to_thread(self, client, auth_headers, notes_tmp):
+        with patch(
+            "agent_backbone.api.routes.notes.asyncio.to_thread",
+            side_effect=lambda func, *args: func(*args),
+        ) as mock_to_thread:
+            resp = await client.post(
+                "/api/notes",
+                json={"title": "Threaded Create", "content": "# Threaded Create\ncontent"},
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 201
+        mock_to_thread.assert_awaited_once()
+        assert mock_to_thread.await_args.args[0] is notes_routes._create_note_sync
+
+    async def test_update_note_uses_to_thread(self, client, auth_headers, notes_tmp):
+        (notes_tmp / "threaded.md").write_text("# Old\ncontent")
+
+        with patch(
+            "agent_backbone.api.routes.notes.asyncio.to_thread",
+            side_effect=lambda func, *args: func(*args),
+        ) as mock_to_thread:
+            resp = await client.put(
+                "/api/notes/threaded.md",
+                json={"content": "# Updated\ncontent"},
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        mock_to_thread.assert_awaited_once()
+        assert mock_to_thread.await_args.args[0] is notes_routes._update_note_sync
+
+    async def test_delete_note_uses_to_thread(self, client, auth_headers, notes_tmp):
+        (notes_tmp / "threaded.md").write_text("# Threaded\ncontent")
+
+        with patch(
+            "agent_backbone.api.routes.notes.asyncio.to_thread",
+            side_effect=lambda func, *args: func(*args),
+        ) as mock_to_thread:
+            resp = await client.delete("/api/notes/threaded.md", headers=auth_headers)
+
+        assert resp.status_code == 200
+        mock_to_thread.assert_awaited_once()
+        assert mock_to_thread.await_args.args[0] is notes_routes._delete_note_sync
