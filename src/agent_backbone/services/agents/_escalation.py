@@ -8,6 +8,7 @@ import os
 import time
 
 from prefect import task
+from prefect.cache_policies import NO_CACHE
 
 from agent_backbone.config import REPO_NAME_PATTERN, BackboneConfig
 from agent_backbone.services.agents._inference import get_agent_state
@@ -224,7 +225,7 @@ async def _pending_count_for_session(
     )
 
 
-@task
+@task(cache_policy=NO_CACHE)
 async def check_for_stalls(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB
 ) -> list[dict]:
@@ -286,7 +287,7 @@ async def check_for_stalls(
     return stalls
 
 
-@task
+@task(cache_policy=NO_CACHE)
 async def check_for_unexpected_offline(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB, gh: object
 ) -> list[dict]:

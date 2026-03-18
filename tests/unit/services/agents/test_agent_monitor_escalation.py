@@ -7,6 +7,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from prefect.cache_policies import NO_CACHE
 
 from agent_backbone.config import (
     AgentStateConfig,
@@ -140,6 +141,13 @@ def patch_copy_mode_recovery():
     """Keep monitor tests focused on the behavior under test."""
     with patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock) as mock_recovery:
         yield mock_recovery
+
+
+class TestPrefectTaskConfig:
+    def test_offline_and_stall_tasks_disable_prefect_input_caching(self):
+        """Prefect must not hash BackboneDB inputs for these monitor tasks."""
+        assert check_for_stalls.cache_policy == NO_CACHE
+        assert check_for_unexpected_offline.cache_policy == NO_CACHE
 
 
 @pytest.fixture
