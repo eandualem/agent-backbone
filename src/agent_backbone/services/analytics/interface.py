@@ -487,7 +487,7 @@ class AnalyticsService:
 
         # Cost status
         if any_cost:
-            totals.cost_status = "partial" if not all_have_cost else "partial"
+            totals.cost_status = "partial" if not all_have_cost else "complete"
         else:
             totals.cost_status = "unavailable"
 
