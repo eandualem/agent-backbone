@@ -11,6 +11,8 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import socketio
+
     from agent_backbone.config import BackboneConfig
     from agent_backbone.services.database import BackboneDB
     from agent_backbone.services.database.interface import DatabaseService
@@ -22,6 +24,7 @@ _config: BackboneConfig | None = None
 _db: BackboneDB | None = None
 _gh: GitHubClient | None = None
 _database_service: DatabaseService | None = None
+_sio: socketio.AsyncServer | None = None
 _init_lock = asyncio.Lock()
 
 
@@ -31,13 +34,15 @@ def init(
     db: BackboneDB,
     gh: GitHubClient,
     database_service: DatabaseService | None = None,
+    sio: socketio.AsyncServer | None = None,
 ) -> None:
     """Populate the service locator. Called once during app lifespan."""
-    global _config, _db, _gh, _database_service
+    global _config, _db, _gh, _database_service, _sio
     _config = config
     _db = db
     _gh = gh
     _database_service = database_service
+    _sio = sio
     log.info("Flow services initialized")
 
 
@@ -50,10 +55,10 @@ async def ensure_initialized() -> None:
         if _config is not None and _db is not None and _gh is not None:
             return
 
-        from agent_backbone.settings import AppSettings
         from agent_backbone.services.database.backbone_db import BackboneDB
         from agent_backbone.services.database.interface import DatabaseService
         from agent_backbone.services.github.interface import GitHubClient
+        from agent_backbone.settings import AppSettings
 
         config = AppSettings().build_config()
         database_service = DatabaseService(config.database)
@@ -90,10 +95,16 @@ def get_gh() -> GitHubClient:
     return _gh
 
 
+def get_sio() -> socketio.AsyncServer | None:
+    """Return the shared Socket.IO server when running inside the gateway process."""
+    return _sio
+
+
 def reset() -> None:
     """Clear all services. Used for test isolation."""
-    global _config, _db, _gh, _database_service
+    global _config, _db, _gh, _database_service, _sio
     _config = None
     _db = None
     _gh = None
     _database_service = None
+    _sio = None

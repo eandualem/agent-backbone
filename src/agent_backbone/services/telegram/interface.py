@@ -71,16 +71,6 @@ class TelegramService:
         allowed = self._config.telegram.allowed_chat_ids
         return not allowed or chat_id in allowed
 
-    async def _run_shell(self, cmd: str) -> tuple[str, int]:
-        """Run a shell command and return (stdout+stderr, returncode)."""
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await proc.communicate()
-        return stdout.decode().strip(), proc.returncode or 0
-
     @staticmethod
     async def send_notification(token: str, chat_id: int, text: str) -> bool:
         """Send a proactive push notification via Telegram API.

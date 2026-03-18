@@ -27,6 +27,7 @@ class SessionIntelligence(StrEnum):
     USER_INTERACTING = "user_interacting"
     AGENT_WORKING = "agent_working"
     PLAN_WAITING = "plan_waiting"
+    PERMISSION_WAITING = "permission_waiting"
     OFFLINE = "offline"
     UNKNOWN = "unknown"
 
@@ -39,4 +40,5 @@ class SessionProfile:
     intelligence: SessionIntelligence
     runtime: str = "unknown"
     agent_state: AgentState = AgentState.UNKNOWN
+    current_issue: int | None = None
     tmux_vars: dict[str, str] = field(default_factory=dict)

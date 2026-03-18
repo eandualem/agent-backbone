@@ -36,12 +36,14 @@ async def deliver_pending_issues(
     Returns a dict mapping entity → action taken.
     """
     result: dict[str, str] = {}
-    comment_ack_cache: dict[int, set[str]] = {}
+    comment_ack_cache: dict[tuple[str, int], set[str]] = {}
 
     async def is_acknowledged(
         issue_number: int,
         target_entity: str,
         sessions: list[str],
+        *,
+        repo_full_name: str | None = None,
     ) -> bool:
         """Check acknowledgment via DB, local action log, then GitHub comments."""
         try:
@@ -52,9 +54,10 @@ async def deliver_pending_issues(
                 await db.record_acknowledgment(issue_number, target_entity)
                 return True
 
-            acknowledged_entities = comment_ack_cache.get(issue_number)
+            cache_key = (repo_full_name or "", issue_number)
+            acknowledged_entities = comment_ack_cache.get(cache_key)
             if acknowledged_entities is None:
-                comments = await gh.list_comments(issue_number)
+                comments = await gh.list_comments(issue_number, repo_full_name=repo_full_name)
                 acknowledged_entities = {
                     entity
                     for comment in comments
@@ -62,7 +65,7 @@ async def deliver_pending_issues(
                     for entity in [parse_from_tag(comment.body)]
                     if entity
                 }
-                comment_ack_cache[issue_number] = acknowledged_entities
+                comment_ack_cache[cache_key] = acknowledged_entities
 
             if target_entity in acknowledged_entities:
                 await db.record_acknowledgment(issue_number, target_entity)
@@ -73,6 +76,48 @@ async def deliver_pending_issues(
                 issue_number,
             )
 
+        return False
+
+    async def was_recently_delivered(
+        issue_number: int,
+        target_entity: str,
+        session_name: str,
+    ) -> bool:
+        """Whether the same target/session got this issue very recently."""
+        try:
+            # Query without outcome filter — outcomes may be prefixed
+            # (e.g. "comment_delivered") so exact match misses them.
+            recent = await db.query_deliveries(
+                issue_number=issue_number,
+                target_entity=target_entity,
+                session_name=session_name,
+                limit=10,
+            )
+            if recent and isinstance(recent, list):
+                for row in recent:
+                    outcome = row.get("outcome", "")
+                    if not outcome.endswith(("delivered", "retried")):
+                        continue
+                    delivered_at = datetime.fromisoformat(row["created_at"])
+                    now = datetime.now(UTC)
+                    if delivered_at.tzinfo is None:
+                        delivered_at = delivered_at.replace(tzinfo=UTC)
+                    age = (now - delivered_at).total_seconds()
+                    if age < config.scheduling.monitor_interval_seconds * 2:
+                        log.info(
+                            "Skipping #%d for %s (%s) — delivered %ds ago by %s",
+                            issue_number,
+                            target_entity,
+                            session_name,
+                            int(age),
+                            row.get("flow_name", "?"),
+                        )
+                        return True
+        except Exception:
+            log.exception(
+                "Failed to check recent deliveries for #%d (non-fatal)",
+                issue_number,
+            )
         return False
 
     for entity in config.registry.all_entities:
@@ -137,38 +182,7 @@ async def deliver_pending_issues(
                 result_key = f"{entity}:{session_name}" if multi_session else entity
 
                 # Skip if recently delivered to this concrete session.
-                recently_delivered = False
-                try:
-                    recent = await db.query_deliveries(
-                        issue_number=candidate.number,
-                        target_entity=entity,
-                        session_name=session_name,
-                        outcome="delivered",
-                        limit=1,
-                    )
-                    if recent and isinstance(recent, list):
-                        delivered_at = datetime.fromisoformat(recent[0]["created_at"])
-                        now = datetime.now(UTC)
-                        if delivered_at.tzinfo is None:
-                            delivered_at = delivered_at.replace(tzinfo=UTC)
-                        age = (now - delivered_at).total_seconds()
-                        if age < config.scheduling.monitor_interval_seconds * 2:
-                            recently_delivered = True
-                            log.info(
-                                "Skipping #%d for %s (%s) — delivered %ds ago by %s",
-                                candidate.number,
-                                entity,
-                                session_name,
-                                int(age),
-                                recent[0].get("flow_name", "?"),
-                            )
-                except Exception:
-                    log.exception(
-                        "Failed to check recent deliveries for #%d (non-fatal)",
-                        candidate.number,
-                    )
-
-                if recently_delivered:
+                if await was_recently_delivered(candidate.number, entity, session_name):
                     continue
 
                 delivery_outcome = await safe_deliver(
@@ -253,29 +267,7 @@ async def deliver_pending_issues(
                     continue
 
                 # Check recently delivered
-                recently_delivered = False
-                try:
-                    recent = await db.query_deliveries(
-                        issue_number=candidate.number,
-                        target_entity="coding-agent",
-                        outcome="delivered",
-                        limit=1,
-                    )
-                    if recent:
-                        delivered_at = datetime.fromisoformat(recent[0]["created_at"])
-                        now = datetime.now(UTC)
-                        if delivered_at.tzinfo is None:
-                            delivered_at = delivered_at.replace(tzinfo=UTC)
-                        age = (now - delivered_at).total_seconds()
-                        if age < config.scheduling.monitor_interval_seconds * 2:
-                            recently_delivered = True
-                except Exception:
-                    log.exception(
-                        "Failed to check recent deliveries for #%d (non-fatal)",
-                        candidate.number,
-                    )
-
-                if recently_delivered:
+                if await was_recently_delivered(candidate.number, "coding-agent", session_name):
                     continue
 
                 # Deliver
@@ -307,5 +299,72 @@ async def deliver_pending_issues(
 
             if not delivered and f"coding:{session_name}" not in result:
                 result[f"coding:{session_name}"] = "no_deliverable"
+
+        # Repo-local issue sweep for active code repos.
+        for session_name in sorted(coding_sessions):
+            prior_result = result.get(f"coding:{session_name}")
+            if prior_result not in (None, "no_pending", "no_deliverable"):
+                continue
+
+            snapshot = await get_agent_state(
+                config.agent_state.state_path,
+                session_name,
+                config.agent_state.stale_threshold_seconds,
+            )
+            if not should_deliver(snapshot.state, require_idle=True):
+                result[f"repo:{session_name}"] = "deferred"
+                log.info(
+                    "Deferred repo-local delivery to %s (state=%s)",
+                    session_name,
+                    snapshot.state.value,
+                )
+                continue
+
+            repo_full_name = f"{config.github.owner}/{session_name}"
+            repo_issues = await gh.list_issues(state="open", repo_full_name=repo_full_name)
+            if not repo_issues:
+                result[f"repo:{session_name}"] = "no_pending"
+                continue
+
+            queue_scope_issue_numbers = {issue.number for issue in repo_issues}
+            delivered = False
+            for candidate in repo_issues:
+                if await is_acknowledged(
+                    candidate.number,
+                    session_name,
+                    [session_name],
+                    repo_full_name=repo_full_name,
+                ):
+                    continue
+
+                if await was_recently_delivered(candidate.number, session_name, session_name):
+                    continue
+
+                message = format_next_issue_notification(candidate)
+                delivery_outcome = await safe_deliver(
+                    session_name,
+                    message,
+                    config,
+                    db=db,
+                    issue_number=candidate.number,
+                    target_entity=session_name,
+                    flow_name="agent-monitor",
+                    enforce_issue_queue=True,
+                    queue_scope_issue_numbers=queue_scope_issue_numbers,
+                )
+                if delivery_outcome == "delivered":
+                    result[f"repo:{session_name}"] = f"delivered_#{candidate.number}"
+                    log.info(
+                        "Delivered repo-local issue #%d to %s",
+                        candidate.number,
+                        session_name,
+                    )
+                else:
+                    result[f"repo:{session_name}"] = delivery_outcome
+                delivered = True
+                break
+
+            if not delivered and f"repo:{session_name}" not in result:
+                result[f"repo:{session_name}"] = "no_deliverable"
 
     return result

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.agents import (
     AgentState,
+    StateSnapshot,
     find_outgoing_comment,
     get_agent_state,
     has_commented_on_issue,
@@ -23,6 +24,7 @@ from agent_backbone.services.agents.interface import StateService, _row_to_snaps
 from agent_backbone.services.database import BackboneDB
 
 _INF = "agent_backbone.services.agents._inference"
+_IFACE = "agent_backbone.services.agents.interface"
 
 
 class TestReadStateFile:
@@ -78,6 +80,22 @@ class TestReadStateFile:
         assert result.plan_file == "/tmp/plan.md"
         assert result.plan_title == "Add caching layer"
 
+    def test_permission_waiting_state(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "state": "permission_waiting",
+                    "issue": 42,
+                    "ts": time.time(),
+                }
+            )
+        )
+        result = read_state_file(tmp_path, "ike")
+        assert result is not None
+        assert result.state == AgentState.PERMISSION_WAITING
+        assert result.current_issue == 42
+
 
 class TestPlanWaiting:
     def test_plan_waiting_enum_value(self):
@@ -92,6 +110,13 @@ class TestPlanWaiting:
 
     def test_should_deliver_plan_waiting_require_idle(self):
         assert should_deliver(AgentState.PLAN_WAITING, require_idle=True) is False
+
+    def test_permission_waiting_enum_value(self):
+        assert AgentState.PERMISSION_WAITING == "permission_waiting"
+        assert AgentState("permission_waiting") == AgentState.PERMISSION_WAITING
+
+    def test_should_deliver_permission_waiting_default(self):
+        assert should_deliver(AgentState.PERMISSION_WAITING) is False
 
 
 class TestInferStateFromPane:
@@ -174,6 +199,17 @@ class TestInferStateFromPane:
         result = infer_state_from_pane(pane)
         assert result.state == AgentState.IDLE
 
+    def test_idle_codex_prompt_ignores_stale_claude_history(self):
+        """Historical runtime text above the prompt must not force a wrong adapter."""
+        pane = (
+            "Previous diagnostic output: Claude Code runtime mismatch\n"
+            "More history about opus 4.6 and delivery retries\n\n"
+            "\u203a Explain this codebase\n\n"
+            "  gpt-5.4 xhigh \u00b7 88% left \u00b7 ~/ws/core/code/WF/agent-backbone"
+        )
+        result = infer_state_from_pane(pane)
+        assert result.state == AgentState.IDLE
+
     def test_codex_placeholder_is_not_pending_input(self):
         """Codex's dim placeholder suggestion should not count as typed input."""
         pane = "\x1b[1m\u203a\x1b[0m \x1b[2mImprove documentation in @filename\x1b[0m"
@@ -191,6 +227,41 @@ class TestInferStateFromPane:
             "  tab to queue message                                        98% context left"
         )
         assert prompt_has_pending_input(pane) is True
+
+    def test_stuck_backbone_envelope_not_pending_input(self):
+        """A stuck backbone delivery in the prompt buffer is not user input (#766)."""
+        pane = "\u276f [via:backbone from:ike] Can you check the status?"
+        assert prompt_has_pending_input(pane) is False
+
+    def test_stuck_github_envelope_not_pending_input(self):
+        """Stuck github notification envelope is not user input."""
+        pane = "\u276f [via:github issue:51] [task] agent-backbone: Add topic routing"
+        assert prompt_has_pending_input(pane) is False
+
+    def test_stuck_telegram_envelope_not_pending_input(self):
+        """Stuck telegram envelope is not user input."""
+        pane = "\u276f [via:telegram from:elias] What's the status?"
+        assert prompt_has_pending_input(pane) is False
+
+    def test_stuck_heartbeat_envelope_not_pending_input(self):
+        """Stuck heartbeat envelope is not user input."""
+        pane = "\u276f [via:heartbeat] periodic check"
+        assert prompt_has_pending_input(pane) is False
+
+    def test_real_user_input_still_detected(self):
+        """Regression guard: actual user text after prompt is still pending input."""
+        pane = "\u276f hello"
+        assert prompt_has_pending_input(pane) is True
+
+    def test_prefix_guard_suffix_matched_output_not_pending(self):
+        """A suffix-matched output line (no prompt prefix) is not pending input."""
+        from agent_backbone.services.terminal._adapters import TerminalRuntime, get_terminal_adapter
+
+        # Claude adapter has prefix ❯ and suffix $. A line ending with $
+        # but not starting with ❯ matched via suffix only — prefix guard
+        # should reject it as not real user input.
+        claude = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        assert claude.prompt_has_pending_input("some output line $") is False
 
     def test_codex_queued_message_banner_is_ignored_for_prompt_detection(self):
         """Queued-message instructional chrome should not hide the live prompt."""
@@ -222,9 +293,47 @@ class TestGetAgentState:
         state_file.write_text(
             json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
         )
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock):
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
             result = await get_agent_state(tmp_path, "ike")
         assert result.state == AgentState.PROCESSING_ISSUE
+        assert result.source == "push"
+
+    async def test_fresh_busy_push_reconciles_when_pane_is_idle(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
+        with patch(
+            f"{_INF}.capture_pane",
+            new_callable=AsyncMock,
+            return_value="user@host $",
+        ):
+            result = await get_agent_state(tmp_path, "ike")
+        assert result.state == AgentState.IDLE
+        assert result.source == "pull"
+
+    async def test_fresh_processing_push_reconciles_when_pane_is_idle(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(
+            json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
+        )
+        with patch(
+            f"{_INF}.capture_pane",
+            new_callable=AsyncMock,
+            return_value="user@host $",
+        ):
+            result = await get_agent_state(tmp_path, "ike")
+        assert result.state == AgentState.IDLE
+        assert result.source == "pull"
+
+    async def test_fresh_busy_push_survives_unknown_pane(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
+        with patch(
+            f"{_INF}.capture_pane",
+            new_callable=AsyncMock,
+            return_value="random output",
+        ):
+            result = await get_agent_state(tmp_path, "ike")
+        assert result.state == AgentState.BUSY
         assert result.source == "push"
 
     async def test_stale_push_triggers_pull(self, tmp_path):
@@ -263,14 +372,14 @@ class TestGetAgentState:
         assert result.source == "default"
 
     async def test_stale_idle_verified_via_tmux(self, tmp_path):
-        """Stale idle push state is re-checked from tmux before fallback."""
+        """Stale known push state is reused when pane inference cannot classify."""
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "idle", "issue": None, "ts": time.time() - 600}))
         mock_capture = AsyncMock(return_value="random stuff")
         with patch(f"{_INF}.capture_pane", mock_capture):
             result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
-        assert result.state == AgentState.UNKNOWN
-        assert result.source == "pull"
+        assert result.state == AgentState.IDLE
+        assert result.source == "push"
         mock_capture.assert_awaited_once()
 
     async def test_stale_busy_verified_via_tmux(self, tmp_path):
@@ -296,6 +405,61 @@ class TestGetAgentState:
         assert result.state == AgentState.IDLE
         assert result.source == "pull"
         mock_capture.assert_awaited_once()
+
+    async def test_stale_plan_waiting_without_plan_file_does_not_resurrect(self, tmp_path):
+        """A missing plan file must not keep a dead plan_waiting snapshot alive."""
+        state_file = tmp_path / "feynman.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "state": "plan_waiting",
+                    "ts": time.time() - 600,
+                    "plan_file": str(tmp_path / "missing-plan.md"),
+                    "plan_title": "Add caching",
+                }
+            )
+        )
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
+            result = await get_agent_state(tmp_path, "feynman", stale_threshold=300)
+        assert result.state == AgentState.UNKNOWN
+        assert result.source == "pull"
+
+    async def test_stale_plan_waiting_with_existing_plan_file_falls_back(self, tmp_path):
+        """An unresolved plan can still be trusted when the backing file exists."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan\n")
+        state_file = tmp_path / "feynman.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "state": "plan_waiting",
+                    "ts": time.time() - 600,
+                    "plan_file": str(plan_file),
+                    "plan_title": "Add caching",
+                }
+            )
+        )
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
+            result = await get_agent_state(tmp_path, "feynman", stale_threshold=300)
+        assert result.state == AgentState.PLAN_WAITING
+        assert result.source == "push"
+
+    async def test_stale_permission_waiting_does_not_resurrect(self, tmp_path):
+        """Permission prompts are transient and must never be revived from stale push data."""
+        state_file = tmp_path / "feynman.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "state": "permission_waiting",
+                    "issue": 42,
+                    "ts": time.time() - 600,
+                }
+            )
+        )
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
+            result = await get_agent_state(tmp_path, "feynman", stale_threshold=300)
+        assert result.state == AgentState.UNKNOWN
+        assert result.source == "pull"
 
 
 class TestRowToSnapshot:
@@ -355,14 +519,38 @@ class TestStateServiceDBFirst:
             db._engine = None
             await engine.dispose()
 
-    async def test_db_first_returns_db_state(self, db, tmp_path):
-        """When DB has state, it's returned without file fallback."""
-        await db.set_agent_state("ike", "processing_issue", current_issue=42, ts="1709500000.0")
+    async def test_db_first_returns_idle_db_state(self, db, tmp_path):
+        """Stable idle snapshots are served from DB without live reconciliation."""
+        await db.set_agent_state("ike", "idle", current_issue=None, ts="1709500000.0")
         svc = StateService(state_dir=str(tmp_path), db=db)
         snap = await svc.get_state("ike")
-        assert snap.state == AgentState.PROCESSING_ISSUE
-        assert snap.current_issue == 42
+        assert snap.state == AgentState.IDLE
+        assert snap.current_issue is None
         assert snap.source == "db"
+
+    async def test_db_working_state_uses_live_reconciliation(self, db, tmp_path):
+        """Cached working states are refreshed from the live reconciler."""
+        await db.set_agent_state("ike", "busy", current_issue=42, ts="1709500000.0")
+        svc = StateService(state_dir=str(tmp_path), db=db)
+        live_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+            timestamp=1709500100.0,
+        )
+        with patch(
+            f"{_IFACE}._get_agent_state",
+            new_callable=AsyncMock,
+            return_value=live_snapshot,
+        ):
+            snap = await svc.get_state("ike")
+        assert snap.state == AgentState.IDLE
+        assert snap.source == "pull"
+
+        row = await db.get_agent_state("ike")
+        assert row is not None
+        assert row["state"] == "idle"
+        assert row["current_issue"] is None
+        assert row["ts"] == "1709500100.0"
 
     async def test_fallback_to_file_when_no_db_row(self, db, tmp_path):
         """When DB has no row, falls back to file+tmux."""
@@ -379,7 +567,7 @@ class TestStateServiceDBFirst:
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
         svc = StateService(state_dir=str(tmp_path), db=None)
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock):
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
             snap = await svc.get_state("ike")
         assert snap.state == AgentState.BUSY
         assert snap.source == "push"

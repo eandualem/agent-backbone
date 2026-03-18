@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -30,9 +30,11 @@ from agent_backbone.services.agents import (
     check_for_stalls,
     check_for_unexpected_offline,
     check_plan_waiting,
+    handle_offline,
+    handle_stalls,
     monitor_agents,
 )
-from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
+from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry, RepoInfo
 
 # Patch target prefixes (keep patch() lines under 100 chars)
 _MON = "agent_backbone.services.agents._monitor"
@@ -72,7 +74,52 @@ def _make_role_registry() -> EntityRegistry:
                 role="",
                 organization="Loveble",
                 entity_type="role-instance",
-            )
+            ),
+        },
+        repos=[],
+    )
+
+
+def _make_role_target_registry() -> EntityRegistry:
+    """Registry with a role target and org-scoped monitored entities."""
+    return EntityRegistry(
+        entities={
+            "bell": EntityEntry(
+                session=None,
+                home="~/ws/core/code/WF/bell",
+                groups=["orchestrators"],
+                figure="",
+                role="",
+                entity_type="role",
+                instances={
+                    "wf": EntityInstance(
+                        home="~/ws/core/code/WF/bell",
+                        session="bell-wf",
+                        organization="WF",
+                    ),
+                    "loveble": EntityInstance(
+                        home="~/ws/core/code/Loveble/bell",
+                        session="bell-loveble",
+                        organization="Loveble",
+                    ),
+                },
+            ),
+            "wf-agent": EntityEntry(
+                session="wf-agent",
+                home="~/ws/core/code/WF/worker",
+                groups=[],
+                figure="",
+                role="",
+                organization="WF",
+            ),
+            "loveble-agent": EntityEntry(
+                session="loveble-agent",
+                home="~/ws/core/code/Loveble/worker",
+                groups=[],
+                figure="",
+                role="",
+                organization="Loveble",
+            ),
         },
         repos=[],
     )
@@ -434,6 +481,128 @@ class TestMonitorAgentsIntegration:
         patch_copy_mode_recovery.assert_awaited_once_with(config, {"ike"})
 
     @pytest.mark.asyncio
+    async def test_monitor_runs_telemetry_collection(self):
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+
+        config = _make_monitor_config()
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike", "gateway"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(
+                f"{_MON}.collect_active_session_telemetry",
+                new_callable=AsyncMock,
+                return_value={},
+            ) as mock_collect,
+            patch(
+                f"{_PEN}.get_agent_state",
+                new_callable=AsyncMock,
+                return_value=idle_snapshot,
+            ),
+            patch(
+                f"{_PEN}.check_pending_issues",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            await monitor_agents.fn()
+
+        mock_collect.assert_awaited_once_with(
+            config=config,
+            db=mock_db,
+            active_sessions={"ike", "gateway"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_monitor_reconciles_sessions_socket_updates(self):
+        """Monitor runs the guarded session subscription watcher inside the flow."""
+        config = _make_monitor_config()
+        mock_db = AsyncMock()
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(f"{_MON}.collect_active_session_telemetry", new_callable=AsyncMock),
+            patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock),
+            patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}),
+            patch(f"{_MON}.get_sio", return_value=MagicMock()),
+            patch(f"{_MON}.emit_sessions_update", new_callable=AsyncMock) as mock_emit,
+        ):
+            await monitor_agents.fn()
+
+        mock_emit.assert_awaited_once()
+        assert mock_emit.await_args.kwargs["only_if_changed"] is True
+
+    @pytest.mark.asyncio
+    async def test_monitor_reconciles_lost_swarm_workers(self):
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+
+        config = _make_monitor_config()
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_db.reconcile_swarm_worker_sessions.return_value = 1
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                side_effect=[["ike"], ["ike", "swarm-24-worker"]],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(
+                f"{_PEN}.get_agent_state",
+                new_callable=AsyncMock,
+                return_value=idle_snapshot,
+            ),
+            patch(
+                f"{_PEN}.check_pending_issues",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            await monitor_agents.fn()
+
+        mock_db.reconcile_swarm_worker_sessions.assert_awaited_once_with(
+            {"ike", "swarm-24-worker"}
+        )
+
+    @pytest.mark.asyncio
     async def test_delivers_to_idle_agent(self):
         idle_snapshot = StateSnapshot(
             state=AgentState.IDLE,
@@ -574,6 +743,7 @@ class TestMonitorAgentsIntegration:
         recent_delivery = {
             "created_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "flow_name": "issue-dispatcher",
+            "outcome": "delivered",
         }
 
         config = _make_monitor_config(
@@ -855,6 +1025,82 @@ class TestOfflineDedup:
         # DB state for feynman was cleared to "unknown"
         mock_db.set_agent_state.assert_called_once_with(
             session_name="feynman",
+            state="unknown",
+            current_issue=None,
+        )
+
+
+class TestRoleEscalationTargetResolution:
+    @pytest.mark.asyncio
+    async def test_role_escalation_target_wf_stall_notifies_matching_instance(self):
+        config = _make_monitor_config(
+            registry=_make_role_target_registry(),
+            escalation=EscalationConfig(
+                escalation_target="bell",
+                escalation_dedup_seconds=1800,
+            ),
+        )
+        mock_db = AsyncMock()
+
+        with (
+            patch(
+                f"{_ESC}.check_for_stalls",
+                new_callable=AsyncMock,
+                return_value=[
+                    {
+                        "entity": "wf-agent",
+                        "session": "wf-agent",
+                        "issue_number": 42,
+                        "duration_minutes": 120,
+                    }
+                ],
+            ),
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+        ):
+            await handle_stalls(config, {"wf-agent", "bell-wf", "bell-loveble"}, mock_db)
+
+        mock_deliver.assert_awaited_once()
+        assert mock_deliver.await_args[0][0] == "bell-wf"
+
+    @pytest.mark.asyncio
+    async def test_role_escalation_target_loveble_offline_notifies_matching_instance(self):
+        config = _make_monitor_config(
+            registry=_make_role_target_registry(),
+            escalation=EscalationConfig(
+                escalation_target="bell",
+                escalation_dedup_seconds=1800,
+            ),
+        )
+        mock_db = AsyncMock()
+
+        with (
+            patch(
+                f"{_ESC}.check_for_unexpected_offline",
+                new_callable=AsyncMock,
+                return_value=[
+                    {
+                        "entity": "loveble-agent",
+                        "session": "loveble-agent",
+                        "pending_count": 3,
+                    }
+                ],
+            ),
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+        ):
+            await handle_offline(config, {"bell-wf", "bell-loveble"}, mock_db, AsyncMock())
+
+        mock_deliver.assert_awaited_once()
+        assert mock_deliver.await_args[0][0] == "bell-loveble"
+        mock_db.set_agent_state.assert_awaited_once_with(
+            session_name="loveble-agent",
             state="unknown",
             current_issue=None,
         )
@@ -1246,6 +1492,68 @@ class TestCodingAgentSweep:
         deliver_calls = [c for c in mock_deliver.call_args_list if c[0][0] == "agent-backbone"]
         assert len(deliver_calls) == 0
 
+    @pytest.mark.asyncio
+    async def test_repo_local_issue_sweep_delivers(self):
+        """Repo-local open issues are delivered to the matching repo session."""
+        idle_snapshot = StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+        )
+        repo_issue = IssueData(
+            number=201,
+            title="Fix webhook repo fallback",
+            state="open",
+            labels=ParsedLabels(sender="unknown", targets=[], issue_type="task"),
+            repo_full_name="eandualem/agent-backbone",
+        )
+
+        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+            return idle_snapshot
+
+        async def mock_check_pending(config, entity, gh):
+            return []
+
+        config = self._make_coding_config()
+        mock_db = AsyncMock()
+        mock_db.is_acknowledged.return_value = False
+        mock_db.query_deliveries.return_value = []
+        mock_gh = AsyncMock()
+        mock_gh.list_issues = AsyncMock(return_value=[repo_issue])
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike", "agent-backbone"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch(
+                f"{_PEN}.check_pending_issues",
+                side_effect=mock_check_pending,
+            ),
+            patch(
+                f"{_PEN}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+            patch(f"{_PEN}.has_commented_on_issue", return_value=False),
+        ):
+            result = await monitor_agents.fn()
+
+        assert result["repo:agent-backbone"] == "delivered_#201"
+        mock_gh.list_issues.assert_awaited_once_with(
+            state="open",
+            repo_full_name="eandualem/agent-backbone",
+        )
+        deliver_calls = [c for c in mock_deliver.call_args_list if c[0][0] == "agent-backbone"]
+        assert len(deliver_calls) == 1
+
 
 def _make_orch_registry() -> EntityRegistry:
     """Build registry with orchestrator entities and a WF repo."""
@@ -1361,6 +1669,93 @@ class TestPlanOrchestratorNotification:
         assert call_args[1]["priority"] is True
 
     @pytest.mark.asyncio
+    async def test_plan_waiting_role_orchestrator_notifies_matching_instance(self):
+        """Coding agent in plan_waiting notifies the org-specific role instance."""
+        plan_snapshot = StateSnapshot(
+            state=AgentState.PLAN_WAITING,
+            current_issue=609,
+            timestamp=time.time(),
+            source="push",
+            plan_file="/tmp/plans/plan.md",
+            plan_title="Role orchestrator notification",
+        )
+
+        registry = EntityRegistry(
+            entities={
+                "bell": EntityEntry(
+                    session=None,
+                    home="~/ws/core/code/WF/bell/",
+                    groups=["orchestrators"],
+                    figure="",
+                    role="",
+                    entity_type="role",
+                    instances={
+                        "wf": EntityInstance(
+                            home="~/ws/core/code/WF/bell/",
+                            session="bell-wf",
+                            organization="WF",
+                        ),
+                        "loveble": EntityInstance(
+                            home="~/ws/core/code/Loveble/bell/",
+                            session="bell-loveble",
+                            organization="Loveble",
+                        ),
+                    },
+                ),
+                "backbone-agent": EntityEntry(
+                    session="agent-backbone",
+                    home="~/ws/core/code/WF/agent-backbone/",
+                    groups=[],
+                    figure="",
+                    role="",
+                ),
+            },
+            repos=[
+                RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+            ],
+        )
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            github=GitHubConfig(owner="eandualem", repo="orchestration"),
+            entities=EntityConfig(skip=frozenset({"elias"})),
+            registry=registry,
+            agent_state=AgentStateConfig(
+                state_dir="/tmp/test-state",
+                stale_threshold_seconds=300,
+            ),
+            escalation=EscalationConfig(escalation_target="ike"),
+            delivery=DeliveryConfig(),
+            capacity_routing=CapacityRoutingConfig(),
+            telegram=TelegramConfig(notification_chat_id=0),
+        )
+
+        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+            if session == "agent-backbone":
+                return plan_snapshot
+            return StateSnapshot(state=AgentState.IDLE, source="pull")
+
+        mock_db = AsyncMock()
+
+        with (
+            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+        ):
+            await check_plan_waiting(
+                config,
+                {"agent-backbone", "bell-wf", "bell-loveble"},
+                db=mock_db,
+            )
+
+        mock_deliver.assert_called_once()
+        call_args = mock_deliver.call_args
+        assert call_args[0][0] == "bell-wf"
+        assert "Role orchestrator notification" in call_args[0][1]
+
+    @pytest.mark.asyncio
     async def test_plan_waiting_orchestrator_dedup(self):
         """Second call for same plan doesn't re-notify orchestrator."""
         plan_snapshot = StateSnapshot(
@@ -1429,6 +1824,158 @@ class TestPlanOrchestratorNotification:
 
         # Should only deliver once
         assert mock_deliver.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_plan_waiting_orchestrator_dedup_survives_memory_reset(self):
+        """Persisted dedup prevents redelivery after process-local cache reset."""
+        plan_snapshot = StateSnapshot(
+            state=AgentState.PLAN_WAITING,
+            current_issue=None,
+            timestamp=time.time(),
+            source="push",
+            plan_file="/tmp/plans/plan.md",
+            plan_title="Test plan",
+        )
+
+        registry = EntityRegistry(
+            entities={
+                "bell": EntityEntry(
+                    session="bell",
+                    home="~/ws/core/bell/",
+                    groups=["orchestrators"],
+                    figure="",
+                    role="",
+                    organization="WF",
+                ),
+                "backbone-agent": EntityEntry(
+                    session="agent-backbone",
+                    home="~/ws/core/code/WF/agent-backbone/",
+                    groups=[],
+                    figure="",
+                    role="",
+                ),
+            },
+            repos=[
+                RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+            ],
+        )
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            github=GitHubConfig(owner="eandualem", repo="orchestration"),
+            entities=EntityConfig(skip=frozenset({"elias"})),
+            registry=registry,
+            agent_state=AgentStateConfig(
+                state_dir="/tmp/test-state",
+                stale_threshold_seconds=300,
+            ),
+            escalation=EscalationConfig(escalation_target="ike"),
+            delivery=DeliveryConfig(),
+            capacity_routing=CapacityRoutingConfig(),
+            telegram=TelegramConfig(notification_chat_id=0),
+        )
+
+        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+            if session == "agent-backbone":
+                return plan_snapshot
+            return StateSnapshot(state=AgentState.IDLE, source="pull")
+
+        mock_db = AsyncMock()
+        mock_db.has_activity_event = AsyncMock(side_effect=[False, True])
+
+        with (
+            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+        ):
+            await check_plan_waiting(config, {"agent-backbone", "bell"}, db=mock_db)
+            _plan_notify_dedup.clear()
+            await check_plan_waiting(config, {"agent-backbone", "bell"}, db=mock_db)
+
+        assert mock_deliver.call_count == 1
+        assert mock_db.record_activity.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_plan_waiting_same_path_new_timestamp_renotifies(self):
+        """A fresh plan with the same path still triggers a new notification."""
+        first_snapshot = StateSnapshot(
+            state=AgentState.PLAN_WAITING,
+            current_issue=None,
+            timestamp=time.time(),
+            source="push",
+            plan_file="/tmp/plans/plan.md",
+            plan_title="Test plan",
+        )
+        second_snapshot = StateSnapshot(
+            state=AgentState.PLAN_WAITING,
+            current_issue=None,
+            timestamp=first_snapshot.timestamp + 30,
+            source="push",
+            plan_file="/tmp/plans/plan.md",
+            plan_title="Test plan",
+        )
+
+        registry = EntityRegistry(
+            entities={
+                "bell": EntityEntry(
+                    session="bell",
+                    home="~/ws/core/bell/",
+                    groups=["orchestrators"],
+                    figure="",
+                    role="",
+                    organization="WF",
+                ),
+                "backbone-agent": EntityEntry(
+                    session="agent-backbone",
+                    home="~/ws/core/code/WF/agent-backbone/",
+                    groups=[],
+                    figure="",
+                    role="",
+                ),
+            },
+            repos=[
+                RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+            ],
+        )
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            github=GitHubConfig(owner="eandualem", repo="orchestration"),
+            entities=EntityConfig(skip=frozenset({"elias"})),
+            registry=registry,
+            agent_state=AgentStateConfig(
+                state_dir="/tmp/test-state",
+                stale_threshold_seconds=300,
+            ),
+            escalation=EscalationConfig(escalation_target="ike"),
+            delivery=DeliveryConfig(),
+            capacity_routing=CapacityRoutingConfig(),
+            telegram=TelegramConfig(notification_chat_id=0),
+        )
+
+        snapshots = [first_snapshot, second_snapshot]
+
+        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+            if session == "agent-backbone":
+                return snapshots.pop(0)
+            return StateSnapshot(state=AgentState.IDLE, source="pull")
+
+        mock_db = AsyncMock()
+        mock_db.has_activity_event = AsyncMock(return_value=False)
+
+        with (
+            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+        ):
+            await check_plan_waiting(config, {"agent-backbone", "bell"}, db=mock_db)
+            await check_plan_waiting(config, {"agent-backbone", "bell"}, db=mock_db)
+
+        assert mock_deliver.call_count == 2
 
     @pytest.mark.asyncio
     async def test_plan_waiting_orchestrator_offline(self):
@@ -1564,3 +2111,65 @@ class TestPlanOrchestratorNotification:
         # Should deliver to ike (escalation target)
         mock_deliver.assert_called_once()
         assert mock_deliver.call_args[0][0] == "ike"
+
+    @pytest.mark.asyncio
+    async def test_stale_plan_waiting_without_plan_file_does_not_notify_escalation_target(
+        self, tmp_path
+    ):
+        """A dead plan_waiting file must not page Ike for named entities."""
+        state_file = tmp_path / "feynman.json"
+        state_file.write_text(
+            '{"state":"plan_waiting","ts":1.0,"plan_file":"%s","plan_title":"Add caching"}'
+            % (tmp_path / "missing-plan.md")
+        )
+
+        registry = EntityRegistry(
+            entities={
+                "feynman": EntityEntry(
+                    session="feynman",
+                    home="~/ws/feynman/",
+                    groups=["optimization"],
+                    figure="",
+                    role="",
+                ),
+                "ike": EntityEntry(
+                    session="ike",
+                    home="~/ws/core/ike/",
+                    groups=["orchestrators"],
+                    figure="",
+                    role="",
+                    organization="",
+                ),
+            },
+            repos=[],
+        )
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            github=GitHubConfig(owner="eandualem", repo="orchestration"),
+            entities=EntityConfig(skip=frozenset({"elias"})),
+            registry=registry,
+            agent_state=AgentStateConfig(
+                state_dir=str(tmp_path),
+                stale_threshold_seconds=300,
+            ),
+            escalation=EscalationConfig(escalation_target="ike"),
+            delivery=DeliveryConfig(),
+            capacity_routing=CapacityRoutingConfig(),
+            telegram=TelegramConfig(notification_chat_id=0),
+        )
+
+        with (
+            patch(
+                "agent_backbone.services.agents._inference.capture_pane",
+                new_callable=AsyncMock,
+                return_value="random output",
+            ),
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+        ):
+            await check_plan_waiting(config, {"feynman", "ike"})
+
+        mock_deliver.assert_not_called()

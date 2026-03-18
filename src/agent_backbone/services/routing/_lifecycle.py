@@ -20,6 +20,11 @@ from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_next_issue_notification
 from agent_backbone.services.routing._intelligence import is_http_target
 from agent_backbone.services.routing._resolution import resolve_entity_session
+from agent_backbone.services.routing._targets import (
+    default_repo_full_name,
+    list_open_queue_for_target,
+    resolve_event_targets,
+)
 from agent_backbone.services.terminal import session_exists
 
 log = logging.getLogger(__name__)
@@ -27,7 +32,7 @@ log = logging.getLogger(__name__)
 
 def _default_repo_full_name(config: BackboneConfig) -> str:
     """Return the configured default GitHub repository."""
-    return f"{config.github.owner}/{config.github.repo}"
+    return default_repo_full_name(config)
 
 
 def _issue_repo_full_name(issue: IssueData, config: BackboneConfig) -> str:
@@ -138,8 +143,12 @@ async def find_next_issue(
     Optionally excludes a specific issue number (e.g. a just-closed issue
     that may still appear as open due to GitHub eventual consistency).
     """
-    label = f"for:{entity}"
-    issues = await gh.list_open_issues(label, repo_full_name=repo_full_name)
+    issues = await list_open_queue_for_target(
+        config,
+        entity,
+        gh,
+        issue_repo_full_name=repo_full_name or "",
+    )
 
     if exclude_number is not None:
         pre_filter = len(issues)
@@ -198,7 +207,21 @@ async def on_issue_closed(
     """
     result: dict[str, str] = {}  # entity -> outcome
 
-    for target in event.issue.labels.targets:
+    # Purge any pending queue messages for the closed issue so they don't
+    # loop in the retry cycle (#780).
+    if db is not None:
+        try:
+            purged = await db.purge_pending_for_issue(event.issue.number)
+            if purged:
+                log.info(
+                    "Purged %d queued messages for closed issue #%d",
+                    purged,
+                    event.issue.number,
+                )
+        except Exception:
+            log.exception("Failed to purge queue for issue #%d (non-fatal)", event.issue.number)
+
+    for target in resolve_event_targets(event, config):
         if target in config.entities.skip:
             result[target] = "skipped"
             continue
@@ -244,9 +267,11 @@ async def on_issue_closed(
 
         queue_scope_issue_numbers = {
             issue.number
-            for issue in await gh.list_open_issues(
-                f"for:{target}",
-                repo_full_name=_issue_repo_full_name(event.issue, config),
+            for issue in await list_open_queue_for_target(
+                config,
+                target,
+                gh,
+                issue_repo_full_name=_issue_repo_full_name(event.issue, config),
             )
             if issue.number != event.issue.number
         }

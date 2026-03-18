@@ -33,7 +33,9 @@ async def send_message(
         message=envelope,
         config=config,
         db=db,
+        flow_name="api-messages",
         priority=body.priority,
+        delivery_kind="direct_message",
     )
 
     delivered = outcome == "delivered"

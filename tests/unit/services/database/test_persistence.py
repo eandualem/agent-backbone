@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.database import BackboneDB
@@ -76,15 +79,24 @@ class TestDeliveryTracking:
         assert outcomes == {"offline", "delivery_failed", "deferred"}
 
     async def test_get_failed_deliveries_includes_transient(self, db):
-        """Transient outcomes (copy_mode, user_interacting) are included in retry query."""
+        """Transient outcomes, including busy-state deferrals, are retryable."""
         await db.record_delivery(1, "ike", "ike", "delivered")
         await db.record_delivery(2, "feynman", "feynman", "copy_mode")
         await db.record_delivery(3, "leo", "leo", "user_interacting")
+        await db.record_delivery(4, "ada", "ada", "agent_working")
+        await db.record_delivery(5, "brunel", "brunel", "plan_waiting")
+        await db.record_delivery(6, "darwin", "darwin", "grace_period")
 
         failed = await db.get_failed_deliveries()
-        assert len(failed) == 2
+        assert len(failed) == 5
         outcomes = {r["outcome"] for r in failed}
-        assert outcomes == {"copy_mode", "user_interacting"}
+        assert outcomes == {
+            "agent_working",
+            "copy_mode",
+            "grace_period",
+            "plan_waiting",
+            "user_interacting",
+        }
         # 'delivered' must not appear
         assert "delivered" not in outcomes
 
@@ -121,6 +133,69 @@ class TestDeliveryTracking:
 
         results = await db.query_deliveries()
         assert len(results) == 0
+
+    async def test_claim_delivery_attempt_success(self, db):
+        claim_id = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        assert isinstance(claim_id, int)
+        rows = await db.query_deliveries(issue_number=42, session_name="ike")
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "attempting"
+
+    async def test_claim_delivery_attempt_conflict(self, db):
+        first = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+        second = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        assert isinstance(first, int)
+        assert second is None
+
+    async def test_finalize_delivery_attempt(self, db):
+        claim_id = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        await db.finalize_delivery_attempt(claim_id, "delivered")
+
+        rows = await db.query_deliveries(issue_number=42, session_name="ike")
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "delivered"
+
+    async def test_reclaim_stale_attempts(self, db):
+        claim_id = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        async with db._engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE deliveries SET created_at = :created_at WHERE id = :id"),
+                {"created_at": "2000-01-01T00:00:00.000000Z", "id": claim_id},
+            )
+
+        reclaimed = await db.reclaim_stale_attempts(max_age_minutes=5)
+
+        assert reclaimed == 1
+        assert await db.query_deliveries(issue_number=42, session_name="ike") == []
 
 
 class TestDedupLog:
@@ -250,6 +325,7 @@ class TestMessageQueue:
             message="Test message",
             issue_number=42,
             target_entity="ike",
+            delivery_kind="comment",
             flow_name="test-flow",
         )
         assert row_id > 0
@@ -258,7 +334,9 @@ class TestMessageQueue:
         assert len(messages) == 1
         assert messages[0]["message"] == "Test message"
         assert messages[0]["issue_number"] == 42
-        assert messages[0]["status"] == "pending"
+        assert messages[0]["delivery_kind"] == "comment"
+        assert messages[0]["status"] == "in_progress"
+        assert messages[0]["leased_at"] is not None
 
     async def test_dequeue_empty(self, db):
         messages = await db.dequeue_messages("nobody")
@@ -266,6 +344,7 @@ class TestMessageQueue:
 
     async def test_mark_delivered(self, db):
         row_id = await db.enqueue_message("ike", "msg")
+        await db.dequeue_messages("ike")
         await db.mark_message_delivered(row_id)
 
         messages = await db.dequeue_messages("ike")
@@ -300,11 +379,13 @@ class TestMessageQueue:
 
         messages = await db.dequeue_messages("ike")
         assert len(messages) == 1
+        assert messages[0]["delivery_kind"] == "issue"
         assert messages[0]["issue_number"] is None
         assert messages[0]["target_entity"] is None
 
     async def test_mark_delivered_sets_timestamp(self, db):
         row_id = await db.enqueue_message("ike", "msg")
+        await db.dequeue_messages("ike")
         await db.mark_message_delivered(row_id)
 
         # Use BackboneDB method to verify
@@ -321,6 +402,187 @@ class TestMessageQueue:
         feynman_msgs = await db.dequeue_messages("feynman")
         assert len(ike_msgs) == 2
         assert len(feynman_msgs) == 1
+
+    async def test_enqueue_dedup_issue_constraint(self, db):
+        first = await db.enqueue_message("ike", "first", issue_number=42, target_entity="ike")
+        second = await db.enqueue_message("ike", "second", issue_number=42, target_entity="ike")
+
+        assert first > 0
+        assert second == -1
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 1
+        assert messages[0]["message"] == "first"
+
+    async def test_enqueue_dedup_different_issues(self, db):
+        first = await db.enqueue_message("ike", "first", issue_number=42, target_entity="ike")
+        second = await db.enqueue_message("ike", "second", issue_number=43, target_entity="ike")
+
+        assert first > 0
+        assert second > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 2
+        assert {message["issue_number"] for message in messages} == {42, 43}
+
+    async def test_enqueue_dedup_comment_constraint(self, db):
+        first = await db.enqueue_message(
+            "ike",
+            "same comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+        duplicate = await db.enqueue_message(
+            "ike",
+            "same comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+        different = await db.enqueue_message(
+            "ike",
+            "different comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+
+        assert first > 0
+        assert duplicate == -1
+        assert different > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 2
+        assert {message["message"] for message in messages} == {"same comment", "different comment"}
+
+    async def test_enqueue_dedup_dm_constraint(self, db):
+        first = await db.enqueue_message(
+            "ike",
+            "same direct message",
+            delivery_kind="direct_message",
+        )
+        duplicate = await db.enqueue_message(
+            "ike",
+            "same direct message",
+            delivery_kind="direct_message",
+        )
+        different = await db.enqueue_message(
+            "ike",
+            "different direct message",
+            delivery_kind="direct_message",
+        )
+
+        assert first > 0
+        assert duplicate == -1
+        assert different > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 2
+        assert {message["message"] for message in messages} == {
+            "different direct message",
+            "same direct message",
+        }
+
+    async def test_enqueue_content_hash_populated(self, db):
+        message = "hash me"
+        row_id = await db.enqueue_message(
+            "ike",
+            message,
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+
+        row = await db.get_message_by_id(row_id)
+
+        assert row["content_hash"] == hashlib.sha256(message.encode()).hexdigest()
+
+    async def test_get_sessions_with_pending(self, db):
+        await db.enqueue_message("ike", "pending one", issue_number=42, target_entity="ike")
+        await db.enqueue_message("jarvis", "pending two", delivery_kind="direct_message")
+
+        sessions = await db.get_sessions_with_pending()
+
+        assert set(sessions) == {"ike", "jarvis"}
+
+    async def test_dequeue_marks_in_progress(self, db):
+        row_id = await db.enqueue_message("ike", "claim me", issue_number=42, target_entity="ike")
+
+        messages = await db.dequeue_messages("ike")
+
+        assert len(messages) == 1
+        assert messages[0]["id"] == row_id
+        assert messages[0]["status"] == "in_progress"
+        assert messages[0]["leased_at"] is not None
+        row = await db.get_message_by_id(row_id)
+        assert row["status"] == "in_progress"
+        assert row["leased_at"] is not None
+
+    async def test_dequeue_skips_in_progress(self, db):
+        await db.enqueue_message("ike", "claim me once", issue_number=42, target_entity="ike")
+
+        first = await db.dequeue_messages("ike")
+        second = await db.dequeue_messages("ike")
+
+        assert len(first) == 1
+        assert second == []
+
+    async def test_release_lease(self, db):
+        row_id = await db.enqueue_message("ike", "lease me", issue_number=42, target_entity="ike")
+        await db.dequeue_messages("ike")
+
+        await db.release_lease(row_id)
+
+        row = await db.get_message_by_id(row_id)
+        assert row["status"] == "pending"
+        assert row["leased_at"] is None
+
+    async def test_expire_stale_leases(self, db):
+        row_id = await db.enqueue_message(
+            "ike", "stale lease", issue_number=42, target_entity="ike"
+        )
+        await db.dequeue_messages("ike")
+
+        async with db._engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE message_queue SET leased_at = :leased_at WHERE id = :id"),
+                {"leased_at": "2000-01-01T00:00:00.000000Z", "id": row_id},
+            )
+
+        expired = await db.expire_stale_leases(max_age_minutes=5)
+
+        assert expired == 1
+        row = await db.get_message_by_id(row_id)
+        assert row["status"] == "pending"
+        assert row["leased_at"] is None
+
+    async def test_purge_covers_in_progress(self, db):
+        first = await db.enqueue_message("ike", "claim me", issue_number=775, target_entity="ike")
+        second = await db.enqueue_message(
+            "feynman",
+            "leave pending",
+            issue_number=775,
+            target_entity="feynman",
+        )
+        await db.dequeue_messages("ike")
+
+        purged = await db.purge_pending_for_issue(775)
+
+        assert purged == 2
+        assert (await db.get_message_by_id(first))["status"] == "delivered"
+        assert (await db.get_message_by_id(second))["status"] == "delivered"
+
+    async def test_mark_delivered_requires_in_progress(self, db):
+        row_id = await db.enqueue_message(
+            "ike", "pending row", issue_number=42, target_entity="ike"
+        )
+
+        await db.mark_message_delivered(row_id)
+
+        row = await db.get_message_by_id(row_id)
+        assert row["status"] == "pending"
+        assert row["delivered_at"] is None
 
 
 class TestDedupHotCache:
@@ -410,3 +672,241 @@ class TestAgentActivity:
 
         events = await db.get_activity("ike")
         assert events[0]["data"] is None
+
+    async def test_record_with_telemetry_metadata(self, db):
+        row_id = await db.record_activity(
+            "ike",
+            "tool.started",
+            '{"name":"exec_command"}',
+            "1709500001.123456",
+            entity="coding-agent",
+            runtime="codex",
+            source_kind="jsonl",
+            source_ref="/tmp/codex.jsonl",
+            source_event_id="event-1",
+            trace_id="turn-123",
+            parent_trace_id="session-456",
+            model="gpt-5.4",
+        )
+        assert row_id > 0
+
+        events = await db.get_activity("ike")
+        assert events[0]["runtime"] == "codex"
+        assert events[0]["source_ref"] == "/tmp/codex.jsonl"
+        assert events[0]["trace_id"] == "turn-123"
+        assert events[0]["model"] == "gpt-5.4"
+
+    async def test_has_activity_event(self, db):
+        await db.record_activity(
+            "ike",
+            "plan_notification_delivered",
+            '{"channel":"tmux"}',
+            "1709500001.123456",
+            source_ref="tmux:ike:1709500001.123456:/tmp/plan.md",
+        )
+
+        assert (
+            await db.has_activity_event(
+                session="ike",
+                event="plan_notification_delivered",
+                source_ref="tmux:ike:1709500001.123456:/tmp/plan.md",
+                since=1709500000.0,
+            )
+            is True
+        )
+        assert (
+            await db.has_activity_event(
+                session="ike",
+                event="plan_notification_delivered",
+                source_ref="tmux:ike:1709500001.123456:/tmp/plan.md",
+                since=1709500002.0,
+            )
+            is False
+        )
+
+    async def test_record_batch(self, db):
+        count = await db.record_activity_batch(
+            [
+                {
+                    "session": "ike",
+                    "event": "message.user",
+                    "entity": "coding-agent",
+                    "runtime": "claude",
+                    "source_kind": "jsonl",
+                    "source_ref": "/tmp/claude.jsonl",
+                    "source_event_id": "event-1",
+                    "trace_id": "trace-1",
+                    "parent_trace_id": None,
+                    "model": None,
+                    "data": '{"content":"hello"}',
+                    "ts": "101.0",
+                    "received_at": "2026-03-13T00:00:00.000000Z",
+                },
+                {
+                    "session": "ike",
+                    "event": "message.assistant",
+                    "entity": "coding-agent",
+                    "runtime": "claude",
+                    "source_kind": "jsonl",
+                    "source_ref": "/tmp/claude.jsonl",
+                    "source_event_id": "event-2",
+                    "trace_id": "trace-1",
+                    "parent_trace_id": None,
+                    "model": "claude-opus-4-1",
+                    "data": '{"content":"world"}',
+                    "ts": "102.0",
+                    "received_at": "2026-03-13T00:00:01.000000Z",
+                },
+            ]
+        )
+        assert count == 2
+
+        events = await db.get_activity("ike")
+        assert [event["event"] for event in events] == ["message.assistant", "message.user"]
+
+
+class TestTelemetryCheckpoints:
+    async def test_upsert_and_get_checkpoint(self, db):
+        await db.upsert_telemetry_checkpoint(
+            session="ike",
+            source_ref="/tmp/claude.jsonl",
+            runtime="claude",
+            source_kind="jsonl",
+            checkpoint={"offset": 128},
+            entity="coding-agent",
+            last_event_ts="1709500001.0",
+        )
+
+        checkpoint = await db.get_telemetry_checkpoint("ike", "/tmp/claude.jsonl")
+        assert checkpoint is not None
+        assert checkpoint["runtime"] == "claude"
+        assert checkpoint["checkpoint"] == {"offset": 128}
+        assert checkpoint["last_event_ts"] == "1709500001.0"
+
+    async def test_upsert_checkpoint_overwrites_cursor(self, db):
+        await db.upsert_telemetry_checkpoint(
+            session="ike",
+            source_ref="/tmp/codex.jsonl",
+            runtime="codex",
+            source_kind="jsonl",
+            checkpoint={"offset": 10},
+        )
+        await db.upsert_telemetry_checkpoint(
+            session="ike",
+            source_ref="/tmp/codex.jsonl",
+            runtime="codex",
+            source_kind="jsonl",
+            checkpoint={"offset": 42},
+            last_event_ts="222.0",
+        )
+
+        checkpoint = await db.get_telemetry_checkpoint("ike", "/tmp/codex.jsonl")
+        assert checkpoint is not None
+        assert checkpoint["checkpoint"] == {"offset": 42}
+        assert checkpoint["last_event_ts"] == "222.0"
+
+    async def test_query_checkpoints_filters_by_runtime(self, db):
+        await db.upsert_telemetry_checkpoint(
+            session="ike",
+            source_ref="/tmp/claude.jsonl",
+            runtime="claude",
+            source_kind="jsonl",
+            checkpoint={"offset": 1},
+        )
+        await db.upsert_telemetry_checkpoint(
+            session="ike",
+            source_ref="/tmp/codex.jsonl",
+            runtime="codex",
+            source_kind="jsonl",
+            checkpoint={"offset": 2},
+        )
+
+        checkpoints = await db.query_telemetry_checkpoints(runtime="codex")
+        assert len(checkpoints) == 1
+        assert checkpoints[0]["source_ref"] == "/tmp/codex.jsonl"
+
+
+async def _create_swarm_with_worker(db: BackboneDB, *, status: str = "pending") -> tuple[str, str]:
+    """Create a minimal non-collaborative swarm and optionally set worker status."""
+    worker_name = "worker-1"
+    swarm_id = await db.create_swarm(
+        repo="agent-backbone",
+        task_id="24",
+        coding_agent_session="agent-backbone",
+        workers=[
+            {
+                "name": worker_name,
+                "role": "coder",
+                "branch": "swarm/24/worker-1",
+                "worktree_path": "/tmp/worker-1",
+                "session": "swarm-24-worker-1",
+            }
+        ],
+    )
+    if status in {"started", "working", "pr_created"}:
+        await db.update_swarm_worker_status(swarm_id, worker_name, status)
+    elif status in {"done", "failed"}:
+        await db.complete_swarm_worker(swarm_id, worker_name, status, f"{status} summary")
+    return swarm_id, worker_name
+
+
+def _worker_from_swarm(swarm: dict, worker_name: str) -> dict:
+    """Extract one worker row from a swarm detail payload."""
+    return next(worker for worker in swarm["workers"] if worker["name"] == worker_name)
+
+
+class TestSwarmWorkerSessionReconciliation:
+    async def test_reconcile_skips_pending_workers(self, db):
+        swarm_id, worker_name = await _create_swarm_with_worker(db, status="pending")
+
+        result = await db.reconcile_swarm_worker_sessions(set())
+        swarm = await db.get_swarm(swarm_id)
+        worker = _worker_from_swarm(swarm, worker_name)
+
+        assert result == 0
+        assert worker["status"] == "pending"
+        assert worker["failure_reason"] is None
+
+    async def test_reconcile_fails_started_worker_without_session(self, db):
+        swarm_id, worker_name = await _create_swarm_with_worker(db, status="started")
+
+        result = await db.reconcile_swarm_worker_sessions(set())
+        swarm = await db.get_swarm(swarm_id)
+        worker = _worker_from_swarm(swarm, worker_name)
+
+        assert result == 1
+        assert worker["status"] == "failed"
+        assert worker["failure_reason"] == "session_lost"
+
+    async def test_reconcile_fails_working_worker_without_session(self, db):
+        swarm_id, worker_name = await _create_swarm_with_worker(db, status="working")
+
+        result = await db.reconcile_swarm_worker_sessions(set())
+        swarm = await db.get_swarm(swarm_id)
+        worker = _worker_from_swarm(swarm, worker_name)
+
+        assert result == 1
+        assert worker["status"] == "failed"
+        assert worker["failure_reason"] == "session_lost"
+
+    async def test_reconcile_skips_done_workers(self, db):
+        swarm_id, worker_name = await _create_swarm_with_worker(db, status="done")
+
+        result = await db.reconcile_swarm_worker_sessions(set())
+        swarm = await db.get_swarm(swarm_id)
+        worker = _worker_from_swarm(swarm, worker_name)
+
+        assert result == 0
+        assert worker["status"] == "done"
+        assert worker["failure_reason"] is None
+
+    async def test_reconcile_skips_failed_workers(self, db):
+        swarm_id, worker_name = await _create_swarm_with_worker(db, status="failed")
+
+        result = await db.reconcile_swarm_worker_sessions(set())
+        swarm = await db.get_swarm(swarm_id)
+        worker = _worker_from_swarm(swarm, worker_name)
+
+        assert result == 0
+        assert worker["status"] == "failed"
+        assert worker["failure_reason"] is None

@@ -11,6 +11,7 @@ import logging
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.terminal import (
+    RUNTIME_ENV_KEY,
     resolve_agent_dir,
     send_message,
     start_session,
@@ -18,6 +19,14 @@ from agent_backbone.services.terminal import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _workflow_working_dir(session: str, config: BackboneConfig) -> str:
+    """Resolve a workflow step session to a concrete workspace directory."""
+    working_dir = resolve_agent_dir(session)
+    if working_dir:
+        return working_dir
+    return resolve_agent_dir(session, config.registry)
 
 
 async def execute_workflow_steps(
@@ -57,12 +66,15 @@ async def execute_workflow_steps(
 
         try:
             if action == "start":
-                working_dir = step.get("working_dir") or resolve_agent_dir(session)
+                working_dir = step.get("working_dir") or _workflow_working_dir(session, config)
                 command_str = step.get("command", "claude")
+                command = [command_str] if command_str else None
+                environment = {RUNTIME_ENV_KEY: command[0]} if command else None
                 ok = await start_session(
                     session,
                     working_dir=working_dir or None,
-                    command=[command_str] if command_str else None,
+                    command=command,
+                    environment=environment,
                 )
                 detail = "started" if ok else "failed to start"
             elif action == "stop":

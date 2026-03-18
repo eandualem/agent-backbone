@@ -6,7 +6,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.infrastructure._processes import pid_for_port, read_pid
-from agent_backbone.services.infrastructure._tunnel import get_tunnel_url
 from agent_backbone.services.terminal import list_sessions, session_exists
 
 if TYPE_CHECKING:
@@ -27,23 +26,28 @@ async def show_status(config: BackboneConfig) -> str:
     # Prefect
     prefect_pid = read_pid("prefect")
     prefect_running = await session_exists("prefect")
+    prefect_port_pid = await pid_for_port(PREFECT_PORT)
     pid_info = f", pid {prefect_pid}" if prefect_pid else ""
-    if prefect_running:
+    if prefect_port_pid:
         lines.append(
-            f"  prefect    : running (tmux session, http://localhost:{PREFECT_PORT}{pid_info})"
+            f"  prefect    : running (http://localhost:{PREFECT_PORT}, pid {prefect_port_pid})"
         )
-    elif prefect_pid:
-        lines.append(f"  prefect    : running (outside tmux{pid_info})")
+    elif prefect_running or prefect_pid:
+        lines.append(
+            f"  prefect    : down (session present, port {PREFECT_PORT} not bound{pid_info})"
+        )
     else:
         lines.append("  prefect    : not running")
 
-    # Gateway — use port as ground truth
+    # Gateway — check both tmux session and port
     gateway_port = config.gateway.port
     gateway_pid = await pid_for_port(gateway_port)
     gateway_session = await session_exists("gateway")
     if gateway_pid:
         ctx = "tmux session" if gateway_session else "outside tmux"
         lines.append(f"  gateway    : running ({ctx}, port {gateway_port}, pid {gateway_pid})")
+    elif gateway_session:
+        lines.append(f"  gateway    : starting (tmux session, port {gateway_port} not yet bound)")
     else:
         lines.append("  gateway    : not running")
 
@@ -51,10 +55,10 @@ async def show_status(config: BackboneConfig) -> str:
     worker_pid = read_pid("worker")
     worker_running = await session_exists("backbone-worker")
     wpid_info = f", pid {worker_pid}" if worker_pid else ""
-    if worker_running:
+    if worker_pid:
         lines.append(f"  worker     : running (tmux session, pool: agent-pool{wpid_info})")
-    elif worker_pid:
-        lines.append(f"  worker     : running (outside tmux{wpid_info})")
+    elif worker_running:
+        lines.append("  worker     : down (tmux session present, worker process exited)")
     else:
         lines.append("  worker     : not running")
 
@@ -68,15 +72,6 @@ async def show_status(config: BackboneConfig) -> str:
         lines.append(f"  telegram   : running (outside tmux{tpid_info})")
     else:
         lines.append("  telegram   : not running")
-
-    # Ngrok
-    ngrok_running = await session_exists("ngrok")
-    if ngrok_running:
-        url = await get_tunnel_url()
-        url_str = url if url else "URL pending..."
-        lines.append(f"  ngrok      : running ({url_str})")
-    else:
-        lines.append("  ngrok      : not running")
 
     # --- Named Entities ---
     lines.append("")

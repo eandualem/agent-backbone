@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.routing._create_notify import (
@@ -93,9 +94,37 @@ class DeliveryService:
         """Compute priority score for an issue."""
         return _compute_priority_score(issue, scoring_config, dependents)
 
-    async def safe_deliver(self, target: str, message: str, config: BackboneConfig) -> str:
+    async def safe_deliver(
+        self,
+        target: str,
+        message: str,
+        config: BackboneConfig,
+        *,
+        db: BackboneDB | None = None,
+        issue_number: int | None = None,
+        target_entity: str | None = None,
+        flow_name: str = "",
+        priority: bool = False,
+        idle_since: float | None = None,
+        enforce_issue_queue: bool = False,
+        queue_scope_issue_numbers: Collection[int] | None = None,
+        delivery_kind: str = "issue",
+    ) -> str:
         """Deliver a message with state pre-checks."""
-        return await _safe_deliver(target, message, config)
+        return await _safe_deliver(
+            target,
+            message,
+            config,
+            db=db,
+            issue_number=issue_number,
+            target_entity=target_entity,
+            flow_name=flow_name,
+            priority=priority,
+            idle_since=idle_since,
+            enforce_issue_queue=enforce_issue_queue,
+            queue_scope_issue_numbers=queue_scope_issue_numbers,
+            delivery_kind=delivery_kind,
+        )
 
     async def create_and_notify(
         self,

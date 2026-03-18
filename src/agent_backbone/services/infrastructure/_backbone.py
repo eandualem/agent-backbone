@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,11 +13,12 @@ import httpx
 from agent_backbone.services.infrastructure._processes import (
     check_port_free,
     kill_port_process,
+    pid_for_port,
+    read_pid,
     record_tmux_pid,
     remove_pid,
     stop_by_pid,
 )
-from agent_backbone.services.infrastructure._tunnel import stop_tunnel
 from agent_backbone.services.terminal import session_exists, start_session, stop_session
 
 if TYPE_CHECKING:
@@ -31,6 +34,86 @@ PREFECT_PORT = 4200
 PREFECT_API_URL = f"http://127.0.0.1:{PREFECT_PORT}/api"
 PREFECT_HEALTH_PROBE_RETRY_INTERVAL_SECONDS = 0.4
 PREFECT_STARTUP_PROBE_RETRY_INTERVAL_SECONDS = 0.1
+PREFECT_STARTUP_PROBE_RETRIES = 300
+PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS = 2.0
+
+
+def _prefect_env() -> dict[str, str]:
+    """Environment for Prefect subprocesses.
+
+    Prefect manages its own internal SQLite database for flow/deployment metadata.
+    Do NOT point PREFECT_API_DATABASE_CONNECTION_URL at the backbone PostgreSQL —
+    Prefect's Alembic migrations are incompatible with the backbone schema.
+    """
+    return {**os.environ, "PREFECT_API_URL": PREFECT_API_URL}
+
+
+async def _run_prefect_process(*args: str) -> int:
+    """Run a Prefect subprocess attached to the current tmux pane."""
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        cwd=BACKBONE_DIR,
+        env=_prefect_env(),
+    )
+    return await proc.wait()
+
+
+async def _wait_for_prefect_api() -> None:
+    """Wait until the local Prefect API answers health probes."""
+    health_url = f"http://127.0.0.1:{PREFECT_PORT}/api/health"
+    while not await wait_for_health(health_url, retries=1, interval=0):
+        log.warning(
+            "Prefect API unavailable at %s; retrying worker bootstrap in %.1fs",
+            health_url,
+            PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS,
+        )
+        await asyncio.sleep(PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS)
+
+
+async def run_prefect_server_supervisor() -> None:
+    """Keep the Prefect server running inside a tmux session."""
+    while True:
+        log.info("Starting Prefect server")
+        exit_code = await _run_prefect_process(
+            "uv",
+            "run",
+            "prefect",
+            "server",
+            "start",
+        )
+        log.warning(
+            "Prefect server exited with code %s; restarting in %.1fs",
+            exit_code,
+            PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS,
+        )
+        await asyncio.sleep(PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS)
+
+
+async def run_prefect_worker_supervisor(config: BackboneConfig) -> None:
+    """Keep the Prefect worker running once the API is reachable."""
+    work_pool_name = config.scheduling.work_pool_name
+
+    while True:
+        await _wait_for_prefect_api()
+
+        log.info("Starting Prefect worker (pool: %s)", work_pool_name)
+        worker_exit = await _run_prefect_process(
+            "uv",
+            "run",
+            "prefect",
+            "worker",
+            "start",
+            "--pool",
+            work_pool_name,
+        )
+        log.warning(
+            "Prefect worker exited with code %s for pool '%s'; ensure deployments are applied "
+            "via `make setup-pool` / `make deploy` before restarting. Retrying in %.1fs",
+            worker_exit,
+            work_pool_name,
+            PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS,
+        )
+        await asyncio.sleep(PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS)
 
 
 async def wait_for_health(
@@ -43,8 +126,9 @@ async def wait_for_health(
         for i in range(retries):
             try:
                 resp = await client.get(url)
-                if resp.status_code < 500:
+                if resp.is_success:
                     return True
+                log.debug("Health probe %s returned %d", url, resp.status_code)
             except httpx.HTTPError:
                 pass
             if i < retries - 1:
@@ -56,9 +140,18 @@ async def wait_for_health(
 
 async def start_prefect(config: BackboneConfig) -> bool:
     """Start Prefect server in a tmux session."""
-    if await session_exists("prefect"):
-        log.info("Prefect server already running")
+    prefect_pid = await pid_for_port(PREFECT_PORT)
+    if prefect_pid:
+        log.info("Prefect server already running (port %d, pid %d)", PREFECT_PORT, prefect_pid)
         return True
+
+    # Session exists but port not bound = stale session, clean it up
+    if await session_exists("prefect"):
+        log.warning(
+            "Prefect session exists but port %d not bound — cleaning up stale session",
+            PREFECT_PORT,
+        )
+        await stop_session("prefect")
 
     # Clean stale PID
     stop_by_pid_result = await stop_by_pid("prefect")
@@ -72,7 +165,15 @@ async def start_prefect(config: BackboneConfig) -> bool:
     ok = await start_session(
         "prefect",
         working_dir=BACKBONE_DIR,
-        command=["uv", "run", "prefect", "server", "start"],
+        command=[
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "agent_backbone.services.infrastructure",
+            "run-prefect-server",
+        ],
+        environment={"PREFECT_API_URL": PREFECT_API_URL},
     )
     if ok:
         await record_tmux_pid("prefect", "prefect")
@@ -81,8 +182,10 @@ async def start_prefect(config: BackboneConfig) -> bool:
 
 
 async def stop_prefect(config: BackboneConfig) -> bool:
-    """Stop Prefect server."""
-    await stop_session("prefect")
+    """Stop Prefect server with clean shutdown for SQLite WAL checkpoint."""
+    from agent_backbone.services.terminal import graceful_close
+
+    await graceful_close("prefect", timeout=10.0)
     await stop_by_pid("prefect")
     await kill_port_process(PREFECT_PORT)
     remove_pid("prefect")
@@ -93,9 +196,17 @@ async def stop_prefect(config: BackboneConfig) -> bool:
 async def start_gateway(config: BackboneConfig) -> bool:
     """Start gateway server in a tmux session."""
     port = config.gateway.port
-    if await session_exists("gateway"):
-        log.info("Gateway already running")
+    gateway_pid = await pid_for_port(port)
+    if gateway_pid:
+        log.info("Gateway already running (port %d, pid %d)", port, gateway_pid)
         return True
+
+    # Session exists but port not bound = stale session, clean it up
+    if await session_exists("gateway"):
+        log.warning(
+            "Gateway session exists but port %d not bound — cleaning up stale session", port
+        )
+        await stop_session("gateway")
 
     # Clean stale state
     await stop_by_pid("gateway")
@@ -149,57 +260,35 @@ async def restart_gateway(config: BackboneConfig) -> bool:
 
 async def start_worker(config: BackboneConfig) -> bool:
     """Start Prefect worker in a tmux session."""
-    if await session_exists("backbone-worker"):
-        log.info("Worker already running")
+    worker_pid = read_pid("worker")
+    if worker_pid and await session_exists("backbone-worker"):
+        log.info("Worker already running (pid %d)", worker_pid)
         return True
+
+    # Session exists but process dead = stale session, clean it up
+    if await session_exists("backbone-worker"):
+        log.warning("Worker session exists but process not alive — cleaning up stale session")
+        await stop_session("backbone-worker")
 
     # Clean stale PID
     await stop_by_pid("worker")
 
-    import asyncio
-
-    work_pool_name = config.scheduling.work_pool_name
-
-    # Create work pool (idempotent)
-    pool_proc = await asyncio.create_subprocess_exec(
-        "uv",
-        "run",
-        "prefect",
-        "work-pool",
-        "create",
-        work_pool_name,
-        "--type",
-        "process",
-        cwd=BACKBONE_DIR,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        env={**__import__("os").environ, "PREFECT_API_URL": PREFECT_API_URL},
-    )
-    await pool_proc.wait()
-
-    # Deploy all scheduled flows
-    deploy_proc = await asyncio.create_subprocess_exec(
-        "uv",
-        "run",
-        "prefect",
-        "deploy",
-        "--all",
-        cwd=BACKBONE_DIR,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        env={**__import__("os").environ, "PREFECT_API_URL": PREFECT_API_URL},
-    )
-    await deploy_proc.wait()
-
     ok = await start_session(
         "backbone-worker",
         working_dir=BACKBONE_DIR,
-        command=["uv", "run", "prefect", "worker", "start", "--pool", work_pool_name],
+        command=[
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "agent_backbone.services.infrastructure",
+            "run-prefect-worker",
+        ],
         environment={"PREFECT_API_URL": PREFECT_API_URL},
     )
     if ok:
         await record_tmux_pid("worker", "backbone-worker")
-        log.info("Worker started (pool: %s)", work_pool_name)
+        log.info("Worker supervisor started (pool: %s)", config.scheduling.work_pool_name)
     return ok
 
 
@@ -214,9 +303,15 @@ async def stop_worker(config: BackboneConfig) -> bool:
 
 async def start_telegram(config: BackboneConfig) -> bool:
     """Start Telegram bot in a tmux session."""
-    if await session_exists("telegram-bot"):
-        log.info("Telegram bot already running")
+    telegram_pid = read_pid("telegram")
+    if telegram_pid and await session_exists("telegram-bot"):
+        log.info("Telegram bot already running (pid %d)", telegram_pid)
         return True
+
+    # Session exists but process dead = stale session, clean it up
+    if await session_exists("telegram-bot"):
+        log.warning("Telegram session exists but process not alive — cleaning up stale session")
+        await stop_session("telegram-bot")
 
     # Clean stale PID
     await stop_by_pid("telegram")
@@ -257,10 +352,19 @@ async def start_backbone(config: BackboneConfig) -> bool:
     log.info("Waiting for Prefect server health...")
     healthy = await wait_for_health(
         f"http://127.0.0.1:{PREFECT_PORT}/api/health",
+        retries=PREFECT_STARTUP_PROBE_RETRIES,
         interval=PREFECT_STARTUP_PROBE_RETRY_INTERVAL_SECONDS,
     )
     if not healthy:
-        log.warning("Prefect server health check failed, continuing anyway")
+        timeout_seconds = (
+            PREFECT_STARTUP_PROBE_RETRIES * PREFECT_STARTUP_PROBE_RETRY_INTERVAL_SECONDS
+        )
+        log.error(
+            "Prefect server failed health checks after %.1fs; aborting backbone startup",
+            timeout_seconds,
+        )
+        await stop_prefect(config)
+        return False
 
     gw_ok = await start_gateway(config)
     wk_ok = await start_worker(config)
@@ -275,7 +379,6 @@ async def stop_backbone(config: BackboneConfig) -> bool:
     await stop_gateway(config)
     await stop_worker(config)
     await stop_prefect(config)
-    await stop_tunnel()
     log.info("Backbone stopped")
     return True
 

@@ -66,7 +66,6 @@ class EntityConfig:
     fallback: dict[str, str] = field(default_factory=lambda: {"coding-agent": "ike"})
     service_sessions: frozenset[str] = frozenset(
         {
-            "ngrok",
             "prefect",
             "prefect-worker",
             "prefect-server",
@@ -133,7 +132,6 @@ class DailyRoutineConfig:
 
     morning_time: str = "08:00"
     evening_time: str = "18:00"
-    morning_agents: list[str] = field(default_factory=lambda: ["ike", "feynman"])
     timezone: str = "Africa/Addis_Ababa"
 
 
@@ -241,9 +239,7 @@ class BackboneConfig:
         """Return the configured webhook secrets in validation order."""
         return tuple(
             dict.fromkeys(
-                secret
-                for secret in (self.webhook_secret, self.github_app_webhook_secret)
-                if secret
+                secret for secret in (self.webhook_secret, self.github_app_webhook_secret) if secret
             )
         )
 
@@ -314,7 +310,6 @@ class BackboneConfig:
                     ent.get(
                         "service_sessions",
                         [
-                            "ngrok",
                             "prefect",
                             "prefect-worker",
                             "prefect-server",
@@ -364,7 +359,6 @@ class BackboneConfig:
             daily_routines=DailyRoutineConfig(
                 morning_time=dr.get("morning_time", "08:00"),
                 evening_time=dr.get("evening_time", "18:00"),
-                morning_agents=dr.get("morning_agents", ["ike", "feynman"]),
                 timezone=dr.get("timezone", "Africa/Addis_Ababa"),
             ),
             priority_scoring=PriorityScoringConfig(

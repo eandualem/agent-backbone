@@ -13,15 +13,19 @@ import logging
 
 from prefect import flow
 
-from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
+from agent_backbone.api.session_updates import emit_sessions_update
+from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh, get_sio
 from agent_backbone.services.agents._escalation import (
     check_plan_waiting,
     handle_offline,
     handle_stalls,
 )
 from agent_backbone.services.agents._pending import deliver_pending_issues
+from agent_backbone.services.agents.interface import StateService
 from agent_backbone.services.routing._dependencies import sync_dependencies
-from agent_backbone.services.terminal import handle_copy_mode_recovery, list_sessions
+from agent_backbone.services.routing._flows import drain_message_queue
+from agent_backbone.services.telemetry import collect_active_session_telemetry
+from agent_backbone.services.terminal import TmuxService, handle_copy_mode_recovery, list_sessions
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +82,15 @@ async def _monitor_agents_impl() -> dict:
     except Exception:
         log.exception("Offline detection failed (non-fatal)")
 
+    # Mark swarm workers failed if their tmux session vanished mid-run.
+    try:
+        fresh_active_sessions = set(await list_sessions())
+        lost_workers = await db.reconcile_swarm_worker_sessions(fresh_active_sessions)
+        if lost_workers:
+            log.warning("Marked %d swarm worker session(s) lost", lost_workers)
+    except Exception:
+        log.exception("Swarm worker session reconciliation failed (non-fatal)")
+
     # Detect plan-waiting agents and send Telegram notification
     try:
         await check_plan_waiting(config, active_sessions, db=db)
@@ -89,6 +102,45 @@ async def _monitor_agents_impl() -> dict:
         await handle_copy_mode_recovery(config, active_sessions)
     except Exception:
         log.exception("Copy-mode recovery failed (non-fatal)")
+
+    # Collect runtime-native telemetry into agent_activity.
+    try:
+        await collect_active_session_telemetry(
+            config=config,
+            db=db,
+            active_sessions=active_sessions,
+        )
+    except Exception:
+        log.exception("Telemetry collection failed (non-fatal)")
+
+    # Reconcile out-of-band session churn to live Socket.IO subscribers.
+    try:
+        await emit_sessions_update(
+            get_sio(),
+            config,
+            StateService(
+                state_dir=config.agent_state.state_dir,
+                stale_threshold=config.agent_state.stale_threshold_seconds,
+                db=db,
+            ),
+            TmuxService(),
+            only_if_changed=True,
+        )
+    except Exception:
+        log.exception("Session subscription reconciliation failed (non-fatal)")
+
+    # Drain deferred comments/messages for sessions that are now idle.
+    try:
+        queue_summary = await drain_message_queue(
+            config=config,
+            db=db,
+            gh=gh,
+            active_sessions=active_sessions,
+        )
+        if queue_summary:
+            log.info("Monitor queue drain: %s", queue_summary)
+    except Exception:
+        log.exception("Queue drain during monitor failed (non-fatal)")
 
     # State-aware delivery loop
     return await deliver_pending_issues(config, active_sessions, db, gh)

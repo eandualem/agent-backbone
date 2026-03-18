@@ -63,7 +63,6 @@ def agent_config(tmp_path):
                     "gateway",
                     "backbone-worker",
                     "telegram-bot",
-                    "ngrok",
                 }
             ),
         ),

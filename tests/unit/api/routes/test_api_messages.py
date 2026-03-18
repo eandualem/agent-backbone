@@ -74,6 +74,8 @@ class TestSendMessage:
         assert call_kwargs.kwargs["session_name"] == "feynman"
         delivered_msg = call_kwargs.kwargs["message"]
         assert delivered_msg == "[via:backbone from:ike] Hello there"
+        assert call_kwargs.kwargs["flow_name"] == "api-messages"
+        assert call_kwargs.kwargs["delivery_kind"] == "direct_message"
 
     async def test_requires_auth(self, api_client, api_key):
         """Request without auth headers is rejected."""

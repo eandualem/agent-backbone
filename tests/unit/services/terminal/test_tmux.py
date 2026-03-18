@@ -81,15 +81,18 @@ class TestSendMessage:
     async def test_send_success(self):
         mock_adapter = AsyncMock()
         mock_adapter.deliver_message = AsyncMock(return_value=True)
-        with patch(
-            "agent_backbone.services.terminal._core.capture_pane",
-            new_callable=AsyncMock,
-            return_value="\u203a ",
-        ), patch(
-            "agent_backbone.services.terminal._adapters.get_terminal_adapter_for_session",
-            new_callable=AsyncMock,
-            return_value=mock_adapter,
-        ) as mock_get_adapter:
+        with (
+            patch(
+                "agent_backbone.services.terminal._core.capture_pane",
+                new_callable=AsyncMock,
+                return_value="\u203a ",
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.get_terminal_adapter_for_session",
+                new_callable=AsyncMock,
+                return_value=mock_adapter,
+            ) as mock_get_adapter,
+        ):
             assert await send_message("ike", "hello") is True
         mock_get_adapter.assert_awaited_once_with(
             "ike",
@@ -101,14 +104,17 @@ class TestSendMessage:
     async def test_send_session_offline(self):
         mock_adapter = AsyncMock()
         mock_adapter.deliver_message = AsyncMock(return_value=False)
-        with patch(
-            "agent_backbone.services.terminal._core.capture_pane",
-            new_callable=AsyncMock,
-            return_value="",
-        ), patch(
-            "agent_backbone.services.terminal._adapters.get_terminal_adapter_for_session",
-            new_callable=AsyncMock,
-            return_value=mock_adapter,
+        with (
+            patch(
+                "agent_backbone.services.terminal._core.capture_pane",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.get_terminal_adapter_for_session",
+                new_callable=AsyncMock,
+                return_value=mock_adapter,
+            ),
         ):
             assert await send_message("offline", "hello") is False
 
@@ -138,21 +144,26 @@ class TestSendMessage:
 class TestTerminalAdapters:
     async def test_claude_adapter_submits_with_enter(self):
         adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
-        with patch(
-            "agent_backbone.services.terminal._adapters._write_message_buffer",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_write, patch(
-            "agent_backbone.services.terminal._adapters._send_submit_key",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_submit, patch(
-            "agent_backbone.services.terminal._adapters.capture_pane",
-            new_callable=AsyncMock,
-            return_value="\u276f ",
-        ), patch(
-            "agent_backbone.services.terminal._adapters.asyncio.sleep",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "agent_backbone.services.terminal._adapters._write_message_buffer",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_write,
+            patch(
+                "agent_backbone.services.terminal._adapters._send_submit_key",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_submit,
+            patch(
+                "agent_backbone.services.terminal._adapters.capture_pane",
+                new_callable=AsyncMock,
+                return_value="\u276f ",
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
             assert await adapter.deliver_message("ike", "hello") is True
         mock_write.assert_awaited_once_with("ike", "hello")
@@ -160,49 +171,60 @@ class TestTerminalAdapters:
 
     async def test_codex_adapter_submits_and_retries_buffered_input(self):
         adapter = get_terminal_adapter(TerminalRuntime.CODEX)
-        with patch(
-            "agent_backbone.services.terminal._adapters._write_message_buffer",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), patch(
-            "agent_backbone.services.terminal._adapters._send_submit_key",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_submit, patch(
-            "agent_backbone.services.terminal._adapters.capture_pane",
-            new_callable=AsyncMock,
-            side_effect=["\u203a follow up", "\u203a "],
-        ), patch(
-            "agent_backbone.services.terminal._adapters.asyncio.sleep",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "agent_backbone.services.terminal._adapters._write_message_buffer",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters._send_submit_key",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_submit,
+            patch(
+                "agent_backbone.services.terminal._adapters.capture_pane",
+                new_callable=AsyncMock,
+                side_effect=["\u203a follow up", "\u203a "],
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
             assert await adapter.deliver_message("codex-repo", "hello") is True
         assert mock_submit.await_count == 2
 
     async def test_codex_adapter_interrupts_queued_delivery(self):
         adapter = get_terminal_adapter(TerminalRuntime.CODEX)
-        with patch(
-            "agent_backbone.services.terminal._adapters._write_message_buffer",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), patch(
-            "agent_backbone.services.terminal._adapters._send_submit_key",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_submit, patch(
-            "agent_backbone.services.terminal._adapters._send_escape_key",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_escape, patch(
-            "agent_backbone.services.terminal._adapters.capture_pane",
-            new_callable=AsyncMock,
-            side_effect=[
-                "\u2022 Messages to be submitted after next tool call\n\u203a hello",
-                "\u203a ",
-            ],
-        ), patch(
-            "agent_backbone.services.terminal._adapters.asyncio.sleep",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "agent_backbone.services.terminal._adapters._write_message_buffer",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters._send_submit_key",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_submit,
+            patch(
+                "agent_backbone.services.terminal._adapters._send_escape_key",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_escape,
+            patch(
+                "agent_backbone.services.terminal._adapters.capture_pane",
+                new_callable=AsyncMock,
+                side_effect=[
+                    "\u2022 Messages to be submitted after next tool call\n\u203a hello",
+                    "\u203a ",
+                ],
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
             assert await adapter.deliver_message("codex-repo", "hello") is True
         mock_escape.assert_awaited_once_with("codex-repo")
@@ -210,21 +232,26 @@ class TestTerminalAdapters:
 
     async def test_gemini_adapter_submits_with_enter(self):
         adapter = get_terminal_adapter(TerminalRuntime.GEMINI)
-        with patch(
-            "agent_backbone.services.terminal._adapters._write_message_buffer",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), patch(
-            "agent_backbone.services.terminal._adapters._send_submit_key",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_submit, patch(
-            "agent_backbone.services.terminal._adapters.capture_pane",
-            new_callable=AsyncMock,
-            return_value="> ",
-        ), patch(
-            "agent_backbone.services.terminal._adapters.asyncio.sleep",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "agent_backbone.services.terminal._adapters._write_message_buffer",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters._send_submit_key",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_submit,
+            patch(
+                "agent_backbone.services.terminal._adapters.capture_pane",
+                new_callable=AsyncMock,
+                return_value="> ",
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
             assert await adapter.deliver_message("gemini-repo", "hello") is True
         mock_submit.assert_awaited_once_with("gemini-repo")
@@ -239,9 +266,7 @@ class TestTerminalAdapters:
         )
         assert (
             detect_runtime_from_pane(
-                ">   Press 'Esc' for NORMAL mode.\n"
-                "[INSERT] /model Auto (Gemini 3)\n"
-                "? for shortcuts"
+                ">   Press 'Esc' for NORMAL mode.\n[INSERT] /model Auto (Gemini 3)\n? for shortcuts"
             )
             == TerminalRuntime.GEMINI
         )

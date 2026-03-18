@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 
@@ -20,5 +21,5 @@ async def require_api_key(request: Request) -> None:
         log.warning("BACKBONE_API_KEY not set — authentication disabled (dev mode)")
         return
     auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer ") or auth[7:] != api_key:
+    if not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], api_key):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")

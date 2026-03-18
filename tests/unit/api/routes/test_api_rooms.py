@@ -224,6 +224,9 @@ class TestSendDirected:
             call_args = mock_svc.safe_deliver.call_args
             assert call_args[0][0] == "leo"
             assert "What's your take?" in call_args[0][1]
+            assert call_args.kwargs["db"] is api_app.state.db
+            assert call_args.kwargs["delivery_kind"] == "direct_message"
+            assert call_args.kwargs["flow_name"] == "room-send-directed"
 
             # Verify message in transcript
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
@@ -572,6 +575,10 @@ class TestSendBroadcast:
 
             # Verify safe_deliver called for each participant
             assert mock_svc.safe_deliver.call_count == 2
+            first_call = mock_svc.safe_deliver.call_args_list[0]
+            assert first_call.kwargs["db"] is api_app.state.db
+            assert first_call.kwargs["delivery_kind"] == "direct_message"
+            assert first_call.kwargs["flow_name"] == "room-send-broadcast"
 
             # Verify transcript
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
@@ -665,6 +672,9 @@ class TestPostResponse:
             # Moderator received delivery
             mock_svc.safe_deliver.assert_called_once()
             assert mock_svc.safe_deliver.call_args[0][0] == "ike-session"
+            assert mock_svc.safe_deliver.call_args.kwargs["db"] is api_app.state.db
+            assert mock_svc.safe_deliver.call_args.kwargs["delivery_kind"] == "direct_message"
+            assert mock_svc.safe_deliver.call_args.kwargs["flow_name"] == "room-post-response"
         finally:
             api_app.dependency_overrides.pop(get_delivery_service, None)
 
@@ -679,6 +689,54 @@ class TestPostResponse:
                 json={"sender": "leo", "content": "Hello"},
             )
             assert resp.status_code == 404
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+    @pytest.mark.parametrize("state", ["paused", "closed"])
+    async def test_post_response_rejects_inactive_room(
+        self, api_client, auth_headers, room_dir, api_app, state
+    ):
+        """400 when posting to a paused or closed room."""
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            room = _make_room(state=state)
+            _save_room_file(room_dir, room)
+
+            resp = await api_client.post(
+                f"/api/rooms/{room.id}/respond",
+                headers=auth_headers,
+                json={"sender": "leo", "content": "Still there?"},
+            )
+
+            assert resp.status_code == 400
+            saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
+            assert saved.transcript == []
+            mock_svc.safe_deliver.assert_not_called()
+        finally:
+            api_app.dependency_overrides.pop(get_delivery_service, None)
+
+    async def test_post_response_sender_not_participant(
+        self, api_client, auth_headers, room_dir, api_app
+    ):
+        """400 when sender is not a room participant or moderator."""
+        mock_svc = _make_mock_delivery_svc()
+        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
+        try:
+            room = _make_room(participants=["leo", "feynman"])
+            _save_room_file(room_dir, room)
+
+            resp = await api_client.post(
+                f"/api/rooms/{room.id}/respond",
+                headers=auth_headers,
+                json={"sender": "ada", "content": "Let me in"},
+            )
+
+            assert resp.status_code == 400
+            assert "Sender is not a room participant or moderator" in resp.json()["detail"]
+            saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
+            assert saved.transcript == []
+            mock_svc.safe_deliver.assert_not_called()
         finally:
             api_app.dependency_overrides.pop(get_delivery_service, None)
 
@@ -1285,6 +1343,7 @@ class TestMeetingSkillInjection:
         """Delivers skill to all participants via safe_deliver."""
         room = _make_room(participants=["leo", "feynman"])
         config = MagicMock()
+        db = MagicMock()
         delivery_svc = _make_mock_delivery_svc()
 
         with (
@@ -1298,7 +1357,7 @@ class TestMeetingSkillInjection:
                 side_effect=["leo-session", "feynman-session"],
             ),
         ):
-            await _inject_meeting_skill(room, config, delivery_svc)
+            await _inject_meeting_skill(room, config, db, delivery_svc)
 
         assert delivery_svc.safe_deliver.call_count == 2
         sessions = [c.args[0] for c in delivery_svc.safe_deliver.call_args_list]
@@ -1308,18 +1367,27 @@ class TestMeetingSkillInjection:
         envelope = delivery_svc.safe_deliver.call_args_list[0].args[1]
         assert "[via:meeting-setup room:test-room-1]" in envelope
         assert "Skill content" in envelope
+        assert delivery_svc.safe_deliver.call_args_list[0].kwargs["db"] is db
+        assert (
+            delivery_svc.safe_deliver.call_args_list[0].kwargs["delivery_kind"] == "direct_message"
+        )
+        assert (
+            delivery_svc.safe_deliver.call_args_list[0].kwargs["flow_name"]
+            == "room-inject-meeting-skill"
+        )
 
     async def test_inject_meeting_skill_missing_file_skips(self):
         """No delivery when skill file not found."""
         room = _make_room()
         config = MagicMock()
+        db = MagicMock()
         delivery_svc = _make_mock_delivery_svc()
 
         with patch(
             "agent_backbone.api.routes.rooms._read_meeting_skill",
             return_value=None,
         ):
-            await _inject_meeting_skill(room, config, delivery_svc)
+            await _inject_meeting_skill(room, config, db, delivery_svc)
 
         delivery_svc.safe_deliver.assert_not_called()
 
@@ -1327,6 +1395,7 @@ class TestMeetingSkillInjection:
         """One participant fails, others still get delivery."""
         room = _make_room(participants=["leo", "feynman"])
         config = MagicMock()
+        db = MagicMock()
         delivery_svc = _make_mock_delivery_svc(safe_deliver_side_effect=["offline", "delivered"])
 
         with (
@@ -1340,7 +1409,7 @@ class TestMeetingSkillInjection:
                 side_effect=["leo-session", "feynman-session"],
             ),
         ):
-            await _inject_meeting_skill(room, config, delivery_svc)
+            await _inject_meeting_skill(room, config, db, delivery_svc)
 
         # Both participants got delivery attempts
         assert delivery_svc.safe_deliver.call_count == 2
@@ -1349,6 +1418,7 @@ class TestMeetingSkillInjection:
         """Unresolvable session skips delivery for that participant."""
         room = _make_room(participants=["leo", "unknown"])
         config = MagicMock()
+        db = MagicMock()
         delivery_svc = _make_mock_delivery_svc()
 
         with (
@@ -1362,7 +1432,7 @@ class TestMeetingSkillInjection:
                 side_effect=["leo-session", None],
             ),
         ):
-            await _inject_meeting_skill(room, config, delivery_svc)
+            await _inject_meeting_skill(room, config, db, delivery_svc)
 
         # Only the resolvable participant got delivery
         delivery_svc.safe_deliver.assert_called_once()
@@ -1485,6 +1555,7 @@ class TestCursorAdvancement:
         msg1 = _make_message(id="m1")
         room = _make_room(participants=["leo", "feynman"], transcript=[msg1])
         config = MagicMock()
+        db = MagicMock()
         delivery_svc = _make_mock_delivery_svc()
 
         with (
@@ -1502,7 +1573,7 @@ class TestCursorAdvancement:
                 new_callable=AsyncMock,
             ) as mock_save,
         ):
-            await _inject_meeting_skill(room, config, delivery_svc)
+            await _inject_meeting_skill(room, config, db, delivery_svc)
 
         # Both participants delivered successfully → cursors set to transcript length
         assert room.cursors["leo"] == 1
@@ -1513,6 +1584,7 @@ class TestCursorAdvancement:
         """Only successfully injected participants get their cursor set."""
         room = _make_room(participants=["leo", "feynman"])
         config = MagicMock()
+        db = MagicMock()
         delivery_svc = _make_mock_delivery_svc(safe_deliver_side_effect=["delivered", "offline"])
 
         with (
@@ -1530,7 +1602,7 @@ class TestCursorAdvancement:
                 new_callable=AsyncMock,
             ) as mock_save,
         ):
-            await _inject_meeting_skill(room, config, delivery_svc)
+            await _inject_meeting_skill(room, config, db, delivery_svc)
 
         assert room.cursors.get("leo") == 0  # empty transcript → len=0
         assert "feynman" not in room.cursors  # failed → no cursor

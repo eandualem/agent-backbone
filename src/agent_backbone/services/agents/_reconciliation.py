@@ -35,8 +35,7 @@ async def reconcile_startup_states(config: BackboneConfig, db: BackboneDB) -> No
     state_path = config.agent_state.state_path
     stale_threshold = config.agent_state.stale_threshold_seconds
 
-    for entity in config.registry.all_entities:
-        session_name = config.registry.sessions_map.get(entity)
+    for entity, session_name in config.registry.tracked_sessions.items():
         if not session_name or session_name not in active_sessions:
             continue
 

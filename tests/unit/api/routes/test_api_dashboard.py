@@ -3,25 +3,25 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import agent_backbone.api.routes.dashboard as dashboard_module
+import agent_backbone.api.session_updates as session_updates_module
 from agent_backbone.api.deps import get_db, get_github, get_state_service, get_tmux_service
+from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.services.agents import AgentState, StateSnapshot
 
 
 @pytest.fixture(autouse=True)
 def _reset_dashboard_caches():
-    """Reset TTL caches before each test."""
-    dashboard_module._agents_cache = []
-    dashboard_module._agents_cache_ts = 0
+    """Reset dashboard-local caches and the shared session snapshot cache."""
+    session_updates_module.reset_sessions_update_state()
     dashboard_module._issues_cache = 0
     dashboard_module._issues_cache_ts = 0
     yield
-    dashboard_module._agents_cache = []
-    dashboard_module._agents_cache_ts = 0
+    session_updates_module.reset_sessions_update_state()
     dashboard_module._issues_cache = 0
     dashboard_module._issues_cache_ts = 0
 
@@ -188,7 +188,7 @@ class TestDashboardEndpoint:
         assert resp.json()["failed_deliveries"] == 4
 
     async def test_service_health_included(self, api_app, api_client, auth_headers):
-        """Services field includes gateway, prefect, and database health."""
+        """Services field includes gateway, prefect, worker, and database health."""
         _set_overrides(
             api_app,
             state_svc=_make_state_svc(),
@@ -207,6 +207,7 @@ class TestDashboardEndpoint:
         assert services["database"] == "up"
         # prefect_server will be "down" in test env (no Prefect running)
         assert services["prefect_server"] in ("up", "down", "degraded")
+        assert services["prefect_worker"] in ("up", "down", "degraded")
 
     async def test_cache_returns_same_within_ttl(self, api_app, api_client, auth_headers):
         """Two rapid calls return same data (cache hit)."""
@@ -230,6 +231,49 @@ class TestDashboardEndpoint:
         assert resp2.status_code == 200
         # Issue count should be cached (5, not 99)
         assert resp2.json()["issues_pending"] == 5
+
+    async def test_reuses_shared_agents_snapshot_from_agents_endpoint(
+        self, api_app, api_client, auth_headers
+    ):
+        """Dashboard reuses the shared snapshot populated by /api/agents."""
+        shared_snapshot = [
+            EnrichedAgent(
+                session="ike",
+                entity="ike",
+                state="idle",
+                online=True,
+                type="named_entity",
+            )
+        ]
+        _set_overrides(
+            api_app,
+            state_svc=_make_state_svc(),
+            tmux_svc=_make_tmux_svc(),
+            gh=_make_gh(issue_count=0),
+            db=_make_db(),
+        )
+        try:
+            with (
+                patch(
+                    "agent_backbone.api.routes.agents.build_session_snapshot",
+                    new_callable=AsyncMock,
+                    return_value=shared_snapshot,
+                ) as mock_agents_build,
+                patch(
+                    "agent_backbone.api.routes.dashboard.build_session_snapshot",
+                    new_callable=AsyncMock,
+                ) as mock_dashboard_build,
+            ):
+                agents_resp = await api_client.get("/api/agents", headers=auth_headers)
+                dashboard_resp = await api_client.get("/api/dashboard", headers=auth_headers)
+        finally:
+            _clear_overrides(api_app)
+
+        assert agents_resp.status_code == 200
+        assert dashboard_resp.status_code == 200
+        assert mock_agents_build.await_count == 1
+        mock_dashboard_build.assert_not_awaited()
+        assert dashboard_resp.json()["agents"][0]["session"] == "ike"
 
     async def test_state_since_populated(self, api_app, api_client, auth_headers):
         """state_since field is populated on agents from snapshot timestamp."""

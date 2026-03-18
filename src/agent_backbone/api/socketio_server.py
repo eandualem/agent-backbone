@@ -8,67 +8,26 @@ Provides bidirectional real-time terminal access via PTY-based
 from __future__ import annotations
 
 import asyncio
-import json
+import hmac
 import logging
 import os
 import time
-from pathlib import Path
 
 import socketio
 
+from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.services.terminal import (
     PtyManager,
-    get_window_size,
     list_panes,
     resize_window,
     session_exists,
+    set_window_size_mode,
 )
 
 log = logging.getLogger(__name__)
 
 # Module-level PTY manager singleton
 _pty_manager = PtyManager()
-
-# Persisted original dimensions — survives uvicorn reload
-_DIMS_FILE = Path("/tmp/agent-backbone-original-dims.json")
-
-
-def _persist_dims(session_name: str, cols: int, rows: int) -> None:
-    """Save original dimensions to file for reload recovery."""
-    try:
-        data = {}
-        if _DIMS_FILE.exists():
-            data = json.loads(_DIMS_FILE.read_text())
-        data[session_name] = [cols, rows]
-        _DIMS_FILE.write_text(json.dumps(data))
-    except Exception:
-        log.debug("Failed to persist original dims for '%s'", session_name)
-
-
-def _load_persisted_dims(session_name: str) -> tuple[int, int] | None:
-    """Load persisted original dimensions from file."""
-    try:
-        if not _DIMS_FILE.exists():
-            return None
-        data = json.loads(_DIMS_FILE.read_text())
-        dims = data.get(session_name)
-        if dims and len(dims) == 2:
-            return (int(dims[0]), int(dims[1]))
-    except Exception:
-        log.debug("Failed to load persisted dims for '%s'", session_name)
-    return None
-
-
-def _remove_persisted_dims(session_name: str) -> None:
-    """Remove persisted original dimensions from file."""
-    try:
-        if not _DIMS_FILE.exists():
-            return
-        data = json.loads(_DIMS_FILE.read_text())
-        data.pop(session_name, None)
-        _DIMS_FILE.write_text(json.dumps(data))
-    except Exception:
-        log.debug("Failed to remove persisted dims for '%s'", session_name)
 
 
 # --- Hardening constants ---
@@ -93,8 +52,42 @@ def create_sio(cors_origins: list[str]) -> socketio.AsyncServer:
         async_mode="asgi",
         cors_allowed_origins=cors_origins,
     )
+    sio.register_namespace(SessionsNamespace(SESSIONS_NAMESPACE))
     sio.register_namespace(TerminalNamespace("/terminal"))
     return sio
+
+
+async def _restore_dynamic_window_size(session_name: str) -> None:
+    """Return tmux size selection to active-client control.
+
+    Browser-driven `resize-window` calls are useful for immediate reflow, but tmux
+    leaves the target window in `window-size manual`. That pins the session even
+    after the browser collapses or detaches. Resetting to `latest` matches native
+    terminal behavior: the most recent non-ignored client becomes the size authority.
+    """
+    if not await set_window_size_mode(session_name, "latest"):
+        log.error("Failed to restore tmux window-size latest for '%s'", session_name)
+
+
+def _socket_auth_valid(auth: dict | None = None) -> bool:
+    """Validate Socket.IO auth against the configured API key."""
+    api_key = os.environ.get("BACKBONE_API_KEY", "")
+    if not api_key:
+        return True
+    raw = auth.get("api_key") if isinstance(auth, dict) else None
+    token = raw if isinstance(raw, str) else ""
+    return hmac.compare_digest(token, api_key)
+
+
+class SessionsNamespace(socketio.AsyncNamespace):
+    """Socket.IO namespace for enriched session state subscriptions."""
+
+    async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
+        """Validate API key on connection."""
+        if not _socket_auth_valid(auth):
+            log.warning("Socket.IO sessions connection rejected — invalid auth (sid=%s)", sid)
+            return False
+        return True
 
 
 class TerminalNamespace(socketio.AsyncNamespace):
@@ -111,22 +104,67 @@ class TerminalNamespace(socketio.AsyncNamespace):
         leave        — detach from a session
         input        — write keyboard input to PTY
         resize       — resize PTY (SIGWINCH to tmux attach)
-        release_dims — restore original tmux dims (dashboard collapse)
+        release_dims — release browser tmux size control (dashboard collapse)
         disconnect   — clean up all sessions
     """
 
     def __init__(self, namespace: str) -> None:
         super().__init__(namespace)
-        # sid -> {session_name: forwarding_task}
-        self._subscriptions: dict[str, dict[str, asyncio.Task]] = {}
+        # sid -> {session_name: forwarding_task or None when collapsed/detached}
+        self._subscriptions: dict[str, dict[str, asyncio.Task | None]] = {}
         # Rate limiting: (sid, session) -> list of timestamps
         self._input_timestamps: dict[tuple[str, str], list[float]] = {}
-        # Active browser sessions: session_name -> set of sids
+        # Attached browser PTY clients: session_name -> set of sids
         self._active_sessions: dict[str, set[str]] = {}
-        # Original tmux dimensions before any browser client joined: session_name -> (cols, rows)
-        self._original_dims: dict[str, tuple[int, int]] = {}
         # Read-only subscribers: sid -> set of session_names
         self._readonly: dict[str, set[str]] = {}
+
+    async def _attach_subscription_client(
+        self,
+        sid: str,
+        session_name: str,
+        cols: int,
+        rows: int,
+    ) -> None:
+        """Create a PTY client and forwarding task for an existing subscription."""
+        mgr = get_pty_manager()
+        pty_session = await mgr.create(sid, session_name, cols, rows)
+
+        def _on_drop(sn: str, _sid: str = sid) -> None:
+            self._on_data_dropped(_sid, sn)
+
+        pty_session.on_data_dropped = _on_drop
+
+        task = asyncio.create_task(
+            self._forward_pty_output(sid, session_name, pty_session.output_queue),
+            name=f"sio-pty-{sid}-{session_name}",
+        )
+        self._subscriptions.setdefault(sid, {})[session_name] = task
+        self._active_sessions.setdefault(session_name, set()).add(sid)
+
+    async def _detach_subscription_client(self, sid: str, session_name: str) -> None:
+        """Detach the browser PTY client but keep the logical subscription."""
+        sid_subs = self._subscriptions.get(sid, {})
+        if session_name not in sid_subs:
+            return
+
+        task = sid_subs.get(session_name)
+        if isinstance(task, asyncio.Task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                log.warning("PTY forwarding task failed during detach: %s", e)
+        elif task is not None:
+            cancel = getattr(task, "cancel", None)
+            if callable(cancel):
+                cancel()
+
+        mgr = get_pty_manager()
+        await mgr.remove(sid, session_name)
+        sid_subs[session_name] = None
 
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
         """Validate API key on connection.
@@ -134,11 +172,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
         Auth dict should contain {"api_key": "..."}.
         Dev mode (BACKBONE_API_KEY not set) allows all connections.
         """
-        api_key = os.environ.get("BACKBONE_API_KEY", "")
-        if not api_key:
-            return True  # Dev mode — unrestricted
-
-        if not auth or auth.get("api_key") != api_key:
+        if not _socket_auth_valid(auth):
             log.warning("Socket.IO connection rejected — invalid auth (sid=%s)", sid)
             return False
 
@@ -169,7 +203,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
             return
 
         # Fix double-join: clean up existing subscription before creating a new one
-        if sid in self._subscriptions and session_name in self._subscriptions[sid]:
+        if session_name in self._subscriptions.get(sid, {}):
             await self._cleanup_session(sid, session_name)
 
         readonly = bool(data.get("readonly", False))
@@ -190,82 +224,15 @@ class TerminalNamespace(socketio.AsyncNamespace):
             cols = int(active_pane["pane_width"]) if active_pane else 80
             rows = int(active_pane["pane_height"]) if active_pane else 24
 
-        # Save original tmux window dimensions only when no browser clients
-        # are currently connected. This prevents a second client from
-        # overwriting the original dims with already-resized values.
-        #
-        # After uvicorn reload, both _active_sessions and _original_dims are
-        # wiped. The tmux window may already be browser-resized, so querying
-        # tmux would give wrong "original" dims. Check the persisted file first.
-        active_sids = self._active_sessions.get(session_name, set())
-        if not active_sids:
-            persisted = _load_persisted_dims(session_name)
-            if persisted is not None:
-                # Reload recovery: use persisted dims (tmux is already resized)
-                self._original_dims[session_name] = persisted
-            else:
-                # Fresh join: query tmux for true original dims and persist
-                orig = await get_window_size(session_name)
-                if orig is not None:
-                    self._original_dims[session_name] = orig
-                    _persist_dims(session_name, orig[0], orig[1])
-        elif session_name not in self._original_dims:
-            # Multiple active sids but dict was wiped — check persisted file
-            persisted = _load_persisted_dims(session_name)
-            if persisted is not None:
-                self._original_dims[session_name] = persisted
-            else:
-                orig = await get_window_size(session_name)
-                if orig is not None:
-                    self._original_dims[session_name] = orig
-
-        # Track this client in active sessions
-        self._active_sessions.setdefault(session_name, set()).add(sid)
-
-        # Track read-only state
-        if readonly:
-            self._readonly.setdefault(sid, set()).add(session_name)
-
-        # Create a dedicated PTY for this client
-        mgr = get_pty_manager()
-        pty_session = await mgr.create(sid, session_name, cols, rows)
-
         try:
-            # Wire up data-drop notification callback with sid captured via closure
-            def _on_drop(sn: str, _sid: str = sid) -> None:
-                self._on_data_dropped(_sid, sn)
-
-            pty_session.on_data_dropped = _on_drop
-
-            # Explicitly resize the tmux window so content reflows to match
-            # the browser terminal dimensions (PTY TIOCSWINSZ alone doesn't
-            # reliably resize when other tmux clients are attached)
-            if not await resize_window(session_name, cols, rows):
-                log.error(
-                    "resize_window failed on join for '%s' (%dx%d)",
-                    session_name,
-                    cols,
-                    rows,
-                )
-
-            queue = pty_session.output_queue
-
             # Enter Socket.IO room
             await self.enter_room(sid, f"session:{session_name}")
-
-            # Start forwarding PTY output to this client
-            task = asyncio.create_task(
-                self._forward_pty_output(sid, session_name, queue),
-                name=f"sio-pty-{sid}-{session_name}",
-            )
-
-            # Track subscription
-            if sid not in self._subscriptions:
-                self._subscriptions[sid] = {}
-            self._subscriptions[sid][session_name] = task
+            await self._attach_subscription_client(sid, session_name, cols, rows)
+            if readonly:
+                self._readonly.setdefault(sid, set()).add(session_name)
         except Exception:
             # Client disconnected or error before tracking — clean up orphan
-            await mgr.remove(sid, session_name)
+            await get_pty_manager().remove(sid, session_name)
             raise
 
         log.info(
@@ -364,38 +331,37 @@ class TerminalNamespace(socketio.AsyncNamespace):
         except (ValueError, TypeError):
             return
 
-        # Re-capture original dims on re-expand after release_dims cleared them.
-        # Only capture if no other browser client already holds original dims
-        # (i.e., this is the first resize after a release).
-        if session_name not in self._original_dims:
-            active_sids = self._active_sessions.get(session_name, set())
-            if active_sids:
-                orig = await get_window_size(session_name)
-                if orig is not None:
-                    self._original_dims[session_name] = orig
-                    _persist_dims(session_name, orig[0], orig[1])
-
         mgr = get_pty_manager()
         pty_session = mgr.get(sid, session_name)
-        if pty_session:
-            pty_session.resize(clamped_cols, clamped_rows)
-            if not await resize_window(session_name, clamped_cols, clamped_rows):
-                log.error(
-                    "resize_window failed on resize for '%s' (%dx%d)",
-                    session_name,
-                    clamped_cols,
-                    clamped_rows,
-                )
+        if pty_session is None:
+            await self._attach_subscription_client(sid, session_name, clamped_cols, clamped_rows)
+            log.info(
+                "Reattached browser PTY for '%s' after collapse (%dx%d)",
+                session_name,
+                clamped_cols,
+                clamped_rows,
+            )
+            return
+
+        pty_session.resize(clamped_cols, clamped_rows)
+        if not await resize_window(session_name, clamped_cols, clamped_rows):
+            log.error(
+                "resize_window failed on resize for '%s' (%dx%d)",
+                session_name,
+                clamped_cols,
+                clamped_rows,
+            )
+        await _restore_dynamic_window_size(session_name)
 
     async def on_release_dims(self, sid: str, data: dict) -> None:
-        """Restore original tmux dimensions without disconnecting.
+        """Release browser size control without disconnecting.
 
         data: {"session": "session-name"}
 
-        Called when the dashboard collapses/hides a terminal. Restores the
-        tmux window to its pre-browser dimensions so Ghostty (or other
-        native clients) aren't left squished. The socket stays alive and
-        the PTY remains attached — a subsequent resize event re-expands.
+        Called when the dashboard collapses/hides a terminal. Fully detaches
+        the browser PTY client so native terminals immediately regain tmux
+        size authority. The socket stays alive and the logical subscription
+        remains, so a subsequent resize event will create a fresh PTY client.
         """
         session_name = data.get("session", "")
         if not session_name:
@@ -410,27 +376,16 @@ class TerminalNamespace(socketio.AsyncNamespace):
             )
             return
 
-        orig = self._original_dims.pop(session_name, None)
-        _remove_persisted_dims(session_name)
+        await self._detach_subscription_client(sid, session_name)
+        active_sids = self._active_sessions.get(session_name, set())
+        active_sids.discard(sid)
+        if not active_sids:
+            self._active_sessions.pop(session_name, None)
 
-        if orig is not None:
-            if not await resize_window(session_name, orig[0], orig[1]):
-                log.error(
-                    "Failed to restore dims on release_dims for '%s'",
-                    session_name,
-                )
-            else:
-                log.info(
-                    "Restored original dims for '%s' (%dx%d) on release_dims",
-                    session_name,
-                    orig[0],
-                    orig[1],
-                )
-        else:
-            log.debug(
-                "No original dims to restore for '%s' on release_dims",
-                session_name,
-            )
+        log.info(
+            "Detached browser PTY for '%s' on collapse",
+            session_name,
+        )
 
     async def on_disconnect(self, sid: str) -> None:
         """Clean up all subscriptions for a disconnecting client."""
@@ -441,23 +396,15 @@ class TerminalNamespace(socketio.AsyncNamespace):
         log.info("sid=%s disconnected, cleaned up %d sessions", sid, len(sessions))
 
     async def _cleanup_session(self, sid: str, session_name: str) -> None:
-        """Remove this client's PTY and restore dims if last client."""
+        """Remove this client's PTY/subscription state entirely."""
         sid_subs = self._subscriptions.get(sid, {})
-        task = sid_subs.pop(session_name, None)
-        if task is None:
+        if session_name not in sid_subs:
             return
 
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            log.warning("PTY forwarding task failed during cleanup: %s", e)
-
-        # Remove this client's PTY immediately
-        mgr = get_pty_manager()
-        await mgr.remove(sid, session_name)
+        await self._detach_subscription_client(sid, session_name)
+        sid_subs.pop(session_name, None)
+        if not sid_subs:
+            self._subscriptions.pop(sid, None)
 
         # Remove from active sessions tracking
         active_sids = self._active_sessions.get(session_name, set())
@@ -470,13 +417,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
             self._readonly.pop(sid, None)
 
         if not active_sids:
-            # Last browser client left — restore original tmux dimensions
             self._active_sessions.pop(session_name, None)
-            orig = self._original_dims.pop(session_name, None)
-            _remove_persisted_dims(session_name)
-            if orig is not None:
-                if not await resize_window(session_name, orig[0], orig[1]):
-                    log.error("Failed to restore original dims for '%s'", session_name)
 
         await self.leave_room(sid, f"session:{session_name}")
         self._input_timestamps.pop((sid, session_name), None)
@@ -606,7 +547,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
                             to=sid,
                         )
                     except Exception:
-                        pass
+                        log.debug("session_ended emit failed for sid=%s (client gone)", sid)
                     break
 
                 buffer = [data]
@@ -624,7 +565,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
                                     to=sid,
                                 )
                             except Exception:
-                                pass
+                                log.debug("terminal_output flush failed for sid=%s", sid)
                         try:
                             await self.emit(
                                 "session_ended",
@@ -632,7 +573,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
                                 to=sid,
                             )
                         except Exception:
-                            pass
+                            log.debug("session_ended emit failed for sid=%s (client gone)", sid)
                         return
                     buffer.append(more)
 
@@ -649,7 +590,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
                                         to=sid,
                                     )
                                 except Exception:
-                                    pass
+                                    log.debug("terminal_output flush failed for sid=%s", sid)
                             try:
                                 await self.emit(
                                     "session_ended",
@@ -657,7 +598,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
                                     to=sid,
                                 )
                             except Exception:
-                                pass
+                                log.debug("session_ended emit failed for sid=%s (client gone)", sid)
                             return
                         buffer.append(more)
                 except TimeoutError:

@@ -22,25 +22,17 @@ from agent_backbone.api.models import (
     EnrichedAgent,
     ServiceHealth,
 )
-from agent_backbone.api.routes.agents import (
-    _build_enriched_agent,
-    _listable_registry_sessions,
-    _reserved_agent_sessions,
-)
+from agent_backbone.api.session_updates import build_session_snapshot, get_cached_session_snapshot
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
-from agent_backbone.services.terminal import TmuxService
+from agent_backbone.services.infrastructure._processes import read_pid
+from agent_backbone.services.terminal import TmuxService, session_exists
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
-
-# TTL caches
-_agents_cache: list[EnrichedAgent] = []
-_agents_cache_ts: float = 0
-_AGENTS_CACHE_TTL = 5.0
 
 _issues_cache: int = 0
 _issues_cache_ts: float = 0
@@ -52,76 +44,10 @@ async def _fetch_agents(
     state_svc: StateService,
     tmux_svc: TmuxService,
 ) -> list[EnrichedAgent]:
-    """Build the full agent list with TTL cache (5s)."""
-    global _agents_cache, _agents_cache_ts  # noqa: PLW0603
-    now = time.monotonic()
-    if now - _agents_cache_ts < _AGENTS_CACHE_TTL and _agents_cache:
-        return _agents_cache
-
-    rich_sessions = await tmux_svc.list_sessions_rich()
-    tmux_lookup = {s["name"]: s for s in rich_sessions}
-    active_sessions = set(tmux_lookup.keys())
-
-    coros: list = []
-
-    # Registry-backed entities, including concrete role-instance sessions.
-    registry_sessions = _listable_registry_sessions(config)
-    for entity, session in registry_sessions.items():
-        reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(
-            entity
-        )
-        if reg_entry and reg_entry.entity_type == "service":
-            continue
-        coros.append(
-            _build_enriched_agent(
-                session,
-                entity,
-                config,
-                active_sessions,
-                state_svc,
-                tmux_lookup.get(session),
-                agent_type="named_entity",
-            )
-        )
-
-    # Discover coding agents from active tmux sessions
-    named_sessions = _reserved_agent_sessions(config)
-    service_sessions = config.entities.service_sessions
-    seen_coding: set[str] = set()
-    for session in active_sessions:
-        if session not in named_sessions and session not in service_sessions:
-            coros.append(
-                _build_enriched_agent(
-                    session,
-                    session,
-                    config,
-                    active_sessions,
-                    state_svc,
-                    tmux_lookup.get(session),
-                    agent_type="coding_agent",
-                )
-            )
-            seen_coding.add(session)
-
-    # Include offline repos from registry
-    for repo in config.registry.repos:
-        if repo.name not in seen_coding and repo.name not in named_sessions:
-            coros.append(
-                _build_enriched_agent(
-                    repo.name,
-                    repo.name,
-                    config,
-                    active_sessions,
-                    state_svc,
-                    agent_type="coding_agent",
-                )
-            )
-
-    agents: list[EnrichedAgent] = list(await asyncio.gather(*coros))
-
-    _agents_cache = agents
-    _agents_cache_ts = now
-    return agents
+    """Build the full agent list with the shared session snapshot cache."""
+    return await get_cached_session_snapshot(
+        lambda: build_session_snapshot(config, state_svc, tmux_svc)
+    )
 
 
 async def _fetch_issues_pending(gh: GitHubClient) -> int:
@@ -158,7 +84,16 @@ async def _fetch_service_health(db: BackboneDB) -> ServiceHealth:
             resp = await client.get("http://localhost:4200/api/health", timeout=3)
             health.prefect_server = "up" if resp.status_code == 200 else "degraded"
     except Exception:
-        health.prefect_server = "down"
+        health.prefect_server = (
+            "degraded" if await session_exists("prefect") or read_pid("prefect") else "down"
+        )
+
+    if read_pid("worker") is not None:
+        health.prefect_worker = "up"
+    elif await session_exists("backbone-worker"):
+        health.prefect_worker = "degraded"
+    else:
+        health.prefect_worker = "down"
 
     try:
         if await db.check_connection():
@@ -180,7 +115,7 @@ def _compute_counts(agents: list[EnrichedAgent]) -> DashboardCounts:
         elif agent.state == "idle":
             counts.idle += 1
             counts.active += 1
-        elif agent.state == "plan_waiting":
+        elif agent.state in ("plan_waiting", "permission_waiting"):
             counts.plan_waiting += 1
             counts.active += 1
         elif agent.state in ("processing_issue", "busy", "blocked"):
@@ -210,7 +145,7 @@ async def get_dashboard(
     )
 
     counts = _compute_counts(agents)
-    plans_pending = sum(1 for a in agents if a.state == "plan_waiting")
+    plans_pending = sum(1 for a in agents if a.state in ("plan_waiting", "permission_waiting"))
 
     return DashboardResponse(
         agents=agents,

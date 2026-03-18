@@ -14,6 +14,7 @@ class AgentState(StrEnum):
     PROCESSING_ISSUE = "processing_issue"
     BUSY = "busy"
     PLAN_WAITING = "plan_waiting"
+    PERMISSION_WAITING = "permission_waiting"
     UNKNOWN = "unknown"
 
 

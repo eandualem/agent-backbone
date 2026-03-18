@@ -11,6 +11,7 @@ from agent_backbone.config import AgentStateConfig, BackboneConfig, TelegramConf
 from agent_backbone.services.registry import EntityEntry, EntityRegistry
 from agent_backbone.services.telegram import TelegramService, _delivery_reply
 from agent_backbone.services.telegram._topic_discovery import TopicDiscovery
+from agent_backbone.services.terminal import RUNTIME_ENV_KEY
 
 
 def _make_topic_update(thread_id: int | None, text: str, chat_id: int = 100) -> MagicMock:
@@ -680,7 +681,10 @@ class TestStartStopCommands:
                 await bot.cmd_start_agent(update, context)
 
         mock_start.assert_called_once_with(
-            "ike", working_dir="/home/test/ws/core/ike", command=["claude"]
+            "ike",
+            working_dir="/home/test/ws/core/ike",
+            command=["claude"],
+            environment={RUNTIME_ENV_KEY: "claude"},
         )
         reply_text = update.message.reply_text.call_args[0][0]
         assert "Started" in reply_text

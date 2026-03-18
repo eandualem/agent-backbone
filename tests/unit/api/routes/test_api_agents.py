@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import agent_backbone.api.routes.agents as agents_module
+import agent_backbone.api.session_updates as session_updates_module
 from agent_backbone.api.deps import get_state_service, get_tmux_service
+from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.api.routes.agents import _resolve_command
 from agent_backbone.services.agents import AgentState, StateSnapshot
 
@@ -19,12 +21,10 @@ _AGENTS = "agent_backbone.api.routes.agents"
 
 @pytest.fixture(autouse=True)
 def _reset_agents_cache():
-    """Reset the TTL cache before each test to prevent cross-test leakage."""
-    agents_module._agents_cache = []
-    agents_module._agents_cache_ts = 0
+    """Reset the shared session snapshot cache before each test."""
+    session_updates_module.reset_sessions_update_state()
     yield
-    agents_module._agents_cache = []
-    agents_module._agents_cache_ts = 0
+    session_updates_module.reset_sessions_update_state()
 
 
 def _idle_snapshot(**overrides) -> StateSnapshot:
@@ -206,7 +206,7 @@ class TestListAgents:
         assert coding["tmux_created"] is not None
 
     async def test_excludes_service_sessions(self, api_app, api_client, auth_headers):
-        """Service sessions (ngrok, prefect, etc.) are filtered from agents list."""
+        """Service sessions (prefect, etc.) are filtered from agents list."""
         _set_di_overrides(
             api_app,
             state_svc=_make_mock_state_svc(),
@@ -218,7 +218,6 @@ class TestListAgents:
                     _tmux("ada"),
                     _tmux("brunel"),
                     _tmux("platform-api"),
-                    _tmux("ngrok"),
                     _tmux("prefect-worker"),
                     _tmux("prefect-server"),
                     _tmux("telegram-bot"),
@@ -236,7 +235,7 @@ class TestListAgents:
         # Coding agent is included
         assert "platform-api" in sessions
         # Services are excluded
-        for svc in ("ngrok", "prefect-worker", "prefect-server", "telegram-bot"):
+        for svc in ("prefect-worker", "prefect-server", "telegram-bot"):
             assert svc not in sessions
 
     async def test_includes_offline_repos_from_registry(self, api_app, api_client, auth_headers):
@@ -446,6 +445,68 @@ class TestListAgents:
         finally:
             os.environ.pop("BACKBONE_API_KEY", None)
 
+    async def test_uses_shared_snapshot_cache_helper(self, api_app, api_client, auth_headers):
+        """The endpoint delegates snapshot caching to the shared helper."""
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(),
+            tmux_svc=_make_mock_tmux_svc(),
+        )
+        try:
+            with patch(
+                "agent_backbone.api.routes.agents.get_cached_session_snapshot",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_cache:
+                resp = await api_client.get("/api/agents", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"items": [], "total": 0}
+        mock_cache.assert_awaited_once()
+        assert callable(mock_cache.await_args.args[0])
+
+    async def test_concurrent_requests_share_snapshot_build(
+        self, api_app, api_client, auth_headers
+    ):
+        """Concurrent reads share a single snapshot build through the shared lock."""
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(),
+            tmux_svc=_make_mock_tmux_svc(),
+        )
+        snapshot = [
+            EnrichedAgent(
+                session="ike",
+                entity="ike",
+                state="idle",
+                online=True,
+                type="named_entity",
+            )
+        ]
+
+        async def slow_build(*_args, **_kwargs):
+            await asyncio.sleep(0.05)
+            return snapshot
+
+        try:
+            with patch(
+                "agent_backbone.api.routes.agents.build_session_snapshot",
+                new_callable=AsyncMock,
+                side_effect=slow_build,
+            ) as mock_build:
+                resp1, resp2 = await asyncio.gather(
+                    api_client.get("/api/agents", headers=auth_headers),
+                    api_client.get("/api/agents", headers=auth_headers),
+                )
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+        assert mock_build.await_count == 1
+
 
 # ---------------------------------------------------------------------------
 # GET /api/agents/{session}/state
@@ -546,7 +607,7 @@ class TestListRuntimes:
         assert resp.status_code == 200
         data = resp.json()
         ids = [r["id"] for r in data]
-        assert ids == ["claude", "gemini", "codex", "cursor", "opencode", "shell"]
+        assert ids == ["claude", "gemini", "codex", "cursor", "opencode", "aider", "shell"]
         # Verify structure
         claude = next(r for r in data if r["id"] == "claude")
         assert claude["display_name"] == "Claude Code"
@@ -826,6 +887,38 @@ class TestStartAgent:
         data = resp.json()
         assert data["model"] is None
 
+    async def test_start_invalidates_shared_cache_and_broadcasts(
+        self, api_app, api_client, auth_headers
+    ):
+        """Successful start resets the shared snapshot cache and triggers a sessions update."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        session_updates_module._snapshot_cache = [MagicMock()]
+        session_updates_module._snapshot_cache_ts = time.monotonic()
+        api_app.state.state_service = _make_mock_state_svc()
+
+        with (
+            patch(
+                "agent_backbone.api.routes.agents.resolve_agent_dir",
+                return_value="/ws/code/WF/my-repo",
+            ),
+            patch(
+                "agent_backbone.api.routes.agents.emit_sessions_update",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_emit,
+        ):
+            try:
+                resp = await api_client.post("/api/agents/my-repo/start", headers=auth_headers)
+            finally:
+                _clear_di_overrides(api_app)
+                del api_app.state.state_service
+
+        assert resp.status_code == 200
+        assert session_updates_module._snapshot_cache == []
+        assert session_updates_module._snapshot_cache_ts == 0
+        mock_emit.assert_awaited_once()
+
 
 # ---------------------------------------------------------------------------
 # POST /api/agents/{session}/stop
@@ -875,6 +968,32 @@ class TestStopAgent:
         data = resp.json()
         assert data["ok"] is True
         assert data["session"] == "ghost"
+
+    async def test_stop_invalidates_shared_cache_and_broadcasts(
+        self, api_app, api_client, auth_headers
+    ):
+        """Successful stop resets the shared snapshot cache and triggers a sessions update."""
+        tmux_svc = _make_mock_tmux_svc(stop_session_result=True)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        session_updates_module._snapshot_cache = [MagicMock()]
+        session_updates_module._snapshot_cache_ts = time.monotonic()
+        api_app.state.state_service = _make_mock_state_svc()
+
+        with patch(
+            "agent_backbone.api.routes.agents.emit_sessions_update",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_emit:
+            try:
+                resp = await api_client.post("/api/agents/ike/stop", headers=auth_headers)
+            finally:
+                _clear_di_overrides(api_app)
+                del api_app.state.state_service
+
+        assert resp.status_code == 200
+        assert session_updates_module._snapshot_cache == []
+        assert session_updates_module._snapshot_cache_ts == 0
+        mock_emit.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -943,16 +1062,24 @@ class TestPostAgentState:
         assert row["plan_title"] == "Add caching"
 
     async def test_post_state_invalidates_cache(self, api_app, api_client, auth_headers):
-        """POST state resets the agents list cache TTL."""
-        import agent_backbone.api.routes.agents as agents_mod
+        """POST state resets the shared session snapshot cache."""
+        session_updates_module._snapshot_cache = [MagicMock()]
+        session_updates_module._snapshot_cache_ts = time.monotonic()
 
-        agents_mod._agents_cache_ts = time.monotonic()
-        await api_client.post(
-            "/api/agents/ike/state",
-            json={"state": "idle"},
-            headers=auth_headers,
-        )
-        assert agents_mod._agents_cache_ts == 0
+        with patch(
+            "agent_backbone.api.routes.agents.emit_sessions_update",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_emit:
+            await api_client.post(
+                "/api/agents/ike/state",
+                json={"state": "idle"},
+                headers=auth_headers,
+            )
+
+        assert session_updates_module._snapshot_cache == []
+        assert session_updates_module._snapshot_cache_ts == 0
+        mock_emit.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

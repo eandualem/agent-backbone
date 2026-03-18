@@ -623,20 +623,20 @@ class TestRunOnboarding:
         cfg = BackboneConfig(
             github_app_id=None,
             github_app_private_key_path="",
-                registry=EntityRegistry(
-                    entities={
-                        "bell-wf": EntityEntry(
-                            session="bell-wf",
-                            home="~/ws/core/code/WF/bell",
-                            groups=["orchestrators"],
-                            figure="Bell",
-                            role="WF Orchestrator",
-                            organization="WF",
-                            entity_type="role-instance",
-                        )
-                    }
-                ),
-            )
+            registry=EntityRegistry(
+                entities={
+                    "bell-wf": EntityEntry(
+                        session="bell-wf",
+                        home="~/ws/core/code/WF/bell",
+                        groups=["orchestrators"],
+                        figure="Bell",
+                        role="WF Orchestrator",
+                        organization="WF",
+                        entity_type="role-instance",
+                    )
+                }
+            ),
+        )
 
         mock_create_notify = AsyncMock()
 
@@ -710,7 +710,7 @@ class TestRunOnboarding:
                         organization="WF",
                     )
                 }
-            )
+            ),
         )
         _clone_side_effect = _selective_create_subprocess_exec(
             asyncio.create_subprocess_exec, clone_proc

@@ -66,15 +66,6 @@ from agent_backbone.services.infrastructure._backbone import (
     stop_worker as _stop_worker,
 )
 from agent_backbone.services.infrastructure._status import show_status as _show_status
-from agent_backbone.services.infrastructure._tunnel import (
-    get_tunnel_url as _get_tunnel_url,
-)
-from agent_backbone.services.infrastructure._tunnel import (
-    start_tunnel as _start_tunnel,
-)
-from agent_backbone.services.infrastructure._tunnel import (
-    stop_tunnel as _stop_tunnel,
-)
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -86,7 +77,7 @@ class InfrastructureService:
     """Infrastructure service implementing LifecycleAware.
 
     Manages OS-level infrastructure: backbone process orchestration,
-    ngrok tunnel, port/PID management, and agent group operations.
+    port/PID management, and agent group operations.
     """
 
     def __init__(self, config: BackboneConfig) -> None:
@@ -102,16 +93,15 @@ class InfrastructureService:
 
     async def health_check(self) -> dict:
         """Check infrastructure health — reports which backbone processes are running."""
-        from agent_backbone.services.infrastructure._processes import pid_for_port
-        from agent_backbone.services.terminal import session_exists
+        from agent_backbone.services.infrastructure._processes import pid_for_port, read_pid
 
-        prefect_up = await session_exists("prefect")
+        prefect_up = await pid_for_port(4200) is not None
         gateway_up = await pid_for_port(self._config.gateway.port) is not None
-        worker_up = await session_exists("backbone-worker")
-        telegram_up = await session_exists("telegram-bot")
+        worker_up = read_pid("worker") is not None
+        telegram_up = read_pid("telegram") is not None
 
         return {
-            "healthy": prefect_up and gateway_up,
+            "healthy": prefect_up and gateway_up and worker_up,
             "service": "infrastructure",
             "prefect": prefect_up,
             "gateway": gateway_up,
@@ -197,12 +187,3 @@ class InfrastructureService:
 
     async def stop_telegram(self) -> bool:
         return await _stop_telegram(self._config)
-
-    async def start_tunnel(self) -> bool:
-        return await _start_tunnel(self._config)
-
-    async def stop_tunnel(self) -> bool:
-        return await _stop_tunnel()
-
-    async def get_tunnel_url(self) -> str | None:
-        return await _get_tunnel_url()

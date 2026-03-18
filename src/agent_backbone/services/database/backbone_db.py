@@ -18,9 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from agent_backbone.services.database import (
     _activity_repo,
+    _analytics_repo,
     _delivery_repo,
     _queue_repo,
     _state_repo,
+    _swarm_repo,
+    _telemetry_repo,
 )
 from agent_backbone.services.database.base import Base
 from agent_backbone.services.database.models import (  # noqa: F401
@@ -32,6 +35,11 @@ from agent_backbone.services.database.models import (  # noqa: F401
     HeartbeatORM,
     IssueDependencyORM,
     MessageQueueORM,
+    SwarmMessageORM,
+    SwarmORM,
+    SwarmPhaseHistoryORM,
+    SwarmWorkerORM,
+    TelemetryCheckpointORM,
 )
 
 metadata = Base.metadata
@@ -138,17 +146,29 @@ class BackboneDB:
         async with self._engine.begin() as async_conn:
 
             def _run_alembic(sync_conn):
-                # Check if alembic_version table exists
                 from sqlalchemy import inspect
 
                 inspector = inspect(sync_conn)
-                has_alembic = "alembic_version" in inspector.get_table_names()
+                existing_tables = set(inspector.get_table_names())
+                has_alembic = "alembic_version" in existing_tables
+                app_tables = {table.name for table in metadata.sorted_tables}
+                existing_app_tables = existing_tables & app_tables
 
                 alembic_cfg.attributes["connection"] = sync_conn
                 if has_alembic:
                     command.upgrade(alembic_cfg, "head")
-                else:
+                elif not existing_app_tables:
+                    command.upgrade(alembic_cfg, "head")
+                elif existing_app_tables == app_tables:
+                    # SQLite file tests initialize schema with metadata.create_all()
+                    # before this method runs, so stamp that full schema as current.
                     command.stamp(alembic_cfg, "head")
+                else:
+                    partial_tables = ", ".join(sorted(existing_app_tables))
+                    raise RuntimeError(
+                        "Database contains application tables but no alembic_version table; "
+                        f"refusing to stamp partial schema: {partial_tables}"
+                    )
 
             await async_conn.run_sync(_run_alembic)
 
@@ -174,6 +194,33 @@ class BackboneDB:
                 flow_name,
                 flow_run_id,
             )
+
+    async def claim_delivery_attempt(
+        self,
+        issue_number: int,
+        target_entity: str,
+        session_name: str,
+        flow_name: str,
+    ) -> int | None:
+        """Reserve an issue delivery attempt before sending."""
+        async with self._engine.begin() as conn:
+            return await _delivery_repo.claim_delivery_attempt(
+                conn,
+                issue_number,
+                target_entity,
+                session_name,
+                flow_name,
+            )
+
+    async def finalize_delivery_attempt(self, delivery_id: int, outcome: str) -> None:
+        """Finalize a previously claimed delivery attempt."""
+        async with self._engine.begin() as conn:
+            await _delivery_repo.finalize_delivery_attempt(conn, delivery_id, outcome)
+
+    async def reclaim_stale_attempts(self, max_age_minutes: int = 5) -> int:
+        """Delete stale attempting rows so new claims can proceed."""
+        async with self._engine.begin() as conn:
+            return await _delivery_repo.reclaim_stale_attempts(conn, max_age_minutes)
 
     async def query_deliveries(
         self,
@@ -301,10 +348,41 @@ class BackboneDB:
         event: str,
         data: str | None,
         ts: str,
+        *,
+        entity: str | None = None,
+        runtime: str | None = None,
+        source_kind: str | None = None,
+        source_ref: str | None = None,
+        source_event_id: str | None = None,
+        trace_id: str | None = None,
+        parent_trace_id: str | None = None,
+        model: str | None = None,
     ) -> int:
         """Record an agent activity event. Returns the row ID."""
         async with self._engine.begin() as conn:
-            return await _activity_repo.record_activity(conn, session, event, data, ts)
+            return await _activity_repo.record_activity(
+                conn,
+                session,
+                event,
+                data,
+                ts,
+                entity=entity,
+                runtime=runtime,
+                source_kind=source_kind,
+                source_ref=source_ref,
+                source_event_id=source_event_id,
+                trace_id=trace_id,
+                parent_trace_id=parent_trace_id,
+                model=model,
+            )
+
+    async def record_activity_batch(
+        self,
+        rows: list[dict[str, str | None]],
+    ) -> int:
+        """Record a batch of activity events. Returns the number of inserted rows."""
+        async with self._engine.begin() as conn:
+            return await _activity_repo.record_activity_batch(conn, rows)
 
     async def get_activity(
         self,
@@ -315,6 +393,150 @@ class BackboneDB:
         """Query activity events for a session."""
         async with self._engine.begin() as conn:
             return await _activity_repo.get_activity(conn, session, limit, since)
+
+    async def query_activity(
+        self,
+        *,
+        limit: int = 50,
+        events: list[str] | None = None,
+    ) -> list[dict]:
+        """Query activity events across all sessions."""
+        async with self._engine.begin() as conn:
+            return await _activity_repo.query_activity(conn, limit=limit, events=events)
+
+    async def has_activity_event(
+        self,
+        *,
+        session: str,
+        event: str,
+        source_ref: str | None = None,
+        since: float | None = None,
+    ) -> bool:
+        """Whether a matching activity event exists for the session."""
+        async with self._engine.begin() as conn:
+            return await _activity_repo.has_activity_event(
+                conn,
+                session=session,
+                event=event,
+                source_ref=source_ref,
+                since=since,
+            )
+
+    async def get_telemetry_checkpoint(
+        self,
+        session: str,
+        source_ref: str,
+    ) -> dict | None:
+        """Fetch the checkpoint for one telemetry source."""
+        async with self._engine.begin() as conn:
+            return await _telemetry_repo.get_checkpoint(conn, session, source_ref)
+
+    async def query_telemetry_checkpoints(
+        self,
+        *,
+        session: str | None = None,
+        runtime: str | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        """List telemetry checkpoints with optional filters."""
+        async with self._engine.begin() as conn:
+            return await _telemetry_repo.query_checkpoints(
+                conn,
+                session=session,
+                runtime=runtime,
+                limit=limit,
+            )
+
+    async def upsert_telemetry_checkpoint(
+        self,
+        *,
+        session: str,
+        source_ref: str,
+        runtime: str,
+        source_kind: str,
+        checkpoint: dict[str, object] | None,
+        entity: str | None = None,
+        last_event_ts: str | None = None,
+    ) -> None:
+        """Create or update a telemetry checkpoint."""
+        async with self._engine.begin() as conn:
+            await _telemetry_repo.upsert_checkpoint(
+                conn,
+                session=session,
+                source_ref=source_ref,
+                runtime=runtime,
+                source_kind=source_kind,
+                checkpoint=checkpoint,
+                entity=entity,
+                last_event_ts=last_event_ts,
+            )
+
+    # --- Analytics queries (delegates to _analytics_repo) ---
+
+    async def query_analytics_rows(
+        self,
+        *,
+        sessions: list[str],
+        since: float | None = None,
+        until: float | None = None,
+        events: list[str] | None = None,
+        runtime: str | None = None,
+        model: str | None = None,
+        source_kind: str | None = None,
+        source_ref: str | None = None,
+        trace_id: str | None = None,
+        parent_trace_id: str | None = None,
+        limit: int | None = None,
+        cursor_ts: str | None = None,
+        cursor_id: int | None = None,
+    ) -> list[dict]:
+        """Query activity rows for analytics aggregation."""
+        async with self._engine.begin() as conn:
+            return await _analytics_repo.query_analytics_rows(
+                conn,
+                sessions=sessions,
+                since=since,
+                until=until,
+                events=events,
+                runtime=runtime,
+                model=model,
+                source_kind=source_kind,
+                source_ref=source_ref,
+                trace_id=trace_id,
+                parent_trace_id=parent_trace_id,
+                limit=limit,
+                cursor_ts=cursor_ts,
+                cursor_id=cursor_id,
+            )
+
+    async def get_swarm_sessions_for_agent(
+        self,
+        coding_agent_session: str,
+        *,
+        swarm_id: str | None = None,
+        worker_name: str | None = None,
+        worker_role: str | None = None,
+    ) -> list[dict]:
+        """Find swarm worker sessions for a coding agent."""
+        async with self._engine.begin() as conn:
+            return await _analytics_repo.get_swarm_sessions_for_agent(
+                conn,
+                coding_agent_session,
+                swarm_id=swarm_id,
+                worker_name=worker_name,
+                worker_role=worker_role,
+            )
+
+    async def get_worker_swarm_attribution(
+        self,
+        worker_session: str,
+    ) -> dict | None:
+        """Look up swarm context for a session that is itself a worker."""
+        async with self._engine.begin() as conn:
+            return await _analytics_repo.get_worker_swarm_attribution(
+                conn,
+                worker_session,
+            )
 
     # --- Issue dependencies (delegates to _queue_repo) ---
 
@@ -380,6 +602,7 @@ class BackboneDB:
         message: str,
         issue_number: int | None = None,
         target_entity: str | None = None,
+        delivery_kind: str = "issue",
         flow_name: str = "",
     ) -> int:
         """Enqueue a message for later delivery. Returns the row ID."""
@@ -390,6 +613,7 @@ class BackboneDB:
                 message,
                 issue_number,
                 target_entity,
+                delivery_kind,
                 flow_name,
             )
 
@@ -398,14 +622,39 @@ class BackboneDB:
         session_name: str,
         limit: int = 10,
     ) -> list[dict]:
-        """Get pending messages for a session, oldest first."""
+        """Atomically claim pending messages for a session, oldest first."""
         async with self._engine.begin() as conn:
             return await _queue_repo.dequeue_messages(conn, session_name, limit)
+
+    async def get_sessions_with_pending(self) -> list[str]:
+        """List sessions that currently have pending queue rows."""
+        async with self._engine.begin() as conn:
+            return await _queue_repo.get_sessions_with_pending(conn)
+
+    async def release_lease(self, message_id: int) -> None:
+        """Return a claimed queued message to pending."""
+        async with self._engine.begin() as conn:
+            await _queue_repo.release_lease(conn, message_id)
+
+    async def expire_stale_leases(self, max_age_minutes: int = 5) -> int:
+        """Recover stale queue leases older than max_age_minutes."""
+        async with self._engine.begin() as conn:
+            return await _queue_repo.expire_stale_leases(conn, max_age_minutes)
 
     async def mark_message_delivered(self, message_id: int) -> None:
         """Mark a queued message as delivered."""
         async with self._engine.begin() as conn:
             await _queue_repo.mark_message_delivered(conn, message_id)
+
+    async def purge_pending_for_issue(self, issue_number: int) -> int:
+        """Mark all pending queue messages for an issue as delivered."""
+        async with self._engine.begin() as conn:
+            return await _queue_repo.purge_pending_for_issue(conn, issue_number)
+
+    async def expire_stale_pending(self, max_age_minutes: int = 30) -> int:
+        """Expire pending queue messages older than max_age_minutes."""
+        async with self._engine.begin() as conn:
+            return await _queue_repo.expire_stale_pending(conn, max_age_minutes)
 
     async def get_message_by_id(self, message_id: int) -> dict | None:
         """Get a single message by ID (for verification)."""
@@ -416,3 +665,145 @@ class BackboneDB:
             )
             row = result.fetchone()
             return dict(row._mapping) if row else None
+
+    # --- Swarm registry (delegates to _swarm_repo) ---
+
+    async def create_swarm(
+        self,
+        repo: str,
+        task_id: str | None,
+        coding_agent_session: str,
+        workers: list[dict],
+    ) -> str:
+        """Create a swarm and its workers. Returns the swarm ID."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.create_swarm(
+                conn,
+                repo,
+                task_id,
+                coding_agent_session,
+                workers,
+            )
+
+    async def list_swarms(
+        self,
+        repo: str | None = None,
+        phase: str | None = None,
+    ) -> list[dict]:
+        """List swarms with worker progress."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.list_swarms(conn, repo=repo, phase=phase)
+
+    async def get_swarm(self, swarm_id: str) -> dict | None:
+        """Get a single swarm with its workers."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.get_swarm(conn, swarm_id)
+
+    async def update_swarm_worker_status(
+        self,
+        swarm_id: str,
+        worker_name: str,
+        status: str,
+        pr_number: int | None = None,
+    ) -> dict | None:
+        """Update one worker status and return the refreshed swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.update_worker_status(
+                conn,
+                swarm_id,
+                worker_name,
+                status,
+                pr_number=pr_number,
+            )
+
+    async def complete_swarm_worker(
+        self,
+        swarm_id: str,
+        worker_name: str,
+        status: str,
+        summary: str,
+        pr_number: int | None = None,
+    ) -> dict | None:
+        """Mark a worker done/failed and return the refreshed swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.complete_worker(
+                conn,
+                swarm_id,
+                worker_name,
+                status,
+                summary,
+                pr_number=pr_number,
+            )
+
+    async def update_swarm_phase(self, swarm_id: str, phase: str) -> dict | None:
+        """Update swarm phase and return the refreshed swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.update_swarm_phase(conn, swarm_id, phase)
+
+    async def complete_swarm(self, swarm_id: str) -> dict | None:
+        """Mark a swarm cleaned up and return the refreshed swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.complete_swarm(conn, swarm_id)
+
+    async def create_swarm_assignment(
+        self,
+        swarm_id: str,
+        worker_name: str,
+        *,
+        assigned_by: str,
+        summary: str,
+        file_paths: list[str],
+    ) -> dict | None:
+        """Create one worker assignment in a collaborative swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.create_assignment(
+                conn,
+                swarm_id,
+                worker_name,
+                assigned_by=assigned_by,
+                summary=summary,
+                file_paths=file_paths,
+            )
+
+    async def list_swarm_assignments(self, swarm_id: str) -> list[dict]:
+        """List all assignments for one swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.list_assignments(conn, swarm_id)
+
+    async def record_swarm_message(
+        self,
+        swarm_id: str,
+        *,
+        target_kind: str,
+        from_entity: str,
+        message: str,
+        delivered: int,
+        failed: int,
+        total: int,
+        target_role: str | None = None,
+        target_worker_name: str | None = None,
+    ) -> dict:
+        """Persist one swarm message log entry."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.record_swarm_message(
+                conn,
+                swarm_id,
+                target_kind=target_kind,
+                from_entity=from_entity,
+                message=message,
+                delivered=delivered,
+                failed=failed,
+                total=total,
+                target_role=target_role,
+                target_worker_name=target_worker_name,
+            )
+
+    async def list_swarm_messages(self, swarm_id: str) -> list[dict]:
+        """List all recorded messages for one swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.list_swarm_messages(conn, swarm_id)
+
+    async def reconcile_swarm_worker_sessions(self, active_sessions: set[str]) -> int:
+        """Mark lost swarm worker sessions failed when they disappear mid-swarm."""
+        async with self._engine.begin() as conn:
+            return await _swarm_repo.reconcile_swarm_worker_sessions(conn, active_sessions)

@@ -14,6 +14,7 @@ import os
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
+from agent_backbone.api.auth import require_api_key
 from agent_backbone.api.deps import (
     get_config,
     get_db,
@@ -27,6 +28,7 @@ from agent_backbone.models import EventType
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.routing import DeliveryService, DispatchService
+from agent_backbone.services.routing._targets import resolve_event_targets
 from agent_backbone.services.telegram._topic_discovery import (
     effective_group_chat_id,
     effective_routes,
@@ -64,21 +66,32 @@ async def dispatch_event_async(
         result = await dispatch_svc.on_issue_closed(event, config, gh, db)
         return f"lifecycle: {result}"
 
+    # Skip comments on closed issues — they cannot be actionable and would
+    # loop in the queue if delivery is deferred (see #780).
+    if event.event_type == EventType.COMMENT_CREATED and event.issue.state == "closed":
+        log.info(
+            "Ignoring comment on closed issue #%d",
+            event.issue.number,
+        )
+        return f"ignored: comment on closed issue #{event.issue.number}"
+
     if event.event_type in (
         EventType.ISSUE_OPENED,
         EventType.ISSUE_LABELED,
         EventType.COMMENT_CREATED,
+        EventType.PULL_REQUEST_OPENED,
     ):
-        targets = event.issue.labels.targets
-        if targets and all(
-            delivery_svc.is_recent_notification(event.issue.number, t) for t in targets
-        ):
-            log.info(
-                "Dedup: #%d reason=all_targets_recently_notified targets=%s",
-                event.issue.number,
-                targets,
-            )
-            return f"deduped: all targets already notified for #{event.issue.number}"
+        if event.event_type in (EventType.ISSUE_OPENED, EventType.ISSUE_LABELED):
+            targets = resolve_event_targets(event, config)
+            if targets and all(
+                delivery_svc.is_recent_notification(event.issue.number, t) for t in targets
+            ):
+                log.info(
+                    "Dedup: #%d reason=all_targets_recently_notified targets=%s",
+                    event.issue.number,
+                    targets,
+                )
+                return f"deduped: all targets already notified for #{event.issue.number}"
 
         result = await dispatch_svc.issue_dispatcher(event, config, db, gh)
         return (
@@ -140,8 +153,11 @@ async def handle_webhook(
     return Response(content=outcome, status_code=200)
 
 
-@router.post("/api/reply")
-async def handle_reply(request: Request, config: BackboneConfig = Depends(get_config)):
+@router.post("/api/reply", dependencies=[Depends(require_api_key)])
+async def handle_reply(
+    request: Request,
+    config: BackboneConfig = Depends(get_config),
+):
     """Route agent replies to Telegram topics."""
     body = await request.body()
 

@@ -13,25 +13,37 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import format_digest, safe_deliver
-from agent_backbone.services.terminal import list_sessions, start_session, stop_session
+from agent_backbone.services.terminal import (
+    RUNTIME_ENV_KEY,
+    list_sessions,
+    resolve_agent_dir,
+    start_session,
+    stop_session,
+)
 
 log = logging.getLogger(__name__)
+
+_DEFAULT_AGENT_CLI = "claude"
+
+
+async def _start_workflow_agent_session(session_name: str, config: BackboneConfig) -> bool:
+    """Start a workflow-managed agent session with its resolved workspace."""
+    working_dir = resolve_agent_dir(session_name, config.registry)
+    if not working_dir:
+        log.warning("Workflow start skipped for %s: no working directory resolved", session_name)
+        return False
+
+    return await start_session(
+        session_name,
+        working_dir=working_dir,
+        command=[_DEFAULT_AGENT_CLI],
+        environment={RUNTIME_ENV_KEY: _DEFAULT_AGENT_CLI},
+    )
 
 
 # ---------------------------------------------------------------------------
 # Morning startup
 # ---------------------------------------------------------------------------
-
-
-@task
-async def start_morning_agents(config: BackboneConfig) -> list[str]:
-    """Start configured morning agents. Returns list of started sessions."""
-    started = []
-    for agent in config.daily_routines.morning_agents:
-        session_name = config.registry.sessions_map.get(agent, agent)
-        if await start_session(session_name):
-            started.append(session_name)
-    return started
 
 
 @task
@@ -94,17 +106,15 @@ async def deliver_overnight_issues(
 async def morning_startup() -> dict:
     """Execute morning startup routine.
 
-    1. Start configured morning agents
-    2. Count pending issues per entity
-    3. Deliver overnight issues to online agents
-    4. Return summary for Telegram digest
+    1. Count pending issues per entity
+    2. Deliver overnight issues to online agents
+    3. Return summary for Telegram digest
     """
     await ensure_initialized()
 
     config = get_config()
     gh = get_gh()
 
-    started = await start_morning_agents(config)
     pending = await count_pending_issues(config, gh)
     deliveries = await deliver_overnight_issues(config, pending, gh)
     sessions = await list_sessions()
@@ -113,12 +123,11 @@ async def morning_startup() -> dict:
         title="Morning Startup",
         sessions=sessions,
         pending_counts=pending,
-        notes=[f"Started: {', '.join(started)}"] if started else None,
     )
     log.info(digest)
 
     return {
-        "started": started,
+        "started": [],
         "pending": pending,
         "deliveries": deliveries,
         "digest": digest,
@@ -219,7 +228,7 @@ async def start_arclio_agents(config: BackboneConfig) -> list[str]:
     started = []
     for agent in ARCLIO_AGENTS:
         session_name = config.registry.sessions_map.get(agent, agent)
-        if await start_session(session_name):
+        if await _start_workflow_agent_session(session_name, config):
             started.append(session_name)
     return started
 

@@ -1,4 +1,4 @@
-"""Infrastructure service — OS-level process orchestration, tunnel, and agent management."""
+"""Infrastructure service — OS-level process orchestration and agent management."""
 
 from agent_backbone.services.infrastructure.exceptions import (
     InfrastructureError,

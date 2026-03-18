@@ -11,13 +11,11 @@ from __future__ import annotations
 import asyncio
 
 from dotenv import load_dotenv
-
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from agent_backbone.services.database.base import Base
-from agent_backbone.services.database.config import DatabaseConfig
+from agent_backbone.services.database.config import database_config_from_env
 from agent_backbone.services.database.models import (  # noqa: F401
     AcknowledgmentORM,
     AgentActivityORM,
@@ -27,7 +25,11 @@ from agent_backbone.services.database.models import (  # noqa: F401
     HeartbeatORM,
     IssueDependencyORM,
     MessageQueueORM,
+    SwarmORM,
+    SwarmWorkerORM,
+    TelemetryCheckpointORM,
 )
+from alembic import context
 
 metadata = Base.metadata
 
@@ -36,9 +38,9 @@ load_dotenv()
 
 target_metadata = metadata
 
-# Build URL from DatabaseConfig (reads env vars via defaults)
+# Build URL from DatabaseConfig with BACKBONE_DATABASE_* overrides applied
 config = context.config
-db_config = DatabaseConfig()
+db_config = database_config_from_env()
 config.set_main_option("sqlalchemy.url", db_config.async_url)
 
 

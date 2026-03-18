@@ -2,9 +2,9 @@
        test test-file test-unit test-integration cov cov-html check build \
        run-gateway run-prefect setup-pool deploy run-worker \
        db-up db-down db-upgrade db-migrate db-revision db-history db-current db-downgrade \
-       start-backbone stop-backbone restart-backbone start-tunnel stop-tunnel status \
+       start-backbone stop-backbone restart-backbone status \
        start-agent stop-agent start-orchestrators start-arclio start-loveble start-wf \
-       start-all stop-all list
+       start-all stop-all stop-agents stop-everything list
 
 .DEFAULT_GOAL := help
 
@@ -143,7 +143,7 @@ run-gateway: ## Start gateway server (prefer 'make dev' for auto-reload)
 	@uv run python -m agent_backbone.services.infrastructure start-gateway
 
 run-prefect: ## Start Prefect server (port 4200)
-	uv run prefect server start
+	uv run python -m agent_backbone.services.infrastructure run-prefect-server
 
 setup-pool: ## Create agent-pool work pool (one-time)
 	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect work-pool create agent-pool --type process
@@ -152,7 +152,7 @@ deploy: ## Deploy all scheduled flows
 	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect deploy --all
 
 run-worker: ## Start Prefect worker for agent-pool
-	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect worker start --pool agent-pool
+	PREFECT_API_URL=$(PREFECT_API_URL) uv run python -m agent_backbone.services.infrastructure run-prefect-worker
 
 # ─── Database ───────────────────────────────────────────
 
@@ -195,12 +195,6 @@ stop-backbone: ## Stop all services
 restart-backbone: ## Restart all services
 	@uv run python -m agent_backbone.services.infrastructure restart-backbone
 
-start-tunnel: ## Start ngrok tunnel
-	@uv run python -m agent_backbone.services.infrastructure start-tunnel
-
-stop-tunnel: ## Stop ngrok tunnel
-	@uv run python -m agent_backbone.services.infrastructure stop-tunnel
-
 status: ## Show all services and agent sessions
 	@uv run python -m agent_backbone.services.infrastructure status
 
@@ -227,8 +221,12 @@ start-wf: ## Start WF coding agents
 start-all: ## Start all agents (orchestrators + coding)
 	@uv run python -m agent_backbone.services.infrastructure start-all
 
-stop-all: ## Stop all agent sessions
-	@uv run python -m agent_backbone.services.infrastructure stop-all
+stop-agents: ## Stop all agent sessions (pauses scheduled startups)
+	@uv run python -m agent_backbone.services.infrastructure stop-agents
+
+stop-all: stop-agents ## Stop all agent sessions (alias for stop-agents)
+
+stop-everything: stop-agents stop-backbone ## Stop all agents + all backbone services
 
 list: ## List all known agents and directories
 	@uv run python -m agent_backbone.services.infrastructure list

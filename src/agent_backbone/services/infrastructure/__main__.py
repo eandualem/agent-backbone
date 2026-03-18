@@ -31,11 +31,6 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start-telegram", help="Start Telegram bot")
     sub.add_parser("stop-telegram", help="Stop Telegram bot")
 
-    # Tunnel
-    sub.add_parser("start-tunnel", help="Start ngrok tunnel")
-    sub.add_parser("stop-tunnel", help="Stop ngrok tunnel")
-    sub.add_parser("show-tunnel-url", help="Show ngrok tunnel URL")
-
     # Agent management
     sa = sub.add_parser("start-agent", help="Start a single agent session")
     sa.add_argument("name", help="Agent name")
@@ -52,7 +47,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start-loveble", help="Start Loveble coding agents")
     sub.add_parser("start-wf", help="Start WF coding agents")
     sub.add_parser("start-all", help="Start all agents")
-    sub.add_parser("stop-all", help="Stop all agent sessions")
+    sub.add_parser("stop-all", help="Stop all agent sessions (pauses scheduled startups)")
+    sub.add_parser("stop-agents", help="Stop all agent sessions (alias for stop-all)")
+    sub.add_parser("stop-everything", help="Stop all agents + all backbone services")
 
     # Info
     sub.add_parser("list", help="List available agents")
@@ -60,6 +57,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Internal
     sub.add_parser("run-telegram-bot", help="Run Telegram bot (internal, blocks)")
+    sub.add_parser("run-prefect-server", help="Run Prefect server supervisor (internal, blocks)")
+    sub.add_parser("run-prefect-worker", help="Run Prefect worker supervisor (internal, blocks)")
 
     return parser
 
@@ -70,7 +69,7 @@ async def _dispatch(args: argparse.Namespace) -> None:
 
     config = BackboneConfig.from_toml()
 
-    from agent_backbone.services.infrastructure import _agents, _backbone, _status, _tunnel
+    from agent_backbone.services.infrastructure import _agents, _backbone, _status
 
     cmd = args.command
 
@@ -109,19 +108,6 @@ async def _dispatch(args: argparse.Namespace) -> None:
     elif cmd == "stop-telegram":
         await _backbone.stop_telegram(config)
 
-    # Tunnel
-    elif cmd == "start-tunnel":
-        ok = await _tunnel.start_tunnel(config)
-        sys.exit(0 if ok else 1)
-    elif cmd == "stop-tunnel":
-        await _tunnel.stop_tunnel()
-    elif cmd == "show-tunnel-url":
-        url = await _tunnel.get_tunnel_url()
-        if url:
-            print(f"Public URL: {url}/")
-        else:
-            print("Tunnel URL not available")
-
     # Agent management
     elif cmd == "start-agent":
         ok = await _agents.start_agent(args.name, config, cli=args.cli, model=args.model)
@@ -143,8 +129,11 @@ async def _dispatch(args: argparse.Namespace) -> None:
         await _agents.start_org("WF", config)
     elif cmd == "start-all":
         await _agents.start_all(config)
-    elif cmd == "stop-all":
+    elif cmd in ("stop-all", "stop-agents"):
         await _agents.stop_all_agents(config)
+    elif cmd == "stop-everything":
+        await _agents.stop_all_agents(config)
+        await _backbone.stop_backbone(config)
 
     # Info
     elif cmd == "list":
@@ -155,6 +144,10 @@ async def _dispatch(args: argparse.Namespace) -> None:
     # Internal
     elif cmd == "run-telegram-bot":
         await _run_telegram_bot(config)
+    elif cmd == "run-prefect-server":
+        await _backbone.run_prefect_server_supervisor()
+    elif cmd == "run-prefect-worker":
+        await _backbone.run_prefect_worker_supervisor(config)
 
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)

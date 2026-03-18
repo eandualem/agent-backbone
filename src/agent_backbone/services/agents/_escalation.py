@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 
 from prefect import task
 
-from agent_backbone.config import BackboneConfig
+from agent_backbone.config import REPO_NAME_PATTERN, BackboneConfig
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import BackboneDB
@@ -25,6 +26,7 @@ _escalation_dedup: dict[tuple[str, str], float] = {}
 
 # Module-level plan notification dedup: (session, plan_file) → monotonic timestamp
 _plan_notify_dedup: dict[tuple[str, str], float] = {}
+_PLAN_NOTIFY_EVENT = "plan_notification_delivered"
 
 
 async def safe_deliver(*args, **kwargs):
@@ -65,6 +67,163 @@ def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
     return True
 
 
+def _plan_notification_source_ref(
+    *,
+    channel: str,
+    recipient: str,
+    plan_file: str,
+    plan_title: str,
+    plan_timestamp: float,
+) -> str:
+    """Stable identity for one plan-notification delivery target."""
+    plan_identity = plan_file or plan_title or "<untitled>"
+    return f"{channel}:{recipient}:{plan_timestamp:.6f}:{plan_identity}"
+
+
+def _organization_for_session(session_name: str, config: BackboneConfig) -> str | None:
+    """Resolve the organization owning a monitored session, if known."""
+    entry = config.registry.entry_for_session(session_name)
+    if entry is not None and entry.organization:
+        return entry.organization
+
+    entity_name = config.registry.entity_by_session.get(session_name)
+    if entity_name is not None:
+        mapped_entry = config.registry.entities.get(entity_name)
+        if mapped_entry is not None and mapped_entry.organization:
+            return mapped_entry.organization
+
+    return config.registry.organization_for_repo(session_name)
+
+
+def _resolve_target_session(
+    target_name: str,
+    source_session: str,
+    config: BackboneConfig,
+) -> str | None:
+    """Resolve a notification target to one concrete session for the source org."""
+    target_entry = config.registry.entities.get(target_name)
+    if target_entry is not None and target_entry.entity_type == "role":
+        source_org = _organization_for_session(source_session, config)
+        if not source_org:
+            log.warning(
+                "Could not resolve organization for %s while targeting role %s",
+                source_session,
+                target_name,
+            )
+            return None
+
+        for candidate in config.registry.resolve_entity_sessions(target_name):
+            candidate_entry = config.registry.entry_for_session(candidate)
+            if candidate_entry is not None and candidate_entry.organization == source_org:
+                return candidate
+
+        log.warning(
+            "Role target %s has no concrete instance for org %s (source session %s)",
+            target_name,
+            source_org,
+            source_session,
+        )
+        return None
+
+    session = config.registry.sessions_map.get(target_name)
+    if session:
+        return session
+    if (
+        target_name in config.registry.entity_by_session
+        or target_name in config.registry.repo_names
+    ):
+        return target_name
+    return None
+
+
+async def _plan_notification_already_sent(
+    session_name: str,
+    source_ref: str,
+    dedup_seconds: int,
+    db: BackboneDB | None,
+) -> bool:
+    """Check in-memory and persisted dedup for plan notifications."""
+    cache_key = (session_name, source_ref)
+    if cache_key in _plan_notify_dedup:
+        return True
+    if db is None:
+        return False
+
+    try:
+        recent = await db.has_activity_event(
+            session=session_name,
+            event=_PLAN_NOTIFY_EVENT,
+            source_ref=source_ref,
+            since=time.time() - dedup_seconds,
+        )
+        if recent is True:
+            _plan_notify_dedup[cache_key] = time.monotonic()
+            return True
+    except Exception:
+        log.exception("Failed to query persisted plan notification dedup (non-fatal)")
+    return False
+
+
+async def _record_plan_notification(
+    session_name: str,
+    entity: str,
+    source_ref: str,
+    payload: dict[str, str],
+    db: BackboneDB | None,
+) -> None:
+    """Record successful plan notification delivery for reload-safe dedup."""
+    _plan_notify_dedup[(session_name, source_ref)] = time.monotonic()
+    if db is None:
+        return
+
+    try:
+        await db.record_activity(
+            session_name,
+            _PLAN_NOTIFY_EVENT,
+            json.dumps(payload, sort_keys=True),
+            str(time.time()),
+            entity=entity,
+            source_kind="plan_notification",
+            source_ref=source_ref,
+        )
+    except Exception:
+        log.exception("Failed to persist plan notification dedup marker (non-fatal)")
+
+
+async def _pending_count_for_session(
+    entity: str,
+    session_name: str,
+    config: BackboneConfig,
+    gh: object,
+    *,
+    coding_issues: list | None = None,
+) -> int:
+    """Count pending work for a monitored session.
+
+    Repo-backed coding sessions can receive both repo-local issues and
+    orchestration issues routed through ``for:coding-agent``. Named entities
+    only need their direct ``for:{entity}`` queue.
+    """
+    if session_name not in config.registry.repo_names:
+        issues = await gh.list_open_issues(f"for:{entity}")
+        return len(issues)
+
+    repo_full_name = f"{config.github.owner}/{session_name}"
+    pending = len(await gh.list_issues(state="open", repo_full_name=repo_full_name))
+    if not coding_issues:
+        return pending
+
+    repo_name = session_name.casefold()
+    return pending + sum(
+        1
+        for issue in coding_issues
+        if (
+            (match := REPO_NAME_PATTERN.match(issue.title or "")) is not None
+            and match.group(1).split("/", 1)[-1].casefold() == repo_name
+        )
+    )
+
+
 @task
 async def check_for_stalls(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB
@@ -78,8 +237,9 @@ async def check_for_stalls(
     state_path = config.agent_state.state_path
     stale_threshold = config.agent_state.stale_threshold_seconds
 
-    for entity in config.registry.all_entities:
-        session_name = config.registry.sessions_map.get(entity)
+    tracked_sessions = config.registry.tracked_sessions
+
+    for entity, session_name in tracked_sessions.items():
         if not session_name or session_name not in active_sessions:
             continue
 
@@ -110,8 +270,7 @@ async def check_for_stalls(
 
     # Persist current states to DB for offline detection
     try:
-        for entity in config.registry.all_entities:
-            session_name = config.registry.sessions_map.get(entity)
+        for entity, session_name in tracked_sessions.items():
             if not session_name or session_name not in active_sessions:
                 continue
             snapshot = await get_agent_state(state_path, session_name, stale_threshold)
@@ -119,6 +278,7 @@ async def check_for_stalls(
                 session_name=session_name,
                 state=snapshot.state.value,
                 current_issue=snapshot.current_issue,
+                entity=entity,
             )
     except Exception:
         log.exception("Failed to persist agent states (non-fatal)")
@@ -138,6 +298,10 @@ async def check_for_unexpected_offline(
     Returns list of offline records: {entity, session, pending_count}.
     """
     offline: list[dict] = []
+    tracked_by_session = {
+        session_name: entity for entity, session_name in config.registry.tracked_sessions.items()
+    }
+    coding_issues: list | None = None
 
     try:
         known_states = await db.get_all_agent_states()
@@ -157,21 +321,22 @@ async def check_for_unexpected_offline(
         if session_name in active_sessions:
             continue
 
-        # Map session back to entity
-        entity = None
-        for ent, sess in config.registry.sessions_map.items():
-            if sess == session_name:
-                entity = ent
-                break
-
+        entity = tracked_by_session.get(session_name)
         if not entity:
             continue
 
         # Count pending issues for context
         pending_count = 0
         try:
-            issues = await gh.list_open_issues(f"for:{entity}")
-            pending_count = len(issues)
+            if session_name in config.registry.repo_names and coding_issues is None:
+                coding_issues = await gh.list_open_issues("for:coding-agent")
+            pending_count = await _pending_count_for_session(
+                entity,
+                session_name,
+                config,
+                gh,
+                coding_issues=coding_issues,
+            )
         except Exception:
             log.exception("Failed to count pending issues for %s", entity)
 
@@ -190,13 +355,17 @@ async def handle_stalls(config: BackboneConfig, active_sessions: set[str], db: B
     """Detect stalled agents and escalate to the configured target."""
     stalls = await check_for_stalls(config, active_sessions, db)
     escalation_target = config.escalation.escalation_target
-    escalation_session = config.registry.sessions_map.get(escalation_target)
 
     for stall in stalls:
         event_key = f"stall:{stall['issue_number']}"
         if _should_escalate(
             stall["session"], event_key, config.escalation.escalation_dedup_seconds
         ):
+            escalation_session = _resolve_target_session(
+                escalation_target,
+                stall["session"],
+                config,
+            )
             if escalation_session and escalation_session in active_sessions:
                 msg = format_stall_notification(
                     stall["session"],
@@ -222,13 +391,17 @@ async def handle_offline(
     """Detect unexpectedly offline agents and escalate."""
     offline_agents = await check_for_unexpected_offline(config, active_sessions, db, gh)
     escalation_target = config.escalation.escalation_target
-    escalation_session = config.registry.sessions_map.get(escalation_target)
 
     for agent in offline_agents:
         event_key = "offline"
         if _should_escalate(
             agent["session"], event_key, config.escalation.escalation_dedup_seconds
         ):
+            escalation_session = _resolve_target_session(
+                escalation_target,
+                agent["session"],
+                config,
+            )
             if escalation_session and escalation_session in active_sessions:
                 msg = format_unexpected_offline_notification(
                     agent["session"],
@@ -284,8 +457,7 @@ async def check_plan_waiting(
     notification_chat_id = config.telegram.notification_chat_id
     telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
 
-    for entity in config.registry.all_entities:
-        session_name = config.registry.sessions_map.get(entity)
+    for entity, session_name in config.registry.tracked_sessions.items():
         if not session_name or session_name not in active_sessions:
             continue
 
@@ -297,8 +469,22 @@ async def check_plan_waiting(
         plan_title = snapshot.plan_title or "Untitled plan"
 
         # Telegram notification
-        tg_dedup_key = (session_name, plan_file)
-        if notification_chat_id and telegram_token and tg_dedup_key not in _plan_notify_dedup:
+        plan_timestamp = snapshot.timestamp or 0.0
+
+        tg_source_ref = _plan_notification_source_ref(
+            channel="telegram",
+            recipient=str(notification_chat_id),
+            plan_file=plan_file,
+            plan_title=plan_title,
+            plan_timestamp=plan_timestamp,
+        )
+        if (
+            notification_chat_id
+            and telegram_token
+            and not await _plan_notification_already_sent(
+                session_name, tg_source_ref, plan_dedup_seconds, db
+            )
+        ):
             msg = (
                 f"\U0001f4cb Plan waiting — {entity}\n"
                 f"Title: {plan_title}\n\n"
@@ -309,19 +495,47 @@ async def check_plan_waiting(
                 telegram_token, notification_chat_id, msg
             )
             if sent:
-                _plan_notify_dedup[tg_dedup_key] = now
+                await _record_plan_notification(
+                    session_name,
+                    entity,
+                    tg_source_ref,
+                    {
+                        "channel": "telegram",
+                        "recipient": str(notification_chat_id),
+                        "plan_file": plan_file,
+                        "plan_title": plan_title,
+                    },
+                    db,
+                )
                 log.info("Sent plan-waiting Telegram notification for %s", entity)
 
         # Orchestrator tmux notification
         orchestrator = _resolve_orchestrator(session_name, config)
         if orchestrator:
-            orch_session = config.registry.sessions_map.get(orchestrator)
-            orch_dedup_key = (session_name, f"orch:{plan_file}")
+            orch_session = _resolve_target_session(orchestrator, session_name, config)
             if (
                 orch_session
                 and orch_session in active_sessions
-                and orch_dedup_key not in _plan_notify_dedup
+                and not await _plan_notification_already_sent(
+                    session_name,
+                    _plan_notification_source_ref(
+                        channel="tmux",
+                        recipient=orch_session,
+                        plan_file=plan_file,
+                        plan_title=plan_title,
+                        plan_timestamp=plan_timestamp,
+                    ),
+                    plan_dedup_seconds,
+                    db,
+                )
             ):
+                orch_source_ref = _plan_notification_source_ref(
+                    channel="tmux",
+                    recipient=orch_session,
+                    plan_file=plan_file,
+                    plan_title=plan_title,
+                    plan_timestamp=plan_timestamp,
+                )
                 orch_msg = format_plan_notification(
                     session_name,
                     entity,
@@ -331,7 +545,18 @@ async def check_plan_waiting(
                 )
                 outcome = await safe_deliver(orch_session, orch_msg, config, db=db, priority=True)
                 if outcome == "delivered":
-                    _plan_notify_dedup[orch_dedup_key] = now
+                    await _record_plan_notification(
+                        session_name,
+                        entity,
+                        orch_source_ref,
+                        {
+                            "channel": "tmux",
+                            "recipient": orch_session,
+                            "plan_file": plan_file,
+                            "plan_title": plan_title,
+                        },
+                        db,
+                    )
                     log.info(
                         "Sent plan notification to orchestrator %s for %s",
                         orchestrator,

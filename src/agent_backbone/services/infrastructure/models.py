@@ -13,7 +13,6 @@ class ServiceName(StrEnum):
     GATEWAY = "gateway"
     WORKER = "backbone-worker"
     TELEGRAM = "telegram-bot"
-    NGROK = "ngrok"
 
 
 @dataclass

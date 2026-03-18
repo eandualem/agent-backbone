@@ -26,7 +26,9 @@ _MAX_SUBMIT_ATTEMPTS = 2
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
 _BOX_CHARS = "\u2500\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u253c\u2501"
+_PROMPT_START_CHARS = ">$\u276f\u203a%#"
 _WORKING_STATES = frozenset({AgentState.PROCESSING_ISSUE, AgentState.BUSY, AgentState.STARTING})
+_BACKBONE_ENVELOPE_PREFIX = "[via:"
 
 
 class TerminalRuntime(StrEnum):
@@ -37,6 +39,7 @@ class TerminalRuntime(StrEnum):
     CODEX = "codex"
     CURSOR = "cursor"
     OPENCODE = "opencode"
+    AIDER = "aider"
     SHELL = "shell"
     UNKNOWN = "unknown"
 
@@ -128,6 +131,36 @@ def _runtime_from_prompt_line(pane_content: str) -> TerminalRuntime:
     return TerminalRuntime.UNKNOWN
 
 
+def _runtime_analysis_line_pairs(pane_content: str) -> list[tuple[str, str]]:
+    """Narrow runtime matching to the active prompt region near the pane tail."""
+    pairs = _prompt_tail_line_pairs(pane_content)
+    if not pairs:
+        return []
+
+    prompt_idx: int | None = None
+    for i in range(len(pairs) - 1, -1, -1):
+        stripped = pairs[i][1].strip()
+        if not stripped or all(ch in _BOX_CHARS for ch in stripped):
+            continue
+        if stripped[0] in _PROMPT_START_CHARS:
+            prompt_idx = i
+            break
+
+    if prompt_idx is None:
+        return pairs[-6:]
+
+    return pairs[prompt_idx : min(len(pairs), prompt_idx + 3)]
+
+
+def _runtime_analysis_text(pane_content: str) -> str:
+    """Sanitized active-tail text used for runtime marker detection."""
+    return "\n".join(
+        sanitized.strip().lower()
+        for _, sanitized in _runtime_analysis_line_pairs(pane_content)
+        if sanitized.strip()
+    )
+
+
 def _normalize_runtime(value: str | None) -> TerminalRuntime:
     """Normalize a free-form runtime label to a known runtime."""
     if not value:
@@ -139,6 +172,7 @@ def _normalize_runtime(value: str | None) -> TerminalRuntime:
         "gemini-cli": TerminalRuntime.GEMINI,
         "open-code": TerminalRuntime.OPENCODE,
         "open_code": TerminalRuntime.OPENCODE,
+        "aider-chat": TerminalRuntime.AIDER,
     }
     try:
         return TerminalRuntime(normalized)
@@ -200,6 +234,27 @@ class TerminalAdapter(ABC):
             return False
         if self.runtime == TerminalRuntime.CODEX and _prompt_line_is_dim_placeholder(prompt_line):
             return False
+
+        # --- Stuck delivery guards (issue #766) ---
+
+        # Prefix guard: if the adapter defines prompt_prefixes and the sanitized
+        # line doesn't start with any of them, we matched via a suffix — the
+        # "pending text" is just trailing output, not user input.
+        if self.prompt_prefixes:
+            if not any(sanitized.startswith(prefix) for prefix in self.prompt_prefixes):
+                return False
+
+        # Stuck envelope: text after the prompt char that begins with a backbone
+        # message envelope tag is a prior delivery that wasn't consumed, not user
+        # input.  Strip the prompt prefix before checking.
+        remainder = sanitized
+        for prefix in self.prompt_prefixes:
+            if sanitized.startswith(prefix):
+                remainder = sanitized[len(prefix) :].lstrip()
+                break
+        if remainder.startswith(_BACKBONE_ENVELOPE_PREFIX):
+            return False
+
         return True
 
     def detect_copy_mode(self, tmux_vars: dict[str, str], agent_state: AgentState) -> bool:
@@ -208,7 +263,16 @@ class TerminalAdapter(ABC):
 
     async def exit_copy_mode(self, session_name: str) -> bool:
         """Immediately attempt to leave copy mode."""
-        return await _send_named_key(session_name, "q")
+        rc, _, stderr = await _run_tmux("send-keys", "-X", "-t", session_name, "cancel")
+        if rc == 0:
+            return True
+
+        err = stderr.decode().strip().lower()
+        if "not in a mode" in err:
+            return True
+
+        log.error("tmux copy-mode cancel failed for '%s': %s", session_name, stderr.decode())
+        return False
 
     def detect_plan_waiting(
         self,
@@ -296,7 +360,7 @@ class TerminalAdapter(ABC):
 
     def matches_runtime(self, pane_content: str) -> bool:
         """Whether the pane appears to belong to this runtime."""
-        lowered = sanitize_pane_content(pane_content).lower()
+        lowered = _runtime_analysis_text(pane_content)
         return any(marker in lowered for marker in self.runtime_markers)
 
     def _matches_prompt_line(self, line: str) -> bool:
@@ -386,6 +450,15 @@ class OpenCodeAdapter(TerminalAdapter):
     paste_settle_seconds = 0.2
 
 
+class AiderAdapter(TerminalAdapter):
+    runtime = TerminalRuntime.AIDER
+    prompt_prefixes = ("aider>", ">")
+    runtime_markers = ("aider", "aider v", "model:", "/help")
+    status_fragments = ("tokens:", "cost:")
+    submit_attempts = _MAX_SUBMIT_ATTEMPTS
+    paste_settle_seconds = 0.2
+
+
 class ShellAdapter(TerminalAdapter):
     runtime = TerminalRuntime.SHELL
     prompt_suffixes = ("$", "%", ">", "#")
@@ -399,6 +472,7 @@ _ADAPTERS: dict[TerminalRuntime, TerminalAdapter] = {
     TerminalRuntime.CODEX: CodexAdapter(),
     TerminalRuntime.CURSOR: CursorAdapter(),
     TerminalRuntime.OPENCODE: OpenCodeAdapter(),
+    TerminalRuntime.AIDER: AiderAdapter(),
     TerminalRuntime.SHELL: ShellAdapter(),
     TerminalRuntime.UNKNOWN: ShellAdapter(),
 }
@@ -417,10 +491,11 @@ def detect_runtime_from_pane(pane_content: str) -> TerminalRuntime:
 
     for runtime in (
         TerminalRuntime.GEMINI,
-        TerminalRuntime.CLAUDE,
-        TerminalRuntime.CODEX,
         TerminalRuntime.OPENCODE,
+        TerminalRuntime.AIDER,
         TerminalRuntime.CURSOR,
+        TerminalRuntime.CODEX,
+        TerminalRuntime.CLAUDE,
     ):
         adapter = get_terminal_adapter(runtime)
         if adapter.matches_runtime(pane_content):
@@ -519,12 +594,3 @@ def infer_state_from_pane(
             return StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="pull")
 
     return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
-
-
-async def _send_named_key(session_name: str, key: str) -> bool:
-    """Send a named tmux key to a session."""
-    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, key)
-    if rc != 0:
-        log.error("tmux send-keys %s failed for '%s': %s", key, session_name, stderr.decode())
-        return False
-    return True

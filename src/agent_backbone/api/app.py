@@ -71,7 +71,12 @@ async def lifespan(app: FastAPI):
         # Populate the flow service locator for scheduled/cron flows
         from agent_backbone.services._locator import init as init_flow_services
 
-        init_flow_services(config=config, db=app.state.db, gh=app.state.github)
+        init_flow_services(
+            config=config,
+            db=app.state.db,
+            gh=app.state.github,
+            sio=app.state.sio,
+        )
 
         # Reconcile disk agent states to DB (catches plan_waiting missed during downtime)
         from agent_backbone.services.agents._reconciliation import reconcile_startup_states
@@ -155,10 +160,12 @@ def create_app() -> socketio.ASGIApp:
     from agent_backbone.api.routes.actions import router as actions_router
     from agent_backbone.api.routes.activity import router as activity_router
     from agent_backbone.api.routes.agents import router as agents_router
+    from agent_backbone.api.routes.analytics import router as analytics_router
     from agent_backbone.api.routes.dashboard import router as dashboard_router
     from agent_backbone.api.routes.deliveries import router as deliveries_router
     from agent_backbone.api.routes.files import router as files_router
     from agent_backbone.api.routes.heartbeats import router as heartbeats_router
+    from agent_backbone.api.routes.hierarchy import router as hierarchy_router
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.notes import router as notes_router
@@ -168,6 +175,7 @@ def create_app() -> socketio.ASGIApp:
     from agent_backbone.api.routes.rooms import router as rooms_router
     from agent_backbone.api.routes.schedule import router as schedule_router
     from agent_backbone.api.routes.status import router as status_router
+    from agent_backbone.api.routes.swarms import router as swarms_router
     from agent_backbone.api.routes.workflows import router as workflows_router
 
     api_routers = [
@@ -175,6 +183,7 @@ def create_app() -> socketio.ASGIApp:
         dashboard_router,
         deliveries_router,
         issues_router,
+        hierarchy_router,
         plans_router,
         status_router,
         heartbeats_router,
@@ -184,7 +193,9 @@ def create_app() -> socketio.ASGIApp:
         actions_router,
         schedule_router,
         activity_router,
+        analytics_router,
         messages_router,
+        swarms_router,
         notes_router,
         rooms_router,
         repos_router,

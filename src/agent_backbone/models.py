@@ -31,6 +31,7 @@ class EventType(StrEnum):
     ISSUE_LABELED = "issue_labeled"
     ISSUE_CLOSED = "issue_closed"
     COMMENT_CREATED = "comment_created"
+    PULL_REQUEST_OPENED = "pull_request_opened"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -45,6 +46,13 @@ class EventType(StrEnum):
             return mapping.get(action, cls.UNKNOWN)
         if event_type == "issue_comment" and action == "created":
             return cls.COMMENT_CREATED
+        if event_type == "pull_request":
+            mapping = {
+                "opened": cls.PULL_REQUEST_OPENED,
+                "ready_for_review": cls.PULL_REQUEST_OPENED,
+                "reopened": cls.PULL_REQUEST_OPENED,
+            }
+            return mapping.get(action, cls.UNKNOWN)
         return cls.UNKNOWN
 
 
@@ -87,6 +95,7 @@ class IssueData(BaseModel):
     labels: ParsedLabels = Field(default_factory=ParsedLabels)
     html_url: str = ""
     repo_full_name: str = ""
+    is_pull_request: bool = False
 
 
 class CommentData(BaseModel):
@@ -115,7 +124,8 @@ class IssueEvent(BaseModel):
     ) -> IssueEvent:
         """Construct from raw GitHub webhook data."""
         event_type = EventType.from_github(event_type_str, action)
-        issue_data = payload.get("issue", {})
+        issue_key = "pull_request" if event_type_str == "pull_request" else "issue"
+        issue_data = payload.get(issue_key, {})
         repository = payload.get("repository", {})
         labels = ParsedLabels.from_github_labels(issue_data.get("labels", []))
 
@@ -126,6 +136,7 @@ class IssueEvent(BaseModel):
             labels=labels,
             html_url=issue_data.get("html_url", ""),
             repo_full_name=repository.get("full_name", ""),
+            is_pull_request=issue_key == "pull_request",
         )
 
         comment = None

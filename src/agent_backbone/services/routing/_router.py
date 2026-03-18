@@ -21,10 +21,15 @@ from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import (
     format_comment_notification,
     format_issue_notification,
+    format_pull_request_notification,
 )
 from agent_backbone.services.routing._resolution import (
     resolve_entity_session,
     resolve_entity_sessions,
+)
+from agent_backbone.services.routing._targets import (
+    list_open_queue_for_target,
+    resolve_event_targets,
 )
 from agent_backbone.services.routing.models import DispatchResult
 
@@ -61,14 +66,18 @@ def _compute_comment_targets(
     event: IssueEvent,
     commenter: str | None,
     skip_set: frozenset[str],
+    fallback_targets: list[str] | None = None,
 ) -> list[str]:
     """Compute the set of entities to notify about a comment.
 
     Formula: {sender} ∪ {targets} - {commenter} - {skip_set}
     """
     all_parties: set[str] = set()
-    all_parties.add(event.issue.labels.sender)
+    if event.issue.labels.sender != "unknown":
+        all_parties.add(event.issue.labels.sender)
     all_parties.update(event.issue.labels.targets)
+    if not all_parties and fallback_targets:
+        all_parties.update(fallback_targets)
 
     # Remove commenter and skip set
     if commenter:
@@ -125,7 +134,7 @@ async def _deliver_to_entity(
         elif outcome == "delivery_failed":
             result.offline.append(session_name)
         else:
-            # awaiting_ack, agent_working, plan_waiting, copy_mode,
+            # awaiting_ack, agent_working, plan_waiting,
             # user_interacting, grace_period, unknown_state
             result.deferred.append(session_name)
 
@@ -158,7 +167,13 @@ async def issue_dispatcher(
     # --- Comment events: separate code path with expanded notify set ---
     if event.event_type == EventType.COMMENT_CREATED and event.comment:
         commenter = _resolve_commenter_entity(event)
-        targets = _compute_comment_targets(event, commenter, config.entities.skip)
+        fallback_targets = resolve_event_targets(event, config)
+        targets = _compute_comment_targets(
+            event,
+            commenter,
+            config.entities.skip,
+            fallback_targets=fallback_targets,
+        )
         message = format_comment_notification(
             event.issue, event.comment, commenter_entity=commenter
         )
@@ -244,15 +259,20 @@ async def issue_dispatcher(
         return result
 
     # --- Issue events (ISSUE_OPENED, ISSUE_LABELED) ---
+    delivery_kind = "issue"
     if event.event_type in (EventType.ISSUE_OPENED, EventType.ISSUE_LABELED):
         message = format_issue_notification(event.issue)
+    elif event.event_type == EventType.PULL_REQUEST_OPENED:
+        message = format_pull_request_notification(event.issue)
+        delivery_kind = "pull_request"
     else:
         log.info("Ignoring event type: %s", event.event_type)
         return result
 
     # Deliver to each target from for: labels
     queue_scope_cache: dict[str, set[int]] = {}
-    for target in event.issue.labels.targets:
+    targets = resolve_event_targets(event, config)
+    for target in targets:
         if target in config.entities.skip:
             result.skipped.append(target)
             continue
@@ -264,11 +284,13 @@ async def issue_dispatcher(
             continue
 
         queue_scope_issue_numbers: set[int] | None = None
-        if gh is not None:
+        if gh is not None and delivery_kind == "issue":
             try:
-                open_issues = await gh.list_open_issues(
-                    f"for:{target}",
-                    repo_full_name=event.issue.repo_full_name or None,
+                open_issues = await list_open_queue_for_target(
+                    config,
+                    target,
+                    gh,
+                    issue_repo_full_name=event.issue.repo_full_name,
                 )
                 queue_scope_issue_numbers = {issue.number for issue in open_issues}
                 queue_scope_cache[target] = queue_scope_issue_numbers
@@ -283,8 +305,9 @@ async def issue_dispatcher(
             db,
             result,
             is_blocking,
-            enforce_issue_queue=True,
+            enforce_issue_queue=delivery_kind == "issue",
             queue_scope_issue_numbers=queue_scope_cache.get(target, queue_scope_issue_numbers),
+            delivery_kind=delivery_kind,
         )
 
     log.info(

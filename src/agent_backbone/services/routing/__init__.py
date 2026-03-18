@@ -62,9 +62,6 @@ from agent_backbone.services.routing.exceptions import (
 )
 from agent_backbone.services.routing.interface import DeliveryService, DispatchService
 from agent_backbone.services.routing.models import (
-    DispatchResult as DispatchResultModel,
-)
-from agent_backbone.services.routing.models import (
     SessionIntelligence,
     SessionProfile,
 )
@@ -72,7 +69,6 @@ from agent_backbone.services.routing.models import (
 __all__ = [
     # Dispatch
     "DispatchResult",
-    "DispatchResultModel",
     "DispatchService",
     "_ONBOARDING_TITLE_PREFIX",
     "_check_onboarding_chain",
