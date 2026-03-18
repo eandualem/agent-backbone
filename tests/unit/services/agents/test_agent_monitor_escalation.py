@@ -31,6 +31,7 @@ from agent_backbone.services.agents import (
     check_for_stalls,
     check_for_unexpected_offline,
     check_plan_waiting,
+    check_pending_issues,
     handle_offline,
     handle_stalls,
     monitor_agents,
@@ -148,6 +149,10 @@ class TestPrefectTaskConfig:
         """Prefect must not hash BackboneDB inputs for these monitor tasks."""
         assert check_for_stalls.cache_policy == NO_CACHE
         assert check_for_unexpected_offline.cache_policy == NO_CACHE
+
+    def test_pending_issue_scan_disables_prefect_input_caching(self):
+        """Pending issue lookup must not hash GitHub client inputs."""
+        assert check_pending_issues.cache_policy == NO_CACHE
 
 
 @pytest.fixture

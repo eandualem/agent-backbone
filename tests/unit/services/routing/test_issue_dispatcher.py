@@ -16,6 +16,7 @@ from agent_backbone.models import (
     parse_from_tag,
 )
 from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry, RepoInfo
+from agent_backbone.services.routing import clear as clear_dedup
 from agent_backbone.services.routing import issue_dispatcher, resolve_session
 
 
@@ -69,6 +70,13 @@ def mock_db():
     db.clear_acknowledgment = AsyncMock()
     db.record_delivery = AsyncMock()
     return db
+
+
+@pytest.fixture(autouse=True)
+def _clear_recent_notification_dedup():
+    clear_dedup()
+    yield
+    clear_dedup()
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +562,29 @@ class TestCommentRouting:
         # Leo (sender) and Ike (target) should both be notified
         assert "leo" in result.delivered
         assert "ike" in result.delivered
+
+    async def test_duplicate_comment_id_is_suppressed_per_target(self, config, mock_db):
+        """The same GitHub comment should not notify the same target twice."""
+        labels = ParsedLabels(sender="leo", targets=["ike"], issue_type="task")
+        issue = IssueData(number=18, title="[task] Duplicate replay", labels=labels)
+        comment = CommentData(
+            id=9001,
+            body="[from:leo] Same comment delivered twice.",
+            user_login="eandualem",
+        )
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_resolve(),
+            _patch_safe_deliver("delivered") as mock_deliver,
+        ):
+            first = await issue_dispatcher.fn(event, config, mock_db)
+            second = await issue_dispatcher.fn(event, config, mock_db)
+
+        assert first.delivered == ["ike"]
+        assert second.delivered == []
+        assert "ike" in second.skipped
+        assert mock_deliver.await_count == 1
 
     async def test_concrete_role_instance_sender_comment_routes_back(self, mock_db):
         """Comments back to a concrete role-instance sender route directly."""

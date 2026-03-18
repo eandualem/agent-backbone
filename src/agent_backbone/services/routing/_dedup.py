@@ -13,20 +13,24 @@ from __future__ import annotations
 
 import time
 
-_recent_notifications: dict[tuple[int, str], float] = {}
+_recent_notifications: dict[tuple[str, str], float] = {}
 
 DEFAULT_DEDUP_SECONDS = 10
 
 
 def is_recent_notification(
-    issue_number: int, target: str, dedup_seconds: int = DEFAULT_DEDUP_SECONDS
+    issue_number: int,
+    target: str,
+    dedup_seconds: int = DEFAULT_DEDUP_SECONDS,
+    *,
+    notification_key: str | None = None,
 ) -> bool:
     """Check if this issue+target was already notified recently.
 
     Returns True if a notification was sent within the dedup window (suppress).
     Returns False and records the notification if it's new (deliver).
     """
-    key = (issue_number, target)
+    key = (notification_key or f"issue:{issue_number}", target)
     now = time.monotonic()
     # Clean expired entries
     expired = [k for k, t in _recent_notifications.items() if now - t > dedup_seconds]

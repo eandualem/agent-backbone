@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 
 from prefect import task
+from prefect.cache_policies import NO_CACHE
 
 from agent_backbone.config import REPO_NAME_PATTERN, BackboneConfig
 from agent_backbone.models import IssueData, parse_from_tag
@@ -18,7 +19,7 @@ from agent_backbone.services.routing._format import format_next_issue_notificati
 log = logging.getLogger(__name__)
 
 
-@task
+@task(cache_policy=NO_CACHE)
 async def check_pending_issues(config: BackboneConfig, entity: str, gh: object) -> list[IssueData]:
     """Get all pending open issues for an entity, sorted by priority."""
     label = f"for:{entity}"

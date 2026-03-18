@@ -144,6 +144,34 @@ async def _persist_delivery_outcome(
     )
 
 
+async def _clear_matching_queue_rows(
+    db: BackboneDB | None,
+    session_name: str,
+    message: str,
+    delivery_kind: str,
+    issue_number: int | None,
+) -> None:
+    """Clear stale queued duplicates once a non-issue notification succeeds."""
+    if db is None or delivery_kind not in {"comment", "direct_message"}:
+        return
+    try:
+        cleared = await db.mark_matching_messages_delivered(
+            session_name=session_name,
+            message=message,
+            delivery_kind=delivery_kind,
+            issue_number=issue_number,
+        )
+        if cleared:
+            log.info(
+                "Cleared %d stale queued %s notification(s) for %s",
+                cleared,
+                delivery_kind,
+                session_name,
+            )
+    except Exception:
+        log.exception("Failed to clear matching queued notifications (non-fatal)")
+
+
 async def _recover_copy_mode(
     session_name: str,
     config: BackboneConfig,
@@ -270,6 +298,13 @@ async def safe_deliver(
                 flow_name,
                 delivery_kind,
                 delivery_claim_id,
+            )
+            await _clear_matching_queue_rows(
+                db,
+                session_name,
+                message,
+                delivery_kind,
+                issue_number,
             )
             return "delivered"
         await _maybe_enqueue(
@@ -474,6 +509,13 @@ async def safe_deliver(
             flow_name,
             delivery_kind,
             delivery_claim_id,
+        )
+        await _clear_matching_queue_rows(
+            db,
+            session_name,
+            message,
+            delivery_kind,
+            issue_number,
         )
         return "delivered"
 

@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from croniter import croniter
 from prefect import flow, task
+from prefect.cache_policies import NO_CACHE
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services._locator import ensure_initialized, get_config, get_db
@@ -103,7 +104,7 @@ def _schedule_targets(agent: str, config: BackboneConfig) -> list[str]:
     return []
 
 
-@task
+@task(cache_policy=NO_CACHE)
 async def evaluate_agent_heartbeat(
     agent: str,
     schedule: dict,

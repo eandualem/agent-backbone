@@ -584,6 +584,52 @@ class TestMessageQueue:
         assert row["status"] == "pending"
         assert row["delivered_at"] is None
 
+    async def test_mark_matching_messages_delivered_clears_same_comment_identity(self, db):
+        matching = await db.enqueue_message(
+            "ike",
+            "same comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+        other_issue = await db.enqueue_message(
+            "ike",
+            "same comment",
+            issue_number=43,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+
+        cleared = await db.mark_matching_messages_delivered(
+            session_name="ike",
+            message="same comment",
+            delivery_kind="comment",
+            issue_number=42,
+        )
+
+        assert cleared == 1
+        assert (await db.get_message_by_id(matching))["status"] == "delivered"
+        assert (await db.get_message_by_id(other_issue))["status"] == "pending"
+
+    async def test_mark_matching_messages_delivered_clears_in_progress_direct_messages(self, db):
+        row_id = await db.enqueue_message(
+            "ike",
+            "same direct message",
+            delivery_kind="direct_message",
+        )
+        await db.dequeue_messages("ike")
+
+        cleared = await db.mark_matching_messages_delivered(
+            session_name="ike",
+            message="same direct message",
+            delivery_kind="direct_message",
+        )
+
+        assert cleared == 1
+        row = await db.get_message_by_id(row_id)
+        assert row["status"] == "delivered"
+        assert row["leased_at"] is None
+
 
 class TestDedupHotCache:
     def test_first_delivery_not_duplicate(self):

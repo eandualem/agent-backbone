@@ -1260,6 +1260,12 @@ class TestSafeDeliver:
             outcome="comment_delivered",
             flow_name="test_flow",
         )
+        mock_db.mark_matching_messages_delivered.assert_awaited_once_with(
+            session_name="ike",
+            message="Hello",
+            delivery_kind="comment",
+            issue_number=42,
+        )
 
     async def test_comment_delivery_bypasses_agent_working_for_current_issue(self):
         """Comments on the active processing issue should deliver immediately."""

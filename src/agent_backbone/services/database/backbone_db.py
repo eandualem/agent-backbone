@@ -646,6 +646,24 @@ class BackboneDB:
         async with self._engine.begin() as conn:
             await _queue_repo.mark_message_delivered(conn, message_id)
 
+    async def mark_matching_messages_delivered(
+        self,
+        *,
+        session_name: str,
+        message: str,
+        delivery_kind: str,
+        issue_number: int | None = None,
+    ) -> int:
+        """Mark queued rows with the same delivery identity as delivered."""
+        async with self._engine.begin() as conn:
+            return await _queue_repo.mark_matching_messages_delivered(
+                conn,
+                session_name=session_name,
+                message=message,
+                delivery_kind=delivery_kind,
+                issue_number=issue_number,
+            )
+
     async def purge_pending_for_issue(self, issue_number: int) -> int:
         """Mark all pending queue messages for an issue as delivered."""
         async with self._engine.begin() as conn:

@@ -75,6 +75,15 @@ class TestIsRecentNotification:
         is_recent_notification(42, "ike")
         assert is_recent_notification(42, "feynman") is False
 
+    def test_notification_key_allows_distinct_comment_events(self):
+        assert (
+            is_recent_notification(42, "ike", notification_key="comment:1001") is False
+        )
+        assert is_recent_notification(42, "ike", notification_key="comment:1001") is True
+        assert (
+            is_recent_notification(42, "ike", notification_key="comment:1002") is False
+        )
+
 
 class TestNormalizeEvent:
     def test_issue_opened(self):

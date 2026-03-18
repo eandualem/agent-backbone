@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
+from prefect.cache_policies import NO_CACHE
 
 from agent_backbone.config import BackboneConfig, HeartbeatConfig
 from agent_backbone.services.agents import (
@@ -81,6 +82,12 @@ class TestIsDue:
         """No cron or at field — not due."""
         schedule = {"timezone": TZ}
         assert is_due(schedule, last_fired=None, default_tz=TZ) is False
+
+
+class TestPrefectTaskConfig:
+    def test_evaluate_agent_heartbeat_disables_prefect_input_caching(self):
+        """Heartbeat task must not hash BackboneDB inputs."""
+        assert evaluate_agent_heartbeat.cache_policy == NO_CACHE
 
 
 # --- load/save schedules ---

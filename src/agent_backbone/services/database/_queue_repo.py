@@ -414,6 +414,53 @@ async def mark_message_delivered(
     )
 
 
+async def mark_matching_messages_delivered(
+    conn: AsyncConnection,
+    *,
+    session_name: str,
+    message: str,
+    delivery_kind: str,
+    issue_number: int | None = None,
+) -> int:
+    """Mark queued messages with the same identity as delivered.
+
+    This clears stale deferred rows after the same payload succeeds through a
+    later direct send path, preventing replay of already-seen comment or direct
+    message notifications.
+    """
+    content_hash = hashlib.sha256(message.encode()).hexdigest()
+    clauses = [
+        "session_name = :session_name",
+        "delivery_kind = :delivery_kind",
+        "content_hash = :content_hash",
+        "status IN ('pending', 'in_progress')",
+    ]
+    params: dict[str, object] = {
+        "session_name": session_name,
+        "delivery_kind": delivery_kind,
+        "content_hash": content_hash,
+        "delivered_at": _now_iso(),
+    }
+
+    if issue_number is None:
+        clauses.append("issue_number IS NULL")
+    else:
+        clauses.append("issue_number = :issue_number")
+        params["issue_number"] = issue_number
+
+    result = await conn.execute(
+        text(
+            f"""UPDATE message_queue
+               SET status = 'delivered',
+                   delivered_at = :delivered_at,
+                   leased_at = NULL
+               WHERE {' AND '.join(clauses)}"""
+        ),
+        params,
+    )
+    return result.rowcount or 0
+
+
 async def expire_stale_pending(
     conn: AsyncConnection,
     max_age_minutes: int = 30,

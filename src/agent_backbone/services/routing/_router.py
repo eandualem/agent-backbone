@@ -18,6 +18,7 @@ from agent_backbone.models import EventType, IssueEvent, parse_from_tag
 from agent_backbone.services.agents._delivery_check import find_outgoing_comment
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
+from agent_backbone.services.routing._dedup import is_recent_notification
 from agent_backbone.services.routing._format import (
     format_comment_notification,
     format_issue_notification,
@@ -193,6 +194,20 @@ async def issue_dispatcher(
                 log.exception("Failed to record acknowledgment (non-fatal)")
 
         for target in targets:
+            if event.comment.id and is_recent_notification(
+                event.issue.number,
+                target,
+                notification_key=f"comment:{event.comment.id}",
+            ):
+                log.info(
+                    "Suppressed duplicate comment notification for comment %d -> %s on #%d",
+                    event.comment.id,
+                    target,
+                    event.issue.number,
+                )
+                result.skipped.append(target)
+                continue
+
             target_sessions = await resolve_entity_sessions(target, config, event.issue.title)
             if not target_sessions:
                 log.warning("Could not resolve session for target '%s'", target)
