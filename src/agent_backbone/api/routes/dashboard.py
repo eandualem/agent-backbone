@@ -22,7 +22,7 @@ from agent_backbone.api.models import (
     EnrichedAgent,
     ServiceHealth,
 )
-from agent_backbone.api.session_updates import build_session_snapshot
+from agent_backbone.api.session_updates import build_session_snapshot, get_cached_session_snapshot
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
@@ -34,11 +34,6 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
-# TTL caches
-_agents_cache: list[EnrichedAgent] = []
-_agents_cache_ts: float = 0
-_AGENTS_CACHE_TTL = 5.0
-
 _issues_cache: int = 0
 _issues_cache_ts: float = 0
 _ISSUES_CACHE_TTL = 60.0
@@ -49,16 +44,10 @@ async def _fetch_agents(
     state_svc: StateService,
     tmux_svc: TmuxService,
 ) -> list[EnrichedAgent]:
-    """Build the full agent list with TTL cache (5s)."""
-    global _agents_cache, _agents_cache_ts  # noqa: PLW0603
-    now = time.monotonic()
-    if now - _agents_cache_ts < _AGENTS_CACHE_TTL and _agents_cache:
-        return _agents_cache
-
-    agents = await build_session_snapshot(config, state_svc, tmux_svc)
-    _agents_cache = agents
-    _agents_cache_ts = now
-    return agents
+    """Build the full agent list with the shared session snapshot cache."""
+    return await get_cached_session_snapshot(
+        lambda: build_session_snapshot(config, state_svc, tmux_svc)
+    )
 
 
 async def _fetch_issues_pending(gh: GitHubClient) -> int:

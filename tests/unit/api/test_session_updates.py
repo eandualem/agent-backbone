@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import agent_backbone.api.session_updates as session_updates_module
 from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.api.session_updates import (
     SESSIONS_NAMESPACE,
     SESSIONS_UPDATE_EVENT,
     emit_sessions_update,
+    get_cached_session_snapshot,
+    invalidate_session_snapshot_caches,
     reset_sessions_update_state,
 )
 
@@ -34,6 +38,111 @@ def _sample_snapshot() -> list[EnrichedAgent]:
     ]
 
 
+class TestGetCachedSessionSnapshot:
+    @pytest.mark.asyncio
+    async def test_ttl_hit_returns_cached_snapshot(self):
+        """Repeated reads inside the TTL reuse the cached snapshot."""
+        first_snapshot = _sample_snapshot()
+        second_snapshot = [
+            EnrichedAgent(
+                session="other-repo",
+                entity="other-repo",
+                state="busy",
+                online=True,
+                type="coding_agent",
+            )
+        ]
+        build_fn = AsyncMock(side_effect=[first_snapshot, second_snapshot])
+
+        first = await get_cached_session_snapshot(build_fn)
+        second = await get_cached_session_snapshot(build_fn)
+
+        assert first == first_snapshot
+        assert second == first_snapshot
+        assert build_fn.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_ttl_miss_rebuilds_snapshot(self):
+        """Expired TTL triggers a new snapshot build."""
+        first_snapshot = _sample_snapshot()
+        second_snapshot = [
+            EnrichedAgent(
+                session="other-repo",
+                entity="other-repo",
+                state="busy",
+                online=True,
+                type="coding_agent",
+            )
+        ]
+        build_fn = AsyncMock(side_effect=[first_snapshot, second_snapshot])
+
+        first = await get_cached_session_snapshot(build_fn)
+        second = await get_cached_session_snapshot(build_fn, ttl=0)
+
+        assert first == first_snapshot
+        assert second == second_snapshot
+        assert build_fn.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_force_refresh_rebuilds_snapshot(self):
+        """Force refresh bypasses the cache even within the TTL."""
+        first_snapshot = _sample_snapshot()
+        second_snapshot = [
+            EnrichedAgent(
+                session="other-repo",
+                entity="other-repo",
+                state="busy",
+                online=True,
+                type="coding_agent",
+            )
+        ]
+        build_fn = AsyncMock(side_effect=[first_snapshot, second_snapshot])
+
+        first = await get_cached_session_snapshot(build_fn)
+        second = await get_cached_session_snapshot(build_fn, force_refresh=True)
+
+        assert first == first_snapshot
+        assert second == second_snapshot
+        assert build_fn.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_invalidate_resets_cache(self):
+        """Invalidation clears the shared cached snapshot state."""
+        snapshot = _sample_snapshot()
+        build_fn = AsyncMock(return_value=snapshot)
+
+        await get_cached_session_snapshot(build_fn)
+        assert session_updates_module._snapshot_cache == snapshot
+        assert session_updates_module._snapshot_cache_ts > 0
+
+        invalidate_session_snapshot_caches()
+
+        assert session_updates_module._snapshot_cache == []
+        assert session_updates_module._snapshot_cache_ts == 0.0
+
+    @pytest.mark.asyncio
+    async def test_concurrent_calls_share_one_build_under_lock(self):
+        """Concurrent cache misses are serialized under the shared lock."""
+        snapshot = _sample_snapshot()
+
+        async def slow_build():
+            await asyncio.sleep(0.05)
+            return snapshot
+
+        build_fn = AsyncMock(side_effect=slow_build)
+
+        first, second, third = await asyncio.gather(
+            get_cached_session_snapshot(build_fn),
+            get_cached_session_snapshot(build_fn),
+            get_cached_session_snapshot(build_fn),
+        )
+
+        assert first == snapshot
+        assert second == snapshot
+        assert third == snapshot
+        assert build_fn.await_count == 1
+
+
 class TestEmitSessionsUpdate:
     @pytest.mark.asyncio
     async def test_noops_without_services(self):
@@ -48,20 +157,17 @@ class TestEmitSessionsUpdate:
         sio = MagicMock()
         sio.emit = AsyncMock()
 
-        with (
-            patch(
-                "agent_backbone.api.session_updates.invalidate_session_snapshot_caches"
-            ) as mock_invalidate,
-            patch(
-                "agent_backbone.api.session_updates.build_session_snapshot",
-                new_callable=AsyncMock,
-                return_value=_sample_snapshot(),
-            ),
-        ):
+        with patch(
+            "agent_backbone.api.session_updates.get_cached_session_snapshot",
+            new_callable=AsyncMock,
+            return_value=_sample_snapshot(),
+        ) as mock_get_snapshot:
             emitted = await emit_sessions_update(sio, MagicMock(), MagicMock(), MagicMock())
 
         assert emitted is True
-        mock_invalidate.assert_called_once_with()
+        mock_get_snapshot.assert_awaited_once()
+        assert callable(mock_get_snapshot.await_args.args[0])
+        assert mock_get_snapshot.await_args.kwargs["force_refresh"] is True
         sio.emit.assert_awaited_once_with(
             SESSIONS_UPDATE_EVENT,
             [_sample_snapshot()[0].model_dump(mode="json")],
@@ -74,16 +180,11 @@ class TestEmitSessionsUpdate:
         sio = MagicMock()
         sio.emit = AsyncMock()
 
-        with (
-            patch(
-                "agent_backbone.api.session_updates.invalidate_session_snapshot_caches"
-            ),
-            patch(
-                "agent_backbone.api.session_updates.build_session_snapshot",
-                new_callable=AsyncMock,
-                return_value=_sample_snapshot(),
-            ),
-        ):
+        with patch(
+            "agent_backbone.api.session_updates.get_cached_session_snapshot",
+            new_callable=AsyncMock,
+            return_value=_sample_snapshot(),
+        ) as mock_get_snapshot:
             first = await emit_sessions_update(
                 sio,
                 MagicMock(),
@@ -101,4 +202,5 @@ class TestEmitSessionsUpdate:
 
         assert first is True
         assert second is False
+        assert mock_get_snapshot.await_count == 2
         sio.emit.assert_awaited_once()
