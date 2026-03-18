@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
@@ -258,25 +259,6 @@ async def query_heartbeats(
 # --- Message queue ---
 
 
-async def has_pending_duplicate(
-    conn: AsyncConnection,
-    session_name: str,
-    message: str,
-) -> bool:
-    """Check if an identical pending message already exists for this session."""
-    result = await conn.execute(
-        text(
-            """SELECT 1 FROM message_queue
-               WHERE session_name = :session_name
-                 AND message = :message
-                 AND status = 'pending'
-               LIMIT 1"""
-        ),
-        {"session_name": session_name, "message": message},
-    )
-    return result.fetchone() is not None
-
-
 async def enqueue_message(
     conn: AsyncConnection,
     session_name: str,
@@ -286,32 +268,64 @@ async def enqueue_message(
     delivery_kind: str = "issue",
     flow_name: str = "",
 ) -> int:
-    """Enqueue a message for later delivery. Returns the row ID.
+    """Enqueue a message for later delivery. Returns the row ID or -1 when deduped."""
+    content_hash = hashlib.sha256(message.encode()).hexdigest()
+    params = {
+        "session_name": session_name,
+        "message": message,
+        "issue_number": issue_number,
+        "target_entity": target_entity,
+        "delivery_kind": delivery_kind,
+        "flow_name": flow_name,
+        "enqueued_at": _now_iso(),
+        "content_hash": content_hash,
+    }
 
-    Skips enqueue if an identical pending message already exists (returns -1).
-    """
-    if await has_pending_duplicate(conn, session_name, message):
-        return -1
-    result = await conn.execute(
-        text(
-            """INSERT INTO message_queue
+    if delivery_kind == "issue" and issue_number is not None:
+        sql = """INSERT INTO message_queue
                (session_name, message, issue_number, target_entity,
-                delivery_kind, flow_name, enqueued_at, status)
+                delivery_kind, flow_name, enqueued_at, status, content_hash)
                VALUES (:session_name, :message, :issue_number, :target_entity,
-                       :delivery_kind, :flow_name, :enqueued_at, 'pending')
+                       :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
+               ON CONFLICT (session_name, issue_number)
+               WHERE delivery_kind = 'issue'
+                 AND status IN ('pending','in_progress')
+                 AND issue_number IS NOT NULL
+               DO NOTHING
                RETURNING id"""
-        ),
-        {
-            "session_name": session_name,
-            "message": message,
-            "issue_number": issue_number,
-            "target_entity": target_entity,
-            "delivery_kind": delivery_kind,
-            "flow_name": flow_name,
-            "enqueued_at": _now_iso(),
-        },
-    )
-    return result.scalar_one()
+    elif delivery_kind == "comment" and issue_number is not None:
+        sql = """INSERT INTO message_queue
+               (session_name, message, issue_number, target_entity,
+                delivery_kind, flow_name, enqueued_at, status, content_hash)
+               VALUES (:session_name, :message, :issue_number, :target_entity,
+                       :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
+               ON CONFLICT (session_name, issue_number, content_hash)
+               WHERE delivery_kind = 'comment'
+                 AND status IN ('pending','in_progress')
+                 AND issue_number IS NOT NULL
+               DO NOTHING
+               RETURNING id"""
+    elif delivery_kind == "direct_message":
+        sql = """INSERT INTO message_queue
+               (session_name, message, issue_number, target_entity,
+                delivery_kind, flow_name, enqueued_at, status, content_hash)
+               VALUES (:session_name, :message, :issue_number, :target_entity,
+                       :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
+               ON CONFLICT (session_name, content_hash)
+               WHERE delivery_kind = 'direct_message' AND status IN ('pending','in_progress')
+               DO NOTHING
+               RETURNING id"""
+    else:
+        sql = """INSERT INTO message_queue
+               (session_name, message, issue_number, target_entity,
+                delivery_kind, flow_name, enqueued_at, status, content_hash)
+               VALUES (:session_name, :message, :issue_number, :target_entity,
+                       :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
+               RETURNING id"""
+
+    result = await conn.execute(text(sql), params)
+    row = result.fetchone()
+    return row._mapping["id"] if row else -1
 
 
 async def dequeue_messages(

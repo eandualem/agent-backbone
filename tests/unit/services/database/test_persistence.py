@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -333,6 +335,101 @@ class TestMessageQueue:
         feynman_msgs = await db.dequeue_messages("feynman")
         assert len(ike_msgs) == 2
         assert len(feynman_msgs) == 1
+
+    async def test_enqueue_dedup_issue_constraint(self, db):
+        first = await db.enqueue_message("ike", "first", issue_number=42, target_entity="ike")
+        second = await db.enqueue_message("ike", "second", issue_number=42, target_entity="ike")
+
+        assert first > 0
+        assert second == -1
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 1
+        assert messages[0]["message"] == "first"
+
+    async def test_enqueue_dedup_different_issues(self, db):
+        first = await db.enqueue_message("ike", "first", issue_number=42, target_entity="ike")
+        second = await db.enqueue_message("ike", "second", issue_number=43, target_entity="ike")
+
+        assert first > 0
+        assert second > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 2
+        assert {message["issue_number"] for message in messages} == {42, 43}
+
+    async def test_enqueue_dedup_comment_constraint(self, db):
+        first = await db.enqueue_message(
+            "ike",
+            "same comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+        duplicate = await db.enqueue_message(
+            "ike",
+            "same comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+        different = await db.enqueue_message(
+            "ike",
+            "different comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+
+        assert first > 0
+        assert duplicate == -1
+        assert different > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 2
+        assert {message["message"] for message in messages} == {"same comment", "different comment"}
+
+    async def test_enqueue_dedup_dm_constraint(self, db):
+        first = await db.enqueue_message(
+            "ike",
+            "same direct message",
+            delivery_kind="direct_message",
+        )
+        duplicate = await db.enqueue_message(
+            "ike",
+            "same direct message",
+            delivery_kind="direct_message",
+        )
+        different = await db.enqueue_message(
+            "ike",
+            "different direct message",
+            delivery_kind="direct_message",
+        )
+
+        assert first > 0
+        assert duplicate == -1
+        assert different > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 2
+        assert {message["message"] for message in messages} == {
+            "different direct message",
+            "same direct message",
+        }
+
+    async def test_enqueue_content_hash_populated(self, db):
+        message = "hash me"
+        row_id = await db.enqueue_message(
+            "ike",
+            message,
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+
+        row = await db.get_message_by_id(row_id)
+
+        assert row["content_hash"] == hashlib.sha256(message.encode()).hexdigest()
 
 
 class TestDedupHotCache:
