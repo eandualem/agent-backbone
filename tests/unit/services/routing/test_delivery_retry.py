@@ -5,10 +5,12 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from prefect.cache_policies import NO_CACHE
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.registry import RepoInfo
+from agent_backbone.services.routing import retry_delivery
 
 
 @pytest.fixture
@@ -43,6 +45,12 @@ class TestRetryDeliveryAckCheck:
         mock_gh = AsyncMock()
         result = await retry_delivery.fn(config, delivery, db, mock_gh)
         assert result == "acknowledged"
+
+
+class TestPrefectTaskConfig:
+    def test_retry_delivery_disables_prefect_input_caching(self):
+        """Retry delivery should not hash BackboneDB or GitHub client inputs."""
+        assert retry_delivery.cache_policy == NO_CACHE
 
     async def test_retry_skips_when_session_acknowledged(self, db, config):
         """Retry skips when fallback session (not target_entity) acknowledged."""

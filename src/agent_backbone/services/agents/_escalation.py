@@ -394,37 +394,46 @@ async def handle_offline(
     escalation_target = config.escalation.escalation_target
 
     for agent in offline_agents:
-        event_key = "offline"
-        if _should_escalate(
-            agent["session"], event_key, config.escalation.escalation_dedup_seconds
-        ):
-            escalation_session = _resolve_target_session(
-                escalation_target,
-                agent["session"],
-                config,
+        # Clear stale DB state before any delivery side effects. This prevents
+        # the same offline session from re-qualifying on the next monitor run
+        # if escalation delivery itself fails or the process exits mid-send.
+        try:
+            await db.set_agent_state(
+                session_name=agent["session"],
+                state="unknown",
+                current_issue=None,
             )
-            if escalation_session and escalation_session in active_sessions:
-                msg = format_unexpected_offline_notification(
-                    agent["session"],
-                    agent["entity"],
-                    agent["pending_count"],
-                )
-                await safe_deliver(escalation_session, msg, config, priority=True)
-                log.warning("Escalated offline: %s", agent["entity"])
+        except Exception:
+            log.exception(
+                "Failed to clear DB state for offline agent %s (non-fatal)",
+                agent["session"],
+            )
 
-            # Mark agent as "unknown" in DB so the next cycle doesn't
-            # re-detect the same offline event.
-            try:
-                await db.set_agent_state(
-                    session_name=agent["session"],
-                    state="unknown",
-                    current_issue=None,
-                )
-            except Exception:
-                log.exception(
-                    "Failed to clear DB state for offline agent %s (non-fatal)",
-                    agent["session"],
-                )
+        event_key = "offline"
+        if not _should_escalate(agent["session"], event_key, config.escalation.escalation_dedup_seconds):
+            continue
+
+        escalation_session = _resolve_target_session(
+            escalation_target,
+            agent["session"],
+            config,
+        )
+        if not escalation_session or escalation_session not in active_sessions:
+            continue
+
+        msg = format_unexpected_offline_notification(
+            agent["session"],
+            agent["entity"],
+            agent["pending_count"],
+        )
+        try:
+            await safe_deliver(escalation_session, msg, config, priority=True)
+            log.warning("Escalated offline: %s", agent["entity"])
+        except Exception:
+            log.exception(
+                "Failed to deliver offline escalation for %s (non-fatal)",
+                agent["entity"],
+            )
 
 
 def _resolve_orchestrator(session_name: str, config: BackboneConfig) -> str | None:

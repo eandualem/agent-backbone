@@ -11,6 +11,7 @@ import logging
 from collections.abc import Collection
 
 from prefect import flow, task
+from prefect.cache_policies import NO_CACHE
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
@@ -92,7 +93,7 @@ async def drain_message_queue(
     return summary
 
 
-@task
+@task(cache_policy=NO_CACHE)
 async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB, gh: object) -> str:
     """Attempt to retry a single failed delivery.
 

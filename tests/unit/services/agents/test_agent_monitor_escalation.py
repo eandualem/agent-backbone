@@ -1042,6 +1042,40 @@ class TestOfflineDedup:
             current_issue=None,
         )
 
+    @pytest.mark.asyncio
+    async def test_offline_clears_db_state_even_if_delivery_raises(self):
+        """Offline state must be cleared even when escalation delivery fails."""
+        config = _make_monitor_config(
+            registry=_make_registry(["ike", "feynman"]),
+            escalation=EscalationConfig(
+                escalation_target="ike",
+                escalation_dedup_seconds=1800,
+            ),
+        )
+        mock_db = AsyncMock()
+
+        with (
+            patch(
+                f"{_ESC}.check_for_unexpected_offline",
+                new_callable=AsyncMock,
+                return_value=[
+                    {"entity": "feynman", "session": "feynman", "pending_count": 0},
+                ],
+            ),
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("tmux failed"),
+            ),
+        ):
+            await handle_offline(config, {"ike"}, mock_db, AsyncMock())
+
+        mock_db.set_agent_state.assert_awaited_once_with(
+            session_name="feynman",
+            state="unknown",
+            current_issue=None,
+        )
+
 
 class TestRoleEscalationTargetResolution:
     @pytest.mark.asyncio
