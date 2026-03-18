@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.database import BackboneDB
@@ -130,6 +133,69 @@ class TestDeliveryTracking:
 
         results = await db.query_deliveries()
         assert len(results) == 0
+
+    async def test_claim_delivery_attempt_success(self, db):
+        claim_id = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        assert isinstance(claim_id, int)
+        rows = await db.query_deliveries(issue_number=42, session_name="ike")
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "attempting"
+
+    async def test_claim_delivery_attempt_conflict(self, db):
+        first = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+        second = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        assert isinstance(first, int)
+        assert second is None
+
+    async def test_finalize_delivery_attempt(self, db):
+        claim_id = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        await db.finalize_delivery_attempt(claim_id, "delivered")
+
+        rows = await db.query_deliveries(issue_number=42, session_name="ike")
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "delivered"
+
+    async def test_reclaim_stale_attempts(self, db):
+        claim_id = await db.claim_delivery_attempt(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            flow_name="issue-dispatcher",
+        )
+
+        async with db._engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE deliveries SET created_at = :created_at WHERE id = :id"),
+                {"created_at": "2000-01-01T00:00:00.000000Z", "id": claim_id},
+            )
+
+        reclaimed = await db.reclaim_stale_attempts(max_age_minutes=5)
+
+        assert reclaimed == 1
+        assert await db.query_deliveries(issue_number=42, session_name="ike") == []
 
 
 class TestDedupLog:
@@ -269,7 +335,8 @@ class TestMessageQueue:
         assert messages[0]["message"] == "Test message"
         assert messages[0]["issue_number"] == 42
         assert messages[0]["delivery_kind"] == "comment"
-        assert messages[0]["status"] == "pending"
+        assert messages[0]["status"] == "in_progress"
+        assert messages[0]["leased_at"] is not None
 
     async def test_dequeue_empty(self, db):
         messages = await db.dequeue_messages("nobody")
@@ -277,6 +344,7 @@ class TestMessageQueue:
 
     async def test_mark_delivered(self, db):
         row_id = await db.enqueue_message("ike", "msg")
+        await db.dequeue_messages("ike")
         await db.mark_message_delivered(row_id)
 
         messages = await db.dequeue_messages("ike")
@@ -317,6 +385,7 @@ class TestMessageQueue:
 
     async def test_mark_delivered_sets_timestamp(self, db):
         row_id = await db.enqueue_message("ike", "msg")
+        await db.dequeue_messages("ike")
         await db.mark_message_delivered(row_id)
 
         # Use BackboneDB method to verify
@@ -333,6 +402,187 @@ class TestMessageQueue:
         feynman_msgs = await db.dequeue_messages("feynman")
         assert len(ike_msgs) == 2
         assert len(feynman_msgs) == 1
+
+    async def test_enqueue_dedup_issue_constraint(self, db):
+        first = await db.enqueue_message("ike", "first", issue_number=42, target_entity="ike")
+        second = await db.enqueue_message("ike", "second", issue_number=42, target_entity="ike")
+
+        assert first > 0
+        assert second == -1
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 1
+        assert messages[0]["message"] == "first"
+
+    async def test_enqueue_dedup_different_issues(self, db):
+        first = await db.enqueue_message("ike", "first", issue_number=42, target_entity="ike")
+        second = await db.enqueue_message("ike", "second", issue_number=43, target_entity="ike")
+
+        assert first > 0
+        assert second > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 2
+        assert {message["issue_number"] for message in messages} == {42, 43}
+
+    async def test_enqueue_dedup_comment_constraint(self, db):
+        first = await db.enqueue_message(
+            "ike",
+            "same comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+        duplicate = await db.enqueue_message(
+            "ike",
+            "same comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+        different = await db.enqueue_message(
+            "ike",
+            "different comment",
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+
+        assert first > 0
+        assert duplicate == -1
+        assert different > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 2
+        assert {message["message"] for message in messages} == {"same comment", "different comment"}
+
+    async def test_enqueue_dedup_dm_constraint(self, db):
+        first = await db.enqueue_message(
+            "ike",
+            "same direct message",
+            delivery_kind="direct_message",
+        )
+        duplicate = await db.enqueue_message(
+            "ike",
+            "same direct message",
+            delivery_kind="direct_message",
+        )
+        different = await db.enqueue_message(
+            "ike",
+            "different direct message",
+            delivery_kind="direct_message",
+        )
+
+        assert first > 0
+        assert duplicate == -1
+        assert different > 0
+
+        messages = await db.dequeue_messages("ike")
+        assert len(messages) == 2
+        assert {message["message"] for message in messages} == {
+            "different direct message",
+            "same direct message",
+        }
+
+    async def test_enqueue_content_hash_populated(self, db):
+        message = "hash me"
+        row_id = await db.enqueue_message(
+            "ike",
+            message,
+            issue_number=42,
+            target_entity="ike",
+            delivery_kind="comment",
+        )
+
+        row = await db.get_message_by_id(row_id)
+
+        assert row["content_hash"] == hashlib.sha256(message.encode()).hexdigest()
+
+    async def test_get_sessions_with_pending(self, db):
+        await db.enqueue_message("ike", "pending one", issue_number=42, target_entity="ike")
+        await db.enqueue_message("jarvis", "pending two", delivery_kind="direct_message")
+
+        sessions = await db.get_sessions_with_pending()
+
+        assert set(sessions) == {"ike", "jarvis"}
+
+    async def test_dequeue_marks_in_progress(self, db):
+        row_id = await db.enqueue_message("ike", "claim me", issue_number=42, target_entity="ike")
+
+        messages = await db.dequeue_messages("ike")
+
+        assert len(messages) == 1
+        assert messages[0]["id"] == row_id
+        assert messages[0]["status"] == "in_progress"
+        assert messages[0]["leased_at"] is not None
+        row = await db.get_message_by_id(row_id)
+        assert row["status"] == "in_progress"
+        assert row["leased_at"] is not None
+
+    async def test_dequeue_skips_in_progress(self, db):
+        await db.enqueue_message("ike", "claim me once", issue_number=42, target_entity="ike")
+
+        first = await db.dequeue_messages("ike")
+        second = await db.dequeue_messages("ike")
+
+        assert len(first) == 1
+        assert second == []
+
+    async def test_release_lease(self, db):
+        row_id = await db.enqueue_message("ike", "lease me", issue_number=42, target_entity="ike")
+        await db.dequeue_messages("ike")
+
+        await db.release_lease(row_id)
+
+        row = await db.get_message_by_id(row_id)
+        assert row["status"] == "pending"
+        assert row["leased_at"] is None
+
+    async def test_expire_stale_leases(self, db):
+        row_id = await db.enqueue_message(
+            "ike", "stale lease", issue_number=42, target_entity="ike"
+        )
+        await db.dequeue_messages("ike")
+
+        async with db._engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE message_queue SET leased_at = :leased_at WHERE id = :id"),
+                {"leased_at": "2000-01-01T00:00:00.000000Z", "id": row_id},
+            )
+
+        expired = await db.expire_stale_leases(max_age_minutes=5)
+
+        assert expired == 1
+        row = await db.get_message_by_id(row_id)
+        assert row["status"] == "pending"
+        assert row["leased_at"] is None
+
+    async def test_purge_covers_in_progress(self, db):
+        first = await db.enqueue_message("ike", "claim me", issue_number=775, target_entity="ike")
+        second = await db.enqueue_message(
+            "feynman",
+            "leave pending",
+            issue_number=775,
+            target_entity="feynman",
+        )
+        await db.dequeue_messages("ike")
+
+        purged = await db.purge_pending_for_issue(775)
+
+        assert purged == 2
+        assert (await db.get_message_by_id(first))["status"] == "delivered"
+        assert (await db.get_message_by_id(second))["status"] == "delivered"
+
+    async def test_mark_delivered_requires_in_progress(self, db):
+        row_id = await db.enqueue_message(
+            "ike", "pending row", issue_number=42, target_entity="ike"
+        )
+
+        await db.mark_message_delivered(row_id)
+
+        row = await db.get_message_by_id(row_id)
+        assert row["status"] == "pending"
+        assert row["delivered_at"] is None
 
 
 class TestDedupHotCache:

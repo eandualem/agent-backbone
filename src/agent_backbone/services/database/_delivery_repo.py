@@ -44,6 +44,69 @@ async def record_delivery(
     return result.scalar_one()
 
 
+async def claim_delivery_attempt(
+    conn: AsyncConnection,
+    issue_number: int,
+    target_entity: str,
+    session_name: str,
+    flow_name: str,
+) -> int | None:
+    """Reserve an issue delivery slot before sending to avoid duplicate sends."""
+    result = await conn.execute(
+        text(
+            """INSERT INTO deliveries
+               (issue_number, target_entity, session_name, outcome, flow_name, created_at)
+               VALUES (:issue_number, :target_entity, :session_name, 'attempting', :flow_name, :now)
+               ON CONFLICT (issue_number, session_name)
+               WHERE outcome IN ('attempting','delivered','retried')
+               DO NOTHING
+               RETURNING id"""
+        ),
+        {
+            "issue_number": issue_number,
+            "target_entity": target_entity,
+            "session_name": session_name,
+            "flow_name": flow_name,
+            "now": _now_iso(),
+        },
+    )
+    row = result.fetchone()
+    return row._mapping["id"] if row else None
+
+
+async def finalize_delivery_attempt(
+    conn: AsyncConnection,
+    delivery_id: int,
+    outcome: str,
+) -> None:
+    """Finalize a claimed delivery attempt."""
+    await conn.execute(
+        text(
+            """UPDATE deliveries SET outcome = :outcome
+               WHERE id = :id AND outcome = 'attempting'"""
+        ),
+        {"id": delivery_id, "outcome": outcome},
+    )
+
+
+async def reclaim_stale_attempts(
+    conn: AsyncConnection,
+    max_age_minutes: int = 5,
+) -> int:
+    """Delete stale attempting rows so new delivery claims can proceed."""
+    cutoff = (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
+    result = await conn.execute(
+        text(
+            """DELETE FROM deliveries
+               WHERE outcome = 'attempting' AND created_at < :cutoff"""
+        ),
+        {"cutoff": cutoff},
+    )
+    return result.rowcount
+
+
 async def query_deliveries(
     conn: AsyncConnection,
     issue_number: int | None = None,

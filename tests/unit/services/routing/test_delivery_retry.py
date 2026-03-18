@@ -158,6 +158,72 @@ class TestRetryDeliveryAckCheck:
 
 class TestDeliveryRetryQueueDrain:
     @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    async def test_drain_includes_queued_sessions(self, mock_deliver, db, config):
+        await db.enqueue_message(
+            session_name="jarvis",
+            message="Queued for jarvis",
+            delivery_kind="direct_message",
+            flow_name="api-messages",
+        )
+        mock_deliver.return_value = "delivered"
+
+        from agent_backbone.services.routing._flows import drain_message_queue
+
+        summary = await drain_message_queue(
+            config,
+            db,
+            AsyncMock(),
+            active_sessions=set(),
+        )
+
+        assert summary["queue_delivered"] == 1
+        assert mock_deliver.await_args.args[0] == "jarvis"
+        row = await db.get_message_by_id(1)
+        assert row["status"] == "delivered"
+
+    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    async def test_drain_releases_lease_on_failure(self, mock_deliver, db, config):
+        await db.enqueue_message(
+            session_name="ike",
+            message="Direct payload",
+            delivery_kind="direct_message",
+            flow_name="api-messages",
+        )
+        db.release_lease = AsyncMock(wraps=db.release_lease)
+        mock_deliver.return_value = "offline"
+
+        from agent_backbone.services.routing._flows import drain_message_queue
+
+        summary = await drain_message_queue(
+            config,
+            db,
+            AsyncMock(),
+            active_sessions={"ike"},
+        )
+
+        assert summary == {}
+        db.release_lease.assert_awaited_once_with(1)
+        row = await db.get_message_by_id(1)
+        assert row["status"] == "pending"
+        assert row["leased_at"] is None
+
+    async def test_drain_calls_expire_stale_leases(self, db, config):
+        db.expire_stale_leases = AsyncMock(return_value=0)
+        db.expire_stale_pending = AsyncMock(return_value=0)
+
+        from agent_backbone.services.routing._flows import drain_message_queue
+
+        await drain_message_queue(
+            config,
+            db,
+            AsyncMock(),
+            active_sessions=set(),
+        )
+
+        db.expire_stale_leases.assert_awaited_once_with(max_age_minutes=5)
+        db.expire_stale_pending.assert_awaited_once_with(max_age_minutes=30)
+
+    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
     @patch(
         "agent_backbone.services.routing._flows.list_open_queue_for_target",
         new_callable=AsyncMock,

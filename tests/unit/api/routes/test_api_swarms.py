@@ -325,6 +325,10 @@ class TestAssignmentDiscipline:
         assert assignment["status"] == "active"
         assert assignment["file_paths"] == ["tests/unit/api/routes/test_api_swarms.py"]
         assert mock_svc.safe_deliver.await_count == 1
+        first_call = mock_svc.safe_deliver.await_args_list[0]
+        assert first_call.kwargs["db"] is api_app.state.db
+        assert first_call.kwargs["delivery_kind"] == "direct_message"
+        assert first_call.kwargs["flow_name"] == "swarm-delivery"
 
         assert detail_resp.status_code == 200
         assert len(detail_resp.json()["assignments"]) == 1
@@ -507,6 +511,10 @@ class TestSwarmMessaging:
         assert body["ok"] is True
         assert body["message_id"] is not None
         assert mock_svc.safe_deliver.await_count == 2
+        first_call = mock_svc.safe_deliver.await_args_list[0]
+        assert first_call.kwargs["db"] is api_app.state.db
+        assert first_call.kwargs["delivery_kind"] == "direct_message"
+        assert first_call.kwargs["flow_name"] == "swarm-delivery"
 
         assert messages_resp.status_code == 200
         messages = messages_resp.json()
@@ -542,6 +550,9 @@ class TestSwarmMessaging:
         first_call = mock_svc.safe_deliver.await_args_list[0]
         assert first_call.args[0] == "tester-worker"
         assert "Target: role:tester" in first_call.args[1]
+        assert first_call.kwargs["db"] is api_app.state.db
+        assert first_call.kwargs["delivery_kind"] == "direct_message"
+        assert first_call.kwargs["flow_name"] == "swarm-delivery"
 
     async def test_message_requires_exactly_one_target(self, api_client, auth_headers, api_app):
         swarm_id = await _create_swarm(api_client, auth_headers)

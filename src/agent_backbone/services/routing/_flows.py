@@ -32,6 +32,14 @@ async def drain_message_queue(
     """Drain queued messages for active sessions, oldest first."""
     summary: dict[str, int] = {}
 
+    try:
+        stale_leases = await db.expire_stale_leases(max_age_minutes=5)
+        if stale_leases:
+            log.info("Recovered %d stale leased messages", stale_leases)
+            summary["leases_recovered"] = stale_leases
+    except Exception:
+        log.exception("Failed to recover stale leases (non-fatal)")
+
     # Auto-expire stale pending messages to prevent infinite retry loops
     try:
         expired = await db.expire_stale_pending(max_age_minutes=30)
@@ -41,7 +49,10 @@ async def drain_message_queue(
     except Exception:
         log.exception("Failed to expire stale messages (non-fatal)")
 
-    for session_name in active_sessions:
+    queued_sessions = set(await db.get_sessions_with_pending())
+    all_sessions = set(active_sessions) | queued_sessions
+
+    for session_name in all_sessions:
         queued = await db.dequeue_messages(session_name, limit=5)
         if not isinstance(queued, list) or not queued:
             continue
@@ -75,6 +86,7 @@ async def drain_message_queue(
                 await db.mark_message_delivered(msg_record["id"])
                 summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
             else:
+                await db.release_lease(msg_record["id"])
                 break  # Stop draining this session if delivery fails
 
     return summary
@@ -173,6 +185,14 @@ async def delivery_retry() -> dict:
     db = get_db()
     gh = get_gh()
     summary: dict[str, int] = {}
+
+    try:
+        reclaimed = await db.reclaim_stale_attempts(max_age_minutes=5)
+        if reclaimed:
+            log.info("Reclaimed %d stale delivery attempts", reclaimed)
+            summary["attempts_reclaimed"] = reclaimed
+    except Exception:
+        log.exception("Failed to reclaim stale attempts (non-fatal)")
 
     failed = await db.get_failed_deliveries(limit=20)
 

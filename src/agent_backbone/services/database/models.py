@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_backbone.services.database.base import Base
@@ -27,6 +27,14 @@ class DeliveryORM(Base):
         Index("idx_deliveries_entity", "target_entity"),
         Index("idx_deliveries_outcome", "outcome"),
         Index("idx_deliveries_created", "created_at"),
+        Index(
+            "uq_deliveries_active_owner",
+            "issue_number",
+            "session_name",
+            unique=True,
+            postgresql_where=text("outcome IN ('attempting','delivered','retried')"),
+            sqlite_where=text("outcome IN ('attempting','delivered','retried')"),
+        ),
     )
 
 
@@ -108,10 +116,59 @@ class MessageQueueORM(Base):
     enqueued_at: Mapped[str] = mapped_column(Text, nullable=False)
     delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    leased_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index("idx_mq_status", "status"),
         Index("idx_mq_session", "session_name"),
+        Index(
+            "idx_mq_leased",
+            "leased_at",
+            postgresql_where=text("status = 'in_progress'"),
+            sqlite_where=text("status = 'in_progress'"),
+        ),
+        Index(
+            "uq_mq_issue_dedup",
+            "session_name",
+            "issue_number",
+            unique=True,
+            postgresql_where=text(
+                "delivery_kind = 'issue' AND status IN ('pending','in_progress') "
+                "AND issue_number IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "delivery_kind = 'issue' AND status IN ('pending','in_progress') "
+                "AND issue_number IS NOT NULL"
+            ),
+        ),
+        Index(
+            "uq_mq_comment_dedup",
+            "session_name",
+            "issue_number",
+            "content_hash",
+            unique=True,
+            postgresql_where=text(
+                "delivery_kind = 'comment' AND status IN ('pending','in_progress') "
+                "AND issue_number IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "delivery_kind = 'comment' AND status IN ('pending','in_progress') "
+                "AND issue_number IS NOT NULL"
+            ),
+        ),
+        Index(
+            "uq_mq_dm_dedup",
+            "session_name",
+            "content_hash",
+            unique=True,
+            postgresql_where=text(
+                "delivery_kind = 'direct_message' AND status IN ('pending','in_progress')"
+            ),
+            sqlite_where=text(
+                "delivery_kind = 'direct_message' AND status IN ('pending','in_progress')"
+            ),
+        ),
     )
 
 
