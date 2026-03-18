@@ -619,12 +619,13 @@ class TestStartBackbone:
         assert result is True
         mock_wait.assert_awaited_once_with(
             "http://127.0.0.1:4200/api/health",
+            retries=300,
             interval=0.1,
         )
 
     @pytest.mark.asyncio
-    async def test_continues_when_health_fails(self, bb_config):
-        """start_backbone continues even when health check fails (logs warning)."""
+    async def test_fails_when_health_fails(self, bb_config):
+        """start_backbone aborts and stops Prefect when health checks never pass."""
         with patch(
             "agent_backbone.services.infrastructure._backbone.start_prefect",
             new_callable=AsyncMock,
@@ -636,26 +637,32 @@ class TestStartBackbone:
                 return_value=False,
             ):
                 with patch(
-                    "agent_backbone.services.infrastructure._backbone.start_gateway",
+                    "agent_backbone.services.infrastructure._backbone.stop_prefect",
                     new_callable=AsyncMock,
                     return_value=True,
-                ):
+                ) as mock_stop_prefect:
                     with patch(
-                        "agent_backbone.services.infrastructure._backbone.start_worker",
+                        "agent_backbone.services.infrastructure._backbone.start_gateway",
                         new_callable=AsyncMock,
-                        return_value=True,
-                    ):
+                    ) as mock_start_gateway:
                         with patch(
-                            "agent_backbone.services.infrastructure._backbone.start_telegram",
+                            "agent_backbone.services.infrastructure._backbone.start_worker",
                             new_callable=AsyncMock,
-                            return_value=True,
-                        ):
-                            from agent_backbone.services.infrastructure._backbone import (
-                                start_backbone,
-                            )
+                        ) as mock_start_worker:
+                            with patch(
+                                "agent_backbone.services.infrastructure._backbone.start_telegram",
+                                new_callable=AsyncMock,
+                            ) as mock_start_telegram:
+                                from agent_backbone.services.infrastructure._backbone import (
+                                    start_backbone,
+                                )
 
-                            result = await start_backbone(bb_config)
-        assert result is True
+                                result = await start_backbone(bb_config)
+        assert result is False
+        mock_stop_prefect.assert_awaited_once_with(bb_config)
+        mock_start_gateway.assert_not_awaited()
+        mock_start_worker.assert_not_awaited()
+        mock_start_telegram.assert_not_awaited()
 
 
 class TestStopBackbone:

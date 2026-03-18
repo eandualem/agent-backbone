@@ -15,10 +15,14 @@ from agent_backbone.api.deps import (
     get_tmux_service,
 )
 from agent_backbone.api.models import EnrichedAgent, ServiceHealth, SystemDigest
-from agent_backbone.api.routes.agents import (
-    _build_enriched_agent,
-    _listable_registry_sessions,
-    _reserved_agent_sessions,
+from agent_backbone.api.session_updates import (
+    build_enriched_agent as _build_enriched_agent,
+)
+from agent_backbone.api.session_updates import (
+    listable_registry_sessions as _listable_registry_sessions,
+)
+from agent_backbone.api.session_updates import (
+    reserved_agent_sessions as _reserved_agent_sessions,
 )
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService

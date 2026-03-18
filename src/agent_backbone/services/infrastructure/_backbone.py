@@ -34,11 +34,17 @@ PREFECT_PORT = 4200
 PREFECT_API_URL = f"http://127.0.0.1:{PREFECT_PORT}/api"
 PREFECT_HEALTH_PROBE_RETRY_INTERVAL_SECONDS = 0.4
 PREFECT_STARTUP_PROBE_RETRY_INTERVAL_SECONDS = 0.1
+PREFECT_STARTUP_PROBE_RETRIES = 300
 PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS = 2.0
 
 
 def _prefect_env() -> dict[str, str]:
-    """Environment for Prefect subprocesses."""
+    """Environment for Prefect subprocesses.
+
+    Prefect manages its own internal SQLite database for flow/deployment metadata.
+    Do NOT point PREFECT_API_DATABASE_CONNECTION_URL at the backbone PostgreSQL —
+    Prefect's Alembic migrations are incompatible with the backbone schema.
+    """
     return {**os.environ, "PREFECT_API_URL": PREFECT_API_URL}
 
 
@@ -68,7 +74,13 @@ async def run_prefect_server_supervisor() -> None:
     """Keep the Prefect server running inside a tmux session."""
     while True:
         log.info("Starting Prefect server")
-        exit_code = await _run_prefect_process("uv", "run", "prefect", "server", "start")
+        exit_code = await _run_prefect_process(
+            "uv",
+            "run",
+            "prefect",
+            "server",
+            "start",
+        )
         log.warning(
             "Prefect server exited with code %s; restarting in %.1fs",
             exit_code,
@@ -78,32 +90,11 @@ async def run_prefect_server_supervisor() -> None:
 
 
 async def run_prefect_worker_supervisor(config: BackboneConfig) -> None:
-    """Keep the Prefect worker running and re-bootstrap deployments after outages."""
+    """Keep the Prefect worker running once the API is reachable."""
     work_pool_name = config.scheduling.work_pool_name
 
     while True:
         await _wait_for_prefect_api()
-
-        pool_exit = await _run_prefect_process(
-            "uv",
-            "run",
-            "prefect",
-            "work-pool",
-            "create",
-            work_pool_name,
-            "--type",
-            "process",
-        )
-        if pool_exit != 0:
-            log.warning(
-                "Prefect work-pool create exited with code %s for pool '%s'",
-                pool_exit,
-                work_pool_name,
-            )
-
-        deploy_exit = await _run_prefect_process("uv", "run", "prefect", "deploy", "--all")
-        if deploy_exit != 0:
-            log.warning("Prefect deploy --all exited with code %s", deploy_exit)
 
         log.info("Starting Prefect worker (pool: %s)", work_pool_name)
         worker_exit = await _run_prefect_process(
@@ -116,8 +107,10 @@ async def run_prefect_worker_supervisor(config: BackboneConfig) -> None:
             work_pool_name,
         )
         log.warning(
-            "Prefect worker exited with code %s; restarting in %.1fs",
+            "Prefect worker exited with code %s for pool '%s'; ensure deployments are applied "
+            "via `make setup-pool` / `make deploy` before restarting. Retrying in %.1fs",
             worker_exit,
+            work_pool_name,
             PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS,
         )
         await asyncio.sleep(PREFECT_SUPERVISOR_RESTART_DELAY_SECONDS)
@@ -189,8 +182,10 @@ async def start_prefect(config: BackboneConfig) -> bool:
 
 
 async def stop_prefect(config: BackboneConfig) -> bool:
-    """Stop Prefect server."""
-    await stop_session("prefect")
+    """Stop Prefect server with clean shutdown for SQLite WAL checkpoint."""
+    from agent_backbone.services.terminal import graceful_close
+
+    await graceful_close("prefect", timeout=10.0)
     await stop_by_pid("prefect")
     await kill_port_process(PREFECT_PORT)
     remove_pid("prefect")
@@ -357,10 +352,19 @@ async def start_backbone(config: BackboneConfig) -> bool:
     log.info("Waiting for Prefect server health...")
     healthy = await wait_for_health(
         f"http://127.0.0.1:{PREFECT_PORT}/api/health",
+        retries=PREFECT_STARTUP_PROBE_RETRIES,
         interval=PREFECT_STARTUP_PROBE_RETRY_INTERVAL_SECONDS,
     )
     if not healthy:
-        log.warning("Prefect server health check failed, continuing anyway")
+        timeout_seconds = (
+            PREFECT_STARTUP_PROBE_RETRIES * PREFECT_STARTUP_PROBE_RETRY_INTERVAL_SECONDS
+        )
+        log.error(
+            "Prefect server failed health checks after %.1fs; aborting backbone startup",
+            timeout_seconds,
+        )
+        await stop_prefect(config)
+        return False
 
     gw_ok = await start_gateway(config)
     wk_ok = await start_worker(config)

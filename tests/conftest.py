@@ -26,10 +26,12 @@ _TEST_GITHUB_APP_KEY = Path(__file__).parent / "fixtures" / "github-app-test-key
 @pytest.fixture(autouse=True)
 def reset_flow_services():
     """Reset the flow service locator between tests."""
+    from agent_backbone.api.session_updates import reset_sessions_update_state
     from agent_backbone.services._locator import reset
 
     yield
     reset()
+    reset_sessions_update_state()
 
 
 @pytest.fixture

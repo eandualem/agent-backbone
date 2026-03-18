@@ -22,11 +22,7 @@ from agent_backbone.api.models import (
     EnrichedAgent,
     ServiceHealth,
 )
-from agent_backbone.api.routes.agents import (
-    _build_enriched_agent,
-    _listable_registry_sessions,
-    _reserved_agent_sessions,
-)
+from agent_backbone.api.session_updates import build_session_snapshot
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
@@ -59,67 +55,7 @@ async def _fetch_agents(
     if now - _agents_cache_ts < _AGENTS_CACHE_TTL and _agents_cache:
         return _agents_cache
 
-    rich_sessions = await tmux_svc.list_sessions_rich()
-    tmux_lookup = {s["name"]: s for s in rich_sessions}
-    active_sessions = set(tmux_lookup.keys())
-
-    coros: list = []
-
-    # Registry-backed entities, including concrete role-instance sessions.
-    registry_sessions = _listable_registry_sessions(config)
-    for entity, session in registry_sessions.items():
-        reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(
-            entity
-        )
-        if reg_entry and reg_entry.entity_type == "service":
-            continue
-        coros.append(
-            _build_enriched_agent(
-                session,
-                entity,
-                config,
-                active_sessions,
-                state_svc,
-                tmux_lookup.get(session),
-                agent_type="named_entity",
-            )
-        )
-
-    # Discover coding agents from active tmux sessions
-    named_sessions = _reserved_agent_sessions(config)
-    service_sessions = config.entities.service_sessions
-    seen_coding: set[str] = set()
-    for session in active_sessions:
-        if session not in named_sessions and session not in service_sessions:
-            coros.append(
-                _build_enriched_agent(
-                    session,
-                    session,
-                    config,
-                    active_sessions,
-                    state_svc,
-                    tmux_lookup.get(session),
-                    agent_type="coding_agent",
-                )
-            )
-            seen_coding.add(session)
-
-    # Include offline repos from registry
-    for repo in config.registry.repos:
-        if repo.name not in seen_coding and repo.name not in named_sessions:
-            coros.append(
-                _build_enriched_agent(
-                    repo.name,
-                    repo.name,
-                    config,
-                    active_sessions,
-                    state_svc,
-                    agent_type="coding_agent",
-                )
-            )
-
-    agents: list[EnrichedAgent] = list(await asyncio.gather(*coros))
-
+    agents = await build_session_snapshot(config, state_svc, tmux_svc)
     _agents_cache = agents
     _agents_cache_ts = now
     return agents

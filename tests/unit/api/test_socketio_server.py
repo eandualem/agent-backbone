@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.api.socketio_server import (
     INPUT_RATE_LIMIT,
     MAX_COLS,
@@ -17,7 +18,9 @@ from agent_backbone.api.socketio_server import (
     MAX_ROWS,
     MIN_COLS,
     MIN_ROWS,
+    SessionsNamespace,
     TerminalNamespace,
+    create_sio,
 )
 from agent_backbone.services.terminal._pty import (
     PtyManager,
@@ -34,6 +37,14 @@ def _make_namespace() -> TerminalNamespace:
     ns.emit = AsyncMock()
     ns.enter_room = AsyncMock()
     ns.leave_room = AsyncMock()
+    return ns
+
+
+def _make_sessions_namespace() -> SessionsNamespace:
+    """Create a SessionsNamespace with a mocked server."""
+    ns = SessionsNamespace(SESSIONS_NAMESPACE)
+    ns.server = MagicMock()
+    ns.emit = AsyncMock()
     return ns
 
 
@@ -144,6 +155,28 @@ class TestOnConnect:
         with patch.dict(os.environ, {"BACKBONE_API_KEY": "secret-key"}):
             result = await ns.on_connect("sid1", {}, auth={})
             assert result is False
+
+
+class TestSessionsNamespace:
+    async def test_connect_valid_key(self):
+        """Session subscriptions require the same API key auth as terminals."""
+        ns = _make_sessions_namespace()
+        with patch.dict(os.environ, {"BACKBONE_API_KEY": "secret-key"}):
+            result = await ns.on_connect("sid1", {}, auth={"api_key": "secret-key"})
+            assert result is True
+
+    async def test_connect_invalid_key(self):
+        """Invalid auth is rejected on the sessions namespace."""
+        ns = _make_sessions_namespace()
+        with patch.dict(os.environ, {"BACKBONE_API_KEY": "secret-key"}):
+            result = await ns.on_connect("sid1", {}, auth={"api_key": "wrong-key"})
+            assert result is False
+
+    def test_create_sio_registers_sessions_namespace(self):
+        """The shared Socket.IO server exposes both sessions and terminal namespaces."""
+        sio = create_sio(["*"])
+        assert SESSIONS_NAMESPACE in sio.namespace_handlers
+        assert "/terminal" in sio.namespace_handlers
 
 
 class TestOnJoin:

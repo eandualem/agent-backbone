@@ -7,10 +7,9 @@ import json
 import logging
 import shutil
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from agent_backbone.api.deps import get_config, get_db, get_state_service, get_tmux_service
 from agent_backbone.api.models import (
@@ -25,13 +24,17 @@ from agent_backbone.api.models import (
     RuntimeInfo,
     StateUpdateRequest,
 )
+from agent_backbone.api.session_updates import (
+    build_session_snapshot,
+    emit_sessions_update,
+    invalidate_session_snapshot_caches,
+)
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.terminal import (
     RUNTIME_ENV_KEY,
     TmuxService,
-    query_environment_var,
     resolve_agent_dir,
 )
 
@@ -81,111 +84,11 @@ for _rt_id, _rt_entry in _RUNTIMES.items():
     if _rt_entry["command"] and not _rt_entry["resolved_path"]:
         log.warning("Runtime '%s': binary '%s' not found", _rt_id, _rt_entry["command"])
 
-
-async def _build_enriched_agent(
-    session: str,
-    entity: str,
-    config: BackboneConfig,
-    active_sessions: set[str],
-    state_svc: StateService,
-    tmux_info: dict | None = None,
-    agent_type: str = "coding_agent",
-) -> EnrichedAgent:
-    """Build an EnrichedAgent from session name and entity."""
-    online = session in active_sessions
-    snapshot = await state_svc.get_state(session)
-    reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(entity)
-    display_name = reg_entry.figure.split()[-1] if reg_entry else session
-    role = reg_entry.role if reg_entry else "Coding Agent"
-    figure = reg_entry.figure if reg_entry else ""
-    groups = list(reg_entry.groups) if reg_entry else []
-    home = reg_entry.home if reg_entry else ""
-    if not home and agent_type == "coding_agent":
-        home = config.registry.repo_path_by_name.get(session, "")
-
-    # Resolve org: named entities from registry, coding agents from RepoInfo
-    org = ""
-    if reg_entry and reg_entry.organization:
-        org = reg_entry.organization
-    elif agent_type == "coding_agent":
-        for repo in config.registry.repos:
-            if repo.name == session:
-                org = repo.org
-                break
-
-    tmux_created = None
-    tmux_attached = False
-    tmux_windows = 0
-    last_activity: float | None = None
-    if tmux_info:
-        created_ts = tmux_info.get("created", 0)
-        if created_ts:
-            tmux_created = datetime.fromtimestamp(created_ts, tz=UTC).isoformat()
-        tmux_attached = tmux_info.get("attached", False)
-        tmux_windows = tmux_info.get("windows", 0)
-        activity_ts = tmux_info.get("activity", 0)
-        if activity_ts:
-            last_activity = float(activity_ts)
-
-    # State inference: reconcile online (tmux) with state (file)
-    state_value = snapshot.state.value
-    if not online:
-        # No tmux session → offline, regardless of stale state file
-        state_value = "offline"
-    elif state_value == "unknown":
-        # Tmux session exists but no state file → default to idle
-        state_value = "idle"
-
-    entity_type = reg_entry.entity_type if reg_entry else "agent"
-
-    # Resolve runtime for online sessions via tmux environment variable
-    runtime: str | None = None
-    if online:
-        try:
-            runtime = await query_environment_var(session, RUNTIME_ENV_KEY) or None
-        except Exception:
-            pass
-
-    return EnrichedAgent(
-        session=session,
-        entity=entity,
-        display_name=display_name,
-        role=role,
-        figure=figure,
-        org=org,
-        groups=groups,
-        home=home,
-        type=agent_type,
-        entity_type=entity_type,
-        state=state_value,
-        current_issue=snapshot.current_issue,
-        online=online,
-        plan_file=snapshot.plan_file,
-        plan_title=snapshot.plan_title,
-        tmux_created=tmux_created,
-        runtime=runtime,
-        tmux_attached=tmux_attached,
-        tmux_windows=tmux_windows,
-        last_activity=last_activity,
-        state_since=snapshot.timestamp if snapshot.timestamp else None,
-    )
-
-
 # TTL cache for /api/agents — avoids subprocess storms from dashboard polling
 _agents_cache: list[EnrichedAgent] = []
 _agents_cache_ts: float = 0
 _AGENTS_CACHE_TTL = 5.0
 _agents_cache_lock = asyncio.Lock()
-
-
-def _listable_registry_sessions(config: BackboneConfig) -> dict[str, str]:
-    """Concrete registry-backed sessions that should appear as named agents."""
-    return config.registry.concrete_sessions_map
-
-
-def _reserved_agent_sessions(config: BackboneConfig) -> set[str]:
-    """Sessions reserved by registry-backed agents."""
-    return set(_listable_registry_sessions(config).values())
 
 
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
@@ -206,68 +109,7 @@ async def list_agents(
         if now - _agents_cache_ts < _AGENTS_CACHE_TTL and _agents_cache:
             return ListEnvelope(items=_agents_cache, total=len(_agents_cache))
 
-        # Fetch rich session info once — single subprocess call
-        rich_sessions = await tmux_svc.list_sessions_rich()
-        tmux_lookup = {s["name"]: s for s in rich_sessions}
-        active_sessions = set(tmux_lookup.keys())
-
-        # Collect all coroutines, then execute concurrently with asyncio.gather
-        coros: list = []
-
-        # Registry-backed entities, including concrete role-instance sessions.
-        registry_sessions = _listable_registry_sessions(config)
-        for entity, session in registry_sessions.items():
-            reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(
-                entity
-            )
-            if reg_entry and reg_entry.entity_type == "service":
-                continue
-            coros.append(
-                _build_enriched_agent(
-                    session,
-                    entity,
-                    config,
-                    active_sessions,
-                    state_svc,
-                    tmux_lookup.get(session),
-                    agent_type="named_entity",
-                )
-            )
-
-        # Discover coding agents from tmux sessions (exclude services)
-        named_sessions = _reserved_agent_sessions(config)
-        service_sessions = config.entities.service_sessions
-        seen_coding: set[str] = set()
-        for session in active_sessions:
-            if session not in named_sessions and session not in service_sessions:
-                coros.append(
-                    _build_enriched_agent(
-                        session,
-                        session,
-                        config,
-                        active_sessions,
-                        state_svc,
-                        tmux_lookup.get(session),
-                        agent_type="coding_agent",
-                    )
-                )
-                seen_coding.add(session)
-
-        # Include all known repos from filesystem scan (offline ones too)
-        for repo in config.registry.repos:
-            if repo.name not in seen_coding and repo.name not in named_sessions:
-                coros.append(
-                    _build_enriched_agent(
-                        repo.name,
-                        repo.name,
-                        config,
-                        active_sessions,
-                        state_svc,
-                        agent_type="coding_agent",
-                    )
-                )
-
-        agents: list[EnrichedAgent] = list(await asyncio.gather(*coros))
+        agents = await build_session_snapshot(config, state_svc, tmux_svc)
 
         _agents_cache = agents
         _agents_cache_ts = now
@@ -308,6 +150,7 @@ async def list_runtimes():
 
 @router.post("/agents/{session}/start", response_model=AgentStartResponse)
 async def start_agent(
+    request: Request,
     session: str,
     body: AgentStartRequest | None = None,
     config: BackboneConfig = Depends(get_config),
@@ -362,6 +205,14 @@ async def start_agent(
         command=command,
         environment={RUNTIME_ENV_KEY: req.runtime},
     )
+    if ok:
+        invalidate_session_snapshot_caches()
+        await emit_sessions_update(
+            getattr(request.app.state, "sio", None),
+            config,
+            getattr(request.app.state, "state_service", None),
+            tmux_svc,
+        )
     return AgentStartResponse(
         ok=ok,
         session=session,
@@ -373,11 +224,21 @@ async def start_agent(
 
 @router.post("/agents/{session}/stop", response_model=AgentStopResponse)
 async def stop_agent(
+    request: Request,
     session: str,
+    config: BackboneConfig = Depends(get_config),
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Stop an agent tmux session."""
     ok = await tmux_svc.stop_session(session)
+    if ok:
+        invalidate_session_snapshot_caches()
+        await emit_sessions_update(
+            getattr(request.app.state, "sio", None),
+            config,
+            getattr(request.app.state, "state_service", None),
+            tmux_svc,
+        )
     return AgentStopResponse(ok=ok, session=session)
 
 
@@ -407,12 +268,13 @@ async def get_terminal_output(
 
 @router.post("/agents/{session}/state")
 async def post_agent_state(
+    request: Request,
     session: str,
     body: StateUpdateRequest,
+    config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
 ):
     """Update agent state in the database."""
-    global _agents_cache_ts  # noqa: PLW0603
     await db.set_agent_state(
         session,
         body.state,
@@ -423,7 +285,13 @@ async def post_agent_state(
         plan_file=body.plan_file,
         plan_title=body.plan_title,
     )
-    _agents_cache_ts = 0
+    invalidate_session_snapshot_caches()
+    await emit_sessions_update(
+        getattr(request.app.state, "sio", None),
+        config,
+        getattr(request.app.state, "state_service", None),
+        getattr(request.app.state, "tmux_service", None),
+    )
     return {"ok": True, "session": session}
 
 

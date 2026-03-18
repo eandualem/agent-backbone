@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -481,6 +481,36 @@ class TestMonitorAgentsIntegration:
             db=mock_db,
             active_sessions={"ike", "gateway"},
         )
+
+    @pytest.mark.asyncio
+    async def test_monitor_reconciles_sessions_socket_updates(self):
+        """Monitor runs the guarded session subscription watcher inside the flow."""
+        config = _make_monitor_config()
+        mock_db = AsyncMock()
+        mock_gh = AsyncMock()
+
+        init_flow_services(config=config, db=mock_db, gh=mock_gh)
+
+        with (
+            patch(
+                f"{_MON}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["ike"],
+            ),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(f"{_MON}.collect_active_session_telemetry", new_callable=AsyncMock),
+            patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock),
+            patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}),
+            patch(f"{_MON}.get_sio", return_value=MagicMock()),
+            patch(f"{_MON}.emit_sessions_update", new_callable=AsyncMock) as mock_emit,
+        ):
+            await monitor_agents.fn()
+
+        mock_emit.assert_awaited_once()
+        assert mock_emit.await_args.kwargs["only_if_changed"] is True
 
     @pytest.mark.asyncio
     async def test_monitor_reconciles_lost_swarm_workers(self):

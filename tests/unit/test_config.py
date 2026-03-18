@@ -307,7 +307,6 @@ class TestPhaseIIIConfigs:
         assert config.daily_routines.morning_time == "08:00"
         assert config.daily_routines.evening_time == "18:00"
         assert config.daily_routines.timezone == "Africa/Addis_Ababa"
-        assert "ike" in config.daily_routines.morning_agents
 
 
 class TestPhaseIVConfigs:

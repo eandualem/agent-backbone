@@ -1,0 +1,240 @@
+"""Shared session snapshot building and Socket.IO update broadcasting."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+from agent_backbone.api.models import EnrichedAgent
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.agents import StateService
+from agent_backbone.services.terminal import (
+    RUNTIME_ENV_KEY,
+    TmuxService,
+    query_environment_var,
+)
+
+if TYPE_CHECKING:
+    import socketio
+
+log = logging.getLogger(__name__)
+
+SESSIONS_NAMESPACE = "/sessions"
+SESSIONS_UPDATE_EVENT = "sessions:update"
+
+_sessions_update_lock = asyncio.Lock()
+_last_sessions_update_signature: str | None = None
+
+
+async def build_enriched_agent(
+    session: str,
+    entity: str,
+    config: BackboneConfig,
+    active_sessions: set[str],
+    state_svc: StateService,
+    tmux_info: dict | None = None,
+    agent_type: str = "coding_agent",
+) -> EnrichedAgent:
+    """Build an EnrichedAgent from session name and entity."""
+    online = session in active_sessions
+    snapshot = await state_svc.get_state(session)
+    reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(entity)
+    display_name = reg_entry.figure.split()[-1] if reg_entry else session
+    role = reg_entry.role if reg_entry else "Coding Agent"
+    figure = reg_entry.figure if reg_entry else ""
+    groups = list(reg_entry.groups) if reg_entry else []
+    home = reg_entry.home if reg_entry else ""
+    if not home and agent_type == "coding_agent":
+        home = config.registry.repo_path_by_name.get(session, "")
+
+    org = ""
+    if reg_entry and reg_entry.organization:
+        org = reg_entry.organization
+    elif agent_type == "coding_agent":
+        for repo in config.registry.repos:
+            if repo.name == session:
+                org = repo.org
+                break
+
+    tmux_created = None
+    tmux_attached = False
+    tmux_windows = 0
+    last_activity: float | None = None
+    if tmux_info:
+        created_ts = tmux_info.get("created", 0)
+        if created_ts:
+            tmux_created = datetime.fromtimestamp(created_ts, tz=UTC).isoformat()
+        tmux_attached = tmux_info.get("attached", False)
+        tmux_windows = tmux_info.get("windows", 0)
+        activity_ts = tmux_info.get("activity", 0)
+        if activity_ts:
+            last_activity = float(activity_ts)
+
+    state_value = snapshot.state.value
+    if not online:
+        state_value = "offline"
+    elif state_value == "unknown":
+        state_value = "idle"
+
+    entity_type = reg_entry.entity_type if reg_entry else "agent"
+
+    runtime: str | None = None
+    if online:
+        try:
+            runtime = await query_environment_var(session, RUNTIME_ENV_KEY) or None
+        except Exception:
+            pass
+
+    return EnrichedAgent(
+        session=session,
+        entity=entity,
+        display_name=display_name,
+        role=role,
+        figure=figure,
+        org=org,
+        groups=groups,
+        home=home,
+        type=agent_type,
+        entity_type=entity_type,
+        state=state_value,
+        current_issue=snapshot.current_issue,
+        online=online,
+        plan_file=snapshot.plan_file,
+        plan_title=snapshot.plan_title,
+        tmux_created=tmux_created,
+        runtime=runtime,
+        tmux_attached=tmux_attached,
+        tmux_windows=tmux_windows,
+        last_activity=last_activity,
+        state_since=snapshot.timestamp if snapshot.timestamp else None,
+    )
+
+
+def listable_registry_sessions(config: BackboneConfig) -> dict[str, str]:
+    """Concrete registry-backed sessions that should appear as named agents."""
+    return config.registry.concrete_sessions_map
+
+
+def reserved_agent_sessions(config: BackboneConfig) -> set[str]:
+    """Sessions reserved by registry-backed agents."""
+    return set(listable_registry_sessions(config).values())
+
+
+async def build_session_snapshot(
+    config: BackboneConfig,
+    state_svc: StateService,
+    tmux_svc: TmuxService,
+) -> list[EnrichedAgent]:
+    """Build the full enriched session snapshot without caching."""
+    rich_sessions = await tmux_svc.list_sessions_rich()
+    tmux_lookup = {session["name"]: session for session in rich_sessions}
+    active_sessions = set(tmux_lookup.keys())
+
+    coros: list = []
+
+    registry_sessions = listable_registry_sessions(config)
+    for entity, session in registry_sessions.items():
+        reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(
+            entity
+        )
+        if reg_entry and reg_entry.entity_type == "service":
+            continue
+        coros.append(
+            build_enriched_agent(
+                session,
+                entity,
+                config,
+                active_sessions,
+                state_svc,
+                tmux_lookup.get(session),
+                agent_type="named_entity",
+            )
+        )
+
+    named_sessions = reserved_agent_sessions(config)
+    service_sessions = config.entities.service_sessions
+    seen_coding: set[str] = set()
+    for session in active_sessions:
+        if session not in named_sessions and session not in service_sessions:
+            coros.append(
+                build_enriched_agent(
+                    session,
+                    session,
+                    config,
+                    active_sessions,
+                    state_svc,
+                    tmux_lookup.get(session),
+                    agent_type="coding_agent",
+                )
+            )
+            seen_coding.add(session)
+
+    for repo in config.registry.repos:
+        if repo.name not in seen_coding and repo.name not in named_sessions:
+            coros.append(
+                build_enriched_agent(
+                    repo.name,
+                    repo.name,
+                    config,
+                    active_sessions,
+                    state_svc,
+                    agent_type="coding_agent",
+                )
+            )
+
+    return list(await asyncio.gather(*coros))
+
+
+def invalidate_session_snapshot_caches() -> None:
+    """Reset both cached agent snapshots before rebuilding a live update."""
+    from agent_backbone.api.routes import agents as agents_routes
+    from agent_backbone.api.routes import dashboard as dashboard_routes
+
+    agents_routes._agents_cache = []
+    agents_routes._agents_cache_ts = 0
+    dashboard_routes._agents_cache = []
+    dashboard_routes._agents_cache_ts = 0
+
+
+def reset_sessions_update_state() -> None:
+    """Reset module-level update dedup state for test isolation."""
+    global _last_sessions_update_signature  # noqa: PLW0603
+    _last_sessions_update_signature = None
+
+
+def _serialize_snapshot(snapshot: list[EnrichedAgent]) -> list[dict]:
+    return [agent.model_dump(mode="json") for agent in snapshot]
+
+
+def _snapshot_signature(payload: list[dict]) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+async def emit_sessions_update(
+    sio: socketio.AsyncServer | None,
+    config: BackboneConfig,
+    state_svc: StateService | None,
+    tmux_svc: TmuxService | None,
+    *,
+    only_if_changed: bool = False,
+) -> bool:
+    """Broadcast the current enriched session snapshot to `/sessions` subscribers."""
+    global _last_sessions_update_signature  # noqa: PLW0603
+    if sio is None or state_svc is None or tmux_svc is None:
+        return False
+
+    async with _sessions_update_lock:
+        invalidate_session_snapshot_caches()
+        snapshot = await build_session_snapshot(config, state_svc, tmux_svc)
+        payload = _serialize_snapshot(snapshot)
+        signature = _snapshot_signature(payload)
+
+        if only_if_changed and signature == _last_sessions_update_signature:
+            return False
+
+        await sio.emit(SESSIONS_UPDATE_EVENT, payload, namespace=SESSIONS_NAMESPACE)
+        _last_sessions_update_signature = signature
+        return True

@@ -47,17 +47,6 @@ async def _start_workflow_agent_session(session_name: str, config: BackboneConfi
 
 
 @task
-async def start_morning_agents(config: BackboneConfig) -> list[str]:
-    """Start configured morning agents. Returns list of started sessions."""
-    started = []
-    for agent in config.daily_routines.morning_agents:
-        session_name = config.registry.sessions_map.get(agent, agent)
-        if await _start_workflow_agent_session(session_name, config):
-            started.append(session_name)
-    return started
-
-
-@task
 async def count_pending_issues(
     config: BackboneConfig,
     gh: object,
@@ -117,17 +106,15 @@ async def deliver_overnight_issues(
 async def morning_startup() -> dict:
     """Execute morning startup routine.
 
-    1. Start configured morning agents
-    2. Count pending issues per entity
-    3. Deliver overnight issues to online agents
-    4. Return summary for Telegram digest
+    1. Count pending issues per entity
+    2. Deliver overnight issues to online agents
+    3. Return summary for Telegram digest
     """
     await ensure_initialized()
 
     config = get_config()
     gh = get_gh()
 
-    started = await start_morning_agents(config)
     pending = await count_pending_issues(config, gh)
     deliveries = await deliver_overnight_issues(config, pending, gh)
     sessions = await list_sessions()
@@ -136,12 +123,11 @@ async def morning_startup() -> dict:
         title="Morning Startup",
         sessions=sessions,
         pending_counts=pending,
-        notes=[f"Started: {', '.join(started)}"] if started else None,
     )
     log.info(digest)
 
     return {
-        "started": started,
+        "started": [],
         "pending": pending,
         "deliveries": deliveries,
         "digest": digest,

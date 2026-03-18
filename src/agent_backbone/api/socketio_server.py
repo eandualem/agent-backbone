@@ -14,6 +14,7 @@ import time
 
 import socketio
 
+from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.services.terminal import (
     PtyManager,
     list_panes,
@@ -50,6 +51,7 @@ def create_sio(cors_origins: list[str]) -> socketio.AsyncServer:
         async_mode="asgi",
         cors_allowed_origins=cors_origins,
     )
+    sio.register_namespace(SessionsNamespace(SESSIONS_NAMESPACE))
     sio.register_namespace(TerminalNamespace("/terminal"))
     return sio
 
@@ -64,6 +66,25 @@ async def _restore_dynamic_window_size(session_name: str) -> None:
     """
     if not await set_window_size_mode(session_name, "latest"):
         log.error("Failed to restore tmux window-size latest for '%s'", session_name)
+
+
+def _socket_auth_valid(auth: dict | None = None) -> bool:
+    """Validate Socket.IO auth against the configured API key."""
+    api_key = os.environ.get("BACKBONE_API_KEY", "")
+    if not api_key:
+        return True
+    return bool(auth and auth.get("api_key") == api_key)
+
+
+class SessionsNamespace(socketio.AsyncNamespace):
+    """Socket.IO namespace for enriched session state subscriptions."""
+
+    async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
+        """Validate API key on connection."""
+        if not _socket_auth_valid(auth):
+            log.warning("Socket.IO sessions connection rejected — invalid auth (sid=%s)", sid)
+            return False
+        return True
 
 
 class TerminalNamespace(socketio.AsyncNamespace):
@@ -148,11 +169,7 @@ class TerminalNamespace(socketio.AsyncNamespace):
         Auth dict should contain {"api_key": "..."}.
         Dev mode (BACKBONE_API_KEY not set) allows all connections.
         """
-        api_key = os.environ.get("BACKBONE_API_KEY", "")
-        if not api_key:
-            return True  # Dev mode — unrestricted
-
-        if not auth or auth.get("api_key") != api_key:
+        if not _socket_auth_valid(auth):
             log.warning("Socket.IO connection rejected — invalid auth (sid=%s)", sid)
             return False
 

@@ -30,7 +30,7 @@ deployments:
     schedule:
       cron: "0 8 * * *"
       timezone: "Africa/Addis_Ababa"
-    description: "Morning routine: start agents, deliver overnight issues, send digest"
+    description: "Morning routine: deliver overnight issues to online sessions and send digest"
 
   - name: evening-shutdown
     entrypoint: src/agent_backbone/services/automation/_flows.py:evening_shutdown

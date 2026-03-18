@@ -228,25 +228,20 @@ class TestStopAllAgents:
     async def test_skips_service_sessions(self, agent_config):
         """stop_all_agents stops agent sessions but skips service sessions."""
         with patch(
-            "agent_backbone.services.infrastructure._agents.pause_agent_deployments",
+            "agent_backbone.services.infrastructure._agents.list_sessions",
             new_callable=AsyncMock,
-            return_value=1,
+            return_value=["ike", "gateway", "prefect"],
         ):
             with patch(
-                "agent_backbone.services.infrastructure._agents.list_sessions",
+                "agent_backbone.services.infrastructure._agents.stop_session",
                 new_callable=AsyncMock,
-                return_value=["ike", "gateway", "prefect"],
-            ):
-                with patch(
-                    "agent_backbone.services.infrastructure._agents.stop_session",
-                    new_callable=AsyncMock,
-                    return_value=True,
-                ) as mock_stop:
-                    from agent_backbone.services.infrastructure._agents import (
-                        stop_all_agents,
-                    )
+                return_value=True,
+            ) as mock_stop:
+                from agent_backbone.services.infrastructure._agents import (
+                    stop_all_agents,
+                )
 
-                    count = await stop_all_agents(agent_config)
+                count = await stop_all_agents(agent_config)
         assert count == 1  # Only ike stopped
         mock_stop.assert_called_once_with("ike")
 
@@ -254,66 +249,21 @@ class TestStopAllAgents:
     async def test_returns_zero_when_no_agents(self, agent_config):
         """stop_all_agents returns 0 when no agent sessions are running."""
         with patch(
-            "agent_backbone.services.infrastructure._agents.pause_agent_deployments",
+            "agent_backbone.services.infrastructure._agents.list_sessions",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=["gateway", "prefect"],
         ):
             with patch(
-                "agent_backbone.services.infrastructure._agents.list_sessions",
+                "agent_backbone.services.infrastructure._agents.stop_session",
                 new_callable=AsyncMock,
-                return_value=["gateway", "prefect"],
-            ):
-                with patch(
-                    "agent_backbone.services.infrastructure._agents.stop_session",
-                    new_callable=AsyncMock,
-                ) as mock_stop:
-                    from agent_backbone.services.infrastructure._agents import (
-                        stop_all_agents,
-                    )
+            ) as mock_stop:
+                from agent_backbone.services.infrastructure._agents import (
+                    stop_all_agents,
+                )
 
-                    count = await stop_all_agents(agent_config)
+                count = await stop_all_agents(agent_config)
         assert count == 0
         mock_stop.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_pauses_deployments_before_stopping(self, agent_config):
-        """stop_all_agents calls pause_agent_deployments before stopping any sessions."""
-        call_order = []
-
-        async def mock_pause():
-            call_order.append("pause")
-            return 1
-
-        async def mock_list():
-            call_order.append("list")
-            return ["ike"]
-
-        async def mock_stop(name):
-            call_order.append(f"stop:{name}")
-            return True
-
-        with patch(
-            "agent_backbone.services.infrastructure._agents.pause_agent_deployments",
-            new_callable=AsyncMock,
-            side_effect=mock_pause,
-        ):
-            with patch(
-                "agent_backbone.services.infrastructure._agents.list_sessions",
-                new_callable=AsyncMock,
-                side_effect=mock_list,
-            ):
-                with patch(
-                    "agent_backbone.services.infrastructure._agents.stop_session",
-                    new_callable=AsyncMock,
-                    side_effect=mock_stop,
-                ):
-                    from agent_backbone.services.infrastructure._agents import (
-                        stop_all_agents,
-                    )
-
-                    await stop_all_agents(agent_config)
-        assert call_order[0] == "pause"
-        assert "stop:ike" in call_order
 
 
 class TestStartOrchestrators:
@@ -391,23 +341,18 @@ class TestStartAll:
             return True
 
         with patch(
-            "agent_backbone.services.infrastructure._agents.resume_agent_deployments",
+            "agent_backbone.services.infrastructure._agents.session_exists",
             new_callable=AsyncMock,
-            return_value=1,
+            side_effect=mock_exists,
         ):
             with patch(
-                "agent_backbone.services.infrastructure._agents.session_exists",
+                "agent_backbone.services.infrastructure._agents.start_session",
                 new_callable=AsyncMock,
-                side_effect=mock_exists,
+                side_effect=mock_start,
             ):
-                with patch(
-                    "agent_backbone.services.infrastructure._agents.start_session",
-                    new_callable=AsyncMock,
-                    side_effect=mock_start,
-                ):
-                    from agent_backbone.services.infrastructure._agents import start_all
+                from agent_backbone.services.infrastructure._agents import start_all
 
-                    total = await start_all(agent_config)
+                total = await start_all(agent_config)
         # 2 orchestrators (ike, leo) + 1 standalone (ada) + 2 repos (platform-api, agent-backbone)
         assert total == 5
         assert set(started_names) == {
@@ -417,126 +362,6 @@ class TestStartAll:
             "platform-api",
             "agent-backbone",
         }
-
-    @pytest.mark.asyncio
-    async def test_resumes_deployments(self, agent_config):
-        """start_all calls resume_agent_deployments before starting agents."""
-        with patch(
-            "agent_backbone.services.infrastructure._agents.resume_agent_deployments",
-            new_callable=AsyncMock,
-            return_value=1,
-        ) as mock_resume:
-            with patch(
-                "agent_backbone.services.infrastructure._agents.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ):
-                from agent_backbone.services.infrastructure._agents import start_all
-
-                await start_all(agent_config)
-        mock_resume.assert_awaited_once()
-
-
-class TestPrefectDeploymentCmd:
-    @pytest.mark.asyncio
-    async def test_returns_true_on_success(self):
-        """_prefect_deployment_cmd returns True when subprocess exits 0."""
-        mock_proc = AsyncMock()
-        mock_proc.communicate.return_value = (b"", b"")
-        mock_proc.returncode = 0
-
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
-            from agent_backbone.services.infrastructure._agents import (
-                _prefect_deployment_cmd,
-            )
-
-            result = await _prefect_deployment_cmd("pause", "morning-startup")
-        assert result is True
-        # Verify the command includes the action and deployment name
-        call_args = mock_exec.call_args
-        assert "pause" in call_args[0]
-        assert "morning-startup" in call_args[0]
-
-    @pytest.mark.asyncio
-    async def test_returns_false_on_failure(self):
-        """_prefect_deployment_cmd returns False when subprocess exits non-zero."""
-        mock_proc = AsyncMock()
-        mock_proc.communicate.return_value = (b"", b"deployment not found")
-        mock_proc.returncode = 1
-
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            from agent_backbone.services.infrastructure._agents import (
-                _prefect_deployment_cmd,
-            )
-
-            result = await _prefect_deployment_cmd("resume", "nonexistent")
-        assert result is False
-
-
-class TestPauseAgentDeployments:
-    @pytest.mark.asyncio
-    async def test_pauses_all_deployments(self):
-        """pause_agent_deployments calls _prefect_deployment_cmd for each deployment."""
-        with patch(
-            "agent_backbone.services.infrastructure._agents._prefect_deployment_cmd",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_cmd:
-            from agent_backbone.services.infrastructure._agents import (
-                pause_agent_deployments,
-            )
-
-            count = await pause_agent_deployments()
-        assert count == 1  # AGENT_STARTING_DEPLOYMENTS has 1 entry
-        mock_cmd.assert_called_once_with("pause", "morning-startup")
-
-    @pytest.mark.asyncio
-    async def test_counts_only_successes(self):
-        """pause_agent_deployments returns 0 when all calls fail."""
-        with patch(
-            "agent_backbone.services.infrastructure._agents._prefect_deployment_cmd",
-            new_callable=AsyncMock,
-            return_value=False,
-        ):
-            from agent_backbone.services.infrastructure._agents import (
-                pause_agent_deployments,
-            )
-
-            count = await pause_agent_deployments()
-        assert count == 0
-
-
-class TestResumeAgentDeployments:
-    @pytest.mark.asyncio
-    async def test_resumes_all_deployments(self):
-        """resume_agent_deployments calls _prefect_deployment_cmd for each deployment."""
-        with patch(
-            "agent_backbone.services.infrastructure._agents._prefect_deployment_cmd",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_cmd:
-            from agent_backbone.services.infrastructure._agents import (
-                resume_agent_deployments,
-            )
-
-            count = await resume_agent_deployments()
-        assert count == 1
-        mock_cmd.assert_called_once_with("resume", "morning-startup")
-
-    @pytest.mark.asyncio
-    async def test_counts_only_successes(self):
-        """resume_agent_deployments returns 0 when all calls fail."""
-        with patch(
-            "agent_backbone.services.infrastructure._agents._prefect_deployment_cmd",
-            new_callable=AsyncMock,
-            return_value=False,
-        ):
-            from agent_backbone.services.infrastructure._agents import (
-                resume_agent_deployments,
-            )
-
-            count = await resume_agent_deployments()
-        assert count == 0
 
 
 class TestListAgents:

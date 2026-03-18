@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import agent_backbone.api.routes.agents as agents_module
+import agent_backbone.api.routes.dashboard as dashboard_module
 from agent_backbone.api.deps import get_state_service, get_tmux_service
 from agent_backbone.api.routes.agents import _resolve_command
 from agent_backbone.services.agents import AgentState, StateSnapshot
@@ -825,6 +826,38 @@ class TestStartAgent:
         data = resp.json()
         assert data["model"] is None
 
+    async def test_start_invalidates_both_caches_and_broadcasts(
+        self, api_app, api_client, auth_headers
+    ):
+        """Successful start resets both caches and triggers a sessions update."""
+        tmux_svc = _make_mock_tmux_svc(session_exists_result=False)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        agents_module._agents_cache_ts = time.monotonic()
+        dashboard_module._agents_cache_ts = time.monotonic()
+        api_app.state.state_service = _make_mock_state_svc()
+
+        with (
+            patch(
+                "agent_backbone.api.routes.agents.resolve_agent_dir",
+                return_value="/ws/code/WF/my-repo",
+            ),
+            patch(
+                "agent_backbone.api.routes.agents.emit_sessions_update",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_emit,
+        ):
+            try:
+                resp = await api_client.post("/api/agents/my-repo/start", headers=auth_headers)
+            finally:
+                _clear_di_overrides(api_app)
+                del api_app.state.state_service
+
+        assert resp.status_code == 200
+        assert agents_module._agents_cache_ts == 0
+        assert dashboard_module._agents_cache_ts == 0
+        mock_emit.assert_awaited_once()
+
 
 # ---------------------------------------------------------------------------
 # POST /api/agents/{session}/stop
@@ -874,6 +907,32 @@ class TestStopAgent:
         data = resp.json()
         assert data["ok"] is True
         assert data["session"] == "ghost"
+
+    async def test_stop_invalidates_both_caches_and_broadcasts(
+        self, api_app, api_client, auth_headers
+    ):
+        """Successful stop resets both caches and triggers a sessions update."""
+        tmux_svc = _make_mock_tmux_svc(stop_session_result=True)
+        _set_di_overrides(api_app, tmux_svc=tmux_svc)
+        agents_module._agents_cache_ts = time.monotonic()
+        dashboard_module._agents_cache_ts = time.monotonic()
+        api_app.state.state_service = _make_mock_state_svc()
+
+        with patch(
+            "agent_backbone.api.routes.agents.emit_sessions_update",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_emit:
+            try:
+                resp = await api_client.post("/api/agents/ike/stop", headers=auth_headers)
+            finally:
+                _clear_di_overrides(api_app)
+                del api_app.state.state_service
+
+        assert resp.status_code == 200
+        assert agents_module._agents_cache_ts == 0
+        assert dashboard_module._agents_cache_ts == 0
+        mock_emit.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -943,15 +1002,23 @@ class TestPostAgentState:
 
     async def test_post_state_invalidates_cache(self, api_app, api_client, auth_headers):
         """POST state resets the agents list cache TTL."""
-        import agent_backbone.api.routes.agents as agents_mod
+        agents_module._agents_cache_ts = time.monotonic()
+        dashboard_module._agents_cache_ts = time.monotonic()
 
-        agents_mod._agents_cache_ts = time.monotonic()
-        await api_client.post(
-            "/api/agents/ike/state",
-            json={"state": "idle"},
-            headers=auth_headers,
-        )
-        assert agents_mod._agents_cache_ts == 0
+        with patch(
+            "agent_backbone.api.routes.agents.emit_sessions_update",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_emit:
+            await api_client.post(
+                "/api/agents/ike/state",
+                json={"state": "idle"},
+                headers=auth_headers,
+            )
+
+        assert agents_module._agents_cache_ts == 0
+        assert dashboard_module._agents_cache_ts == 0
+        mock_emit.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

@@ -71,7 +71,12 @@ async def lifespan(app: FastAPI):
         # Populate the flow service locator for scheduled/cron flows
         from agent_backbone.services._locator import init as init_flow_services
 
-        init_flow_services(config=config, db=app.state.db, gh=app.state.github)
+        init_flow_services(
+            config=config,
+            db=app.state.db,
+            gh=app.state.github,
+            sio=app.state.sio,
+        )
 
         # Reconcile disk agent states to DB (catches plan_waiting missed during downtime)
         from agent_backbone.services.agents._reconciliation import reconcile_startup_states

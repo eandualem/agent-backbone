@@ -13,6 +13,7 @@ from agent_backbone.services._locator import (
     get_config,
     get_db,
     get_gh,
+    get_sio,
     init,
     reset,
 )
@@ -39,12 +40,14 @@ class TestServiceLocator:
         mock_config = MagicMock()
         mock_db = MagicMock()
         mock_gh = MagicMock()
+        mock_sio = MagicMock()
 
-        init(config=mock_config, db=mock_db, gh=mock_gh)
+        init(config=mock_config, db=mock_db, gh=mock_gh, sio=mock_sio)
 
         assert get_config() is mock_config
         assert get_db() is mock_db
         assert get_gh() is mock_gh
+        assert get_sio() is mock_sio
 
     def test_reset_clears(self):
         """reset() clears all services."""
@@ -53,6 +56,7 @@ class TestServiceLocator:
 
         with pytest.raises(RuntimeError):
             get_config()
+        assert get_sio() is None
 
     def test_init_reset_init_cycle(self):
         """Services can be re-initialized after reset."""
