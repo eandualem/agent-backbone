@@ -35,6 +35,7 @@ def _snapshot(state: AgentState = AgentState.IDLE, **kw) -> StateSnapshot:
 def _make_state_svc(snapshot: StateSnapshot | None = None) -> MagicMock:
     svc = MagicMock()
     svc.get_state = AsyncMock(return_value=snapshot or _snapshot())
+    svc.read_state = MagicMock(return_value=None)
     return svc
 
 

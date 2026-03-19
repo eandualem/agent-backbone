@@ -66,6 +66,7 @@ def _make_mock_state_svc(**kwargs) -> MagicMock:
     """Create a mock StateService with get_state returning an idle snapshot."""
     svc = MagicMock()
     svc.get_state = AsyncMock(return_value=kwargs.get("snapshot", _idle_snapshot()))
+    svc.read_state = MagicMock(return_value=None)
     return svc
 
 
