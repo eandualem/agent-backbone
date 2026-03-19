@@ -60,6 +60,7 @@ async def collect_session_telemetry(
     cwd: str | Path,
     entity: str | None = None,
     max_sources: int | None = None,
+    claimed_sources: set[str] | None = None,
 ) -> CollectionSummary:
     """Collect new telemetry events for a single session/runtime."""
     adapter = get_telemetry_adapter(runtime)
@@ -83,6 +84,13 @@ async def collect_session_telemetry(
         cwd=Path(cwd),
         entity=entity,
     )
+    # In shared-worktree scenarios (swarms), multiple sessions share a cwd
+    # and discover the same source files. Claim sources on first encounter
+    # so each file is ingested by at most one session per collection cycle.
+    if claimed_sources is not None:
+        sources = [s for s in sources if s.source_ref not in claimed_sources]
+        for s in sources:
+            claimed_sources.add(s.source_ref)
     if max_sources is not None:
         sources = sources[-max_sources:]
 
@@ -123,6 +131,9 @@ async def collect_active_session_telemetry(
 ) -> dict[str, CollectionSummary]:
     """Collect telemetry for all active non-service sessions with supported runtimes."""
     summaries: dict[str, CollectionSummary] = {}
+    # Track which source files are already claimed by a session in this cycle
+    # to prevent cross-contamination in shared-worktree scenarios (swarms).
+    claimed_sources: set[str] = set()
     for session_name in sorted(active_sessions):
         if session_name in config.entities.service_sessions:
             continue
@@ -144,6 +155,7 @@ async def collect_active_session_telemetry(
                 cwd=cwd,
                 entity=entity,
                 max_sources=max_sources_per_session,
+                claimed_sources=claimed_sources,
             )
         except Exception:
             log.exception("Telemetry collection failed for session '%s'", session_name)

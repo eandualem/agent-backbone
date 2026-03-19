@@ -442,6 +442,72 @@ async def test_collects_gemini_snapshot_and_logs_incrementally(monkeypatch, tmp_
         assert delta.events_recorded == 3
 
 
+async def test_claimed_sources_prevents_cross_contamination(monkeypatch, tmp_path):
+    """In shared-worktree scenarios, claimed_sources prevents duplicate ingestion (#35)."""
+    cwd = tmp_path / "workspace" / "shared-worktree"
+    cwd.mkdir(parents=True)
+    projects_dir = tmp_path / "claude" / "projects"
+    project_dir = projects_dir / str(cwd).replace("/", "-")
+    transcript = project_dir / "session.jsonl"
+    _write_jsonl(
+        transcript,
+        [
+            {
+                "type": "user",
+                "uuid": "user-1",
+                "sessionId": "shared-session-id",
+                "timestamp": "2026-03-13T12:00:01Z",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Do the work."}],
+                },
+            },
+            {
+                "type": "assistant",
+                "uuid": "assistant-1",
+                "sessionId": "shared-session-id",
+                "timestamp": "2026-03-13T12:00:02Z",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-opus-4-1",
+                    "content": [{"type": "text", "text": "Done."}],
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            },
+        ],
+    )
+
+    adapter = ClaudeTelemetryAdapter(projects_dir=projects_dir)
+    monkeypatch.setitem(telemetry_adapters._ADAPTERS, TerminalRuntime.CLAUDE, adapter)
+
+    async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
+        claimed: set[str] = set()
+
+        # Session A collects first — claims the source file
+        summary_a = await collect_session_telemetry(
+            db=db,
+            session_name="session-a",
+            runtime=TerminalRuntime.CLAUDE,
+            cwd=cwd,
+            entity="coder-a",
+            claimed_sources=claimed,
+        )
+        assert summary_a.sources_scanned == 1
+        assert summary_a.events_recorded > 0
+
+        # Session B shares the same cwd — source already claimed
+        summary_b = await collect_session_telemetry(
+            db=db,
+            session_name="session-b",
+            runtime=TerminalRuntime.CLAUDE,
+            cwd=cwd,
+            entity="coder-b",
+            claimed_sources=claimed,
+        )
+        assert summary_b.sources_scanned == 0
+        assert summary_b.events_recorded == 0
+
+
 def _create_opencode_db(path: Path, cwd: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
