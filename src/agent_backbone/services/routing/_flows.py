@@ -58,7 +58,18 @@ async def drain_message_queue(
         if not isinstance(queued, list) or not queued:
             continue
 
+        # Deduplicate by content_hash: deliver each unique message once
+        seen_hashes: set[str] = set()
         for msg_record in queued:
+            content_hash = msg_record.get("content_hash")
+            if content_hash and content_hash in seen_hashes:
+                await db.mark_message_delivered(msg_record["id"])
+                summary["queue_deduped"] = (
+                    summary.get("queue_deduped", 0) + 1
+                )
+                continue
+            if content_hash:
+                seen_hashes.add(content_hash)
             q_outcome = await safe_deliver(
                 session_name,
                 msg_record["message"],

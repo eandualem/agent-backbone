@@ -312,6 +312,59 @@ class TestDeliveryRetryQueueDrain:
         assert row["status"] == "delivered"
 
 
+    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch(
+        "agent_backbone.services.routing._flows.list_open_queue_for_target",
+        new_callable=AsyncMock,
+    )
+    async def test_drain_deduplicates_by_content_hash(
+        self, mock_list_open, mock_deliver, db, config
+    ):
+        """Duplicate queued messages (same content_hash) are delivered only once (#37)."""
+        # Enqueue two messages with identical content but different issue numbers.
+        # Same message text produces the same content_hash; different issue_number
+        # avoids the ON CONFLICT dedup at insert time, so both rows are persisted.
+        await db.enqueue_message(
+            session_name="ike",
+            message="Identical notification payload",
+            delivery_kind="comment",
+            flow_name="issue-dispatcher",
+            issue_number=200,
+            target_entity="ike",
+        )
+        await db.enqueue_message(
+            session_name="ike",
+            message="Identical notification payload",
+            delivery_kind="comment",
+            flow_name="issue-dispatcher",
+            issue_number=201,
+            target_entity="ike",
+        )
+
+        mock_list_open.return_value = [MagicMock(number=200)]
+        mock_deliver.return_value = "delivered"
+
+        from agent_backbone.services.routing._flows import drain_message_queue
+
+        summary = await drain_message_queue(
+            config,
+            db,
+            AsyncMock(),
+            active_sessions={"ike"},
+        )
+
+        # safe_deliver called only once — the duplicate was skipped
+        mock_deliver.assert_called_once()
+        # Both messages marked as delivered in the queue
+        row1 = await db.get_message_by_id(1)
+        row2 = await db.get_message_by_id(2)
+        assert row1["status"] == "delivered"
+        assert row2["status"] == "delivered"
+        # Summary reflects the dedup
+        assert summary.get("queue_delivered", 0) == 1
+        assert summary.get("queue_deduped", 0) >= 1
+
+
 class TestPurgePendingForIssue:
     async def test_purges_pending_messages_for_issue(self, db):
         """purge_pending_for_issue marks all pending messages for an issue as delivered (#780)."""
