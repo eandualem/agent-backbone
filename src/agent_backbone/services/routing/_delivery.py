@@ -568,7 +568,7 @@ async def _maybe_enqueue(
             flow_name=flow_name,
         )
         log.info(
-            "Enqueued message for %s (#%d) via %s",
+            "Enqueued message for %s (#%s) via %s",
             session_name,
             issue_number,
             flow_name or "unknown",

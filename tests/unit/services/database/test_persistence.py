@@ -557,6 +557,58 @@ class TestMessageQueue:
         assert row["status"] == "pending"
         assert row["leased_at"] is None
 
+    async def test_expire_stale_pending_exempts_direct_messages(self, db):
+        """Direct messages survive the 30-minute expiry."""
+        issue_id = await db.enqueue_message(
+            "ike", "issue msg", issue_number=10, target_entity="ike"
+        )
+        dm_id = await db.enqueue_message(
+            "ike", "direct msg", delivery_kind="direct_message"
+        )
+
+        # Backdate both to 1h ago (>30min but <24h)
+        from datetime import UTC, datetime, timedelta
+
+        one_hour_ago = (datetime.now(UTC) - timedelta(hours=1)).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+        async with db._engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET enqueued_at = :ts"
+                    " WHERE id IN (:a, :b)"
+                ),
+                {"ts": one_hour_ago, "a": issue_id, "b": dm_id},
+            )
+
+        expired = await db.expire_stale_pending(max_age_minutes=30)
+
+        # Issue message expired; direct message survived
+        assert expired >= 1
+        assert (await db.get_message_by_id(issue_id))["status"] == "expired"
+        assert (await db.get_message_by_id(dm_id))["status"] == "pending"
+
+    async def test_expire_stale_pending_expires_old_direct_messages(self, db):
+        """Direct messages older than 24h are expired."""
+        dm_id = await db.enqueue_message(
+            "ike", "ancient dm", delivery_kind="direct_message"
+        )
+
+        # Backdate to >24h ago
+        async with db._engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00.000000Z'"
+                    " WHERE id = :id"
+                ),
+                {"id": dm_id},
+            )
+
+        expired = await db.expire_stale_pending(max_age_minutes=30)
+
+        assert expired >= 1
+        assert (await db.get_message_by_id(dm_id))["status"] == "expired"
+
     async def test_purge_covers_in_progress(self, db):
         first = await db.enqueue_message("ike", "claim me", issue_number=775, target_entity="ike")
         second = await db.enqueue_message(

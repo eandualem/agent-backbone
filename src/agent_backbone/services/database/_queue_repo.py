@@ -479,7 +479,8 @@ async def expire_stale_pending(
             """UPDATE message_queue
                SET status = 'expired', delivered_at = :now
                WHERE status = 'pending'
-                 AND enqueued_at < :cutoff"""
+                 AND enqueued_at < :cutoff
+                 AND delivery_kind != 'direct_message'"""
         ),
         {
             "now": now,
@@ -489,11 +490,29 @@ async def expire_stale_pending(
     in_progress_result = await conn.execute(
         text(
             """UPDATE message_queue SET status='expired', delivered_at=:now
-               WHERE status='in_progress' AND leased_at < :cutoff"""
+               WHERE status='in_progress' AND leased_at < :cutoff
+                 AND delivery_kind != 'direct_message'"""
         ),
         {"now": now, "cutoff": cutoff_str},
     )
-    return (pending_result.rowcount or 0) + (in_progress_result.rowcount or 0)
+    # Direct messages get a longer TTL (24h) to survive swarm durations
+    dm_cutoff = (datetime.now(UTC) - timedelta(hours=24)).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
+    dm_result = await conn.execute(
+        text(
+            """UPDATE message_queue SET status='expired', delivered_at=:now
+               WHERE status IN ('pending', 'in_progress')
+                 AND delivery_kind = 'direct_message'
+                 AND enqueued_at < :dm_cutoff"""
+        ),
+        {"now": now, "dm_cutoff": dm_cutoff},
+    )
+    return (
+        (pending_result.rowcount or 0)
+        + (in_progress_result.rowcount or 0)
+        + (dm_result.rowcount or 0)
+    )
 
 
 async def purge_pending_for_issue(
