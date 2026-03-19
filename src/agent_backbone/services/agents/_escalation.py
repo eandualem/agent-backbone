@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 
 from prefect import task
 from prefect.cache_policies import NO_CACHE
@@ -74,11 +75,10 @@ def _plan_notification_source_ref(
     recipient: str,
     plan_file: str,
     plan_title: str,
-    plan_timestamp: float,
 ) -> str:
     """Stable identity for one plan-notification delivery target."""
     plan_identity = plan_file or plan_title or "<untitled>"
-    return f"{channel}:{recipient}:{plan_timestamp:.6f}:{plan_identity}"
+    return f"{channel}:{recipient}:{plan_identity}"
 
 
 def _organization_for_session(session_name: str, config: BackboneConfig) -> str | None:
@@ -476,17 +476,17 @@ async def check_plan_waiting(
             continue
 
         plan_file = snapshot.plan_file or ""
+        if plan_file and not Path(plan_file).exists():
+            log.debug("Skipping plan notification for %s: plan file %s not found", entity, plan_file)
+            continue
         plan_title = snapshot.plan_title or "Untitled plan"
 
         # Telegram notification
-        plan_timestamp = snapshot.timestamp or 0.0
-
         tg_source_ref = _plan_notification_source_ref(
             channel="telegram",
             recipient=str(notification_chat_id),
             plan_file=plan_file,
             plan_title=plan_title,
-            plan_timestamp=plan_timestamp,
         )
         if (
             notification_chat_id
@@ -533,7 +533,6 @@ async def check_plan_waiting(
                         recipient=orch_session,
                         plan_file=plan_file,
                         plan_title=plan_title,
-                        plan_timestamp=plan_timestamp,
                     ),
                     plan_dedup_seconds,
                     db,
@@ -544,7 +543,6 @@ async def check_plan_waiting(
                     recipient=orch_session,
                     plan_file=plan_file,
                     plan_title=plan_title,
-                    plan_timestamp=plan_timestamp,
                 )
                 orch_msg = format_plan_notification(
                     session_name,
