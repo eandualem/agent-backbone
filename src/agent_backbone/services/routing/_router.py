@@ -17,8 +17,8 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.models import EventType, IssueEvent, parse_from_tag
 from agent_backbone.services.agents._delivery_check import find_outgoing_comment
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._dedup import is_recent_notification
+from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import (
     format_comment_notification,
     format_issue_notification,

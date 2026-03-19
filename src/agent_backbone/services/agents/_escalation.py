@@ -477,7 +477,7 @@ async def check_plan_waiting(
 
         plan_file = snapshot.plan_file or ""
         if plan_file and not Path(plan_file).exists():
-            log.debug("Skipping plan notification for %s: plan file %s not found", entity, plan_file)
+            log.debug("Skipping plan notification for %s: file gone", entity)
             continue
         plan_title = snapshot.plan_title or "Untitled plan"
 

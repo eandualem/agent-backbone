@@ -30,8 +30,8 @@ from agent_backbone.services.agents import (
     _should_escalate,
     check_for_stalls,
     check_for_unexpected_offline,
-    check_plan_waiting,
     check_pending_issues,
+    check_plan_waiting,
     handle_offline,
     handle_stalls,
     monitor_agents,
@@ -1250,6 +1250,7 @@ class TestPlanWaitingMonitor:
                 new_callable=AsyncMock,
                 return_value=True,
             ) as mock_notify,
+            patch("pathlib.Path.exists", return_value=True),
         ):
             result = await monitor_agents.fn()
 
@@ -1703,6 +1704,7 @@ class TestPlanOrchestratorNotification:
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
+            patch("pathlib.Path.exists", return_value=True),
         ):
             await check_plan_waiting(config, {"agent-backbone", "bell", "ike"}, db=mock_db)
 
@@ -1790,6 +1792,7 @@ class TestPlanOrchestratorNotification:
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
+            patch("pathlib.Path.exists", return_value=True),
         ):
             await check_plan_waiting(
                 config,
@@ -1863,6 +1866,7 @@ class TestPlanOrchestratorNotification:
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
+            patch("pathlib.Path.exists", return_value=True),
         ):
             # First call
             await check_plan_waiting(config, {"agent-backbone", "bell"})
@@ -1936,6 +1940,7 @@ class TestPlanOrchestratorNotification:
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
+            patch("pathlib.Path.exists", return_value=True),
         ):
             await check_plan_waiting(config, {"agent-backbone", "bell"}, db=mock_db)
             _plan_notify_dedup.clear()
@@ -1945,8 +1950,9 @@ class TestPlanOrchestratorNotification:
         assert mock_db.record_activity.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_plan_waiting_same_path_new_timestamp_renotifies(self):
-        """A fresh plan with the same path still triggers a new notification."""
+    async def test_plan_waiting_same_path_new_timestamp_deduped(self):
+        """Same plan file + title with different timestamp is deduped (no re-notification)."""
+        _plan_notify_dedup.clear()
         first_snapshot = StateSnapshot(
             state=AgentState.PLAN_WAITING,
             current_issue=None,
@@ -2018,11 +2024,160 @@ class TestPlanOrchestratorNotification:
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
+            patch("pathlib.Path.exists", return_value=True),
         ):
             await check_plan_waiting(config, {"agent-backbone", "bell"}, db=mock_db)
             await check_plan_waiting(config, {"agent-backbone", "bell"}, db=mock_db)
 
-        assert mock_deliver.call_count == 2
+        assert mock_deliver.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_plan_waiting_missing_file_skips_notification(self):
+        """Plan file set but doesn't exist on disk — skip notification entirely."""
+        _plan_notify_dedup.clear()
+        plan_snapshot = StateSnapshot(
+            state=AgentState.PLAN_WAITING,
+            current_issue=None,
+            timestamp=time.time(),
+            source="push",
+            plan_file="/tmp/nonexistent/plan.md",
+            plan_title="Ghost plan",
+        )
+
+        registry = EntityRegistry(
+            entities={
+                "bell": EntityEntry(
+                    session="bell",
+                    home="~/ws/core/bell/",
+                    groups=["orchestrators"],
+                    figure="",
+                    role="",
+                    organization="WF",
+                ),
+                "backbone-agent": EntityEntry(
+                    session="agent-backbone",
+                    home="~/ws/core/code/WF/agent-backbone/",
+                    groups=[],
+                    figure="",
+                    role="",
+                ),
+            },
+            repos=[
+                RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+            ],
+        )
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            github=GitHubConfig(owner="eandualem", repo="orchestration"),
+            entities=EntityConfig(skip=frozenset({"elias"})),
+            registry=registry,
+            agent_state=AgentStateConfig(
+                state_dir="/tmp/test-state",
+                stale_threshold_seconds=300,
+            ),
+            escalation=EscalationConfig(escalation_target="ike"),
+            delivery=DeliveryConfig(),
+            capacity_routing=CapacityRoutingConfig(),
+            telegram=TelegramConfig(notification_chat_id=12345),
+        )
+
+        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+            if session == "agent-backbone":
+                return plan_snapshot
+            return StateSnapshot(state=AgentState.IDLE, source="pull")
+
+        mock_db = AsyncMock()
+
+        with (
+            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+            patch(
+                f"{_ESC}.TelegramService.send_notification",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_tg,
+            patch.dict(os.environ, {"TELEGRAM_TOKEN": "test-token"}),
+            patch("agent_backbone.services.agents._escalation.Path") as mock_path_cls,
+        ):
+            mock_path_cls.return_value.exists.return_value = False
+            await check_plan_waiting(config, {"agent-backbone", "bell"}, db=mock_db)
+
+        assert mock_deliver.call_count == 0
+        mock_tg.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_plan_waiting_no_plan_file_still_notifies(self):
+        """Empty plan_file skips file existence check — notification proceeds."""
+        _plan_notify_dedup.clear()
+        plan_snapshot = StateSnapshot(
+            state=AgentState.PLAN_WAITING,
+            current_issue=None,
+            timestamp=time.time(),
+            source="push",
+            plan_file="",
+            plan_title="Inline plan",
+        )
+
+        registry = EntityRegistry(
+            entities={
+                "bell": EntityEntry(
+                    session="bell",
+                    home="~/ws/core/bell/",
+                    groups=["orchestrators"],
+                    figure="",
+                    role="",
+                    organization="WF",
+                ),
+                "backbone-agent": EntityEntry(
+                    session="agent-backbone",
+                    home="~/ws/core/code/WF/agent-backbone/",
+                    groups=[],
+                    figure="",
+                    role="",
+                ),
+            },
+            repos=[
+                RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
+            ],
+        )
+        config = BackboneConfig(
+            webhook_secret="test-secret",
+            github=GitHubConfig(owner="eandualem", repo="orchestration"),
+            entities=EntityConfig(skip=frozenset({"elias"})),
+            registry=registry,
+            agent_state=AgentStateConfig(
+                state_dir="/tmp/test-state",
+                stale_threshold_seconds=300,
+            ),
+            escalation=EscalationConfig(escalation_target="ike"),
+            delivery=DeliveryConfig(),
+            capacity_routing=CapacityRoutingConfig(),
+            telegram=TelegramConfig(notification_chat_id=0),
+        )
+
+        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+            if session == "agent-backbone":
+                return plan_snapshot
+            return StateSnapshot(state=AgentState.IDLE, source="pull")
+
+        mock_db = AsyncMock()
+        mock_db.has_activity_event = AsyncMock(return_value=False)
+
+        with (
+            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver,
+        ):
+            await check_plan_waiting(config, {"agent-backbone", "bell"}, db=mock_db)
+
+        assert mock_deliver.call_count == 1
 
     @pytest.mark.asyncio
     async def test_plan_waiting_orchestrator_offline(self):
@@ -2152,6 +2307,7 @@ class TestPlanOrchestratorNotification:
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
+            patch("pathlib.Path.exists", return_value=True),
         ):
             await check_plan_waiting(config, {"feynman", "ike"})
 
