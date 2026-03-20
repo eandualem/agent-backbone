@@ -17,6 +17,8 @@ _ALLOWED_PREFIXES = [
     Path("~/.claude/state").expanduser().resolve(),
     Path("~/.claude/plans").expanduser().resolve(),
     Path("~/notes").expanduser().resolve(),
+    Path("~/infra").expanduser().resolve(),
+    Path("~/ws/core/spec").expanduser().resolve(),
 ]
 
 
