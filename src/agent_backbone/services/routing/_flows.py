@@ -105,7 +105,14 @@ async def drain_message_queue(
 
 
 @task(cache_policy=NO_CACHE)
-async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB, gh: object) -> str:
+async def retry_delivery(
+    config: BackboneConfig,
+    delivery: dict,
+    db: BackboneDB,
+    gh: object,
+    *,
+    active_sessions: set[str] | None = None,
+) -> str:
     """Attempt to retry a single failed delivery.
 
     Returns outcome string: retried, still_offline, still_busy, issue_closed.
@@ -113,6 +120,10 @@ async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB,
     session_name = delivery["session_name"]
     issue_number = delivery["issue_number"]
     target_entity = delivery["target_entity"]
+
+    # Skip if session is not active — avoids creating new failure records
+    if active_sessions is not None and session_name not in active_sessions:
+        return "still_offline"
 
     # Skip if already acknowledged (check both entity and session for fallback scenarios)
     if await db.is_acknowledged(issue_number, target_entity):
@@ -206,21 +217,29 @@ async def delivery_retry() -> dict:
     except Exception:
         log.exception("Failed to reclaim stale attempts (non-fatal)")
 
+    # Get active sessions early — used for both retry filtering and queue drain
+    from agent_backbone.services.terminal import list_sessions as _list_sessions
+
+    try:
+        active_sessions = set(await _list_sessions())
+    except Exception:
+        log.exception("Failed to list sessions for retry (non-fatal)")
+        active_sessions = set()
+
     failed = await db.get_failed_deliveries(limit=20)
 
     if failed:
         log.info("Found %d failed deliveries to retry", len(failed))
         for delivery in failed:
-            outcome = await retry_delivery(config, delivery, db, gh)
+            outcome = await retry_delivery(
+                config, delivery, db, gh, active_sessions=active_sessions
+            )
             summary[outcome] = summary.get(outcome, 0) + 1
     else:
         log.info("No failed deliveries to retry; draining queued messages only")
 
     # Drain message queue: deliver pending queued messages
     try:
-        from agent_backbone.services.terminal import list_sessions as _list_sessions
-
-        active_sessions = set(await _list_sessions())
         drained = await drain_message_queue(config, db, gh, active_sessions=active_sessions)
         for key, value in drained.items():
             summary[key] = summary.get(key, 0) + value
