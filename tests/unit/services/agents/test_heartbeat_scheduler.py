@@ -30,6 +30,15 @@ TZ = "Africa/Addis_Ababa"
 _HB = "agent_backbone.services.agents._heartbeat"
 
 
+@pytest.fixture(autouse=True)
+def _prefect_home(tmp_path, monkeypatch):
+    """Keep Prefect's temporary SQLite files inside the writable pytest sandbox."""
+    home = tmp_path / "prefect-home"
+    home.mkdir()
+    monkeypatch.setenv("PREFECT_HOME", str(home))
+    monkeypatch.setenv("PREFECT_LOGGING_TO_API_WHEN_MISSING_FLOW", "ignore")
+
+
 # --- is_due ---
 
 

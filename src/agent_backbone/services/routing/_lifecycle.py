@@ -175,7 +175,7 @@ async def deliver_next(
     config: BackboneConfig,
     db: BackboneDB | None = None,
     target_entity: str = "",
-    queue_scope_issue_numbers: set[int] | None = None,
+    queue_scope_issue_numbers: set[tuple[str, int]] | None = None,
 ) -> str:
     """Deliver a next-issue notification via safe_deliver."""
     message = format_next_issue_notification(issue)
@@ -184,6 +184,7 @@ async def deliver_next(
         message,
         config,
         db=db,
+        repo_full_name=issue.repo_full_name,
         issue_number=issue.number,
         target_entity=target_entity,
         flow_name="issue-lifecycle",
@@ -211,7 +212,10 @@ async def on_issue_closed(
     # loop in the retry cycle (#780).
     if db is not None:
         try:
-            purged = await db.purge_pending_for_issue(event.issue.number)
+            purged = await db.purge_pending_for_issue(
+                event.issue.repo_full_name,
+                event.issue.number,
+            )
             if purged:
                 log.info(
                     "Purged %d queued messages for closed issue #%d",
@@ -266,7 +270,7 @@ async def on_issue_closed(
             continue
 
         queue_scope_issue_numbers = {
-            issue.number
+            issue.identity_key
             for issue in await list_open_queue_for_target(
                 config,
                 target,
@@ -285,7 +289,11 @@ async def on_issue_closed(
 
             # Dedup: don't re-deliver an issue the entity was already notified about recently
             # This prevents duplicate "next issue" notifications when multiple closes happen
-            if is_recent_notification(next_issue.number, session_name):
+            if is_recent_notification(
+                next_issue.number,
+                session_name,
+                repo_full_name=next_issue.repo_full_name,
+            ):
                 log.info(
                     "Suppressed duplicate next-issue notification for #%d -> %s",
                     next_issue.number,

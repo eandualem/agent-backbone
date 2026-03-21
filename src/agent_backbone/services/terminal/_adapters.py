@@ -329,6 +329,14 @@ class TerminalAdapter(ABC):
                 state = await self.delivery_submission_state(session_name)
                 break
 
+            if state == "queued":
+                log.info(
+                    "Terminal delivery queued in '%s' via %s adapter",
+                    session_name,
+                    self.runtime.value,
+                )
+                return True
+
         if state != "submitted":
             log.warning(
                 "Terminal delivery remained unsent in '%s' via %s adapter (state=%s)",
@@ -387,6 +395,7 @@ class ClaudeCodeAdapter(TerminalAdapter):
     prompt_suffixes = ("$", "%")
     runtime_markers = ("claude code", "claude max", "opus 4.6")
     status_fragments = ("for shortcuts", "medium · /effort", "accept edits on")
+    queue_markers = ("press up to edit queued messages",)
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 

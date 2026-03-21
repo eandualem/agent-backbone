@@ -6,6 +6,7 @@ GitHub App installation tokens derived from the configured App credentials.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -20,6 +21,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
 from agent_backbone.models import CommentData, IssueData, ParsedLabels
+from agent_backbone.services.github.exceptions import GitHubServiceError
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -28,6 +30,15 @@ log = logging.getLogger(__name__)
 
 API_BASE = "https://api.github.com"
 _TOKEN_REFRESH_SKEW = timedelta(minutes=1)
+_MUTATING_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
+_SAFE_RETRY_METHODS = {"GET"}
+_TRANSIENT_SERVER_ERRORS = {500, 502, 503, 504}
+_MAX_AUTH_RETRIES = 1
+_MAX_RATE_LIMIT_RETRIES = 1
+_MAX_SAFE_REQUEST_RETRIES = 2
+_MUTATION_MIN_INTERVAL_SECONDS = 1.0
+_MAX_AUTOMATIC_RATE_LIMIT_WAIT_SECONDS = 5.0
+_SAFE_RETRY_BACKOFF_SECONDS = (0.5, 1.0)
 
 
 @dataclass(slots=True)
@@ -71,6 +82,8 @@ class GitHubClient:
         self._private_key: Any | None = None
         self._installation_ids: dict[str, int] = {}
         self._installation_tokens: dict[str, _CachedInstallationToken] = {}
+        self._mutation_lock = asyncio.Lock()
+        self._last_mutation_at = 0.0
 
     async def __aenter__(self) -> GitHubClient:
         await self.start()
@@ -101,6 +114,7 @@ class GitHubClient:
             self._client = None
         self._installation_ids.clear()
         self._installation_tokens.clear()
+        self._last_mutation_at = 0.0
 
     async def health_check(self) -> dict:
         """Check GitHub API connectivity."""
@@ -124,6 +138,9 @@ class GitHubClient:
     def _repo_key(self, repo_full_name: str | None = None) -> str:
         owner, repo = self._resolve_repo(repo_full_name)
         return f"{owner}/{repo}"
+
+    def _invalidate_installation_token(self, repo_full_name: str | None = None) -> None:
+        self._installation_tokens.pop(self._repo_key(repo_full_name), None)
 
     def _validate_app_config(self) -> None:
         missing: list[str] = []
@@ -228,12 +245,187 @@ class GitHubClient:
         **kwargs: Any,
     ) -> httpx.Response:
         assert self._client is not None
-        headers = dict(kwargs.pop("headers", {}))
-        token = await self._get_installation_token(repo_full_name)
-        headers["Authorization"] = f"Bearer {token}"
-        resp = await self._client.request(method, url, headers=headers, **kwargs)
-        resp.raise_for_status()
-        return resp
+        method = method.upper()
+        base_headers = dict(kwargs.pop("headers", {}))
+        safe_retry_count = 0
+        auth_retry_count = 0
+        rate_limit_retry_count = 0
+
+        while True:
+            headers = dict(base_headers)
+            token = await self._get_installation_token(repo_full_name)
+            headers["Authorization"] = f"Bearer {token}"
+
+            try:
+                resp = await self._send_request(method, url, headers=headers, **kwargs)
+            except httpx.TimeoutException as exc:
+                if method in _SAFE_RETRY_METHODS and safe_retry_count < _MAX_SAFE_REQUEST_RETRIES:
+                    delay = _SAFE_RETRY_BACKOFF_SECONDS[safe_retry_count]
+                    safe_retry_count += 1
+                    log.warning(
+                        "GitHub %s %s timed out; retrying in %.1fs (%d/%d)",
+                        method,
+                        url,
+                        delay,
+                        safe_retry_count,
+                        _MAX_SAFE_REQUEST_RETRIES,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise GitHubServiceError(
+                    f"GitHub request timed out for {method} {url}",
+                    retry_allowed=True,
+                ) from exc
+            except httpx.RequestError as exc:
+                if method in _SAFE_RETRY_METHODS and safe_retry_count < _MAX_SAFE_REQUEST_RETRIES:
+                    delay = _SAFE_RETRY_BACKOFF_SECONDS[safe_retry_count]
+                    safe_retry_count += 1
+                    log.warning(
+                        "GitHub %s %s failed (%s); retrying in %.1fs (%d/%d)",
+                        method,
+                        url,
+                        exc.__class__.__name__,
+                        delay,
+                        safe_retry_count,
+                        _MAX_SAFE_REQUEST_RETRIES,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise GitHubServiceError(
+                    f"GitHub request failed for {method} {url}: {exc}",
+                    retry_allowed=True,
+                ) from exc
+
+            if resp.status_code == 401 and auth_retry_count < _MAX_AUTH_RETRIES:
+                auth_retry_count += 1
+                self._invalidate_installation_token(repo_full_name)
+                log.warning(
+                    "GitHub rejected installation token for %s; "
+                    "refreshing token and retrying %s %s",
+                    self._repo_key(repo_full_name),
+                    method,
+                    url,
+                )
+                continue
+
+            retry_after = self._rate_limit_retry_after(resp)
+            if retry_after is not None and rate_limit_retry_count < _MAX_RATE_LIMIT_RETRIES:
+                if retry_after <= _MAX_AUTOMATIC_RATE_LIMIT_WAIT_SECONDS:
+                    rate_limit_retry_count += 1
+                    log.warning(
+                        "GitHub rate-limited %s %s; retrying in %.1fs (%d/%d)",
+                        method,
+                        url,
+                        retry_after,
+                        rate_limit_retry_count,
+                        _MAX_RATE_LIMIT_RETRIES,
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
+
+            if (
+                method in _SAFE_RETRY_METHODS
+                and resp.status_code in _TRANSIENT_SERVER_ERRORS
+                and safe_retry_count < _MAX_SAFE_REQUEST_RETRIES
+            ):
+                delay = _SAFE_RETRY_BACKOFF_SECONDS[safe_retry_count]
+                safe_retry_count += 1
+                log.warning(
+                    "GitHub %s %s returned %d; retrying in %.1fs (%d/%d)",
+                    method,
+                    url,
+                    resp.status_code,
+                    delay,
+                    safe_retry_count,
+                    _MAX_SAFE_REQUEST_RETRIES,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            if resp.is_error:
+                raise self._build_service_error(resp, method, url, retry_after=retry_after)
+
+            return resp
+
+    async def _send_request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        assert self._client is not None
+        if method not in _MUTATING_METHODS:
+            return await self._client.request(method, url, **kwargs)
+
+        async with self._mutation_lock:
+            delay = _MUTATION_MIN_INTERVAL_SECONDS - (time.monotonic() - self._last_mutation_at)
+            if delay > 0:
+                await asyncio.sleep(delay)
+            try:
+                return await self._client.request(method, url, **kwargs)
+            finally:
+                self._last_mutation_at = time.monotonic()
+
+    def _rate_limit_retry_after(self, resp: httpx.Response) -> float | None:
+        if resp.status_code not in {403, 429}:
+            return None
+
+        retry_after_header = resp.headers.get("Retry-After")
+        if retry_after_header:
+            try:
+                return max(float(retry_after_header), 0.0)
+            except ValueError:
+                pass
+
+        if resp.headers.get("X-RateLimit-Remaining") == "0":
+            reset_header = resp.headers.get("X-RateLimit-Reset")
+            if reset_header:
+                try:
+                    return max(float(reset_header) - time.time(), 0.0)
+                except ValueError:
+                    pass
+
+        if self._is_secondary_rate_limit(resp):
+            return 60.0
+
+        return None
+
+    def _is_secondary_rate_limit(self, resp: httpx.Response) -> bool:
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = None
+
+        if isinstance(payload, dict):
+            message = payload.get("message")
+            if isinstance(message, str) and "secondary rate limit" in message.lower():
+                return True
+        return "secondary rate limit" in resp.text.lower()
+
+    def _build_service_error(
+        self,
+        resp: httpx.Response,
+        method: str,
+        url: str,
+        *,
+        retry_after: float | None = None,
+    ) -> GitHubServiceError:
+        message = f"GitHub API {resp.status_code} for {method} {url}"
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = None
+
+        if isinstance(payload, dict):
+            upstream_message = payload.get("message")
+            if isinstance(upstream_message, str) and upstream_message:
+                message = f"{message}: {upstream_message}"
+
+        retry_allowed = (
+            resp.status_code >= 500 or retry_after is not None or resp.status_code == 401
+        )
+        return GitHubServiceError(
+            message,
+            status_code=resp.status_code,
+            retry_after_seconds=retry_after,
+            response_text=resp.text[:500],
+            retry_allowed=retry_allowed,
+        )
 
     def _build_issue(self, item: dict[str, Any], repo_full_name: str | None = None) -> IssueData:
         labels = ParsedLabels.from_github_labels(item.get("labels", []))
@@ -287,11 +479,8 @@ class GitHubClient:
         url = f"/repos/{owner}/{repo}/issues/{issue_number}/sub_issues"
         try:
             resp = await self._request("GET", url, repo_full_name=repo_full_name)
-        except httpx.HTTPStatusError as exc:
+        except GitHubServiceError as exc:
             log.warning("Failed to fetch sub-issues for #%d: %s", issue_number, exc)
-            return []
-        except httpx.TimeoutException:
-            log.warning("Timeout fetching sub-issues for #%d", issue_number)
             return []
 
         return [self._build_issue(item, repo_full_name=repo_full_name) for item in resp.json()]
@@ -363,10 +552,14 @@ class GitHubClient:
         ]
 
     async def create_issue(
-        self, title: str, body: str, labels: list[str] | None = None
+        self,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        repo_full_name: str | None = None,
     ) -> IssueData:
-        """Create a new issue in the configured orchestration repo."""
-        repo_full_name = self._default_repo_full_name()
+        """Create a new issue in the requested repo or the default coordination repo."""
+        repo_full_name = self._repo_key(repo_full_name)
         owner, repo = self._resolve_repo(repo_full_name)
         url = f"/repos/{owner}/{repo}/issues"
         payload: dict[str, Any] = {"title": title, "body": body}
@@ -385,9 +578,14 @@ class GitHubClient:
             repo_full_name=repo_full_name,
         )
 
-    async def add_comment(self, issue_number: int, body: str) -> CommentData:
-        """Add a comment to an issue."""
-        repo_full_name = self._default_repo_full_name()
+    async def add_comment(
+        self,
+        issue_number: int,
+        body: str,
+        repo_full_name: str | None = None,
+    ) -> CommentData:
+        """Add a comment to an issue in the requested repo."""
+        repo_full_name = self._repo_key(repo_full_name)
         owner, repo = self._resolve_repo(repo_full_name)
         url = f"/repos/{owner}/{repo}/issues/{issue_number}/comments"
         resp = await self._request(
@@ -403,9 +601,14 @@ class GitHubClient:
             user_login=item.get("user", {}).get("login", "unknown"),
         )
 
-    async def update_issue(self, issue_number: int, state: str) -> IssueData:
-        """Update an issue's state (open/closed)."""
-        repo_full_name = self._default_repo_full_name()
+    async def update_issue(
+        self,
+        issue_number: int,
+        state: str,
+        repo_full_name: str | None = None,
+    ) -> IssueData:
+        """Update an issue's state (open/closed) in the requested repo."""
+        repo_full_name = self._repo_key(repo_full_name)
         owner, repo = self._resolve_repo(repo_full_name)
         url = f"/repos/{owner}/{repo}/issues/{issue_number}"
         resp = await self._request(

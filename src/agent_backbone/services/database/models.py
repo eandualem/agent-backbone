@@ -14,6 +14,7 @@ class DeliveryORM(Base):
     __tablename__ = "deliveries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    repo_full_name: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
     target_entity: Mapped[str] = mapped_column(Text, nullable=False)
     session_name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -29,6 +30,7 @@ class DeliveryORM(Base):
         Index("idx_deliveries_created", "created_at"),
         Index(
             "uq_deliveries_active_owner",
+            "repo_full_name",
             "issue_number",
             "session_name",
             unique=True,
@@ -82,6 +84,7 @@ class AcknowledgmentORM(Base):
 
     __tablename__ = "acknowledgments"
 
+    repo_full_name: Mapped[str] = mapped_column(Text, primary_key=True, server_default="")
     issue_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     target_entity: Mapped[str] = mapped_column(Text, primary_key=True)
     acknowledged_at: Mapped[str] = mapped_column(Text, nullable=False)
@@ -109,6 +112,7 @@ class MessageQueueORM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_name: Mapped[str] = mapped_column(Text, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
+    repo_full_name: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     target_entity: Mapped[str | None] = mapped_column(Text, nullable=True)
     delivery_kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="issue")
@@ -131,6 +135,7 @@ class MessageQueueORM(Base):
         Index(
             "uq_mq_issue_dedup",
             "session_name",
+            "repo_full_name",
             "issue_number",
             unique=True,
             postgresql_where=text(
@@ -145,6 +150,7 @@ class MessageQueueORM(Base):
         Index(
             "uq_mq_comment_dedup",
             "session_name",
+            "repo_full_name",
             "issue_number",
             "content_hash",
             unique=True,

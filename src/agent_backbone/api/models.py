@@ -144,6 +144,7 @@ class IssueResponse(BaseModel):
     title: str = ""
     state: str = "open"
     html_url: str = ""
+    repo_full_name: str = ""
     labels: ParsedLabelsResponse = Field(default_factory=ParsedLabelsResponse)
     priority_score: float = 0.0
 
@@ -171,6 +172,7 @@ class DeliveryRecord(BaseModel):
     """A single delivery attempt record."""
 
     id: int
+    repo_full_name: str = ""
     issue_number: int
     target_entity: str
     session_name: str

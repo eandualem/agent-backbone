@@ -24,6 +24,48 @@ def parse_from_tag(comment_body: str) -> str | None:
     return None
 
 
+def normalize_repo_full_name(repo_full_name: str | None) -> str:
+    """Normalize owner/repo strings for persistence and dedup keys."""
+    return (repo_full_name or "").strip()
+
+
+def repo_session_name(repo_full_name: str | None) -> str:
+    """Return the repo-session name implied by an owner/repo identity."""
+    normalized = normalize_repo_full_name(repo_full_name)
+    if "/" in normalized:
+        return normalized.split("/", 1)[1].strip()
+    return normalized
+
+
+def acknowledgment_entities(
+    target_entity: str,
+    repo_full_name: str | None = None,
+    *,
+    session_name: str | None = None,
+) -> tuple[str, ...]:
+    """Canonical acknowledgment identities for a delivery target.
+
+    Repo-local issue delivery targets are stored as the concrete repo session
+    name (for example ``agent-orchestration-dashboard``), while the coding
+    agent comments with ``[from:coding-agent]``. Treat both as the same ack
+    identity for repo-local queues.
+    """
+    aliases: list[str] = [target_entity]
+    if session_name and session_name not in aliases:
+        aliases.append(session_name)
+
+    repo_session = repo_session_name(repo_full_name)
+    if repo_session and (target_entity == repo_session or session_name == repo_session):
+        aliases.append("coding-agent")
+
+    return tuple(dict.fromkeys(alias for alias in aliases if alias))
+
+
+def issue_identity_key(issue_number: int, repo_full_name: str | None = None) -> tuple[str, int]:
+    """Build the canonical repo-qualified issue identity."""
+    return (normalize_repo_full_name(repo_full_name), issue_number)
+
+
 class EventType(StrEnum):
     """Normalized event types from GitHub webhooks."""
 
@@ -96,6 +138,11 @@ class IssueData(BaseModel):
     html_url: str = ""
     repo_full_name: str = ""
     is_pull_request: bool = False
+
+    @property
+    def identity_key(self) -> tuple[str, int]:
+        """Canonical repo-qualified identity for this issue."""
+        return issue_identity_key(self.number, self.repo_full_name)
 
 
 class CommentData(BaseModel):

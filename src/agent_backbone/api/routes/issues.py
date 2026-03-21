@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -17,7 +18,7 @@ from agent_backbone.api.models import (
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import parse_from_tag
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.github import GitHubClient
+from agent_backbone.services.github import GitHubClient, GitHubServiceError
 from agent_backbone.services.routing import DeliveryService
 from agent_backbone.services.routing._resolution import validate_issue_targets
 
@@ -36,6 +37,7 @@ def _issue_to_response(
         title=issue.title,
         state=issue.state,
         html_url=issue.html_url,
+        repo_full_name=issue.repo_full_name,
         labels=ParsedLabelsResponse(
             sender=issue.labels.sender,
             targets=issue.labels.targets,
@@ -46,6 +48,25 @@ def _issue_to_response(
     )
 
 
+def _raise_github_http_error(
+    exc: GitHubServiceError,
+    *,
+    not_found_detail: str | None = None,
+) -> None:
+    if exc.status_code == 404:
+        raise HTTPException(status_code=404, detail=not_found_detail or exc.message) from exc
+
+    headers: dict[str, str] = {}
+    if exc.retry_after_seconds and exc.retry_after_seconds > 0:
+        headers["Retry-After"] = str(max(1, math.ceil(exc.retry_after_seconds)))
+    status_code = 503 if exc.retry_allowed else 502
+    raise HTTPException(
+        status_code=status_code,
+        detail=exc.message,
+        headers=headers or None,
+    ) from exc
+
+
 @router.get("/issues", response_model=ListEnvelope[IssueResponse])
 async def list_issues(
     state: str = Query(default="open"),
@@ -53,6 +74,7 @@ async def list_issues(
     from_entity: str | None = Query(default=None),
     issue_type: str | None = Query(default=None, alias="type"),
     label: str | None = Query(default=None),
+    repo: str | None = Query(default=None),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
@@ -68,7 +90,10 @@ async def list_issues(
     if label:
         labels.append(label)
 
-    issues = await gh.list_issues(state=state, labels=labels)
+    try:
+        issues = await gh.list_issues(state=state, labels=labels, repo_full_name=repo)
+    except GitHubServiceError as exc:
+        _raise_github_http_error(exc)
     items = [_issue_to_response(i, config, delivery_svc) for i in issues]
     return ListEnvelope(items=items, total=len(items))
 
@@ -76,25 +101,30 @@ async def list_issues(
 @router.get("/issues/{number}", response_model=IssueResponse)
 async def get_issue(
     number: int,
+    repo: str | None = Query(default=None),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Get a single issue by number with priority score."""
     try:
-        issue = await gh.get_issue(number)
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Issue #{number} not found") from e
+        issue = await gh.get_issue(number, repo_full_name=repo)
+    except GitHubServiceError as exc:
+        _raise_github_http_error(exc, not_found_detail=f"Issue #{number} not found")
     return _issue_to_response(issue, config, delivery_svc)
 
 
 @router.get("/issues/{number}/comments", response_model=ListEnvelope[IssueCommentResponse])
 async def list_issue_comments(
     number: int,
+    repo: str | None = Query(default=None),
     gh: GitHubClient = Depends(get_github),
 ):
     """List comments on an issue with parsed [from:X] tags."""
-    comments = await gh.list_comments(number)
+    try:
+        comments = await gh.list_comments(number, repo_full_name=repo)
+    except GitHubServiceError as exc:
+        _raise_github_http_error(exc, not_found_detail=f"Issue #{number} not found")
     items = [
         IssueCommentResponse(
             id=c.id,
@@ -110,13 +140,14 @@ async def list_issue_comments(
 @router.get("/issues/{number}/dependencies", response_model=IssueDependencies)
 async def get_issue_dependencies(
     number: int,
+    repo: str | None = Query(default=None),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     db: BackboneDB = Depends(get_db),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Get sub-issues and parent issues for an issue."""
-    sub_issues = await gh.get_sub_issues(number)
+    sub_issues = await gh.get_sub_issues(number, repo_full_name=repo)
     parents = await db.get_parents(number)
     return IssueDependencies(
         sub_issues=[_issue_to_response(s, config, delivery_svc) for s in sub_issues],
@@ -136,6 +167,7 @@ async def create_issue(
     title = body.get("title", "")
     issue_body = body.get("body", "")
     labels = body.get("labels", [])
+    repo_full_name = body.get("repo") or body.get("repo_full_name")
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
     targets = [label.removeprefix("for:") for label in labels if label.startswith("for:")]
@@ -149,6 +181,7 @@ async def create_issue(
         issue_body,
         labels,
         config,
+        repo_full_name=repo_full_name,
         db=db,
         flow_name="api-create-issue",
     )
@@ -163,9 +196,13 @@ async def add_issue_comment(
 ):
     """Add a comment to an issue."""
     comment_body = body.get("body", "")
+    repo_full_name = body.get("repo") or body.get("repo_full_name")
     if not comment_body:
         raise HTTPException(status_code=400, detail="body is required")
-    comment = await gh.add_comment(number, comment_body)
+    try:
+        comment = await gh.add_comment(number, comment_body, repo_full_name=repo_full_name)
+    except GitHubServiceError as exc:
+        _raise_github_http_error(exc, not_found_detail=f"Issue #{number} not found")
     return IssueCommentResponse(
         id=comment.id,
         body=comment.body,
@@ -184,7 +221,11 @@ async def update_issue(
 ):
     """Update an issue (e.g. close it)."""
     state = body.get("state")
+    repo_full_name = body.get("repo") or body.get("repo_full_name")
     if not state:
         raise HTTPException(status_code=400, detail="state is required")
-    issue = await gh.update_issue(number, state)
+    try:
+        issue = await gh.update_issue(number, state, repo_full_name=repo_full_name)
+    except GitHubServiceError as exc:
+        _raise_github_http_error(exc, not_found_detail=f"Issue #{number} not found")
     return _issue_to_response(issue, config, delivery_svc)

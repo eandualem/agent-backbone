@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from agent_backbone.models import normalize_repo_full_name
+
 
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -14,6 +16,7 @@ def _now_iso() -> str:
 
 async def record_delivery(
     conn: AsyncConnection,
+    repo_full_name: str | None,
     issue_number: int,
     target_entity: str,
     session_name: str,
@@ -25,13 +28,14 @@ async def record_delivery(
     result = await conn.execute(
         text(
             """INSERT INTO deliveries
-               (issue_number, target_entity, session_name,
+               (repo_full_name, issue_number, target_entity, session_name,
                 outcome, flow_name, flow_run_id, created_at)
-               VALUES (:issue_number, :target_entity, :session_name,
+               VALUES (:repo_full_name, :issue_number, :target_entity, :session_name,
                        :outcome, :flow_name, :flow_run_id, :created_at)
                RETURNING id"""
         ),
         {
+            "repo_full_name": normalize_repo_full_name(repo_full_name),
             "issue_number": issue_number,
             "target_entity": target_entity,
             "session_name": session_name,
@@ -46,6 +50,7 @@ async def record_delivery(
 
 async def claim_delivery_attempt(
     conn: AsyncConnection,
+    repo_full_name: str | None,
     issue_number: int,
     target_entity: str,
     session_name: str,
@@ -55,14 +60,15 @@ async def claim_delivery_attempt(
     result = await conn.execute(
         text(
             """INSERT INTO deliveries
-               (issue_number, target_entity, session_name, outcome, flow_name, created_at)
-               VALUES (:issue_number, :target_entity, :session_name, 'attempting', :flow_name, :now)
-               ON CONFLICT (issue_number, session_name)
+               (repo_full_name, issue_number, target_entity, session_name, outcome, flow_name, created_at)
+               VALUES (:repo_full_name, :issue_number, :target_entity, :session_name, 'attempting', :flow_name, :now)
+               ON CONFLICT (repo_full_name, issue_number, session_name)
                WHERE outcome IN ('attempting','delivered','retried')
                DO NOTHING
                RETURNING id"""
         ),
         {
+            "repo_full_name": normalize_repo_full_name(repo_full_name),
             "issue_number": issue_number,
             "target_entity": target_entity,
             "session_name": session_name,
@@ -109,6 +115,7 @@ async def reclaim_stale_attempts(
 
 async def query_deliveries(
     conn: AsyncConnection,
+    repo_full_name: str | None = None,
     issue_number: int | None = None,
     target_entity: str | None = None,
     session_name: str | None = None,
@@ -118,6 +125,9 @@ async def query_deliveries(
     """Query delivery records with optional filters."""
     conditions: list[str] = []
     params: dict[str, object] = {}
+    if repo_full_name is not None:
+        conditions.append("repo_full_name = :repo_full_name")
+        params["repo_full_name"] = normalize_repo_full_name(repo_full_name)
     if issue_number is not None:
         conditions.append("issue_number = :issue_number")
         params["issue_number"] = issue_number
@@ -155,7 +165,8 @@ async def get_failed_deliveries(
                )
                  AND NOT EXISTS (
                    SELECT 1 FROM deliveries d2
-                   WHERE d2.issue_number = d.issue_number
+                   WHERE d2.repo_full_name = d.repo_full_name
+                     AND d2.issue_number = d.issue_number
                      AND d2.target_entity = d.target_entity
                      AND (d2.outcome LIKE '%delivered' OR d2.outcome LIKE '%retried')
                      AND d2.created_at > d.created_at

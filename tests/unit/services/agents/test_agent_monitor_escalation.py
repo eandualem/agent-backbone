@@ -908,7 +908,7 @@ class TestMonitorAgentsIntegration:
             result = await monitor_agents.fn()
 
         assert result["ike"] == "no_deliverable"
-        mock_db.record_acknowledgment.assert_called_once_with(42, "ike")
+        mock_db.record_acknowledgment.assert_called_once_with("", 42, "ike")
         mock_deliver.assert_not_called()
 
     @pytest.mark.asyncio
@@ -935,7 +935,9 @@ class TestMonitorAgentsIntegration:
             scheduling=SchedulingConfig(monitor_interval_seconds=60),
         )
         mock_db = AsyncMock()
-        mock_db.is_acknowledged.side_effect = lambda num, entity: num == 49
+        mock_db.is_acknowledged.side_effect = (
+            lambda repo_full_name, num, entity: repo_full_name == "" and num == 49
+        )
         mock_db.query_deliveries.return_value = []
         mock_gh = AsyncMock()
 
@@ -1411,7 +1413,7 @@ class TestCodingAgentSweep:
             result = await monitor_agents.fn()
 
         assert result["coding:agent-orchestration-dashboard"] == "delivered_#694"
-        mock_db.record_acknowledgment.assert_called_once_with(693, "coding-agent")
+        mock_db.record_acknowledgment.assert_called_once_with("", 693, "coding-agent")
         mock_deliver.assert_called_once()
 
     @pytest.mark.asyncio

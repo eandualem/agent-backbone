@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import respx
 
 from agent_backbone.config import BackboneConfig, GitHubConfig
-from agent_backbone.services.github import API_BASE, GitHubClient
+from agent_backbone.services.github import API_BASE, GitHubClient, GitHubServiceError
 
 _TEST_GITHUB_APP_KEY = Path(__file__).parents[3] / "fixtures" / "github-app-test-key.pem"
 _ORIGINAL_GET_INSTALLATION_TOKEN = GitHubClient._get_installation_token
@@ -145,7 +147,7 @@ class TestListOpenIssues:
         respx.get(issues_url).respond(status_code=500)
 
         async with GitHubClient(config) as gh:
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(GitHubServiceError):
                 await gh.list_open_issues("for:ike")
 
     @respx.mock
@@ -168,6 +170,137 @@ class TestListOpenIssues:
 
         assert len(issues) == 1
         assert issues[0].repo_full_name == "WF/agent-shell"
+
+    @respx.mock
+    async def test_refreshes_installation_token_after_401(self, config, monkeypatch, issues_url):
+        monkeypatch.setattr(
+            GitHubClient,
+            "_get_installation_token",
+            _ORIGINAL_GET_INSTALLATION_TOKEN,
+        )
+        monkeypatch.setattr(GitHubClient, "_build_app_jwt", lambda self: "app-jwt")
+
+        installation_url = f"{API_BASE}/repos/eandualem/orchestration/installation"
+        token_url = f"{API_BASE}/app/installations/321/access_tokens"
+        respx.get(installation_url).respond(json={"id": 321})
+        token_route = respx.post(token_url).mock(
+            side_effect=[
+                httpx.Response(
+                    201,
+                    json={"token": "stale-token", "expires_at": "2099-01-01T00:00:00Z"},
+                ),
+                httpx.Response(
+                    201,
+                    json={"token": "fresh-token", "expires_at": "2099-01-01T00:00:00Z"},
+                ),
+            ]
+        )
+        issues_route = respx.get(issues_url).mock(
+            side_effect=[
+                httpx.Response(401, json={"message": "Bad credentials"}),
+                httpx.Response(200, json=[]),
+            ]
+        )
+
+        async with GitHubClient(config) as gh:
+            issues = await gh.list_open_issues("for:ike")
+
+        assert issues == []
+        assert issues_route.call_count == 2
+        assert token_route.call_count == 2
+
+    @respx.mock
+    async def test_retries_safe_get_after_server_error(self, config, issues_url, monkeypatch):
+        sleep_calls: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            sleep_calls.append(delay)
+
+        monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+        route = respx.get(issues_url).mock(
+            side_effect=[
+                httpx.Response(502, json={"message": "Bad gateway"}),
+                httpx.Response(200, json=[]),
+            ]
+        )
+
+        async with GitHubClient(config) as gh:
+            issues = await gh.list_open_issues("for:ike")
+
+        assert issues == []
+        assert route.call_count == 2
+        assert sleep_calls == [0.5]
+
+    @respx.mock
+    async def test_retries_rate_limited_request_when_retry_after_is_short(
+        self, config, issues_url, monkeypatch
+    ):
+        sleep_calls: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            sleep_calls.append(delay)
+
+        monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+        route = respx.get(issues_url).mock(
+            side_effect=[
+                httpx.Response(
+                    403,
+                    headers={"Retry-After": "1"},
+                    json={"message": "You have exceeded a secondary rate limit"},
+                ),
+                httpx.Response(200, json=[]),
+            ]
+        )
+
+        async with GitHubClient(config) as gh:
+            issues = await gh.list_open_issues("for:ike")
+
+        assert issues == []
+        assert route.call_count == 2
+        assert sleep_calls == [1.0]
+
+
+class TestMutatingRequests:
+    async def test_serializes_and_spaces_mutations(self, config, monkeypatch):
+        call_times = iter([10.0, 10.0, 10.2, 11.3])
+        last_time = 11.3
+        sleep_calls: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            sleep_calls.append(delay)
+
+        def _fake_monotonic() -> float:
+            nonlocal last_time
+            try:
+                last_time = next(call_times)
+            except StopIteration:
+                pass
+            return last_time
+
+        monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+        monkeypatch.setattr(
+            "agent_backbone.services.github.interface.time.monotonic",
+            _fake_monotonic,
+        )
+
+        async with GitHubClient(config) as gh:
+            request = AsyncMock(
+                side_effect=[
+                    httpx.Response(
+                        201,
+                        json={"id": 1, "body": "ok", "user": {"login": "eandualem"}},
+                    ),
+                    httpx.Response(
+                        201,
+                        json={"id": 2, "body": "ok", "user": {"login": "eandualem"}},
+                    ),
+                ]
+            )
+            monkeypatch.setattr(gh._client, "request", request)
+            await gh.add_comment(42, "[from:ike] first")
+            await gh.add_comment(42, "[from:ike] second")
+
+        assert sleep_calls == [pytest.approx(0.8)]
 
 
 class TestGetIssue:

@@ -51,6 +51,82 @@ log = logging.getLogger(__name__)
 _ALEMBIC_INI = Path(__file__).parents[4] / "alembic.ini"
 
 
+def _coerce_repo_issue_target(
+    repo_full_name: str | int | None,
+    issue_number: int | str,
+    target_entity: str | None,
+) -> tuple[str | None, int, str]:
+    """Accept both repo-aware and legacy `(issue_number, target_entity)` calls."""
+    if target_entity is None:
+        if not isinstance(repo_full_name, int) or not isinstance(issue_number, str):
+            raise TypeError("expected (issue_number: int, target_entity: str)")
+        return None, repo_full_name, issue_number
+
+    if not isinstance(issue_number, int) or not isinstance(target_entity, str):
+        raise TypeError("expected (repo_full_name, issue_number: int, target_entity: str)")
+    if repo_full_name is not None and not isinstance(repo_full_name, str):
+        raise TypeError("repo_full_name must be a string or None")
+    return repo_full_name, issue_number, target_entity
+
+
+def _coerce_repo_issue(
+    repo_full_name: str | int | None,
+    issue_number: int | None,
+) -> tuple[str | None, int]:
+    """Accept both repo-aware and legacy `(issue_number,)` calls."""
+    if issue_number is None:
+        if not isinstance(repo_full_name, int):
+            raise TypeError("expected issue_number: int")
+        return None, repo_full_name
+
+    if not isinstance(issue_number, int):
+        raise TypeError("expected issue_number: int")
+    if repo_full_name is not None and not isinstance(repo_full_name, str):
+        raise TypeError("repo_full_name must be a string or None")
+    return repo_full_name, issue_number
+
+
+def _coerce_delivery_call(
+    repo_full_name: str | int | None,
+    issue_number: int | str,
+    target_entity: str | None,
+    session_name: str | None,
+    outcome: str | None,
+    flow_name: str,
+    flow_run_id: str,
+) -> tuple[str | None, int, str, str, str, str, str]:
+    """Accept both repo-aware and legacy `record_delivery` call shapes."""
+    if (
+        isinstance(repo_full_name, int)
+        and isinstance(issue_number, str)
+        and isinstance(target_entity, str)
+        and isinstance(session_name, str)
+    ):
+        return (
+            None,
+            repo_full_name,
+            issue_number,
+            target_entity,
+            session_name,
+            outcome or "",
+            flow_name,
+        )
+
+    if not (
+        isinstance(issue_number, int)
+        and isinstance(target_entity, str)
+        and isinstance(session_name, str)
+        and isinstance(outcome, str)
+    ):
+        raise TypeError(
+            "expected (repo_full_name, issue_number: int, target_entity: str, "
+            "session_name: str, outcome: str)"
+        )
+    if repo_full_name is not None and not isinstance(repo_full_name, str):
+        raise TypeError("repo_full_name must be a string or None")
+    return repo_full_name, issue_number, target_entity, session_name, outcome, flow_name, flow_run_id
+
+
 class BackboneDB:
     """Async database for backbone persistence.
 
@@ -176,17 +252,38 @@ class BackboneDB:
 
     async def record_delivery(
         self,
-        issue_number: int,
-        target_entity: str,
-        session_name: str,
-        outcome: str,
+        repo_full_name: str | int | None = None,
+        issue_number: int | str = 0,
+        target_entity: str | None = None,
+        session_name: str | None = None,
+        outcome: str | None = None,
         flow_name: str = "",
         flow_run_id: str = "",
     ) -> int:
         """Record a delivery attempt. Returns the row ID."""
+        (
+            repo_full_name,
+            issue_number,
+            target_entity,
+            session_name,
+            outcome,
+            flow_name,
+            flow_run_id,
+        ) = (
+            _coerce_delivery_call(
+                repo_full_name,
+                issue_number,
+                target_entity,
+                session_name,
+                outcome,
+                flow_name,
+                flow_run_id,
+            )
+        )
         async with self._engine.begin() as conn:
             return await _delivery_repo.record_delivery(
                 conn,
+                repo_full_name,
                 issue_number,
                 target_entity,
                 session_name,
@@ -197,15 +294,21 @@ class BackboneDB:
 
     async def claim_delivery_attempt(
         self,
-        issue_number: int,
-        target_entity: str,
-        session_name: str,
-        flow_name: str,
+        repo_full_name: str | None = None,
+        issue_number: int = 0,
+        target_entity: str = "",
+        session_name: str = "",
+        flow_name: str = "",
     ) -> int | None:
         """Reserve an issue delivery attempt before sending."""
+        if issue_number <= 0 or not target_entity or not session_name:
+            raise TypeError(
+                "claim_delivery_attempt requires issue_number, target_entity, and session_name"
+            )
         async with self._engine.begin() as conn:
             return await _delivery_repo.claim_delivery_attempt(
                 conn,
+                repo_full_name,
                 issue_number,
                 target_entity,
                 session_name,
@@ -224,6 +327,7 @@ class BackboneDB:
 
     async def query_deliveries(
         self,
+        repo_full_name: str | None = None,
         issue_number: int | None = None,
         target_entity: str | None = None,
         session_name: str | None = None,
@@ -234,6 +338,7 @@ class BackboneDB:
         async with self._engine.begin() as conn:
             return await _delivery_repo.query_deliveries(
                 conn,
+                repo_full_name,
                 issue_number,
                 target_entity,
                 session_name,
@@ -557,20 +662,65 @@ class BackboneDB:
 
     # --- Acknowledgments (delegates to _queue_repo) ---
 
-    async def record_acknowledgment(self, issue_number: int, target_entity: str) -> None:
+    async def record_acknowledgment(
+        self,
+        repo_full_name: str | int | None,
+        issue_number: int | str,
+        target_entity: str | None = None,
+    ) -> None:
         """Record that an entity has acknowledged an issue."""
+        repo_full_name, issue_number, target_entity = _coerce_repo_issue_target(
+            repo_full_name,
+            issue_number,
+            target_entity,
+        )
         async with self._engine.begin() as conn:
-            await _queue_repo.record_acknowledgment(conn, issue_number, target_entity)
+            await _queue_repo.record_acknowledgment(
+                conn,
+                repo_full_name,
+                issue_number,
+                target_entity,
+            )
 
-    async def is_acknowledged(self, issue_number: int, target_entity: str) -> bool:
+    async def is_acknowledged(
+        self,
+        repo_full_name: str | int | None,
+        issue_number: int | str,
+        target_entity: str | None = None,
+    ) -> bool:
         """Check if entity has acknowledged this issue."""
+        repo_full_name, issue_number, target_entity = _coerce_repo_issue_target(
+            repo_full_name,
+            issue_number,
+            target_entity,
+        )
         async with self._engine.begin() as conn:
-            return await _queue_repo.is_acknowledged(conn, issue_number, target_entity)
+            return await _queue_repo.is_acknowledged(
+                conn,
+                repo_full_name,
+                issue_number,
+                target_entity,
+            )
 
-    async def clear_acknowledgment(self, issue_number: int, target_entity: str) -> None:
+    async def clear_acknowledgment(
+        self,
+        repo_full_name: str | int | None,
+        issue_number: int | str,
+        target_entity: str | None = None,
+    ) -> None:
         """Clear acknowledgment for entity on issue."""
+        repo_full_name, issue_number, target_entity = _coerce_repo_issue_target(
+            repo_full_name,
+            issue_number,
+            target_entity,
+        )
         async with self._engine.begin() as conn:
-            await _queue_repo.clear_acknowledgment(conn, issue_number, target_entity)
+            await _queue_repo.clear_acknowledgment(
+                conn,
+                repo_full_name,
+                issue_number,
+                target_entity,
+            )
 
     # --- Heartbeats (delegates to _queue_repo) ---
 
@@ -600,6 +750,7 @@ class BackboneDB:
         self,
         session_name: str,
         message: str,
+        repo_full_name: str | None = None,
         issue_number: int | None = None,
         target_entity: str | None = None,
         delivery_kind: str = "issue",
@@ -611,6 +762,7 @@ class BackboneDB:
                 conn,
                 session_name,
                 message,
+                repo_full_name,
                 issue_number,
                 target_entity,
                 delivery_kind,
@@ -652,6 +804,7 @@ class BackboneDB:
         session_name: str,
         message: str,
         delivery_kind: str,
+        repo_full_name: str | None = None,
         issue_number: int | None = None,
     ) -> int:
         """Mark queued rows with the same delivery identity as delivered."""
@@ -661,13 +814,19 @@ class BackboneDB:
                 session_name=session_name,
                 message=message,
                 delivery_kind=delivery_kind,
+                repo_full_name=repo_full_name,
                 issue_number=issue_number,
             )
 
-    async def purge_pending_for_issue(self, issue_number: int) -> int:
+    async def purge_pending_for_issue(
+        self,
+        repo_full_name: str | int | None,
+        issue_number: int | None = None,
+    ) -> int:
         """Mark all pending queue messages for an issue as delivered."""
+        repo_full_name, issue_number = _coerce_repo_issue(repo_full_name, issue_number)
         async with self._engine.begin() as conn:
-            return await _queue_repo.purge_pending_for_issue(conn, issue_number)
+            return await _queue_repo.purge_pending_for_issue(conn, repo_full_name, issue_number)
 
     async def expire_stale_pending(self, max_age_minutes: int = 30) -> int:
         """Expire pending queue messages older than max_age_minutes."""

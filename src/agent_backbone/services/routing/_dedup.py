@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import time
 
+from agent_backbone.models import normalize_repo_full_name
+
 _recent_notifications: dict[tuple[str, str], float] = {}
 
 DEFAULT_DEDUP_SECONDS = 10
@@ -23,6 +25,7 @@ def is_recent_notification(
     target: str,
     dedup_seconds: int = DEFAULT_DEDUP_SECONDS,
     *,
+    repo_full_name: str | None = None,
     notification_key: str | None = None,
 ) -> bool:
     """Check if this issue+target was already notified recently.
@@ -30,7 +33,8 @@ def is_recent_notification(
     Returns True if a notification was sent within the dedup window (suppress).
     Returns False and records the notification if it's new (deliver).
     """
-    key = (notification_key or f"issue:{issue_number}", target)
+    issue_key = notification_key or f"issue:{normalize_repo_full_name(repo_full_name)}:{issue_number}"
+    key = (issue_key, target)
     now = time.monotonic()
     # Clean expired entries
     expired = [k for k, t in _recent_notifications.items() if now - t > dedup_seconds]

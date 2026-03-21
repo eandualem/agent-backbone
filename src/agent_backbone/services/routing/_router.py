@@ -14,7 +14,13 @@ import logging
 from prefect import flow, task
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.models import EventType, IssueEvent, parse_from_tag
+from agent_backbone.models import (
+    EventType,
+    IssueEvent,
+    acknowledgment_entities,
+    parse_from_tag,
+    repo_session_name,
+)
 from agent_backbone.services.agents._delivery_check import find_outgoing_comment
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._dedup import is_recent_notification
@@ -59,7 +65,7 @@ def _resolve_commenter_entity(event: IssueEvent) -> str | None:
             return entity
 
     # JSONL fallback — within the 30s recency window
-    originator = find_outgoing_comment(event.issue.number)
+    originator = find_outgoing_comment(event.issue.number, repo_full_name=event.issue.repo_full_name)
     return originator
 
 
@@ -97,7 +103,7 @@ async def _deliver_to_entity(
     result: DispatchResult,
     is_blocking: bool,
     enforce_issue_queue: bool = False,
-    queue_scope_issue_numbers: set[int] | None = None,
+    queue_scope_issue_numbers: set[tuple[str, int]] | None = None,
     delivery_kind: str = "issue",
     session_names: list[str] | None = None,
 ) -> None:
@@ -116,6 +122,7 @@ async def _deliver_to_entity(
             message,
             config,
             db=db,
+            repo_full_name=event.issue.repo_full_name,
             issue_number=event.issue.number,
             target_entity=target,
             flow_name="issue-dispatcher",
@@ -189,7 +196,21 @@ async def issue_dispatcher(
         # Record acknowledgment for the commenter (they've engaged with the issue)
         if commenter:
             try:
-                await db.record_acknowledgment(event.issue.number, commenter)
+                ack_session = (
+                    repo_session_name(event.issue.repo_full_name)
+                    if commenter == "coding-agent"
+                    else None
+                )
+                for entity in acknowledgment_entities(
+                    commenter,
+                    event.issue.repo_full_name,
+                    session_name=ack_session,
+                ):
+                    await db.record_acknowledgment(
+                        event.issue.repo_full_name,
+                        event.issue.number,
+                        entity,
+                    )
             except Exception:
                 log.exception("Failed to record acknowledgment (non-fatal)")
 
@@ -197,6 +218,7 @@ async def issue_dispatcher(
             if event.comment.id and is_recent_notification(
                 event.issue.number,
                 target,
+                repo_full_name=event.issue.repo_full_name,
                 notification_key=f"comment:{event.comment.id}",
             ):
                 log.info(
@@ -248,7 +270,11 @@ async def issue_dispatcher(
 
             # Clear acknowledgment for the target (new info for them)
             try:
-                await db.clear_acknowledgment(event.issue.number, target)
+                await db.clear_acknowledgment(
+                    event.issue.repo_full_name,
+                    event.issue.number,
+                    target,
+                )
             except Exception:
                 log.exception("Failed to clear acknowledgment (non-fatal)")
 
@@ -285,7 +311,7 @@ async def issue_dispatcher(
         return result
 
     # Deliver to each target from for: labels
-    queue_scope_cache: dict[str, set[int]] = {}
+    queue_scope_cache: dict[str, set[tuple[str, int]]] = {}
     targets = resolve_event_targets(event, config)
     for target in targets:
         if target in config.entities.skip:
@@ -298,7 +324,7 @@ async def issue_dispatcher(
             result.skipped.append(target)
             continue
 
-        queue_scope_issue_numbers: set[int] | None = None
+        queue_scope_issue_numbers: set[tuple[str, int]] | None = None
         if gh is not None and delivery_kind == "issue":
             try:
                 open_issues = await list_open_queue_for_target(
@@ -307,7 +333,7 @@ async def issue_dispatcher(
                     gh,
                     issue_repo_full_name=event.issue.repo_full_name,
                 )
-                queue_scope_issue_numbers = {issue.number for issue in open_issues}
+                queue_scope_issue_numbers = {issue.identity_key for issue in open_issues}
                 queue_scope_cache[target] = queue_scope_issue_numbers
             except Exception:
                 log.exception("Failed to load queue scope for %s (non-fatal)", target)

@@ -14,6 +14,7 @@ from prefect import flow, task
 from prefect.cache_policies import NO_CACHE
 
 from agent_backbone.config import BackboneConfig
+from agent_backbone.models import acknowledgment_entities
 from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
@@ -75,16 +76,18 @@ async def drain_message_queue(
                 msg_record["message"],
                 config,
                 db=db,
+                repo_full_name=msg_record.get("repo_full_name"),
                 issue_number=msg_record.get("issue_number"),
                 target_entity=msg_record.get("target_entity"),
                 flow_name="delivery-retry-queue",
                 enforce_issue_queue=True,
                 queue_scope_issue_numbers={
-                    item.number
+                    item.identity_key
                     for item in await list_open_queue_for_target(
                         config,
                         msg_record["target_entity"],
                         gh,
+                        issue_repo_full_name=msg_record.get("repo_full_name") or "",
                     )
                 }
                 if msg_record.get("target_entity")
@@ -117,29 +120,33 @@ async def retry_delivery(
 
     Returns outcome string: retried, still_offline, still_busy, issue_closed.
     """
+    target_entity = delivery["target_entity"]
     session_name = delivery["session_name"]
     issue_number = delivery["issue_number"]
-    target_entity = delivery["target_entity"]
+    repo_full_name = delivery.get("repo_full_name") or (
+        f"{config.github.owner}/{target_entity}"
+        if target_entity in config.registry.repo_names
+        else None
+    )
 
     # Skip if session is not active — avoids creating new failure records
     if active_sessions is not None and session_name not in active_sessions:
         return "still_offline"
 
     # Skip if already acknowledged (check both entity and session for fallback scenarios)
-    if await db.is_acknowledged(issue_number, target_entity):
-        return "acknowledged"
-    if session_name != target_entity and await db.is_acknowledged(issue_number, session_name):
-        return "acknowledged"
+    for entity in acknowledgment_entities(
+        target_entity,
+        repo_full_name,
+        session_name=session_name,
+    ):
+        if await db.is_acknowledged(repo_full_name, issue_number, entity):
+            return "acknowledged"
 
     # Fetch current issue state from GitHub
     try:
         issue = await gh.get_issue(
             issue_number,
-            repo_full_name=(
-                f"{config.github.owner}/{target_entity}"
-                if target_entity in config.registry.repo_names
-                else None
-            ),
+            repo_full_name=repo_full_name,
         )
     except Exception:
         log.warning("Failed to fetch issue #%d for retry", issue_number)
@@ -152,7 +159,7 @@ async def retry_delivery(
     # Deliver via safe_deliver (handles state checks + enqueue on failure)
     message = format_next_issue_notification(issue)
     queue_scope_issue_numbers = {
-        item.number
+        item.identity_key
         for item in await list_open_queue_for_target(
             config,
             target_entity,
@@ -165,6 +172,7 @@ async def retry_delivery(
         message,
         config,
         db=db,
+        repo_full_name=issue.repo_full_name,
         issue_number=issue_number,
         target_entity=target_entity,
         flow_name="delivery-retry",
@@ -256,6 +264,7 @@ async def scheduled_delivery(
     target_entity: str,
     session_name: str,
     is_blocking: bool = False,
+    repo_full_name: str = "",
 ) -> str:
     """Deliver a specific issue to a specific session.
 
@@ -270,7 +279,8 @@ async def scheduled_delivery(
     # Fetch current issue state
     issue = await gh.get_issue(
         issue_number,
-        repo_full_name=(
+        repo_full_name=repo_full_name
+        or (
             f"{config.github.owner}/{target_entity}"
             if target_entity in config.registry.repo_names
             else None
@@ -283,7 +293,7 @@ async def scheduled_delivery(
     # Deliver via safe_deliver (handles state checks)
     message = format_next_issue_notification(issue)
     queue_scope_issue_numbers = {
-        item.number
+        item.identity_key
         for item in await list_open_queue_for_target(
             config,
             target_entity,
@@ -296,6 +306,7 @@ async def scheduled_delivery(
         message,
         config,
         db=db,
+        repo_full_name=issue.repo_full_name,
         issue_number=issue_number,
         target_entity=target_entity,
         flow_name="scheduled-delivery",

@@ -22,8 +22,7 @@ class TestFormatIssueNotification:
         assert "[task]" in msg
         assert "Update config" in msg
         assert "from leo" in msg
-        assert "mcp__github__issue_read" in msg
-        assert "issue_number:42" in msg
+        assert "gh issue view 42 --repo eandualem/orchestration" in msg
 
     def test_with_priority(self):
         labels = ParsedLabels(
@@ -51,8 +50,7 @@ class TestFormatIssueNotification:
             repo_full_name="WF/agent-shell",
         )
         msg = format_issue_notification(issue)
-        assert 'owner:"WF"' in msg
-        assert 'repo:"agent-shell"' in msg
+        assert "gh issue view 42 --repo WF/agent-shell" in msg
 
 
 class TestFormatCommentNotification:
@@ -62,7 +60,7 @@ class TestFormatCommentNotification:
         assert "#42" in msg
         assert "eandualem" in msg
         assert "test comment" in msg
-        assert "get_comments" in msg
+        assert "gh issue view 42 --repo eandualem/orchestration --comments" in msg
         # Issue title must appear in the notification
         assert '"[task] Update config"' in msg
         # Attribution falls back to user_login when no entity provided
@@ -112,8 +110,7 @@ class TestFormatCommentNotification:
             repo_full_name="WF/agent-shell",
         )
         msg = format_comment_notification(issue, sample_comment)
-        assert 'owner:"WF"' in msg
-        assert 'repo:"agent-shell"' in msg
+        assert "gh issue view 42 --repo WF/agent-shell --comments" in msg
 
 
 class TestFormatNextIssueNotification:
@@ -144,7 +141,7 @@ class TestFormatUnblockNotification:
         assert "#42" in msg
         assert "[task]" in msg
         assert "All sub-issues are now closed" in msg
-        assert "mcp__github__issue_read" in msg
+        assert "gh issue view 42 --repo eandualem/orchestration" in msg
 
     def test_includes_sender(self):
         labels = ParsedLabels(sender="ada", targets=["ike"], issue_type="spec-gap")
@@ -163,12 +160,20 @@ class TestFormatStallNotification:
         assert "#42" in msg
         assert "95m" in msg
         assert "stalled" in msg
-        assert "mcp__github__issue_read" in msg
-        assert "issue_number:42" in msg
 
     def test_single_line(self):
         msg = format_stall_notification("ike", 10, 120, "ike")
         assert "\n" not in msg
+
+    def test_includes_repo_when_available(self):
+        msg = format_stall_notification(
+            "feynman",
+            42,
+            95,
+            "feynman",
+            repo_full_name="eandualem/agent-backbone",
+        )
+        assert "gh issue view 42 --repo eandualem/agent-backbone" in msg
 
 
 class TestFormatUnexpectedOfflineNotification:

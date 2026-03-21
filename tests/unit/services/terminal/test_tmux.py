@@ -169,6 +169,32 @@ class TestTerminalAdapters:
         mock_write.assert_awaited_once_with("ike", "hello")
         mock_submit.assert_awaited_once_with("ike")
 
+    async def test_claude_adapter_treats_queued_message_as_delivered(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        with (
+            patch(
+                "agent_backbone.services.terminal._adapters._write_message_buffer",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters._send_submit_key",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_submit,
+            patch(
+                "agent_backbone.services.terminal._adapters.capture_pane",
+                new_callable=AsyncMock,
+                return_value="❯ [via:backbone] queued payload\nPress up to edit queued messages",
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            assert await adapter.deliver_message("ike", "hello") is True
+        mock_submit.assert_awaited_once_with("ike")
+
     async def test_codex_adapter_submits_and_retries_buffered_input(self):
         adapter = get_terminal_adapter(TerminalRuntime.CODEX)
         with (
