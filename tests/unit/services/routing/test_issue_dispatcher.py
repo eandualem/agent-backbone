@@ -400,7 +400,7 @@ class TestIssueDispatcher:
         # Ike is the commenter and should be skipped (removed from target set)
         assert "ike" not in result.delivered
         # Acknowledgment recorded for the commenter
-        mock_db.record_acknowledgment.assert_called_once_with(42, "ike")
+        mock_db.record_acknowledgment.assert_called_once_with("", 42, "ike")
 
     async def test_external_comment_clears_acknowledgment(self, config, mock_db):
         """When someone else comments, the target's acknowledgment is cleared
@@ -419,7 +419,39 @@ class TestIssueDispatcher:
         # Ike should receive the comment (Leo is the commenter, Ike is target)
         assert "ike" in result.delivered
         # Acknowledgment should be cleared for Ike (new info for them)
-        mock_db.clear_acknowledgment.assert_called_with(42, "ike")
+        mock_db.clear_acknowledgment.assert_called_with("", 42, "ike")
+
+    async def test_repo_local_coding_agent_comment_records_repo_session_ack(self, mock_db):
+        registry = EntityRegistry(
+            entities={},
+            repos=[RepoInfo(org="WF", name="agent-orchestration-dashboard", path="/some/path")],
+        )
+        config = BackboneConfig(webhook_secret="test-secret", registry=registry)
+        issue = IssueData(
+            number=20,
+            title="Redesign Agent Schedule as calendar view with activity heatmap",
+            labels=ParsedLabels(),
+            repo_full_name="eandualem/agent-orchestration-dashboard",
+        )
+        comment = CommentData(body="[from:coding-agent] Acknowledged.", user_login="eandualem")
+        event = IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+        with (
+            _patch_resolve_sessions(["agent-orchestration-dashboard"]),
+            _patch_safe_deliver("delivered"),
+        ):
+            await issue_dispatcher.fn(event, config, mock_db)
+
+        assert mock_db.record_acknowledgment.await_args_list[0].args == (
+            "eandualem/agent-orchestration-dashboard",
+            20,
+            "coding-agent",
+        )
+        assert mock_db.record_acknowledgment.await_args_list[1].args == (
+            "eandualem/agent-orchestration-dashboard",
+            20,
+            "agent-orchestration-dashboard",
+        )
 
 
 # ---------------------------------------------------------------------------

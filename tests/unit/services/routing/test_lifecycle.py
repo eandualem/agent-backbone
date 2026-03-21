@@ -425,7 +425,7 @@ class TestOnIssueClosed:
         ):
             result = await on_issue_closed.fn(event, config, mock_gh, db=mock_db)
 
-        mock_db.purge_pending_for_issue.assert_awaited_once_with(10)
+        mock_db.purge_pending_for_issue.assert_awaited_once_with("", 10)
         assert result["feynman"] == "queue_empty"
 
 

@@ -90,6 +90,12 @@ class TestFailedDeliveries:
         body = resp.json()
         assert all(item["outcome"] != "delivered" for item in body["items"])
 
+    async def test_legacy_alias_endpoint(self, client, auth_headers):
+        resp = await client.get("/api/failed-deliveries", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 2
+
 
 class TestDeliveryStats:
     """GET /api/deliveries/stats — aggregated counts by outcome."""

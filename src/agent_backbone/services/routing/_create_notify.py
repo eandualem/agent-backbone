@@ -28,6 +28,7 @@ async def create_and_notify(
     labels: list[str],
     config: BackboneConfig,
     *,
+    repo_full_name: str | None = None,
     db: BackboneDB | None = None,
     flow_name: str = "",
 ) -> IssueData:
@@ -53,7 +54,7 @@ async def create_and_notify(
     targets = [label.removeprefix("for:") for label in labels if label.startswith("for:")]
     validate_issue_targets(targets, config)
 
-    issue = await gh.create_issue(title, body, labels)
+    issue = await gh.create_issue(title, body, labels, repo_full_name=repo_full_name)
 
     if not targets:
         log.info("Created issue #%d with no for: targets — skipping notification", issue.number)
@@ -72,7 +73,7 @@ async def create_and_notify(
             continue
 
         queue_scope_issue_numbers = {
-            item.number
+            item.identity_key
             for item in await gh.list_open_issues(
                 f"for:{target}",
                 repo_full_name=issue.repo_full_name or None,
@@ -84,6 +85,7 @@ async def create_and_notify(
                 message,
                 config,
                 db=db,
+                repo_full_name=issue.repo_full_name,
                 issue_number=issue.number,
                 target_entity=target,
                 flow_name=flow_name,

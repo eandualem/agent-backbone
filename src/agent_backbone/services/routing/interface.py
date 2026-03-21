@@ -84,9 +84,21 @@ class DeliveryService:
 
     # --- DI surface for route handlers ---
 
-    def is_recent_notification(self, issue_number: int, target: str) -> bool:
+    def is_recent_notification(
+        self,
+        issue_number: int,
+        target: str,
+        *,
+        repo_full_name: str | None = None,
+        notification_key: str | None = None,
+    ) -> bool:
         """Check if issue+target was already notified recently."""
-        return _is_recent_notification(issue_number, target)
+        return _is_recent_notification(
+            issue_number,
+            target,
+            repo_full_name=repo_full_name,
+            notification_key=notification_key,
+        )
 
     def compute_priority_score(
         self, issue: IssueData, scoring_config: PriorityScoringConfig, dependents: int = 0
@@ -101,6 +113,7 @@ class DeliveryService:
         config: BackboneConfig,
         *,
         db: BackboneDB | None = None,
+        repo_full_name: str | None = None,
         issue_number: int | None = None,
         target_entity: str | None = None,
         flow_name: str = "",
@@ -116,6 +129,7 @@ class DeliveryService:
             message,
             config,
             db=db,
+            repo_full_name=repo_full_name,
             issue_number=issue_number,
             target_entity=target_entity,
             flow_name=flow_name,

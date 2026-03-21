@@ -12,6 +12,7 @@ from agent_backbone.api.deps import get_config, get_db, get_delivery_service, ge
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import CommentData, IssueData, ParsedLabels
 from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.github import GitHubServiceError
 from agent_backbone.services.registry import EntityEntry, EntityRegistry
 
 # --- Fixtures ---
@@ -126,29 +127,49 @@ class TestListIssues:
         assert item["labels"]["issue_type"] == "task"
         assert "priority_score" in item
         # Default call uses state=open, no labels
-        mock_github.list_issues.assert_called_once_with(state="open", labels=[])
+        mock_github.list_issues.assert_called_once_with(
+            state="open",
+            labels=[],
+            repo_full_name=None,
+        )
 
     async def test_list_issues_filter_by_for_entity(self, issues_client, auth_headers, mock_github):
         resp = await issues_client.get("/api/issues?for_entity=ike", headers=auth_headers)
         assert resp.status_code == 200
-        mock_github.list_issues.assert_called_once_with(state="open", labels=["for:ike"])
+        mock_github.list_issues.assert_called_once_with(
+            state="open",
+            labels=["for:ike"],
+            repo_full_name=None,
+        )
 
     async def test_list_issues_filter_by_from_entity(
         self, issues_client, auth_headers, mock_github
     ):
         resp = await issues_client.get("/api/issues?from_entity=leo", headers=auth_headers)
         assert resp.status_code == 200
-        mock_github.list_issues.assert_called_once_with(state="open", labels=["from:leo"])
+        mock_github.list_issues.assert_called_once_with(
+            state="open",
+            labels=["from:leo"],
+            repo_full_name=None,
+        )
 
     async def test_list_issues_filter_by_type(self, issues_client, auth_headers, mock_github):
         resp = await issues_client.get("/api/issues?type=bug", headers=auth_headers)
         assert resp.status_code == 200
-        mock_github.list_issues.assert_called_once_with(state="open", labels=["bug"])
+        mock_github.list_issues.assert_called_once_with(
+            state="open",
+            labels=["bug"],
+            repo_full_name=None,
+        )
 
     async def test_list_issues_filter_by_state(self, issues_client, auth_headers, mock_github):
         resp = await issues_client.get("/api/issues?state=closed", headers=auth_headers)
         assert resp.status_code == 200
-        mock_github.list_issues.assert_called_once_with(state="closed", labels=[])
+        mock_github.list_issues.assert_called_once_with(
+            state="closed",
+            labels=[],
+            repo_full_name=None,
+        )
 
     async def test_list_issues_requires_auth(self, issues_client):
         resp = await issues_client.get("/api/issues")
@@ -164,13 +185,28 @@ class TestGetIssue:
         assert data["title"] == "[task] Update config"
         assert data["html_url"] == "https://github.com/eandualem/orchestration/issues/42"
         assert "priority_score" in data
-        mock_github.get_issue.assert_called_once_with(42)
+        mock_github.get_issue.assert_called_once_with(42, repo_full_name=None)
 
     async def test_get_issue_not_found(self, issues_client, auth_headers, mock_github):
-        mock_github.get_issue.side_effect = Exception("Not found")
+        mock_github.get_issue.side_effect = GitHubServiceError(
+            "GitHub API 404 for GET /repos/eandualem/orchestration/issues/999: Not Found",
+            status_code=404,
+            retry_allowed=False,
+        )
         resp = await issues_client.get("/api/issues/999", headers=auth_headers)
         assert resp.status_code == 404
         assert "not found" in resp.json()["detail"].lower()
+
+    async def test_get_issue_upstream_failure_returns_503(
+        self, issues_client, auth_headers, mock_github
+    ):
+        mock_github.get_issue.side_effect = GitHubServiceError(
+            "GitHub request timed out for GET /repos/eandualem/orchestration/issues/42",
+            retry_allowed=True,
+        )
+        resp = await issues_client.get("/api/issues/42", headers=auth_headers)
+        assert resp.status_code == 503
+        assert "timed out" in resp.json()["detail"].lower()
 
 
 class TestListComments:
@@ -187,7 +223,7 @@ class TestListComments:
         # Second comment has no from-tag
         assert items[1]["id"] == 2
         assert items[1]["from_entity"] is None
-        mock_github.list_comments.assert_called_once_with(42)
+        mock_github.list_comments.assert_called_once_with(42, repo_full_name=None)
 
 
 class TestGetDependencies:
@@ -197,7 +233,7 @@ class TestGetDependencies:
         data = resp.json()
         assert data["sub_issues"] == []
         assert data["parents"] == []
-        mock_github.get_sub_issues.assert_called_once_with(42)
+        mock_github.get_sub_issues.assert_called_once_with(42, repo_full_name=None)
 
     async def test_dependencies_with_sub_issues(self, issues_client, auth_headers, mock_github):
         sub = IssueData(
@@ -309,7 +345,11 @@ class TestAddComment:
         assert data["id"] == 10
         assert data["body"] == "[from:ike] Acknowledged"
         assert data["from_entity"] == "ike"
-        mock_github.add_comment.assert_called_once_with(42, "[from:ike] Acknowledged")
+        mock_github.add_comment.assert_called_once_with(
+            42,
+            "[from:ike] Acknowledged",
+            repo_full_name=None,
+        )
 
     async def test_add_comment_missing_body(self, issues_client, auth_headers):
         payload = {"something": "else"}
@@ -326,6 +366,23 @@ class TestAddComment:
         )
         assert resp.status_code == 400
 
+    async def test_add_comment_rate_limited_returns_retry_after(
+        self, issues_client, auth_headers, mock_github
+    ):
+        mock_github.add_comment.side_effect = GitHubServiceError(
+            "GitHub API 403 for POST "
+            "/repos/eandualem/orchestration/issues/42/comments: secondary rate limit",
+            status_code=403,
+            retry_after_seconds=2.4,
+            retry_allowed=True,
+        )
+        payload = {"body": "[from:ike] Acknowledged"}
+        resp = await issues_client.post(
+            "/api/issues/42/comment", json=payload, headers=auth_headers
+        )
+        assert resp.status_code == 503
+        assert resp.headers["Retry-After"] == "3"
+
 
 class TestUpdateIssue:
     async def test_update_issue_close(self, issues_client, auth_headers, mock_github):
@@ -335,7 +392,7 @@ class TestUpdateIssue:
         data = resp.json()
         assert data["number"] == 42
         assert data["state"] == "closed"
-        mock_github.update_issue.assert_called_once_with(42, "closed")
+        mock_github.update_issue.assert_called_once_with(42, "closed", repo_full_name=None)
 
     async def test_update_issue_missing_state(self, issues_client, auth_headers):
         payload = {"title": "new title"}

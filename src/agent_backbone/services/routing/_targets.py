@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import EventType, IssueData, IssueEvent
+from agent_backbone.services.routing._priority import compute_priority_score
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
+
+log = logging.getLogger(__name__)
 
 
 def default_repo_full_name(config: BackboneConfig) -> str:
     """Return the backbone's default GitHub repository."""
     return f"{config.github.owner}/{config.github.repo}"
+
+
+def monitored_repo_full_names(config: BackboneConfig) -> tuple[str, ...]:
+    """All repositories whose issues are visible to backbone delivery."""
+    repos = {default_repo_full_name(config)}
+    repos.update(f"{config.github.owner}/{repo_name}" for repo_name in config.registry.repo_names)
+    return tuple(sorted(repos))
 
 
 def repo_name_from_full_name(repo_full_name: str) -> str:
@@ -73,6 +85,43 @@ def repo_full_name_for_target(
     return None
 
 
+def _sort_issue_queue(issues: list[IssueData], config: BackboneConfig) -> list[IssueData]:
+    issues.sort(
+        key=lambda issue: (
+            -compute_priority_score(issue, config.priority_scoring),
+            issue.number,
+            issue.repo_full_name,
+        )
+    )
+    return issues
+
+
+async def _list_open_issues_across_managed_repos(
+    config: BackboneConfig,
+    label: str,
+    gh: object,
+) -> list[IssueData]:
+    repo_full_names = monitored_repo_full_names(config)
+    results = await asyncio.gather(
+        *(gh.list_open_issues(label, repo_full_name=repo_full_name) for repo_full_name in repo_full_names),
+        return_exceptions=True,
+    )
+
+    issues: list[IssueData] = []
+    for repo_full_name, result in zip(repo_full_names, results, strict=True):
+        if isinstance(result, Exception):
+            log.warning(
+                "Failed to load %s queue from %s: %s",
+                label,
+                repo_full_name,
+                result,
+            )
+            continue
+        issues.extend(result)
+
+    return _sort_issue_queue(issues, config)
+
+
 async def list_open_queue_for_target(
     config: BackboneConfig,
     target: str,
@@ -88,4 +137,6 @@ async def list_open_queue_for_target(
     )
     if repo_full_name and target in config.registry.repo_names:
         return await gh.list_issues(state="open", repo_full_name=repo_full_name)
-    return await gh.list_open_issues(f"for:{target}", repo_full_name=repo_full_name)
+    if repo_full_name:
+        return await gh.list_open_issues(f"for:{target}", repo_full_name=repo_full_name)
+    return await _list_open_issues_across_managed_repos(config, f"for:{target}", gh)

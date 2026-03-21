@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from agent_backbone.models import normalize_repo_full_name
+
 
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -136,6 +138,7 @@ async def sync_dependencies(
 
 async def record_acknowledgment(
     conn: AsyncConnection,
+    repo_full_name: str | None,
     issue_number: int,
     target_entity: str,
 ) -> None:
@@ -143,12 +146,13 @@ async def record_acknowledgment(
     await conn.execute(
         text(
             """INSERT INTO acknowledgments
-               (issue_number, target_entity, acknowledged_at)
-               VALUES (:issue_number, :target_entity, :acknowledged_at)
-               ON CONFLICT(issue_number, target_entity) DO UPDATE SET
+               (repo_full_name, issue_number, target_entity, acknowledged_at)
+               VALUES (:repo_full_name, :issue_number, :target_entity, :acknowledged_at)
+               ON CONFLICT(repo_full_name, issue_number, target_entity) DO UPDATE SET
                  acknowledged_at = excluded.acknowledged_at"""
         ),
         {
+            "repo_full_name": normalize_repo_full_name(repo_full_name),
             "issue_number": issue_number,
             "target_entity": target_entity,
             "acknowledged_at": _now_iso(),
@@ -158,6 +162,7 @@ async def record_acknowledgment(
 
 async def is_acknowledged(
     conn: AsyncConnection,
+    repo_full_name: str | None,
     issue_number: int,
     target_entity: str,
 ) -> bool:
@@ -165,15 +170,21 @@ async def is_acknowledged(
     result = await conn.execute(
         text(
             "SELECT 1 FROM acknowledgments"
-            " WHERE issue_number = :issue_number AND target_entity = :target_entity"
+            " WHERE repo_full_name = :repo_full_name"
+            " AND issue_number = :issue_number AND target_entity = :target_entity"
         ),
-        {"issue_number": issue_number, "target_entity": target_entity},
+        {
+            "repo_full_name": normalize_repo_full_name(repo_full_name),
+            "issue_number": issue_number,
+            "target_entity": target_entity,
+        },
     )
     return result.fetchone() is not None
 
 
 async def clear_acknowledgment(
     conn: AsyncConnection,
+    repo_full_name: str | None,
     issue_number: int,
     target_entity: str,
 ) -> None:
@@ -181,9 +192,14 @@ async def clear_acknowledgment(
     await conn.execute(
         text(
             "DELETE FROM acknowledgments"
-            " WHERE issue_number = :issue_number AND target_entity = :target_entity"
+            " WHERE repo_full_name = :repo_full_name"
+            " AND issue_number = :issue_number AND target_entity = :target_entity"
         ),
-        {"issue_number": issue_number, "target_entity": target_entity},
+        {
+            "repo_full_name": normalize_repo_full_name(repo_full_name),
+            "issue_number": issue_number,
+            "target_entity": target_entity,
+        },
     )
 
 
@@ -263,6 +279,7 @@ async def enqueue_message(
     conn: AsyncConnection,
     session_name: str,
     message: str,
+    repo_full_name: str | None = None,
     issue_number: int | None = None,
     target_entity: str | None = None,
     delivery_kind: str = "issue",
@@ -273,6 +290,7 @@ async def enqueue_message(
     params = {
         "session_name": session_name,
         "message": message,
+        "repo_full_name": normalize_repo_full_name(repo_full_name),
         "issue_number": issue_number,
         "target_entity": target_entity,
         "delivery_kind": delivery_kind,
@@ -283,11 +301,11 @@ async def enqueue_message(
 
     if delivery_kind == "issue" and issue_number is not None:
         sql = """INSERT INTO message_queue
-               (session_name, message, issue_number, target_entity,
+               (session_name, message, repo_full_name, issue_number, target_entity,
                 delivery_kind, flow_name, enqueued_at, status, content_hash)
-               VALUES (:session_name, :message, :issue_number, :target_entity,
+               VALUES (:session_name, :message, :repo_full_name, :issue_number, :target_entity,
                        :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
-               ON CONFLICT (session_name, issue_number)
+               ON CONFLICT (session_name, repo_full_name, issue_number)
                WHERE delivery_kind = 'issue'
                  AND status IN ('pending','in_progress')
                  AND issue_number IS NOT NULL
@@ -295,11 +313,11 @@ async def enqueue_message(
                RETURNING id"""
     elif delivery_kind == "comment" and issue_number is not None:
         sql = """INSERT INTO message_queue
-               (session_name, message, issue_number, target_entity,
+               (session_name, message, repo_full_name, issue_number, target_entity,
                 delivery_kind, flow_name, enqueued_at, status, content_hash)
-               VALUES (:session_name, :message, :issue_number, :target_entity,
+               VALUES (:session_name, :message, :repo_full_name, :issue_number, :target_entity,
                        :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
-               ON CONFLICT (session_name, issue_number, content_hash)
+               ON CONFLICT (session_name, repo_full_name, issue_number, content_hash)
                WHERE delivery_kind = 'comment'
                  AND status IN ('pending','in_progress')
                  AND issue_number IS NOT NULL
@@ -307,9 +325,9 @@ async def enqueue_message(
                RETURNING id"""
     elif delivery_kind == "direct_message":
         sql = """INSERT INTO message_queue
-               (session_name, message, issue_number, target_entity,
+               (session_name, message, repo_full_name, issue_number, target_entity,
                 delivery_kind, flow_name, enqueued_at, status, content_hash)
-               VALUES (:session_name, :message, :issue_number, :target_entity,
+               VALUES (:session_name, :message, :repo_full_name, :issue_number, :target_entity,
                        :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
                ON CONFLICT (session_name, content_hash)
                WHERE delivery_kind = 'direct_message' AND status IN ('pending','in_progress')
@@ -317,9 +335,9 @@ async def enqueue_message(
                RETURNING id"""
     else:
         sql = """INSERT INTO message_queue
-               (session_name, message, issue_number, target_entity,
+               (session_name, message, repo_full_name, issue_number, target_entity,
                 delivery_kind, flow_name, enqueued_at, status, content_hash)
-               VALUES (:session_name, :message, :issue_number, :target_entity,
+               VALUES (:session_name, :message, :repo_full_name, :issue_number, :target_entity,
                        :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
                RETURNING id"""
 
@@ -420,6 +438,7 @@ async def mark_matching_messages_delivered(
     session_name: str,
     message: str,
     delivery_kind: str,
+    repo_full_name: str | None = None,
     issue_number: int | None = None,
 ) -> int:
     """Mark queued messages with the same identity as delivered.
@@ -439,8 +458,11 @@ async def mark_matching_messages_delivered(
         "session_name": session_name,
         "delivery_kind": delivery_kind,
         "content_hash": content_hash,
+        "repo_full_name": normalize_repo_full_name(repo_full_name),
         "delivered_at": _now_iso(),
     }
+
+    clauses.append("repo_full_name = :repo_full_name")
 
     if issue_number is None:
         clauses.append("issue_number IS NULL")
@@ -517,6 +539,7 @@ async def expire_stale_pending(
 
 async def purge_pending_for_issue(
     conn: AsyncConnection,
+    repo_full_name: str | None,
     issue_number: int,
 ) -> int:
     """Mark all pending or leased messages for an issue as delivered (issue closed).
@@ -527,9 +550,14 @@ async def purge_pending_for_issue(
         text(
             """UPDATE message_queue
                SET status = 'delivered', delivered_at = :delivered_at
-               WHERE issue_number = :issue_number
+               WHERE repo_full_name = :repo_full_name
+                 AND issue_number = :issue_number
                  AND status IN ('pending', 'in_progress')"""
         ),
-        {"delivered_at": _now_iso(), "issue_number": issue_number},
+        {
+            "delivered_at": _now_iso(),
+            "repo_full_name": normalize_repo_full_name(repo_full_name),
+            "issue_number": issue_number,
+        },
     )
     return result.rowcount

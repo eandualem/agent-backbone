@@ -1339,7 +1339,7 @@ class TestMeetingSkillInjection:
 
         assert "Participants: leo" in result
 
-    async def test_inject_meeting_skill_delivers_to_all(self):
+    async def test_inject_meeting_skill_delivers_to_all(self, room_dir):
         """Delivers skill to all participants via safe_deliver."""
         room = _make_room(participants=["leo", "feynman"])
         config = MagicMock()
@@ -1391,7 +1391,7 @@ class TestMeetingSkillInjection:
 
         delivery_svc.safe_deliver.assert_not_called()
 
-    async def test_inject_meeting_skill_partial_failure_continues(self):
+    async def test_inject_meeting_skill_partial_failure_continues(self, room_dir):
         """One participant fails, others still get delivery."""
         room = _make_room(participants=["leo", "feynman"])
         config = MagicMock()
@@ -1414,7 +1414,7 @@ class TestMeetingSkillInjection:
         # Both participants got delivery attempts
         assert delivery_svc.safe_deliver.call_count == 2
 
-    async def test_inject_meeting_skill_unresolvable_session_skips(self):
+    async def test_inject_meeting_skill_unresolvable_session_skips(self, room_dir):
         """Unresolvable session skips delivery for that participant."""
         room = _make_room(participants=["leo", "unknown"])
         config = MagicMock()

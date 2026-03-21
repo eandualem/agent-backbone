@@ -20,6 +20,7 @@ from agent_backbone.services.routing._format import (
     format_stall_notification,
     format_unexpected_offline_notification,
 )
+from agent_backbone.services.routing._targets import list_open_queue_for_target
 
 log = logging.getLogger(__name__)
 
@@ -206,7 +207,7 @@ async def _pending_count_for_session(
     only need their direct ``for:{entity}`` queue.
     """
     if session_name not in config.registry.repo_names:
-        issues = await gh.list_open_issues(f"for:{entity}")
+        issues = await list_open_queue_for_target(config, entity, gh)
         return len(issues)
 
     repo_full_name = f"{config.github.owner}/{session_name}"
@@ -223,6 +224,24 @@ async def _pending_count_for_session(
             and match.group(1).split("/", 1)[-1].casefold() == repo_name
         )
     )
+
+
+async def _latest_issue_repo_for_session(
+    db: BackboneDB,
+    session_name: str,
+    issue_number: int,
+) -> str | None:
+    """Best-effort repo lookup for the issue currently associated with a session."""
+    rows = await db.query_deliveries(
+        issue_number=issue_number,
+        session_name=session_name,
+        limit=25,
+    )
+    for row in rows:
+        repo_full_name = row.get("repo_full_name")
+        if isinstance(repo_full_name, str) and repo_full_name:
+            return repo_full_name
+    return None
 
 
 @task(cache_policy=NO_CACHE)
@@ -330,7 +349,7 @@ async def check_for_unexpected_offline(
         pending_count = 0
         try:
             if session_name in config.registry.repo_names and coding_issues is None:
-                coding_issues = await gh.list_open_issues("for:coding-agent")
+                coding_issues = await list_open_queue_for_target(config, "coding-agent", gh)
             pending_count = await _pending_count_for_session(
                 entity,
                 session_name,
@@ -358,7 +377,12 @@ async def handle_stalls(config: BackboneConfig, active_sessions: set[str], db: B
     escalation_target = config.escalation.escalation_target
 
     for stall in stalls:
-        event_key = f"stall:{stall['issue_number']}"
+        issue_repo_full_name = await _latest_issue_repo_for_session(
+            db,
+            stall["session"],
+            stall["issue_number"] or 0,
+        )
+        event_key = f"stall:{issue_repo_full_name or ''}:{stall['issue_number']}"
         if _should_escalate(
             stall["session"], event_key, config.escalation.escalation_dedup_seconds
         ):
@@ -373,6 +397,7 @@ async def handle_stalls(config: BackboneConfig, active_sessions: set[str], db: B
                     stall["issue_number"] or 0,
                     stall["duration_minutes"],
                     stall["entity"],
+                    repo_full_name=issue_repo_full_name,
                 )
                 await safe_deliver(escalation_session, msg, config, priority=True)
                 log.warning(

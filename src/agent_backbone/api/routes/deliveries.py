@@ -41,6 +41,15 @@ async def list_failed_deliveries(
     return ListEnvelope(items=items, total=len(items))
 
 
+@router.get("/failed-deliveries", response_model=ListEnvelope[DeliveryRecord], include_in_schema=False)
+async def list_failed_deliveries_legacy(
+    limit: int = Query(default=50, ge=1, le=500),
+    db: BackboneDB = Depends(get_db),
+):
+    """Back-compat alias for older failed-deliveries callers."""
+    return await list_failed_deliveries(limit=limit, db=db)
+
+
 @router.get("/deliveries/stats", response_model=DeliveryStats)
 async def get_delivery_stats(db: BackboneDB = Depends(get_db)):
     """Aggregate delivery statistics by outcome."""

@@ -218,6 +218,11 @@ def _default_config() -> BackboneConfig:
     )
 
 
+def _default_repo_full_name(config: BackboneConfig) -> str:
+    """Default repo full name for tests that rely on orchestration defaults."""
+    return f"{config.github.owner}/{config.github.repo}"
+
+
 def _config_with_grace(seconds: int) -> BackboneConfig:
     """BackboneConfig with a specific grace_period_seconds."""
     return BackboneConfig(
@@ -684,6 +689,7 @@ class TestSafeDeliver:
         mock_db.enqueue_message.assert_called_once_with(
             session_name="ike",
             message="Hello",
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             delivery_kind="issue",
@@ -834,6 +840,7 @@ class TestSafeDeliver:
         mock_db.enqueue_message.assert_called_once_with(
             session_name="ike",
             message="Hello",
+            repo_full_name="",
             issue_number=None,
             target_entity=None,
             delivery_kind="direct_message",
@@ -902,12 +909,14 @@ class TestSafeDeliver:
         mock_db.enqueue_message.assert_called_once_with(
             session_name="ike",
             message="Hello",
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             delivery_kind="issue",
             flow_name="test_flow",
         )
         mock_db.record_delivery.assert_called_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -939,6 +948,7 @@ class TestSafeDeliver:
         mock_db.enqueue_message.assert_called_once_with(
             session_name="ike",
             message="Hello",
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             delivery_kind="issue",
@@ -969,6 +979,7 @@ class TestSafeDeliver:
         mock_db.enqueue_message.assert_called_once_with(
             session_name="ike",
             message="Hello",
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             delivery_kind="issue",
@@ -998,6 +1009,7 @@ class TestSafeDeliver:
         assert result == "delivered"
         mock_db.enqueue_message.assert_not_called()
         mock_db.record_delivery.assert_called_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -1088,6 +1100,7 @@ class TestSafeDeliver:
 
         assert result == "delivered"
         mock_db.record_delivery.assert_called_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -1141,6 +1154,7 @@ class TestSafeDeliver:
         assert order[:2] == ["claim", "send"]
         assert order[-1] == "finalize"
         mock_db.claim_delivery_attempt.assert_awaited_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -1178,6 +1192,7 @@ class TestSafeDeliver:
 
         assert result == "already_delivered"
         mock_db.claim_delivery_attempt.assert_awaited_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -1218,11 +1233,15 @@ class TestSafeDeliver:
                 target_entity="ike",
                 flow_name="test_flow",
                 enforce_issue_queue=True,
-                queue_scope_issue_numbers={42, 43},
+                queue_scope_issue_numbers={
+                    (_default_repo_full_name(config), 42),
+                    (_default_repo_full_name(config), 43),
+                },
             )
 
         assert result == "delivered"
         mock_db.record_delivery.assert_called_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -1254,6 +1273,7 @@ class TestSafeDeliver:
 
         assert result == "delivered"
         mock_db.record_delivery.assert_called_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -1264,6 +1284,7 @@ class TestSafeDeliver:
             session_name="ike",
             message="Hello",
             delivery_kind="comment",
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
         )
 
@@ -1291,6 +1312,7 @@ class TestSafeDeliver:
 
         assert result == "delivered"
         mock_db.record_delivery.assert_called_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -1323,12 +1345,14 @@ class TestSafeDeliver:
         mock_db.enqueue_message.assert_called_once_with(
             session_name="ike",
             message="Comment",
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             delivery_kind="comment",
             flow_name="test_flow",
         )
         mock_db.record_delivery.assert_called_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -1465,12 +1489,14 @@ class TestSafeDeliver:
         mock_db.enqueue_message.assert_called_once_with(
             session_name="ike",
             message="Comment",
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             delivery_kind="comment",
             flow_name="test_flow",
         )
         mock_db.record_delivery.assert_called_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -1506,6 +1532,7 @@ class TestSafeDeliver:
         assert result == "grace_period"
         mock_db.enqueue_message.assert_not_called()
         mock_db.record_delivery.assert_called_once_with(
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="ike",
             session_name="ike",
@@ -1557,6 +1584,7 @@ class TestSafeDeliver:
         mock_db.enqueue_message.assert_called_once_with(
             session_name="jarvis",
             message="Hello",
+            repo_full_name=_default_repo_full_name(config),
             issue_number=42,
             target_entity="jarvis",
             delivery_kind="issue",

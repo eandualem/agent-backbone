@@ -17,7 +17,7 @@ def _repo_from_html_url(html_url: str) -> str:
 
 
 def _review_target(issue: IssueData) -> tuple[str, str]:
-    """Resolve owner/repo for GitHub MCP review commands."""
+    """Resolve owner/repo for GitHub CLI review commands."""
     repo_full_name = issue.repo_full_name or _repo_from_html_url(issue.html_url)
     if "/" in repo_full_name:
         owner, repo = repo_full_name.split("/", 1)
@@ -27,12 +27,10 @@ def _review_target(issue: IssueData) -> tuple[str, str]:
 
 
 def _review_with(issue: IssueData, method: str) -> str:
-    """Build an MCP review command for an issue in its source repository."""
+    """Build a gh CLI review command for an issue in its source repository."""
     owner, repo = _review_target(issue)
-    return (
-        f'Review with: mcp__github__issue_read(method:"{method}", '
-        f'owner:"{owner}", repo:"{repo}", issue_number:{issue.number})'
-    )
+    comments_flag = " --comments" if method == "get_comments" else ""
+    return f"Review with: gh issue view {issue.number} --repo {owner}/{repo}{comments_flag}"
 
 
 def format_digest(
@@ -135,16 +133,21 @@ def format_unblock_notification(issue: IssueData) -> str:
 
 
 def format_stall_notification(
-    session: str, issue_number: int, duration_minutes: int, entity: str
+    session: str,
+    issue_number: int,
+    duration_minutes: int,
+    entity: str,
+    repo_full_name: str | None = None,
 ) -> str:
     """Format a stall escalation notification for the escalation target."""
-    return (
+    message = (
         f"[via:backbone] "
         f"Agent {entity} ({session}) appears stalled on issue #{issue_number} "
-        f"for {duration_minutes}m. Check session and intervene if needed. "
-        f'Inspect with: mcp__github__issue_read(method:"get", owner:"eandualem", '
-        f'repo:"orchestration", issue_number:{issue_number})'
+        f"for {duration_minutes}m. Check session and intervene if needed."
     )
+    if repo_full_name:
+        message += f" Inspect with: gh issue view {issue_number} --repo {repo_full_name}"
+    return message
 
 
 def format_unexpected_offline_notification(session: str, entity: str, pending_count: int) -> str:

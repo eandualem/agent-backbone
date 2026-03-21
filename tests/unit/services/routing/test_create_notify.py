@@ -57,7 +57,10 @@ class TestCreateAndNotify:
 
         assert result.number == 99
         mock_gh.create_issue.assert_called_once_with(
-            "[task] Test issue", "## Context\nTest", ["from:coding-agent", "for:brunel", "task"]
+            "[task] Test issue",
+            "## Context\nTest",
+            ["from:coding-agent", "for:brunel", "task"],
+            repo_full_name=None,
         )
         mock_resolve.assert_called_once_with("brunel", config, "[task] Test issue")
         mock_deliver.assert_called_once()

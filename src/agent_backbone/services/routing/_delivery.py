@@ -11,7 +11,13 @@ if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
     from agent_backbone.services.database import BackboneDB
 
+from agent_backbone.models import (
+    acknowledgment_entities,
+    issue_identity_key,
+    normalize_repo_full_name,
+)
 from agent_backbone.services.routing._intelligence import get_session_intelligence, is_http_target
+from agent_backbone.services.routing._targets import default_repo_full_name
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.terminal import get_terminal_adapter, send_message
 
@@ -30,32 +36,44 @@ def _can_track_issue_delivery(
     db: BackboneDB | None,
     issue_number: int | None,
     target_entity: str | None,
+    repo_full_name: str | None,
 ) -> bool:
     """Whether this delivery has enough metadata for queue coordination."""
-    return db is not None and issue_number is not None and target_entity is not None
+    return (
+        db is not None
+        and issue_number is not None
+        and target_entity is not None
+        and bool(normalize_repo_full_name(repo_full_name))
+    )
 
 
 async def _is_acknowledged_for_session(
     db: BackboneDB,
+    repo_full_name: str,
     issue_number: int,
     target_entity: str,
     session_name: str,
 ) -> bool:
     """Check acknowledgment using both entity and session fallback keys."""
-    if await db.is_acknowledged(issue_number, target_entity):
-        return True
-    if session_name != target_entity and await db.is_acknowledged(issue_number, session_name):
-        return True
+    for entity in acknowledgment_entities(
+        target_entity,
+        repo_full_name,
+        session_name=session_name,
+    ):
+        if await db.is_acknowledged(repo_full_name, issue_number, entity):
+            return True
     return False
 
 
 async def _has_successful_issue_delivery(
     db: BackboneDB,
+    repo_full_name: str,
     issue_number: int,
     session_name: str,
 ) -> bool:
     """Whether this issue was already successfully delivered to this session."""
     rows = await db.query_deliveries(
+        repo_full_name=repo_full_name,
         issue_number=issue_number,
         session_name=session_name,
         limit=25,
@@ -67,30 +85,41 @@ async def _get_unacknowledged_gate_issue(
     db: BackboneDB,
     session_name: str,
     current_issue: int,
-    queue_scope_issue_numbers: Collection[int] | None = None,
-) -> int | None:
+    current_repo_full_name: str,
+    queue_scope_issue_numbers: Collection[tuple[str, int]] | None = None,
+) -> tuple[str, int] | None:
     """Return the most recent successful issue still awaiting acknowledgment."""
     scoped_issue_numbers = set(queue_scope_issue_numbers or ())
+    current_issue_key = issue_identity_key(current_issue, current_repo_full_name)
     rows = await db.query_deliveries(session_name=session_name, limit=100)
     for row in rows:
+        repo_full_name = normalize_repo_full_name(row.get("repo_full_name"))
         issue_number = row.get("issue_number")
         target_entity = row.get("target_entity")
         if not isinstance(issue_number, int) or not isinstance(target_entity, str):
             continue
-        if scoped_issue_numbers and issue_number not in scoped_issue_numbers:
+        issue_key = issue_identity_key(issue_number, repo_full_name)
+        if scoped_issue_numbers and issue_key not in scoped_issue_numbers:
             continue
-        if issue_number == current_issue:
+        if issue_key == current_issue_key:
             continue
         if not (row.get("outcome") or "").endswith(_SUCCESSFUL_OUTCOME_SUFFIXES):
             continue
-        if await _is_acknowledged_for_session(db, issue_number, target_entity, session_name):
+        if await _is_acknowledged_for_session(
+            db,
+            repo_full_name,
+            issue_number,
+            target_entity,
+            session_name,
+        ):
             continue
-        return issue_number
+        return issue_key
     return None
 
 
 async def _record_issue_attempt(
     db: BackboneDB | None,
+    repo_full_name: str | None,
     issue_number: int | None,
     target_entity: str | None,
     session_name: str,
@@ -99,13 +128,14 @@ async def _record_issue_attempt(
     delivery_kind: str = "issue",
 ) -> None:
     """Persist a queue delivery attempt when tracking metadata is available."""
-    if not _can_track_issue_delivery(db, issue_number, target_entity):
+    if not _can_track_issue_delivery(db, issue_number, target_entity, repo_full_name):
         return
     recorded_outcome = outcome
     if delivery_kind != "issue":
         recorded_outcome = f"{delivery_kind}_{outcome}"
     try:
         await db.record_delivery(
+            repo_full_name=repo_full_name,
             issue_number=issue_number,
             target_entity=target_entity,
             session_name=session_name,
@@ -118,6 +148,7 @@ async def _record_issue_attempt(
 
 async def _persist_delivery_outcome(
     db: BackboneDB | None,
+    repo_full_name: str | None,
     issue_number: int | None,
     target_entity: str | None,
     session_name: str,
@@ -135,6 +166,7 @@ async def _persist_delivery_outcome(
         return
     await _record_issue_attempt(
         db,
+        repo_full_name,
         issue_number,
         target_entity,
         session_name,
@@ -149,6 +181,7 @@ async def _clear_matching_queue_rows(
     session_name: str,
     message: str,
     delivery_kind: str,
+    repo_full_name: str | None,
     issue_number: int | None,
 ) -> None:
     """Clear stale queued duplicates once a non-issue notification succeeds."""
@@ -159,6 +192,7 @@ async def _clear_matching_queue_rows(
             session_name=session_name,
             message=message,
             delivery_kind=delivery_kind,
+            repo_full_name=repo_full_name,
             issue_number=issue_number,
         )
         if cleared:
@@ -200,13 +234,14 @@ async def safe_deliver(
     config: BackboneConfig,
     *,
     db: BackboneDB | None = None,
+    repo_full_name: str | None = None,
     issue_number: int | None = None,
     target_entity: str | None = None,
     flow_name: str = "",
     priority: bool = False,
     idle_since: float | None = None,
     enforce_issue_queue: bool = False,
-    queue_scope_issue_numbers: Collection[int] | None = None,
+    queue_scope_issue_numbers: Collection[tuple[str, int]] | None = None,
     delivery_kind: str = "issue",
 ) -> str:
     """Deliver a message with composite state pre-checks and optional queuing.
@@ -218,6 +253,7 @@ async def safe_deliver(
         session_name: target tmux session.
         message: notification text to deliver.
         config: backbone configuration.
+        repo_full_name: source repository for issue identity tracking.
         issue_number: issue number for queue tracking (optional).
         target_entity: entity name for queue tracking (optional).
         flow_name: originating flow for logging/tracking.
@@ -238,14 +274,24 @@ async def safe_deliver(
         "plan_waiting", "permission_waiting", "grace_period",
         "already_delivered", "awaiting_ack", "delivery_failed".
     """
-    if _can_track_issue_delivery(db, issue_number, target_entity):
+    normalized_repo_full_name = normalize_repo_full_name(repo_full_name)
+    if issue_number is not None and not normalized_repo_full_name:
+        normalized_repo_full_name = default_repo_full_name(config)
+
+    if _can_track_issue_delivery(db, issue_number, target_entity, normalized_repo_full_name):
         # Issue-level dedup: only for issue deliveries. Comments are distinct
         # per webhook delivery_id — a prior comment_delivered on the same issue
         # must NOT block future comments on that issue.
         if delivery_kind == "issue":
-            if await _has_successful_issue_delivery(db, issue_number, session_name):
+            if await _has_successful_issue_delivery(
+                db,
+                normalized_repo_full_name,
+                issue_number,
+                session_name,
+            ):
                 log.info(
-                    "Suppressed duplicate issue delivery for #%d -> %s",
+                    "Suppressed duplicate issue delivery for %s#%d -> %s",
+                    normalized_repo_full_name,
                     issue_number,
                     session_name,
                 )
@@ -257,21 +303,30 @@ async def safe_deliver(
                 db,
                 session_name,
                 issue_number,
+                normalized_repo_full_name,
                 queue_scope_issue_numbers=queue_scope_issue_numbers,
             )
             if blocking_issue is not None:
                 log.info(
-                    "Blocked #%d -> %s pending acknowledgment for #%d",
+                    "Blocked %s#%d -> %s pending acknowledgment for %s#%d",
+                    normalized_repo_full_name,
                     issue_number,
                     session_name,
-                    blocking_issue,
+                    blocking_issue[0],
+                    blocking_issue[1],
                 )
                 return "awaiting_ack"
 
     # Pre-send reservation for issue deliveries to close the send-time race window.
     delivery_claim_id: int | None = None
-    if delivery_kind == "issue" and _can_track_issue_delivery(db, issue_number, target_entity):
+    if delivery_kind == "issue" and _can_track_issue_delivery(
+        db,
+        issue_number,
+        target_entity,
+        normalized_repo_full_name,
+    ):
         claim_result = await db.claim_delivery_attempt(
+            repo_full_name=normalized_repo_full_name,
             issue_number=issue_number,
             target_entity=target_entity,
             session_name=session_name,
@@ -291,6 +346,7 @@ async def safe_deliver(
         ):
             await _persist_delivery_outcome(
                 db,
+                normalized_repo_full_name,
                 issue_number,
                 target_entity,
                 session_name,
@@ -304,12 +360,14 @@ async def safe_deliver(
                 session_name,
                 message,
                 delivery_kind,
+                normalized_repo_full_name,
                 issue_number,
             )
             return "delivered"
         await _maybe_enqueue(
             session_name,
             message,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             flow_name,
@@ -318,6 +376,7 @@ async def safe_deliver(
         )
         await _persist_delivery_outcome(
             db,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             session_name,
@@ -341,6 +400,7 @@ async def safe_deliver(
         await _maybe_enqueue(
             session_name,
             message,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             flow_name,
@@ -349,6 +409,7 @@ async def safe_deliver(
         )
         await _persist_delivery_outcome(
             db,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             session_name,
@@ -364,6 +425,7 @@ async def safe_deliver(
             await _maybe_enqueue(
                 session_name,
                 message,
+                normalized_repo_full_name,
                 issue_number,
                 target_entity,
                 flow_name,
@@ -372,6 +434,7 @@ async def safe_deliver(
             )
         await _persist_delivery_outcome(
             db,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             session_name,
@@ -387,6 +450,7 @@ async def safe_deliver(
             await _maybe_enqueue(
                 session_name,
                 message,
+                normalized_repo_full_name,
                 issue_number,
                 target_entity,
                 flow_name,
@@ -395,6 +459,7 @@ async def safe_deliver(
             )
         await _persist_delivery_outcome(
             db,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             session_name,
@@ -410,6 +475,7 @@ async def safe_deliver(
             await _maybe_enqueue(
                 session_name,
                 message,
+                normalized_repo_full_name,
                 issue_number,
                 target_entity,
                 flow_name,
@@ -418,6 +484,7 @@ async def safe_deliver(
             )
         await _persist_delivery_outcome(
             db,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             session_name,
@@ -433,6 +500,7 @@ async def safe_deliver(
             await _maybe_enqueue(
                 session_name,
                 message,
+                normalized_repo_full_name,
                 issue_number,
                 target_entity,
                 flow_name,
@@ -441,6 +509,7 @@ async def safe_deliver(
             )
         await _persist_delivery_outcome(
             db,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             session_name,
@@ -458,6 +527,7 @@ async def safe_deliver(
             await _maybe_enqueue(
                 session_name,
                 message,
+                normalized_repo_full_name,
                 issue_number,
                 target_entity,
                 flow_name,
@@ -466,6 +536,7 @@ async def safe_deliver(
             )
             await _persist_delivery_outcome(
                 db,
+                normalized_repo_full_name,
                 issue_number,
                 target_entity,
                 session_name,
@@ -480,6 +551,7 @@ async def safe_deliver(
         await _maybe_enqueue(
             session_name,
             message,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             flow_name,
@@ -488,6 +560,7 @@ async def safe_deliver(
         )
         await _persist_delivery_outcome(
             db,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             session_name,
@@ -502,6 +575,7 @@ async def safe_deliver(
     if await send_message(session_name, message, runtime_hint=profile.runtime):
         await _persist_delivery_outcome(
             db,
+            normalized_repo_full_name,
             issue_number,
             target_entity,
             session_name,
@@ -515,6 +589,7 @@ async def safe_deliver(
             session_name,
             message,
             delivery_kind,
+            normalized_repo_full_name,
             issue_number,
         )
         return "delivered"
@@ -523,6 +598,7 @@ async def safe_deliver(
     await _maybe_enqueue(
         session_name,
         message,
+        normalized_repo_full_name,
         issue_number,
         target_entity,
         flow_name,
@@ -531,6 +607,7 @@ async def safe_deliver(
     )
     await _persist_delivery_outcome(
         db,
+        normalized_repo_full_name,
         issue_number,
         target_entity,
         session_name,
@@ -545,6 +622,7 @@ async def safe_deliver(
 async def _maybe_enqueue(
     session_name: str,
     message: str,
+    repo_full_name: str | None,
     issue_number: int | None,
     target_entity: str | None,
     flow_name: str,
@@ -553,7 +631,11 @@ async def _maybe_enqueue(
     delivery_kind: str = "issue",
 ) -> None:
     """Enqueue a message to SQLite when the delivery kind supports deferral."""
-    if delivery_kind == "issue" and (issue_number is None or target_entity is None):
+    if delivery_kind == "issue" and (
+        issue_number is None
+        or target_entity is None
+        or not normalize_repo_full_name(repo_full_name)
+    ):
         return
     if db is None:
         log.debug("No DB provided to _maybe_enqueue — skipping enqueue for %s", session_name)
@@ -562,6 +644,7 @@ async def _maybe_enqueue(
         await db.enqueue_message(
             session_name=session_name,
             message=message,
+            repo_full_name=repo_full_name,
             issue_number=issue_number,
             target_entity=target_entity,
             delivery_kind=delivery_kind,

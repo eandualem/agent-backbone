@@ -11,6 +11,7 @@ from agent_backbone.services.agents.models import AgentState
 
 def find_outgoing_comment(
     issue_number: int,
+    repo_full_name: str | None = None,
     action_log: str = "~/.claude/state/github-actions.jsonl",
     max_lines: int = 50,
     recency_seconds: float = 30.0,
@@ -36,7 +37,12 @@ def find_outgoing_comment(
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if entry.get("action") == "comment" and entry.get("issue") == issue_number:
+            entry_repo = entry.get("repo_full_name") or entry.get("repo") or ""
+            if (
+                entry.get("action") == "comment"
+                and entry.get("issue") == issue_number
+                and (not repo_full_name or entry_repo == repo_full_name)
+            ):
                 ts = entry.get("ts", 0)
                 if now - ts <= recency_seconds:
                     return entry.get("session")
@@ -48,6 +54,7 @@ def find_outgoing_comment(
 def has_commented_on_issue(
     issue_number: int,
     session: str,
+    repo_full_name: str | None = None,
     action_log: str = "~/.claude/state/github-actions.jsonl",
     max_lines: int = 200,
 ) -> bool:
@@ -70,6 +77,10 @@ def has_commented_on_issue(
                 entry.get("action") == "comment"
                 and entry.get("issue") == issue_number
                 and entry.get("session") == session
+                and (
+                    not repo_full_name
+                    or (entry.get("repo_full_name") or entry.get("repo") or "") == repo_full_name
+                )
             ):
                 return True
         return False
