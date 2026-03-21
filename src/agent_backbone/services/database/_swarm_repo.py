@@ -6,8 +6,16 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import text
+from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
+
+from agent_backbone.services.database.models import (
+    SwarmAssignmentORM,
+    SwarmMessageORM,
+    SwarmORM,
+    SwarmPhaseHistoryORM,
+    SwarmWorkerORM,
+)
 
 _SWARM_PHASE_ORDER = (
     "created",
@@ -60,6 +68,10 @@ def _group_rows(rows: list[dict], key: str) -> dict[str, list[dict]]:
     for row in rows:
         grouped.setdefault(row[key], []).append(row)
     return grouped
+
+
+def _rows_to_dicts(result) -> list[dict]:
+    return [dict(row._mapping) for row in result.fetchall()]
 
 
 def _group_workers_by_role(rows: list[dict]) -> dict[str, list[dict]]:
@@ -172,27 +184,15 @@ async def create_swarm(
     now = _now_iso()
     swarm_id = str(uuid.uuid4())
     await conn.execute(
-        text(
-            """INSERT INTO swarms
-               (swarm_id, repo, task_id, coding_agent_session, phase, created_at, completed_at)
-               VALUES (
-                   :swarm_id,
-                   :repo,
-                   :task_id,
-                   :coding_agent_session,
-                   :phase,
-                   :created_at,
-                   NULL
-               )"""
-        ),
-        {
-            "swarm_id": swarm_id,
-            "repo": repo,
-            "task_id": task_id,
-            "coding_agent_session": coding_agent_session,
-            "phase": "created",
-            "created_at": now,
-        },
+        insert(SwarmORM).values(
+            swarm_id=swarm_id,
+            repo=repo,
+            task_id=task_id,
+            coding_agent_session=coding_agent_session,
+            phase="created",
+            created_at=now,
+            completed_at=None,
+        )
     )
     await _insert_phase_history(
         conn,
@@ -205,31 +205,22 @@ async def create_swarm(
 
     for worker in workers:
         await conn.execute(
-            text(
-                """INSERT INTO swarm_workers
-                   (worker_id, swarm_id, name, role, branch, worktree_path, session,
-                    status, pr_number, summary, failure_reason, completed_at,
-                    created_at, updated_at)
-                   VALUES (:worker_id, :swarm_id, :name, :role, :branch, :worktree_path, :session,
-                           :status, :pr_number, :summary, :failure_reason, :completed_at,
-                           :created_at, :updated_at)"""
-            ),
-            {
-                "worker_id": str(uuid.uuid4()),
-                "swarm_id": swarm_id,
-                "name": worker["name"],
-                "role": worker["role"],
-                "branch": worker["branch"],
-                "worktree_path": worker["worktree_path"],
-                "session": worker["session"],
-                "status": "pending",
-                "pr_number": None,
-                "summary": None,
-                "failure_reason": None,
-                "completed_at": None,
-                "created_at": now,
-                "updated_at": now,
-            },
+            insert(SwarmWorkerORM).values(
+                worker_id=str(uuid.uuid4()),
+                swarm_id=swarm_id,
+                name=worker["name"],
+                role=worker["role"],
+                branch=worker["branch"],
+                worktree_path=worker["worktree_path"],
+                session=worker["session"],
+                status="pending",
+                pr_number=None,
+                summary=None,
+                failure_reason=None,
+                completed_at=None,
+                created_at=now,
+                updated_at=now,
+            )
         )
     return swarm_id
 
@@ -240,28 +231,16 @@ async def list_swarms(
     phase: str | None = None,
 ) -> list[dict]:
     """List swarms with aggregated worker progress."""
-    conditions: list[str] = []
-    params: dict[str, object] = {}
+    stmt = select(SwarmORM.__table__)
     if repo:
-        conditions.append("repo = :repo")
-        params["repo"] = repo
+        stmt = stmt.where(SwarmORM.repo == repo)
     if phase:
-        conditions.append("phase = :phase")
-        params["phase"] = phase
+        stmt = stmt.where(SwarmORM.phase == phase)
     else:
-        visible_names = []
-        for index, value in enumerate(sorted(_VISIBLE_SWARM_PHASES)):
-            key = f"phase_{index}"
-            visible_names.append(f":{key}")
-            params[key] = value
-        conditions.append(f"phase IN ({', '.join(visible_names)})")
+        stmt = stmt.where(SwarmORM.phase.in_(sorted(_VISIBLE_SWARM_PHASES)))
 
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    result = await conn.execute(
-        text(f"SELECT * FROM swarms {where} ORDER BY created_at DESC"),
-        params,
-    )
-    swarms = [dict(row._mapping) for row in result.fetchall()]
+    result = await conn.execute(stmt.order_by(SwarmORM.created_at.desc()))
+    swarms = _rows_to_dicts(result)
     if not swarms:
         return []
 
@@ -325,21 +304,16 @@ async def update_worker_status(
                 raise ValueError("Worker must have an active assignment before starting work")
 
     now = _now_iso()
+    values = {
+        "status": status,
+        "updated_at": now,
+    }
+    if pr_number is not None:
+        values["pr_number"] = pr_number
     await conn.execute(
-        text(
-            """UPDATE swarm_workers
-               SET status = :status,
-                   pr_number = COALESCE(:pr_number, pr_number),
-                   updated_at = :updated_at
-               WHERE swarm_id = :swarm_id AND name = :worker_name"""
-        ),
-        {
-            "swarm_id": swarm_id,
-            "worker_name": worker_name,
-            "status": status,
-            "pr_number": pr_number,
-            "updated_at": now,
-        },
+        update(SwarmWorkerORM)
+        .where(SwarmWorkerORM.swarm_id == swarm_id, SwarmWorkerORM.name == worker_name)
+        .values(**values)
     )
 
     await _auto_promote_validating_if_ready(
@@ -380,27 +354,19 @@ async def complete_worker(
             raise ValueError("Worker must have an active assignment before reporting completion")
 
     now = _now_iso()
+    values = {
+        "status": status,
+        "summary": summary,
+        "failure_reason": failure_reason if status == "failed" else None,
+        "completed_at": worker.get("completed_at") or now,
+        "updated_at": now,
+    }
+    if pr_number is not None:
+        values["pr_number"] = pr_number
     await conn.execute(
-        text(
-            """UPDATE swarm_workers
-               SET status = :status,
-                   summary = :summary,
-                   failure_reason = :failure_reason,
-                   pr_number = COALESCE(:pr_number, pr_number),
-                   completed_at = COALESCE(completed_at, :completed_at),
-                   updated_at = :updated_at
-               WHERE swarm_id = :swarm_id AND name = :worker_name"""
-        ),
-        {
-            "swarm_id": swarm_id,
-            "worker_name": worker_name,
-            "status": status,
-            "summary": summary,
-            "failure_reason": failure_reason if status == "failed" else None,
-            "pr_number": pr_number,
-            "completed_at": now,
-            "updated_at": now,
-        },
+        update(SwarmWorkerORM)
+        .where(SwarmWorkerORM.swarm_id == swarm_id, SwarmWorkerORM.name == worker_name)
+        .values(**values)
     )
     await _close_active_assignments_for_worker(
         conn,
@@ -504,39 +470,18 @@ async def create_assignment(
     )
 
     result = await conn.execute(
-        text(
-            """INSERT INTO swarm_assignments
-               (
-                   swarm_id,
-                   worker_name,
-                   assigned_by,
-                   summary,
-                   file_paths,
-                   status,
-                   created_at,
-                   completed_at
-               )
-               VALUES (
-                   :swarm_id,
-                   :worker_name,
-                   :assigned_by,
-                   :summary,
-                   :file_paths,
-                   :status,
-                   :created_at,
-                   NULL
-               )
-               RETURNING *"""
-        ),
-        {
-            "swarm_id": swarm_id,
-            "worker_name": worker_name,
-            "assigned_by": assigned_by,
-            "summary": summary,
-            "file_paths": _encode_file_paths(file_paths),
-            "status": "active",
-            "created_at": now,
-        },
+        insert(SwarmAssignmentORM)
+        .values(
+            swarm_id=swarm_id,
+            worker_name=worker_name,
+            assigned_by=assigned_by,
+            summary=summary,
+            file_paths=_encode_file_paths(file_paths),
+            status="active",
+            created_at=now,
+            completed_at=None,
+        )
+        .returning(*SwarmAssignmentORM.__table__.c)
     )
     return _decode_assignment_row(dict(result.fetchone()._mapping))
 
@@ -544,13 +489,9 @@ async def create_assignment(
 async def list_assignments(conn: AsyncConnection, swarm_id: str) -> list[dict]:
     """List all swarm assignments in timestamp order."""
     result = await conn.execute(
-        text(
-            """SELECT *
-               FROM swarm_assignments
-               WHERE swarm_id = :swarm_id
-               ORDER BY created_at ASC, assignment_id ASC"""
-        ),
-        {"swarm_id": swarm_id},
+        select(SwarmAssignmentORM.__table__)
+        .where(SwarmAssignmentORM.swarm_id == swarm_id)
+        .order_by(SwarmAssignmentORM.created_at.asc(), SwarmAssignmentORM.assignment_id.asc())
     )
     return [_decode_assignment_row(dict(row._mapping)) for row in result.fetchall()]
 
@@ -571,36 +512,20 @@ async def record_swarm_message(
     """Persist one swarm message log entry."""
     now = _now_iso()
     result = await conn.execute(
-        text(
-            """INSERT INTO swarm_messages
-               (swarm_id, target_kind, target_role, target_worker_name, from_entity,
-                message, delivered, failed, total, created_at)
-               VALUES (
-                   :swarm_id,
-                   :target_kind,
-                   :target_role,
-                   :target_worker_name,
-                   :from_entity,
-                   :message,
-                   :delivered,
-                   :failed,
-                   :total,
-                   :created_at
-               )
-               RETURNING *"""
-        ),
-        {
-            "swarm_id": swarm_id,
-            "target_kind": target_kind,
-            "target_role": target_role,
-            "target_worker_name": target_worker_name,
-            "from_entity": from_entity,
-            "message": message,
-            "delivered": delivered,
-            "failed": failed,
-            "total": total,
-            "created_at": now,
-        },
+        insert(SwarmMessageORM)
+        .values(
+            swarm_id=swarm_id,
+            target_kind=target_kind,
+            target_role=target_role,
+            target_worker_name=target_worker_name,
+            from_entity=from_entity,
+            message=message,
+            delivered=delivered,
+            failed=failed,
+            total=total,
+            created_at=now,
+        )
+        .returning(*SwarmMessageORM.__table__.c)
     )
     return dict(result.fetchone()._mapping)
 
@@ -608,13 +533,9 @@ async def record_swarm_message(
 async def list_swarm_messages(conn: AsyncConnection, swarm_id: str) -> list[dict]:
     """List all swarm messages in timestamp order."""
     result = await conn.execute(
-        text(
-            """SELECT *
-               FROM swarm_messages
-               WHERE swarm_id = :swarm_id
-               ORDER BY created_at ASC, message_id ASC"""
-        ),
-        {"swarm_id": swarm_id},
+        select(SwarmMessageORM.__table__)
+        .where(SwarmMessageORM.swarm_id == swarm_id)
+        .order_by(SwarmMessageORM.created_at.asc(), SwarmMessageORM.message_id.asc())
     )
     return [dict(row._mapping) for row in result.fetchall()]
 
@@ -625,13 +546,13 @@ async def reconcile_swarm_worker_sessions(
 ) -> int:
     """Mark session-bearing workers failed when their tmux session disappears."""
     result = await conn.execute(
-        text(
-            """SELECT swarm_id, name, session
-               FROM swarm_workers
-               WHERE status IN ('started', 'working', 'pr_created')"""
-        )
+        select(
+            SwarmWorkerORM.swarm_id,
+            SwarmWorkerORM.name,
+            SwarmWorkerORM.session,
+        ).where(SwarmWorkerORM.status.in_(("started", "working", "pr_created")))
     )
-    candidate_rows = [dict(row._mapping) for row in result.fetchall()]
+    candidate_rows = _rows_to_dicts(result)
     lost_workers = [row for row in candidate_rows if row["session"] not in active_sessions]
     if not lost_workers:
         return 0
@@ -658,10 +579,7 @@ async def reconcile_swarm_worker_sessions(
 
 
 async def _fetch_swarm_row(conn: AsyncConnection, swarm_id: str) -> dict | None:
-    result = await conn.execute(
-        text("SELECT * FROM swarms WHERE swarm_id = :swarm_id"),
-        {"swarm_id": swarm_id},
-    )
+    result = await conn.execute(select(SwarmORM.__table__).where(SwarmORM.swarm_id == swarm_id))
     row = result.fetchone()
     return dict(row._mapping) if row else None
 
@@ -672,12 +590,10 @@ async def _fetch_worker_row(
     worker_name: str,
 ) -> dict | None:
     result = await conn.execute(
-        text(
-            """SELECT *
-               FROM swarm_workers
-               WHERE swarm_id = :swarm_id AND name = :worker_name"""
-        ),
-        {"swarm_id": swarm_id, "worker_name": worker_name},
+        select(SwarmWorkerORM.__table__).where(
+            SwarmWorkerORM.swarm_id == swarm_id,
+            SwarmWorkerORM.name == worker_name,
+        )
     )
     row = result.fetchone()
     return dict(row._mapping) if row else None
@@ -689,16 +605,14 @@ async def _fetch_active_assignment_row(
     worker_name: str,
 ) -> dict | None:
     result = await conn.execute(
-        text(
-            """SELECT *
-               FROM swarm_assignments
-               WHERE swarm_id = :swarm_id
-                 AND worker_name = :worker_name
-                 AND status = 'active'
-               ORDER BY created_at DESC, assignment_id DESC
-               LIMIT 1"""
-        ),
-        {"swarm_id": swarm_id, "worker_name": worker_name},
+        select(SwarmAssignmentORM.__table__)
+        .where(
+            SwarmAssignmentORM.swarm_id == swarm_id,
+            SwarmAssignmentORM.worker_name == worker_name,
+            SwarmAssignmentORM.status == "active",
+        )
+        .order_by(SwarmAssignmentORM.created_at.desc(), SwarmAssignmentORM.assignment_id.desc())
+        .limit(1)
     )
     row = result.fetchone()
     if row is None:
@@ -708,14 +622,12 @@ async def _fetch_active_assignment_row(
 
 async def _fetch_active_assignments(conn: AsyncConnection, swarm_id: str) -> list[dict]:
     result = await conn.execute(
-        text(
-            """SELECT *
-               FROM swarm_assignments
-               WHERE swarm_id = :swarm_id
-                 AND status = 'active'
-               ORDER BY created_at ASC, assignment_id ASC"""
-        ),
-        {"swarm_id": swarm_id},
+        select(SwarmAssignmentORM.__table__)
+        .where(
+            SwarmAssignmentORM.swarm_id == swarm_id,
+            SwarmAssignmentORM.status == "active",
+        )
+        .order_by(SwarmAssignmentORM.created_at.asc(), SwarmAssignmentORM.assignment_id.asc())
     )
     return [_decode_assignment_row(dict(row._mapping)) for row in result.fetchall()]
 
@@ -744,21 +656,12 @@ async def _fetch_workers_for_swarms(
 ) -> list[dict]:
     if not swarm_ids:
         return []
-    params: dict[str, object] = {}
-    placeholders: list[str] = []
-    for index, swarm_id in enumerate(swarm_ids):
-        key = f"swarm_id_{index}"
-        placeholders.append(f":{key}")
-        params[key] = swarm_id
     result = await conn.execute(
-        text(
-            "SELECT * FROM swarm_workers "
-            f"WHERE swarm_id IN ({', '.join(placeholders)}) "
-            "ORDER BY created_at ASC, name ASC"
-        ),
-        params,
+        select(SwarmWorkerORM.__table__)
+        .where(SwarmWorkerORM.swarm_id.in_(swarm_ids))
+        .order_by(SwarmWorkerORM.created_at.asc(), SwarmWorkerORM.name.asc())
     )
-    return [dict(row._mapping) for row in result.fetchall()]
+    return _rows_to_dicts(result)
 
 
 async def _close_active_assignments_for_worker(
@@ -772,20 +675,13 @@ async def _close_active_assignments_for_worker(
     if assignment_status not in _TERMINAL_ASSIGNMENT_STATUSES:
         raise ValueError(f"Unsupported terminal assignment status: {assignment_status}")
     await conn.execute(
-        text(
-            """UPDATE swarm_assignments
-               SET status = :status,
-                   completed_at = COALESCE(completed_at, :completed_at)
-               WHERE swarm_id = :swarm_id
-                 AND worker_name = :worker_name
-                 AND status = 'active'"""
-        ),
-        {
-            "swarm_id": swarm_id,
-            "worker_name": worker_name,
-            "status": assignment_status,
-            "completed_at": completed_at,
-        },
+        update(SwarmAssignmentORM)
+        .where(
+            SwarmAssignmentORM.swarm_id == swarm_id,
+            SwarmAssignmentORM.worker_name == worker_name,
+            SwarmAssignmentORM.status == "active",
+        )
+        .values(status=assignment_status, completed_at=completed_at)
     )
 
 
@@ -795,21 +691,12 @@ async def _fetch_phase_history_for_swarms(
 ) -> list[dict]:
     if not swarm_ids:
         return []
-    params: dict[str, object] = {}
-    placeholders: list[str] = []
-    for index, swarm_id in enumerate(swarm_ids):
-        key = f"swarm_id_{index}"
-        placeholders.append(f":{key}")
-        params[key] = swarm_id
     result = await conn.execute(
-        text(
-            "SELECT * FROM swarm_phase_history "
-            f"WHERE swarm_id IN ({', '.join(placeholders)}) "
-            "ORDER BY timestamp ASC, history_id ASC"
-        ),
-        params,
+        select(SwarmPhaseHistoryORM.__table__)
+        .where(SwarmPhaseHistoryORM.swarm_id.in_(swarm_ids))
+        .order_by(SwarmPhaseHistoryORM.timestamp.asc(), SwarmPhaseHistoryORM.history_id.asc())
     )
-    return [dict(row._mapping) for row in result.fetchall()]
+    return _rows_to_dicts(result)
 
 
 async def _insert_phase_history(
@@ -822,18 +709,13 @@ async def _insert_phase_history(
     timestamp: str,
 ) -> None:
     await conn.execute(
-        text(
-            """INSERT INTO swarm_phase_history
-               (swarm_id, from_phase, to_phase, timestamp, triggered_by)
-               VALUES (:swarm_id, :from_phase, :to_phase, :timestamp, :triggered_by)"""
-        ),
-        {
-            "swarm_id": swarm_id,
-            "from_phase": from_phase,
-            "to_phase": to_phase,
-            "timestamp": timestamp,
-            "triggered_by": triggered_by,
-        },
+        insert(SwarmPhaseHistoryORM).values(
+            swarm_id=swarm_id,
+            from_phase=from_phase,
+            to_phase=to_phase,
+            timestamp=timestamp,
+            triggered_by=triggered_by,
+        )
     )
 
 
@@ -854,17 +736,9 @@ async def _set_swarm_phase(
     now = _now_iso()
     completed_at = _phase_completed_at(swarm.get("completed_at"), to_phase, now)
     await conn.execute(
-        text(
-            """UPDATE swarms
-               SET phase = :phase,
-                   completed_at = :completed_at
-               WHERE swarm_id = :swarm_id"""
-        ),
-        {
-            "swarm_id": swarm["swarm_id"],
-            "phase": to_phase,
-            "completed_at": completed_at,
-        },
+        update(SwarmORM)
+        .where(SwarmORM.swarm_id == swarm["swarm_id"])
+        .values(phase=to_phase, completed_at=completed_at)
     )
     await _insert_phase_history(
         conn,
