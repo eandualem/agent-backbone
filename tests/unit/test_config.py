@@ -393,6 +393,15 @@ class TestEscalationConfig:
         assert config.escalation.escalation_target == "leo"
         assert config.escalation.escalation_dedup_seconds == 900
 
+    def test_empty_escalation_target_falls_back_to_default(self, tmp_path):
+        toml_file = tmp_path / "custom.toml"
+        toml_file.write_text(
+            "[escalation]\n"
+            'escalation_target = ""\n'
+        )
+        config = BackboneConfig.from_toml(toml_file)
+        assert config.escalation.escalation_target == "ike"
+
     def test_missing_section_uses_defaults(self, tmp_path):
         toml_file = tmp_path / "empty.toml"
         toml_file.write_text("[gateway]\nport = 9877\n")

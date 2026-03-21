@@ -381,7 +381,7 @@ class BackboneConfig:
             ),
             escalation=EscalationConfig(
                 stall_threshold_seconds=es.get("stall_threshold_seconds", 5400),
-                escalation_target=es.get("escalation_target", "ike"),
+                escalation_target=es.get("escalation_target") or "ike",
                 escalation_dedup_seconds=es.get("escalation_dedup_seconds", 1800),
             ),
             heartbeat=HeartbeatConfig(
