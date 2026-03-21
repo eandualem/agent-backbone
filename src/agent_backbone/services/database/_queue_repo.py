@@ -5,14 +5,35 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import and_, delete, distinct, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from agent_backbone.models import normalize_repo_full_name
+from agent_backbone.services.database.models import (
+    AcknowledgmentORM,
+    DedupLogORM,
+    HeartbeatORM,
+    IssueDependencyORM,
+    MessageQueueORM,
+)
 
 
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _dialect_insert(conn: AsyncConnection, model):
+    if conn.dialect.name == "postgresql":
+        return pg_insert(model)
+    if conn.dialect.name == "sqlite":
+        return sqlite_insert(model)
+    raise RuntimeError(f"Unsupported dialect for conflict-aware insert: {conn.dialect.name}")
+
+
+def _rows_to_dicts(result) -> list[dict]:
+    return [dict(row._mapping) for row in result.fetchall()]
 
 
 # --- Dedup ---
@@ -26,8 +47,7 @@ async def is_duplicate_delivery_id(
     if not delivery_id:
         return False
     result = await conn.execute(
-        text("SELECT 1 FROM dedup_log WHERE delivery_id = :delivery_id"),
-        {"delivery_id": delivery_id},
+        select(DedupLogORM.delivery_id).where(DedupLogORM.delivery_id == delivery_id).limit(1)
     )
     return result.fetchone() is not None
 
@@ -39,14 +59,12 @@ async def record_delivery_id(
     """Record a delivery ID for dedup."""
     if not delivery_id:
         return
-    await conn.execute(
-        text(
-            """INSERT INTO dedup_log (delivery_id, received_at)
-               VALUES (:delivery_id, :received_at)
-               ON CONFLICT DO NOTHING"""
-        ),
-        {"delivery_id": delivery_id, "received_at": _now_iso()},
+    stmt = (
+        _dialect_insert(conn, DedupLogORM)
+        .values(delivery_id=delivery_id, received_at=_now_iso())
+        .on_conflict_do_nothing(index_elements=[DedupLogORM.delivery_id])
     )
+    await conn.execute(stmt)
 
 
 async def prune_delivery_ids(
@@ -55,10 +73,7 @@ async def prune_delivery_ids(
 ) -> int:
     """Remove old dedup entries. Returns count deleted."""
     cutoff = (datetime.now(UTC) - timedelta(hours=max_age_hours)).isoformat()
-    result = await conn.execute(
-        text("DELETE FROM dedup_log WHERE received_at < :cutoff"),
-        {"cutoff": cutoff},
-    )
+    result = await conn.execute(delete(DedupLogORM).where(DedupLogORM.received_at < cutoff))
     return result.rowcount
 
 
@@ -71,15 +86,18 @@ async def upsert_dependency(
     sub: int,
 ) -> None:
     """Record a parent->sub-issue dependency."""
-    await conn.execute(
-        text(
-            """INSERT INTO issue_dependencies (parent_number, sub_issue_number, updated_at)
-               VALUES (:parent, :sub, :now)
-               ON CONFLICT(parent_number, sub_issue_number) DO UPDATE SET
-                 updated_at = excluded.updated_at"""
-        ),
-        {"parent": parent, "sub": sub, "now": _now_iso()},
+    stmt = (
+        _dialect_insert(conn, IssueDependencyORM)
+        .values(parent_number=parent, sub_issue_number=sub, updated_at=_now_iso())
+        .on_conflict_do_update(
+            index_elements=[
+                IssueDependencyORM.parent_number,
+                IssueDependencyORM.sub_issue_number,
+            ],
+            set_={"updated_at": _now_iso()},
+        )
     )
+    await conn.execute(stmt)
 
 
 async def get_parents(
@@ -88,11 +106,11 @@ async def get_parents(
 ) -> list[int]:
     """Get parent issue numbers for a given sub-issue."""
     result = await conn.execute(
-        text("SELECT parent_number FROM issue_dependencies WHERE sub_issue_number = :sub"),
-        {"sub": sub_issue_number},
+        select(IssueDependencyORM.parent_number).where(
+            IssueDependencyORM.sub_issue_number == sub_issue_number
+        )
     )
-    rows = result.fetchall()
-    return [row._mapping["parent_number"] for row in rows]
+    return [row._mapping["parent_number"] for row in result.fetchall()]
 
 
 async def sync_dependencies(
@@ -102,35 +120,39 @@ async def sync_dependencies(
 ) -> None:
     """Sync the dependency table for a parent."""
     now = _now_iso()
-    for sub in sub_issues:
-        await conn.execute(
-            text(
-                """INSERT INTO issue_dependencies (parent_number, sub_issue_number, updated_at)
-                   VALUES (:parent, :sub, :now)
-                   ON CONFLICT(parent_number, sub_issue_number) DO UPDATE SET
-                     updated_at = excluded.updated_at"""
-            ),
-            {"parent": parent, "sub": sub, "now": now},
-        )
     if sub_issues:
-        # Build parameterized IN clause
-        param_names = [f":sub_{i}" for i in range(len(sub_issues))]
-        placeholders = ",".join(param_names)
-        params: dict[str, object] = {"parent": parent}
-        for i, sub in enumerate(sub_issues):
-            params[f"sub_{i}"] = sub
-        await conn.execute(
-            text(
-                f"DELETE FROM issue_dependencies WHERE parent_number = :parent "
-                f"AND sub_issue_number NOT IN ({placeholders})"
-            ),
-            params,
+        upsert_stmt = (
+            _dialect_insert(conn, IssueDependencyORM)
+            .values(
+                parent_number=parent,
+                sub_issue_number=None,
+                updated_at=now,
+            )
+            .on_conflict_do_update(
+                index_elements=[
+                    IssueDependencyORM.parent_number,
+                    IssueDependencyORM.sub_issue_number,
+                ],
+                set_={"updated_at": now},
+            )
         )
-    else:
+        for sub in sub_issues:
+            await conn.execute(
+                upsert_stmt.values(
+                    parent_number=parent,
+                    sub_issue_number=sub,
+                    updated_at=now,
+                )
+            )
         await conn.execute(
-            text("DELETE FROM issue_dependencies WHERE parent_number = :parent"),
-            {"parent": parent},
+            delete(IssueDependencyORM).where(
+                IssueDependencyORM.parent_number == parent,
+                IssueDependencyORM.sub_issue_number.not_in(sub_issues),
+            )
         )
+        return
+
+    await conn.execute(delete(IssueDependencyORM).where(IssueDependencyORM.parent_number == parent))
 
 
 # --- Acknowledgments ---
@@ -143,21 +165,24 @@ async def record_acknowledgment(
     target_entity: str,
 ) -> None:
     """Record that an entity has acknowledged an issue."""
-    await conn.execute(
-        text(
-            """INSERT INTO acknowledgments
-               (repo_full_name, issue_number, target_entity, acknowledged_at)
-               VALUES (:repo_full_name, :issue_number, :target_entity, :acknowledged_at)
-               ON CONFLICT(repo_full_name, issue_number, target_entity) DO UPDATE SET
-                 acknowledged_at = excluded.acknowledged_at"""
-        ),
-        {
-            "repo_full_name": normalize_repo_full_name(repo_full_name),
-            "issue_number": issue_number,
-            "target_entity": target_entity,
-            "acknowledged_at": _now_iso(),
-        },
+    stmt = (
+        _dialect_insert(conn, AcknowledgmentORM)
+        .values(
+            repo_full_name=normalize_repo_full_name(repo_full_name),
+            issue_number=issue_number,
+            target_entity=target_entity,
+            acknowledged_at=_now_iso(),
+        )
+        .on_conflict_do_update(
+            index_elements=[
+                AcknowledgmentORM.repo_full_name,
+                AcknowledgmentORM.issue_number,
+                AcknowledgmentORM.target_entity,
+            ],
+            set_={"acknowledged_at": _now_iso()},
+        )
     )
+    await conn.execute(stmt)
 
 
 async def is_acknowledged(
@@ -168,16 +193,13 @@ async def is_acknowledged(
 ) -> bool:
     """Check if entity has acknowledged this issue."""
     result = await conn.execute(
-        text(
-            "SELECT 1 FROM acknowledgments"
-            " WHERE repo_full_name = :repo_full_name"
-            " AND issue_number = :issue_number AND target_entity = :target_entity"
-        ),
-        {
-            "repo_full_name": normalize_repo_full_name(repo_full_name),
-            "issue_number": issue_number,
-            "target_entity": target_entity,
-        },
+        select(AcknowledgmentORM.issue_number)
+        .where(
+            AcknowledgmentORM.repo_full_name == normalize_repo_full_name(repo_full_name),
+            AcknowledgmentORM.issue_number == issue_number,
+            AcknowledgmentORM.target_entity == target_entity,
+        )
+        .limit(1)
     )
     return result.fetchone() is not None
 
@@ -190,16 +212,11 @@ async def clear_acknowledgment(
 ) -> None:
     """Clear acknowledgment for entity on issue."""
     await conn.execute(
-        text(
-            "DELETE FROM acknowledgments"
-            " WHERE repo_full_name = :repo_full_name"
-            " AND issue_number = :issue_number AND target_entity = :target_entity"
-        ),
-        {
-            "repo_full_name": normalize_repo_full_name(repo_full_name),
-            "issue_number": issue_number,
-            "target_entity": target_entity,
-        },
+        delete(AcknowledgmentORM).where(
+            AcknowledgmentORM.repo_full_name == normalize_repo_full_name(repo_full_name),
+            AcknowledgmentORM.issue_number == issue_number,
+            AcknowledgmentORM.target_entity == target_entity,
+        )
     )
 
 
@@ -214,17 +231,18 @@ async def record_heartbeat(
 ) -> int:
     """Record a heartbeat delivery attempt. Returns the row ID."""
     result = await conn.execute(
-        text(
-            """INSERT INTO heartbeats (agent, delivered_at, outcome, message)
-               VALUES (:agent, :delivered_at, :outcome, :message)
-               RETURNING id"""
-        ),
-        {
-            "agent": agent,
-            "delivered_at": _now_iso(),
-            "outcome": outcome,
-            "message": message,
-        },
+        (
+            pg_insert(HeartbeatORM)
+            if conn.dialect.name == "postgresql"
+            else sqlite_insert(HeartbeatORM)
+        )
+        .values(
+            agent=agent,
+            delivered_at=_now_iso(),
+            outcome=outcome,
+            message=message,
+        )
+        .returning(HeartbeatORM.id)
     )
     return result.scalar_one()
 
@@ -236,12 +254,10 @@ async def get_last_heartbeat(
 ) -> str | None:
     """Get the delivered_at ISO string of the most recent matching heartbeat."""
     result = await conn.execute(
-        text(
-            """SELECT delivered_at FROM heartbeats
-               WHERE agent = :agent AND outcome = :outcome
-               ORDER BY delivered_at DESC LIMIT 1"""
-        ),
-        {"agent": agent, "outcome": outcome},
+        select(HeartbeatORM.delivered_at)
+        .where(HeartbeatORM.agent == agent, HeartbeatORM.outcome == outcome)
+        .order_by(HeartbeatORM.delivered_at.desc())
+        .limit(1)
     )
     row = result.fetchone()
     return row._mapping["delivered_at"] if row else None
@@ -254,22 +270,13 @@ async def query_heartbeats(
     limit: int = 50,
 ) -> list[dict]:
     """Query heartbeat records with optional filters."""
-    conditions: list[str] = []
-    params: dict[str, object] = {}
+    stmt = select(HeartbeatORM.__table__)
     if agent is not None:
-        conditions.append("agent = :agent")
-        params["agent"] = agent
+        stmt = stmt.where(HeartbeatORM.agent == agent)
     if outcome is not None:
-        conditions.append("outcome = :outcome")
-        params["outcome"] = outcome
-
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    sql = f"SELECT * FROM heartbeats {where} ORDER BY delivered_at DESC LIMIT :lim"
-    params["lim"] = limit
-
-    result = await conn.execute(text(sql), params)
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+        stmt = stmt.where(HeartbeatORM.outcome == outcome)
+    result = await conn.execute(stmt.order_by(HeartbeatORM.delivered_at.desc()).limit(limit))
+    return _rows_to_dicts(result)
 
 
 # --- Message queue ---
@@ -287,61 +294,56 @@ async def enqueue_message(
 ) -> int:
     """Enqueue a message for later delivery. Returns the row ID or -1 when deduped."""
     content_hash = hashlib.sha256(message.encode()).hexdigest()
-    params = {
-        "session_name": session_name,
-        "message": message,
-        "repo_full_name": normalize_repo_full_name(repo_full_name),
-        "issue_number": issue_number,
-        "target_entity": target_entity,
-        "delivery_kind": delivery_kind,
-        "flow_name": flow_name,
-        "enqueued_at": _now_iso(),
-        "content_hash": content_hash,
-    }
+    stmt = _dialect_insert(conn, MessageQueueORM).values(
+        session_name=session_name,
+        message=message,
+        repo_full_name=normalize_repo_full_name(repo_full_name),
+        issue_number=issue_number,
+        target_entity=target_entity,
+        delivery_kind=delivery_kind,
+        flow_name=flow_name,
+        enqueued_at=_now_iso(),
+        status="pending",
+        content_hash=content_hash,
+    )
 
     if delivery_kind == "issue" and issue_number is not None:
-        sql = """INSERT INTO message_queue
-               (session_name, message, repo_full_name, issue_number, target_entity,
-                delivery_kind, flow_name, enqueued_at, status, content_hash)
-               VALUES (:session_name, :message, :repo_full_name, :issue_number, :target_entity,
-                       :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
-               ON CONFLICT (session_name, repo_full_name, issue_number)
-               WHERE delivery_kind = 'issue'
-                 AND status IN ('pending','in_progress')
-                 AND issue_number IS NOT NULL
-               DO NOTHING
-               RETURNING id"""
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=[
+                MessageQueueORM.session_name,
+                MessageQueueORM.repo_full_name,
+                MessageQueueORM.issue_number,
+            ],
+            index_where=and_(
+                MessageQueueORM.delivery_kind == "issue",
+                MessageQueueORM.status.in_(("pending", "in_progress")),
+                MessageQueueORM.issue_number.is_not(None),
+            ),
+        )
     elif delivery_kind == "comment" and issue_number is not None:
-        sql = """INSERT INTO message_queue
-               (session_name, message, repo_full_name, issue_number, target_entity,
-                delivery_kind, flow_name, enqueued_at, status, content_hash)
-               VALUES (:session_name, :message, :repo_full_name, :issue_number, :target_entity,
-                       :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
-               ON CONFLICT (session_name, repo_full_name, issue_number, content_hash)
-               WHERE delivery_kind = 'comment'
-                 AND status IN ('pending','in_progress')
-                 AND issue_number IS NOT NULL
-               DO NOTHING
-               RETURNING id"""
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=[
+                MessageQueueORM.session_name,
+                MessageQueueORM.repo_full_name,
+                MessageQueueORM.issue_number,
+                MessageQueueORM.content_hash,
+            ],
+            index_where=and_(
+                MessageQueueORM.delivery_kind == "comment",
+                MessageQueueORM.status.in_(("pending", "in_progress")),
+                MessageQueueORM.issue_number.is_not(None),
+            ),
+        )
     elif delivery_kind == "direct_message":
-        sql = """INSERT INTO message_queue
-               (session_name, message, repo_full_name, issue_number, target_entity,
-                delivery_kind, flow_name, enqueued_at, status, content_hash)
-               VALUES (:session_name, :message, :repo_full_name, :issue_number, :target_entity,
-                       :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
-               ON CONFLICT (session_name, content_hash)
-               WHERE delivery_kind = 'direct_message' AND status IN ('pending','in_progress')
-               DO NOTHING
-               RETURNING id"""
-    else:
-        sql = """INSERT INTO message_queue
-               (session_name, message, repo_full_name, issue_number, target_entity,
-                delivery_kind, flow_name, enqueued_at, status, content_hash)
-               VALUES (:session_name, :message, :repo_full_name, :issue_number, :target_entity,
-                       :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)
-               RETURNING id"""
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=[MessageQueueORM.session_name, MessageQueueORM.content_hash],
+            index_where=and_(
+                MessageQueueORM.delivery_kind == "direct_message",
+                MessageQueueORM.status.in_(("pending", "in_progress")),
+            ),
+        )
 
-    result = await conn.execute(text(sql), params)
+    result = await conn.execute(stmt.returning(MessageQueueORM.id))
     row = result.fetchone()
     return row._mapping["id"] if row else -1
 
@@ -349,7 +351,7 @@ async def enqueue_message(
 async def get_sessions_with_pending(conn: AsyncConnection) -> list[str]:
     """List sessions that currently have pending queue rows."""
     result = await conn.execute(
-        text("SELECT DISTINCT session_name FROM message_queue WHERE status = 'pending'")
+        select(distinct(MessageQueueORM.session_name)).where(MessageQueueORM.status == "pending")
     )
     return [row._mapping["session_name"] for row in result.fetchall()]
 
@@ -360,25 +362,26 @@ async def dequeue_messages(
     limit: int = 10,
 ) -> list[dict]:
     """Atomically claim pending messages for a session, oldest first."""
-    dialect = conn.dialect.name
     now = _now_iso()
-    if dialect == "postgresql":
-        sql = """UPDATE message_queue SET status='in_progress', leased_at=:now
-                 WHERE id IN (
-                     SELECT id FROM message_queue
-                     WHERE session_name=:session AND status='pending'
-                     ORDER BY enqueued_at ASC LIMIT :lim
-                     FOR UPDATE SKIP LOCKED
-                 ) RETURNING *"""
-    else:
-        sql = """UPDATE message_queue SET status='in_progress', leased_at=:now
-                 WHERE id IN (
-                     SELECT id FROM message_queue
-                     WHERE session_name=:session AND status='pending'
-                     ORDER BY enqueued_at ASC LIMIT :lim
-                 ) RETURNING *"""
-    result = await conn.execute(text(sql), {"session": session_name, "lim": limit, "now": now})
-    rows = [dict(row._mapping) for row in result.fetchall()]
+    pending_ids = (
+        select(MessageQueueORM.id)
+        .where(
+            MessageQueueORM.session_name == session_name,
+            MessageQueueORM.status == "pending",
+        )
+        .order_by(MessageQueueORM.enqueued_at.asc())
+        .limit(limit)
+    )
+    if conn.dialect.name == "postgresql":
+        pending_ids = pending_ids.with_for_update(skip_locked=True)
+
+    result = await conn.execute(
+        update(MessageQueueORM)
+        .where(MessageQueueORM.id.in_(pending_ids))
+        .values(status="in_progress", leased_at=now)
+        .returning(*MessageQueueORM.__table__.c)
+    )
+    rows = _rows_to_dicts(result)
     rows.sort(key=lambda row: row["enqueued_at"])
     return rows
 
@@ -389,11 +392,9 @@ async def release_lease(
 ) -> None:
     """Return an in-progress queue row to pending."""
     await conn.execute(
-        text(
-            """UPDATE message_queue SET status='pending', leased_at=NULL
-               WHERE id = :id AND status = 'in_progress'"""
-        ),
-        {"id": message_id},
+        update(MessageQueueORM)
+        .where(MessageQueueORM.id == message_id, MessageQueueORM.status == "in_progress")
+        .values(status="pending", leased_at=None)
     )
 
 
@@ -402,17 +403,16 @@ async def expire_stale_leases(
     max_age_minutes: int = 5,
 ) -> int:
     """Return abandoned in-progress rows to pending."""
+    cutoff = (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
     result = await conn.execute(
-        text(
-            """UPDATE message_queue SET status='pending', leased_at=NULL
-               WHERE status = 'in_progress'
-                 AND leased_at < :cutoff"""
-        ),
-        {
-            "cutoff": (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
-                "%Y-%m-%dT%H:%M:%S.%fZ"
-            )
-        },
+        update(MessageQueueORM)
+        .where(
+            MessageQueueORM.status == "in_progress",
+            MessageQueueORM.leased_at < cutoff,
+        )
+        .values(status="pending", leased_at=None)
     )
     return result.rowcount
 
@@ -423,12 +423,9 @@ async def mark_message_delivered(
 ) -> None:
     """Mark a claimed queued message as delivered."""
     await conn.execute(
-        text(
-            """UPDATE message_queue
-               SET status = 'delivered', delivered_at = :delivered_at
-               WHERE id = :id AND status = 'in_progress'"""
-        ),
-        {"delivered_at": _now_iso(), "id": message_id},
+        update(MessageQueueORM)
+        .where(MessageQueueORM.id == message_id, MessageQueueORM.status == "in_progress")
+        .values(status="delivered", delivered_at=_now_iso())
     )
 
 
@@ -441,44 +438,24 @@ async def mark_matching_messages_delivered(
     repo_full_name: str | None = None,
     issue_number: int | None = None,
 ) -> int:
-    """Mark queued messages with the same identity as delivered.
-
-    This clears stale deferred rows after the same payload succeeds through a
-    later direct send path, preventing replay of already-seen comment or direct
-    message notifications.
-    """
+    """Mark queued messages with the same identity as delivered."""
     content_hash = hashlib.sha256(message.encode()).hexdigest()
-    clauses = [
-        "session_name = :session_name",
-        "delivery_kind = :delivery_kind",
-        "content_hash = :content_hash",
-        "status IN ('pending', 'in_progress')",
+    conditions = [
+        MessageQueueORM.session_name == session_name,
+        MessageQueueORM.delivery_kind == delivery_kind,
+        MessageQueueORM.content_hash == content_hash,
+        MessageQueueORM.status.in_(("pending", "in_progress")),
     ]
-    params: dict[str, object] = {
-        "session_name": session_name,
-        "delivery_kind": delivery_kind,
-        "content_hash": content_hash,
-        "repo_full_name": normalize_repo_full_name(repo_full_name),
-        "delivered_at": _now_iso(),
-    }
-
-    clauses.append("repo_full_name = :repo_full_name")
-
+    conditions.append(MessageQueueORM.repo_full_name == normalize_repo_full_name(repo_full_name))
     if issue_number is None:
-        clauses.append("issue_number IS NULL")
+        conditions.append(MessageQueueORM.issue_number.is_(None))
     else:
-        clauses.append("issue_number = :issue_number")
-        params["issue_number"] = issue_number
+        conditions.append(MessageQueueORM.issue_number == issue_number)
 
     result = await conn.execute(
-        text(
-            f"""UPDATE message_queue
-               SET status = 'delivered',
-                   delivered_at = :delivered_at,
-                   leased_at = NULL
-               WHERE {' AND '.join(clauses)}"""
-        ),
-        params,
+        update(MessageQueueORM)
+        .where(*conditions)
+        .values(status="delivered", delivered_at=_now_iso(), leased_at=None)
     )
     return result.rowcount or 0
 
@@ -487,48 +464,38 @@ async def expire_stale_pending(
     conn: AsyncConnection,
     max_age_minutes: int = 30,
 ) -> int:
-    """Mark stale pending and in-progress messages as expired.
-
-    Prevents stale messages from looping indefinitely in the drain cycle.
-    Returns the number of expired messages.
-    """
+    """Mark stale pending and in-progress messages as expired."""
     now = _now_iso()
     cutoff_str = (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
         "%Y-%m-%dT%H:%M:%S.%fZ"
     )
     pending_result = await conn.execute(
-        text(
-            """UPDATE message_queue
-               SET status = 'expired', delivered_at = :now
-               WHERE status = 'pending'
-                 AND enqueued_at < :cutoff
-                 AND delivery_kind != 'direct_message'"""
-        ),
-        {
-            "now": now,
-            "cutoff": cutoff_str,
-        },
+        update(MessageQueueORM)
+        .where(
+            MessageQueueORM.status == "pending",
+            MessageQueueORM.enqueued_at < cutoff_str,
+            MessageQueueORM.delivery_kind != "direct_message",
+        )
+        .values(status="expired", delivered_at=now)
     )
     in_progress_result = await conn.execute(
-        text(
-            """UPDATE message_queue SET status='expired', delivered_at=:now
-               WHERE status='in_progress' AND leased_at < :cutoff
-                 AND delivery_kind != 'direct_message'"""
-        ),
-        {"now": now, "cutoff": cutoff_str},
+        update(MessageQueueORM)
+        .where(
+            MessageQueueORM.status == "in_progress",
+            MessageQueueORM.leased_at < cutoff_str,
+            MessageQueueORM.delivery_kind != "direct_message",
+        )
+        .values(status="expired", delivered_at=now)
     )
-    # Direct messages get a longer TTL (24h) to survive swarm durations
-    dm_cutoff = (datetime.now(UTC) - timedelta(hours=24)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
+    dm_cutoff = (datetime.now(UTC) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     dm_result = await conn.execute(
-        text(
-            """UPDATE message_queue SET status='expired', delivered_at=:now
-               WHERE status IN ('pending', 'in_progress')
-                 AND delivery_kind = 'direct_message'
-                 AND enqueued_at < :dm_cutoff"""
-        ),
-        {"now": now, "dm_cutoff": dm_cutoff},
+        update(MessageQueueORM)
+        .where(
+            MessageQueueORM.status.in_(("pending", "in_progress")),
+            MessageQueueORM.delivery_kind == "direct_message",
+            MessageQueueORM.enqueued_at < dm_cutoff,
+        )
+        .values(status="expired", delivered_at=now)
     )
     return (
         (pending_result.rowcount or 0)
@@ -542,22 +509,14 @@ async def purge_pending_for_issue(
     repo_full_name: str | None,
     issue_number: int,
 ) -> int:
-    """Mark all pending or leased messages for an issue as delivered (issue closed).
-
-    Returns the number of purged messages.
-    """
+    """Mark all pending or leased messages for an issue as delivered (issue closed)."""
     result = await conn.execute(
-        text(
-            """UPDATE message_queue
-               SET status = 'delivered', delivered_at = :delivered_at
-               WHERE repo_full_name = :repo_full_name
-                 AND issue_number = :issue_number
-                 AND status IN ('pending', 'in_progress')"""
-        ),
-        {
-            "delivered_at": _now_iso(),
-            "repo_full_name": normalize_repo_full_name(repo_full_name),
-            "issue_number": issue_number,
-        },
+        update(MessageQueueORM)
+        .where(
+            MessageQueueORM.repo_full_name == normalize_repo_full_name(repo_full_name),
+            MessageQueueORM.issue_number == issue_number,
+            MessageQueueORM.status.in_(("pending", "in_progress")),
+        )
+        .values(status="delivered", delivered_at=_now_iso())
     )
     return result.rowcount
