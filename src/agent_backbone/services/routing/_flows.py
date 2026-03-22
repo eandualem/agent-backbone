@@ -94,6 +94,17 @@ async def drain_message_queue(
             if q_outcome == "delivered":
                 await db.mark_message_delivered(msg_record["id"])
                 summary["queue_delivered"] = summary.get("queue_delivered", 0) + 1
+                from agent_backbone.api.governance_events import emit_governance_event
+
+                await emit_governance_event(
+                    "queue.drained",
+                    context={
+                        "session": session_name,
+                        "issue_id": msg_record.get("issue_number"),
+                        "repo": msg_record.get("repo_full_name") or "",
+                    },
+                    source="backbone",
+                )
             elif q_outcome == "already_delivered":
                 await db.mark_message_delivered(msg_record["id"])
                 summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1

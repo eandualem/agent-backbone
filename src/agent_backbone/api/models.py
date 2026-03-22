@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -1049,3 +1049,78 @@ class AnalyticsErrorsResponse(BaseModel):
     errors: list[AnalyticsErrorEntry] = Field(
         default_factory=list,
     )
+
+
+# --- Governance ---
+
+
+class GovernanceActionRequest(BaseModel):
+    """Request body for governance action execution."""
+
+    action_type: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    track_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class GovernanceActionResponse(BaseModel):
+    """Response from governance action execution."""
+
+    ok: bool
+    action_type: str
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
+class GovernanceTrackCreate(BaseModel):
+    """Request body for creating a governance track."""
+
+    id: str
+    name: str
+    description: str = ""
+    definition: dict[str, Any] = Field(default_factory=dict)
+
+
+class GovernanceTrackUpdate(BaseModel):
+    """Request body for updating a governance track."""
+
+    name: str | None = None
+    description: str | None = None
+    definition: dict[str, Any] | None = None
+
+
+class GovernanceTrackResponse(BaseModel):
+    """A governance track definition."""
+
+    id: str
+    name: str
+    description: str
+    definition: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class GovernanceInstanceCreate(BaseModel):
+    """Request body for creating a track instance."""
+
+    id: str
+    context: dict[str, Any] = Field(default_factory=dict)
+    current_state: str
+
+
+class GovernanceInstanceUpdate(BaseModel):
+    """Request body for updating a track instance."""
+
+    current_state: str | None = None
+    context: dict[str, Any] | None = None
+    history: list[dict[str, Any]] | None = None
+
+
+class GovernanceInstanceResponse(BaseModel):
+    """A governance track instance."""
+
+    id: str
+    track_id: str
+    context: dict[str, Any]
+    current_state: str
+    history: list[dict[str, Any]]
+    created_at: str
+    updated_at: str

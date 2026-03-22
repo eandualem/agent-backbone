@@ -357,3 +357,41 @@ class SwarmAssignmentORM(Base):
         Index("idx_swarm_assignments_worker", "worker_name"),
         Index("idx_swarm_assignments_status", "status"),
     )
+
+
+class GovernanceTrackORM(Base):
+    """Governance track definitions — state machine workflow templates."""
+
+    __tablename__ = "governance_tracks"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("idx_governance_tracks_name", "name"),
+    )
+
+
+class GovernanceTrackInstanceORM(Base):
+    """Active instances of governance tracks — tied to specific work items."""
+
+    __tablename__ = "governance_track_instances"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    track_id: Mapped[str] = mapped_column(
+        ForeignKey("governance_tracks.id", ondelete="CASCADE"), nullable=False
+    )
+    context: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    current_state: Mapped[str] = mapped_column(Text, nullable=False)
+    history: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("idx_governance_instances_track", "track_id"),
+        Index("idx_governance_instances_state", "current_state"),
+    )

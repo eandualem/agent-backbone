@@ -209,6 +209,14 @@ async def issue_dispatcher(
             except Exception:
                 log.exception("Failed to record acknowledgment (non-fatal)")
 
+        from agent_backbone.api.governance_events import emit_governance_event
+
+        await emit_governance_event(
+            "queue.acknowledged",
+            context={"issue_id": event.issue.number, "repo": event.issue.repo_full_name},
+            source=commenter or "unknown",
+        )
+
         for target in targets:
             if event.comment.id and is_recent_notification(
                 event.issue.number,
