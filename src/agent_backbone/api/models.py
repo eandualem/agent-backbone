@@ -1085,3 +1085,59 @@ class GovernanceActionResponse(BaseModel):
     ok: bool
     action_type: str
     result: dict[str, Any] = Field(default_factory=dict)
+
+
+class GovernanceTrackCreate(BaseModel):
+    """Request body for creating a governance track."""
+
+    id: str
+    name: str
+    description: str = ""
+    definition: dict[str, Any] = Field(default_factory=dict)
+
+
+class GovernanceTrackUpdate(BaseModel):
+    """Request body for updating a governance track."""
+
+    name: str | None = None
+    description: str | None = None
+    definition: dict[str, Any] | None = None
+
+
+class GovernanceTrackResponse(BaseModel):
+    """A governance track definition."""
+
+    id: str
+    name: str
+    description: str
+    definition: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class GovernanceInstanceCreate(BaseModel):
+    """Request body for creating a track instance."""
+
+    id: str
+    context: dict[str, Any] = Field(default_factory=dict)
+    current_state: str
+
+
+class GovernanceInstanceUpdate(BaseModel):
+    """Request body for updating a track instance."""
+
+    current_state: str | None = None
+    context: dict[str, Any] | None = None
+    history: list[dict[str, Any]] | None = None
+
+
+class GovernanceInstanceResponse(BaseModel):
+    """A governance track instance."""
+
+    id: str
+    track_id: str
+    context: dict[str, Any]
+    current_state: str
+    history: list[dict[str, Any]]
+    created_at: str
+    updated_at: str
