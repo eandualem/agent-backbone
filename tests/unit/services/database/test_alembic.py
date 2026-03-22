@@ -22,6 +22,8 @@ _EXPECTED_TABLES = {
     "swarm_phase_history",
     "swarm_workers",
     "telemetry_checkpoints",
+    "governance_tracks",
+    "governance_track_instances",
 }
 
 _EXPECTED_INDEXES = {
@@ -58,6 +60,9 @@ _EXPECTED_INDEXES = {
     "uq_mq_comment_dedup",
     "uq_mq_dm_dedup",
     "uq_mq_issue_dedup",
+    "idx_governance_tracks_name",
+    "idx_governance_instances_track",
+    "idx_governance_instances_state",
 }
 
 
