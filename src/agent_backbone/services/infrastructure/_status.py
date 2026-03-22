@@ -13,8 +13,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-PREFECT_PORT = 4200
-
 
 async def show_status(config: BackboneConfig) -> str:
     """Collect and format status of all infrastructure services and agents."""
@@ -22,22 +20,6 @@ async def show_status(config: BackboneConfig) -> str:
 
     # --- Services ---
     lines.append("=== Services ===")
-
-    # Prefect
-    prefect_pid = read_pid("prefect")
-    prefect_running = await session_exists("prefect")
-    prefect_port_pid = await pid_for_port(PREFECT_PORT)
-    pid_info = f", pid {prefect_pid}" if prefect_pid else ""
-    if prefect_port_pid:
-        lines.append(
-            f"  prefect    : running (http://localhost:{PREFECT_PORT}, pid {prefect_port_pid})"
-        )
-    elif prefect_running or prefect_pid:
-        lines.append(
-            f"  prefect    : down (session present, port {PREFECT_PORT} not bound{pid_info})"
-        )
-    else:
-        lines.append("  prefect    : not running")
 
     # Gateway — check both tmux session and port
     gateway_port = config.gateway.port
@@ -50,17 +32,6 @@ async def show_status(config: BackboneConfig) -> str:
         lines.append(f"  gateway    : starting (tmux session, port {gateway_port} not yet bound)")
     else:
         lines.append("  gateway    : not running")
-
-    # Worker
-    worker_pid = read_pid("worker")
-    worker_running = await session_exists("backbone-worker")
-    wpid_info = f", pid {worker_pid}" if worker_pid else ""
-    if worker_pid:
-        lines.append(f"  worker     : running (tmux session, pool: agent-pool{wpid_info})")
-    elif worker_running:
-        lines.append("  worker     : down (tmux session present, worker process exited)")
-    else:
-        lines.append("  worker     : not running")
 
     # Telegram
     telegram_pid = read_pid("telegram")
