@@ -7,10 +7,8 @@ from __future__ import annotations
 
 import logging
 
-from prefect import flow, task
-
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
+from agent_backbone.services._locator import get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import format_digest, safe_deliver
 from agent_backbone.services.terminal import (
@@ -46,7 +44,6 @@ async def _start_workflow_agent_session(session_name: str, config: BackboneConfi
 # ---------------------------------------------------------------------------
 
 
-@task
 async def count_pending_issues(
     config: BackboneConfig,
     gh: object,
@@ -63,7 +60,6 @@ async def count_pending_issues(
     return counts
 
 
-@task
 async def deliver_overnight_issues(
     config: BackboneConfig,
     pending: dict[str, int],
@@ -102,7 +98,6 @@ async def deliver_overnight_issues(
     return results
 
 
-@flow(name="morning-startup")
 async def morning_startup() -> dict:
     """Execute morning startup routine.
 
@@ -110,8 +105,6 @@ async def morning_startup() -> dict:
     2. Deliver overnight issues to online agents
     3. Return summary for Telegram digest
     """
-    await ensure_initialized()
-
     config = get_config()
     gh = get_gh()
 
@@ -139,7 +132,6 @@ async def morning_startup() -> dict:
 # ---------------------------------------------------------------------------
 
 
-@task
 async def capture_delivery_stats(config: BackboneConfig, db: BackboneDB) -> dict:
     """Get delivery statistics for the day."""
     recent = await db.query_deliveries(limit=100)
@@ -157,7 +149,6 @@ async def capture_delivery_stats(config: BackboneConfig, db: BackboneDB) -> dict
     }
 
 
-@task
 async def _count_pending_evening(config: BackboneConfig, gh: object) -> dict[str, int]:
     """Count pending issues per entity (evening variant)."""
     counts: dict[str, int] = {}
@@ -171,7 +162,6 @@ async def _count_pending_evening(config: BackboneConfig, gh: object) -> dict[str
     return counts
 
 
-@flow(name="evening-shutdown")
 async def evening_shutdown() -> dict:
     """Execute evening shutdown routine.
 
@@ -180,8 +170,6 @@ async def evening_shutdown() -> dict:
     3. List active sessions
     4. Build and return digest
     """
-    await ensure_initialized()
-
     config = get_config()
     db = get_db()
     gh = get_gh()
@@ -222,7 +210,6 @@ async def evening_shutdown() -> dict:
 ARCLIO_AGENTS = ["ike", "feynman"]
 
 
-@task
 async def start_arclio_agents(config: BackboneConfig) -> list[str]:
     """Start Arclio-related agent sessions."""
     started = []
@@ -233,14 +220,11 @@ async def start_arclio_agents(config: BackboneConfig) -> list[str]:
     return started
 
 
-@flow(name="arclio-start")
 async def arclio_start() -> dict:
     """Start Arclio development environment.
 
     Starts Arclio coding agents and reports which sessions came online.
     """
-    await ensure_initialized()
-
     config = get_config()
     started = await start_arclio_agents(config)
     sessions = await list_sessions()
@@ -260,7 +244,6 @@ async def arclio_start() -> dict:
 ARCLIO_AGENTS_STOP = ["ike", "feynman"]
 
 
-@task
 async def stop_arclio_agents(config: BackboneConfig) -> list[str]:
     """Stop Arclio-related agent sessions."""
     stopped = []
@@ -271,14 +254,11 @@ async def stop_arclio_agents(config: BackboneConfig) -> list[str]:
     return stopped
 
 
-@flow(name="arclio-stop")
 async def arclio_stop() -> dict:
     """Shut down Arclio development environment.
 
     Stops all Arclio coding agents and reports final session state.
     """
-    await ensure_initialized()
-
     config = get_config()
     stopped = await stop_arclio_agents(config)
     sessions = await list_sessions()
@@ -295,7 +275,6 @@ async def arclio_stop() -> dict:
 # ---------------------------------------------------------------------------
 
 
-@task
 async def stop_all_agents(config: BackboneConfig) -> dict[str, bool]:
     """Stop all configured agent sessions. Returns {session: success}."""
     results: dict[str, bool] = {}
@@ -304,15 +283,12 @@ async def stop_all_agents(config: BackboneConfig) -> dict[str, bool]:
     return results
 
 
-@flow(name="full-shutdown")
 async def full_shutdown() -> dict:
     """Shut down all agent sessions.
 
     Stops every configured agent session and reports results.
     Infrastructure (Prefect server, gateway, Telegram bot) is NOT affected.
     """
-    await ensure_initialized()
-
     config = get_config()
     results = await stop_all_agents(config)
 

@@ -1,6 +1,6 @@
 .PHONY: help install dev logs clean lint format format-check fix type-check \
        test test-file test-unit test-integration cov cov-html check build \
-       run-gateway run-prefect setup-pool deploy run-worker \
+       run-gateway \
        db-up db-down db-upgrade db-migrate db-revision db-history db-current db-downgrade \
        start-backbone stop-backbone restart-backbone status \
        start-agent stop-agent start-orchestrators start-arclio start-loveble start-wf \
@@ -20,8 +20,6 @@ endif
 PROJECT_NAME := agent-backbone
 SRC_DIRS     := src/
 ALL_DIRS     := src/ tests/
-PREFECT_API_URL ?= http://127.0.0.1:4200/api
-
 # ─── Colors ──────────────────────────────────────────────
 
 GREEN  := $(shell tput -Txterm setaf 2)
@@ -141,18 +139,6 @@ build: ## Production build
 
 run-gateway: ## Start gateway server (prefer 'make dev' for auto-reload)
 	@uv run python -m agent_backbone.services.infrastructure start-gateway
-
-run-prefect: ## Start Prefect server (port 4200)
-	uv run python -m agent_backbone.services.infrastructure run-prefect-server
-
-setup-pool: ## Create agent-pool work pool (one-time)
-	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect work-pool create agent-pool --type process
-
-deploy: ## Deploy all scheduled flows
-	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect deploy --all
-
-run-worker: ## Start Prefect worker for agent-pool
-	PREFECT_API_URL=$(PREFECT_API_URL) uv run python -m agent_backbone.services.infrastructure run-prefect-worker
 
 # ─── Database ───────────────────────────────────────────
 

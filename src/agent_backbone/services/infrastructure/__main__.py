@@ -21,13 +21,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("restart-backbone", help="Restart all backbone services")
 
     # Individual services
-    sub.add_parser("start-prefect", help="Start Prefect server")
-    sub.add_parser("stop-prefect", help="Stop Prefect server")
     sub.add_parser("start-gateway", help="Start gateway server")
     sub.add_parser("stop-gateway", help="Stop gateway server")
     sub.add_parser("restart-gateway", help="Restart gateway server")
-    sub.add_parser("start-worker", help="Start Prefect worker")
-    sub.add_parser("stop-worker", help="Stop Prefect worker")
     sub.add_parser("start-telegram", help="Start Telegram bot")
     sub.add_parser("stop-telegram", help="Stop Telegram bot")
 
@@ -57,8 +53,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Internal
     sub.add_parser("run-telegram-bot", help="Run Telegram bot (internal, blocks)")
-    sub.add_parser("run-prefect-server", help="Run Prefect server supervisor (internal, blocks)")
-    sub.add_parser("run-prefect-worker", help="Run Prefect worker supervisor (internal, blocks)")
 
     return parser
 
@@ -84,11 +78,6 @@ async def _dispatch(args: argparse.Namespace) -> None:
         sys.exit(0 if ok else 1)
 
     # Individual services
-    elif cmd == "start-prefect":
-        ok = await _backbone.start_prefect(config)
-        sys.exit(0 if ok else 1)
-    elif cmd == "stop-prefect":
-        await _backbone.stop_prefect(config)
     elif cmd == "start-gateway":
         ok = await _backbone.start_gateway(config)
         sys.exit(0 if ok else 1)
@@ -97,11 +86,6 @@ async def _dispatch(args: argparse.Namespace) -> None:
     elif cmd == "restart-gateway":
         ok = await _backbone.restart_gateway(config)
         sys.exit(0 if ok else 1)
-    elif cmd == "start-worker":
-        ok = await _backbone.start_worker(config)
-        sys.exit(0 if ok else 1)
-    elif cmd == "stop-worker":
-        await _backbone.stop_worker(config)
     elif cmd == "start-telegram":
         ok = await _backbone.start_telegram(config)
         sys.exit(0 if ok else 1)
@@ -144,10 +128,6 @@ async def _dispatch(args: argparse.Namespace) -> None:
     # Internal
     elif cmd == "run-telegram-bot":
         await _run_telegram_bot(config)
-    elif cmd == "run-prefect-server":
-        await _backbone.run_prefect_server_supervisor()
-    elif cmd == "run-prefect-worker":
-        await _backbone.run_prefect_worker_supervisor(config)
 
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)

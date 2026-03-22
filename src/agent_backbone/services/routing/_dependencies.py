@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import logging
 
-from prefect import flow, task
-
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
+from agent_backbone.services._locator import get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_unblock_notification
@@ -19,7 +17,6 @@ from agent_backbone.services.routing._format import format_unblock_notification
 log = logging.getLogger(__name__)
 
 
-@task
 async def check_parent_resolved(
     config: BackboneConfig, parent_number: int, gh: object
 ) -> dict | None:
@@ -42,14 +39,11 @@ async def check_parent_resolved(
     }
 
 
-@flow(name="dependency-tracker")
 async def on_dependency_resolved(closed_issue_number: int) -> dict:
     """Check if closing this issue unblocks any parent issues.
 
     Returns a dict mapping parent_number -> outcome.
     """
-    await ensure_initialized()
-
     config = get_config()
     db = get_db()
     gh = get_gh()

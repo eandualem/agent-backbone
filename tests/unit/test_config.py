@@ -252,7 +252,6 @@ class TestPhaseIIConfigs:
         config = BackboneConfig()
         assert config.scheduling.monitor_interval_seconds == 60
         assert config.scheduling.delivery_retry_interval_seconds == 300
-        assert config.scheduling.work_pool_name == "agent-pool"
 
 
 class TestPhaseIIIConfigs:

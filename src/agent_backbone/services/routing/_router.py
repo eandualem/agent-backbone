@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import logging
 
-from prefect import flow, task
-
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import (
     EventType,
@@ -43,12 +41,10 @@ from agent_backbone.services.routing.models import DispatchResult
 log = logging.getLogger(__name__)
 
 
-@task
 async def resolve_session(target: str, issue_title: str, config: BackboneConfig) -> str | None:
     """Resolve a target entity to a tmux session name.
 
     Delegates to session_bridge.resolve_entity_session() for unified resolution.
-    Kept as a Prefect @task for dashboard visibility.
     """
     return await resolve_entity_session(target, config, issue_title)
 
@@ -155,7 +151,6 @@ async def _deliver_to_entity(
         )
 
 
-@flow(name="issue-dispatcher")
 async def issue_dispatcher(
     event: IssueEvent,
     config: BackboneConfig,

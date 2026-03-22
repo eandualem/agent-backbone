@@ -6,32 +6,47 @@ from agent_backbone.services.automation import WorkflowRegistry
 
 
 async def test_discover_finds_workflows():
-    """Registry discovers workflow modules in flows/workflows/."""
+    """Registry discovers workflows; with Prefect removed, only JSON are found."""
     reg = WorkflowRegistry()
     count = reg.discover()
-    assert count >= 3  # arclio_start, arclio_stop, full_shutdown
+    # No @flow decorators remain, so Prefect discovery returns 0
+    assert count == 0
 
 
 async def test_list_names():
-    """list_names returns sorted workflow names."""
-    reg = WorkflowRegistry()
-    reg.discover()
-    names = reg.list_names()
-    assert "arclio-start" in names
-    assert "arclio-stop" in names
-    assert "full-shutdown" in names
+    """list_names returns sorted workflow names from JSON discovery."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        for name in ("alpha", "beta"):
+            (tmp_path / f"{name}.json").write_text(
+                json.dumps({"name": name, "steps": []})
+            )
+        reg = WorkflowRegistry()
+        reg.discover(json_dir=tmp_path)
+        names = reg.list_names()
+
+    assert "alpha" in names
+    assert "beta" in names
     assert names == sorted(names)
 
 
-async def test_get_known_workflow():
-    """get() returns entry for a known workflow."""
+async def test_get_known_workflow(tmp_path):
+    """get() returns entry for a known JSON workflow."""
+    import json
+
+    wf = {"name": "test-wf", "description": "A test workflow", "steps": []}
+    (tmp_path / "test-wf.json").write_text(json.dumps(wf))
+
     reg = WorkflowRegistry()
-    reg.discover()
-    entry = reg.get("arclio-start")
+    reg.discover(json_dir=tmp_path)
+    entry = reg.get("test-wf")
     assert entry is not None
-    assert entry.name == "arclio-start"
-    assert entry.module == "agent_backbone.services.automation._flows"
-    assert entry.description  # has a docstring
+    assert entry.name == "test-wf"
+    assert entry.description == "A test workflow"
 
 
 async def test_get_unknown_returns_none():
@@ -41,13 +56,18 @@ async def test_get_unknown_returns_none():
     assert reg.get("nonexistent-workflow") is None
 
 
-async def test_format_list_nonempty():
+async def test_format_list_nonempty(tmp_path):
     """format_list produces human-readable output."""
+    import json
+
+    (tmp_path / "demo.json").write_text(
+        json.dumps({"name": "demo", "description": "Demo workflow", "steps": []})
+    )
     reg = WorkflowRegistry()
-    reg.discover()
+    reg.discover(json_dir=tmp_path)
     text = reg.format_list()
     assert "Available workflows:" in text
-    assert "arclio-start" in text
+    assert "demo" in text
 
 
 async def test_format_list_empty():
@@ -57,22 +77,34 @@ async def test_format_list_empty():
     assert "No workflows registered" in text
 
 
-async def test_workflows_property():
+async def test_workflows_property(tmp_path):
     """workflows property returns dict copy."""
+    import json
+
+    for name in ("a", "b", "c"):
+        (tmp_path / f"{name}.json").write_text(
+            json.dumps({"name": name, "steps": []})
+        )
     reg = WorkflowRegistry()
-    reg.discover()
+    reg.discover(json_dir=tmp_path)
     wf = reg.workflows
     assert isinstance(wf, dict)
     # Modifying the copy shouldn't affect the registry
+    original_count = len(reg.workflows)
     wf.clear()
-    assert len(reg.workflows) >= 3
+    assert len(reg.workflows) == original_count
 
 
-async def test_discover_clears_previous():
+async def test_discover_clears_previous(tmp_path):
     """Calling discover() again clears and re-discovers."""
+    import json
+
+    (tmp_path / "wf.json").write_text(
+        json.dumps({"name": "wf", "steps": []})
+    )
     reg = WorkflowRegistry()
-    first = reg.discover()
-    second = reg.discover()
+    first = reg.discover(json_dir=tmp_path)
+    second = reg.discover(json_dir=tmp_path)
     assert first == second
 
 
@@ -120,21 +152,18 @@ async def test_discover_json_with_last_run(tmp_path):
 
 
 async def test_discover_without_json_dir():
-    """Calling discover() without json_dir only finds Prefect flows (backward compat)."""
+    """Calling discover() without json_dir finds no workflows (no @flow decorators)."""
     reg = WorkflowRegistry()
     count = reg.discover()
-    assert count >= 3  # same as test_discover_finds_workflows
-    # Verify all entries are Prefect source
-    for entry in reg.workflows.values():
-        assert entry.source == "prefect"
+    assert count == 0
 
 
 async def test_discover_json_empty_dir(tmp_path):
     """Empty JSON dir doesn't add workflows but doesn't fail."""
     reg = WorkflowRegistry()
     count = reg.discover(json_dir=tmp_path)
-    # Only Prefect workflows
-    assert count >= 3
+    # No Prefect workflows, no JSON workflows
+    assert count == 0
 
 
 async def test_json_entry_fields(tmp_path):

@@ -83,10 +83,18 @@ async def lifespan(app: FastAPI):
 
         await reconcile_startup_states(config=config, db=app.state.db)
 
+        from agent_backbone.api.background import start_background_tasks
+
+        start_background_tasks()
+
         log.info("Backbone API started — port %d", config.gateway.port)
         yield
     finally:
         await lifecycle.stop_all()
+
+        from agent_backbone.api.background import stop_background_tasks
+
+        await stop_background_tasks()
 
         # Non-lifecycle cleanup (PTY)
         from agent_backbone.api.socketio_server import get_pty_manager
@@ -171,7 +179,6 @@ def create_app() -> socketio.ASGIApp:
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.notes import router as notes_router
     from agent_backbone.api.routes.plans import router as plans_router
-    from agent_backbone.api.routes.prefect import router as prefect_router
     from agent_backbone.api.routes.repos import router as repos_router
     from agent_backbone.api.routes.rooms import router as rooms_router
     from agent_backbone.api.routes.schedule import router as schedule_router
@@ -191,7 +198,6 @@ def create_app() -> socketio.ASGIApp:
         workflows_router,
         files_router,
         governance_router,
-        prefect_router,
         actions_router,
         schedule_router,
         activity_router,

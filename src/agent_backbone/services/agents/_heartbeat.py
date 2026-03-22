@@ -15,11 +15,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
-from prefect import flow, task
-from prefect.cache_policies import NO_CACHE
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services._locator import ensure_initialized, get_config, get_db
+from agent_backbone.services._locator import get_config, get_db
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import BackboneDB
@@ -104,7 +102,6 @@ def _schedule_targets(agent: str, config: BackboneConfig) -> list[str]:
     return []
 
 
-@task(cache_policy=NO_CACHE)
 async def evaluate_agent_heartbeat(
     agent: str,
     schedule: dict,
@@ -163,7 +160,6 @@ async def evaluate_agent_heartbeat(
     return None
 
 
-@flow(name="heartbeat-scheduler")
 async def heartbeat_scheduler() -> dict:
     """Evaluate heartbeat schedules and wake agents at configured times.
 
@@ -172,8 +168,6 @@ async def heartbeat_scheduler() -> dict:
     if _heartbeat_lock.locked():
         log.info("Heartbeat scheduler already running — skipping concurrent run")
         return {"_skipped": "concurrent_run"}
-
-    await ensure_initialized()
 
     async with _heartbeat_lock:
         return await _heartbeat_scheduler_impl()

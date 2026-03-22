@@ -125,7 +125,7 @@ class TestResolveSession:
             new_callable=AsyncMock,
             return_value="ike",
         ) as mock:
-            result = await resolve_session.fn("ike", "[task] Something", config)
+            result = await resolve_session("ike", "[task] Something", config)
         assert result == "ike"
         mock.assert_called_once()
         args = mock.call_args[0]
@@ -139,7 +139,7 @@ class TestResolveSession:
             new_callable=AsyncMock,
             return_value=None,
         ):
-            result = await resolve_session.fn("nobody", "irrelevant", config)
+            result = await resolve_session("nobody", "irrelevant", config)
         assert result is None
 
 
@@ -158,7 +158,7 @@ class TestIssueDispatcher:
             _patch_resolve(),
             _patch_safe_deliver("delivered") as mock_deliver,
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         assert "ike" in result.delivered
         assert mock_deliver.called
@@ -168,7 +168,7 @@ class TestIssueDispatcher:
         issue = IssueData(number=2, title="[question] Clarify", labels=labels)
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
-        result = await issue_dispatcher.fn(event, config, mock_db)
+        result = await issue_dispatcher(event, config, mock_db)
         assert "elias" in result.skipped
         assert result.delivered == []
 
@@ -181,7 +181,7 @@ class TestIssueDispatcher:
             _patch_resolve(),
             _patch_safe_deliver("delivery_failed"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         assert "feynman" in result.offline
 
@@ -194,7 +194,7 @@ class TestIssueDispatcher:
             _patch_resolve(),
             _patch_safe_deliver("delivered"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         assert len(result.delivered) == 2
 
@@ -207,7 +207,7 @@ class TestIssueDispatcher:
             _patch_resolve_sessions(["bell-wf"]),
             _patch_safe_deliver("delivered") as mock_deliver,
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         assert result.delivered == ["bell-wf"]
         assert mock_deliver.await_count == 1
@@ -241,7 +241,7 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
         with _patch_safe_deliver("delivered") as mock_deliver:
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         assert result.delivered == []
         assert result.skipped == ["bell"]
@@ -252,7 +252,7 @@ class TestIssueDispatcher:
         issue = IssueData(number=6, title="Whatever", labels=labels)
         event = IssueEvent(event_type=EventType.UNKNOWN, issue=issue)
 
-        result = await issue_dispatcher.fn(event, config, mock_db)
+        result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == []
         assert result.offline == []
 
@@ -266,7 +266,7 @@ class TestIssueDispatcher:
             _patch_resolve(),
             _patch_safe_deliver("agent_working"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         assert "ike" in result.deferred
         assert result.delivered == []
@@ -286,7 +286,7 @@ class TestIssueDispatcher:
             _patch_resolve(),
             _patch_safe_deliver("delivered"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         assert "ike" in result.delivered
 
@@ -311,7 +311,7 @@ class TestIssueDispatcher:
             _patch_resolve_sessions(["agent-backbone"]),
             _patch_safe_deliver("delivered") as mock_deliver,
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db, mock_gh)
+            result = await issue_dispatcher(event, config, mock_db, mock_gh)
 
         assert result.delivered == ["agent-backbone"]
         mock_deliver.assert_awaited_once()
@@ -338,7 +338,7 @@ class TestIssueDispatcher:
             _patch_resolve_sessions(["agent-backbone"]),
             _patch_safe_deliver("delivered") as mock_deliver,
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db, mock_gh)
+            result = await issue_dispatcher(event, config, mock_db, mock_gh)
 
         assert result.delivered == ["agent-backbone"]
         assert mock_deliver.await_args.kwargs["delivery_kind"] == "pull_request"
@@ -357,7 +357,7 @@ class TestIssueDispatcher:
             _patch_safe_deliver("delivered"),
             _patch_find_outgoing(None),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         # Unknown commenter means nobody is subtracted from {sender} | {targets},
         # except the skip set. Both leo and ike should be notified.
@@ -376,7 +376,7 @@ class TestIssueDispatcher:
             _patch_resolve(),
             _patch_safe_deliver("delivered"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         # Leo should be delivered (sender, not commenter)
         assert "leo" in result.delivered
@@ -395,7 +395,7 @@ class TestIssueDispatcher:
             _patch_resolve(),
             _patch_safe_deliver("delivered"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         # Ike is the commenter and should be skipped (removed from target set)
         assert "ike" not in result.delivered
@@ -414,7 +414,7 @@ class TestIssueDispatcher:
             _patch_resolve(),
             _patch_safe_deliver("delivered"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         # Ike should receive the comment (Leo is the commenter, Ike is target)
         assert "ike" in result.delivered
@@ -440,7 +440,7 @@ class TestIssueDispatcher:
             _patch_resolve_sessions(["agent-orchestration-dashboard"]),
             _patch_safe_deliver("delivered"),
         ):
-            await issue_dispatcher.fn(event, config, mock_db)
+            await issue_dispatcher(event, config, mock_db)
 
         assert mock_db.record_acknowledgment.await_args_list[0].args == (
             "eandualem/agent-orchestration-dashboard",
@@ -474,7 +474,7 @@ class TestCommentRouting:
             _patch_resolve(),
             _patch_safe_deliver("delivered"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         assert "leo" in result.delivered
         # Ike is removed by _compute_comment_targets (commenter subtracted from set)
@@ -491,7 +491,7 @@ class TestCommentRouting:
             _patch_resolve(),
             _patch_safe_deliver("delivered") as mock_deliver,
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         assert "leo" in result.delivered
         assert mock_deliver.called
@@ -508,7 +508,7 @@ class TestCommentRouting:
             _patch_safe_deliver("delivered"),
             _patch_find_outgoing("ike"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         # ike identified as commenter via JSONL fallback, subtracted from targets
         assert "leo" in result.delivered
@@ -526,7 +526,7 @@ class TestCommentRouting:
             _patch_safe_deliver("delivered"),
             _patch_find_outgoing(None),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         # Both sender and target notified since commenter is unknown
         assert "leo" in result.delivered
@@ -551,7 +551,7 @@ class TestCommentRouting:
             _patch_resolve(),
             _patch_safe_deliver("delivered"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         # Leo should be delivered (sender)
         assert "leo" in result.delivered
@@ -570,7 +570,7 @@ class TestCommentRouting:
             _patch_resolve(),
             _patch_safe_deliver("delivered"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         # elias is in skip set, so removed by _compute_comment_targets
         assert "elias" not in result.delivered
@@ -587,7 +587,7 @@ class TestCommentRouting:
             _patch_resolve(),
             _patch_safe_deliver("delivered"),
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         # Feynman is the commenter, removed from target set by _compute_comment_targets
         assert "feynman" not in result.delivered
@@ -610,8 +610,8 @@ class TestCommentRouting:
             _patch_resolve(),
             _patch_safe_deliver("delivered") as mock_deliver,
         ):
-            first = await issue_dispatcher.fn(event, config, mock_db)
-            second = await issue_dispatcher.fn(event, config, mock_db)
+            first = await issue_dispatcher(event, config, mock_db)
+            second = await issue_dispatcher(event, config, mock_db)
 
         assert first.delivered == ["ike"]
         assert second.delivered == []
@@ -650,7 +650,7 @@ class TestCommentRouting:
             ),
             _patch_safe_deliver("delivered") as mock_deliver,
         ):
-            result = await issue_dispatcher.fn(event, config, mock_db)
+            result = await issue_dispatcher(event, config, mock_db)
 
         assert result.delivered == ["bell-wf"]
         assert [call.args[0] for call in mock_deliver.await_args_list] == ["bell-wf"]

@@ -92,27 +92,26 @@ async def run_workflow(
     if not entry:
         raise HTTPException(status_code=404, detail=f"Workflow '{name}' not found")
 
-    if entry.source == "json":
-        result = await workflows_svc.execute_steps(entry.steps, config)
+    if entry.flow_fn is not None:
+        try:
+            result = await entry.flow_fn()
+            return {"ok": True, "workflow": name, "result": str(result)}
+        except Exception as e:
+            log.exception("Workflow '%s' failed", name)
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
-        # Update last_run in the JSON file
-        file_path = _JSON_WORKFLOW_DIR / f"{name}.json"
-        if file_path.exists():
-            try:
-                from datetime import UTC, datetime
+    result = await workflows_svc.execute_steps(entry.steps, config)
 
-                data = json.loads(file_path.read_text())
-                data["last_run"] = datetime.now(UTC).isoformat()
-                file_path.write_text(json.dumps(data, indent=2))
-            except Exception:
-                log.warning("Failed to update last_run for workflow '%s'", name)
+    # Update last_run in the JSON file
+    file_path = _JSON_WORKFLOW_DIR / f"{name}.json"
+    if file_path.exists():
+        try:
+            from datetime import UTC, datetime
 
-        return {"ok": result["ok"], "workflow": name, "result": result}
+            data = json.loads(file_path.read_text())
+            data["last_run"] = datetime.now(UTC).isoformat()
+            file_path.write_text(json.dumps(data, indent=2))
+        except Exception:
+            log.warning("Failed to update last_run for workflow '%s'", name)
 
-    # Prefect workflow
-    try:
-        result = await entry.flow_fn()
-        return {"ok": True, "workflow": name, "result": str(result)}
-    except Exception as e:
-        log.exception("Workflow '%s' failed", name)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {"ok": result["ok"], "workflow": name, "result": result}

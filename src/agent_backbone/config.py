@@ -66,12 +66,8 @@ class EntityConfig:
     fallback: dict[str, str] = field(default_factory=lambda: {"coding-agent": "ike"})
     service_sessions: frozenset[str] = frozenset(
         {
-            "prefect",
-            "prefect-worker",
-            "prefect-server",
             "telegram-bot",
             "gateway",
-            "backbone-worker",
         }
     )
 
@@ -101,7 +97,6 @@ class SchedulingConfig:
 
     monitor_interval_seconds: int = 60
     delivery_retry_interval_seconds: int = 300
-    work_pool_name: str = "agent-pool"
 
 
 @dataclass(frozen=True)
@@ -310,12 +305,8 @@ class BackboneConfig:
                     ent.get(
                         "service_sessions",
                         [
-                            "prefect",
-                            "prefect-worker",
-                            "prefect-server",
                             "telegram-bot",
                             "gateway",
-                            "backbone-worker",
                         ],
                     )
                 ),
@@ -331,7 +322,6 @@ class BackboneConfig:
             scheduling=SchedulingConfig(
                 monitor_interval_seconds=sc.get("monitor_interval_seconds", 60),
                 delivery_retry_interval_seconds=sc.get("delivery_retry_interval_seconds", 300),
-                work_pool_name=sc.get("work_pool_name", "agent-pool"),
             ),
             database=DatabaseConfig(
                 host=db.get("host", "localhost"),

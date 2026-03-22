@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from prefect.cache_policies import NO_CACHE
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.database import BackboneDB
@@ -40,18 +39,13 @@ class TestRetryDeliveryAckCheck:
             "target_entity": "coding-agent",
         }
 
-        from agent_backbone.services.routing import retry_delivery
 
         mock_gh = AsyncMock()
-        result = await retry_delivery.fn(config, delivery, db, mock_gh)
+        result = await retry_delivery(config, delivery, db, mock_gh)
         assert result == "acknowledged"
 
 
-class TestPrefectTaskConfig:
-    def test_retry_delivery_disables_prefect_input_caching(self):
-        """Retry delivery should not hash BackboneDB or GitHub client inputs."""
-        assert retry_delivery.cache_policy == NO_CACHE
-
+class TestRetryDeliveryAckEdgeCases:
     async def test_retry_skips_when_session_acknowledged(self, db, config):
         """Retry skips when fallback session (not target_entity) acknowledged."""
         # Delivery was for coding-agent but fell back to ike session
@@ -65,10 +59,9 @@ class TestPrefectTaskConfig:
             "target_entity": "coding-agent",
         }
 
-        from agent_backbone.services.routing import retry_delivery
 
         mock_gh = AsyncMock()
-        result = await retry_delivery.fn(config, delivery, db, mock_gh)
+        result = await retry_delivery(config, delivery, db, mock_gh)
         assert result == "acknowledged"
 
     @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
@@ -91,9 +84,8 @@ class TestPrefectTaskConfig:
             "target_entity": "coding-agent",
         }
 
-        from agent_backbone.services.routing import retry_delivery
 
-        result = await retry_delivery.fn(config, delivery, db, mock_gh)
+        result = await retry_delivery(config, delivery, db, mock_gh)
         assert result == "retried"
         mock_deliver.assert_called_once()
 
@@ -108,10 +100,9 @@ class TestPrefectTaskConfig:
             "target_entity": "ike",
         }
 
-        from agent_backbone.services.routing import retry_delivery
 
         mock_gh = AsyncMock()
-        result = await retry_delivery.fn(config, delivery, db, mock_gh)
+        result = await retry_delivery(config, delivery, db, mock_gh)
         assert result == "acknowledged"
 
     @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
@@ -133,9 +124,8 @@ class TestPrefectTaskConfig:
             "target_entity": "agent-backbone",
         }
 
-        from agent_backbone.services.routing import retry_delivery
 
-        result = await retry_delivery.fn(config, delivery, db, mock_gh)
+        result = await retry_delivery(config, delivery, db, mock_gh)
         assert result == "retried"
         assert mock_gh.get_issue.await_args.kwargs["repo_full_name"] == "eandualem/agent-backbone"
 
@@ -157,9 +147,8 @@ class TestPrefectTaskConfig:
             "target_entity": "coding-agent",
         }
 
-        from agent_backbone.services.routing import retry_delivery
 
-        result = await retry_delivery.fn(config, delivery, db, mock_gh)
+        result = await retry_delivery(config, delivery, db, mock_gh)
         assert result == "retried"
         mock_deliver.assert_called_once()
 
@@ -264,7 +253,7 @@ class TestDeliveryRetryQueueDrain:
         mock_gh = AsyncMock()
         init_flow_services(config=config, db=db, gh=mock_gh)
 
-        summary = await delivery_retry.fn()
+        summary = await delivery_retry()
 
         assert summary["queue_delivered"] == 1
         assert mock_deliver.await_args.kwargs["delivery_kind"] == "comment"
@@ -301,7 +290,7 @@ class TestDeliveryRetryQueueDrain:
         mock_gh = AsyncMock()
         init_flow_services(config=config, db=db, gh=mock_gh)
 
-        summary = await delivery_retry.fn()
+        summary = await delivery_retry()
 
         assert summary["queue_delivered"] == 1
         assert mock_deliver.await_args.kwargs["issue_number"] is None

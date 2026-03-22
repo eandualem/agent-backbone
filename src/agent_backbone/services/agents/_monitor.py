@@ -11,10 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from prefect import flow
-
 from agent_backbone.api.session_updates import emit_sessions_update
-from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh, get_sio
+from agent_backbone.services._locator import get_config, get_db, get_gh, get_sio
 from agent_backbone.services.agents._escalation import (
     check_plan_waiting,
     handle_offline,
@@ -33,7 +31,6 @@ log = logging.getLogger(__name__)
 _monitor_lock = asyncio.Lock()
 
 
-@flow(name="agent-monitor")
 async def monitor_agents() -> dict:
     """Check all entity sessions and deliver pending issues to online agents.
 
@@ -46,8 +43,6 @@ async def monitor_agents() -> dict:
     if _monitor_lock.locked():
         log.info("Monitor already running — skipping concurrent run")
         return {"_skipped": "concurrent_run"}
-
-    await ensure_initialized()
 
     async with _monitor_lock:
         return await _monitor_agents_impl()

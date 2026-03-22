@@ -10,12 +10,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection
 
-from prefect import flow, task
-from prefect.cache_policies import NO_CACHE
-
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import acknowledgment_entities
-from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
+from agent_backbone.services._locator import get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_next_issue_notification
@@ -118,7 +115,6 @@ async def drain_message_queue(
     return summary
 
 
-@task(cache_policy=NO_CACHE)
 async def retry_delivery(
     config: BackboneConfig,
     delivery: dict,
@@ -215,14 +211,11 @@ async def retry_delivery(
     return "delivery_failed"
 
 
-@flow(name="delivery-retry")
 async def delivery_retry() -> dict:
     """Retry failed deliveries for agents that are now online.
 
     Returns summary of retry outcomes.
     """
-    await ensure_initialized()
-
     config = get_config()
     db = get_db()
     gh = get_gh()
@@ -269,7 +262,6 @@ async def delivery_retry() -> dict:
     return summary
 
 
-@flow(name="scheduled-delivery")
 async def scheduled_delivery(
     issue_number: int,
     target_entity: str,
@@ -281,8 +273,6 @@ async def scheduled_delivery(
 
     Returns outcome string: delivered, offline, busy, issue_closed.
     """
-    await ensure_initialized()
-
     config = get_config()
     db = get_db()
     gh = get_gh()
