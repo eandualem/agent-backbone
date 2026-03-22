@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent_backbone.services.database.models import (
     GovernanceTrackInstanceORM,
+    GovernanceTrackLayoutORM,
     GovernanceTrackORM,
 )
 
@@ -236,3 +237,50 @@ class GovernanceRepo:
                 "created_at": r.created_at,
                 "updated_at": r.updated_at,
             }
+
+    # --- Layouts ---
+
+    async def get_layout(self, track_id: str) -> dict | None:
+        """Get layout positions for a track."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(GovernanceTrackLayoutORM).where(
+                    GovernanceTrackLayoutORM.track_id == track_id
+                )
+            )
+            r = result.scalar_one_or_none()
+            if r is None:
+                return None
+            return {
+                "track_id": r.track_id,
+                "positions": json.loads(r.positions),
+                "updated_at": r.updated_at,
+            }
+
+    async def upsert_layout(self, track_id: str, positions: dict) -> dict:
+        """Create or update layout positions for a track."""
+        now = _now()
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(GovernanceTrackLayoutORM).where(
+                    GovernanceTrackLayoutORM.track_id == track_id
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing is not None:
+                existing.positions = json.dumps(positions)
+                existing.updated_at = now
+            else:
+                session.add(
+                    GovernanceTrackLayoutORM(
+                        track_id=track_id,
+                        positions=json.dumps(positions),
+                        updated_at=now,
+                    )
+                )
+            await session.commit()
+        return {
+            "track_id": track_id,
+            "positions": positions,
+            "updated_at": now,
+        }

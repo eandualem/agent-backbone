@@ -24,6 +24,7 @@ _EXPECTED_TABLES = {
     "telemetry_checkpoints",
     "governance_tracks",
     "governance_track_instances",
+    "governance_track_layouts",
 }
 
 _EXPECTED_INDEXES = {

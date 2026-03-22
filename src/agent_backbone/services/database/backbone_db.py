@@ -33,6 +33,7 @@ from agent_backbone.services.database.models import (  # noqa: F401
     DedupLogORM,
     DeliveryORM,
     GovernanceTrackInstanceORM,
+    GovernanceTrackLayoutORM,
     GovernanceTrackORM,
     HeartbeatORM,
     IssueDependencyORM,

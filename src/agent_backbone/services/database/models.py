@@ -395,3 +395,13 @@ class GovernanceTrackInstanceORM(Base):
         Index("idx_governance_instances_track", "track_id"),
         Index("idx_governance_instances_state", "current_state"),
     )
+
+
+class GovernanceTrackLayoutORM(Base):
+    """Persisted node positions for governance track graph visualizations."""
+
+    __tablename__ = "governance_track_layouts"
+
+    track_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    positions: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
