@@ -32,6 +32,8 @@ from agent_backbone.services.database.models import (  # noqa: F401
     AgentStateORM,
     DedupLogORM,
     DeliveryORM,
+    GovernanceTrackInstanceORM,
+    GovernanceTrackORM,
     HeartbeatORM,
     IssueDependencyORM,
     MessageQueueORM,
@@ -984,3 +986,17 @@ class BackboneDB:
         """Mark lost swarm worker sessions failed when they disappear mid-swarm."""
         async with self._engine.begin() as conn:
             return await _swarm_repo.reconcile_swarm_worker_sessions(conn, active_sessions)
+
+    # --- Governance tracks (class-based repo with session factory) ---
+
+    @property
+    def governance(self):
+        """Lazy-initialized governance track repository."""
+        if not hasattr(self, "_governance_repo"):
+            from sqlalchemy.ext.asyncio import async_sessionmaker
+
+            from agent_backbone.services.database._governance_repo import GovernanceRepo
+
+            session_factory = async_sessionmaker(self._engine, expire_on_commit=False)
+            self._governance_repo = GovernanceRepo(session_factory)
+        return self._governance_repo
