@@ -46,4 +46,26 @@ async def send_message(
         outcome,
     )
 
+    from agent_backbone.api.governance_events import emit_governance_event
+
+    await emit_governance_event(
+        "message.direct_sent",
+        context={"from_session": body.from_entity, "to_session": body.target_session},
+        source=body.from_entity,
+        data={"outcome": outcome},
+    )
+    if delivered:
+        await emit_governance_event(
+            "message.direct_delivered",
+            context={"from_session": body.from_entity, "to_session": body.target_session},
+            source="backbone",
+        )
+    elif outcome in ("offline", "agent_working", "plan_waiting", "permission_waiting", "user_interacting", "grace_period"):
+        await emit_governance_event(
+            "message.direct_queued",
+            context={"from_session": body.from_entity, "to_session": body.target_session},
+            source="backbone",
+            data={"reason": outcome},
+        )
+
     return MessageResponse(ok=delivered, session=body.target_session, outcome=outcome)
