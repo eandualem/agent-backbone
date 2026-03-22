@@ -1,0 +1,53 @@
+"""Fire-and-forget governance event broadcasting via Socket.IO."""
+
+from __future__ import annotations
+
+import logging
+import time
+from typing import TYPE_CHECKING, Any
+
+from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
+from agent_backbone.services import _locator
+
+if TYPE_CHECKING:
+    import socketio
+
+log = logging.getLogger(__name__)
+
+GOVERNANCE_EVENT = "governance:event"
+
+
+async def emit_governance_event(
+    event_type: str,
+    *,
+    context: dict[str, Any] | None = None,
+    source: str,
+    data: dict[str, Any] | None = None,
+    sio: socketio.AsyncServer | None = None,
+) -> None:
+    """Emit a governance event to all connected Socket.IO clients.
+
+    Fire-and-forget: never raises, never blocks callers. All exceptions are
+    caught and logged as warnings.
+    """
+    try:
+        server = sio if sio is not None else _locator.get_sio()
+        if server is None:
+            log.warning(
+                "[GOVERNANCE] No Socket.IO server available — skipping event %s",
+                event_type,
+            )
+            return
+
+        payload: dict[str, Any] = {
+            "type": event_type,
+            "context": context or {},
+            "source": source,
+            "timestamp": int(time.time()),
+            "data": data or {},
+        }
+
+        await server.emit(GOVERNANCE_EVENT, payload, namespace=SESSIONS_NAMESPACE)
+        log.debug("[GOVERNANCE] Emitted %s from %s", event_type, source)
+    except Exception:
+        log.warning("[GOVERNANCE] Failed to emit event %s", event_type, exc_info=True)
