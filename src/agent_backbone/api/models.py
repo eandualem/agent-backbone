@@ -1124,3 +1124,17 @@ class GovernanceInstanceResponse(BaseModel):
     history: list[dict[str, Any]]
     created_at: str
     updated_at: str
+
+
+class GovernanceLayoutRequest(BaseModel):
+    """Request body for upserting track layout positions."""
+
+    positions: dict[str, Any]
+
+
+class GovernanceLayoutResponse(BaseModel):
+    """Track graph layout positions."""
+
+    track_id: str
+    positions: dict[str, Any]
+    updated_at: str

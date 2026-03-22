@@ -18,6 +18,8 @@ from agent_backbone.api.models import (
     GovernanceTrackCreate,
     GovernanceTrackResponse,
     GovernanceTrackUpdate,
+    GovernanceLayoutRequest,
+    GovernanceLayoutResponse,
     ListEnvelope,
 )
 from agent_backbone.config import BackboneConfig
@@ -280,3 +282,25 @@ async def update_instance(
     if result is None:
         raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
     return result
+
+
+# --- Track Layouts ---
+
+
+@router.get("/layouts/{track_id}", response_model=GovernanceLayoutResponse)
+async def get_layout(track_id: str, db: BackboneDB = Depends(get_db)):
+    """Get graph layout positions for a track."""
+    layout = await db.governance.get_layout(track_id)
+    if layout is None:
+        raise HTTPException(status_code=404, detail=f"Layout for track '{track_id}' not found")
+    return layout
+
+
+@router.post("/layouts/{track_id}", response_model=GovernanceLayoutResponse)
+async def upsert_layout(
+    track_id: str,
+    body: GovernanceLayoutRequest,
+    db: BackboneDB = Depends(get_db),
+):
+    """Create or update graph layout positions for a track."""
+    return await db.governance.upsert_layout(track_id, body.positions)
