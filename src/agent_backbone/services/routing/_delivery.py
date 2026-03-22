@@ -26,6 +26,39 @@ log = logging.getLogger(__name__)
 _SUCCESSFUL_OUTCOME_SUFFIXES = ("delivered", "retried")
 _COPY_MODE_RECHECK_DELAY_SECONDS = 0.1
 
+_DELIVERY_EVENT_MAP: dict[str, str] = {
+    "delivered": "delivery.delivered",
+    "already_delivered": "delivery.delivered",
+    "offline": "delivery.queued",
+    "plan_waiting": "delivery.queued",
+    "permission_waiting": "delivery.queued",
+    "agent_working": "delivery.queued",
+    "grace_period": "delivery.queued",
+    "awaiting_ack": "delivery.queued",
+    "user_interacting": "delivery.queued",
+    "delivery_failed": "delivery.failed",
+}
+
+
+async def _emit_delivery_governance(
+    outcome: str,
+    session_name: str,
+    issue_number: int | None,
+    repo_full_name: str | None,
+    target_entity: str | None,
+    delivery_kind: str,
+) -> None:
+    """Emit a governance event for a delivery outcome. Fire-and-forget."""
+    from agent_backbone.api.governance_events import emit_governance_event
+
+    event_type = _DELIVERY_EVENT_MAP.get(outcome, "delivery.queued")
+    await emit_governance_event(
+        event_type,
+        context={"issue_id": issue_number, "repo": repo_full_name or "", "session": session_name},
+        source="backbone",
+        data={"outcome": outcome, "delivery_kind": delivery_kind},
+    )
+
 
 def _comment_matches_active_issue(issue_number: int | None, current_issue: int | None) -> bool:
     """Whether a comment belongs to the issue the agent is actively working on."""
@@ -295,6 +328,9 @@ async def safe_deliver(
                     issue_number,
                     session_name,
                 )
+                await _emit_delivery_governance(
+                    "already_delivered", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
+                )
                 return "already_delivered"
 
         # Issue queue gating: only for issue deliveries with enforcement
@@ -315,6 +351,9 @@ async def safe_deliver(
                     blocking_issue[0],
                     blocking_issue[1],
                 )
+                await _emit_delivery_governance(
+                    "awaiting_ack", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
+                )
                 return "awaiting_ack"
 
     # Pre-send reservation for issue deliveries to close the send-time race window.
@@ -333,6 +372,9 @@ async def safe_deliver(
             flow_name=flow_name,
         )
         if claim_result is None:
+            await _emit_delivery_governance(
+                "already_delivered", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
+            )
             return "already_delivered"
         if isinstance(claim_result, int):
             delivery_claim_id = claim_result
@@ -363,6 +405,9 @@ async def safe_deliver(
                 normalized_repo_full_name,
                 issue_number,
             )
+            await _emit_delivery_governance(
+                "delivered", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
+            )
             return "delivered"
         await _maybe_enqueue(
             session_name,
@@ -384,6 +429,9 @@ async def safe_deliver(
             flow_name,
             delivery_kind,
             delivery_claim_id,
+        )
+        await _emit_delivery_governance(
+            "delivery_failed", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
         )
         return "delivery_failed"
 
@@ -418,6 +466,9 @@ async def safe_deliver(
             delivery_kind,
             delivery_claim_id,
         )
+        await _emit_delivery_governance(
+            "offline", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
+        )
         return "offline"
 
     if intelligence == SessionIntelligence.PLAN_WAITING and not allow_same_issue_comment:
@@ -442,6 +493,9 @@ async def safe_deliver(
             flow_name,
             delivery_kind,
             delivery_claim_id,
+        )
+        await _emit_delivery_governance(
+            "plan_waiting", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
         )
         return "plan_waiting"
 
@@ -468,6 +522,9 @@ async def safe_deliver(
             delivery_kind,
             delivery_claim_id,
         )
+        await _emit_delivery_governance(
+            "permission_waiting", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
+        )
         return "permission_waiting"
 
     if intelligence == SessionIntelligence.AGENT_WORKING and not allow_same_issue_comment:
@@ -493,6 +550,9 @@ async def safe_deliver(
             delivery_kind,
             delivery_claim_id,
         )
+        await _emit_delivery_governance(
+            "agent_working", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
+        )
         return "agent_working"
 
     if intelligence == SessionIntelligence.IDLE_GRACE and not allow_same_issue_comment:
@@ -517,6 +577,9 @@ async def safe_deliver(
             flow_name,
             delivery_kind,
             delivery_claim_id,
+        )
+        await _emit_delivery_governance(
+            "grace_period", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
         )
         return "grace_period"
 
@@ -545,6 +608,9 @@ async def safe_deliver(
                 delivery_kind,
                 delivery_claim_id,
             )
+            await _emit_delivery_governance(
+                "delivery_failed", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
+            )
             return "delivery_failed"
 
     if intelligence == SessionIntelligence.USER_INTERACTING and not priority:
@@ -569,6 +635,9 @@ async def safe_deliver(
             delivery_kind,
             delivery_claim_id,
         )
+        await _emit_delivery_governance(
+            "user_interacting", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
+        )
         return "user_interacting"
 
     # Deliverable: IDLE_READY, UNKNOWN, or priority-bypassed COPY_MODE/USER_INTERACTING
@@ -591,6 +660,9 @@ async def safe_deliver(
             delivery_kind,
             normalized_repo_full_name,
             issue_number,
+        )
+        await _emit_delivery_governance(
+            "delivered", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
         )
         return "delivered"
 
@@ -615,6 +687,9 @@ async def safe_deliver(
         flow_name,
         delivery_kind,
         delivery_claim_id,
+    )
+    await _emit_delivery_governance(
+        "delivery_failed", session_name, issue_number, normalized_repo_full_name, target_entity, delivery_kind,
     )
     return "delivery_failed"
 
