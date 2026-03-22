@@ -1,7 +1,7 @@
 [project]
 name = "agent-backbone"
 version = "0.1.0"
-description = "Prefect-based automation backbone for agent orchestration"
+description = "Automation backbone for agent orchestration"
 requires-python = ">=3.11"
 dependencies = [
     "cryptography>=44.0",
@@ -16,7 +16,7 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "croniter>=3.0",
     "python-socketio>=5.11",
-    "sqlalchemy>=2.0",
+    "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.13",
 ]
 

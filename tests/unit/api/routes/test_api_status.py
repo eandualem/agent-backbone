@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -146,7 +145,7 @@ class TestGetSystemStatus:
         assert named["type"] == "named_entity"
 
     async def test_excludes_service_sessions(self, api_client, auth_headers, config, api_app):
-        """Service sessions (prefect-*) are excluded from status digest."""
+        """Service sessions (gateway, telegram-bot) are excluded from status digest."""
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[])
         mock_state_svc = _make_mock_state_svc()
@@ -155,8 +154,6 @@ class TestGetSystemStatus:
                 "feynman",
                 "ike",
                 "platform-api",
-                "prefect-worker",
-                "prefect-server",
                 "telegram-bot",
             ]
         )
@@ -174,8 +171,7 @@ class TestGetSystemStatus:
         data = resp.json()
         sessions = [a["session"] for a in data["agents"]]
         assert "platform-api" in sessions
-        for svc in ("prefect-worker", "prefect-server", "telegram-bot"):
-            assert svc not in sessions
+        assert "telegram-bot" not in sessions
         # 9 named + 1 coding agent (platform-api), no services
         assert data["agent_count"] == 10
 
@@ -202,108 +198,32 @@ class TestGetServiceHealth:
     """Tests for GET /api/status/services — service health checks."""
 
     async def test_all_services_up(self, api_client, auth_headers):
-        """When Prefect is reachable and DB works, all services report up."""
-        mock_response = httpx.Response(status_code=200, request=httpx.Request("GET", "http://test"))
-
-        with (
-            patch("agent_backbone.api.routes.status.httpx.AsyncClient") as mock_client_cls,
-            patch(
-                "agent_backbone.api.routes.status.read_pid",
-                side_effect=lambda name: 123 if name == "worker" else None,
-            ),
-        ):
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client_cls.return_value = mock_client
-
-            resp = await api_client.get("/api/status/services", headers=auth_headers)
+        """When DB connection works, gateway and database report up."""
+        resp = await api_client.get(
+            "/api/status/services", headers=auth_headers
+        )
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["gateway"] == "up"
-        assert data["prefect_server"] == "up"
-        assert data["prefect_worker"] == "up"
         assert data["database"] == "up"
 
-    async def test_prefect_down(self, api_client, auth_headers):
-        """When Prefect is unreachable, prefect_server reports down."""
-        with (
-            patch("agent_backbone.api.routes.status.httpx.AsyncClient") as mock_client_cls,
-            patch(
-                "agent_backbone.api.routes.status.session_exists",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch("agent_backbone.api.routes.status.read_pid", return_value=None),
-        ):
-            mock_client = AsyncMock()
-            mock_client.get.side_effect = httpx.ConnectError("Connection refused")
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client_cls.return_value = mock_client
-
-            resp = await api_client.get("/api/status/services", headers=auth_headers)
+    async def test_database_down(self, api_client, auth_headers, api_app):
+        """When DB connection fails, database reports down."""
+        mock_db = AsyncMock()
+        mock_db.check_connection = AsyncMock(return_value=False)
+        api_app.dependency_overrides[get_db] = lambda: mock_db
+        try:
+            resp = await api_client.get(
+                "/api/status/services", headers=auth_headers
+            )
+        finally:
+            del api_app.dependency_overrides[get_db]
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["gateway"] == "up"
-        assert data["prefect_server"] == "down"
-        assert data["prefect_worker"] == "down"
-        assert data["database"] == "up"
-
-    async def test_prefect_degraded(self, api_client, auth_headers):
-        """When Prefect returns non-200, prefect_server reports degraded."""
-        mock_response = httpx.Response(status_code=503, request=httpx.Request("GET", "http://test"))
-
-        with (
-            patch("agent_backbone.api.routes.status.httpx.AsyncClient") as mock_client_cls,
-            patch("agent_backbone.api.routes.status.read_pid", return_value=None),
-            patch(
-                "agent_backbone.api.routes.status.session_exists",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-        ):
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client_cls.return_value = mock_client
-
-            resp = await api_client.get("/api/status/services", headers=auth_headers)
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["prefect_server"] == "degraded"
-        assert data["prefect_worker"] == "down"
-
-    async def test_worker_degraded_when_tmux_session_exists_but_process_is_gone(
-        self, api_client, auth_headers
-    ):
-        """Dead worker panes should surface as degraded, not healthy."""
-        with (
-            patch("agent_backbone.api.routes.status.httpx.AsyncClient") as mock_client_cls,
-            patch(
-                "agent_backbone.api.routes.status.session_exists",
-                new_callable=AsyncMock,
-                side_effect=lambda session: session in {"prefect", "backbone-worker"},
-            ),
-            patch("agent_backbone.api.routes.status.read_pid", return_value=None),
-        ):
-            mock_client = AsyncMock()
-            mock_client.get.side_effect = httpx.ConnectError("Connection refused")
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client_cls.return_value = mock_client
-
-            resp = await api_client.get("/api/status/services", headers=auth_headers)
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["prefect_server"] == "degraded"
-        assert data["prefect_worker"] == "degraded"
+        assert data["database"] == "down"
 
 
 class TestGetEntityConfig:

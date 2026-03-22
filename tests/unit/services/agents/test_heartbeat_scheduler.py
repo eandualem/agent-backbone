@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
-from prefect.cache_policies import NO_CACHE
 
 from agent_backbone.config import BackboneConfig, HeartbeatConfig
 from agent_backbone.services.agents import (
@@ -28,15 +27,6 @@ TZ = "Africa/Addis_Ababa"
 
 # Patch target prefix (keep patch() lines under 100 chars)
 _HB = "agent_backbone.services.agents._heartbeat"
-
-
-@pytest.fixture(autouse=True)
-def _prefect_home(tmp_path, monkeypatch):
-    """Keep Prefect's temporary SQLite files inside the writable pytest sandbox."""
-    home = tmp_path / "prefect-home"
-    home.mkdir()
-    monkeypatch.setenv("PREFECT_HOME", str(home))
-    monkeypatch.setenv("PREFECT_LOGGING_TO_API_WHEN_MISSING_FLOW", "ignore")
 
 
 # --- is_due ---
@@ -91,12 +81,6 @@ class TestIsDue:
         """No cron or at field — not due."""
         schedule = {"timezone": TZ}
         assert is_due(schedule, last_fired=None, default_tz=TZ) is False
-
-
-class TestPrefectTaskConfig:
-    def test_evaluate_agent_heartbeat_disables_prefect_input_caching(self):
-        """Heartbeat task must not hash BackboneDB inputs."""
-        assert evaluate_agent_heartbeat.cache_policy == NO_CACHE
 
 
 # --- load/save schedules ---
@@ -177,7 +161,7 @@ class TestEvaluateAgentHeartbeat:
             mock_state.return_value = idle_snapshot
             mock_send.return_value = True
 
-            result = await evaluate_agent_heartbeat.fn(
+            result = await evaluate_agent_heartbeat(
                 agent="ike",
                 schedule=schedule,
                 active_sessions={"ike"},
@@ -194,7 +178,7 @@ class TestEvaluateAgentHeartbeat:
     async def test_skips_disabled_agent(self, heartbeat_config, mock_db):
         """Disabled schedule returns skipped_disabled."""
         schedule = {"cron": "0 * * * *", "enabled": False}
-        result = await evaluate_agent_heartbeat.fn(
+        result = await evaluate_agent_heartbeat(
             agent="ike",
             schedule=schedule,
             active_sessions={"ike"},
@@ -214,7 +198,7 @@ class TestEvaluateAgentHeartbeat:
         ) as mock_state:
             mock_state.return_value = busy_snapshot
 
-            result = await evaluate_agent_heartbeat.fn(
+            result = await evaluate_agent_heartbeat(
                 agent="ike",
                 schedule=schedule,
                 active_sessions={"ike"},
@@ -235,7 +219,7 @@ class TestEvaluateAgentHeartbeat:
         ) as mock_state:
             mock_state.return_value = idle_snapshot
 
-            result = await evaluate_agent_heartbeat.fn(
+            result = await evaluate_agent_heartbeat(
                 agent="ike",
                 schedule=schedule,
                 active_sessions=set(),  # no sessions
@@ -252,7 +236,7 @@ class TestEvaluateAgentHeartbeat:
         recent = (datetime.now(tz) - timedelta(minutes=1)).isoformat()
         mock_db.get_last_heartbeat = AsyncMock(return_value=recent)
 
-        result = await evaluate_agent_heartbeat.fn(
+        result = await evaluate_agent_heartbeat(
             agent="ike",
             schedule=schedule,
             active_sessions={"ike"},

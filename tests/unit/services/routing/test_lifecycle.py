@@ -58,7 +58,7 @@ class TestOnIssueClosed:
                 return_value="delivered",
             ) as mock_deliver,
         ):
-            result = await on_issue_closed.fn(event, config, mock_gh)
+            result = await on_issue_closed(event, config, mock_gh)
 
         assert result["feynman"] == "delivered_#11"
         mock_deliver.assert_called_once()
@@ -79,7 +79,7 @@ class TestOnIssueClosed:
                 return_value=None,
             ),
         ):
-            result = await on_issue_closed.fn(event, config, mock_gh)
+            result = await on_issue_closed(event, config, mock_gh)
 
         assert result["feynman"] == "queue_empty"
 
@@ -92,14 +92,14 @@ class TestOnIssueClosed:
             new_callable=AsyncMock,
             return_value=False,
         ):
-            result = await on_issue_closed.fn(event, config, mock_gh)
+            result = await on_issue_closed(event, config, mock_gh)
 
         assert result["feynman"] == "offline"
 
     async def test_skips_elias(self, config):
         event = make_close_event(["elias"])
         mock_gh = AsyncMock()
-        result = await on_issue_closed.fn(event, config, mock_gh)
+        result = await on_issue_closed(event, config, mock_gh)
         assert result["elias"] == "skipped"
 
     async def test_blocking_issues_first(self, config):
@@ -131,7 +131,7 @@ class TestOnIssueClosed:
                 return_value="delivered",
             ),
         ):
-            result = await on_issue_closed.fn(event, config, mock_gh)
+            result = await on_issue_closed(event, config, mock_gh)
 
         assert result["ike"] == "delivered_#20"
 
@@ -178,7 +178,7 @@ class TestOnIssueClosed:
                 return_value="delivered",
             ) as mock_deliver,
         ):
-            result = await on_issue_closed.fn(event, config, mock_gh)
+            result = await on_issue_closed(event, config, mock_gh)
 
         assert result["bell-wf"] == "delivered_#21"
         assert mock_deliver.await_count == 1
@@ -210,7 +210,7 @@ class TestOnIssueClosed:
         )
         mock_gh = AsyncMock()
 
-        result = await on_issue_closed.fn(event, config, mock_gh)
+        result = await on_issue_closed(event, config, mock_gh)
 
         assert result["bell"] == "no_session"
 
@@ -242,12 +242,12 @@ class TestOnIssueClosed:
         ):
             # First close: delivers #6
             event1 = make_close_event(["feynman"])
-            result1 = await on_issue_closed.fn(event1, config, mock_gh)
+            result1 = await on_issue_closed(event1, config, mock_gh)
             assert result1["feynman"] == "delivered_#6"
 
             # Second close: #6 is still next, but should be deduped
             event2 = make_close_event(["feynman"])
-            result2 = await on_issue_closed.fn(event2, config, mock_gh)
+            result2 = await on_issue_closed(event2, config, mock_gh)
             assert result2["feynman"] == "deduped_#6"
 
         # safe_deliver should only be called once (first delivery)
@@ -271,7 +271,7 @@ class TestOnIssueClosed:
         mock_gh.list_open_issues.return_value = [closed_issue, real_next]
 
         config = BackboneConfig(webhook_secret="s")
-        result = await find_next_issue.fn(config, "feynman", mock_gh, exclude_number=10)
+        result = await find_next_issue(config, "feynman", mock_gh, exclude_number=10)
 
         assert result is not None
         assert result.number == 11
@@ -312,7 +312,7 @@ class TestOnIssueClosed:
                 return_value="delivered",
             ) as mock_deliver,
         ):
-            result = await on_issue_closed.fn(event, config, mock_gh)
+            result = await on_issue_closed(event, config, mock_gh)
 
         # session_exists should NOT be called for HTTP targets
         mock_session_exists.assert_not_called()
@@ -354,7 +354,7 @@ class TestOnIssueClosed:
                 new_callable=AsyncMock,
             ) as mock_check_onboarding_chain,
         ):
-            result = await on_issue_closed.fn(event, config, mock_gh)
+            result = await on_issue_closed(event, config, mock_gh)
 
         assert result["feynman"] == "delivered_#11"
         assert mock_find_next_issue.await_args.kwargs["repo_full_name"] == "WF/agent-shell"
@@ -398,7 +398,7 @@ class TestOnIssueClosed:
                 return_value="delivered",
             ) as mock_deliver,
         ):
-            result = await on_issue_closed.fn(event, config, mock_gh)
+            result = await on_issue_closed(event, config, mock_gh)
 
         assert result["agent-backbone"] == "delivered_#11"
         assert mock_gh.list_issues.await_count >= 1
@@ -423,7 +423,7 @@ class TestOnIssueClosed:
                 return_value=None,
             ),
         ):
-            result = await on_issue_closed.fn(event, config, mock_gh, db=mock_db)
+            result = await on_issue_closed(event, config, mock_gh, db=mock_db)
 
         mock_db.purge_pending_for_issue.assert_awaited_once_with("", 10)
         assert result["feynman"] == "queue_empty"

@@ -256,19 +256,19 @@ class TestDeliveryScenarios:
                 sent_messages,
             ),
         ):
-            orchestration_result = await issue_dispatcher.fn(
+            orchestration_result = await issue_dispatcher(
                 _event(EventType.ISSUE_OPENED, bell_issue),
                 delivery_config,
                 scenario_db,
                 gh,
             )
-            repo_result = await issue_dispatcher.fn(
+            repo_result = await issue_dispatcher(
                 _event(EventType.ISSUE_OPENED, repo_issue),
                 delivery_config,
                 scenario_db,
                 gh,
             )
-            coding_result = await issue_dispatcher.fn(
+            coding_result = await issue_dispatcher(
                 _event(EventType.ISSUE_OPENED, coding_issue),
                 delivery_config,
                 scenario_db,
@@ -342,7 +342,7 @@ class TestDeliveryScenarios:
                 sent_messages,
             ),
         ):
-            result = await issue_dispatcher.fn(
+            result = await issue_dispatcher(
                 _event(EventType.ISSUE_OPENED, issue),
                 delivery_config,
                 scenario_db,
@@ -366,7 +366,7 @@ class TestDeliveryScenarios:
             {"agent-orchestration-dashboard": SessionIntelligence.IDLE_READY},
             sent_messages,
         ):
-            retry_outcome = await retry_delivery.fn(
+            retry_outcome = await retry_delivery(
                 delivery_config,
                 failed_row,
                 scenario_db,
@@ -493,13 +493,13 @@ class TestDeliveryScenarios:
                 sent_messages,
             ),
         ):
-            await issue_dispatcher.fn(
+            await issue_dispatcher(
                 _event(EventType.ISSUE_OPENED, orchestration_issue),
                 delivery_config,
                 scenario_db,
                 dispatch_gh,
             )
-            await issue_dispatcher.fn(
+            await issue_dispatcher(
                 _event(EventType.ISSUE_OPENED, repo_issue),
                 delivery_config,
                 scenario_db,
@@ -539,14 +539,14 @@ class TestDeliveryScenarios:
             {"agent-orchestration-dashboard": SessionIntelligence.IDLE_READY},
             sent_messages,
         ):
-            orchestration_outcome = await retry_delivery.fn(
+            orchestration_outcome = await retry_delivery(
                 delivery_config,
                 failed_rows[("eandualem/orchestration", "coding-agent")],
                 scenario_db,
                 retry_gh,
                 active_sessions={"agent-orchestration-dashboard"},
             )
-            repo_outcome = await retry_delivery.fn(
+            repo_outcome = await retry_delivery(
                 delivery_config,
                 failed_rows[
                     (
@@ -665,7 +665,7 @@ class TestDeliveryScenarios:
                 sent_messages,
             ),
         ):
-            result = await on_issue_closed.fn(
+            result = await on_issue_closed(
                 _event(EventType.ISSUE_CLOSED, closed_issue),
                 delivery_config,
                 gh,

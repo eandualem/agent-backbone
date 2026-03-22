@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import sys
-from types import ModuleType
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from agent_backbone.services._locator import (
-    ensure_initialized,
     get_config,
     get_db,
     get_gh,
@@ -71,48 +68,3 @@ class TestServiceLocator:
         init(config=mock2, db=MagicMock(), gh=MagicMock())
         assert get_config() is mock2
 
-    @pytest.mark.asyncio
-    async def test_ensure_initialized_bootstraps_services(self):
-        """ensure_initialized() bootstraps services from the env-aware settings path."""
-        reset()
-        mock_config = MagicMock()
-        mock_db_service = MagicMock()
-        mock_db_service.start = AsyncMock()
-        mock_db = MagicMock()
-        mock_db.start = AsyncMock()
-        mock_gh = MagicMock()
-        mock_gh.start = AsyncMock()
-        fake_github_interface = ModuleType("agent_backbone.services.github.interface")
-        fake_github_interface.GitHubClient = MagicMock(return_value=mock_gh)
-        fake_github_package = ModuleType("agent_backbone.services.github")
-        fake_github_package.interface = fake_github_interface
-
-        with (
-            patch(
-                "agent_backbone.settings.AppSettings.build_config",
-                return_value=mock_config,
-            ),
-            patch(
-                "agent_backbone.services.database.interface.DatabaseService",
-                return_value=mock_db_service,
-            ),
-            patch(
-                "agent_backbone.services.database.backbone_db.BackboneDB",
-                return_value=mock_db,
-            ),
-            patch.dict(
-                sys.modules,
-                {
-                    "agent_backbone.services.github": fake_github_package,
-                    "agent_backbone.services.github.interface": fake_github_interface,
-                },
-            ),
-        ):
-            await ensure_initialized()
-
-        mock_db_service.start.assert_awaited_once()
-        mock_db.start.assert_awaited_once()
-        mock_gh.start.assert_awaited_once()
-        assert get_config() is mock_config
-        assert get_db() is mock_db
-        assert get_gh() is mock_gh

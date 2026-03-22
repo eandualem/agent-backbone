@@ -7,7 +7,6 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from prefect.cache_policies import NO_CACHE
 
 from agent_backbone.config import (
     AgentStateConfig,
@@ -30,7 +29,6 @@ from agent_backbone.services.agents import (
     _should_escalate,
     check_for_stalls,
     check_for_unexpected_offline,
-    check_pending_issues,
     check_plan_waiting,
     handle_offline,
     handle_stalls,
@@ -144,17 +142,6 @@ def patch_copy_mode_recovery():
         yield mock_recovery
 
 
-class TestPrefectTaskConfig:
-    def test_offline_and_stall_tasks_disable_prefect_input_caching(self):
-        """Prefect must not hash BackboneDB inputs for these monitor tasks."""
-        assert check_for_stalls.cache_policy == NO_CACHE
-        assert check_for_unexpected_offline.cache_policy == NO_CACHE
-
-    def test_pending_issue_scan_disables_prefect_input_caching(self):
-        """Pending issue lookup must not hash GitHub client inputs."""
-        assert check_pending_issues.cache_policy == NO_CACHE
-
-
 @pytest.fixture
 def escalation_config():
     """Config with minimal entities for escalation testing."""
@@ -220,7 +207,7 @@ class TestCheckForStalls:
             new_callable=AsyncMock,
             return_value=stalled_snapshot,
         ):
-            stalls = await check_for_stalls.fn(
+            stalls = await check_for_stalls(
                 escalation_config, {"ike", "feynman", "leo"}, mock_db
             )
 
@@ -241,7 +228,7 @@ class TestCheckForStalls:
             new_callable=AsyncMock,
             return_value=idle_snapshot,
         ):
-            stalls = await check_for_stalls.fn(
+            stalls = await check_for_stalls(
                 escalation_config, {"ike", "feynman", "leo"}, mock_db
             )
 
@@ -264,7 +251,7 @@ class TestCheckForStalls:
             new_callable=AsyncMock,
             return_value=busy_no_issue,
         ):
-            stalls = await check_for_stalls.fn(
+            stalls = await check_for_stalls(
                 escalation_config, {"ike", "feynman", "leo"}, mock_db
             )
 
@@ -287,7 +274,7 @@ class TestCheckForStalls:
             new_callable=AsyncMock,
             return_value=recent_ts_snapshot,
         ):
-            stalls = await check_for_stalls.fn(
+            stalls = await check_for_stalls(
                 escalation_config, {"ike", "feynman", "leo"}, mock_db
             )
 
@@ -307,7 +294,7 @@ class TestCheckForStalls:
             new_callable=AsyncMock,
             return_value=busy_no_start,
         ):
-            stalls = await check_for_stalls.fn(
+            stalls = await check_for_stalls(
                 escalation_config, {"ike", "feynman", "leo"}, mock_db
             )
 
@@ -339,7 +326,7 @@ class TestCheckForUnexpectedOffline:
         ]
 
         # feynman NOT in active sessions
-        offline = await check_for_unexpected_offline.fn(
+        offline = await check_for_unexpected_offline(
             escalation_config, {"ike", "leo"}, mock_db, mock_gh
         )
 
@@ -354,7 +341,7 @@ class TestCheckForUnexpectedOffline:
             {"session_name": "feynman", "state": "unknown"},
         ]
 
-        offline = await check_for_unexpected_offline.fn(
+        offline = await check_for_unexpected_offline(
             escalation_config, {"ike", "leo"}, mock_db, AsyncMock()
         )
 
@@ -368,7 +355,7 @@ class TestCheckForUnexpectedOffline:
         ]
 
         # feynman IS in active sessions
-        offline = await check_for_unexpected_offline.fn(
+        offline = await check_for_unexpected_offline(
             escalation_config, {"ike", "feynman", "leo"}, mock_db, AsyncMock()
         )
 
@@ -447,7 +434,7 @@ class TestMonitorAgentsIntegration:
             ),
             patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         # Feynman is busy → deferred, Ike is idle → delivered
         assert result["feynman"] == "deferred"
@@ -489,7 +476,7 @@ class TestMonitorAgentsIntegration:
                 return_value=[],
             ),
         ):
-            await monitor_agents.fn()
+            await monitor_agents()
 
         patch_copy_mode_recovery.assert_awaited_once_with(config, {"ike"})
 
@@ -534,7 +521,7 @@ class TestMonitorAgentsIntegration:
                 return_value=[],
             ),
         ):
-            await monitor_agents.fn()
+            await monitor_agents()
 
         mock_collect.assert_awaited_once_with(
             config=config,
@@ -567,7 +554,7 @@ class TestMonitorAgentsIntegration:
             patch(f"{_MON}.get_sio", return_value=MagicMock()),
             patch(f"{_MON}.emit_sessions_update", new_callable=AsyncMock) as mock_emit,
         ):
-            await monitor_agents.fn()
+            await monitor_agents()
 
         mock_emit.assert_awaited_once()
         assert mock_emit.await_args.kwargs["only_if_changed"] is True
@@ -609,7 +596,7 @@ class TestMonitorAgentsIntegration:
                 return_value=[],
             ),
         ):
-            await monitor_agents.fn()
+            await monitor_agents()
 
         mock_db.reconcile_swarm_worker_sessions.assert_awaited_once_with(
             {"ike", "swarm-24-worker"}
@@ -663,7 +650,7 @@ class TestMonitorAgentsIntegration:
             ) as mock_deliver,
             patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         assert result["ike"] == "delivered_#10"
         mock_deliver.assert_called_once()
@@ -729,7 +716,7 @@ class TestMonitorAgentsIntegration:
             ) as mock_deliver,
             patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         assert result["bell-wf"] == "delivered_#18"
         assert result["bell-loveble"] == "delivered_#19"
@@ -797,7 +784,7 @@ class TestMonitorAgentsIntegration:
             ) as mock_deliver,
             patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         assert result["ike"] == "no_deliverable"
         mock_deliver.assert_not_called()
@@ -849,7 +836,7 @@ class TestMonitorAgentsIntegration:
                 return_value="delivered",
             ) as mock_deliver,
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         assert result["ike"] == "no_deliverable"
         mock_deliver.assert_not_called()
@@ -905,7 +892,7 @@ class TestMonitorAgentsIntegration:
                 return_value="delivered",
             ) as mock_deliver,
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         assert result["ike"] == "no_deliverable"
         mock_db.record_acknowledgment.assert_called_once_with("", 42, "ike")
@@ -970,7 +957,7 @@ class TestMonitorAgentsIntegration:
                 return_value="delivered",
             ) as mock_deliver,
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         # Should skip #49 (acknowledged) and deliver #50
         assert result["ike"] == "delivered_#50"
@@ -1032,7 +1019,7 @@ class TestOfflineDedup:
                 return_value="delivered",
             ) as mock_deliver,
         ):
-            await monitor_agents.fn()
+            await monitor_agents()
 
         # Escalation message was sent to ike via safe_deliver
         mock_deliver.assert_called()
@@ -1174,7 +1161,7 @@ class TestPlanWaitingMonitor:
             new_callable=AsyncMock,
             return_value=plan_snapshot,
         ):
-            stalls = await check_for_stalls.fn(
+            stalls = await check_for_stalls(
                 escalation_config, {"ike", "feynman", "leo"}, mock_db
             )
 
@@ -1254,7 +1241,7 @@ class TestPlanWaitingMonitor:
             ) as mock_notify,
             patch("pathlib.Path.exists", return_value=True),
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         mock_notify.assert_called_once()
         call_args = mock_notify.call_args[0]
@@ -1334,7 +1321,7 @@ class TestCodingAgentSweep:
             ) as mock_deliver,
             patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         assert result["coding:agent-backbone"] == "delivered_#100"
         # Verify safe_deliver was called with the coding-agent session
@@ -1410,7 +1397,7 @@ class TestCodingAgentSweep:
             ) as mock_deliver,
             patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         assert result["coding:agent-orchestration-dashboard"] == "delivered_#694"
         mock_db.record_acknowledgment.assert_called_once_with("", 693, "coding-agent")
@@ -1475,7 +1462,7 @@ class TestCodingAgentSweep:
             ) as mock_deliver,
             patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         assert result["coding:agent-backbone"] == "deferred"
         # safe_deliver should NOT have been called for agent-backbone
@@ -1535,7 +1522,7 @@ class TestCodingAgentSweep:
             ) as mock_deliver,
             patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         assert result["coding:agent-backbone"] == "no_deliverable"
         # safe_deliver should NOT have been called for agent-backbone
@@ -1594,7 +1581,7 @@ class TestCodingAgentSweep:
             ) as mock_deliver,
             patch(f"{_PEN}.has_commented_on_issue", return_value=False),
         ):
-            result = await monitor_agents.fn()
+            result = await monitor_agents()
 
         assert result["repo:agent-backbone"] == "delivered_#201"
         mock_gh.list_issues.assert_awaited_once_with(

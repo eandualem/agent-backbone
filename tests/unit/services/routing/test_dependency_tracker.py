@@ -32,7 +32,7 @@ class TestOnDependencyResolved:
 
             init_flow_services(config=config, db=db, gh=mock_gh)
 
-            result = await on_dependency_resolved.fn(99)
+            result = await on_dependency_resolved(99)
 
         assert result["parents_checked"] == "0"
 
@@ -61,7 +61,7 @@ class TestOnDependencyResolved:
                     return_value="delivered",
                 ) as mock_deliver,
             ):
-                result = await on_dependency_resolved.fn(20)
+                result = await on_dependency_resolved(20)
 
         assert "unblocked" in result.get("parent_10", "")
         assert mock_deliver.called
@@ -84,7 +84,7 @@ class TestOnDependencyResolved:
                 new_callable=AsyncMock,
                 return_value=None,
             ):
-                result = await on_dependency_resolved.fn(20)
+                result = await on_dependency_resolved(20)
 
         assert result.get("parent_10") == "still_blocked"
 
@@ -107,7 +107,7 @@ class TestOnDependencyResolved:
             ):
                 # The flow will raise, but lifecycle wraps it in try/except
                 try:
-                    await on_dependency_resolved.fn(20)
+                    await on_dependency_resolved(20)
                 except Exception:
                     pass  # Expected — lifecycle wrapper catches this
 

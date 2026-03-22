@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from prefect import Flow
+from collections.abc import Callable
 
 
 @dataclass
@@ -14,7 +14,7 @@ class WorkflowEntry:
     name: str
     description: str
     module: str = ""
-    flow_fn: Flow | None = None
-    source: str = "prefect"  # "prefect" or "json"
+    flow_fn: Callable | None = None
+    source: str = "json"
     last_run: str | None = None
     steps: list[dict] = field(default_factory=list)
