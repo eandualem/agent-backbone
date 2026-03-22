@@ -9,9 +9,7 @@ from enum import StrEnum
 class ServiceName(StrEnum):
     """Known backbone infrastructure services."""
 
-    PREFECT = "prefect"
     GATEWAY = "gateway"
-    WORKER = "backbone-worker"
     TELEGRAM = "telegram-bot"
 
 

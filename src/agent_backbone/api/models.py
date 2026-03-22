@@ -582,8 +582,6 @@ class ServiceHealth(BaseModel):
     """Health check for backbone services."""
 
     gateway: str = "up"
-    prefect_server: str = "unknown"
-    prefect_worker: str = "unknown"
     database: str = "unknown"
 
 
@@ -660,21 +658,6 @@ class RuntimeInfo(BaseModel):
     id: str
     display_name: str
     available: bool = True
-
-
-# --- Prefect ---
-
-
-class FlowRunResponse(BaseModel):
-    """Prefect flow run summary."""
-
-    id: str
-    name: str = ""
-    flow_id: str = ""
-    state: str = "unknown"  # completed/failed/running/pending
-    start_time: str | None = None
-    duration: float | None = None  # seconds
-    detail: str = ""
 
 
 # --- Actions ---

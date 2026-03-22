@@ -42,13 +42,7 @@ from agent_backbone.services.infrastructure._backbone import (
     start_gateway as _start_gateway,
 )
 from agent_backbone.services.infrastructure._backbone import (
-    start_prefect as _start_prefect,
-)
-from agent_backbone.services.infrastructure._backbone import (
     start_telegram as _start_telegram,
-)
-from agent_backbone.services.infrastructure._backbone import (
-    start_worker as _start_worker,
 )
 from agent_backbone.services.infrastructure._backbone import (
     stop_backbone as _stop_backbone,
@@ -57,13 +51,7 @@ from agent_backbone.services.infrastructure._backbone import (
     stop_gateway as _stop_gateway,
 )
 from agent_backbone.services.infrastructure._backbone import (
-    stop_prefect as _stop_prefect,
-)
-from agent_backbone.services.infrastructure._backbone import (
     stop_telegram as _stop_telegram,
-)
-from agent_backbone.services.infrastructure._backbone import (
-    stop_worker as _stop_worker,
 )
 from agent_backbone.services.infrastructure._status import show_status as _show_status
 
@@ -95,17 +83,13 @@ class InfrastructureService:
         """Check infrastructure health — reports which backbone processes are running."""
         from agent_backbone.services.infrastructure._processes import pid_for_port, read_pid
 
-        prefect_up = await pid_for_port(4200) is not None
         gateway_up = await pid_for_port(self._config.gateway.port) is not None
-        worker_up = read_pid("worker") is not None
         telegram_up = read_pid("telegram") is not None
 
         return {
-            "healthy": prefect_up and gateway_up and worker_up,
+            "healthy": gateway_up,
             "service": "infrastructure",
-            "prefect": prefect_up,
             "gateway": gateway_up,
-            "worker": worker_up,
             "telegram": telegram_up,
         }
 
@@ -161,12 +145,6 @@ class InfrastructureService:
         """Restart all backbone services."""
         return await _restart_backbone(self._config)
 
-    async def start_prefect(self) -> bool:
-        return await _start_prefect(self._config)
-
-    async def stop_prefect(self) -> bool:
-        return await _stop_prefect(self._config)
-
     async def start_gateway(self) -> bool:
         return await _start_gateway(self._config)
 
@@ -175,12 +153,6 @@ class InfrastructureService:
 
     async def restart_gateway(self) -> bool:
         return await _restart_gateway(self._config)
-
-    async def start_worker(self) -> bool:
-        return await _start_worker(self._config)
-
-    async def stop_worker(self) -> bool:
-        return await _stop_worker(self._config)
 
     async def start_telegram(self) -> bool:
         return await _start_telegram(self._config)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 
-import httpx
 from fastapi import APIRouter, Depends
 
 from agent_backbone.api.deps import (
@@ -28,8 +27,7 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
-from agent_backbone.services.infrastructure._processes import read_pid
-from agent_backbone.services.terminal import TmuxService, session_exists
+from agent_backbone.services.terminal import TmuxService
 
 log = logging.getLogger(__name__)
 
@@ -96,25 +94,8 @@ async def get_system_status(
 async def get_service_health(
     db: BackboneDB = Depends(get_db),
 ):
-    """Check health of backbone services (gateway, Prefect, database)."""
+    """Check health of backbone services (gateway, database)."""
     health = ServiceHealth(gateway="up")
-
-    # Prefect server health
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get("http://localhost:4200/api/health", timeout=3)
-            health.prefect_server = "up" if resp.status_code == 200 else "degraded"
-    except Exception:
-        health.prefect_server = (
-            "degraded" if await session_exists("prefect") or read_pid("prefect") else "down"
-        )
-
-    if read_pid("worker") is not None:
-        health.prefect_worker = "up"
-    elif await session_exists("backbone-worker"):
-        health.prefect_worker = "degraded"
-    else:
-        health.prefect_worker = "down"
 
     # Database health
     try:
