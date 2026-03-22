@@ -272,6 +272,25 @@ async def post_agent_state(
         getattr(request.app.state, "state_service", None),
         getattr(request.app.state, "tmux_service", None),
     )
+
+    from agent_backbone.api.governance_events import emit_governance_event
+
+    await emit_governance_event(
+        "agent.state_changed",
+        context={"session": session, "entity": body.entity or session},
+        source=body.entity or session,
+        data={"state": body.state, "issue": body.issue, "context": body.context},
+        sio=getattr(request.app.state, "sio", None),
+    )
+    if body.state in ("idle", "processing", "plan_waiting"):
+        await emit_governance_event(
+            f"agent.{body.state}",
+            context={"session": session, "entity": body.entity or session},
+            source=body.entity or session,
+            data={"issue": body.issue},
+            sio=getattr(request.app.state, "sio", None),
+        )
+
     return {"ok": True, "session": session}
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -1066,3 +1066,22 @@ class AnalyticsErrorsResponse(BaseModel):
     errors: list[AnalyticsErrorEntry] = Field(
         default_factory=list,
     )
+
+
+# --- Governance ---
+
+
+class GovernanceActionRequest(BaseModel):
+    """Request body for governance action execution."""
+
+    action_type: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    track_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class GovernanceActionResponse(BaseModel):
+    """Response from governance action execution."""
+
+    ok: bool
+    action_type: str
+    result: dict[str, Any] = Field(default_factory=dict)

@@ -407,6 +407,18 @@ async def handle_stalls(config: BackboneConfig, active_sessions: set[str], db: B
                     stall["duration_minutes"],
                 )
 
+            from agent_backbone.api.governance_events import emit_governance_event
+
+            await emit_governance_event(
+                "agent.stall_detected",
+                context={"session": stall["session"], "entity": stall["entity"]},
+                source=stall["entity"],
+                data={
+                    "issue": stall["issue_number"],
+                    "duration_minutes": stall["duration_minutes"],
+                },
+            )
+
 
 async def handle_offline(
     config: BackboneConfig,
@@ -433,6 +445,15 @@ async def handle_offline(
                 "Failed to clear DB state for offline agent %s (non-fatal)",
                 agent["session"],
             )
+
+        from agent_backbone.api.governance_events import emit_governance_event
+
+        await emit_governance_event(
+            "agent.offline",
+            context={"session": agent["session"], "entity": agent["entity"]},
+            source=agent["entity"],
+            data={"pending_count": agent["pending_count"]},
+        )
 
         event_key = "offline"
         if not _should_escalate(agent["session"], event_key, config.escalation.escalation_dedup_seconds):
