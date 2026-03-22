@@ -22,6 +22,7 @@ from agent_backbone.api.deps import (
     get_dispatch_service,
     get_github,
 )
+from agent_backbone.api.governance_events import emit_governance_event
 from agent_backbone.api.webhook_utils import normalize_event, verify_signature
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import EventType
@@ -45,6 +46,15 @@ def _reverse_topic_routes(routes: dict[int, str]) -> dict[str, int]:
     return {
         session: thread_id for thread_id, session in routes.items() if session != "coding-agents"
     }
+
+
+_WEBHOOK_EVENT_MAP: dict[EventType, str] = {
+    EventType.ISSUE_OPENED: "issue.created",
+    EventType.COMMENT_CREATED: "issue.commented",
+    EventType.ISSUE_CLOSED: "issue.closed",
+    EventType.ISSUE_LABELED: "issue.labeled",
+    EventType.PULL_REQUEST_OPENED: "pr.opened",
+}
 
 
 async def dispatch_event_async(
@@ -153,6 +163,15 @@ async def handle_webhook(
         event.issue.number,
         event.issue.labels.targets,
     )
+
+    gov_event_type = _WEBHOOK_EVENT_MAP.get(event.event_type)
+    if gov_event_type:
+        await emit_governance_event(
+            gov_event_type,
+            context={"issue_id": event.issue.number, "repo": event.issue.repo_full_name},
+            source=event.issue.labels.sender if event.issue.labels.sender != "unknown" else "github",
+            data={"action": action, "delivery_id": delivery_id},
+        )
 
     outcome = await dispatch_event_async(event, config, db, gh, delivery_svc, dispatch_svc)
     return Response(content=outcome, status_code=200)

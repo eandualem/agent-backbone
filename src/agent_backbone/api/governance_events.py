@@ -7,7 +7,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
-from agent_backbone.services import _locator
+from agent_backbone.services._locator import get_sio
 
 if TYPE_CHECKING:
     import socketio
@@ -21,7 +21,7 @@ async def emit_governance_event(
     event_type: str,
     *,
     context: dict[str, Any] | None = None,
-    source: str,
+    source: str = "backbone",
     data: dict[str, Any] | None = None,
     sio: socketio.AsyncServer | None = None,
 ) -> None:
@@ -31,7 +31,7 @@ async def emit_governance_event(
     caught and logged as warnings.
     """
     try:
-        server = sio if sio is not None else _locator.get_sio()
+        server = sio if sio is not None else get_sio()
         if server is None:
             log.warning(
                 "[GOVERNANCE] No Socket.IO server available — skipping event %s",
