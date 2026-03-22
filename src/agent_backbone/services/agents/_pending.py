@@ -5,9 +5,6 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from prefect import task
-from prefect.cache_policies import NO_CACHE
-
 from agent_backbone.config import REPO_NAME_PATTERN, BackboneConfig
 from agent_backbone.models import IssueData, acknowledgment_entities, parse_from_tag
 from agent_backbone.services.agents._delivery_check import has_commented_on_issue, should_deliver
@@ -20,7 +17,6 @@ from agent_backbone.services.routing._targets import list_open_queue_for_target
 log = logging.getLogger(__name__)
 
 
-@task(cache_policy=NO_CACHE)
 async def check_pending_issues(config: BackboneConfig, entity: str, gh: object) -> list[IssueData]:
     """Get all pending open issues for an entity, sorted by priority."""
     return await list_open_queue_for_target(config, entity, gh)

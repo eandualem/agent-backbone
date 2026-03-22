@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import logging
 
-from prefect import flow, task
-
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import IssueData, IssueEvent
 from agent_backbone.services.database import BackboneDB
@@ -129,7 +127,6 @@ async def _check_onboarding_chain(
         )
 
 
-@task
 async def find_next_issue(
     config: BackboneConfig,
     entity: str,
@@ -168,7 +165,6 @@ async def find_next_issue(
     return issues[0]
 
 
-@task
 async def deliver_next(
     session_name: str,
     issue: IssueData,
@@ -193,7 +189,6 @@ async def deliver_next(
     )
 
 
-@flow(name="issue-lifecycle")
 async def on_issue_closed(
     event: IssueEvent,
     config: BackboneConfig,

@@ -8,9 +8,6 @@ import os
 import time
 from pathlib import Path
 
-from prefect import task
-from prefect.cache_policies import NO_CACHE
-
 from agent_backbone.config import REPO_NAME_PATTERN, BackboneConfig
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import AgentState
@@ -244,7 +241,6 @@ async def _latest_issue_repo_for_session(
     return None
 
 
-@task(cache_policy=NO_CACHE)
 async def check_for_stalls(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB
 ) -> list[dict]:
@@ -306,7 +302,6 @@ async def check_for_stalls(
     return stalls
 
 
-@task(cache_policy=NO_CACHE)
 async def check_for_unexpected_offline(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB, gh: object
 ) -> list[dict]:
