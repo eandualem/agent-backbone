@@ -136,6 +136,31 @@ def _hierarchy_registry() -> EntityRegistry:
                 figure="Will Durant",
                 role="Narrative Historian",
             ),
+            "koch": EntityEntry(
+                session="koch",
+                home="~/ws/core/quality",
+                groups=["orchestrators"],
+                figure="Robert Koch",
+                role="Bug Quality Architect",
+            ),
+            "snow-wf": EntityEntry(
+                session="snow-wf",
+                home="~/ws/core/quality/WF/snow",
+                groups=["orchestrators"],
+                figure="John Snow",
+                role="Bug Validator",
+                organization="WF",
+                entity_type="role-instance",
+            ),
+            "snow-loveble": EntityEntry(
+                session="snow-loveble",
+                home="~/ws/core/quality/Loveble/snow",
+                groups=["orchestrators"],
+                figure="John Snow",
+                role="Bug Validator",
+                organization="Loveble",
+                entity_type="role-instance",
+            ),
         },
         repos=[
             RepoInfo(org="WF", name="agent-backbone", path="/ws/core/code/WF/agent-backbone"),
@@ -251,6 +276,7 @@ class TestHierarchyEndpoint:
             "operations",
             "review",
             "architecture",
+            "quality",
             "knowledge-workers",
         ]
 
@@ -293,7 +319,16 @@ class TestHierarchyEndpoint:
         euclid_wf = next(node for node in ada["children"] if node["id"] == "euclid-wf")
         assert euclid_wf["codingAgents"] is None
 
-        knowledge_workers = data["sections"][3]["nodes"]
+        quality = data["sections"][3]
+        assert quality["id"] == "quality"
+        koch = quality["nodes"][0]
+        assert koch["id"] == "koch"
+        assert koch["tier"] == "quality"
+        assert [child["id"] for child in koch["children"]] == ["snow-wf", "snow-loveble"]
+        assert koch["children"][0]["managedOrg"] == "WF"
+        assert koch["children"][1]["managedOrg"] == "Loveble"
+
+        knowledge_workers = data["sections"][4]["nodes"]
         assert [node["id"] for node in knowledge_workers] == [
             "darwin",
             "gallup",

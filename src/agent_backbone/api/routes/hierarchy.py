@@ -212,6 +212,37 @@ _SECTIONS = (
         ),
     ),
     _HierarchySectionSpec(
+        id="quality",
+        title="Quality",
+        nodes=(
+            _HierarchyNodeSpec(
+                id="koch",
+                label="Koch",
+                role="Bug Quality Architect",
+                tier="quality",
+                session="koch",
+                children=(
+                    _HierarchyNodeSpec(
+                        id="snow-wf",
+                        label="Snow (WF)",
+                        role="Bug Validator",
+                        tier="quality",
+                        session="snow-wf",
+                        managed_org="WF",
+                    ),
+                    _HierarchyNodeSpec(
+                        id="snow-loveble",
+                        label="Snow (Loveble)",
+                        role="Bug Validator",
+                        tier="quality",
+                        session="snow-loveble",
+                        managed_org="Loveble",
+                    ),
+                ),
+            ),
+        ),
+    ),
+    _HierarchySectionSpec(
         id="knowledge-workers",
         title="Knowledge Workers",
         nodes=(
