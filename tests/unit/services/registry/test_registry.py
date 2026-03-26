@@ -1031,3 +1031,66 @@ class TestOrchestratorForRepo:
         registry = EntityRegistry(entities=entities, repos=repos)
 
         assert registry.organization_for_repo("shared-repo") is None
+
+
+# --- resolve_role_instance ---
+
+
+def _role_instance_registry() -> EntityRegistry:
+    return EntityRegistry(
+        entities={
+            "snow-wf": EntityEntry(
+                session="snow-wf",
+                home="~/ws/core/quality/WF/snow",
+                groups=["validators"],
+                figure="John Snow",
+                role="Bug Validator",
+                organization="WF",
+                entity_type="role-instance",
+                role_entity="snow",
+            ),
+            "snow-loveble": EntityEntry(
+                session="snow-loveble",
+                home="~/ws/core/quality/Loveble/snow",
+                groups=["validators"],
+                figure="John Snow",
+                role="Bug Validator",
+                organization="Loveble",
+                entity_type="role-instance",
+                role_entity="snow",
+            ),
+            "koch": EntityEntry(
+                session="koch",
+                home="~/ws/core/quality",
+                groups=["standalone"],
+                figure="Robert Koch",
+                role="Bug Quality Architect",
+            ),
+        },
+    )
+
+
+class TestResolveRoleInstance:
+    def test_resolves_snow_wf(self):
+        registry = _role_instance_registry()
+        assert registry.resolve_role_instance("snow", "WF") == "snow-wf"
+
+    def test_resolves_snow_loveble(self):
+        registry = _role_instance_registry()
+        assert registry.resolve_role_instance("snow", "Loveble") == "snow-loveble"
+
+    def test_case_insensitive(self):
+        registry = _role_instance_registry()
+        assert registry.resolve_role_instance("Snow", "wf") == "snow-wf"
+
+    def test_unknown_abstract_name(self):
+        registry = _role_instance_registry()
+        assert registry.resolve_role_instance("unknown", "WF") is None
+
+    def test_unknown_org(self):
+        registry = _role_instance_registry()
+        assert registry.resolve_role_instance("snow", "Arclio") is None
+
+    def test_entity_without_role_entity_not_matched(self):
+        registry = _role_instance_registry()
+        assert registry.resolve_role_instance("koch", "WF") is None

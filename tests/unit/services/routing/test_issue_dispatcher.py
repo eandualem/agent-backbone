@@ -14,6 +14,7 @@ from agent_backbone.models import (
     IssueEvent,
     ParsedLabels,
     parse_from_tag,
+    parse_governance_tag,
 )
 from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry, RepoInfo
 from agent_backbone.services.routing import clear as clear_dedup
@@ -110,6 +111,30 @@ class TestParseFromTag:
 
     def test_invalid_name_starts_with_digit(self):
         assert parse_from_tag("[from:123]") is None
+
+
+# ---------------------------------------------------------------------------
+# TestParseGovernanceTag
+# ---------------------------------------------------------------------------
+
+
+class TestParseGovernanceTag:
+    """Tests for the parse_governance_tag() function in agent_backbone/models.py."""
+
+    def test_extracts_event_type(self):
+        assert parse_governance_tag("[governance:proof.submitted]") == "proof.submitted"
+
+    def test_extracts_with_underscores(self):
+        assert parse_governance_tag("[governance:step_completed]") == "step_completed"
+
+    def test_found_anywhere_in_body(self):
+        assert parse_governance_tag("Some text [governance:proof.submitted] more") == "proof.submitted"
+
+    def test_no_tag_returns_none(self):
+        assert parse_governance_tag("regular comment") is None
+
+    def test_empty_string_returns_none(self):
+        assert parse_governance_tag("") is None
 
 
 # ---------------------------------------------------------------------------

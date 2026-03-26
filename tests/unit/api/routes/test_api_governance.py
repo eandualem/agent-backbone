@@ -132,6 +132,120 @@ class TestGovernanceActions:
                 break
         assert found, "action.executed governance event was not emitted"
 
+    async def test_notify_agent_resolves_entity_from_track_context(
+        self, api_client, auth_headers, api_app
+    ):
+        """notify_agent resolves abstract entity name via track_context org."""
+        from dataclasses import replace as dc_replace
+
+        from agent_backbone.services.registry import EntityEntry, EntityRegistry
+
+        old_config = api_app.state.config
+        registry = EntityRegistry(
+            entities={
+                **old_config.registry.entities,
+                "snow-wf": EntityEntry(
+                    session="snow-wf",
+                    home="~/ws/core/quality/WF/snow",
+                    groups=["validators"],
+                    figure="John Snow",
+                    role="Bug Validator",
+                    organization="WF",
+                    entity_type="role-instance",
+                    role_entity="snow",
+                ),
+            },
+            repos=old_config.registry.repos,
+        )
+        api_app.state.config = dc_replace(old_config, registry=registry)
+
+        try:
+            with patch(
+                "agent_backbone.services.routing._delivery.safe_deliver",
+                new_callable=AsyncMock,
+                return_value="delivered",
+            ) as mock_deliver:
+                resp = await api_client.post(
+                    "/api/governance/actions",
+                    headers=auth_headers,
+                    json={
+                        "action_type": "notify_agent",
+                        "params": {"entity": "snow", "message": "Test"},
+                        "track_context": {"org": "WF"},
+                    },
+                )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["ok"] is True
+            mock_deliver.assert_awaited_once()
+            assert mock_deliver.call_args.kwargs["session_name"] == "snow-wf"
+        finally:
+            api_app.state.config = old_config
+
+    async def test_notify_agent_fails_without_session_or_entity(
+        self, api_client, auth_headers, api_app
+    ):
+        """notify_agent fails gracefully when neither session nor entity resolves."""
+        resp = await api_client.post(
+            "/api/governance/actions",
+            headers=auth_headers,
+            json={
+                "action_type": "notify_agent",
+                "params": {"message": "Test"},
+                "track_context": {},
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "error" in data["result"]
+
+    async def test_auto_comment_with_message_alias(
+        self, api_client, auth_headers, api_app
+    ):
+        """auto_comment accepts 'message' as alias for 'body'."""
+        mock_gh = AsyncMock()
+        mock_gh.add_comment = AsyncMock(return_value=None)
+        api_app.state.github = mock_gh
+        resp = await api_client.post(
+            "/api/governance/actions",
+            headers=auth_headers,
+            json={
+                "action_type": "auto_comment",
+                "params": {"message": "Governance comment"},
+                "track_context": {"issue_id": 99, "repo": "eandualem/test"},
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        mock_gh.add_comment.assert_awaited_once_with(
+            99, "Governance comment", repo_full_name="eandualem/test"
+        )
+
+    async def test_auto_comment_derives_issue_from_track_context(
+        self, api_client, auth_headers, api_app
+    ):
+        """auto_comment derives issue_number and repo from track_context."""
+        mock_gh = AsyncMock()
+        mock_gh.add_comment = AsyncMock(return_value=None)
+        api_app.state.github = mock_gh
+        resp = await api_client.post(
+            "/api/governance/actions",
+            headers=auth_headers,
+            json={
+                "action_type": "auto_comment",
+                "params": {"body": "Comment text"},
+                "track_context": {"issue_id": 77, "repo": "eandualem/orchestration"},
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        mock_gh.add_comment.assert_awaited_once_with(
+            77, "Comment text", repo_full_name="eandualem/orchestration"
+        )
+
     async def test_requires_auth(self, api_client, api_key):
         """Request without auth headers is rejected."""
         resp = await api_client.post(
