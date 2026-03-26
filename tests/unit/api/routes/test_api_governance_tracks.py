@@ -171,3 +171,62 @@ class TestUpdateInstance:
             json={"current_state": "done"},
         )
         assert resp.status_code == 404
+
+
+_SECOND_TRACK = {
+    "id": "code-review",
+    "name": "Code Review Workflow",
+    "description": "Standard code review process",
+    "definition": {
+        "states": ["pending", "reviewing", "approved"],
+        "initial": "pending",
+        "transitions": [],
+    },
+}
+
+
+class TestListAllInstances:
+    async def test_empty_list(self, api_client, auth_headers, api_app):
+        resp = await api_client.get(
+            "/api/governance/instances", headers=auth_headers
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["items"] == []
+
+    async def test_returns_instances_across_tracks(
+        self, api_client, auth_headers, api_app
+    ):
+        # Create two tracks with instances
+        await api_client.post(
+            "/api/governance/tracks",
+            headers=auth_headers,
+            json=_SAMPLE_TRACK,
+        )
+        await api_client.post(
+            "/api/governance/tracks",
+            headers=auth_headers,
+            json=_SECOND_TRACK,
+        )
+        await api_client.post(
+            "/api/governance/tracks/bug-fix/instances",
+            headers=auth_headers,
+            json={"id": "bf-1", "context": {}, "current_state": "created"},
+        )
+        await api_client.post(
+            "/api/governance/tracks/code-review/instances",
+            headers=auth_headers,
+            json={"id": "cr-1", "context": {}, "current_state": "pending"},
+        )
+
+        resp = await api_client.get(
+            "/api/governance/instances", headers=auth_headers
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        ids = {item["id"] for item in data["items"]}
+        assert ids == {"bf-1", "cr-1"}
+        track_ids = {item["track_id"] for item in data["items"]}
+        assert track_ids == {"bug-fix", "code-review"}

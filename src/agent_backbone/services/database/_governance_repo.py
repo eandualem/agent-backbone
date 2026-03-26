@@ -123,6 +123,16 @@ class GovernanceRepo:
             await session.commit()
             return result.rowcount > 0
 
+    async def list_all_instances(self) -> list[dict]:
+        """Return all governance track instances across all tracks."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(GovernanceTrackInstanceORM)
+                .order_by(GovernanceTrackInstanceORM.created_at.desc())
+            )
+            rows = result.scalars().all()
+            return self._instances_to_dicts(rows)
+
     async def list_instances(self, track_id: str) -> list[dict]:
         async with self._session_factory() as session:
             result = await session.execute(
@@ -131,18 +141,22 @@ class GovernanceRepo:
                 .order_by(GovernanceTrackInstanceORM.created_at.desc())
             )
             rows = result.scalars().all()
-            return [
-                {
-                    "id": r.id,
-                    "track_id": r.track_id,
-                    "context": json.loads(r.context),
-                    "current_state": r.current_state,
-                    "history": json.loads(r.history),
-                    "created_at": r.created_at,
-                    "updated_at": r.updated_at,
-                }
-                for r in rows
-            ]
+            return self._instances_to_dicts(rows)
+
+    @staticmethod
+    def _instances_to_dicts(rows) -> list[dict]:
+        return [
+            {
+                "id": r.id,
+                "track_id": r.track_id,
+                "context": json.loads(r.context),
+                "current_state": r.current_state,
+                "history": json.loads(r.history),
+                "created_at": r.created_at,
+                "updated_at": r.updated_at,
+            }
+            for r in rows
+        ]
 
     async def create_instance(
         self,

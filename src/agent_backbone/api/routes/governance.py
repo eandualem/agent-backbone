@@ -256,6 +256,16 @@ async def delete_track(track_id: str, db: BackboneDB = Depends(get_db)):
 
 
 @router.get(
+    "/instances",
+    response_model=ListEnvelope[GovernanceInstanceResponse],
+)
+async def list_all_instances(db: BackboneDB = Depends(get_db)):
+    """List all governance track instances across all tracks."""
+    instances = await db.governance.list_all_instances()
+    return ListEnvelope(items=instances, total=len(instances))
+
+
+@router.get(
     "/tracks/{track_id}/instances",
     response_model=ListEnvelope[GovernanceInstanceResponse],
 )
