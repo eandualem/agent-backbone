@@ -25,7 +25,7 @@ from agent_backbone.api.deps import (
 from agent_backbone.api.governance_events import emit_governance_event
 from agent_backbone.api.webhook_utils import normalize_event, verify_signature
 from agent_backbone.config import BackboneConfig
-from agent_backbone.models import EventType
+from agent_backbone.models import EventType, parse_governance_tag, repo_session_name
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.routing import DeliveryService, DispatchService
@@ -166,11 +166,32 @@ async def handle_webhook(
 
     gov_event_type = _WEBHOOK_EVENT_MAP.get(event.event_type)
     if gov_event_type:
+        # Override with governance tag from comment body if present
+        if event.comment and event.comment.body:
+            governance_tag = parse_governance_tag(event.comment.body)
+            if governance_tag:
+                gov_event_type = governance_tag
+
+        # Derive org from repo name via registry
+        repo_name = repo_session_name(event.issue.repo_full_name)
+        org = config.registry.organization_for_repo(repo_name) if repo_name else None
+
+        gov_context: dict[str, object] = {
+            "issue_id": event.issue.number,
+            "repo": event.issue.repo_full_name,
+        }
+        if org:
+            gov_context["org"] = org
+
+        gov_data: dict[str, object] = {"action": action, "delivery_id": delivery_id}
+        if event.comment and event.comment.body:
+            gov_data["comment_body"] = event.comment.body
+
         await emit_governance_event(
             gov_event_type,
-            context={"issue_id": event.issue.number, "repo": event.issue.repo_full_name},
+            context=gov_context,
             source=event.issue.labels.sender if event.issue.labels.sender != "unknown" else "github",
-            data={"action": action, "delivery_id": delivery_id},
+            data=gov_data,
         )
 
     outcome = await dispatch_event_async(event, config, db, gh, delivery_svc, dispatch_svc)

@@ -24,6 +24,21 @@ def parse_from_tag(comment_body: str) -> str | None:
     return None
 
 
+_GOVERNANCE_TAG_PATTERN = re.compile(r"\[governance:([a-zA-Z0-9_.]+)\]")
+
+
+def parse_governance_tag(comment_body: str) -> str | None:
+    """Extract event type from ``[governance:X]`` tag in comment body.
+
+    Unlike parse_from_tag, this scans the full body (not anchored to start).
+    Returns the event type string, or None if no valid tag is found.
+    """
+    match = _GOVERNANCE_TAG_PATTERN.search(comment_body)
+    if match:
+        return match.group(1)
+    return None
+
+
 def normalize_repo_full_name(repo_full_name: str | None) -> str:
     """Normalize owner/repo strings for persistence and dedup keys."""
     return (repo_full_name or "").strip()
