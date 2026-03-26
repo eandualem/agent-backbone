@@ -295,6 +295,7 @@ async def create_instance(
         context=body.context,
         current_state=body.current_state,
         status=body.status,
+        last_projected_state=body.last_projected_state,
     )
 
 
@@ -312,6 +313,7 @@ async def update_instance(
         instance_id,
         current_state=body.current_state,
         status=body.status,
+        last_projected_state=body.last_projected_state,
         context=body.context,
         history=body.history,
     )

@@ -388,6 +388,7 @@ class GovernanceTrackInstanceORM(Base):
     context: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
     current_state: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    last_projected_state: Mapped[str | None] = mapped_column(Text, nullable=True)
     history: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)

@@ -151,6 +151,7 @@ class GovernanceRepo:
             "context": json.loads(r.context),
             "current_state": r.current_state,
             "status": r.status,
+            "last_projected_state": r.last_projected_state,
             "history": json.loads(r.history),
             "created_at": r.created_at,
             "updated_at": r.updated_at,
@@ -167,6 +168,7 @@ class GovernanceRepo:
         context: dict,
         current_state: str,
         status: str = "active",
+        last_projected_state: str | None = None,
     ) -> dict:
         now = _now()
         async with self._session_factory() as session:
@@ -176,6 +178,7 @@ class GovernanceRepo:
                 context=json.dumps(context),
                 current_state=current_state,
                 status=status,
+                last_projected_state=last_projected_state,
                 history=json.dumps([]),
                 created_at=now,
                 updated_at=now,
@@ -188,6 +191,7 @@ class GovernanceRepo:
                 "context": context,
                 "current_state": current_state,
                 "status": status,
+                "last_projected_state": last_projected_state,
                 "history": [],
                 "created_at": now,
                 "updated_at": now,
@@ -199,6 +203,7 @@ class GovernanceRepo:
         *,
         current_state: str | None = None,
         status: str | None = None,
+        last_projected_state: str | None = None,
         context: dict | None = None,
         history: list | None = None,
     ) -> dict | None:
@@ -208,6 +213,8 @@ class GovernanceRepo:
             values["current_state"] = current_state
         if status is not None:
             values["status"] = status
+        if last_projected_state is not None:
+            values["last_projected_state"] = last_projected_state
         if context is not None:
             values["context"] = json.dumps(context)
         if history is not None:

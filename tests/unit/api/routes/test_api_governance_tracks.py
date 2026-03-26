@@ -160,6 +160,75 @@ class TestCreateInstance:
         assert resp.status_code == 404
 
 
+class TestLastProjectedState:
+    async def test_defaults_to_null_on_create(self, api_client, auth_headers, api_app):
+        await api_client.post(
+            "/api/governance/tracks", headers=auth_headers, json=_SAMPLE_TRACK
+        )
+        resp = await api_client.post(
+            "/api/governance/tracks/bug-fix/instances",
+            headers=auth_headers,
+            json={"id": "lps-1", "context": {}, "current_state": "created"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["last_projected_state"] is None
+
+    async def test_persists_on_put(self, api_client, auth_headers, api_app):
+        await api_client.post(
+            "/api/governance/tracks", headers=auth_headers, json=_SAMPLE_TRACK
+        )
+        await api_client.post(
+            "/api/governance/tracks/bug-fix/instances",
+            headers=auth_headers,
+            json={"id": "lps-2", "context": {}, "current_state": "created"},
+        )
+        resp = await api_client.put(
+            "/api/governance/tracks/instances/lps-2",
+            headers=auth_headers,
+            json={"last_projected_state": "investigating"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["last_projected_state"] == "investigating"
+
+    async def test_survives_get_roundtrip(self, api_client, auth_headers, api_app):
+        await api_client.post(
+            "/api/governance/tracks", headers=auth_headers, json=_SAMPLE_TRACK
+        )
+        await api_client.post(
+            "/api/governance/tracks/bug-fix/instances",
+            headers=auth_headers,
+            json={"id": "lps-3", "context": {}, "current_state": "created"},
+        )
+        await api_client.put(
+            "/api/governance/tracks/instances/lps-3",
+            headers=auth_headers,
+            json={"last_projected_state": "fixing"},
+        )
+        resp = await api_client.get(
+            "/api/governance/instances", headers=auth_headers
+        )
+        assert resp.status_code == 200
+        inst = next(i for i in resp.json()["items"] if i["id"] == "lps-3")
+        assert inst["last_projected_state"] == "fixing"
+
+    async def test_accepted_on_create(self, api_client, auth_headers, api_app):
+        await api_client.post(
+            "/api/governance/tracks", headers=auth_headers, json=_SAMPLE_TRACK
+        )
+        resp = await api_client.post(
+            "/api/governance/tracks/bug-fix/instances",
+            headers=auth_headers,
+            json={
+                "id": "lps-4",
+                "context": {},
+                "current_state": "created",
+                "last_projected_state": "created",
+            },
+        )
+        assert resp.status_code == 201
+        assert resp.json()["last_projected_state"] == "created"
+
+
 class TestUpdateInstanceStatus:
     async def test_persists_status_on_put(self, api_client, auth_headers, api_app):
         await api_client.post(

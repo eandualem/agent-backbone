@@ -1106,6 +1106,7 @@ class GovernanceInstanceCreate(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
     current_state: str
     status: str = "active"
+    last_projected_state: str | None = None
 
 
 class GovernanceInstanceUpdate(BaseModel):
@@ -1113,6 +1114,7 @@ class GovernanceInstanceUpdate(BaseModel):
 
     current_state: str | None = None
     status: str | None = None
+    last_projected_state: str | None = None
     context: dict[str, Any] | None = None
     history: list[dict[str, Any]] | None = None
 
@@ -1125,6 +1127,7 @@ class GovernanceInstanceResponse(BaseModel):
     context: dict[str, Any]
     current_state: str
     status: str
+    last_projected_state: str | None
     history: list[dict[str, Any]]
     created_at: str
     updated_at: str
