@@ -294,6 +294,7 @@ async def create_instance(
         track_id=track_id,
         context=body.context,
         current_state=body.current_state,
+        status=body.status,
     )
 
 
@@ -310,6 +311,7 @@ async def update_instance(
     result = await db.governance.update_instance(
         instance_id,
         current_state=body.current_state,
+        status=body.status,
         context=body.context,
         history=body.history,
     )

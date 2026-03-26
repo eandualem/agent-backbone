@@ -144,19 +144,21 @@ class GovernanceRepo:
             return self._instances_to_dicts(rows)
 
     @staticmethod
-    def _instances_to_dicts(rows) -> list[dict]:
-        return [
-            {
-                "id": r.id,
-                "track_id": r.track_id,
-                "context": json.loads(r.context),
-                "current_state": r.current_state,
-                "history": json.loads(r.history),
-                "created_at": r.created_at,
-                "updated_at": r.updated_at,
-            }
-            for r in rows
-        ]
+    def _instance_to_dict(r) -> dict:
+        return {
+            "id": r.id,
+            "track_id": r.track_id,
+            "context": json.loads(r.context),
+            "current_state": r.current_state,
+            "status": r.status,
+            "history": json.loads(r.history),
+            "created_at": r.created_at,
+            "updated_at": r.updated_at,
+        }
+
+    @classmethod
+    def _instances_to_dicts(cls, rows) -> list[dict]:
+        return [cls._instance_to_dict(r) for r in rows]
 
     async def create_instance(
         self,
@@ -164,6 +166,7 @@ class GovernanceRepo:
         track_id: str,
         context: dict,
         current_state: str,
+        status: str = "active",
     ) -> dict:
         now = _now()
         async with self._session_factory() as session:
@@ -172,6 +175,7 @@ class GovernanceRepo:
                 track_id=track_id,
                 context=json.dumps(context),
                 current_state=current_state,
+                status=status,
                 history=json.dumps([]),
                 created_at=now,
                 updated_at=now,
@@ -183,6 +187,7 @@ class GovernanceRepo:
                 "track_id": track_id,
                 "context": context,
                 "current_state": current_state,
+                "status": status,
                 "history": [],
                 "created_at": now,
                 "updated_at": now,
@@ -193,6 +198,7 @@ class GovernanceRepo:
         instance_id: str,
         *,
         current_state: str | None = None,
+        status: str | None = None,
         context: dict | None = None,
         history: list | None = None,
     ) -> dict | None:
@@ -200,6 +206,8 @@ class GovernanceRepo:
         values: dict = {"updated_at": now}
         if current_state is not None:
             values["current_state"] = current_state
+        if status is not None:
+            values["status"] = status
         if context is not None:
             values["context"] = json.dumps(context)
         if history is not None:
@@ -223,15 +231,7 @@ class GovernanceRepo:
             r = result.scalar_one_or_none()
             if r is None:
                 return None
-            return {
-                "id": r.id,
-                "track_id": r.track_id,
-                "context": json.loads(r.context),
-                "current_state": r.current_state,
-                "history": json.loads(r.history),
-                "created_at": r.created_at,
-                "updated_at": r.updated_at,
-            }
+            return self._instance_to_dict(r)
 
     async def get_instance(self, instance_id: str) -> dict | None:
         async with self._session_factory() as session:
@@ -242,15 +242,7 @@ class GovernanceRepo:
             r = result.scalar_one_or_none()
             if r is None:
                 return None
-            return {
-                "id": r.id,
-                "track_id": r.track_id,
-                "context": json.loads(r.context),
-                "current_state": r.current_state,
-                "history": json.loads(r.history),
-                "created_at": r.created_at,
-                "updated_at": r.updated_at,
-            }
+            return self._instance_to_dict(r)
 
     # --- Layouts ---
 

@@ -122,6 +122,35 @@ class TestCreateInstance:
         assert data["current_state"] == "created"
         assert data["context"]["issue_id"] == 42
 
+    async def test_defaults_status_to_active(self, api_client, auth_headers, api_app):
+        await api_client.post(
+            "/api/governance/tracks", headers=auth_headers, json=_SAMPLE_TRACK
+        )
+        resp = await api_client.post(
+            "/api/governance/tracks/bug-fix/instances",
+            headers=auth_headers,
+            json={"id": "inst-s", "context": {}, "current_state": "created"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["status"] == "active"
+
+    async def test_accepts_custom_status_on_create(self, api_client, auth_headers, api_app):
+        await api_client.post(
+            "/api/governance/tracks", headers=auth_headers, json=_SAMPLE_TRACK
+        )
+        resp = await api_client.post(
+            "/api/governance/tracks/bug-fix/instances",
+            headers=auth_headers,
+            json={
+                "id": "inst-p",
+                "context": {},
+                "current_state": "created",
+                "status": "paused",
+            },
+        )
+        assert resp.status_code == 201
+        assert resp.json()["status"] == "paused"
+
     async def test_track_not_found_returns_404(self, api_client, auth_headers, api_app):
         resp = await api_client.post(
             "/api/governance/tracks/nonexistent/instances",
@@ -129,6 +158,48 @@ class TestCreateInstance:
             json={"id": "inst-1", "context": {}, "current_state": "start"},
         )
         assert resp.status_code == 404
+
+
+class TestUpdateInstanceStatus:
+    async def test_persists_status_on_put(self, api_client, auth_headers, api_app):
+        await api_client.post(
+            "/api/governance/tracks", headers=auth_headers, json=_SAMPLE_TRACK
+        )
+        await api_client.post(
+            "/api/governance/tracks/bug-fix/instances",
+            headers=auth_headers,
+            json={"id": "inst-u", "context": {}, "current_state": "created"},
+        )
+        resp = await api_client.put(
+            "/api/governance/tracks/instances/inst-u",
+            headers=auth_headers,
+            json={"current_state": "done", "status": "completed"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "completed"
+        assert resp.json()["current_state"] == "done"
+
+    async def test_status_survives_get_roundtrip(self, api_client, auth_headers, api_app):
+        await api_client.post(
+            "/api/governance/tracks", headers=auth_headers, json=_SAMPLE_TRACK
+        )
+        await api_client.post(
+            "/api/governance/tracks/bug-fix/instances",
+            headers=auth_headers,
+            json={"id": "inst-r", "context": {}, "current_state": "created"},
+        )
+        await api_client.put(
+            "/api/governance/tracks/instances/inst-r",
+            headers=auth_headers,
+            json={"status": "paused"},
+        )
+        # Verify via list-all endpoint
+        resp = await api_client.get(
+            "/api/governance/instances", headers=auth_headers
+        )
+        assert resp.status_code == 200
+        inst = next(i for i in resp.json()["items"] if i["id"] == "inst-r")
+        assert inst["status"] == "paused"
 
 
 class TestListInstances:
