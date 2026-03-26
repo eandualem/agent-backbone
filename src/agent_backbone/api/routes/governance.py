@@ -35,11 +35,24 @@ async def _handle_notify_agent(
     params: dict[str, Any],
     config: BackboneConfig,
     db: BackboneDB,
+    track_context: dict[str, Any],
 ) -> dict[str, Any]:
     from agent_backbone.services.routing._delivery import safe_deliver
 
+    session = params.get("session")
+    if not session:
+        entity = params.get("entity")
+        org = track_context.get("org")
+        if entity and org:
+            session = config.registry.resolve_role_instance(entity, org)
+        if not session:
+            raise ValueError(
+                f"Cannot resolve session: no 'session' param and "
+                f"entity={params.get('entity')!r} org={org!r} did not resolve"
+            )
+
     outcome = await safe_deliver(
-        session_name=params["session"],
+        session_name=session,
         message=params["message"],
         config=config,
         db=db,
@@ -94,11 +107,22 @@ async def _handle_notify_jarvis(
 async def _handle_auto_comment(
     params: dict[str, Any],
     gh: GitHubClient,
+    track_context: dict[str, Any],
 ) -> dict[str, Any]:
+    body = params.get("body") or params.get("message")
+    if not body:
+        raise ValueError("Either 'body' or 'message' param is required")
+
+    issue_number = params.get("issue_number") or track_context.get("issue_id")
+    if not issue_number:
+        raise ValueError("Either 'issue_number' param or issue_id in track_context is required")
+
+    repo = params.get("repo") or track_context.get("repo")
+
     await gh.add_comment(
-        params["issue_number"],
-        params["body"],
-        repo_full_name=params.get("repo"),
+        issue_number,
+        body,
+        repo_full_name=repo,
     )
     return {"commented": True}
 
@@ -125,11 +149,11 @@ async def execute_governance_action(
     params = body.params
 
     handlers = {
-        "notify_agent": lambda: _handle_notify_agent(params, config, db),
+        "notify_agent": lambda: _handle_notify_agent(params, config, db, body.track_context),
         "notify_backbone": lambda: _handle_notify_backbone(params, config, db),
         "notify_elias": lambda: _handle_notify_elias(params, config),
         "notify_jarvis": lambda: _handle_notify_jarvis(params, config),
-        "auto_comment": lambda: _handle_auto_comment(params, gh),
+        "auto_comment": lambda: _handle_auto_comment(params, gh, body.track_context),
         "log": lambda: _handle_log(params),
         "semantic_search": lambda: _handle_semantic_search(),
     }

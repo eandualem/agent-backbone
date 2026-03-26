@@ -28,6 +28,7 @@ class EntityEntry:
     organization: str = ""
     entity_type: str = "agent"
     role_definition: str = ""
+    role_entity: str = ""
     instances: dict[str, EntityInstance] = field(default_factory=dict)
 
 
@@ -245,3 +246,16 @@ class EntityRegistry:
         if len(organizations) != 1:
             return None
         return next(iter(organizations))
+
+    def resolve_role_instance(self, abstract_name: str, org: str) -> str | None:
+        """Resolve an abstract role name + org to a concrete session.
+
+        Scans role-instance entries where role_entity matches the abstract
+        name and organization matches the org.
+        """
+        key = abstract_name.casefold()
+        org_lower = org.casefold()
+        for entry in self.entities.values():
+            if entry.role_entity.casefold() == key and entry.organization.casefold() == org_lower:
+                return entry.session
+        return None

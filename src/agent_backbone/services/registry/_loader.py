@@ -92,6 +92,7 @@ def load_entity_registry(path: Path) -> dict[str, EntityEntry]:
             organization=data.get("organization", ""),
             entity_type=data.get("type", "agent"),
             role_definition=data.get("roleDefinition", ""),
+            role_entity=data.get("roleEntity", ""),
             instances=instances,
         )
     return entities
