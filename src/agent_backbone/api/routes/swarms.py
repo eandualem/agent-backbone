@@ -7,7 +7,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from agent_backbone.api.deps import get_config, get_db, get_delivery_service
+from agent_backbone.api.deps import get_config, get_db
 from agent_backbone.api.models import (
     ListEnvelope,
     SwarmAssignmentCreateRequest,
@@ -31,7 +31,7 @@ from agent_backbone.api.models import (
 )
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing import DeliveryService
+from agent_backbone.services.messaging import deliver_message
 
 log = logging.getLogger(__name__)
 
@@ -166,16 +166,12 @@ async def _deliver_to_workers(
     *,
     config: BackboneConfig,
     db: BackboneDB,
-    delivery_svc: DeliveryService,
 ) -> tuple[int, int]:
     async def _deliver(worker: dict) -> str:
-        result = await delivery_svc.safe_deliver(
+        result = await deliver_message(
             worker["session"],
             envelope,
             config,
-            db=db,
-            delivery_kind="direct_message",
-            flow_name="swarm-delivery",
         )
         if result != "delivered":
             log.warning(
@@ -343,7 +339,6 @@ async def create_swarm_assignment(
     body: SwarmAssignmentCreateRequest,
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
-    delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Create and dispatch one lead-owned assignment for a worker."""
     swarm = await db.get_swarm(swarm_id)
@@ -381,7 +376,6 @@ async def create_swarm_assignment(
         envelope,
         config=config,
         db=db,
-        delivery_svc=delivery_svc,
     )
     message_log = await db.record_swarm_message(
         swarm_id,
@@ -430,7 +424,6 @@ async def broadcast_swarm_message(
     body: SwarmBroadcastRequest,
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
-    delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Broadcast a lead message to all worker sessions in a swarm."""
     swarm = await db.get_swarm(swarm_id)
@@ -449,7 +442,6 @@ async def broadcast_swarm_message(
         envelope,
         config=config,
         db=db,
-        delivery_svc=delivery_svc,
     )
     message_log = await db.record_swarm_message(
         swarm_id,
@@ -475,7 +467,6 @@ async def send_swarm_message(
     body: SwarmMessageRequest,
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
-    delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Send a role-targeted or worker-targeted message within a swarm."""
     swarm = await db.get_swarm(swarm_id)
@@ -517,7 +508,6 @@ async def send_swarm_message(
         envelope,
         config=config,
         db=db,
-        delivery_svc=delivery_svc,
     )
     message_log = await db.record_swarm_message(
         swarm_id,

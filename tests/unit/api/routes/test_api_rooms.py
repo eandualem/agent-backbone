@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_backbone.api.deps import get_config, get_delivery_service
+from agent_backbone.api.deps import get_config
 from agent_backbone.api.models import Room, RoomMessage
 from agent_backbone.api.routes.rooms import (
     _compute_context_delta,
@@ -17,6 +17,8 @@ from agent_backbone.api.routes.rooms import (
     _read_meeting_skill,
 )
 
+_DELIVER_PATCH = "agent_backbone.api.routes.rooms.deliver_message"
+
 
 @pytest.fixture
 def room_dir(tmp_path):
@@ -25,16 +27,6 @@ def room_dir(tmp_path):
     d.mkdir()
     with patch("agent_backbone.api.routes.rooms._ROOM_DIR", d):
         yield d
-
-
-def _make_mock_delivery_svc(safe_deliver_return="delivered", safe_deliver_side_effect=None):
-    """Create a mock DeliveryService with safe_deliver configured."""
-    svc = MagicMock()
-    svc.safe_deliver = AsyncMock(
-        return_value=safe_deliver_return,
-        side_effect=safe_deliver_side_effect,
-    )
-    return svc
 
 
 def _save_room_file(room_dir, room: Room):
@@ -78,11 +70,10 @@ class TestCreateRoom:
 
     async def test_create_room_success(self, api_client, auth_headers, room_dir, api_app):
         """201 with UUID id, state=active, empty transcript, file persisted, injection triggered."""
-        mock_svc = _make_mock_delivery_svc()
+        mock_deliver = AsyncMock(return_value="delivered")
         mock_config = MagicMock()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
         api_app.dependency_overrides[get_config] = lambda: mock_config
-        try:
+        with patch(_DELIVER_PATCH, mock_deliver):
             with patch(
                 "agent_backbone.api.routes.rooms._inject_meeting_skill",
                 new_callable=AsyncMock,
@@ -121,8 +112,7 @@ class TestCreateRoom:
                 mock_inject.assert_called_once()
                 injected_room = mock_inject.call_args[0][0]
                 assert injected_room.id == data["id"]
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
             api_app.dependency_overrides.pop(get_config, None)
 
 
@@ -196,15 +186,13 @@ class TestSendDirected:
 
     async def test_send_directed_success(self, api_client, auth_headers, room_dir, api_app):
         """200, safe_deliver called, message appended with mode=directed."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room()
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="leo",
             ):
                 resp = await api_client.post(
@@ -219,30 +207,25 @@ class TestSendDirected:
             assert data["status"] == "delivered"
             assert data["target"] == "leo"
 
-            # Verify safe_deliver was called
-            mock_svc.safe_deliver.assert_called_once()
-            call_args = mock_svc.safe_deliver.call_args
+            # Verify deliver_message was called
+            mock_deliver.assert_called_once()
+            call_args = mock_deliver.call_args
             assert call_args[0][0] == "leo"
             assert "What's your take?" in call_args[0][1]
-            assert call_args.kwargs["db"] is api_app.state.db
-            assert call_args.kwargs["delivery_kind"] == "direct_message"
-            assert call_args.kwargs["flow_name"] == "room-send-directed"
 
             # Verify message in transcript
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert len(saved.transcript) == 1
             assert saved.transcript[0].mode == "directed"
             assert saved.transcript[0].sender == "ike"
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_send_directed_target_not_participant(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """400 when target is not a room participant."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
@@ -254,23 +237,20 @@ class TestSendDirected:
 
             assert resp.status_code == 400
             assert "not a room participant" in resp.json()["detail"]
-            mock_svc.safe_deliver.assert_not_called()
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            mock_deliver.assert_not_called()
+        # deliver_message patched via context manager
 
     async def test_send_directed_room_not_found(self, api_client, auth_headers, room_dir, api_app):
         """404 for non-existent room."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             resp = await api_client.post(
                 "/api/rooms/no-room/directed",
                 headers=auth_headers,
                 json={"target": "leo", "content": "Hello"},
             )
             assert resp.status_code == 404
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
 
 class TestPeerDirected:
@@ -278,15 +258,13 @@ class TestPeerDirected:
 
     async def test_peer_directed_delivery(self, api_client, auth_headers, room_dir, api_app):
         """Participant sends to another participant — both get delivery, moderator gets CC."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 side_effect=["feynman-session", "ike-session"],
             ):
                 resp = await api_client.post(
@@ -303,27 +281,24 @@ class TestPeerDirected:
             assert data["sender"] == "leo"
 
             # target + moderator CC = 2 deliveries
-            assert mock_svc.safe_deliver.call_count == 2
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            assert mock_deliver.call_count == 2
+        # deliver_message patched via context manager
 
     async def test_peer_directed_moderator_cc(self, api_client, auth_headers, room_dir, api_app):
         """Non-moderator sender triggers CC to moderator with moderator's own delta."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             sessions_resolved = []
 
-            async def _track_resolve(entity, config):
+            def _track_resolve(entity, config):
                 sessions_resolved.append(entity)
                 return f"{entity}-session"
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 side_effect=_track_resolve,
             ):
                 resp = await api_client.post(
@@ -342,22 +317,19 @@ class TestPeerDirected:
             assert len(saved.transcript) == 1
             assert saved.transcript[0].sender == "leo"
             assert saved.transcript[0].recipients == ["feynman"]
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_peer_directed_to_moderator_no_cc(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Participant messages moderator — no CC (moderator IS the target)."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="ike-session",
             ):
                 resp = await api_client.post(
@@ -373,21 +345,18 @@ class TestPeerDirected:
             assert data["target"] == "ike"
 
             # Only 1 delivery — no CC when moderator is the target
-            assert mock_svc.safe_deliver.call_count == 1
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            assert mock_deliver.call_count == 1
+        # deliver_message patched via context manager
 
     async def test_moderator_directed_no_cc(self, api_client, auth_headers, room_dir, api_app):
         """Moderator sends — no CC (sender IS the moderator)."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="leo-session",
             ):
                 resp = await api_client.post(
@@ -398,17 +367,15 @@ class TestPeerDirected:
 
             assert resp.status_code == 200
             # Only 1 delivery — moderator is the default sender, no CC
-            assert mock_svc.safe_deliver.call_count == 1
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            assert mock_deliver.call_count == 1
+        # deliver_message patched via context manager
 
     async def test_directed_sender_not_participant(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """400 for unknown sender."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
@@ -420,15 +387,13 @@ class TestPeerDirected:
 
             assert resp.status_code == 400
             assert "Sender is not a room participant or moderator" in resp.json()["detail"]
-            mock_svc.safe_deliver.assert_not_called()
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            mock_deliver.assert_not_called()
+        # deliver_message patched via context manager
 
     async def test_directed_sender_equals_target(self, api_client, auth_headers, room_dir, api_app):
         """400 for self-message."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
@@ -440,23 +405,20 @@ class TestPeerDirected:
 
             assert resp.status_code == 400
             assert "Sender and target must be different" in resp.json()["detail"]
-            mock_svc.safe_deliver.assert_not_called()
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            mock_deliver.assert_not_called()
+        # deliver_message patched via context manager
 
     async def test_directed_sender_cursor_advances(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Sender's cursor advances on send — they know what they sent."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 side_effect=["feynman-session", "ike-session"],
             ):
                 resp = await api_client.post(
@@ -473,23 +435,20 @@ class TestPeerDirected:
             assert saved.cursors.get("feynman") == 1
             # Moderator (ike) cursor should also advance (CC delivered)
             assert saved.cursors.get("ike") == 1
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_peer_directed_cc_failure_doesnt_fail_request(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """CC fails but ok=true if target delivery succeeded."""
         # First call (target) succeeds, second call (CC to moderator) fails
-        mock_svc = _make_mock_delivery_svc(safe_deliver_side_effect=["delivered", "offline"])
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(side_effect=["delivered", "offline"])
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 side_effect=["feynman-session", "ike-session"],
             ):
                 resp = await api_client.post(
@@ -507,22 +466,19 @@ class TestPeerDirected:
             # Moderator cursor should NOT advance (CC failed)
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert saved.cursors.get("ike") is None or saved.cursors.get("ike") == 0
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_directed_target_can_be_moderator(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Participant can message the moderator directly."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="ike-session",
             ):
                 resp = await api_client.post(
@@ -540,8 +496,7 @@ class TestPeerDirected:
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert saved.transcript[0].sender == "feynman"
             assert saved.transcript[0].recipients == ["ike"]
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
 
 class TestSendBroadcast:
@@ -549,15 +504,13 @@ class TestSendBroadcast:
 
     async def test_send_broadcast_success(self, api_client, auth_headers, room_dir, api_app):
         """200, all delivered, message appended with mode=broadcast."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 side_effect=["leo-session", "feynman-session"],
             ):
                 resp = await api_client.post(
@@ -573,34 +526,27 @@ class TestSendBroadcast:
             assert data["failed"] == 0
             assert data["total"] == 2
 
-            # Verify safe_deliver called for each participant
-            assert mock_svc.safe_deliver.call_count == 2
-            first_call = mock_svc.safe_deliver.call_args_list[0]
-            assert first_call.kwargs["db"] is api_app.state.db
-            assert first_call.kwargs["delivery_kind"] == "direct_message"
-            assert first_call.kwargs["flow_name"] == "room-send-broadcast"
+            # Verify deliver_message called for each participant
+            assert mock_deliver.call_count == 2
 
             # Verify transcript
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert len(saved.transcript) == 1
             assert saved.transcript[0].mode == "broadcast"
             assert set(saved.transcript[0].recipients) == {"leo", "feynman"}
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_send_broadcast_partial_failure(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Partial delivery: delivered=1, failed=1, message still appended."""
-        mock_svc = _make_mock_delivery_svc(safe_deliver_side_effect=["delivered", "offline"])
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(side_effect=["delivered", "offline"])
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 side_effect=["leo-session", "feynman-session"],
             ):
                 resp = await api_client.post(
@@ -619,22 +565,19 @@ class TestSendBroadcast:
             # Message still in transcript
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert len(saved.transcript) == 1
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_send_broadcast_room_not_found(self, api_client, auth_headers, room_dir, api_app):
         """404 for non-existent room."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             resp = await api_client.post(
                 "/api/rooms/no-room/broadcast",
                 headers=auth_headers,
                 json={"content": "Hello all"},
             )
             assert resp.status_code == 404
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
 
 class TestPostResponse:
@@ -642,15 +585,13 @@ class TestPostResponse:
 
     async def test_post_response_success(self, api_client, auth_headers, room_dir, api_app):
         """200, message appended with mode=response, delivered to moderator."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room()
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="ike-session",
             ):
                 resp = await api_client.post(
@@ -670,36 +611,29 @@ class TestPostResponse:
             assert saved.transcript[0].content == "I think we should go with option A"
 
             # Moderator received delivery
-            mock_svc.safe_deliver.assert_called_once()
-            assert mock_svc.safe_deliver.call_args[0][0] == "ike-session"
-            assert mock_svc.safe_deliver.call_args.kwargs["db"] is api_app.state.db
-            assert mock_svc.safe_deliver.call_args.kwargs["delivery_kind"] == "direct_message"
-            assert mock_svc.safe_deliver.call_args.kwargs["flow_name"] == "room-post-response"
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            mock_deliver.assert_called_once()
+            assert mock_deliver.call_args[0][0] == "ike-session"
+        # deliver_message patched via context manager
 
     async def test_post_response_room_not_found(self, api_client, auth_headers, room_dir, api_app):
         """404 for non-existent room."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             resp = await api_client.post(
                 "/api/rooms/no-room/respond",
                 headers=auth_headers,
                 json={"sender": "leo", "content": "Hello"},
             )
             assert resp.status_code == 404
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     @pytest.mark.parametrize("state", ["paused", "closed"])
     async def test_post_response_rejects_inactive_room(
         self, api_client, auth_headers, room_dir, api_app, state
     ):
         """400 when posting to a paused or closed room."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(state=state)
             _save_room_file(room_dir, room)
 
@@ -712,17 +646,15 @@ class TestPostResponse:
             assert resp.status_code == 400
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert saved.transcript == []
-            mock_svc.safe_deliver.assert_not_called()
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            mock_deliver.assert_not_called()
+        # deliver_message patched via context manager
 
     async def test_post_response_sender_not_participant(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """400 when sender is not a room participant or moderator."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
@@ -736,17 +668,15 @@ class TestPostResponse:
             assert "Sender is not a room participant or moderator" in resp.json()["detail"]
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert saved.transcript == []
-            mock_svc.safe_deliver.assert_not_called()
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            mock_deliver.assert_not_called()
+        # deliver_message patched via context manager
 
     async def test_post_response_moderator_no_self_delivery(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Moderator's own response doesn't trigger self-delivery."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room()
             _save_room_file(room_dir, room)
 
@@ -760,23 +690,20 @@ class TestPostResponse:
             assert resp.json()["ok"] is True
 
             # No delivery — moderator is the sender
-            mock_svc.safe_deliver.assert_not_called()
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            mock_deliver.assert_not_called()
+        # deliver_message patched via context manager
 
     async def test_post_response_sender_cursor_advances(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Sender's cursor advances unconditionally on response."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room()
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="ike-session",
             ):
                 resp = await api_client.post(
@@ -788,22 +715,19 @@ class TestPostResponse:
             assert resp.status_code == 200
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert saved.cursors.get("leo") == 1
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_post_response_moderator_cursor_advances_on_delivery(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Moderator's cursor advances on successful delivery."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room()
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="ike-session",
             ):
                 resp = await api_client.post(
@@ -816,22 +740,19 @@ class TestPostResponse:
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert saved.cursors.get("ike") == 1
             assert saved.cursors.get("feynman") == 1
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_post_response_delivery_failure_doesnt_fail_request(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Delivery failure doesn't affect API response — ok still True."""
-        mock_svc = _make_mock_delivery_svc(safe_deliver_return="offline")
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="offline")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room()
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="ike-session",
             ):
                 resp = await api_client.post(
@@ -848,22 +769,19 @@ class TestPostResponse:
             assert saved.cursors.get("ike") is None or saved.cursors.get("ike") == 0
             # But sender cursor still advances
             assert saved.cursors.get("leo") == 1
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_post_response_unresolvable_moderator(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Unresolvable moderator session doesn't fail the request."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room()
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value=None,
             ):
                 resp = await api_client.post(
@@ -874,9 +792,8 @@ class TestPostResponse:
 
             assert resp.status_code == 200
             assert resp.json()["ok"] is True
-            mock_svc.safe_deliver.assert_not_called()
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            mock_deliver.assert_not_called()
+        # deliver_message patched via context manager
 
 
 class TestUpdateRoomState:
@@ -884,13 +801,11 @@ class TestUpdateRoomState:
 
     @pytest.fixture(autouse=True)
     def _override_deps(self, api_app):
-        """Provide config and delivery_service overrides for all state-update tests."""
-        mock_svc = _make_mock_delivery_svc()
+        """Provide config override and patch deliver_message for all state-update tests."""
         mock_config = MagicMock()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
         api_app.dependency_overrides[get_config] = lambda: mock_config
-        yield
-        api_app.dependency_overrides.pop(get_delivery_service, None)
+        with patch(_DELIVER_PATCH, AsyncMock(return_value="delivered")):
+            yield
         api_app.dependency_overrides.pop(get_config, None)
 
     async def test_update_room_state_success(self, api_client, auth_headers, room_dir):
@@ -1108,15 +1023,13 @@ class TestBroadcastSessionResolution:
         self, api_client, auth_headers, room_dir, api_app
     ):
         """resolve_entity_session called per participant; resolved name passed to safe_deliver."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 side_effect=["leo-session", "feynman-session"],
             ) as mock_resolve:
                 resp = await api_client.post(
@@ -1137,25 +1050,22 @@ class TestBroadcastSessionResolution:
             assert "feynman" in resolve_targets
 
             # Verify safe_deliver received resolved session names
-            deliver_sessions = [c.args[0] for c in mock_svc.safe_deliver.call_args_list]
+            deliver_sessions = [c.args[0] for c in mock_deliver.call_args_list]
             assert "leo-session" in deliver_sessions
             assert "feynman-session" in deliver_sessions
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_send_broadcast_unresolvable_participant(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Unresolvable participant counted as failed, not delivered."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "unknown-entity"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 side_effect=["leo-session", None],
             ):
                 resp = await api_client.post(
@@ -1171,29 +1081,26 @@ class TestBroadcastSessionResolution:
             assert data["total"] == 2
 
             # safe_deliver called only for the resolvable participant
-            assert mock_svc.safe_deliver.call_count == 1
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            assert mock_deliver.call_count == 1
+        # deliver_message patched via context manager
 
     async def test_send_broadcast_exception_logged(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Exceptions from gather are caught; counted as failed."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             # First participant resolves fine, second raises
-            async def _resolve_side_effect(target, config):
+            def _resolve_side_effect(target, config):
                 if target == "leo":
                     return "leo-session"
                 raise RuntimeError("tmux error")
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 side_effect=_resolve_side_effect,
             ):
                 resp = await api_client.post(
@@ -1209,8 +1116,7 @@ class TestBroadcastSessionResolution:
             # Message still appended to transcript
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert len(saved.transcript) == 1
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
 
 class TestDirectedSessionResolution:
@@ -1220,15 +1126,13 @@ class TestDirectedSessionResolution:
         self, api_client, auth_headers, room_dir, api_app
     ):
         """resolve_entity_session called; resolved name passed to safe_deliver."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room()
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="leo-session",
             ) as mock_resolve:
                 resp = await api_client.post(
@@ -1247,22 +1151,19 @@ class TestDirectedSessionResolution:
             assert mock_resolve.call_args.args[0] == "leo"
 
             # Verify safe_deliver received resolved session name
-            mock_svc.safe_deliver.assert_called_once()
-            assert mock_svc.safe_deliver.call_args.args[0] == "leo-session"
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+            mock_deliver.assert_called_once()
+            assert mock_deliver.call_args.args[0] == "leo-session"
+        # deliver_message patched via context manager
 
     async def test_send_directed_unresolvable(self, api_client, auth_headers, room_dir, api_app):
         """Unresolvable target returns unresolvable status."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room()
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value=None,
             ):
                 resp = await api_client.post(
@@ -1277,13 +1178,12 @@ class TestDirectedSessionResolution:
             assert data["status"] == "unresolvable"
 
             # safe_deliver never called
-            mock_svc.safe_deliver.assert_not_called()
+            mock_deliver.assert_not_called()
 
             # Message still in transcript
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert len(saved.transcript) == 1
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
 
 class TestMeetingSkillInjection:
@@ -1340,11 +1240,10 @@ class TestMeetingSkillInjection:
         assert "Participants: leo" in result
 
     async def test_inject_meeting_skill_delivers_to_all(self, room_dir):
-        """Delivers skill to all participants via safe_deliver."""
+        """Delivers skill to all participants via deliver_message."""
         room = _make_room(participants=["leo", "feynman"])
         config = MagicMock()
-        db = MagicMock()
-        delivery_svc = _make_mock_delivery_svc()
+        mock_deliver = AsyncMock(return_value="delivered")
 
         with (
             patch(
@@ -1352,51 +1251,44 @@ class TestMeetingSkillInjection:
                 return_value="Skill content",
             ),
             patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
-                side_effect=["leo-session", "feynman-session"],
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
+                side_effect=lambda e, c: f"{e}-session",
             ),
+            patch(_DELIVER_PATCH, mock_deliver),
         ):
-            await _inject_meeting_skill(room, config, db, delivery_svc)
+            await _inject_meeting_skill(room, config)
 
-        assert delivery_svc.safe_deliver.call_count == 2
-        sessions = [c.args[0] for c in delivery_svc.safe_deliver.call_args_list]
+        assert mock_deliver.call_count == 2
+        sessions = [c[0][0] for c in mock_deliver.call_args_list]
         assert "leo-session" in sessions
         assert "feynman-session" in sessions
         # Verify envelope content
-        envelope = delivery_svc.safe_deliver.call_args_list[0].args[1]
+        envelope = mock_deliver.call_args_list[0][0][1]
         assert "[via:meeting-setup room:test-room-1]" in envelope
         assert "Skill content" in envelope
-        assert delivery_svc.safe_deliver.call_args_list[0].kwargs["db"] is db
-        assert (
-            delivery_svc.safe_deliver.call_args_list[0].kwargs["delivery_kind"] == "direct_message"
-        )
-        assert (
-            delivery_svc.safe_deliver.call_args_list[0].kwargs["flow_name"]
-            == "room-inject-meeting-skill"
-        )
 
     async def test_inject_meeting_skill_missing_file_skips(self):
         """No delivery when skill file not found."""
         room = _make_room()
         config = MagicMock()
-        db = MagicMock()
-        delivery_svc = _make_mock_delivery_svc()
+        mock_deliver = AsyncMock(return_value="delivered")
 
-        with patch(
-            "agent_backbone.api.routes.rooms._read_meeting_skill",
-            return_value=None,
+        with (
+            patch(
+                "agent_backbone.api.routes.rooms._read_meeting_skill",
+                return_value=None,
+            ),
+            patch(_DELIVER_PATCH, mock_deliver),
         ):
-            await _inject_meeting_skill(room, config, db, delivery_svc)
+            await _inject_meeting_skill(room, config)
 
-        delivery_svc.safe_deliver.assert_not_called()
+        mock_deliver.assert_not_called()
 
     async def test_inject_meeting_skill_partial_failure_continues(self, room_dir):
         """One participant fails, others still get delivery."""
         room = _make_room(participants=["leo", "feynman"])
         config = MagicMock()
-        db = MagicMock()
-        delivery_svc = _make_mock_delivery_svc(safe_deliver_side_effect=["offline", "delivered"])
+        mock_deliver = AsyncMock(side_effect=["offline", "delivered"])
 
         with (
             patch(
@@ -1404,22 +1296,21 @@ class TestMeetingSkillInjection:
                 return_value="Skill content",
             ),
             patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
-                side_effect=["leo-session", "feynman-session"],
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
+                side_effect=lambda e, c: f"{e}-session",
             ),
+            patch(_DELIVER_PATCH, mock_deliver),
         ):
-            await _inject_meeting_skill(room, config, db, delivery_svc)
+            await _inject_meeting_skill(room, config)
 
         # Both participants got delivery attempts
-        assert delivery_svc.safe_deliver.call_count == 2
+        assert mock_deliver.call_count == 2
 
     async def test_inject_meeting_skill_unresolvable_session_skips(self, room_dir):
         """Unresolvable session skips delivery for that participant."""
         room = _make_room(participants=["leo", "unknown"])
         config = MagicMock()
-        db = MagicMock()
-        delivery_svc = _make_mock_delivery_svc()
+        mock_deliver = AsyncMock(return_value="delivered")
 
         with (
             patch(
@@ -1427,16 +1318,16 @@ class TestMeetingSkillInjection:
                 return_value="Skill content",
             ),
             patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
-                side_effect=["leo-session", None],
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
+                side_effect=lambda e, c: "leo-session" if e == "leo" else None,
             ),
+            patch(_DELIVER_PATCH, mock_deliver),
         ):
-            await _inject_meeting_skill(room, config, db, delivery_svc)
+            await _inject_meeting_skill(room, config)
 
         # Only the resolvable participant got delivery
-        delivery_svc.safe_deliver.assert_called_once()
-        assert delivery_svc.safe_deliver.call_args.args[0] == "leo-session"
+        mock_deliver.assert_called_once()
+        assert mock_deliver.call_args[0][0] == "leo-session"
 
 
 class TestCursorAdvancement:
@@ -1446,15 +1337,13 @@ class TestCursorAdvancement:
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Successful directed delivery advances cursor; second delivery gets delta."""
-        mock_svc = _make_mock_delivery_svc()
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="leo-session",
             ):
                 # First directed message
@@ -1473,8 +1362,7 @@ class TestCursorAdvancement:
 
             # Second directed message — should only get delta (nothing new since cursor)
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="leo-session",
             ):
                 resp2 = await api_client.post(
@@ -1486,22 +1374,19 @@ class TestCursorAdvancement:
 
             saved2 = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert saved2.cursors["leo"] == 2  # after 2 messages
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_directed_does_not_advance_cursor_on_failure(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Failed delivery does not advance cursor."""
-        mock_svc = _make_mock_delivery_svc(safe_deliver_return="offline")
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="offline")
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 return_value="leo-session",
             ):
                 resp = await api_client.post(
@@ -1515,22 +1400,19 @@ class TestCursorAdvancement:
             # Cursor should NOT have advanced
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert "leo" not in saved.cursors
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_broadcast_advances_cursors_per_participant(
         self, api_client, auth_headers, room_dir, api_app
     ):
         """Each participant's cursor advances independently based on delivery outcome."""
-        mock_svc = _make_mock_delivery_svc(safe_deliver_side_effect=["delivered", "offline"])
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(side_effect=["delivered", "offline"])
+        with patch(_DELIVER_PATCH, mock_deliver):
             room = _make_room(participants=["leo", "feynman"])
             _save_room_file(room_dir, room)
 
             with patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
                 side_effect=["leo-session", "feynman-session"],
             ):
                 resp = await api_client.post(
@@ -1547,16 +1429,14 @@ class TestCursorAdvancement:
             saved = Room.model_validate_json((room_dir / f"{room.id}.json").read_text())
             assert saved.cursors.get("leo") == 1  # delivered → advanced
             assert "feynman" not in saved.cursors  # failed → not advanced
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
+        # deliver_message patched via context manager
 
     async def test_skill_injection_sets_initial_cursors(self):
         """After successful injection, cursors are set to transcript length."""
         msg1 = _make_message(id="m1")
         room = _make_room(participants=["leo", "feynman"], transcript=[msg1])
         config = MagicMock()
-        db = MagicMock()
-        delivery_svc = _make_mock_delivery_svc()
+        mock_deliver = AsyncMock(return_value="delivered")
 
         with (
             patch(
@@ -1564,18 +1444,18 @@ class TestCursorAdvancement:
                 return_value="Skill content",
             ),
             patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
-                side_effect=["leo-session", "feynman-session"],
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
+                side_effect=lambda e, c: f"{e}-session",
             ),
+            patch(_DELIVER_PATCH, mock_deliver),
             patch(
                 "agent_backbone.api.routes.rooms._save_room",
                 new_callable=AsyncMock,
             ) as mock_save,
         ):
-            await _inject_meeting_skill(room, config, db, delivery_svc)
+            await _inject_meeting_skill(room, config)
 
-        # Both participants delivered successfully → cursors set to transcript length
+        # Both participants delivered successfully -> cursors set to transcript length
         assert room.cursors["leo"] == 1
         assert room.cursors["feynman"] == 1
         mock_save.assert_called_once_with(room)
@@ -1584,8 +1464,7 @@ class TestCursorAdvancement:
         """Only successfully injected participants get their cursor set."""
         room = _make_room(participants=["leo", "feynman"])
         config = MagicMock()
-        db = MagicMock()
-        delivery_svc = _make_mock_delivery_svc(safe_deliver_side_effect=["delivered", "offline"])
+        mock_deliver = AsyncMock(side_effect=["delivered", "offline"])
 
         with (
             patch(
@@ -1593,19 +1472,19 @@ class TestCursorAdvancement:
                 return_value="Skill content",
             ),
             patch(
-                "agent_backbone.api.routes.rooms.resolve_entity_session",
-                new_callable=AsyncMock,
-                side_effect=["leo-session", "feynman-session"],
+                "agent_backbone.api.routes.rooms._resolve_entity_session",
+                side_effect=lambda e, c: f"{e}-session",
             ),
+            patch(_DELIVER_PATCH, mock_deliver),
             patch(
                 "agent_backbone.api.routes.rooms._save_room",
                 new_callable=AsyncMock,
             ) as mock_save,
         ):
-            await _inject_meeting_skill(room, config, db, delivery_svc)
+            await _inject_meeting_skill(room, config)
 
-        assert room.cursors.get("leo") == 0  # empty transcript → len=0
-        assert "feynman" not in room.cursors  # failed → no cursor
+        assert room.cursors.get("leo") == 0  # empty transcript -> len=0
+        assert "feynman" not in room.cursors  # failed -> no cursor
         mock_save.assert_called_once()
 
     def test_existing_room_without_cursors_field(self):

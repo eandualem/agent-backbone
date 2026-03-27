@@ -9,7 +9,7 @@ class TestGovernanceActions:
     async def test_notify_agent_delivered(self, api_client, auth_headers, api_app):
         """notify_agent action calls safe_deliver and returns result."""
         with patch(
-            "agent_backbone.services.routing._delivery.safe_deliver",
+            "agent_backbone.services.messaging.deliver_message",
             new_callable=AsyncMock,
             return_value="delivered",
         ):
@@ -161,7 +161,7 @@ class TestGovernanceActions:
 
         try:
             with patch(
-                "agent_backbone.services.routing._delivery.safe_deliver",
+                "agent_backbone.services.messaging.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver:
@@ -178,7 +178,7 @@ class TestGovernanceActions:
             data = resp.json()
             assert data["ok"] is True
             mock_deliver.assert_awaited_once()
-            assert mock_deliver.call_args.kwargs["session_name"] == "snow-wf"
+            assert mock_deliver.call_args[0][0] == "snow-wf"
         finally:
             api_app.state.config = old_config
 

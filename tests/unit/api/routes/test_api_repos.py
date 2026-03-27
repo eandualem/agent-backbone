@@ -158,10 +158,6 @@ class TestOnboardRepo:
         with (
             patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
             patch("agent_backbone.services.github.GitHubClient", return_value=mock_gh),
-            patch(
-                "agent_backbone.services.routing.create_and_notify",
-                new_callable=AsyncMock,
-            ),
         ):
             resp = await client.post(
                 "/api/repos/onboard",
@@ -307,10 +303,6 @@ class TestOnboardRepo:
         with (
             patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
             patch("agent_backbone.services.github.GitHubClient", return_value=mock_gh),
-            patch(
-                "agent_backbone.services.routing.create_and_notify",
-                new_callable=AsyncMock,
-            ),
         ):
             resp = await client.post(
                 "/api/repos/onboard",

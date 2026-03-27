@@ -10,8 +10,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from agent_backbone.api.webhook_utils import normalize_event, verify_signature
 from agent_backbone.models import EventType
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing import clear as clear_dedup
-from agent_backbone.services.routing import is_recent_notification
 
 
 def _make_db() -> BackboneDB:
@@ -55,34 +53,6 @@ class TestIsDuplicate:
         assert db.is_duplicate("delivery-0", max_ids=100) is False  # Evicted, counts as new
         assert db.is_duplicate("delivery-149", max_ids=100) is True  # Still present
 
-
-class TestIsRecentNotification:
-    def setup_method(self):
-        clear_dedup()
-
-    def test_first_notification(self):
-        assert is_recent_notification(42, "ike") is False
-
-    def test_duplicate_within_window(self):
-        is_recent_notification(42, "ike", dedup_seconds=60)
-        assert is_recent_notification(42, "ike", dedup_seconds=60) is True
-
-    def test_different_issue_not_duplicate(self):
-        is_recent_notification(42, "ike")
-        assert is_recent_notification(43, "ike") is False
-
-    def test_different_target_not_duplicate(self):
-        is_recent_notification(42, "ike")
-        assert is_recent_notification(42, "feynman") is False
-
-    def test_notification_key_allows_distinct_comment_events(self):
-        assert (
-            is_recent_notification(42, "ike", notification_key="comment:1001") is False
-        )
-        assert is_recent_notification(42, "ike", notification_key="comment:1001") is True
-        assert (
-            is_recent_notification(42, "ike", notification_key="comment:1002") is False
-        )
 
 
 class TestNormalizeEvent:

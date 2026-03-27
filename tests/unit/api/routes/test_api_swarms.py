@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
-
-from agent_backbone.api.deps import get_delivery_service
+from unittest.mock import AsyncMock, patch
 
 
 async def _create_swarm(api_client, auth_headers, **overrides) -> str:
@@ -298,9 +295,10 @@ class TestAssignmentDiscipline:
         self, api_client, auth_headers, api_app
     ):
         swarm_id = await _create_swarm(api_client, auth_headers)
-        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(return_value="delivered"))
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(
+            "agent_backbone.api.routes.swarms.deliver_message", mock_deliver
+        ):
             assign_resp = await api_client.post(
                 f"/api/swarms/{swarm_id}/assignments",
                 headers=auth_headers,
@@ -316,19 +314,16 @@ class TestAssignmentDiscipline:
                 f"/api/swarms/{swarm_id}/assignments",
                 headers=auth_headers,
             )
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert assign_resp.status_code == 200
         assignment = assign_resp.json()["assignment"]
         assert assignment["worker_name"] == "tester-worker"
         assert assignment["status"] == "active"
         assert assignment["file_paths"] == ["tests/unit/api/routes/test_api_swarms.py"]
-        assert mock_svc.safe_deliver.await_count == 1
-        first_call = mock_svc.safe_deliver.await_args_list[0]
-        assert first_call.kwargs["db"] is api_app.state.db
-        assert first_call.kwargs["delivery_kind"] == "direct_message"
-        assert first_call.kwargs["flow_name"] == "swarm-delivery"
+        assert mock_deliver.await_count == 1
+        first_call = mock_deliver.await_args_list[0]
+        # deliver_message(session, envelope, config)
+        assert first_call[0][0] == "tester-worker"
 
         assert detail_resp.status_code == 200
         assert len(detail_resp.json()["assignments"]) == 1
@@ -345,9 +340,10 @@ class TestAssignmentDiscipline:
 
     async def test_assignment_rejects_lead_target(self, api_client, auth_headers, api_app):
         swarm_id = await _create_swarm(api_client, auth_headers)
-        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(return_value="delivered"))
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(
+            "agent_backbone.api.routes.swarms.deliver_message", mock_deliver
+        ):
             resp = await api_client.post(
                 f"/api/swarms/{swarm_id}/assignments",
                 headers=auth_headers,
@@ -358,8 +354,6 @@ class TestAssignmentDiscipline:
                     "file_paths": ["src/agent_backbone/api/routes/swarms.py"],
                 },
             )
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 409
         assert "Lead workers cannot receive implementation assignments" in resp.json()["detail"]
@@ -392,9 +386,10 @@ class TestAssignmentDiscipline:
                 },
             ],
         )
-        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(return_value="delivered"))
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(
+            "agent_backbone.api.routes.swarms.deliver_message", mock_deliver
+        ):
             first = await api_client.post(
                 f"/api/swarms/{swarm_id}/assignments",
                 headers=auth_headers,
@@ -415,8 +410,6 @@ class TestAssignmentDiscipline:
                     "file_paths": ["src/agent_backbone/api/routes/swarms.py"],
                 },
             )
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert first.status_code == 200
         assert second.status_code == 409
@@ -426,9 +419,10 @@ class TestAssignmentDiscipline:
         self, api_client, auth_headers, api_app
     ):
         swarm_id = await _create_swarm(api_client, auth_headers)
-        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(return_value="delivered"))
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(
+            "agent_backbone.api.routes.swarms.deliver_message", mock_deliver
+        ):
             first = await api_client.post(
                 f"/api/swarms/{swarm_id}/assignments",
                 headers=auth_headers,
@@ -453,8 +447,6 @@ class TestAssignmentDiscipline:
                 f"/api/swarms/{swarm_id}/assignments",
                 headers=auth_headers,
             )
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert first.status_code == 200
         assert second.status_code == 200
@@ -491,9 +483,10 @@ class TestAssignmentDiscipline:
 class TestSwarmMessaging:
     async def test_broadcast_logs_message(self, api_client, auth_headers, api_app):
         swarm_id = await _create_swarm(api_client, auth_headers)
-        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(side_effect=["delivered", "delivered"]))
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(side_effect=["delivered", "delivered"])
+        with patch(
+            "agent_backbone.api.routes.swarms.deliver_message", mock_deliver
+        ):
             resp = await api_client.post(
                 f"/api/swarms/{swarm_id}/broadcast",
                 headers=auth_headers,
@@ -503,18 +496,12 @@ class TestSwarmMessaging:
                 f"/api/swarms/{swarm_id}/messages",
                 headers=auth_headers,
             )
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 200
         body = resp.json()
         assert body["ok"] is True
         assert body["message_id"] is not None
-        assert mock_svc.safe_deliver.await_count == 2
-        first_call = mock_svc.safe_deliver.await_args_list[0]
-        assert first_call.kwargs["db"] is api_app.state.db
-        assert first_call.kwargs["delivery_kind"] == "direct_message"
-        assert first_call.kwargs["flow_name"] == "swarm-delivery"
+        assert mock_deliver.await_count == 2
 
         assert messages_resp.status_code == 200
         messages = messages_resp.json()
@@ -524,9 +511,10 @@ class TestSwarmMessaging:
 
     async def test_role_message_targets_matching_workers(self, api_client, auth_headers, api_app):
         swarm_id = await _create_swarm(api_client, auth_headers)
-        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(side_effect=["agent_working"]))
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(side_effect=["agent_working"])
+        with patch(
+            "agent_backbone.api.routes.swarms.deliver_message", mock_deliver
+        ):
             resp = await api_client.post(
                 f"/api/swarms/{swarm_id}/message",
                 headers=auth_headers,
@@ -536,8 +524,6 @@ class TestSwarmMessaging:
                     "message": "Run the regression suite.",
                 },
             )
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 200
         assert resp.json() == {
@@ -547,18 +533,17 @@ class TestSwarmMessaging:
             "failed": 1,
             "total": 1,
         }
-        first_call = mock_svc.safe_deliver.await_args_list[0]
-        assert first_call.args[0] == "tester-worker"
-        assert "Target: role:tester" in first_call.args[1]
-        assert first_call.kwargs["db"] is api_app.state.db
-        assert first_call.kwargs["delivery_kind"] == "direct_message"
-        assert first_call.kwargs["flow_name"] == "swarm-delivery"
+        first_call = mock_deliver.await_args_list[0]
+        # deliver_message(session, envelope, config) — session is first positional arg
+        assert first_call[0][0] == "tester-worker"
+        assert "Target: role:tester" in first_call[0][1]
 
     async def test_message_requires_exactly_one_target(self, api_client, auth_headers, api_app):
         swarm_id = await _create_swarm(api_client, auth_headers)
-        mock_svc = SimpleNamespace(safe_deliver=AsyncMock(return_value="delivered"))
-        api_app.dependency_overrides[get_delivery_service] = lambda: mock_svc
-        try:
+        mock_deliver = AsyncMock(return_value="delivered")
+        with patch(
+            "agent_backbone.api.routes.swarms.deliver_message", mock_deliver
+        ):
             resp = await api_client.post(
                 f"/api/swarms/{swarm_id}/message",
                 headers=auth_headers,
@@ -569,8 +554,6 @@ class TestSwarmMessaging:
                     "message": "Invalid request.",
                 },
             )
-        finally:
-            api_app.dependency_overrides.pop(get_delivery_service, None)
 
         assert resp.status_code == 422
 

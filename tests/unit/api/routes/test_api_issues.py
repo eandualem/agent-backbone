@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from agent_backbone.api.deps import get_config, get_db, get_delivery_service, get_github
-from agent_backbone.config import BackboneConfig
+from agent_backbone.api.deps import get_db, get_github
 from agent_backbone.models import CommentData, IssueData, ParsedLabels
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubServiceError
-from agent_backbone.services.registry import EntityEntry, EntityRegistry
 
 # --- Fixtures ---
 
@@ -77,16 +75,7 @@ def mock_github(sample_issues, sample_comments):
 
 
 @pytest.fixture
-def mock_delivery_svc():
-    """Mock DeliveryService with default return values."""
-    mock = MagicMock()
-    mock.compute_priority_score = MagicMock(return_value=42.0)
-    mock.create_and_notify = AsyncMock()
-    return mock
-
-
-@pytest.fixture
-async def issues_client(api_app, auth_headers, mock_github, mock_delivery_svc):
+async def issues_client(api_app, auth_headers, mock_github):
     """Async test client with GitHub mock and in-memory DB overridden."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     db = BackboneDB(engine)
@@ -94,7 +83,6 @@ async def issues_client(api_app, auth_headers, mock_github, mock_delivery_svc):
 
     api_app.dependency_overrides[get_github] = lambda: mock_github
     api_app.dependency_overrides[get_db] = lambda: db
-    api_app.dependency_overrides[get_delivery_service] = lambda: mock_delivery_svc
 
     transport = ASGITransport(app=api_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -253,17 +241,8 @@ class TestGetDependencies:
 
 class TestCreateIssue:
     async def test_create_issue_success(
-        self, issues_client, auth_headers, mock_github, mock_delivery_svc
+        self, issues_client, auth_headers, mock_github
     ):
-        created_issue = IssueData(
-            number=99,
-            title="[task] New issue",
-            state="open",
-            labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
-            html_url="https://github.com/eandualem/orchestration/issues/99",
-        )
-        mock_delivery_svc.create_and_notify.return_value = created_issue
-
         payload = {
             "title": "[task] New issue",
             "body": "## Context\nTest",
@@ -274,13 +253,12 @@ class TestCreateIssue:
         data = resp.json()
         assert data["number"] == 99
         assert data["title"] == "[task] New issue"
-        mock_delivery_svc.create_and_notify.assert_called_once()
-        call_args = mock_delivery_svc.create_and_notify.call_args
-        assert call_args.args[0] is mock_github  # gh
-        assert call_args.args[1] == "[task] New issue"  # title
-        assert call_args.args[2] == "## Context\nTest"  # body
-        assert call_args.args[3] == ["from:leo", "for:ike", "task"]  # labels
-        assert call_args.kwargs["flow_name"] == "api-create-issue"
+        mock_github.create_issue.assert_called_once_with(
+            "[task] New issue",
+            "## Context\nTest",
+            ["from:leo", "for:ike", "task"],
+            repo_full_name=None,
+        )
 
     async def test_create_issue_missing_title(self, issues_client, auth_headers):
         payload = {"body": "no title"}
@@ -292,47 +270,6 @@ class TestCreateIssue:
         payload = {"title": "", "body": "empty title"}
         resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
         assert resp.status_code == 400
-
-    async def test_create_issue_rejects_abstract_shared_role_target(
-        self, api_app, issues_client, auth_headers
-    ):
-        api_app.dependency_overrides[get_config] = lambda: BackboneConfig(
-            webhook_secret="test-secret",
-            registry=EntityRegistry(
-                entities={
-                    "bell-wf": EntityEntry(
-                        session="bell-wf",
-                        home="~/ws/core/code/WF/bell",
-                        groups=["orchestrators"],
-                        figure="Bell",
-                        role="Org Orchestrator",
-                        organization="WF",
-                        entity_type="role-instance",
-                    ),
-                    "bell-loveble": EntityEntry(
-                        session="bell-loveble",
-                        home="~/ws/core/code/Loveble/bell",
-                        groups=["orchestrators"],
-                        figure="Bell",
-                        role="Org Orchestrator",
-                        organization="Loveble",
-                        entity_type="role-instance",
-                    ),
-                },
-                repos=[],
-            ),
-        )
-        payload = {
-            "title": "[task] Legacy shared role target",
-            "body": "## Context\nTest",
-            "labels": ["from:leo", "for:bell", "task"],
-        }
-        resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
-        api_app.dependency_overrides.pop(get_config, None)
-
-        assert resp.status_code == 400
-        assert "invalid issue target 'bell'" in resp.json()["detail"]
-
 
 class TestAddComment:
     async def test_add_comment_success(self, issues_client, auth_headers, mock_github):

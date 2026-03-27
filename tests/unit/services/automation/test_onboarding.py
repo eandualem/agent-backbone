@@ -638,18 +638,12 @@ class TestRunOnboarding:
             ),
         )
 
-        mock_create_notify = AsyncMock()
-
         _clone_side_effect = _selective_create_subprocess_exec(
             asyncio.create_subprocess_exec, clone_proc
         )
         with (
             patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
             patch("agent_backbone.services.github.GitHubClient", return_value=mock_gh),
-            patch(
-                "agent_backbone.services.routing.create_and_notify",
-                mock_create_notify,
-            ),
         ):
             result = await run_onboarding("WF", _SSH_URL, config=cfg)
 
@@ -663,17 +657,13 @@ class TestRunOnboarding:
         assert step10.name == "notify_orchestrator"
         assert step10.status == "done"
         assert step10.detail == "Created onboarding issue for bell-wf"
-        assert mock_create_notify.call_count == 2
-        brunel_call = mock_create_notify.call_args_list[0].kwargs
-        orchestrator_call = mock_create_notify.call_args_list[1].kwargs
-        assert "for:brunel" in brunel_call["labels"]
-        assert brunel_call["flow_name"] == "onboarding"
-        assert brunel_call["config"] is cfg
-        assert "for:bell-wf" in orchestrator_call["labels"]
-        assert orchestrator_call["flow_name"] == "onboarding"
-        assert orchestrator_call["config"] is cfg
+        assert mock_gh.create_issue.call_count == 2
+        brunel_call = mock_gh.create_issue.call_args_list[0]
+        orchestrator_call = mock_gh.create_issue.call_args_list[1]
+        assert "for:brunel" in brunel_call.kwargs["labels"]
+        assert "for:bell-wf" in orchestrator_call.kwargs["labels"]
         assert (
-            orchestrator_call["title"]
+            orchestrator_call.kwargs["title"]
             == "[task] New repo onboarded: WF/new-thing - needs CLAUDE.md content"
         )
 
@@ -738,18 +728,12 @@ class TestRunOnboarding:
         cfg = BackboneConfig(
             registry=EntityRegistry(),
         )
-        mock_create_notify = AsyncMock()
-
         _clone_side_effect = _selective_create_subprocess_exec(
             asyncio.create_subprocess_exec, clone_proc
         )
         with (
             patch("asyncio.create_subprocess_exec", side_effect=_clone_side_effect),
             patch("agent_backbone.services.github.GitHubClient", return_value=mock_gh),
-            patch(
-                "agent_backbone.services.routing.create_and_notify",
-                mock_create_notify,
-            ),
         ):
             result = await run_onboarding("WF", _SSH_URL, config=cfg)
 
@@ -758,7 +742,8 @@ class TestRunOnboarding:
         assert step10.status == "failed"
         assert "No orchestrator found" in step10.detail
         assert result.success is False
-        assert mock_create_notify.call_count == 1
+        # Only Brunel notification was attempted (step 9)
+        assert mock_gh.create_issue.call_count == 1
 
     async def test_success_when_all_ok(self, workspace):
         clone_proc = _mock_subprocess_ok()

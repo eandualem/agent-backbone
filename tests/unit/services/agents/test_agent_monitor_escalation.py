@@ -417,7 +417,7 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["feynman", "ike"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -428,7 +428,7 @@ class TestMonitorAgentsIntegration:
                 return_value=[pending_issue],
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ),
@@ -461,7 +461,7 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -501,7 +501,7 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike", "gateway"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -544,12 +544,12 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
             patch(f"{_MON}.collect_active_session_telemetry", new_callable=AsyncMock),
-            patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock),
+
             patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}),
             patch(f"{_MON}.get_sio", return_value=MagicMock()),
             patch(f"{_MON}.emit_sessions_update", new_callable=AsyncMock) as mock_emit,
@@ -581,7 +581,7 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 side_effect=[["ike"], ["ike", "swarm-24-worker"]],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -629,7 +629,7 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -644,7 +644,7 @@ class TestMonitorAgentsIntegration:
                 return_value=[pending_issue],
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -696,7 +696,7 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["bell-wf", "bell-loveble"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -710,7 +710,7 @@ class TestMonitorAgentsIntegration:
                 side_effect=mock_check_pending,
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -763,7 +763,7 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -778,7 +778,7 @@ class TestMonitorAgentsIntegration:
                 return_value=[pending_issue],
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -816,7 +816,7 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -831,7 +831,7 @@ class TestMonitorAgentsIntegration:
                 return_value=[pending_issue],
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -868,7 +868,7 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -887,7 +887,7 @@ class TestMonitorAgentsIntegration:
                 return_value=True,
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -936,7 +936,7 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -952,7 +952,7 @@ class TestMonitorAgentsIntegration:
             ),
             patch(f"{_PEN}.has_commented_on_issue", return_value=False),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -993,7 +993,7 @@ class TestOfflineDedup:
                 new_callable=AsyncMock,
                 return_value=["ike"],  # feynman is NOT active
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(
                 f"{_ESC}.check_for_unexpected_offline",
@@ -1014,14 +1014,14 @@ class TestOfflineDedup:
                 return_value=[],
             ),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
         ):
             await monitor_agents()
 
-        # Escalation message was sent to ike via safe_deliver
+        # Escalation message was sent to ike via deliver_message
         mock_deliver.assert_called()
 
         # DB state for feynman was cleared to "unknown"
@@ -1052,7 +1052,7 @@ class TestOfflineDedup:
                 ],
             ),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("tmux failed"),
             ),
@@ -1092,7 +1092,7 @@ class TestRoleEscalationTargetResolution:
                 ],
             ),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -1126,7 +1126,7 @@ class TestRoleEscalationTargetResolution:
                 ],
             ),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -1218,7 +1218,7 @@ class TestPlanWaitingMonitor:
                 new_callable=AsyncMock,
                 return_value=["feynman", "ike"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
@@ -1229,7 +1229,7 @@ class TestPlanWaitingMonitor:
                 return_value=[],
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ),
@@ -1305,7 +1305,7 @@ class TestCodingAgentSweep:
                 new_callable=AsyncMock,
                 return_value=["ike", "agent-backbone"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -1315,7 +1315,7 @@ class TestCodingAgentSweep:
                 side_effect=mock_check_pending,
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -1324,7 +1324,7 @@ class TestCodingAgentSweep:
             result = await monitor_agents()
 
         assert result["coding:agent-backbone"] == "delivered_#100"
-        # Verify safe_deliver was called with the coding-agent session
+        # Verify deliver_message was called with the coding-agent session
         mock_deliver.assert_called()
         deliver_calls = [c for c in mock_deliver.call_args_list if c[0][0] == "agent-backbone"]
         assert len(deliver_calls) == 1
@@ -1381,7 +1381,7 @@ class TestCodingAgentSweep:
                 new_callable=AsyncMock,
                 return_value=["ike", "agent-orchestration-dashboard"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -1391,7 +1391,7 @@ class TestCodingAgentSweep:
                 side_effect=mock_check_pending,
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -1446,7 +1446,7 @@ class TestCodingAgentSweep:
                 new_callable=AsyncMock,
                 return_value=["ike", "agent-backbone"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -1456,7 +1456,7 @@ class TestCodingAgentSweep:
                 side_effect=mock_check_pending,
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -1465,7 +1465,7 @@ class TestCodingAgentSweep:
             result = await monitor_agents()
 
         assert result["coding:agent-backbone"] == "deferred"
-        # safe_deliver should NOT have been called for agent-backbone
+        # deliver_message should NOT have been called for agent-backbone
         deliver_calls = [c for c in mock_deliver.call_args_list if c[0][0] == "agent-backbone"]
         assert len(deliver_calls) == 0
 
@@ -1506,7 +1506,7 @@ class TestCodingAgentSweep:
                 new_callable=AsyncMock,
                 return_value=["ike", "agent-backbone"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -1516,7 +1516,7 @@ class TestCodingAgentSweep:
                 side_effect=mock_check_pending,
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -1525,7 +1525,7 @@ class TestCodingAgentSweep:
             result = await monitor_agents()
 
         assert result["coding:agent-backbone"] == "no_deliverable"
-        # safe_deliver should NOT have been called for agent-backbone
+        # deliver_message should NOT have been called for agent-backbone
         deliver_calls = [c for c in mock_deliver.call_args_list if c[0][0] == "agent-backbone"]
         assert len(deliver_calls) == 0
 
@@ -1565,7 +1565,7 @@ class TestCodingAgentSweep:
                 new_callable=AsyncMock,
                 return_value=["ike", "agent-backbone"],
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -1575,7 +1575,7 @@ class TestCodingAgentSweep:
                 side_effect=mock_check_pending,
             ),
             patch(
-                f"{_PEN}.safe_deliver",
+                f"{_PEN}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -1689,7 +1689,7 @@ class TestPlanOrchestratorNotification:
         with (
             patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -1697,7 +1697,7 @@ class TestPlanOrchestratorNotification:
         ):
             await check_plan_waiting(config, {"agent-backbone", "bell", "ike"}, db=mock_db)
 
-        # safe_deliver should have been called with bell's session
+        # deliver_message should have been called with bell's session
         mock_deliver.assert_called_once()
         call_args = mock_deliver.call_args
         assert call_args[0][0] == "bell"  # target session
@@ -1777,7 +1777,7 @@ class TestPlanOrchestratorNotification:
         with (
             patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -1851,7 +1851,7 @@ class TestPlanOrchestratorNotification:
         with (
             patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -1925,7 +1925,7 @@ class TestPlanOrchestratorNotification:
         with (
             patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -2009,7 +2009,7 @@ class TestPlanOrchestratorNotification:
         with (
             patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -2080,7 +2080,7 @@ class TestPlanOrchestratorNotification:
         with (
             patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -2159,7 +2159,7 @@ class TestPlanOrchestratorNotification:
         with (
             patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -2225,7 +2225,7 @@ class TestPlanOrchestratorNotification:
         with (
             patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -2292,7 +2292,7 @@ class TestPlanOrchestratorNotification:
         with (
             patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,
@@ -2357,7 +2357,7 @@ class TestPlanOrchestratorNotification:
                 return_value="random output",
             ),
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
                 return_value="delivered",
             ) as mock_deliver,

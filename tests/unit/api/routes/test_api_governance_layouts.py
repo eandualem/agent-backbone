@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 _SAMPLE_POSITIONS = {
     "created": {"x": 100, "y": 200},
     "investigating": {"x": 300, "y": 200},

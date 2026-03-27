@@ -6,11 +6,8 @@ import hashlib
 import hmac
 import json
 from dataclasses import replace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-import pytest
-
-from agent_backbone.api.deps import get_delivery_service, get_dispatch_service
 from agent_backbone.services.registry import RepoInfo
 
 
@@ -36,33 +33,6 @@ def _webhook_headers(
         "X-GitHub-Delivery": delivery_id,
         "Content-Type": "application/json",
     }
-
-
-@pytest.fixture
-def mock_delivery_svc():
-    """Mock DeliveryService for DI override."""
-    svc = MagicMock()
-    svc.is_recent_notification = MagicMock(return_value=False)
-    return svc
-
-
-@pytest.fixture
-def mock_dispatch_svc():
-    """Mock DispatchService for DI override."""
-    svc = MagicMock()
-    svc.on_issue_closed = AsyncMock(return_value="delivered_next")
-    svc.issue_dispatcher = AsyncMock()
-    return svc
-
-
-@pytest.fixture(autouse=True)
-def _override_services(api_app, mock_delivery_svc, mock_dispatch_svc):
-    """Override DI providers with mocks for all webhook tests."""
-    api_app.dependency_overrides[get_delivery_service] = lambda: mock_delivery_svc
-    api_app.dependency_overrides[get_dispatch_service] = lambda: mock_dispatch_svc
-    yield
-    api_app.dependency_overrides.pop(get_delivery_service, None)
-    api_app.dependency_overrides.pop(get_dispatch_service, None)
 
 
 class TestHealthEndpoint:
@@ -101,13 +71,13 @@ class TestWebhookSignatureValidation:
         headers = _webhook_headers(payload_bytes)
 
         with patch(
-            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
-        ) as mock_dispatch:
-            mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
+            "agent_backbone.api.routes.webhook.emit_governance_event",
+            new_callable=AsyncMock,
+        ):
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
-        mock_dispatch.assert_awaited_once()
+        assert resp.text == "accepted"
 
     async def test_github_app_secret_is_accepted(self, api_client, api_app, webhook_payload):
         api_app.state.db._seen_deliveries.clear()
@@ -123,13 +93,13 @@ class TestWebhookSignatureValidation:
         )
 
         with patch(
-            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
-        ) as mock_dispatch:
-            mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
+            "agent_backbone.api.routes.webhook.emit_governance_event",
+            new_callable=AsyncMock,
+        ):
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
-        mock_dispatch.assert_awaited_once()
+        assert resp.text == "accepted"
 
     async def test_invalid_signature_returns_403(self, api_client, webhook_payload):
         payload_bytes = json.dumps(webhook_payload).encode()
@@ -163,115 +133,19 @@ class TestWebhookDeduplication:
         delivery_id = "dup-delivery-abc"
         headers = _webhook_headers(payload_bytes, delivery_id=delivery_id)
 
-        # First request: dispatches normally
+        # First request: accepted
         with patch(
-            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
-        ) as mock_dispatch:
-            mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
+            "agent_backbone.api.routes.webhook.emit_governance_event",
+            new_callable=AsyncMock,
+        ):
             resp1 = await api_client.post("/", content=payload_bytes, headers=headers)
         assert resp1.status_code == 200
-        mock_dispatch.assert_awaited_once()
+        assert resp1.text == "accepted"
 
         # Second request with same delivery ID: deduped
         resp2 = await api_client.post("/", content=payload_bytes, headers=headers)
         assert resp2.status_code == 200
         assert resp2.text == "Duplicate, skipped"
-
-    async def test_issue_event_recent_notification_returns_deduped(
-        self, api_client, api_app, webhook_payload, mock_delivery_svc, mock_dispatch_svc
-    ):
-        api_app.state.db._seen_deliveries.clear()
-        payload_bytes = json.dumps(webhook_payload).encode()
-        headers = _webhook_headers(payload_bytes, delivery_id="recent-issue-dedup")
-        mock_delivery_svc.is_recent_notification.return_value = True
-
-        resp = await api_client.post("/", content=payload_bytes, headers=headers)
-
-        assert resp.status_code == 200
-        assert resp.text == "deduped: all targets already notified for #42"
-        mock_dispatch_svc.issue_dispatcher.assert_not_awaited()
-
-    async def test_comment_event_bypasses_recent_notification_dedup(
-        self, api_client, api_app, mock_delivery_svc, mock_dispatch_svc
-    ):
-        api_app.state.db._seen_deliveries.clear()
-        payload = {
-            "action": "created",
-            "repository": {"full_name": "eandualem/orchestration"},
-            "issue": {
-                "number": 730,
-                "title": "[task] orchestration: Git autonomy for coding agents",
-                "state": "open",
-                "html_url": "https://github.com/eandualem/orchestration/issues/730",
-                "labels": [
-                    {"name": "from:ike"},
-                    {"name": "for:feynman"},
-                    {"name": "task"},
-                    {"name": "blocking"},
-                ],
-            },
-            "comment": {
-                "id": 1,
-                "body": "[from:feynman]\nAcknowledged.",
-                "user": {"login": "eandualem"},
-            },
-        }
-        payload_bytes = json.dumps(payload).encode()
-        headers = _webhook_headers(
-            payload_bytes,
-            event="issue_comment",
-            delivery_id="comment-dedup-regression",
-        )
-        mock_delivery_svc.is_recent_notification.return_value = True
-        mock_dispatch_svc.issue_dispatcher.return_value = MagicMock(
-            delivered=["ike"],
-            offline=[],
-            deferred=[],
-        )
-
-        resp = await api_client.post("/", content=payload_bytes, headers=headers)
-
-        assert resp.status_code == 200
-        assert resp.text == "dispatch: 1 delivered, 0 offline, 0 deferred"
-        mock_dispatch_svc.issue_dispatcher.assert_awaited_once()
-        mock_delivery_svc.is_recent_notification.assert_not_called()
-
-    async def test_comment_on_closed_issue_ignored(self, api_client, api_app, mock_dispatch_svc):
-        """Comments on closed issues are rejected at intake (#780)."""
-        api_app.state.db._seen_deliveries.clear()
-        payload = {
-            "action": "created",
-            "repository": {"full_name": "eandualem/orchestration"},
-            "issue": {
-                "number": 775,
-                "title": "[task] orchestration: Something",
-                "state": "closed",
-                "html_url": "https://github.com/eandualem/orchestration/issues/775",
-                "labels": [
-                    {"name": "from:ike"},
-                    {"name": "for:feynman"},
-                    {"name": "task"},
-                ],
-            },
-            "comment": {
-                "id": 999,
-                "body": "[from:bell-wf]\nVerification complete.",
-                "user": {"login": "eandualem"},
-            },
-        }
-        payload_bytes = json.dumps(payload).encode()
-        headers = _webhook_headers(
-            payload_bytes,
-            event="issue_comment",
-            delivery_id="comment-closed-issue",
-        )
-
-        resp = await api_client.post("/", content=payload_bytes, headers=headers)
-
-        assert resp.status_code == 200
-        assert "ignored: comment on closed issue" in resp.text
-        mock_dispatch_svc.issue_dispatcher.assert_not_awaited()
-
 
 class TestWebhookPayloadParsing:
     async def test_invalid_json_returns_400(self, api_client, api_app):
@@ -294,14 +168,13 @@ class TestWebhookDispatch:
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-root-test-1")
 
         with patch(
-            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
-        ) as mock_dispatch:
-            mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
+            "agent_backbone.api.routes.webhook.emit_governance_event",
+            new_callable=AsyncMock,
+        ):
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
-        assert "dispatch" in resp.text
-        mock_dispatch.assert_awaited_once()
+        assert resp.text == "accepted"
 
     async def test_dispatches_issue_opened_event(self, api_client, api_app, webhook_payload):
         api_app.state.db._seen_deliveries.clear()
@@ -309,18 +182,17 @@ class TestWebhookDispatch:
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-test-1")
 
         with patch(
-            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
-        ) as mock_dispatch:
-            mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
+            "agent_backbone.api.routes.webhook.emit_governance_event",
+            new_callable=AsyncMock,
+        ) as mock_emit:
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
-        assert "dispatch" in resp.text
-        # Verify the event was passed to dispatch
-        call_args = mock_dispatch.call_args
-        event = call_args[0][0]
-        assert event.issue.number == 42
-        assert event.issue.repo_full_name == "eandualem/orchestration"
+        assert resp.text == "accepted"
+        # Verify governance event was emitted for issue.created
+        mock_emit.assert_awaited()
+        event_types = [call.args[0] for call in mock_emit.await_args_list]
+        assert "issue.created" in event_types
 
     async def test_dispatches_non_default_repo_event(self, api_client, api_app, webhook_payload):
         api_app.state.db._seen_deliveries.clear()
@@ -334,14 +206,13 @@ class TestWebhookDispatch:
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-test-non-default")
 
         with patch(
-            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
-        ) as mock_dispatch:
-            mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
+            "agent_backbone.api.routes.webhook.emit_governance_event",
+            new_callable=AsyncMock,
+        ):
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
-        event = mock_dispatch.call_args[0][0]
-        assert event.issue.repo_full_name == "WF/agent-shell"
+        assert resp.text == "accepted"
 
     async def test_dispatch_outcome_returned_in_response(
         self, api_client, api_app, webhook_payload
@@ -351,13 +222,13 @@ class TestWebhookDispatch:
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-test-2")
 
         with patch(
-            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
-        ) as mock_dispatch:
-            mock_dispatch.return_value = "ignored: unknown"
+            "agent_backbone.api.routes.webhook.emit_governance_event",
+            new_callable=AsyncMock,
+        ):
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
-        assert resp.text == "ignored: unknown"
+        assert resp.text == "accepted"
 
     async def test_pull_request_event_dispatches_for_repo_session(self, api_client, api_app):
         api_app.state.db._seen_deliveries.clear()
@@ -382,17 +253,15 @@ class TestWebhookDispatch:
             delivery_id="dispatch-pr-test-1",
         )
 
-        mock_dispatch = api_app.dependency_overrides[get_dispatch_service]()
-        mock_dispatch.issue_dispatcher.return_value = MagicMock(
-            delivered=["agent-backbone"],
-            offline=[],
-            deferred=[],
-        )
-
-        resp = await api_client.post("/", content=payload_bytes, headers=headers)
+        with patch(
+            "agent_backbone.api.routes.webhook.emit_governance_event",
+            new_callable=AsyncMock,
+        ) as mock_emit:
+            resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
-        assert resp.text == "dispatch: 1 delivered, 0 offline, 0 deferred"
-        event = mock_dispatch.issue_dispatcher.await_args.args[0]
-        assert event.event_type.value == "pull_request_opened"
-        assert event.issue.repo_full_name == "eandualem/agent-backbone"
+        assert resp.text == "accepted"
+        # Verify governance event was emitted for pr.opened
+        mock_emit.assert_awaited()
+        event_types = [call.args[0] for call in mock_emit.await_args_list]
+        assert "pr.opened" in event_types

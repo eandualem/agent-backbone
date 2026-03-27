@@ -95,7 +95,7 @@ class TestMorningStartup:
                                 new_callable=AsyncMock,
                             ) as mock_start:
                                 with patch(
-                                    "agent_backbone.services.automation._flows.format_digest",
+                                    "agent_backbone.services.automation._flows._format_digest",
                                     return_value="digest",
                                 ):
                                     result = await morning_startup()

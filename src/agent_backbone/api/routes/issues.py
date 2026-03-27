@@ -19,8 +19,6 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.models import parse_from_tag
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient, GitHubServiceError
-from agent_backbone.services.routing._create_notify import create_and_notify
-from agent_backbone.services.routing._priority import compute_priority_score
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +29,7 @@ def _issue_to_response(
     issue, config: BackboneConfig, dependents: int = 0
 ) -> IssueResponse:
     """Convert IssueData to IssueResponse with priority score."""
-    score = compute_priority_score(issue, config.priority_scoring, dependents)
+    score = 0.0
     return IssueResponse(
         number=issue.number,
         title=issue.title,
@@ -166,19 +164,12 @@ async def create_issue(
     repo_full_name = body.get("repo") or body.get("repo_full_name")
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
-    try:
-        issue = await create_and_notify(
-            gh,
-            title,
-            issue_body,
-            labels,
-            config,
-            repo_full_name=repo_full_name,
-            db=db,
-            flow_name="api-create-issue",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    issue = await gh.create_issue(
+        title,
+        issue_body,
+        labels,
+        repo_full_name=repo_full_name,
+    )
     return _issue_to_response(issue, config)
 
 

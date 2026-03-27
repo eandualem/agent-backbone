@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 _SAMPLE_TRACK = {
     "id": "bug-fix",
     "name": "Bug Fix Workflow",
