@@ -9,7 +9,6 @@ from agent_backbone.services.agents import MonitoringService, StateService
 from agent_backbone.services.automation import OnboardingService, WorkflowsService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
-from agent_backbone.services.routing import DeliveryService, DispatchService
 from agent_backbone.services.terminal import TmuxService
 
 
@@ -38,19 +37,9 @@ def get_tmux_service(request: Request) -> TmuxService:
     return request.app.state.tmux_service
 
 
-def get_delivery_service(request: Request) -> DeliveryService:
-    """Retrieve the DeliveryService instance from app state."""
-    return request.app.state.delivery_service
-
-
 def get_monitoring_service(request: Request) -> MonitoringService:
     """Retrieve the MonitoringService instance from app state."""
     return request.app.state.monitoring_service
-
-
-def get_dispatch_service(request: Request) -> DispatchService:
-    """Retrieve the DispatchService instance from app state."""
-    return request.app.state.dispatch_service
 
 
 def get_onboarding_service(request: Request) -> OnboardingService:

@@ -38,11 +38,6 @@ async def lifespan(app: FastAPI):
     from agent_backbone.services.github.factory import register_github
     from agent_backbone.services.infrastructure.factory import register_infrastructure
     from agent_backbone.services.registry.factory import register_registry
-    from agent_backbone.services.routing.factory import (
-        register_delivery,
-        register_dispatch,
-        register_notifications,
-    )
     from agent_backbone.services.telegram.factory import register_telegram
     from agent_backbone.services.terminal.factory import register_tmux
 
@@ -52,9 +47,6 @@ async def lifespan(app: FastAPI):
     app.state.github = await register_github(lifecycle, config)
     app.state.tmux_service = await register_tmux(lifecycle)
     app.state.state_service = await register_state(lifecycle, config, db=app.state.db)
-    app.state.notification_service = await register_notifications(lifecycle)
-    app.state.delivery_service = await register_delivery(lifecycle)
-    app.state.dispatch_service = await register_dispatch(lifecycle)
     app.state.monitoring_service = await register_monitoring(lifecycle, config)
     app.state.telegram_service = await register_telegram(lifecycle, config)
     app.state.infrastructure_service = await register_infrastructure(lifecycle, config)
