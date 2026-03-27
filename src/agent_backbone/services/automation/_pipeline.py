@@ -501,12 +501,10 @@ async def run_onboarding(
     if config is not None:
         try:
             from agent_backbone.services.github import GitHubClient
-            from agent_backbone.services.routing import create_and_notify
 
             async with GitHubClient(config) as gh:
-                await create_and_notify(
-                    gh,
-                    title=(f"[task] Verify onboarding infrastructure: {org}/{repo}"),
+                await gh.create_issue(
+                    title=f"[task] Verify onboarding infrastructure: {org}/{repo}",
                     body=(
                         f"## Context\n"
                         f"Repo `{org}/{repo}` was just onboarded"
@@ -521,8 +519,6 @@ async def run_onboarding(
                         f" `~/ws/core/code/{org}/{repo}/`\n"
                     ),
                     labels=["from:coding-agent", "for:brunel", "task"],
-                    config=config,
-                    flow_name="onboarding",
                 )
             steps.append(
                 OnboardingStep(
@@ -556,7 +552,6 @@ async def run_onboarding(
     if config is not None:
         try:
             from agent_backbone.services.github import GitHubClient
-            from agent_backbone.services.routing import create_and_notify
 
             orchestrator = next(
                 (
@@ -570,9 +565,8 @@ async def run_onboarding(
                 raise RuntimeError(f"No orchestrator found for {org}/{repo}")
 
             async with GitHubClient(config) as gh:
-                await create_and_notify(
-                    gh,
-                    title=(f"[task] New repo onboarded: {org}/{repo} - needs CLAUDE.md content"),
+                await gh.create_issue(
+                    title=f"[task] New repo onboarded: {org}/{repo} - needs CLAUDE.md content",
                     body=(
                         f"## Context\n"
                         f"Repo `{org}/{repo}` was just onboarded"
@@ -587,8 +581,6 @@ async def run_onboarding(
                         f"- Spec docs: `~/ws/core/spec/{org}/{repo}/docs/`\n"
                     ),
                     labels=["from:coding-agent", f"for:{orchestrator}", "task"],
-                    config=config,
-                    flow_name="onboarding",
                 )
             steps.append(
                 OnboardingStep(

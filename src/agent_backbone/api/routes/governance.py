@@ -15,11 +15,11 @@ from agent_backbone.api.models import (
     GovernanceInstanceCreate,
     GovernanceInstanceResponse,
     GovernanceInstanceUpdate,
+    GovernanceLayoutRequest,
+    GovernanceLayoutResponse,
     GovernanceTrackCreate,
     GovernanceTrackResponse,
     GovernanceTrackUpdate,
-    GovernanceLayoutRequest,
-    GovernanceLayoutResponse,
     ListEnvelope,
 )
 from agent_backbone.config import BackboneConfig
@@ -34,10 +34,9 @@ router = APIRouter(prefix="/api/governance", tags=["governance"])
 async def _handle_notify_agent(
     params: dict[str, Any],
     config: BackboneConfig,
-    db: BackboneDB,
     track_context: dict[str, Any],
 ) -> dict[str, Any]:
-    from agent_backbone.services.routing._delivery import safe_deliver
+    from agent_backbone.services.messaging import deliver_message
 
     session = params.get("session")
     if not session:
@@ -51,30 +50,18 @@ async def _handle_notify_agent(
                 f"entity={params.get('entity')!r} org={org!r} did not resolve"
             )
 
-    outcome = await safe_deliver(
-        session_name=session,
-        message=params["message"],
-        config=config,
-        db=db,
-        delivery_kind="direct_message",
-    )
+    outcome = await deliver_message(session, params["message"], config)
     return {"outcome": outcome}
 
 
 async def _handle_notify_backbone(
     params: dict[str, Any],
     config: BackboneConfig,
-    db: BackboneDB,
 ) -> dict[str, Any]:
-    from agent_backbone.services.routing._delivery import safe_deliver
+    from agent_backbone.services.messaging import deliver_message
 
-    outcome = await safe_deliver(
-        session_name=params["session"],
-        message=f"[via:governance] {params['message']}",
-        config=config,
-        db=db,
-        delivery_kind="direct_message",
-    )
+    msg = f"[via:governance] {params['message']}"
+    outcome = await deliver_message(params["session"], msg, config)
     return {"outcome": outcome}
 
 
@@ -149,8 +136,8 @@ async def execute_governance_action(
     params = body.params
 
     handlers = {
-        "notify_agent": lambda: _handle_notify_agent(params, config, db, body.track_context),
-        "notify_backbone": lambda: _handle_notify_backbone(params, config, db),
+        "notify_agent": lambda: _handle_notify_agent(params, config, body.track_context),
+        "notify_backbone": lambda: _handle_notify_backbone(params, config),
         "notify_elias": lambda: _handle_notify_elias(params, config),
         "notify_jarvis": lambda: _handle_notify_jarvis(params, config),
         "auto_comment": lambda: _handle_auto_comment(params, gh, body.track_context),

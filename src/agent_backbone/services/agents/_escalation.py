@@ -12,12 +12,7 @@ from agent_backbone.config import REPO_NAME_PATTERN, BackboneConfig
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing._format import (
-    format_plan_notification,
-    format_stall_notification,
-    format_unexpected_offline_notification,
-)
-from agent_backbone.services.routing._targets import list_open_queue_for_target
+from agent_backbone.services.messaging import deliver_message
 
 log = logging.getLogger(__name__)
 
@@ -27,13 +22,6 @@ _escalation_dedup: dict[tuple[str, str], float] = {}
 # Module-level plan notification dedup: (session, plan_file) → monotonic timestamp
 _plan_notify_dedup: dict[tuple[str, str], float] = {}
 _PLAN_NOTIFY_EVENT = "plan_notification_delivered"
-
-
-async def safe_deliver(*args, **kwargs):
-    """Lazy proxy to avoid importing routing delivery during module import."""
-    from agent_backbone.services.routing._delivery import safe_deliver as _safe_deliver
-
-    return await _safe_deliver(*args, **kwargs)
 
 
 class TelegramService:
@@ -204,7 +192,7 @@ async def _pending_count_for_session(
     only need their direct ``for:{entity}`` queue.
     """
     if session_name not in config.registry.repo_names:
-        issues = await list_open_queue_for_target(config, entity, gh)
+        issues = await gh.list_open_issues(f"for:{entity}")
         return len(issues)
 
     repo_full_name = f"{config.github.owner}/{session_name}"
@@ -344,7 +332,7 @@ async def check_for_unexpected_offline(
         pending_count = 0
         try:
             if session_name in config.registry.repo_names and coding_issues is None:
-                coding_issues = await list_open_queue_for_target(config, "coding-agent", gh)
+                coding_issues = await gh.list_open_issues("for:coding-agent")
             pending_count = await _pending_count_for_session(
                 entity,
                 session_name,
@@ -387,14 +375,16 @@ async def handle_stalls(config: BackboneConfig, active_sessions: set[str], db: B
                 config,
             )
             if escalation_session and escalation_session in active_sessions:
-                msg = format_stall_notification(
-                    stall["session"],
-                    stall["issue_number"] or 0,
-                    stall["duration_minutes"],
-                    stall["entity"],
-                    repo_full_name=issue_repo_full_name,
+                issue_num = stall["issue_number"] or 0
+                msg = (
+                    f"[via:backbone] Agent {stall['entity']} ({stall['session']}) "
+                    f"appears stalled on issue #{issue_num} "
+                    f"for {stall['duration_minutes']}m. "
+                    f"Check session and intervene if needed."
                 )
-                await safe_deliver(escalation_session, msg, config, priority=True)
+                if issue_repo_full_name:
+                    msg += f" Inspect with: gh issue view {issue_num} --repo {issue_repo_full_name}"
+                await deliver_message(escalation_session, msg, config, priority=True)
                 log.warning(
                     "Escalated stall: %s on #%s (%dm)",
                     stall["entity"],
@@ -462,13 +452,14 @@ async def handle_offline(
         if not escalation_session or escalation_session not in active_sessions:
             continue
 
-        msg = format_unexpected_offline_notification(
-            agent["session"],
-            agent["entity"],
-            agent["pending_count"],
+        issue_word = "issue" if agent["pending_count"] == 1 else "issues"
+        msg = (
+            f"[via:backbone] Agent {agent['entity']} ({agent['session']}) "
+            f"went offline unexpectedly with {agent['pending_count']} pending {issue_word}. "
+            f"Session may need restart."
         )
         try:
-            await safe_deliver(escalation_session, msg, config, priority=True)
+            await deliver_message(escalation_session, msg, config, priority=True)
             log.warning("Escalated offline: %s", agent["entity"])
         except Exception:
             log.exception(
@@ -585,14 +576,12 @@ async def check_plan_waiting(
                     plan_file=plan_file,
                     plan_title=plan_title,
                 )
-                orch_msg = format_plan_notification(
-                    session_name,
-                    entity,
-                    plan_file,
-                    plan_title,
-                    issue_number=snapshot.current_issue,
+                issue_str = f" (issue #{snapshot.current_issue})" if snapshot.current_issue else ""
+                orch_msg = (
+                    f"[via:backbone] Agent {entity} ({session_name}) created a plan{issue_str}. "
+                    f'Title: "{plan_title}". Plan file: {plan_file}'
                 )
-                outcome = await safe_deliver(orch_session, orch_msg, config, db=db, priority=True)
+                outcome = await deliver_message(orch_session, orch_msg, config, priority=True)
                 if outcome == "delivered":
                     await _record_plan_notification(
                         session_name,

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from agent_backbone.api.deps import get_config, get_db, get_delivery_service
+from agent_backbone.api.deps import get_config
 from agent_backbone.api.models import (
     BroadcastMessageRequest,
     DirectedMessageRequest,
@@ -23,8 +23,7 @@ from agent_backbone.api.models import (
     RoomStateUpdate,
 )
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing import DeliveryService, resolve_entity_session
+from agent_backbone.services.messaging import deliver_message
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +33,12 @@ _ROOM_DIR = Path.home() / ".claude" / "state" / "rooms"
 _MEETING_SKILL_PATH = Path.home() / ".claude" / "skills" / "meeting-participant" / "SKILL.md"
 
 _VALID_STATES = {"active", "paused", "closed"}
+
+
+def _resolve_entity_session(entity: str, config: BackboneConfig) -> str | None:
+    """Resolve an entity name to a tmux session using the registry."""
+    sessions = config.registry.resolve_entity_sessions(entity)
+    return sessions[0] if sessions else None
 
 
 # --- Storage helpers ---
@@ -163,8 +168,6 @@ def _format_meeting_setup_envelope(room: Room, skill_content: str) -> str:
 async def _inject_meeting_skill(
     room: Room,
     config: BackboneConfig,
-    db: BackboneDB,
-    delivery_svc: DeliveryService,
 ) -> None:
     """Deliver meeting-participant skill to all room participants. Fire-and-forget."""
     skill_content = await asyncio.to_thread(_read_meeting_skill)
@@ -174,21 +177,14 @@ async def _inject_meeting_skill(
     envelope = _format_meeting_setup_envelope(room, skill_content)
 
     async def _deliver(participant: str) -> bool:
-        session_name = await resolve_entity_session(participant, config)
+        session_name = _resolve_entity_session(participant, config)
         if session_name is None:
             log.warning(
                 "Meeting skill injection: cannot resolve session for '%s'",
                 participant,
             )
             return False
-        result = await delivery_svc.safe_deliver(
-            session_name,
-            envelope,
-            config,
-            db=db,
-            delivery_kind="direct_message",
-            flow_name="room-inject-meeting-skill",
-        )
+        result = await deliver_message(session_name, envelope, config)
         if result != "delivered":
             log.warning("Meeting skill injection failed for '%s': %s", participant, result)
             return False
@@ -220,8 +216,6 @@ async def _inject_meeting_skill(
 async def create_room(
     body: RoomCreate,
     config: BackboneConfig = Depends(get_config),
-    db: BackboneDB = Depends(get_db),
-    delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Create a new meeting room."""
     now = _now_iso()
@@ -237,7 +231,7 @@ async def create_room(
         updated_at=now,
     )
     await _save_room(room)
-    asyncio.create_task(_inject_meeting_skill(room, config, db, delivery_svc))
+    asyncio.create_task(_inject_meeting_skill(room, config))
     return room
 
 
@@ -262,8 +256,6 @@ async def send_directed(
     room_id: str,
     body: DirectedMessageRequest,
     config: BackboneConfig = Depends(get_config),
-    db: BackboneDB = Depends(get_db),
-    delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Send a directed message from any room member to another."""
     room = await _load_room(room_id)
@@ -294,20 +286,13 @@ async def send_directed(
 
     # Deliver to all recipients in parallel
     async def _deliver_one(recipient: str) -> tuple[str, str]:
-        session_name = await resolve_entity_session(recipient, config)
+        session_name = _resolve_entity_session(recipient, config)
         if session_name is None:
             log.error("Room directed: cannot resolve session for '%s'", recipient)
             return (recipient, "unresolvable")
         delta = _compute_context_delta(room, recipient)
         envelope = _format_room_message(room, effective_sender, body.content, recipient, delta)
-        result = await delivery_svc.safe_deliver(
-            session_name,
-            envelope,
-            config,
-            db=db,
-            delivery_kind="direct_message",
-            flow_name="room-send-directed",
-        )
+        result = await deliver_message(session_name, envelope, config)
         if result != "delivered":
             log.error("Room directed delivery failed for '%s': %s", recipient, result)
         return (recipient, result)
@@ -359,8 +344,6 @@ async def send_broadcast(
     room_id: str,
     body: BroadcastMessageRequest,
     config: BackboneConfig = Depends(get_config),
-    db: BackboneDB = Depends(get_db),
-    delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Broadcast a message to all participants with per-participant context deltas."""
     room = await _load_room(room_id)
@@ -372,7 +355,7 @@ async def send_broadcast(
     # Deliver to each participant in parallel via session bridge
     async def _deliver(participant: str) -> tuple[str, str]:
         """Returns (participant, outcome)."""
-        session_name = await resolve_entity_session(participant, config)
+        session_name = _resolve_entity_session(participant, config)
         if session_name is None:
             log.error(
                 "Room broadcast: cannot resolve session for participant '%s'",
@@ -387,14 +370,7 @@ async def send_broadcast(
             participant,
             delta,
         )
-        result = await delivery_svc.safe_deliver(
-            session_name,
-            envelope,
-            config,
-            db=db,
-            delivery_kind="direct_message",
-            flow_name="room-send-broadcast",
-        )
+        result = await deliver_message(session_name, envelope, config)
         if result != "delivered":
             log.error(
                 "Room broadcast delivery failed for '%s' (session '%s'): %s",
@@ -454,8 +430,6 @@ async def post_response(
     room_id: str,
     body: ResponseMessageRequest,
     config: BackboneConfig = Depends(get_config),
-    db: BackboneDB = Depends(get_db),
-    delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Post a participant response and deliver to moderator."""
     room = await _load_room(room_id)
@@ -482,7 +456,7 @@ async def post_response(
 
     # Deliver to moderator if sender is not the moderator
     if body.sender != room.moderator:
-        session_name = await resolve_entity_session(room.moderator, config)
+        session_name = _resolve_entity_session(room.moderator, config)
         if session_name is None:
             log.warning(
                 "Room respond: cannot resolve session for moderator '%s'",
@@ -491,14 +465,7 @@ async def post_response(
         else:
             delta = _compute_context_delta(room, room.moderator)
             envelope = _format_room_message(room, body.sender, body.content, room.moderator, delta)
-            result = await delivery_svc.safe_deliver(
-                session_name,
-                envelope,
-                config,
-                db=db,
-                delivery_kind="direct_message",
-                flow_name="room-post-response",
-            )
+            result = await deliver_message(session_name, envelope, config)
             if result == "delivered":
                 room.cursors[room.moderator] = len(room.transcript)
             else:
@@ -518,8 +485,6 @@ async def update_room_state(
     room_id: str,
     body: RoomStateUpdate,
     config: BackboneConfig = Depends(get_config),
-    db: BackboneDB = Depends(get_db),
-    delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Update room state (active/paused/closed)."""
     if body.state not in _VALID_STATES:
@@ -538,6 +503,6 @@ async def update_room_state(
     await _save_room(room)
 
     if body.state == "active" and old_state != "active":
-        asyncio.create_task(_inject_meeting_skill(room, config, db, delivery_svc))
+        asyncio.create_task(_inject_meeting_skill(room, config))
 
     return room

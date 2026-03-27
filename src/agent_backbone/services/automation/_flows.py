@@ -10,7 +10,7 @@ import logging
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services._locator import get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing import format_digest, safe_deliver
+from agent_backbone.services.messaging import deliver_message
 from agent_backbone.services.terminal import (
     RUNTIME_ENV_KEY,
     list_sessions,
@@ -22,6 +22,30 @@ from agent_backbone.services.terminal import (
 log = logging.getLogger(__name__)
 
 _DEFAULT_AGENT_CLI = "claude"
+
+
+def _format_digest(
+    title: str,
+    sessions: list[str],
+    pending_counts: dict[str, int],
+    notes: list[str] | None = None,
+) -> str:
+    """Format a simple digest message for logging."""
+    lines = [f"[via:backbone] === {title} ==="]
+    lines.append(f"Active sessions: {len(sessions)}")
+    if sessions:
+        lines.append("  " + ", ".join(sorted(sessions)))
+    if pending_counts:
+        lines.append("Pending issues:")
+        for entity, count in sorted(pending_counts.items()):
+            lines.append(f"  {entity}: {count}")
+    else:
+        lines.append("No pending issues.")
+    if notes:
+        lines.append("")
+        for note in notes:
+            lines.append(f"  {note}")
+    return "\n".join(lines)
 
 
 async def _start_workflow_agent_session(session_name: str, config: BackboneConfig) -> bool:
@@ -79,17 +103,13 @@ async def deliver_overnight_issues(
         label = f"for:{entity}"
         issues = await gh.list_open_issues(label)
         if issues:
-            from agent_backbone.services.routing import format_next_issue_notification
-
-            msg = format_next_issue_notification(issues[0])
-            outcome = await safe_deliver(
-                session,
-                msg,
-                config,
-                issue_number=issues[0].number,
-                target_entity=entity,
-                flow_name="morning-startup",
+            issue = issues[0]
+            msg = (
+                f"[via:backbone] Next issue in your queue: "
+                f'#{issue.number} "{issue.title}" '
+                f"(from {issue.labels.sender})"
             )
+            outcome = await deliver_message(session, msg, config)
             if outcome == "delivered":
                 results[entity] = f"delivered_#{issues[0].number}"
             else:
@@ -112,7 +132,7 @@ async def morning_startup() -> dict:
     deliveries = await deliver_overnight_issues(config, pending, gh)
     sessions = await list_sessions()
 
-    digest = format_digest(
+    digest = _format_digest(
         title="Morning Startup",
         sessions=sessions,
         pending_counts=pending,
@@ -186,7 +206,7 @@ async def evening_shutdown() -> dict:
         breakdown = ", ".join(f"{k}: {v}" for k, v in stats["outcomes"].items())
         notes.append(f"Breakdown: {breakdown}")
 
-    digest = format_digest(
+    digest = _format_digest(
         title="Evening Report",
         sessions=sessions,
         pending_counts=pending,

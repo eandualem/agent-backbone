@@ -10,16 +10,26 @@ from agent_backbone.models import IssueData, acknowledgment_entities, parse_from
 from agent_backbone.services.agents._delivery_check import has_commented_on_issue, should_deliver
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing._delivery import safe_deliver
-from agent_backbone.services.routing._format import format_next_issue_notification
-from agent_backbone.services.routing._targets import list_open_queue_for_target
+from agent_backbone.services.messaging import deliver_message
 
 log = logging.getLogger(__name__)
 
 
+def _format_next_issue(issue: IssueData) -> str:
+    """Format a next-issue notification for tmux delivery."""
+    labels = issue.labels
+    priority_str = f" [{labels.priority}]" if labels.priority else ""
+    type_str = f" [{labels.issue_type}]" if labels.issue_type else ""
+    return (
+        f"[via:backbone] "
+        f'Next issue in your queue: #{issue.number}{type_str}{priority_str} "{issue.title}" '
+        f"(from {labels.sender})"
+    )
+
+
 async def check_pending_issues(config: BackboneConfig, entity: str, gh: object) -> list[IssueData]:
     """Get all pending open issues for an entity, sorted by priority."""
-    return await list_open_queue_for_target(config, entity, gh)
+    return await gh.list_open_issues(f"for:{entity}")
 
 
 async def deliver_pending_issues(
@@ -169,7 +179,6 @@ async def deliver_pending_issues(
             else:
                 result[entity] = "no_pending"
             continue
-        queue_scope_issue_numbers = {issue.identity_key for issue in pending_issues}
 
         # Iterate through pending issues — skip acknowledged and deliver the
         # first queue candidate independently to each active concrete session.
@@ -185,7 +194,7 @@ async def deliver_pending_issues(
                 log.debug("Skipping #%d for %s — acknowledged", candidate.number, entity)
                 continue
 
-            message = format_next_issue_notification(candidate)
+            message = _format_next_issue(candidate)
 
             for session_name in deliverable_sessions:
                 result_key = f"{entity}:{session_name}" if multi_session else entity
@@ -199,17 +208,10 @@ async def deliver_pending_issues(
                 ):
                     continue
 
-                delivery_outcome = await safe_deliver(
+                delivery_outcome = await deliver_message(
                     session_name,
                     message,
                     config,
-                    db=db,
-                    repo_full_name=candidate.repo_full_name,
-                    issue_number=candidate.number,
-                    target_entity=entity,
-                    flow_name="agent-monitor",
-                    enforce_issue_queue=True,
-                    queue_scope_issue_numbers=queue_scope_issue_numbers,
                 )
                 if delivery_outcome == "delivered":
                     result[result_key] = f"delivered_#{candidate.number}"
@@ -253,7 +255,6 @@ async def deliver_pending_issues(
     if coding_sessions:
         # Fetch for:coding-agent issues once
         coding_issues: list[IssueData] = await check_pending_issues(config, "coding-agent", gh)
-        coding_queue_scope_issue_numbers = {issue.identity_key for issue in coding_issues}
 
         for session_name in sorted(coding_sessions):
             snapshot = await get_agent_state(
@@ -296,18 +297,11 @@ async def deliver_pending_issues(
                     continue
 
                 # Deliver
-                message = format_next_issue_notification(candidate)
-                delivery_outcome = await safe_deliver(
+                message = _format_next_issue(candidate)
+                delivery_outcome = await deliver_message(
                     session_name,
                     message,
                     config,
-                    db=db,
-                    repo_full_name=candidate.repo_full_name,
-                    issue_number=candidate.number,
-                    target_entity="coding-agent",
-                    flow_name="agent-monitor",
-                    enforce_issue_queue=True,
-                    queue_scope_issue_numbers=coding_queue_scope_issue_numbers,
                 )
                 if delivery_outcome == "delivered":
                     result[f"coding:{session_name}"] = f"delivered_#{candidate.number}"
@@ -352,7 +346,6 @@ async def deliver_pending_issues(
                 result[f"repo:{session_name}"] = "no_pending"
                 continue
 
-            queue_scope_issue_numbers = {issue.identity_key for issue in repo_issues}
             delivered = False
             for candidate in repo_issues:
                 if await is_acknowledged(
@@ -371,18 +364,11 @@ async def deliver_pending_issues(
                 ):
                     continue
 
-                message = format_next_issue_notification(candidate)
-                delivery_outcome = await safe_deliver(
+                message = _format_next_issue(candidate)
+                delivery_outcome = await deliver_message(
                     session_name,
                     message,
                     config,
-                    db=db,
-                    repo_full_name=repo_full_name,
-                    issue_number=candidate.number,
-                    target_entity=session_name,
-                    flow_name="agent-monitor",
-                    enforce_issue_queue=True,
-                    queue_scope_issue_numbers=queue_scope_issue_numbers,
                 )
                 if delivery_outcome == "delivered":
                     result[f"repo:{session_name}"] = f"delivered_#{candidate.number}"

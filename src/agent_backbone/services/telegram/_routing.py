@@ -10,12 +10,12 @@ from telegram.ext import ContextTypes
 if TYPE_CHECKING:
     from agent_backbone.services.telegram.interface import TelegramService
 
-from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.messaging import deliver_message
 from agent_backbone.services.telegram._topic_discovery import process_message_for_discovery
 
 
 def _delivery_reply(agent: str, status: str) -> str:
-    """Map safe_deliver outcome to a user-friendly Telegram reply."""
+    """Map deliver_message outcome to a user-friendly Telegram reply."""
     if status == "delivered":
         return f"Sent to `{agent}`."
     if status == "offline":
@@ -73,5 +73,5 @@ async def handle_topic_message(
         agent = target
         message = f"{tag} {text}"
 
-    result = await safe_deliver(agent, message, bot._config)
+    result = await deliver_message(agent, message, bot._config)
     await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")

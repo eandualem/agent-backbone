@@ -47,11 +47,9 @@ class _CachedInstallationToken:
     expires_at: datetime
 
 
-def _issue_sort_key(issue: IssueData, config: BackboneConfig) -> tuple[float, int]:
-    """Compute the delivery sort key without importing routing at module load."""
-    from agent_backbone.services.routing._priority import compute_priority_score
-
-    return (-compute_priority_score(issue, config.priority_scoring), issue.number)
+def _issue_sort_key(issue: IssueData) -> tuple[int, int]:
+    """Sort key for issue delivery ordering: lower number = older = higher priority."""
+    return (issue.number, 0)
 
 
 def _utcnow() -> datetime:
@@ -465,7 +463,7 @@ class GitHubClient:
                 continue
             issues.append(self._build_issue(item, repo_full_name=repo_full_name))
 
-        issues.sort(key=lambda i: _issue_sort_key(i, self._config))
+        issues.sort(key=lambda i: _issue_sort_key(i))
         return issues
 
     async def get_sub_issues(
@@ -526,7 +524,7 @@ class GitHubClient:
                 continue
             issues.append(self._build_issue(item, repo_full_name=repo_full_name))
 
-        issues.sort(key=lambda issue: _issue_sort_key(issue, self._config))
+        issues.sort(key=lambda issue: _issue_sort_key(issue))
         return issues
 
     async def list_comments(

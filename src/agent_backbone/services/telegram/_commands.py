@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from agent_backbone.services.agents._file_reader import read_state_file
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.messaging import deliver_message
 from agent_backbone.services.telegram._routing import _delivery_reply
 from agent_backbone.services.telegram._topic_discovery import process_message_for_discovery
 from agent_backbone.services.terminal import (
@@ -159,7 +159,7 @@ async def cmd_tell(
     raw_message = " ".join(context.args[1:])
     sender = bot._sender_tag(update)
     message = f"[via:telegram from:{sender}] {raw_message}"
-    result = await safe_deliver(agent, message, bot._config)
+    result = await deliver_message(agent, message, bot._config)
 
     await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")
 

@@ -7,7 +7,6 @@ import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent_backbone.services.database.models import (
     GovernanceTrackInstanceORM,

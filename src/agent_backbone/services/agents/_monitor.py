@@ -20,8 +20,6 @@ from agent_backbone.services.agents._escalation import (
 )
 from agent_backbone.services.agents._pending import deliver_pending_issues
 from agent_backbone.services.agents.interface import StateService
-from agent_backbone.services.routing._dependencies import sync_dependencies
-from agent_backbone.services.routing._flows import drain_message_queue
 from agent_backbone.services.telemetry import collect_active_session_telemetry
 from agent_backbone.services.terminal import TmuxService, handle_copy_mode_recovery, list_sessions
 
@@ -58,12 +56,6 @@ async def _monitor_agents_impl() -> dict:
     if not active_sessions:
         log.info("No tmux sessions active")
         return {}
-
-    # Sync sub-issue dependencies for open issues
-    try:
-        await sync_dependencies(config, db, gh)
-    except Exception:
-        log.exception("Dependency sync failed (non-fatal)")
 
     # Detect stalled agents
     try:
@@ -123,19 +115,6 @@ async def _monitor_agents_impl() -> dict:
         )
     except Exception:
         log.exception("Session subscription reconciliation failed (non-fatal)")
-
-    # Drain deferred comments/messages for sessions that are now idle.
-    try:
-        queue_summary = await drain_message_queue(
-            config=config,
-            db=db,
-            gh=gh,
-            active_sessions=active_sessions,
-        )
-        if queue_summary:
-            log.info("Monitor queue drain: %s", queue_summary)
-    except Exception:
-        log.exception("Queue drain during monitor failed (non-fatal)")
 
     # State-aware delivery loop
     return await deliver_pending_issues(config, active_sessions, db, gh)
