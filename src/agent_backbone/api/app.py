@@ -105,6 +105,14 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> socketio.ASGIApp:
     """Build and return the ASGI application (Socket.IO wrapping FastAPI)."""
+    # Ensure app-level logging is configured even when bypassing main.py
+    # (e.g., uvicorn --factory). Without this, all log.info() calls are silent.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     app = FastAPI(
         title="Agent Backbone API",
         description="REST API for agent orchestration backbone",
