@@ -48,6 +48,6 @@ async def emit_governance_event(
         }
 
         await server.emit(GOVERNANCE_EVENT, payload, namespace=SESSIONS_NAMESPACE)
-        log.debug("[GOVERNANCE] Emitted %s from %s", event_type, source)
+        log.info("[GOVERNANCE] Emitted %s from %s context=%s", event_type, source, context)
     except Exception:
         log.warning("[GOVERNANCE] Failed to emit event %s", event_type, exc_info=True)
