@@ -182,8 +182,8 @@ class TestEmitSessionsUpdate:
         assert await emit_sessions_update(MagicMock(), MagicMock(), MagicMock(), None) is False
 
     @pytest.mark.asyncio
-    async def test_emits_snapshot_payload(self):
-        """Broadcast emits the canonical event on the sessions namespace."""
+    async def test_emits_to_all_agents_and_per_agent_rooms(self):
+        """Changed agents emit to all-agents room and per-agent room."""
         sio = MagicMock()
         sio.emit = AsyncMock()
 
@@ -191,22 +191,29 @@ class TestEmitSessionsUpdate:
             "agent_backbone.api.session_updates.get_cached_session_snapshot",
             new_callable=AsyncMock,
             return_value=_sample_snapshot(),
-        ) as mock_get_snapshot:
+        ):
             emitted = await emit_sessions_update(sio, MagicMock(), MagicMock(), MagicMock())
 
         assert emitted is True
-        mock_get_snapshot.assert_awaited_once()
-        assert callable(mock_get_snapshot.await_args.args[0])
-        assert mock_get_snapshot.await_args.kwargs["force_refresh"] is True
-        sio.emit.assert_awaited_once_with(
+        agent_dict = _sample_snapshot()[0].model_dump(mode="json")
+        # SUB-8: all-agents room gets full changed list
+        sio.emit.assert_any_await(
             SESSIONS_UPDATE_EVENT,
-            [_sample_snapshot()[0].model_dump(mode="json")],
+            [agent_dict],
             namespace=SESSIONS_NAMESPACE,
+            room="all-agents",
+        )
+        # SUB-8: per-agent room gets single-element list
+        sio.emit.assert_any_await(
+            SESSIONS_UPDATE_EVENT,
+            [agent_dict],
+            namespace=SESSIONS_NAMESPACE,
+            room="agent:agent-backbone",
         )
 
     @pytest.mark.asyncio
-    async def test_only_if_changed_suppresses_duplicate_payload(self):
-        """Watcher mode emits only when the snapshot payload actually changes."""
+    async def test_per_agent_change_detection_suppresses_unchanged(self):
+        """SUB-9: unchanged agents are not re-emitted."""
         sio = MagicMock()
         sio.emit = AsyncMock()
 
@@ -214,26 +221,14 @@ class TestEmitSessionsUpdate:
             "agent_backbone.api.session_updates.get_cached_session_snapshot",
             new_callable=AsyncMock,
             return_value=_sample_snapshot(),
-        ) as mock_get_snapshot:
-            first = await emit_sessions_update(
-                sio,
-                MagicMock(),
-                MagicMock(),
-                MagicMock(),
-                only_if_changed=True,
-            )
-            second = await emit_sessions_update(
-                sio,
-                MagicMock(),
-                MagicMock(),
-                MagicMock(),
-                only_if_changed=True,
-            )
+        ):
+            first = await emit_sessions_update(sio, MagicMock(), MagicMock(), MagicMock())
+            second = await emit_sessions_update(sio, MagicMock(), MagicMock(), MagicMock())
 
         assert first is True
         assert second is False
-        assert mock_get_snapshot.await_count == 2
-        sio.emit.assert_awaited_once()
+        # Only emitted on first call (2 calls: all-agents + per-agent)
+        assert sio.emit.await_count == 2
 
 
 class TestBuildEnrichedAgent:

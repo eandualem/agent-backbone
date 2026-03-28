@@ -29,6 +29,7 @@ SESSIONS_UPDATE_EVENT = "sessions:update"
 
 _sessions_update_lock = asyncio.Lock()
 _last_sessions_update_signature: str | None = None
+_last_agent_states: dict[str, str] = {}
 _snapshot_cache: list[Any] = []
 _snapshot_cache_ts: float = 0.0
 _snapshot_cache_lock = asyncio.Lock()
@@ -243,15 +244,21 @@ async def invalidate_session_snapshot_caches() -> None:
 
 def reset_sessions_update_state() -> None:
     """Reset module-level update dedup state for test isolation."""
-    global _last_sessions_update_signature, _sessions_update_lock, _snapshot_cache_lock  # noqa: PLW0603
+    global _last_sessions_update_signature, _sessions_update_lock, _snapshot_cache_lock, _last_agent_states  # noqa: PLW0603
     _snapshot_cache_lock = asyncio.Lock()
     _invalidate_session_snapshot_caches_unlocked()
     _last_sessions_update_signature = None
+    _last_agent_states = {}
     _sessions_update_lock = asyncio.Lock()
 
 
 def _serialize_snapshot(snapshot: list[EnrichedAgent]) -> list[dict]:
     return [agent.model_dump(mode="json") for agent in snapshot]
+
+
+def _agent_signature(agent_dict: dict) -> str:
+    """Compute a stable signature for a single agent's state."""
+    return json.dumps(agent_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _snapshot_signature(payload: list[dict]) -> str:
@@ -266,8 +273,12 @@ async def emit_sessions_update(
     *,
     only_if_changed: bool = False,
 ) -> bool:
-    """Broadcast the current enriched session snapshot to `/sessions` subscribers."""
-    global _last_sessions_update_signature  # noqa: PLW0603
+    """Emit session updates with per-agent change detection and room routing.
+
+    Per SUB-8 and SUB-9: only agents whose state changed since last emission
+    are included. Updates route to agent:{session} rooms and all-agents room.
+    """
+    global _last_sessions_update_signature, _last_agent_states  # noqa: PLW0603
     if sio is None or state_svc is None or tmux_svc is None:
         return False
 
@@ -277,11 +288,37 @@ async def emit_sessions_update(
             force_refresh=True,
         )
         payload = _serialize_snapshot(snapshot)
-        signature = _snapshot_signature(payload)
 
-        if only_if_changed and signature == _last_sessions_update_signature:
+        # SUB-9: Per-agent change detection
+        changed_agents: list[dict] = []
+        for agent_dict in payload:
+            session = agent_dict.get("session", "")
+            sig = _agent_signature(agent_dict)
+            if _last_agent_states.get(session) != sig:
+                _last_agent_states[session] = sig
+                changed_agents.append(agent_dict)
+
+        if not changed_agents:
             return False
 
-        await sio.emit(SESSIONS_UPDATE_EVENT, payload, namespace=SESSIONS_NAMESPACE)
-        _last_sessions_update_signature = signature
+        # SUB-8: Emit to all-agents room with all changed agents
+        await sio.emit(
+            SESSIONS_UPDATE_EVENT,
+            changed_agents,
+            namespace=SESSIONS_NAMESPACE,
+            room="all-agents",
+        )
+
+        # SUB-8: Emit to per-agent rooms with single-element list
+        for agent_dict in changed_agents:
+            session = agent_dict.get("session", "")
+            if session:
+                await sio.emit(
+                    SESSIONS_UPDATE_EVENT,
+                    [agent_dict],
+                    namespace=SESSIONS_NAMESPACE,
+                    room=f"agent:{session}",
+                )
+
+        _last_sessions_update_signature = _snapshot_signature(payload)
         return True

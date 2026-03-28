@@ -47,7 +47,17 @@ async def emit_governance_event(
             "data": data or {},
         }
 
-        await server.emit(GOVERNANCE_EVENT, payload, namespace=SESSIONS_NAMESPACE)
+        # SUB-10: Route to track room if instanceId present, always to all-agents
+        instance_id = (context or {}).get("instanceId")
+        if instance_id:
+            await server.emit(
+                GOVERNANCE_EVENT, payload, namespace=SESSIONS_NAMESPACE,
+                room=f"track:{instance_id}",
+            )
+        await server.emit(
+            GOVERNANCE_EVENT, payload, namespace=SESSIONS_NAMESPACE,
+            room="all-agents",
+        )
         log.info("[GOVERNANCE] Emitted %s from %s context=%s", event_type, source, context)
     except Exception:
         log.warning("[GOVERNANCE] Failed to emit event %s", event_type, exc_info=True)

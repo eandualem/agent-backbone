@@ -80,14 +80,80 @@ def _socket_auth_valid(auth: dict | None = None) -> bool:
 
 
 class SessionsNamespace(socketio.AsyncNamespace):
-    """Socket.IO namespace for enriched session state subscriptions."""
+    """Socket.IO namespace for enriched session state subscriptions.
+
+    Supports room-based filtering per SOCKET_IO_SUBSCRIPTIONS protocol:
+    - agent:{session} rooms for per-agent updates
+    - track:{instanceId} rooms for governance events
+    - all-agents room for full broadcast (default)
+    """
+
+    def __init__(self, namespace: str | None = None) -> None:
+        super().__init__(namespace)
+        # Track whether a client has explicitly subscribed (vs default all-agents).
+        self._explicit_subscribers: set[str] = set()
 
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
-        """Validate API key on connection."""
+        """Validate API key and join default room (SUB-6, SUB-12)."""
         if not _socket_auth_valid(auth):
             log.warning("Socket.IO sessions connection rejected — invalid auth (sid=%s)", sid)
             return False
+        # SUB-6: Default to all-agents for backwards compatibility
+        self.enter_room(sid, "all-agents")
         return True
+
+    async def on_subscribe(self, sid: str, data: dict) -> None:
+        """Handle subscribe event — join rooms (SUB-2, SUB-3, SUB-7)."""
+        if not isinstance(data, dict):
+            return
+
+        for agent in data.get("agents", []):
+            if isinstance(agent, str) and agent:
+                self.enter_room(sid, f"agent:{agent}")
+
+        for track in data.get("tracks", []):
+            if isinstance(track, str) and track:
+                self.enter_room(sid, f"track:{track}")
+
+        if data.get("all_agents"):
+            self.enter_room(sid, "all-agents")
+        elif data.get("agents") or data.get("tracks"):
+            # SUB-7: Remove default all-agents if client subscribes
+            # to specific agents/tracks without requesting all_agents
+            if sid not in self._explicit_subscribers:
+                self.leave_room(sid, "all-agents")
+
+        self._explicit_subscribers.add(sid)
+
+        # SUB-5: Acknowledge with current room list
+        rooms = self.rooms(sid) or []
+        filtered = [r for r in rooms if r != sid]
+        await self.emit("subscribed", {"rooms": filtered}, to=sid)
+
+    async def on_unsubscribe(self, sid: str, data: dict) -> None:
+        """Handle unsubscribe event — leave rooms (SUB-4)."""
+        if not isinstance(data, dict):
+            return
+
+        for agent in data.get("agents", []):
+            if isinstance(agent, str) and agent:
+                self.leave_room(sid, f"agent:{agent}")
+
+        for track in data.get("tracks", []):
+            if isinstance(track, str) and track:
+                self.leave_room(sid, f"track:{track}")
+
+        if data.get("all_agents"):
+            self.leave_room(sid, "all-agents")
+
+        # SUB-5: Acknowledge with current room list
+        rooms = self.rooms(sid) or []
+        filtered = [r for r in rooms if r != sid]
+        await self.emit("subscribed", {"rooms": filtered}, to=sid)
+
+    async def on_disconnect(self, sid: str) -> None:
+        """Clean up tracking on disconnect (SUB-13)."""
+        self._explicit_subscribers.discard(sid)
 
 
 class TerminalNamespace(socketio.AsyncNamespace):

@@ -41,10 +41,27 @@ def _make_namespace() -> TerminalNamespace:
 
 
 def _make_sessions_namespace() -> SessionsNamespace:
-    """Create a SessionsNamespace with a mocked server."""
+    """Create a SessionsNamespace with a mocked server and room tracking."""
     ns = SessionsNamespace(SESSIONS_NAMESPACE)
     ns.server = MagicMock()
     ns.emit = AsyncMock()
+
+    # Track rooms per sid for test assertions
+    _rooms: dict[str, set[str]] = {}
+
+    def _enter_room(sid, room):
+        _rooms.setdefault(sid, set()).add(room)
+
+    def _leave_room(sid, room):
+        _rooms.get(sid, set()).discard(room)
+
+    def _rooms_fn(sid):
+        return list(_rooms.get(sid, set()) | {sid})
+
+    ns.enter_room = MagicMock(side_effect=_enter_room)
+    ns.leave_room = MagicMock(side_effect=_leave_room)
+    ns.rooms = MagicMock(side_effect=_rooms_fn)
+    ns._test_rooms = _rooms
     return ns
 
 
@@ -205,6 +222,87 @@ class TestSessionsNamespace:
         sio = create_sio(["*"])
         assert SESSIONS_NAMESPACE in sio.namespace_handlers
         assert "/terminal" in sio.namespace_handlers
+
+    async def test_connect_joins_all_agents_by_default(self):
+        """SUB-6: Default room on connect is all-agents."""
+        ns = _make_sessions_namespace()
+        await ns.on_connect("sid1", {})
+        ns.enter_room.assert_called_with("sid1", "all-agents")
+
+    async def test_subscribe_agents_joins_agent_rooms(self):
+        """SUB-2: subscribe with agents joins agent:{session} rooms."""
+        ns = _make_sessions_namespace()
+        await ns.on_connect("sid1", {})
+        await ns.on_subscribe("sid1", {"agents": ["bell-wf", "ike"]})
+        rooms = ns._test_rooms.get("sid1", set())
+        assert "agent:bell-wf" in rooms
+        assert "agent:ike" in rooms
+
+    async def test_subscribe_tracks_joins_track_rooms(self):
+        """SUB-2: subscribe with tracks joins track:{instanceId} rooms."""
+        ns = _make_sessions_namespace()
+        await ns.on_connect("sid1", {})
+        await ns.on_subscribe("sid1", {"tracks": ["bug-validation-49"]})
+        rooms = ns._test_rooms.get("sid1", set())
+        assert "track:bug-validation-49" in rooms
+
+    async def test_subscribe_removes_default_all_agents(self):
+        """SUB-7: explicit subscribe removes default all-agents membership."""
+        ns = _make_sessions_namespace()
+        await ns.on_connect("sid1", {})
+        assert "all-agents" in ns._test_rooms.get("sid1", set())
+        await ns.on_subscribe("sid1", {"agents": ["bell-wf"]})
+        assert "all-agents" not in ns._test_rooms.get("sid1", set())
+
+    async def test_subscribe_all_agents_preserves_membership(self):
+        """SUB-7/X-3: explicit all_agents preserves all-agents membership."""
+        ns = _make_sessions_namespace()
+        await ns.on_connect("sid1", {})
+        await ns.on_subscribe(
+            "sid1", {"agents": ["bell-wf"], "all_agents": True}
+        )
+        rooms = ns._test_rooms.get("sid1", set())
+        assert "all-agents" in rooms
+        assert "agent:bell-wf" in rooms
+
+    async def test_subscribe_is_additive(self):
+        """SUB-3: multiple subscribes are additive."""
+        ns = _make_sessions_namespace()
+        await ns.on_connect("sid1", {})
+        await ns.on_subscribe("sid1", {"agents": ["bell-wf"]})
+        await ns.on_subscribe("sid1", {"agents": ["ike"]})
+        rooms = ns._test_rooms.get("sid1", set())
+        assert "agent:bell-wf" in rooms
+        assert "agent:ike" in rooms
+
+    async def test_unsubscribe_leaves_rooms(self):
+        """SUB-4: unsubscribe removes from rooms."""
+        ns = _make_sessions_namespace()
+        await ns.on_connect("sid1", {})
+        await ns.on_subscribe("sid1", {"agents": ["bell-wf", "ike"]})
+        await ns.on_unsubscribe("sid1", {"agents": ["bell-wf"]})
+        rooms = ns._test_rooms.get("sid1", set())
+        assert "agent:bell-wf" not in rooms
+        assert "agent:ike" in rooms
+
+    async def test_subscribe_emits_acknowledgment(self):
+        """SUB-5: subscribed ack emitted after subscribe."""
+        ns = _make_sessions_namespace()
+        await ns.on_connect("sid1", {})
+        await ns.on_subscribe("sid1", {"agents": ["bell-wf"]})
+        ns.emit.assert_awaited()
+        ack_call = ns.emit.await_args
+        assert ack_call.args[0] == "subscribed"
+        assert "rooms" in ack_call.args[1]
+
+    async def test_disconnect_clears_tracking(self):
+        """SUB-13: disconnect cleans up explicit subscriber tracking."""
+        ns = _make_sessions_namespace()
+        await ns.on_connect("sid1", {})
+        await ns.on_subscribe("sid1", {"agents": ["bell-wf"]})
+        assert "sid1" in ns._explicit_subscribers
+        await ns.on_disconnect("sid1")
+        assert "sid1" not in ns._explicit_subscribers
 
 
 class TestOnJoin:
