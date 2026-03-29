@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
+from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.models import ListEnvelope, NoteCreate, NoteDetail, NoteItem, NoteUpdate
 
 router = APIRouter(prefix="/api", tags=["notes"])
@@ -162,9 +163,11 @@ async def create_note(body: NoteCreate):
     note_path = target_dir / filename
 
     try:
-        return await asyncio.to_thread(_create_note_sync, note_path, body.content, body.title)
+        result = await asyncio.to_thread(_create_note_sync, note_path, body.content, body.title)
     except _NoteRouteError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    await notify_stream("notes")
+    return result
 
 
 @router.put("/notes/{note_id:path}", response_model=NoteDetail)
@@ -172,9 +175,11 @@ async def update_note(note_id: str, body: NoteUpdate):
     """Update an existing note's content."""
     note_path = _NOTES_ROOT / note_id
     try:
-        return await asyncio.to_thread(_update_note_sync, note_path, note_id, body.content)
+        result = await asyncio.to_thread(_update_note_sync, note_path, note_id, body.content)
     except _NoteRouteError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    await notify_stream("notes")
+    return result
 
 
 @router.delete("/notes/{note_id:path}")
@@ -182,6 +187,8 @@ async def delete_note(note_id: str):
     """Delete a note by ID."""
     note_path = _NOTES_ROOT / note_id
     try:
-        return await asyncio.to_thread(_delete_note_sync, note_path, note_id)
+        result = await asyncio.to_thread(_delete_note_sync, note_path, note_id)
     except _NoteRouteError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    await notify_stream("notes")
+    return result

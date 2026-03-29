@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.deps import get_config, get_monitoring_service
 from agent_backbone.api.models import ListEnvelope, PersonalScheduleCreate, ScheduleEntry
 from agent_backbone.config import BackboneConfig
@@ -234,6 +235,7 @@ async def toggle_schedule_done(
                 new_done = True
             item["done_dates"] = done_dates
             _save_personal_schedule(config.agent_state.state_path, personal_data)
+            await notify_stream("schedule")
             return {"id": item_id, "done": new_done}
 
     # Fall through to heartbeat done-state logic
@@ -241,6 +243,7 @@ async def toggle_schedule_done(
     current = done_state.get(item_id, False)
     done_state[item_id] = not current
     _save_done_state(config.agent_state.state_path, done_state)
+    await notify_stream("schedule")
     return {"id": item_id, "done": not current}
 
 
@@ -274,6 +277,7 @@ async def create_personal_item(
     personal_data["items"].append(new_item)
     _save_personal_schedule(config.agent_state.state_path, personal_data)
 
+    await notify_stream("schedule")
     return ScheduleEntry(
         id=slug,
         entity="elias",
@@ -298,4 +302,5 @@ async def delete_personal_item(
         raise HTTPException(status_code=404, detail="Personal schedule item not found")
 
     _save_personal_schedule(config.agent_state.state_path, personal_data)
+    await notify_stream("schedule")
     return {"deleted": True, "id": item_id}

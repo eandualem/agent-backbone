@@ -79,14 +79,20 @@ async def lifespan(app: FastAPI):
 
         start_background_tasks()
 
+        from agent_backbone.api.data_streams import register_data_streams
+
+        register_data_streams(app.state.sio)
+
         log.info("Backbone API started — port %d", config.gateway.port)
         yield
     finally:
         await lifecycle.stop_all()
 
         from agent_backbone.api.background import stop_background_tasks
+        from agent_backbone.api.data_streams import stop_data_streams
 
         await stop_background_tasks()
+        await stop_data_streams()
 
         # Non-lifecycle cleanup (PTY)
         from agent_backbone.api.socketio_server import get_pty_manager

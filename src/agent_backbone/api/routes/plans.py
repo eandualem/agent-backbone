@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.deps import get_config, get_state_service, get_tmux_service
 from agent_backbone.api.models import (
     ListEnvelope,
@@ -96,6 +97,8 @@ async def approve_plan(
     ok = await tmux_svc.send_keys(session, "[Z")
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to send approval keys")
+    await notify_stream("plans")
+    await notify_stream("agents")
     return {"ok": True, "session": session, "action": "plan_approved"}
 
 

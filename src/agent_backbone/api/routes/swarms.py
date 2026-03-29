@@ -7,6 +7,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.deps import get_config, get_db
 from agent_backbone.api.models import (
     ListEnvelope,
@@ -224,6 +225,7 @@ async def create_swarm(
         coding_agent_session=body.coding_agent_session,
         workers=[worker.model_dump() for worker in body.workers],
     )
+    await notify_stream("swarms")
     return SwarmCreateResponse(swarm_id=swarm_id)
 
 
@@ -264,6 +266,7 @@ async def update_swarm_phase(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if swarm is None:
         raise HTTPException(status_code=404, detail="Swarm not found")
+    await notify_stream("swarms")
     return _to_swarm_detail_response(swarm)
 
 
@@ -286,6 +289,7 @@ async def update_worker_status(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if swarm is None:
         raise HTTPException(status_code=404, detail="Swarm worker not found")
+    await notify_stream("swarms")
     return _to_swarm_detail_response(swarm)
 
 
@@ -312,6 +316,7 @@ async def complete_worker(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if swarm is None:
         raise HTTPException(status_code=404, detail="Swarm worker not found")
+    await notify_stream("swarms")
     return _to_swarm_detail_response(swarm)
 
 
@@ -327,6 +332,7 @@ async def complete_swarm(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if swarm is None:
         raise HTTPException(status_code=404, detail="Swarm not found")
+    await notify_stream("swarms")
     return _to_swarm_detail_response(swarm)
 
 

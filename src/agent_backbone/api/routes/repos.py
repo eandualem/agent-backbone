@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.deps import get_onboarding_service
 from agent_backbone.api.models import (
     CheckDetail,
@@ -78,6 +79,7 @@ async def onboard_repo(
         )
         backbone_config.registry.add_repo(new_repo)
 
+    await notify_stream("repos")
     return RepoOnboardResponse(
         org=result.org,
         repo=result.repo,

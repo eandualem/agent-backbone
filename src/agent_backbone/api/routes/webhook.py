@@ -16,6 +16,7 @@ import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
 from agent_backbone.api.auth import require_api_key
+from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.deps import (
     get_config,
     get_db,
@@ -124,6 +125,7 @@ async def handle_webhook(
             data=gov_data,
         )
 
+    await notify_stream("tasks")
     return Response(content="accepted", status_code=200)
 
 

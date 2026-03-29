@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.deps import get_config
 from agent_backbone.api.models import (
     BroadcastMessageRequest,
@@ -232,6 +233,7 @@ async def create_room(
     )
     await _save_room(room)
     asyncio.create_task(_inject_meeting_skill(room, config))
+    await notify_stream("rooms")
     return room
 
 
@@ -331,6 +333,7 @@ async def send_directed(
         elif isinstance(r, BaseException):
             target_result = "error"
 
+    await notify_stream("rooms")
     return {
         "ok": target_result == "delivered",
         "status": target_result,
@@ -417,6 +420,7 @@ async def send_broadcast(
 
     await _save_room(room)
 
+    await notify_stream("rooms")
     return {
         "ok": failed == 0,
         "delivered": delivered,
@@ -477,6 +481,7 @@ async def post_response(
 
     await _save_room(room)
 
+    await notify_stream("rooms")
     return {"ok": True}
 
 
@@ -505,4 +510,5 @@ async def update_room_state(
     if body.state == "active" and old_state != "active":
         asyncio.create_task(_inject_meeting_skill(room, config))
 
+    await notify_stream("rooms")
     return room

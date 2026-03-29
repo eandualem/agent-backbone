@@ -22,6 +22,7 @@ from agent_backbone.api.models import (
     RuntimeInfo,
     StateUpdateRequest,
 )
+from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.session_updates import (
     build_session_snapshot,
     emit_sessions_update,
@@ -193,6 +194,7 @@ async def start_agent(
             getattr(request.app.state, "state_service", None),
             tmux_svc,
         )
+    await notify_stream("agents")
     return AgentStartResponse(
         ok=ok,
         session=session,
@@ -219,6 +221,7 @@ async def stop_agent(
             getattr(request.app.state, "state_service", None),
             tmux_svc,
         )
+    await notify_stream("agents")
     return AgentStopResponse(ok=ok, session=session)
 
 
@@ -291,6 +294,8 @@ async def post_agent_state(
             sio=getattr(request.app.state, "sio", None),
         )
 
+    await notify_stream("agents")
+    await notify_stream("plans")
     return {"ok": True, "session": session}
 
 

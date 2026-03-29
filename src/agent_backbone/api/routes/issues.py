@@ -7,6 +7,7 @@ import math
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.deps import get_config, get_db, get_github
 from agent_backbone.api.models import (
     IssueCommentResponse,
@@ -170,6 +171,7 @@ async def create_issue(
         labels,
         repo_full_name=repo_full_name,
     )
+    await notify_stream("tasks")
     return _issue_to_response(issue, config)
 
 
@@ -188,6 +190,7 @@ async def add_issue_comment(
         comment = await gh.add_comment(number, comment_body, repo_full_name=repo_full_name)
     except GitHubServiceError as exc:
         _raise_github_http_error(exc, not_found_detail=f"Issue #{number} not found")
+    await notify_stream("tasks")
     return IssueCommentResponse(
         id=comment.id,
         body=comment.body,
