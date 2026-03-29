@@ -28,10 +28,12 @@ def reset_flow_services():
     """Reset the flow service locator between tests."""
     from agent_backbone.api.session_updates import reset_sessions_update_state
     from agent_backbone.services._locator import reset
+    from agent_backbone.services.agents.interface import reset_push_timestamps
 
     yield
     reset()
     reset_sessions_update_state()
+    reset_push_timestamps()
 
 
 @pytest.fixture

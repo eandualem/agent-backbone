@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,10 @@ _LIVE_RECONCILIATION_STATES = frozenset(
     }
 )
 
+# Pushed states are authoritative for this duration (seconds).
+# Pane inference only kicks in after this window expires.
+_PUSH_AUTHORITY_SECONDS = 60.0
+
 
 def _row_to_snapshot(row: dict) -> StateSnapshot:
     """Convert a DB agent_states row dict to a StateSnapshot."""
@@ -54,9 +59,41 @@ def _row_to_snapshot(row: dict) -> StateSnapshot:
     )
 
 
-def _should_use_db_snapshot(snapshot: StateSnapshot) -> bool:
-    """Whether a persisted snapshot is safe to reuse without live verification."""
+def _should_use_db_snapshot(snapshot: StateSnapshot, *, recently_pushed: bool = False) -> bool:
+    """Whether a persisted snapshot is safe to reuse without live verification.
+
+    Recently pushed states are always trusted — they come from authoritative
+    hooks. Older states in working categories trigger live reconciliation.
+    """
+    if recently_pushed:
+        return True
     return snapshot.state not in _LIVE_RECONCILIATION_STATES
+
+
+# Module-level registry of recent authoritative pushes: session → monotonic timestamp.
+# Populated by record_push(), checked by get_state().
+_push_timestamps: dict[str, float] = {}
+
+
+def record_push(session: str) -> None:
+    """Mark a session as having received an authoritative push.
+
+    Called from the POST /api/agents/{session}/state route handler.
+    """
+    _push_timestamps[session] = time.monotonic()
+
+
+def reset_push_timestamps() -> None:
+    """Clear push authority tracking (for test isolation)."""
+    _push_timestamps.clear()
+
+
+def _is_recently_pushed(session: str) -> bool:
+    """Whether the session received an authoritative push within the authority window."""
+    ts = _push_timestamps.get(session)
+    if ts is None:
+        return False
+    return (time.monotonic() - ts) < _PUSH_AUTHORITY_SECONDS
 
 
 def _should_sync_db_snapshot(current: StateSnapshot | None, live: StateSnapshot) -> bool:
@@ -100,14 +137,20 @@ class StateService:
     # --- DI surface for route handlers ---
 
     async def get_state(self, session: str) -> StateSnapshot:
-        """Get reconciled agent state — DB first, file+tmux fallback."""
+        """Get reconciled agent state — DB first, file+tmux fallback.
+
+        Recently pushed states (within _PUSH_AUTHORITY_SECONDS) are trusted
+        without pane inference. Pane inference only applies when the DB
+        state is stale or absent.
+        """
         db_snapshot: StateSnapshot | None = None
         if self._db is not None:
             try:
                 row = await self._db.get_agent_state(session)
                 if row is not None:
                     db_snapshot = _row_to_snapshot(row)
-                    if _should_use_db_snapshot(db_snapshot):
+                    recently_pushed = _is_recently_pushed(session)
+                    if _should_use_db_snapshot(db_snapshot, recently_pushed=recently_pushed):
                         return db_snapshot
             except Exception:
                 log.warning("DB state read failed for %s, falling back to file", session)

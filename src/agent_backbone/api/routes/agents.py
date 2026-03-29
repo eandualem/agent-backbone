@@ -258,6 +258,9 @@ async def post_agent_state(
     db: BackboneDB = Depends(get_db),
 ):
     """Update agent state in the database."""
+    from agent_backbone.services.agents.interface import record_push
+
+    record_push(session)
     await db.set_agent_state(
         session,
         body.state,
