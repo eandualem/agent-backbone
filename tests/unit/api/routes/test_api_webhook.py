@@ -71,7 +71,7 @@ class TestWebhookSignatureValidation:
         headers = _webhook_headers(payload_bytes)
 
         with patch(
-            "agent_backbone.api.routes.webhook.emit_governance_event",
+            "agent_backbone.api.routes.webhook.emit_run_event",
             new_callable=AsyncMock,
         ):
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
@@ -93,7 +93,7 @@ class TestWebhookSignatureValidation:
         )
 
         with patch(
-            "agent_backbone.api.routes.webhook.emit_governance_event",
+            "agent_backbone.api.routes.webhook.emit_run_event",
             new_callable=AsyncMock,
         ):
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
@@ -135,7 +135,7 @@ class TestWebhookDeduplication:
 
         # First request: accepted
         with patch(
-            "agent_backbone.api.routes.webhook.emit_governance_event",
+            "agent_backbone.api.routes.webhook.emit_run_event",
             new_callable=AsyncMock,
         ):
             resp1 = await api_client.post("/", content=payload_bytes, headers=headers)
@@ -168,7 +168,7 @@ class TestWebhookDispatch:
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-root-test-1")
 
         with patch(
-            "agent_backbone.api.routes.webhook.emit_governance_event",
+            "agent_backbone.api.routes.webhook.emit_run_event",
             new_callable=AsyncMock,
         ):
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
@@ -182,14 +182,14 @@ class TestWebhookDispatch:
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-test-1")
 
         with patch(
-            "agent_backbone.api.routes.webhook.emit_governance_event",
+            "agent_backbone.api.routes.webhook.emit_run_event",
             new_callable=AsyncMock,
         ) as mock_emit:
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
         assert resp.text == "accepted"
-        # Verify governance event was emitted for issue.created
+        # Verify run event was emitted for issue.created
         mock_emit.assert_awaited()
         event_types = [call.args[0] for call in mock_emit.await_args_list]
         assert "issue.created" in event_types
@@ -206,7 +206,7 @@ class TestWebhookDispatch:
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-test-non-default")
 
         with patch(
-            "agent_backbone.api.routes.webhook.emit_governance_event",
+            "agent_backbone.api.routes.webhook.emit_run_event",
             new_callable=AsyncMock,
         ):
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
@@ -222,7 +222,7 @@ class TestWebhookDispatch:
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-test-2")
 
         with patch(
-            "agent_backbone.api.routes.webhook.emit_governance_event",
+            "agent_backbone.api.routes.webhook.emit_run_event",
             new_callable=AsyncMock,
         ):
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
@@ -254,14 +254,14 @@ class TestWebhookDispatch:
         )
 
         with patch(
-            "agent_backbone.api.routes.webhook.emit_governance_event",
+            "agent_backbone.api.routes.webhook.emit_run_event",
             new_callable=AsyncMock,
         ) as mock_emit:
             resp = await api_client.post("/", content=payload_bytes, headers=headers)
 
         assert resp.status_code == 200
         assert resp.text == "accepted"
-        # Verify governance event was emitted for pr.opened
+        # Verify run event was emitted for pr.opened
         mock_emit.assert_awaited()
         event_types = [call.args[0] for call in mock_emit.await_args_list]
         assert "pr.opened" in event_types

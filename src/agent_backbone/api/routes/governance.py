@@ -164,7 +164,7 @@ async def execute_run_action(
         )
 
     # Emit run event after successful execution
-    from agent_backbone.api.governance_events import emit_run_event
+    from agent_backbone.api.run_events import emit_run_event
 
     await emit_run_event(
         "action.executed",

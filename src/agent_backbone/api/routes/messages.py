@@ -42,7 +42,7 @@ async def send_message(
         outcome,
     )
 
-    from agent_backbone.api.governance_events import emit_run_event
+    from agent_backbone.api.run_events import emit_run_event
 
     await emit_run_event(
         "message.direct_sent",

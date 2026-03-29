@@ -238,13 +238,13 @@ class TestSessionsNamespace:
         assert "agent:bell-wf" in rooms
         assert "agent:ike" in rooms
 
-    async def test_subscribe_tracks_joins_track_rooms(self):
-        """SUB-2: subscribe with tracks joins track:{instanceId} rooms."""
+    async def test_subscribe_runs_joins_run_rooms(self):
+        """SUB-2: subscribe with runs joins run:{runId} rooms."""
         ns = _make_sessions_namespace()
         await ns.on_connect("sid1", {})
-        await ns.on_subscribe("sid1", {"tracks": ["bug-validation-49"]})
+        await ns.on_subscribe("sid1", {"runs": ["bug-validation-49"]})
         rooms = ns._test_rooms.get("sid1", set())
-        assert "track:bug-validation-49" in rooms
+        assert "run:bug-validation-49" in rooms
 
     async def test_subscribe_removes_default_all_agents(self):
         """SUB-7: explicit subscribe removes default all-agents membership."""

@@ -21,7 +21,7 @@ from agent_backbone.api.deps import (
     get_config,
     get_db,
 )
-from agent_backbone.api.governance_events import emit_run_event
+from agent_backbone.api.run_events import emit_run_event
 from agent_backbone.api.webhook_utils import normalize_event, verify_signature
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import EventType, parse_governance_tag, repo_session_name

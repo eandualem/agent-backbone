@@ -1,11 +1,11 @@
-"""Tests for api/routes/governance.py — governance action execution."""
+"""Tests for api/routes/governance.py — run action execution."""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
 
-class TestGovernanceActions:
+class TestRunActions:
     async def test_notify_agent_delivered(self, api_client, auth_headers, api_app):
         """notify_agent action calls safe_deliver and returns result."""
         with patch(
@@ -14,7 +14,7 @@ class TestGovernanceActions:
             return_value="delivered",
         ):
             resp = await api_client.post(
-                "/api/governance/actions",
+                "/api/runs/actions",
                 headers=auth_headers,
                 json={
                     "action_type": "notify_agent",
@@ -36,7 +36,7 @@ class TestGovernanceActions:
             return_value=True,
         ):
             resp = await api_client.post(
-                "/api/governance/actions",
+                "/api/runs/actions",
                 headers=auth_headers,
                 json={
                     "action_type": "notify_elias",
@@ -52,7 +52,7 @@ class TestGovernanceActions:
         mock_gh.add_comment = AsyncMock(return_value=None)
         api_app.state.github = mock_gh
         resp = await api_client.post(
-            "/api/governance/actions",
+            "/api/runs/actions",
             headers=auth_headers,
             json={
                 "action_type": "auto_comment",
@@ -67,7 +67,7 @@ class TestGovernanceActions:
     async def test_log_action(self, api_client, auth_headers, api_app):
         """log action returns ok without external calls."""
         resp = await api_client.post(
-            "/api/governance/actions",
+            "/api/runs/actions",
             headers=auth_headers,
             json={
                 "action_type": "log",
@@ -81,7 +81,7 @@ class TestGovernanceActions:
     async def test_semantic_search_stub(self, api_client, auth_headers, api_app):
         """semantic_search returns stub response."""
         resp = await api_client.post(
-            "/api/governance/actions",
+            "/api/runs/actions",
             headers=auth_headers,
             json={
                 "action_type": "semantic_search",
@@ -96,7 +96,7 @@ class TestGovernanceActions:
     async def test_unknown_action_type(self, api_client, auth_headers, api_app):
         """Unknown action_type returns ok=False with error."""
         resp = await api_client.post(
-            "/api/governance/actions",
+            "/api/runs/actions",
             headers=auth_headers,
             json={
                 "action_type": "nonexistent",
@@ -109,13 +109,13 @@ class TestGovernanceActions:
         assert "error" in data["result"]
 
     async def test_emits_action_executed_event(self, api_client, auth_headers, api_app):
-        """Successful action emits action.executed governance event."""
+        """Successful action emits action.executed run event."""
         with patch(
-            "agent_backbone.api.governance_events.emit_governance_event",
+            "agent_backbone.api.run_events.emit_run_event",
             new_callable=AsyncMock,
         ) as mock_emit:
             resp = await api_client.post(
-                "/api/governance/actions",
+                "/api/runs/actions",
                 headers=auth_headers,
                 json={
                     "action_type": "log",
@@ -130,7 +130,7 @@ class TestGovernanceActions:
             if call.args[0] == "action.executed":
                 found = True
                 break
-        assert found, "action.executed governance event was not emitted"
+        assert found, "action.executed run event was not emitted"
 
     async def test_notify_agent_resolves_entity_from_track_context(
         self, api_client, auth_headers, api_app
@@ -166,7 +166,7 @@ class TestGovernanceActions:
                 return_value="delivered",
             ) as mock_deliver:
                 resp = await api_client.post(
-                    "/api/governance/actions",
+                    "/api/runs/actions",
                     headers=auth_headers,
                     json={
                         "action_type": "notify_agent",
@@ -187,7 +187,7 @@ class TestGovernanceActions:
     ):
         """notify_agent fails gracefully when neither session nor entity resolves."""
         resp = await api_client.post(
-            "/api/governance/actions",
+            "/api/runs/actions",
             headers=auth_headers,
             json={
                 "action_type": "notify_agent",
@@ -208,7 +208,7 @@ class TestGovernanceActions:
         mock_gh.add_comment = AsyncMock(return_value=None)
         api_app.state.github = mock_gh
         resp = await api_client.post(
-            "/api/governance/actions",
+            "/api/runs/actions",
             headers=auth_headers,
             json={
                 "action_type": "auto_comment",
@@ -231,7 +231,7 @@ class TestGovernanceActions:
         mock_gh.add_comment = AsyncMock(return_value=None)
         api_app.state.github = mock_gh
         resp = await api_client.post(
-            "/api/governance/actions",
+            "/api/runs/actions",
             headers=auth_headers,
             json={
                 "action_type": "auto_comment",
@@ -249,7 +249,7 @@ class TestGovernanceActions:
     async def test_requires_auth(self, api_client, api_key):
         """Request without auth headers is rejected."""
         resp = await api_client.post(
-            "/api/governance/actions",
+            "/api/runs/actions",
             json={"action_type": "log", "params": {}},
         )
         assert resp.status_code == 401

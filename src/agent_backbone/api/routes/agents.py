@@ -276,7 +276,7 @@ async def post_agent_state(
         getattr(request.app.state, "tmux_service", None),
     )
 
-    from agent_backbone.api.governance_events import emit_run_event
+    from agent_backbone.api.run_events import emit_run_event
 
     await emit_run_event(
         "agent.state_changed",
