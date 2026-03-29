@@ -392,9 +392,9 @@ async def handle_stalls(config: BackboneConfig, active_sessions: set[str], db: B
                     stall["duration_minutes"],
                 )
 
-            from agent_backbone.api.governance_events import emit_governance_event
+            from agent_backbone.api.governance_events import emit_run_event
 
-            await emit_governance_event(
+            await emit_run_event(
                 "agent.stall_detected",
                 context={"session": stall["session"], "entity": stall["entity"]},
                 source=stall["entity"],
@@ -431,9 +431,9 @@ async def handle_offline(
                 agent["session"],
             )
 
-        from agent_backbone.api.governance_events import emit_governance_event
+        from agent_backbone.api.governance_events import emit_run_event
 
-        await emit_governance_event(
+        await emit_run_event(
             "agent.offline",
             context={"session": agent["session"], "entity": agent["entity"]},
             source=agent["entity"],

@@ -1052,27 +1052,27 @@ class AnalyticsErrorsResponse(BaseModel):
     )
 
 
-# --- Governance ---
+# --- Tracks & Runs ---
 
 
-class GovernanceActionRequest(BaseModel):
-    """Request body for governance action execution."""
+class RunActionRequest(BaseModel):
+    """Request body for run action execution."""
 
     action_type: str
     params: dict[str, Any] = Field(default_factory=dict)
     track_context: dict[str, Any] = Field(default_factory=dict)
 
 
-class GovernanceActionResponse(BaseModel):
-    """Response from governance action execution."""
+class RunActionResponse(BaseModel):
+    """Response from run action execution."""
 
     ok: bool
     action_type: str
     result: dict[str, Any] = Field(default_factory=dict)
 
 
-class GovernanceTrackCreate(BaseModel):
-    """Request body for creating a governance track."""
+class TrackCreate(BaseModel):
+    """Request body for creating a track."""
 
     id: str
     name: str
@@ -1080,16 +1080,16 @@ class GovernanceTrackCreate(BaseModel):
     definition: dict[str, Any] = Field(default_factory=dict)
 
 
-class GovernanceTrackUpdate(BaseModel):
-    """Request body for updating a governance track."""
+class TrackUpdate(BaseModel):
+    """Request body for updating a track."""
 
     name: str | None = None
     description: str | None = None
     definition: dict[str, Any] | None = None
 
 
-class GovernanceTrackResponse(BaseModel):
-    """A governance track definition."""
+class TrackResponse(BaseModel):
+    """A track definition."""
 
     id: str
     name: str
@@ -1099,8 +1099,8 @@ class GovernanceTrackResponse(BaseModel):
     updated_at: str
 
 
-class GovernanceInstanceCreate(BaseModel):
-    """Request body for creating a track instance."""
+class RunCreate(BaseModel):
+    """Request body for creating a track run."""
 
     id: str
     context: dict[str, Any] = Field(default_factory=dict)
@@ -1109,8 +1109,8 @@ class GovernanceInstanceCreate(BaseModel):
     last_projected_state: str | None = None
 
 
-class GovernanceInstanceUpdate(BaseModel):
-    """Request body for updating a track instance."""
+class RunUpdate(BaseModel):
+    """Request body for updating a track run."""
 
     current_state: str | None = None
     status: str | None = None
@@ -1119,8 +1119,8 @@ class GovernanceInstanceUpdate(BaseModel):
     history: list[dict[str, Any]] | None = None
 
 
-class GovernanceInstanceResponse(BaseModel):
-    """A governance track instance."""
+class RunResponse(BaseModel):
+    """A track run."""
 
     id: str
     track_id: str
@@ -1133,13 +1133,13 @@ class GovernanceInstanceResponse(BaseModel):
     updated_at: str
 
 
-class GovernanceLayoutRequest(BaseModel):
+class TrackLayoutRequest(BaseModel):
     """Request body for upserting track layout positions."""
 
     positions: dict[str, Any]
 
 
-class GovernanceLayoutResponse(BaseModel):
+class TrackLayoutResponse(BaseModel):
     """Track graph layout positions."""
 
     track_id: str

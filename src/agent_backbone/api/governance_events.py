@@ -1,4 +1,4 @@
-"""Fire-and-forget governance event broadcasting via Socket.IO."""
+"""Fire-and-forget run event broadcasting via Socket.IO."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-GOVERNANCE_EVENT = "governance:event"
+RUN_EVENT = "run:event"
 
 
-async def emit_governance_event(
+async def emit_run_event(
     event_type: str,
     *,
     context: dict[str, Any] | None = None,
@@ -25,7 +25,7 @@ async def emit_governance_event(
     data: dict[str, Any] | None = None,
     sio: socketio.AsyncServer | None = None,
 ) -> None:
-    """Emit a governance event to all connected Socket.IO clients.
+    """Emit a run event to all connected Socket.IO clients.
 
     Fire-and-forget: never raises, never blocks callers. All exceptions are
     caught and logged as warnings.
@@ -34,7 +34,7 @@ async def emit_governance_event(
         server = sio if sio is not None else get_sio()
         if server is None:
             log.warning(
-                "[GOVERNANCE] No Socket.IO server available — skipping event %s",
+                "[RUN] No Socket.IO server available — skipping event %s",
                 event_type,
             )
             return
@@ -47,17 +47,17 @@ async def emit_governance_event(
             "data": data or {},
         }
 
-        # SUB-10: Route to track room if instanceId present, always to all-agents
-        instance_id = (context or {}).get("instanceId")
-        if instance_id:
+        # SUB-10: Route to run room if runId present, always to all-agents
+        run_id = (context or {}).get("runId")
+        if run_id:
             await server.emit(
-                GOVERNANCE_EVENT, payload, namespace=SESSIONS_NAMESPACE,
-                room=f"track:{instance_id}",
+                RUN_EVENT, payload, namespace=SESSIONS_NAMESPACE,
+                room=f"run:{run_id}",
             )
         await server.emit(
-            GOVERNANCE_EVENT, payload, namespace=SESSIONS_NAMESPACE,
+            RUN_EVENT, payload, namespace=SESSIONS_NAMESPACE,
             room="all-agents",
         )
-        log.info("[GOVERNANCE] Emitted %s from %s context=%s", event_type, source, context)
+        log.info("[RUN] Emitted %s from %s context=%s", event_type, source, context)
     except Exception:
-        log.warning("[GOVERNANCE] Failed to emit event %s", event_type, exc_info=True)
+        log.warning("[RUN] Failed to emit event %s", event_type, exc_info=True)

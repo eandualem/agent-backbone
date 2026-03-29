@@ -84,7 +84,7 @@ class SessionsNamespace(socketio.AsyncNamespace):
 
     Supports room-based filtering per SOCKET_IO_SUBSCRIPTIONS protocol:
     - agent:{session} rooms for per-agent updates
-    - track:{instanceId} rooms for governance events
+    - run:{runId} rooms for run events
     - all-agents room for full broadcast (default)
     """
 
@@ -111,15 +111,15 @@ class SessionsNamespace(socketio.AsyncNamespace):
             if isinstance(agent, str) and agent:
                 self.enter_room(sid, f"agent:{agent}")
 
-        for track in data.get("tracks", []):
-            if isinstance(track, str) and track:
-                self.enter_room(sid, f"track:{track}")
+        for run_id in data.get("runs", []):
+            if isinstance(run_id, str) and run_id:
+                self.enter_room(sid, f"run:{run_id}")
 
         if data.get("all_agents"):
             self.enter_room(sid, "all-agents")
-        elif data.get("agents") or data.get("tracks"):
+        elif data.get("agents") or data.get("runs"):
             # SUB-7: Remove default all-agents if client subscribes
-            # to specific agents/tracks without requesting all_agents
+            # to specific agents/runs without requesting all_agents
             if sid not in self._explicit_subscribers:
                 self.leave_room(sid, "all-agents")
 
@@ -139,9 +139,9 @@ class SessionsNamespace(socketio.AsyncNamespace):
             if isinstance(agent, str) and agent:
                 self.leave_room(sid, f"agent:{agent}")
 
-        for track in data.get("tracks", []):
-            if isinstance(track, str) and track:
-                self.leave_room(sid, f"track:{track}")
+        for run_id in data.get("runs", []):
+            if isinstance(run_id, str) and run_id:
+                self.leave_room(sid, f"run:{run_id}")
 
         if data.get("all_agents"):
             self.leave_room(sid, "all-agents")

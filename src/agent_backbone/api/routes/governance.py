@@ -1,4 +1,4 @@
-"""Governance action execution — frontend governance engine triggers actions via the backbone."""
+"""Track and run management — frontend governance engine triggers actions via the backbone."""
 
 from __future__ import annotations
 
@@ -10,17 +10,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from agent_backbone.api.deps import get_config, get_db, get_github
 from agent_backbone.api.models import (
-    GovernanceActionRequest,
-    GovernanceActionResponse,
-    GovernanceInstanceCreate,
-    GovernanceInstanceResponse,
-    GovernanceInstanceUpdate,
-    GovernanceLayoutRequest,
-    GovernanceLayoutResponse,
-    GovernanceTrackCreate,
-    GovernanceTrackResponse,
-    GovernanceTrackUpdate,
     ListEnvelope,
+    RunActionRequest,
+    RunActionResponse,
+    RunCreate,
+    RunResponse,
+    RunUpdate,
+    TrackCreate,
+    TrackLayoutRequest,
+    TrackLayoutResponse,
+    TrackResponse,
+    TrackUpdate,
 )
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.database import BackboneDB
@@ -28,7 +28,7 @@ from agent_backbone.services.github import GitHubClient
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/governance", tags=["governance"])
+router = APIRouter(prefix="/api", tags=["tracks"])
 
 
 async def _handle_notify_agent(
@@ -123,15 +123,15 @@ async def _handle_semantic_search() -> dict[str, Any]:
     return {"stub": True, "message": "semantic_search not yet implemented"}
 
 
-@router.post("/actions", response_model=GovernanceActionResponse)
-async def execute_governance_action(
-    body: GovernanceActionRequest,
+@router.post("/runs/actions", response_model=RunActionResponse)
+async def execute_run_action(
+    body: RunActionRequest,
     request: Request,
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
     gh: GitHubClient = Depends(get_github),
-) -> GovernanceActionResponse:
-    """Execute a governance action dispatched by the frontend governance engine."""
+) -> RunActionResponse:
+    """Execute a run action dispatched by the frontend governance engine."""
     action_type = body.action_type
     params = body.params
 
@@ -147,7 +147,7 @@ async def execute_governance_action(
 
     handler = handlers.get(action_type)
     if handler is None:
-        return GovernanceActionResponse(
+        return RunActionResponse(
             ok=False,
             action_type=action_type,
             result={"error": f"Unknown action type: {action_type}"},
@@ -156,17 +156,17 @@ async def execute_governance_action(
     try:
         result = await handler()
     except Exception as exc:
-        log.warning("[GOVERNANCE] Action %s failed: %s", action_type, exc, exc_info=True)
-        return GovernanceActionResponse(
+        log.warning("[RUN] Action %s failed: %s", action_type, exc, exc_info=True)
+        return RunActionResponse(
             ok=False,
             action_type=action_type,
             result={"error": str(exc)},
         )
 
-    # Emit governance event after successful execution
-    from agent_backbone.api.governance_events import emit_governance_event
+    # Emit run event after successful execution
+    from agent_backbone.api.governance_events import emit_run_event
 
-    await emit_governance_event(
+    await emit_run_event(
         "action.executed",
         context=body.track_context,
         source="governance",
@@ -174,34 +174,34 @@ async def execute_governance_action(
         sio=getattr(request.app.state, "sio", None),
     )
 
-    return GovernanceActionResponse(ok=True, action_type=action_type, result=result)
+    return RunActionResponse(ok=True, action_type=action_type, result=result)
 
 
 # --- Track CRUD ---
 
 
-@router.get("/tracks", response_model=ListEnvelope[GovernanceTrackResponse])
+@router.get("/tracks", response_model=ListEnvelope[TrackResponse])
 async def list_tracks(db: BackboneDB = Depends(get_db)):
-    """List all governance track definitions."""
+    """List all track definitions."""
     tracks = await db.governance.list_tracks()
     return ListEnvelope(items=tracks, total=len(tracks))
 
 
-@router.get("/tracks/{track_id}", response_model=GovernanceTrackResponse)
+@router.get("/tracks/{track_id}", response_model=TrackResponse)
 async def get_track(track_id: str, db: BackboneDB = Depends(get_db)):
-    """Get a specific governance track definition."""
+    """Get a specific track definition."""
     track = await db.governance.get_track(track_id)
     if track is None:
         raise HTTPException(status_code=404, detail=f"Track '{track_id}' not found")
     return track
 
 
-@router.post("/tracks", response_model=GovernanceTrackResponse, status_code=201)
+@router.post("/tracks", response_model=TrackResponse, status_code=201)
 async def create_track(
-    body: GovernanceTrackCreate,
+    body: TrackCreate,
     db: BackboneDB = Depends(get_db),
 ):
-    """Create a new governance track definition."""
+    """Create a new track definition."""
     existing = await db.governance.get_track(body.id)
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"Track '{body.id}' already exists")
@@ -213,13 +213,13 @@ async def create_track(
     )
 
 
-@router.put("/tracks/{track_id}", response_model=GovernanceTrackResponse)
+@router.put("/tracks/{track_id}", response_model=TrackResponse)
 async def update_track(
     track_id: str,
-    body: GovernanceTrackUpdate,
+    body: TrackUpdate,
     db: BackboneDB = Depends(get_db),
 ):
-    """Update a governance track definition."""
+    """Update a track definition."""
     result = await db.governance.update_track(
         track_id,
         name=body.name,
@@ -233,46 +233,46 @@ async def update_track(
 
 @router.delete("/tracks/{track_id}", status_code=204)
 async def delete_track(track_id: str, db: BackboneDB = Depends(get_db)):
-    """Delete a governance track definition."""
+    """Delete a track definition."""
     deleted = await db.governance.delete_track(track_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Track '{track_id}' not found")
 
 
-# --- Track Instance CRUD ---
+# --- Track Run CRUD ---
 
 
 @router.get(
-    "/instances",
-    response_model=ListEnvelope[GovernanceInstanceResponse],
+    "/runs",
+    response_model=ListEnvelope[RunResponse],
 )
-async def list_all_instances(db: BackboneDB = Depends(get_db)):
-    """List all governance track instances across all tracks."""
+async def list_all_runs(db: BackboneDB = Depends(get_db)):
+    """List all track runs across all tracks."""
     instances = await db.governance.list_all_instances()
     return ListEnvelope(items=instances, total=len(instances))
 
 
 @router.get(
-    "/tracks/{track_id}/instances",
-    response_model=ListEnvelope[GovernanceInstanceResponse],
+    "/tracks/{track_id}/runs",
+    response_model=ListEnvelope[RunResponse],
 )
-async def list_instances(track_id: str, db: BackboneDB = Depends(get_db)):
-    """List instances of a governance track."""
+async def list_runs(track_id: str, db: BackboneDB = Depends(get_db)):
+    """List runs of a track."""
     instances = await db.governance.list_instances(track_id)
     return ListEnvelope(items=instances, total=len(instances))
 
 
 @router.post(
-    "/tracks/{track_id}/instances",
-    response_model=GovernanceInstanceResponse,
+    "/tracks/{track_id}/runs",
+    response_model=RunResponse,
     status_code=201,
 )
-async def create_instance(
+async def create_run(
     track_id: str,
-    body: GovernanceInstanceCreate,
+    body: RunCreate,
     db: BackboneDB = Depends(get_db),
 ):
-    """Create a new instance of a governance track."""
+    """Create a new run of a track."""
     track = await db.governance.get_track(track_id)
     if track is None:
         raise HTTPException(status_code=404, detail=f"Track '{track_id}' not found")
@@ -287,17 +287,17 @@ async def create_instance(
 
 
 @router.put(
-    "/tracks/instances/{instance_id}",
-    response_model=GovernanceInstanceResponse,
+    "/tracks/runs/{run_id}",
+    response_model=RunResponse,
 )
-async def update_instance(
-    instance_id: str,
-    body: GovernanceInstanceUpdate,
+async def update_run(
+    run_id: str,
+    body: RunUpdate,
     db: BackboneDB = Depends(get_db),
 ):
-    """Update a track instance state."""
+    """Update a track run state."""
     result = await db.governance.update_instance(
-        instance_id,
+        run_id,
         current_state=body.current_state,
         status=body.status,
         last_projected_state=body.last_projected_state,
@@ -305,14 +305,14 @@ async def update_instance(
         history=body.history,
     )
     if result is None:
-        raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     return result
 
 
 # --- Track Layouts ---
 
 
-@router.get("/layouts/{track_id}", response_model=GovernanceLayoutResponse)
+@router.get("/tracks/{track_id}/layout", response_model=TrackLayoutResponse)
 async def get_layout(track_id: str, db: BackboneDB = Depends(get_db)):
     """Get graph layout positions for a track."""
     layout = await db.governance.get_layout(track_id)
@@ -321,10 +321,10 @@ async def get_layout(track_id: str, db: BackboneDB = Depends(get_db)):
     return layout
 
 
-@router.post("/layouts/{track_id}", response_model=GovernanceLayoutResponse)
+@router.post("/tracks/{track_id}/layout", response_model=TrackLayoutResponse)
 async def upsert_layout(
     track_id: str,
-    body: GovernanceLayoutRequest,
+    body: TrackLayoutRequest,
     db: BackboneDB = Depends(get_db),
 ):
     """Create or update graph layout positions for a track."""
