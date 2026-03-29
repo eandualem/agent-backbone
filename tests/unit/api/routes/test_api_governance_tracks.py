@@ -121,6 +121,38 @@ class TestCreateRun:
         assert data["current_state"] == "created"
         assert data["context"]["issue_id"] == 42
 
+    async def test_emits_run_created_on_runs_namespace(self, api_client, auth_headers, api_app):
+        """RDS-86/88: run:created emitted on /runs namespace after creation."""
+        from unittest.mock import AsyncMock
+
+        await api_client.post("/api/tracks", headers=auth_headers, json=_SAMPLE_TRACK)
+        mock_sio = AsyncMock()
+        api_app.state.sio = mock_sio
+
+        from agent_backbone.services import _locator
+        old_sio = _locator._sio
+        _locator._sio = mock_sio
+        try:
+            resp = await api_client.post(
+                "/api/tracks/bug-fix/runs",
+                headers=auth_headers,
+                json={"id": "run-emit-1", "context": {}, "current_state": "created"},
+            )
+        finally:
+            _locator._sio = old_sio
+
+        assert resp.status_code == 201
+        # Find the run:created emit call
+        found = False
+        for call in mock_sio.emit.await_args_list:
+            if call.args[0] == "run:created" and call.kwargs.get("namespace") == "/runs":
+                found = True
+                payload = call.args[1]
+                assert payload["id"] == "run-emit-1"
+                assert payload["track_id"] == "bug-fix"
+                break
+        assert found, "run:created was not emitted on /runs namespace"
+
     async def test_defaults_status_to_active(self, api_client, auth_headers, api_app):
         await api_client.post(
             "/api/tracks", headers=auth_headers, json=_SAMPLE_TRACK

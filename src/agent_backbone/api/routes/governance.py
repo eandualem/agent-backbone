@@ -276,7 +276,7 @@ async def create_run(
     track = await db.governance.get_track(track_id)
     if track is None:
         raise HTTPException(status_code=404, detail=f"Track '{track_id}' not found")
-    return await db.governance.create_instance(
+    result = await db.governance.create_instance(
         instance_id=body.id,
         track_id=track_id,
         context=body.context,
@@ -284,6 +284,15 @@ async def create_run(
         status=body.status,
         last_projected_state=body.last_projected_state,
     )
+
+    # RDS-86/88: Emit run:created on /runs namespace
+    from agent_backbone.services._locator import get_sio
+
+    sio = get_sio()
+    if sio is not None:
+        await sio.emit("run:created", result, namespace="/runs")
+
+    return result
 
 
 @router.put(
