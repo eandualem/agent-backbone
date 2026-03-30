@@ -62,18 +62,10 @@ async def set_agent_state(
                  entity = COALESCE(
                      excluded.entity,
                      agent_states.entity),
-                 context = COALESCE(
-                     excluded.context,
-                     agent_states.context),
-                 ts = COALESCE(
-                     excluded.ts,
-                     agent_states.ts),
-                 plan_file = COALESCE(
-                     excluded.plan_file,
-                     agent_states.plan_file),
-                 plan_title = COALESCE(
-                     excluded.plan_title,
-                     agent_states.plan_title)"""
+                 context = excluded.context,
+                 ts = excluded.ts,
+                 plan_file = excluded.plan_file,
+                 plan_title = excluded.plan_title"""
         ),
         {
             "session_name": session_name,

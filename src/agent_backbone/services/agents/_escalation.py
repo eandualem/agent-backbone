@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from agent_backbone.config import REPO_NAME_PATTERN, BackboneConfig
-from agent_backbone.services.agents._inference import get_agent_state
+from agent_backbone.services.agents.interface import StateService
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.messaging import deliver_message
@@ -32,6 +32,23 @@ class TelegramService:
         from agent_backbone.services.telegram.interface import TelegramService as _TelegramService
 
         return await _TelegramService.send_notification(*args, **kwargs)
+
+
+async def get_agent_state(
+    state_dir: object,
+    session: str,
+    stale_threshold: float = 300.0,
+):
+    """Compatibility shim for legacy callers patched at this module boundary."""
+    del state_dir, stale_threshold
+    db: BackboneDB | None = None
+    try:
+        from agent_backbone.services._locator import get_db
+
+        db = get_db()
+    except RuntimeError:
+        pass
+    return await StateService(db=db).get_state(session)
 
 
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
@@ -238,19 +255,20 @@ async def check_for_stalls(
     """
     stalls: list[dict] = []
     threshold = config.escalation.stall_threshold_seconds
-    state_path = config.agent_state.state_path
-    stale_threshold = config.agent_state.stale_threshold_seconds
-
     tracked_sessions = config.registry.tracked_sessions
 
     for entity, session_name in tracked_sessions.items():
         if not session_name or session_name not in active_sessions:
             continue
 
-        snapshot = await get_agent_state(state_path, session_name, stale_threshold)
+        snapshot = await get_agent_state(
+            config.agent_state.state_path,
+            session_name,
+            config.agent_state.stale_threshold_seconds,
+        )
 
-        # Only PROCESSING_ISSUE and BUSY can be stalled (PLAN_WAITING is human-blocked, not stalled)
-        if snapshot.state not in (AgentState.PROCESSING_ISSUE, AgentState.BUSY):
+        # Only BUSY sessions can be stalled (waiting states are blocked, not stalled).
+        if snapshot.state != AgentState.BUSY:
             continue
 
         # No assigned issue — agent is busy with housekeeping, not stalled
@@ -277,7 +295,11 @@ async def check_for_stalls(
         for entity, session_name in tracked_sessions.items():
             if not session_name or session_name not in active_sessions:
                 continue
-            snapshot = await get_agent_state(state_path, session_name, stale_threshold)
+            snapshot = await get_agent_state(
+                config.agent_state.state_path,
+                session_name,
+                config.agent_state.stale_threshold_seconds,
+            )
             await db.set_agent_state(
                 session_name=session_name,
                 state=snapshot.state.value,
@@ -296,7 +318,7 @@ async def check_for_unexpected_offline(
     """Detect agents that were previously tracked but are now offline.
 
     Compares active sessions against persisted agent_states. An agent is
-    flagged if it was in a non-unknown state but its session is gone.
+    flagged if it was in a non-offline state but its session is gone.
 
     Returns list of offline records: {entity, session, pending_count}.
     """
@@ -314,10 +336,10 @@ async def check_for_unexpected_offline(
 
     for record in known_states:
         session_name = record["session_name"]
-        state = record.get("state", "unknown")
+        state = record.get("state", AgentState.OFFLINE.value)
 
-        # Skip sessions that were already unknown
-        if state == "unknown":
+        # Skip sessions that were already offline
+        if state in {AgentState.OFFLINE.value, "unknown"}:
             continue
 
         # If session is still active, no problem
@@ -422,8 +444,10 @@ async def handle_offline(
         try:
             await db.set_agent_state(
                 session_name=agent["session"],
-                state="unknown",
+                state=AgentState.OFFLINE.value,
                 current_issue=None,
+                plan_file=None,
+                plan_title=None,
             )
         except Exception:
             log.exception(
@@ -441,7 +465,11 @@ async def handle_offline(
         )
 
         event_key = "offline"
-        if not _should_escalate(agent["session"], event_key, config.escalation.escalation_dedup_seconds):
+        if not _should_escalate(
+            agent["session"],
+            event_key,
+            config.escalation.escalation_dedup_seconds,
+        ):
             continue
 
         escalation_session = _resolve_target_session(
@@ -493,9 +521,6 @@ async def check_plan_waiting(
     for k in expired:
         del _plan_notify_dedup[k]
 
-    state_path = config.agent_state.state_path
-    stale_threshold = config.agent_state.stale_threshold_seconds
-
     notification_chat_id = config.telegram.notification_chat_id
     telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
 
@@ -503,7 +528,11 @@ async def check_plan_waiting(
         if not session_name or session_name not in active_sessions:
             continue
 
-        snapshot = await get_agent_state(state_path, session_name, stale_threshold)
+        snapshot = await get_agent_state(
+            config.agent_state.state_path,
+            session_name,
+            config.agent_state.stale_threshold_seconds,
+        )
         if snapshot.state != AgentState.PLAN_WAITING:
             continue
 

@@ -55,7 +55,7 @@ class AgentStateORM(Base):
     __tablename__ = "agent_states"
 
     session_name: Mapped[str] = mapped_column(Text, primary_key=True)
-    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="unknown")
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="offline")
     current_issue: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_activity: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[str | None] = mapped_column(Text, nullable=True)

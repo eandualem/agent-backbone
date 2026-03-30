@@ -97,16 +97,21 @@ def _compute_counts(agents: list[EnrichedAgent]) -> DashboardCounts:
         elif agent.state == "idle":
             counts.idle += 1
             counts.active += 1
-        elif agent.state in ("plan_waiting", "permission_waiting"):
+        elif agent.state == "plan_waiting":
             counts.plan_waiting += 1
             counts.active += 1
-        elif agent.state in ("processing_issue", "busy", "blocked"):
+        elif agent.state == "permission_waiting":
+            counts.permission_waiting += 1
+            counts.active += 1
+        elif agent.state == "sub_agent_waiting":
+            counts.sub_agent_waiting += 1
+            counts.active += 1
+        elif agent.state == "starting":
+            counts.starting += 1
+            counts.active += 1
+        elif agent.state == "busy":
             counts.busy += 1
             counts.active += 1
-        else:
-            # unknown or other — count as active if online
-            if agent.online:
-                counts.active += 1
     return counts
 
 
@@ -127,7 +132,7 @@ async def get_dashboard(
     )
 
     counts = _compute_counts(agents)
-    plans_pending = sum(1 for a in agents if a.state in ("plan_waiting", "permission_waiting"))
+    plans_pending = sum(1 for a in agents if a.state == "plan_waiting")
 
     return DashboardResponse(
         agents=agents,

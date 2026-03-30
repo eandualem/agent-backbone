@@ -36,6 +36,7 @@ def _make_mock_services(
     get_state_side_effect=None,
     get_state_return=None,
     read_state_return=None,
+    reported_state_return=None,
     list_sessions_return=None,
     session_exists_return=True,
     send_keys_return=True,
@@ -49,10 +50,13 @@ def _make_mock_services(
     else:
         mock_state_svc.get_state = AsyncMock(return_value=_idle_snapshot())
 
-    if read_state_return is not None:
-        mock_state_svc.read_state = MagicMock(return_value=read_state_return)
+    if reported_state_return is None:
+        reported_state_return = read_state_return
+
+    if reported_state_return is not None:
+        mock_state_svc.get_reported_state = AsyncMock(return_value=reported_state_return)
     else:
-        mock_state_svc.read_state = MagicMock(return_value=None)
+        mock_state_svc.get_reported_state = AsyncMock(return_value=None)
 
     mock_tmux_svc = MagicMock()
     mock_tmux_svc.list_sessions = AsyncMock(

@@ -30,9 +30,10 @@ router = APIRouter(prefix="/api", tags=["hierarchy"])
 
 _STATE_PRIORITY: tuple[HierarchyState, ...] = (
     "busy",
-    "processing",
-    "starting",
+    "permission_waiting",
     "plan_waiting",
+    "sub_agent_waiting",
+    "starting",
     "idle",
     "offline",
 )
@@ -305,12 +306,6 @@ def _normalize_state(raw_state: AgentState, online: bool) -> HierarchyState:
     if not online:
         return "offline"
 
-    if raw_state == AgentState.PROCESSING_ISSUE:
-        return "processing"
-    if raw_state == AgentState.PERMISSION_WAITING:
-        return "plan_waiting"
-    if raw_state == AgentState.UNKNOWN:
-        return "idle"
     return raw_state.value  # type: ignore[return-value]
 
 

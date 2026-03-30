@@ -27,7 +27,7 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
 _BOX_CHARS = "\u2500\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u253c\u2501"
 _PROMPT_START_CHARS = ">$\u276f\u203a%#"
-_WORKING_STATES = frozenset({AgentState.PROCESSING_ISSUE, AgentState.BUSY, AgentState.STARTING})
+_WORKING_STATES = frozenset({AgentState.BUSY, AgentState.STARTING})
 _BACKBONE_ENVELOPE_PREFIX = "[via:"
 
 
@@ -573,7 +573,7 @@ def infer_state_from_pane(
     sanitized = sanitize_pane_content(pane_content)
     lines = sanitized.strip().splitlines()
     if not lines:
-        return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
+        return StateSnapshot(state=AgentState.OFFLINE, source="pull")
 
     runtime = _normalize_runtime(runtime_hint)
     if runtime == TerminalRuntime.UNKNOWN:
@@ -596,10 +596,10 @@ def infer_state_from_pane(
                 if word and word.split()[0].isdigit():
                     issue_num = int(word.split()[0])
                     return StateSnapshot(
-                        state=AgentState.PROCESSING_ISSUE,
+                        state=AgentState.BUSY,
                         current_issue=issue_num,
                         source="pull",
                     )
-            return StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="pull")
+            return StateSnapshot(state=AgentState.BUSY, source="pull")
 
-    return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
+    return StateSnapshot(state=AgentState.OFFLINE, source="pull")

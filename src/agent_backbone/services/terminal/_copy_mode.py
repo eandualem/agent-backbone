@@ -6,10 +6,14 @@ import asyncio
 import logging
 import os
 import time
+from typing import TYPE_CHECKING
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.terminal._adapters import get_terminal_adapter_for_session
 from agent_backbone.services.terminal._sessions import query_format_vars
+
+if TYPE_CHECKING:
+    from agent_backbone.services.database import BackboneDB
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +67,7 @@ def _copy_mode_alert_message(session_name: str, preceded_by: str) -> str:
 async def handle_copy_mode_recovery(
     config: BackboneConfig,
     active_sessions: set[str],
+    db: BackboneDB | None = None,
 ) -> None:
     """Detect accidental copy mode and immediately attempt recovery."""
     managed_sessions = set(_managed_sessions(config, active_sessions))
@@ -71,17 +76,21 @@ async def handle_copy_mode_recovery(
     if not managed_sessions:
         return
 
-    from agent_backbone.services.agents._inference import get_agent_state
-
     notification_chat_id = config.telegram.notification_chat_id
     telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
+    if db is None:
+        try:
+            from agent_backbone.services._locator import get_db
+
+            db = get_db()
+        except RuntimeError:
+            db = None
+    from agent_backbone.services.agents.interface import StateService
+
+    state_svc = StateService(db=db)
 
     for session_name in sorted(managed_sessions):
-        snapshot = await get_agent_state(
-            config.agent_state.state_path,
-            session_name,
-            config.agent_state.stale_threshold_seconds,
-        )
+        snapshot = await state_svc.get_state(session_name)
         adapter = await get_terminal_adapter_for_session(session_name)
         tmux_vars = await query_format_vars(session_name, "pane_in_mode=#{pane_in_mode}")
         in_copy_mode = adapter.detect_copy_mode(tmux_vars, snapshot.state)

@@ -6,17 +6,21 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents._inference import get_agent_state
+from agent_backbone.services.agents.interface import StateService
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.terminal import query_format_vars, send_keys
+
+if TYPE_CHECKING:
+    from agent_backbone.services.database import BackboneDB
 
 log = logging.getLogger(__name__)
 
 _COPY_MODE_RECOVERY_AFTER_SECONDS = 30.0
 _COPY_MODE_ALERT_AFTER_ATTEMPT_SECONDS = 120.0
-_WORKING_STATES = frozenset({AgentState.PROCESSING_ISSUE, AgentState.BUSY, AgentState.STARTING})
+_WORKING_STATES = frozenset({AgentState.BUSY, AgentState.STARTING})
 
 
 @dataclass
@@ -41,6 +45,23 @@ class TelegramService:
         from agent_backbone.services.telegram.interface import TelegramService as _TelegramService
 
         return await _TelegramService.send_notification(*args, **kwargs)
+
+
+async def get_agent_state(
+    state_dir: object,
+    session: str,
+    stale_threshold: float = 300.0,
+):
+    """Compatibility shim for legacy callers patched at this module boundary."""
+    del state_dir, stale_threshold
+    db: BackboneDB | None = None
+    try:
+        from agent_backbone.services._locator import get_db
+
+        db = get_db()
+    except RuntimeError:
+        pass
+    return await StateService(db=db).get_state(session)
 
 
 def _managed_sessions(config: BackboneConfig, active_sessions: set[str]) -> list[str]:
@@ -95,6 +116,7 @@ async def _pane_in_copy_mode(session_name: str, agent_state: AgentState) -> bool
 async def handle_copy_mode_recovery(
     config: BackboneConfig,
     active_sessions: set[str],
+    db: BackboneDB | None = None,
 ) -> None:
     """Detect accidental copy mode, auto-exit it, and alert if it persists."""
     managed_sessions = set(_managed_sessions(config, active_sessions))
@@ -106,7 +128,13 @@ async def handle_copy_mode_recovery(
     now = time.monotonic()
     notification_chat_id = config.telegram.notification_chat_id
     telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
+    if db is None:
+        try:
+            from agent_backbone.services._locator import get_db
 
+            db = get_db()
+        except RuntimeError:
+            db = None
     for session_name in sorted(managed_sessions):
         snapshot = await get_agent_state(
             config.agent_state.state_path,

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents import StateService
+from agent_backbone.services.agents import AgentState, StateService, StateSnapshot
 from agent_backbone.services.terminal import (
     RUNTIME_ENV_KEY,
     TmuxService,
@@ -44,18 +44,22 @@ async def build_enriched_agent(
     state_svc: StateService,
     tmux_info: dict | None = None,
     agent_type: str = "coding_agent",
+    snapshot_override: StateSnapshot | None = None,
 ) -> EnrichedAgent:
     """Build an EnrichedAgent from session name and entity."""
     online = session in active_sessions
-    if online:
+    if snapshot_override is not None:
+        snapshot = snapshot_override
+    elif online:
         snapshot = await state_svc.get_state(session)
     else:
-        # Avoid syncing stale push snapshots back into the DB for offline
-        # sessions. That can overwrite the monitor's "unknown" marker and
-        # re-arm repeated offline escalations on every refresh cycle.
-        snapshot = state_svc.read_state(session)
-        if snapshot is None:
-            snapshot = await state_svc.get_state(session)
+        snapshot = await state_svc.get_reported_state(session)
+    if snapshot is None:
+        snapshot = StateSnapshot(
+            state=AgentState.OFFLINE,
+            timestamp=0.0,
+            source="default",
+        )
     reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(entity)
     display_name = reg_entry.figure.split()[-1] if reg_entry else session
     role = reg_entry.role if reg_entry else "Coding Agent"
@@ -242,7 +246,8 @@ async def invalidate_session_snapshot_caches() -> None:
 
 def reset_sessions_update_state() -> None:
     """Reset module-level update dedup state for test isolation."""
-    global _last_sessions_update_signature, _sessions_update_lock, _snapshot_cache_lock, _last_agent_states  # noqa: PLW0603
+    global _last_sessions_update_signature, _sessions_update_lock  # noqa: PLW0603
+    global _snapshot_cache_lock, _last_agent_states  # noqa: PLW0603
     _snapshot_cache_lock = asyncio.Lock()
     _invalidate_session_snapshot_caches_unlocked()
     _last_sessions_update_signature = None
@@ -261,6 +266,72 @@ def _agent_signature(agent_dict: dict) -> str:
 
 def _snapshot_signature(payload: list[dict]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+async def _emit_changed_agents(
+    sio: socketio.AsyncServer | None,
+    changed_agents: list[dict],
+) -> bool:
+    """Emit a changed-agent payload to the shared /sessions rooms."""
+    if sio is None or not changed_agents:
+        return False
+
+    await sio.emit(
+        SESSIONS_UPDATE_EVENT,
+        changed_agents,
+        namespace=SESSIONS_NAMESPACE,
+        room="all-agents",
+    )
+    for agent_dict in changed_agents:
+        session = agent_dict.get("session", "")
+        if session:
+            await sio.emit(
+                SESSIONS_UPDATE_EVENT,
+                [agent_dict],
+                namespace=SESSIONS_NAMESPACE,
+                room=f"agent:{session}",
+            )
+    return True
+
+
+async def emit_session_override(
+    sio: socketio.AsyncServer | None,
+    config: BackboneConfig,
+    state_svc: StateService | None,
+    tmux_svc: TmuxService | None,
+    *,
+    session: str,
+    entity: str,
+    snapshot: StateSnapshot,
+    agent_type: str | None = None,
+) -> bool:
+    """Emit one session snapshot before PostgreSQL persistence completes."""
+    global _last_agent_states  # noqa: PLW0603
+    if sio is None or state_svc is None or tmux_svc is None:
+        return False
+
+    async with _sessions_update_lock:
+        rich_sessions = await tmux_svc.list_sessions_rich()
+        tmux_lookup = {row["name"]: row for row in rich_sessions}
+        active_sessions = set(tmux_lookup)
+        resolved_type = agent_type
+        if resolved_type is None:
+            resolved_type = (
+                "named_entity" if session in reserved_agent_sessions(config) else "coding_agent"
+            )
+        agent = await build_enriched_agent(
+            session=session,
+            entity=entity,
+            config=config,
+            active_sessions=active_sessions,
+            state_svc=state_svc,
+            tmux_info=tmux_lookup.get(session),
+            agent_type=resolved_type,
+            snapshot_override=snapshot,
+        )
+        agent_dict = agent.model_dump(mode="json")
+        _last_agent_states[session] = _agent_signature(agent_dict)
+        return await _emit_changed_agents(sio, [agent_dict])
 
 
 async def emit_sessions_update(
@@ -299,24 +370,5 @@ async def emit_sessions_update(
         if not changed_agents:
             return False
 
-        # SUB-8: Emit to all-agents room with all changed agents
-        await sio.emit(
-            SESSIONS_UPDATE_EVENT,
-            changed_agents,
-            namespace=SESSIONS_NAMESPACE,
-            room="all-agents",
-        )
-
-        # SUB-8: Emit to per-agent rooms with single-element list
-        for agent_dict in changed_agents:
-            session = agent_dict.get("session", "")
-            if session:
-                await sio.emit(
-                    SESSIONS_UPDATE_EVENT,
-                    [agent_dict],
-                    namespace=SESSIONS_NAMESPACE,
-                    room=f"agent:{session}",
-                )
-
         _last_sessions_update_signature = _snapshot_signature(payload)
-        return True
+        return await _emit_changed_agents(sio, changed_agents)

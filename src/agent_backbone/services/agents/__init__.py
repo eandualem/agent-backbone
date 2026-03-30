@@ -12,6 +12,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "MonitoringService": ("agent_backbone.services.agents.interface", "MonitoringService"),
     "StateService": ("agent_backbone.services.agents.interface", "StateService"),
     "StateSnapshot": ("agent_backbone.services.agents.models", "StateSnapshot"),
+    "SessionObservation": ("agent_backbone.services.agents._observation", "SessionObservation"),
     "find_outgoing_comment": (
         "agent_backbone.services.agents._delivery_check",
         "find_outgoing_comment",
@@ -21,11 +22,13 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "agent_backbone.services.agents._delivery_check",
         "has_commented_on_issue",
     ),
-    "infer_state_from_pane": (
-        "agent_backbone.services.agents._inference",
-        "infer_state_from_pane",
-    ),
+    "infer_state_from_pane": ("agent_backbone.services.agents._inference", "infer_state_from_pane"),
+    "observe_session": ("agent_backbone.services.agents._observation", "observe_session"),
     "read_state_file": ("agent_backbone.services.agents._file_reader", "read_state_file"),
+    "snapshot_from_observation": (
+        "agent_backbone.services.agents._observation",
+        "snapshot_from_observation",
+    ),
     "should_deliver": ("agent_backbone.services.agents._delivery_check", "should_deliver"),
     "_escalation_dedup": (
         "agent_backbone.services.agents._escalation",
@@ -61,10 +64,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "is_due": ("agent_backbone.services.agents._heartbeat", "is_due"),
     "load_schedules": ("agent_backbone.services.agents._heartbeat", "load_schedules"),
     "monitor_agents": ("agent_backbone.services.agents._monitor", "monitor_agents"),
-    "reconcile_startup_states": (
-        "agent_backbone.services.agents._reconciliation",
-        "reconcile_startup_states",
-    ),
     "save_schedules": ("agent_backbone.services.agents._heartbeat", "save_schedules"),
 }
 

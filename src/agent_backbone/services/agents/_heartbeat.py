@@ -18,7 +18,6 @@ from croniter import croniter
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services._locator import get_config, get_db
-from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.terminal import list_sessions, send_message
@@ -27,6 +26,23 @@ log = logging.getLogger(__name__)
 
 # Concurrency guard — prevents parallel heartbeat runs
 _heartbeat_lock = asyncio.Lock()
+
+
+async def get_agent_state(
+    state_dir: object,
+    session: str,
+    stale_threshold: float = 300.0,
+):
+    """Compatibility shim for legacy callers patched at this module boundary."""
+    del state_dir, stale_threshold
+    db: BackboneDB | None = None
+    try:
+        db = get_db()
+    except RuntimeError:
+        pass
+    from agent_backbone.services.agents.interface import StateService
+
+    return await StateService(db=db).get_state(session)
 
 
 def load_schedules(path: Path) -> dict:

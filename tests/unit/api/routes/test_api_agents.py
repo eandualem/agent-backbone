@@ -35,9 +35,9 @@ def _idle_snapshot(**overrides) -> StateSnapshot:
 
 
 def _processing_snapshot(issue: int = 42) -> StateSnapshot:
-    """Build a processing StateSnapshot."""
+    """Build a busy StateSnapshot."""
     return StateSnapshot(
-        state=AgentState.PROCESSING_ISSUE,
+        state=AgentState.BUSY,
         current_issue=issue,
         source="push",
         timestamp=time.time(),
@@ -66,7 +66,7 @@ def _make_mock_state_svc(**kwargs) -> MagicMock:
     """Create a mock StateService with get_state returning an idle snapshot."""
     svc = MagicMock()
     svc.get_state = AsyncMock(return_value=kwargs.get("snapshot", _idle_snapshot()))
-    svc.read_state = MagicMock(return_value=None)
+    svc.get_reported_state = AsyncMock(return_value=kwargs.get("reported_snapshot"))
     return svc
 
 
@@ -529,7 +529,7 @@ class TestGetAgentState:
         assert resp.status_code == 200
         data = resp.json()
         assert data["session"] == "feynman"
-        assert data["state"] == "processing_issue"
+        assert data["state"] == "busy"
         assert data["current_issue"] == 99
         assert data["source"] == "push"
 
@@ -550,11 +550,11 @@ class TestGetAgentState:
         assert data["session"] == "Feynman"
 
     async def test_unknown_session_returns_default_state(self, api_app, api_client, auth_headers):
-        """An unknown session still returns a snapshot (with default/unknown state)."""
+        """An unknown session now returns the offline sentinel."""
         _set_di_overrides(
             api_app,
             state_svc=_make_mock_state_svc(
-                snapshot=_idle_snapshot(state=AgentState.UNKNOWN, source="default")
+                snapshot=_idle_snapshot(state=AgentState.OFFLINE, source="default")
             ),
         )
         try:
@@ -565,7 +565,7 @@ class TestGetAgentState:
         assert resp.status_code == 200
         data = resp.json()
         assert data["session"] == "nonexistent"
-        assert data["state"] == "unknown"
+        assert data["state"] == "offline"
 
 
 # ---------------------------------------------------------------------------
@@ -1067,7 +1067,7 @@ class TestPostAgentState:
         session_updates_module._snapshot_cache_ts = time.monotonic()
 
         with patch(
-            "agent_backbone.api.routes.agents.emit_sessions_update",
+            "agent_backbone.api.routes.agents.emit_session_override",
             new_callable=AsyncMock,
             return_value=True,
         ) as mock_emit:
@@ -1081,12 +1081,12 @@ class TestPostAgentState:
         assert session_updates_module._snapshot_cache_ts == 0
         mock_emit.assert_awaited_once()
 
-    async def test_post_processing_state_emits_processing_run_event(
+    async def test_post_processing_state_emits_busy_run_event(
         self,
         api_client,
         auth_headers,
     ):
-        """Specific processing event uses the processing_issue state value."""
+        """Legacy processing pushes normalize to the busy run event."""
         with patch(
             "agent_backbone.api.run_events.emit_run_event",
             new_callable=AsyncMock,
@@ -1104,7 +1104,7 @@ class TestPostAgentState:
 
         assert resp.status_code == 200
         emitted_types = [call.args[0] for call in mock_emit.await_args_list]
-        assert emitted_types == ["agent.state_changed", "agent.processing"]
+        assert emitted_types == ["agent.state_changed", "agent.busy"]
 
 
 # ---------------------------------------------------------------------------
@@ -1121,7 +1121,12 @@ class TestPostAgentActivity:
         ) as mock_notify:
             resp = await api_client.post(
                 "/api/agents/feynman/activity",
-                json={"event": "tool_use", "ts": 1709500001.0, "tool": "Edit", "target": "config.py"},
+                json={
+                    "event": "tool_use",
+                    "ts": 1709500001.0,
+                    "tool": "Edit",
+                    "target": "config.py",
+                },
                 headers=auth_headers,
             )
         assert resp.status_code == 200

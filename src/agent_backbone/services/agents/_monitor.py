@@ -105,11 +105,7 @@ async def _monitor_agents_impl() -> dict:
         await emit_sessions_update(
             get_sio(),
             config,
-            StateService(
-                state_dir=config.agent_state.state_dir,
-                stale_threshold=config.agent_state.stale_threshold_seconds,
-                db=db,
-            ),
+            StateService(db=db),
             TmuxService(),
             only_if_changed=True,
         )

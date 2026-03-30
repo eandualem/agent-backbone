@@ -70,10 +70,10 @@ async def lifespan(app: FastAPI):
             sio=app.state.sio,
         )
 
-        # Reconcile disk agent states to DB (catches plan_waiting missed during downtime)
-        from agent_backbone.services.agents._reconciliation import reconcile_startup_states
+        # Seed DB state from live tmux/process observations on backbone restart.
+        from agent_backbone.services.agents._startup import seed_startup_states
 
-        await reconcile_startup_states(config=config, db=app.state.db)
+        await seed_startup_states(config=config, db=app.state.db)
 
         from agent_backbone.api.background import start_background_tasks
 

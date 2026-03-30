@@ -10,8 +10,8 @@ from telegram.ext import ContextTypes
 if TYPE_CHECKING:
     from agent_backbone.services.telegram.interface import TelegramService
 
-from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.agents.models import AgentState
+from agent_backbone.services.agents.interface import StateService
+from agent_backbone.services.agents.models import AgentState, StateSnapshot
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.messaging import deliver_message
 from agent_backbone.services.telegram._routing import _delivery_reply
@@ -25,6 +25,12 @@ from agent_backbone.services.terminal import (
     start_session,
     stop_session,
 )
+
+
+async def _reported_state(bot: TelegramService, agent: str) -> StateSnapshot:
+    """Load one agent state snapshot from PostgreSQL for Telegram commands."""
+    async with BackboneDB.connect(bot._config.database.async_url) as db:
+        return await StateService(db=db).get_reported_state(agent)
 
 
 async def cmd_help(
@@ -287,11 +293,10 @@ async def cmd_viewplan(
         return
 
     agent = context.args[0]
-    state_path = bot._config.agent_state.state_path
-    snapshot = read_state_file(state_path, agent)
+    snapshot = await _reported_state(bot, agent)
 
     if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
-        state_str = snapshot.state.value if snapshot else "unknown"
+        state_str = snapshot.state.value if snapshot else AgentState.OFFLINE.value
         await update.message.reply_text(
             f"Agent `{agent}` is not waiting for plan approval (state: {state_str})",
             parse_mode="Markdown",
@@ -332,11 +337,10 @@ async def cmd_approve(
         return
 
     agent = context.args[0]
-    state_path = bot._config.agent_state.state_path
-    snapshot = read_state_file(state_path, agent)
+    snapshot = await _reported_state(bot, agent)
 
     if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
-        state_str = snapshot.state.value if snapshot else "unknown"
+        state_str = snapshot.state.value if snapshot else AgentState.OFFLINE.value
         await update.message.reply_text(
             f"Agent `{agent}` is not waiting for plan approval (state: {state_str})",
             parse_mode="Markdown",

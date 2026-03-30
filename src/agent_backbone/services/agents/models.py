@@ -11,11 +11,13 @@ class AgentState(StrEnum):
 
     IDLE = "idle"
     STARTING = "starting"
-    PROCESSING_ISSUE = "processing_issue"
     BUSY = "busy"
     PLAN_WAITING = "plan_waiting"
     PERMISSION_WAITING = "permission_waiting"
-    UNKNOWN = "unknown"
+    SUB_AGENT_WAITING = "sub_agent_waiting"
+    OFFLINE = "offline"
+    PROCESSING_ISSUE = "busy"
+    UNKNOWN = "offline"
 
 
 @dataclass

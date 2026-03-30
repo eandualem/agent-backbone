@@ -19,6 +19,9 @@ from agent_backbone.services.terminal._sessions import (
     list_sessions_rich as _list_sessions_rich,
 )
 from agent_backbone.services.terminal._sessions import (
+    query_format_vars as _query_format_vars,
+)
+from agent_backbone.services.terminal._sessions import (
     start_session as _start_session,
 )
 from agent_backbone.services.terminal._sessions import (
@@ -54,6 +57,10 @@ class TmuxService:
     async def list_sessions_rich(self) -> list[dict]:
         """List sessions with metadata (windows, created, attached)."""
         return await _list_sessions_rich()
+
+    async def query_format_vars(self, session: str, format_str: str) -> dict[str, str]:
+        """Query tmux format variables for a session."""
+        return await _query_format_vars(session, format_str)
 
     async def capture_pane(self, session: str, lines: int = 50) -> str:
         """Capture recent terminal output from a session."""

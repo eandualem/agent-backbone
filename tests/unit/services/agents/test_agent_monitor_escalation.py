@@ -967,7 +967,7 @@ class TestMonitorAgentsIntegration:
 class TestOfflineDedup:
     @pytest.mark.asyncio
     async def test_offline_clears_db_state(self):
-        """After notifying about an offline agent, DB state is set to 'unknown'."""
+        """After notifying about an offline agent, DB state is set to 'offline'."""
         idle_snapshot = StateSnapshot(
             state=AgentState.IDLE,
             source="pull",
@@ -1024,11 +1024,13 @@ class TestOfflineDedup:
         # Escalation message was sent to ike via deliver_message
         mock_deliver.assert_called()
 
-        # DB state for feynman was cleared to "unknown"
+        # DB state for feynman was cleared to "offline"
         mock_db.set_agent_state.assert_called_once_with(
             session_name="feynman",
-            state="unknown",
+            state="offline",
             current_issue=None,
+            plan_file=None,
+            plan_title=None,
         )
 
     @pytest.mark.asyncio
@@ -1061,8 +1063,10 @@ class TestOfflineDedup:
 
         mock_db.set_agent_state.assert_awaited_once_with(
             session_name="feynman",
-            state="unknown",
+            state="offline",
             current_issue=None,
+            plan_file=None,
+            plan_title=None,
         )
 
 
@@ -1137,8 +1141,10 @@ class TestRoleEscalationTargetResolution:
         assert mock_deliver.await_args[0][0] == "bell-loveble"
         mock_db.set_agent_state.assert_awaited_once_with(
             session_name="loveble-agent",
-            state="unknown",
+            state="offline",
             current_issue=None,
+            plan_file=None,
+            plan_title=None,
         )
 
 

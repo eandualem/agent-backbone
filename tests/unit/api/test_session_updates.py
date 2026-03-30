@@ -233,8 +233,8 @@ class TestEmitSessionsUpdate:
 
 class TestBuildEnrichedAgent:
     @pytest.mark.asyncio
-    async def test_offline_session_uses_read_state_without_db_sync(self):
-        """Offline snapshot building must not sync stale push state back into DB."""
+    async def test_offline_session_uses_reported_state_without_db_sync(self):
+        """Offline snapshot building must use the reported DB state without a live refresh."""
         config = MagicMock()
         config.registry.entry_for_session.return_value = None
         config.registry.entities.get.return_value = None
@@ -242,11 +242,13 @@ class TestBuildEnrichedAgent:
         config.registry.repos = []
 
         state_svc = MagicMock()
-        state_svc.read_state.return_value = StateSnapshot(
-            state=AgentState.IDLE,
-            current_issue=42,
-            timestamp=123.0,
-            source="push",
+        state_svc.get_reported_state = AsyncMock(
+            return_value=StateSnapshot(
+                state=AgentState.IDLE,
+                current_issue=42,
+                timestamp=123.0,
+                source="db",
+            )
         )
         state_svc.get_state = AsyncMock()
 
@@ -259,14 +261,14 @@ class TestBuildEnrichedAgent:
             agent_type="coding_agent",
         )
 
-        state_svc.read_state.assert_called_once_with("ada")
+        state_svc.get_reported_state.assert_awaited_once_with("ada")
         state_svc.get_state.assert_not_awaited()
         assert agent.state == "offline"
         assert agent.current_issue == 42
 
     @pytest.mark.asyncio
-    async def test_online_unknown_state_remains_unknown(self):
-        """Online sessions must not coerce unknown state to idle."""
+    async def test_online_unknown_state_normalizes_to_offline(self):
+        """Removed unknown state now normalizes to offline."""
         config = MagicMock()
         config.registry.entry_for_session.return_value = None
         config.registry.entities.get.return_value = None
@@ -292,4 +294,4 @@ class TestBuildEnrichedAgent:
         )
 
         assert agent.online is True
-        assert agent.state == "unknown"
+        assert agent.state == "offline"

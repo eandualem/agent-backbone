@@ -40,7 +40,7 @@ class EnrichedAgent(BaseModel):
     home: str = ""
     type: str = "coding_agent"  # "named_entity" | "coding_agent"
     entity_type: str = "agent"  # "agent" | "service"
-    state: str = "unknown"
+    state: str = "offline"
     current_issue: int | None = None
     online: bool = False
     plan_file: str | None = None
@@ -84,7 +84,7 @@ class AgentStateDetail(BaseModel):
     """Detailed agent state snapshot."""
 
     session: str
-    state: str = "unknown"
+    state: str = "offline"
     current_issue: int | None = None
     timestamp: float = 0.0
     source: str = "default"
@@ -103,6 +103,8 @@ class StateUpdateRequest(BaseModel):
     ts: float = 0.0
     plan_file: str | None = None
     plan_title: str | None = None
+    hook_event: str = ""
+    cli: str = ""
 
 
 class ActivityCreateRequest(BaseModel):
@@ -254,7 +256,15 @@ HierarchyTier = Literal[
     "swarm-worker",
 ]
 
-HierarchyState = Literal["idle", "busy", "processing", "plan_waiting", "offline", "starting"]
+HierarchyState = Literal[
+    "idle",
+    "busy",
+    "plan_waiting",
+    "permission_waiting",
+    "sub_agent_waiting",
+    "offline",
+    "starting",
+]
 
 
 class HierarchySwarmWorkerNode(BaseModel):
@@ -604,6 +614,9 @@ class DashboardCounts(BaseModel):
     idle: int = 0
     busy: int = 0
     plan_waiting: int = 0
+    permission_waiting: int = 0
+    sub_agent_waiting: int = 0
+    starting: int = 0
     offline: int = 0
 
 

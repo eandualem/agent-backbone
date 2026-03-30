@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import respx
 
-from agent_backbone.config import AgentStateConfig, BackboneConfig, TelegramConfig
+from agent_backbone.config import BackboneConfig, TelegramConfig
+from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.registry import EntityEntry, EntityRegistry
 from agent_backbone.services.telegram import TelegramService, _delivery_reply
 from agent_backbone.services.telegram._topic_discovery import TopicDiscovery
@@ -351,23 +352,15 @@ class TestViewPlanCommand:
 
     @pytest.mark.asyncio
     async def test_viewplan_not_waiting(self, bot, tmp_path):
-        # Write idle state file
-        state_dir = tmp_path / "state"
-        state_dir.mkdir()
-        (state_dir / "ike.json").write_text('{"state": "idle", "ts": 1000000}')
-        bot._config = BackboneConfig(
-            telegram=TelegramConfig(
-                allowed_chat_ids=[],
-                topic_discovery_file=str(tmp_path / "topics.json"),
-            ),
-            agent_state=AgentStateConfig(
-                state_dir=str(state_dir),
-            ),
-        )
         update = _make_topic_update(thread_id=None, text="/viewplan ike")
         ctx = MagicMock()
         ctx.args = ["ike"]
-        await bot.cmd_viewplan(update, ctx)
+        with patch(
+            "agent_backbone.services.telegram._commands._reported_state",
+            new_callable=AsyncMock,
+            return_value=StateSnapshot(state=AgentState.IDLE, source="db"),
+        ):
+            await bot.cmd_viewplan(update, ctx)
         reply = update.message.reply_text.call_args[0][0]
         assert "not waiting" in reply
 
@@ -376,33 +369,20 @@ class TestViewPlanCommand:
         # Write plan file
         plan_file = tmp_path / "plan.md"
         plan_file.write_text("# My Plan\nStep 1: do stuff\nStep 2: profit")
-        # Write plan_waiting state
-        state_dir = tmp_path / "state"
-        state_dir.mkdir()
-        import json
-        import time
-
-        (state_dir / "feynman.json").write_text(
-            json.dumps(
-                {
-                    "state": "plan_waiting",
-                    "ts": time.time(),
-                    "plan_file": str(plan_file),
-                    "plan_title": "My Plan",
-                }
-            )
-        )
-        bot._config = BackboneConfig(
-            telegram=TelegramConfig(
-                allowed_chat_ids=[],
-                topic_discovery_file=str(tmp_path / "topics.json"),
-            ),
-            agent_state=AgentStateConfig(state_dir=str(state_dir)),
-        )
         update = _make_topic_update(thread_id=None, text="/viewplan feynman")
         ctx = MagicMock()
         ctx.args = ["feynman"]
-        await bot.cmd_viewplan(update, ctx)
+        with patch(
+            "agent_backbone.services.telegram._commands._reported_state",
+            new_callable=AsyncMock,
+            return_value=StateSnapshot(
+                state=AgentState.PLAN_WAITING,
+                source="db",
+                plan_file=str(plan_file),
+                plan_title="My Plan",
+            ),
+        ):
+            await bot.cmd_viewplan(update, ctx)
         reply = update.message.reply_text.call_args[0][0]
         assert "My Plan" in reply
         assert "Step 1" in reply
@@ -425,54 +405,39 @@ class TestApproveCommand:
 
     @pytest.mark.asyncio
     async def test_approve_not_waiting(self, bot, tmp_path):
-        state_dir = tmp_path / "state"
-        state_dir.mkdir()
-        (state_dir / "ike.json").write_text('{"state": "idle", "ts": 1000000}')
-        bot._config = BackboneConfig(
-            telegram=TelegramConfig(
-                allowed_chat_ids=[],
-                topic_discovery_file=str(tmp_path / "topics.json"),
-            ),
-            agent_state=AgentStateConfig(state_dir=str(state_dir)),
-        )
         update = _make_topic_update(thread_id=None, text="/approve ike")
         ctx = MagicMock()
         ctx.args = ["ike"]
-        await bot.cmd_approve(update, ctx)
+        with patch(
+            "agent_backbone.services.telegram._commands._reported_state",
+            new_callable=AsyncMock,
+            return_value=StateSnapshot(state=AgentState.IDLE, source="db"),
+        ):
+            await bot.cmd_approve(update, ctx)
         reply = update.message.reply_text.call_args[0][0]
         assert "not waiting" in reply
 
     @pytest.mark.asyncio
     async def test_approve_session_offline(self, bot, tmp_path):
-        state_dir = tmp_path / "state"
-        state_dir.mkdir()
-        import json
-        import time
-
-        (state_dir / "ike.json").write_text(
-            json.dumps(
-                {
-                    "state": "plan_waiting",
-                    "ts": time.time(),
-                    "plan_file": "/tmp/plan.md",
-                    "plan_title": "Test",
-                }
-            )
-        )
-        bot._config = BackboneConfig(
-            telegram=TelegramConfig(
-                allowed_chat_ids=[],
-                topic_discovery_file=str(tmp_path / "topics.json"),
-            ),
-            agent_state=AgentStateConfig(state_dir=str(state_dir)),
-        )
         update = _make_topic_update(thread_id=None, text="/approve ike")
         ctx = MagicMock()
         ctx.args = ["ike"]
-        with patch(
-            "agent_backbone.services.telegram._commands.session_exists",
-            new_callable=AsyncMock,
-            return_value=False,
+        with (
+            patch(
+                "agent_backbone.services.telegram._commands._reported_state",
+                new_callable=AsyncMock,
+                return_value=StateSnapshot(
+                    state=AgentState.PLAN_WAITING,
+                    source="db",
+                    plan_file="/tmp/plan.md",
+                    plan_title="Test",
+                ),
+            ),
+            patch(
+                "agent_backbone.services.telegram._commands.session_exists",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
         ):
             await bot.cmd_approve(update, ctx)
         reply = update.message.reply_text.call_args[0][0]
@@ -480,32 +445,20 @@ class TestApproveCommand:
 
     @pytest.mark.asyncio
     async def test_approve_sends_keys(self, bot, tmp_path):
-        state_dir = tmp_path / "state"
-        state_dir.mkdir()
-        import json
-        import time
-
-        (state_dir / "ike.json").write_text(
-            json.dumps(
-                {
-                    "state": "plan_waiting",
-                    "ts": time.time(),
-                    "plan_file": "/tmp/plan.md",
-                    "plan_title": "Test",
-                }
-            )
-        )
-        bot._config = BackboneConfig(
-            telegram=TelegramConfig(
-                allowed_chat_ids=[],
-                topic_discovery_file=str(tmp_path / "topics.json"),
-            ),
-            agent_state=AgentStateConfig(state_dir=str(state_dir)),
-        )
         update = _make_topic_update(thread_id=None, text="/approve ike")
         ctx = MagicMock()
         ctx.args = ["ike"]
         with (
+            patch(
+                "agent_backbone.services.telegram._commands._reported_state",
+                new_callable=AsyncMock,
+                return_value=StateSnapshot(
+                    state=AgentState.PLAN_WAITING,
+                    source="db",
+                    plan_file="/tmp/plan.md",
+                    plan_title="Test",
+                ),
+            ),
             patch(
                 "agent_backbone.services.telegram._commands.session_exists",
                 new_callable=AsyncMock,

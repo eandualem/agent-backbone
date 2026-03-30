@@ -19,11 +19,9 @@ async def register_state(
     """Create and register the state service."""
     from agent_backbone.services.agents.interface import StateService
 
-    service = StateService(
-        state_dir=config.agent_state.state_dir,
-        stale_threshold=config.agent_state.stale_threshold_seconds,
-        db=db,
-    )
+    del config
+
+    service = StateService(db=db)
     lifecycle.register("state", service)
     return service
 

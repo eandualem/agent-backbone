@@ -8,11 +8,28 @@ from datetime import UTC, datetime
 from agent_backbone.config import REPO_NAME_PATTERN, BackboneConfig
 from agent_backbone.models import IssueData, acknowledgment_entities, parse_from_tag
 from agent_backbone.services.agents._delivery_check import has_commented_on_issue, should_deliver
-from agent_backbone.services.agents._inference import get_agent_state
+from agent_backbone.services.agents.interface import StateService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.messaging import deliver_message
 
 log = logging.getLogger(__name__)
+
+
+async def get_agent_state(
+    state_dir: object,
+    session: str,
+    stale_threshold: float = 300.0,
+):
+    """Compatibility shim for legacy callers patched at this module boundary."""
+    del state_dir, stale_threshold
+    db: BackboneDB | None = None
+    try:
+        from agent_backbone.services._locator import get_db
+
+        db = get_db()
+    except RuntimeError:
+        pass
+    return await StateService(db=db).get_state(session)
 
 
 def _format_next_issue(issue: IssueData) -> str:
@@ -44,7 +61,6 @@ async def deliver_pending_issues(
     """
     result: dict[str, str] = {}
     comment_ack_cache: dict[tuple[str, int], set[str]] = {}
-
     async def is_acknowledged(
         issue_number: int,
         target_entity: str,

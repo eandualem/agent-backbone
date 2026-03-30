@@ -287,7 +287,7 @@ class TestHierarchyEndpoint:
 
         bell_wf = next(node for node in ike["children"] if node["id"] == "bell-wf")
         assert bell_wf["managedOrg"] == "WF"
-        assert bell_wf["state"] == "processing"
+        assert bell_wf["state"] == "busy"
         assert bell_wf["codingAgents"] == [
             {
                 "id": "agent-backbone",

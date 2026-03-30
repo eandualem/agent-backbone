@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.agents import (
     AgentState,
-    StateSnapshot,
     find_outgoing_comment,
     get_agent_state,
     has_commented_on_issue,
@@ -42,7 +41,7 @@ class TestReadStateFile:
             json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
         )
         result = read_state_file(tmp_path, "ike")
-        assert result.state == AgentState.PROCESSING_ISSUE
+        assert result.state == AgentState.BUSY
         assert result.current_issue == 42
 
     def test_missing_file(self, tmp_path):
@@ -295,7 +294,7 @@ class TestGetAgentState:
         )
         with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
             result = await get_agent_state(tmp_path, "ike")
-        assert result.state == AgentState.PROCESSING_ISSUE
+        assert result.state == AgentState.BUSY
         assert result.source == "push"
 
     async def test_fresh_busy_push_is_authoritative_when_pane_is_idle(self, tmp_path):
@@ -321,7 +320,7 @@ class TestGetAgentState:
             return_value="user@host $",
         ):
             result = await get_agent_state(tmp_path, "ike")
-        assert result.state == AgentState.PROCESSING_ISSUE
+        assert result.state == AgentState.BUSY
         assert result.source == "push"
 
     async def test_fresh_busy_push_survives_unknown_pane(self, tmp_path):
@@ -490,7 +489,7 @@ class TestRowToSnapshot:
             "plan_title": "DB migration",
         }
         snap = _row_to_snapshot(row)
-        assert snap.state == AgentState.PROCESSING_ISSUE
+        assert snap.state == AgentState.BUSY
         assert snap.current_issue == 571
         assert snap.started_at == 1709499000.0
         assert snap.plan_file == "/tmp/plan.md"
@@ -528,61 +527,58 @@ class TestStateServiceDBFirst:
         assert snap.current_issue is None
         assert snap.source == "db"
 
-    async def test_db_working_state_uses_live_reconciliation(self, db, tmp_path):
-        """Cached working states are refreshed from the live reconciler."""
+    async def test_db_working_state_returns_reported_snapshot(self, db, tmp_path):
+        """DB-backed states are returned directly without live reconciliation."""
         await db.set_agent_state("ike", "busy", current_issue=42, ts="1709500000.0")
         svc = StateService(state_dir=str(tmp_path), db=db)
-        live_snapshot = StateSnapshot(
-            state=AgentState.IDLE,
-            source="pull",
-            timestamp=1709500100.0,
-        )
-        with patch(
-            f"{_IFACE}._get_agent_state",
-            new_callable=AsyncMock,
-            return_value=live_snapshot,
-        ):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.source == "pull"
+        snap = await svc.get_state("ike")
+        assert snap.state == AgentState.BUSY
+        assert snap.current_issue == 42
+        assert snap.source == "db"
 
         row = await db.get_agent_state("ike")
         assert row is not None
-        assert row["state"] == "idle"
-        assert row["current_issue"] is None
-        assert row["ts"] == "1709500100.0"
+        assert row["state"] == "busy"
+        assert row["current_issue"] == 42
+        assert row["ts"] == "1709500000.0"
 
-    async def test_fallback_to_file_when_no_db_row(self, db, tmp_path):
-        """When DB has no row, falls back to file+tmux."""
-        state_file = tmp_path / "ike.json"
-        state_file.write_text(json.dumps({"state": "idle", "issue": None, "ts": time.time()}))
+    async def test_missing_db_row_uses_observed_offline_default(self, db, tmp_path):
+        """When DB has no row, StateService synthesizes an observed offline snapshot."""
         svc = StateService(state_dir=str(tmp_path), db=db)
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock):
+        with patch(
+            f"{_IFACE}.observe_session",
+            new_callable=AsyncMock,
+            return_value=MagicMock(online=False, has_child_processes=False),
+        ):
             snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.source == "push"
+        assert snap.state == AgentState.OFFLINE
+        assert snap.source == "observed"
 
-    async def test_fallback_when_no_db(self, tmp_path):
-        """When StateService has no db, uses file+tmux."""
-        state_file = tmp_path / "ike.json"
-        state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
+    async def test_missing_db_service_uses_observed_offline_default(self, tmp_path):
+        """When StateService has no DB, it still uses live observation defaults."""
         svc = StateService(state_dir=str(tmp_path), db=None)
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
+        with patch(
+            f"{_IFACE}.observe_session",
+            new_callable=AsyncMock,
+            return_value=MagicMock(online=False, has_child_processes=False),
+        ):
             snap = await svc.get_state("ike")
-        assert snap.state == AgentState.BUSY
-        assert snap.source == "push"
+        assert snap.state == AgentState.OFFLINE
+        assert snap.source == "observed"
 
-    async def test_db_error_falls_back_to_file(self, tmp_path):
-        """When DB raises an error, falls back to file."""
-        state_file = tmp_path / "ike.json"
-        state_file.write_text(json.dumps({"state": "idle", "ts": time.time()}))
+    async def test_db_error_uses_observed_offline_default(self, tmp_path):
+        """When DB raises, StateService falls back to live observation defaults."""
         mock_db = MagicMock()
         mock_db.get_agent_state = AsyncMock(side_effect=RuntimeError("DB down"))
         svc = StateService(state_dir=str(tmp_path), db=mock_db)
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock):
+        with patch(
+            f"{_IFACE}.observe_session",
+            new_callable=AsyncMock,
+            return_value=MagicMock(online=False, has_child_processes=False),
+        ):
             snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.source == "push"
+        assert snap.state == AgentState.OFFLINE
+        assert snap.source == "observed"
 
 
 class TestShouldDeliver:

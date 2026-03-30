@@ -10,6 +10,11 @@ from agent_backbone.services.agents.models import AgentState, StateSnapshot
 
 log = logging.getLogger(__name__)
 
+_LEGACY_STATE_ALIASES = {
+    "processing_issue": AgentState.BUSY.value,
+    "unknown": AgentState.OFFLINE.value,
+}
+
 
 def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
     """Read push-based state from ~/.claude/state/{session}.json.
@@ -25,6 +30,7 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
     try:
         data = json.loads(state_file.read_text())
         state_str = data.get("state", "unknown")
+        state_str = _LEGACY_STATE_ALIASES.get(state_str, state_str)
         try:
             state = AgentState(state_str)
         except ValueError:

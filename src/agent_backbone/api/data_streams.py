@@ -163,11 +163,7 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
         config = get_config()
         db = get_db()
         gh = get_gh()
-        state_svc = StateService(
-            state_dir=config.agent_state.state_dir,
-            stale_threshold=config.agent_state.stale_threshold_seconds,
-            db=db,
-        )
+        state_svc = StateService(db=db)
         tmux_svc = TmuxService()
         agents = await _fetch_agents(config, state_svc, tmux_svc)
         counts = _compute_counts(agents)
@@ -261,11 +257,7 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
 
         config = get_config()
         db = get_db()
-        state_svc = StateService(
-            state_dir=config.agent_state.state_dir,
-            stale_threshold=config.agent_state.stale_threshold_seconds,
-            db=db,
-        )
+        state_svc = StateService(db=db)
         tmux_svc = TmuxService()
         all_sessions = list(config.registry.sessions_map.values())
         active = await tmux_svc.list_sessions()
@@ -275,7 +267,7 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
         plans: list[dict] = []
         for session in all_sessions:
             snapshot = await state_svc.get_state(session)
-            if snapshot.state in (AgentState.PLAN_WAITING, AgentState.PERMISSION_WAITING):
+            if snapshot.state == AgentState.PLAN_WAITING:
                 plans.append(
                     PlanDetail(
                         session=session,
@@ -355,7 +347,10 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
                         id=item_id,
                         entity=entity,
                         time=time_str,
-                        label=routine_labels.get(time_str, schedule.get("description", "Heartbeat")),
+                        label=routine_labels.get(
+                            time_str,
+                            schedule.get("description", "Heartbeat"),
+                        ),
                         type="heartbeat",
                         done=done_state.get(item_id, False),
                     ).model_dump(mode="json")

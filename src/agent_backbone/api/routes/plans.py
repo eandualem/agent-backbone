@@ -61,7 +61,7 @@ async def get_plan_detail(
     state_svc: StateService = Depends(get_state_service),
 ):
     """Get plan details including file content for a specific session."""
-    snapshot = state_svc.read_state(session)
+    snapshot = await state_svc.get_reported_state(session)
     if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
         raise HTTPException(status_code=404, detail=f"No pending plan for session '{session}'")
 
@@ -114,7 +114,7 @@ async def reject_plan(
     Sends Escape to exit plan mode, then delivers the feedback message
     so the agent sees why the plan was rejected.
     """
-    snapshot = state_svc.read_state(session)
+    snapshot = await state_svc.get_reported_state(session)
     if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
         raise HTTPException(
             status_code=409, detail=f"Session '{session}' is not in plan_waiting state"
@@ -146,7 +146,7 @@ async def respond_to_plan(
     Delivers the literal input text to the session via send_message,
     which handles load-buffer/paste-buffer safely.
     """
-    snapshot = state_svc.read_state(session)
+    snapshot = await state_svc.get_reported_state(session)
     if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
         raise HTTPException(
             status_code=409, detail=f"Session '{session}' is not in plan_waiting state"

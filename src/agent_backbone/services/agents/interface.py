@@ -1,46 +1,42 @@
 """Agent state tracking service and monitoring coordination service — LifecycleAware wrappers."""
 
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import logging
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents._file_reader import read_state_file
 from agent_backbone.services.agents._heartbeat import (
     load_schedules as _load_schedules,
-)
-from agent_backbone.services.agents._heartbeat import (
     save_schedules as _save_schedules,
 )
-from agent_backbone.services.agents._inference import get_agent_state as _get_agent_state
 from agent_backbone.services.agents.models import AgentState, StateSnapshot
+from agent_backbone.services.agents._observation import (
+    observe_session,
+    snapshot_from_observation,
+)
 
 if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
 
 log = logging.getLogger(__name__)
-_LIVE_RECONCILIATION_STATES = frozenset(
-    {
-        AgentState.STARTING,
-        AgentState.BUSY,
-        AgentState.PROCESSING_ISSUE,
-        AgentState.UNKNOWN,
-    }
-)
 
-# Pushed states are authoritative for this duration (seconds).
-# Pane inference only kicks in after this window expires.
-_PUSH_AUTHORITY_SECONDS = 60.0
+_LEGACY_STATE_ALIASES = {
+    "processing_issue": AgentState.BUSY.value,
+    "unknown": AgentState.OFFLINE.value,
+}
 
 
 def _row_to_snapshot(row: dict) -> StateSnapshot:
     """Convert a DB agent_states row dict to a StateSnapshot."""
+    state_str = _LEGACY_STATE_ALIASES.get(
+        str(row.get("state", AgentState.OFFLINE.value)),
+        str(row.get("state", AgentState.OFFLINE.value)),
+    )
     try:
-        state = AgentState(row.get("state", "unknown"))
+        state = AgentState(state_str)
     except ValueError:
-        state = AgentState.UNKNOWN
+        state = AgentState.OFFLINE
 
     ts_raw = row.get("ts")
     timestamp = float(ts_raw) if ts_raw else 0.0
@@ -59,53 +55,17 @@ def _row_to_snapshot(row: dict) -> StateSnapshot:
     )
 
 
-def _should_use_db_snapshot(snapshot: StateSnapshot, *, recently_pushed: bool = False) -> bool:
-    """Whether a persisted snapshot is safe to reuse without live verification.
-
-    Recently pushed states are always trusted — they come from authoritative
-    hooks. Older states in working categories trigger live reconciliation.
-    """
-    if recently_pushed:
-        return True
-    return snapshot.state not in _LIVE_RECONCILIATION_STATES
-
-
-# Module-level registry of recent authoritative pushes: session → monotonic timestamp.
-# Populated by record_push(), checked by get_state().
-_push_timestamps: dict[str, float] = {}
-
-
-def record_push(session: str) -> None:
-    """Mark a session as having received an authoritative push.
-
-    Called from the POST /api/agents/{session}/state route handler.
-    """
-    _push_timestamps[session] = time.monotonic()
+async def _default_snapshot(session: str) -> StateSnapshot:
+    """Return the synthesized fallback snapshot for a session with no DB row."""
+    observation = await observe_session(session)
+    if observation.online:
+        return StateSnapshot(state=AgentState.STARTING, source="default")
+    return snapshot_from_observation(observation, timestamp=0.0)
 
 
 def reset_push_timestamps() -> None:
-    """Clear push authority tracking (for test isolation)."""
-    _push_timestamps.clear()
-
-
-def _is_recently_pushed(session: str) -> bool:
-    """Whether the session received an authoritative push within the authority window."""
-    ts = _push_timestamps.get(session)
-    if ts is None:
-        return False
-    return (time.monotonic() - ts) < _PUSH_AUTHORITY_SECONDS
-
-
-def _should_sync_db_snapshot(current: StateSnapshot | None, live: StateSnapshot) -> bool:
-    """Whether a live reconciliation result should refresh the persisted cache."""
-    if current is None or live.state == AgentState.UNKNOWN:
-        return False
-    return (
-        current.state != live.state
-        or current.current_issue != live.current_issue
-        or current.plan_file != live.plan_file
-        or current.plan_title != live.plan_title
-    )
+    """Compatibility no-op for legacy test fixtures."""
+    return None
 
 
 class StateService:
@@ -117,61 +77,63 @@ class StateService:
         stale_threshold: int = 300,
         db: BackboneDB | None = None,
     ) -> None:
-        self._state_dir = Path(state_dir).expanduser()
-        self._stale_threshold = stale_threshold
+        del state_dir, stale_threshold
         self._db = db
 
     async def start(self) -> None:
-        log.info("State service started: state_dir=%s, db=%s", self._state_dir, bool(self._db))
+        log.info("State service started: db=%s", bool(self._db))
 
     async def stop(self) -> None:
         pass
 
     async def health_check(self) -> dict:
         return {
-            "healthy": self._state_dir.is_dir(),
+            "healthy": self._db is not None,
             "service": "state",
-            "state_dir_exists": self._state_dir.is_dir(),
+            "db_backed": self._db is not None,
         }
 
     # --- DI surface for route handlers ---
 
     async def get_state(self, session: str) -> StateSnapshot:
-        """Get reconciled agent state — DB first, file+tmux fallback.
+        """Get the current state for one session from PostgreSQL or live defaults."""
+        snapshot = await self.get_reported_state(session)
+        if snapshot.state == AgentState.OFFLINE:
+            observation = await observe_session(session)
+            if observation.online:
+                return StateSnapshot(
+                    state=AgentState.STARTING,
+                    current_issue=snapshot.current_issue,
+                    timestamp=snapshot.timestamp,
+                    source="default",
+                    started_at=snapshot.started_at,
+                    plan_file=snapshot.plan_file,
+                    plan_title=snapshot.plan_title,
+                )
+        return snapshot
 
-        Recently pushed states (within _PUSH_AUTHORITY_SECONDS) are trusted
-        without pane inference. Pane inference only applies when the DB
-        state is stale or absent.
-        """
-        db_snapshot: StateSnapshot | None = None
+    async def get_reported_state(self, session: str) -> StateSnapshot:
+        """Get the raw reported state for one session from PostgreSQL."""
+        if self._db is None:
+            return await _default_snapshot(session)
+
         if self._db is not None:
             try:
                 row = await self._db.get_agent_state(session)
                 if row is not None:
-                    db_snapshot = _row_to_snapshot(row)
-                    recently_pushed = _is_recently_pushed(session)
-                    if _should_use_db_snapshot(db_snapshot, recently_pushed=recently_pushed):
-                        return db_snapshot
+                    return _row_to_snapshot(row)
             except Exception:
-                log.warning("DB state read failed for %s, falling back to file", session)
-        live_snapshot = await _get_agent_state(self._state_dir, session, self._stale_threshold)
-        if self._db is not None and _should_sync_db_snapshot(db_snapshot, live_snapshot):
-            try:
-                await self._db.set_agent_state(
-                    session,
-                    live_snapshot.state.value,
-                    current_issue=live_snapshot.current_issue,
-                    ts=str(live_snapshot.timestamp) if live_snapshot.timestamp else None,
-                    plan_file=live_snapshot.plan_file,
-                    plan_title=live_snapshot.plan_title,
-                )
-            except Exception:
-                log.warning("DB state refresh failed for %s after live reconciliation", session)
-        return live_snapshot
+                log.warning("DB state read failed for %s", session)
+        return await _default_snapshot(session)
 
-    def read_state(self, session: str) -> StateSnapshot | None:
-        """Read push-based state file for a session."""
-        return read_state_file(self._state_dir, session)
+    async def observe_session(self, session: str):
+        """Observe a session's tmux/process state directly."""
+        return await observe_session(session)
+
+    async def observe_state(self, session: str) -> StateSnapshot:
+        """Observe the tmux/process-derived state directly."""
+        observation = await observe_session(session)
+        return snapshot_from_observation(observation)
 
 
 class MonitoringService:
