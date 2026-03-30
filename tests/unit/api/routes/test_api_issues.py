@@ -199,7 +199,7 @@ class TestListIssues:
             issue_type=None,
             label=None,
             page=1,
-            per_page=50,
+            per_page=200,
         )
 
     async def test_list_issues_filter_by_for_entity(
@@ -215,7 +215,7 @@ class TestListIssues:
             issue_type=None,
             label=None,
             page=1,
-            per_page=50,
+            per_page=200,
         )
 
     async def test_list_issues_filter_by_from_entity(
@@ -231,7 +231,7 @@ class TestListIssues:
             issue_type=None,
             label=None,
             page=1,
-            per_page=50,
+            per_page=200,
         )
 
     async def test_list_issues_filter_by_type(
@@ -247,7 +247,7 @@ class TestListIssues:
             issue_type="bug",
             label=None,
             page=1,
-            per_page=50,
+            per_page=200,
         )
 
     async def test_list_issues_filter_by_state(
@@ -263,7 +263,7 @@ class TestListIssues:
             issue_type=None,
             label=None,
             page=1,
-            per_page=50,
+            per_page=200,
         )
 
     async def test_list_issues_requires_auth(self, issues_client):

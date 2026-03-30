@@ -110,7 +110,7 @@ async def list_issues(
     issue_type: str | None = Query(default=None, alias="type"),
     label: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=50, ge=1, le=100),
+    per_page: int = Query(default=200, ge=1, le=500),
     issue_service: IssueService = Depends(get_issue_service),
 ):
     """List issues from the canonical projection."""
