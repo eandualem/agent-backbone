@@ -6,12 +6,15 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from agent_backbone.services.agents.models import AgentState, StateSnapshot
 from agent_backbone.services.terminal._core import session_exists
 from agent_backbone.services.terminal._sessions import query_format_vars
 
 log = logging.getLogger(__name__)
+
+_INFRASTRUCTURE_PROCESS_PREFIXES = ("docker", "containerd")
 
 
 @dataclass(frozen=True)
@@ -37,7 +40,42 @@ async def _has_child_processes(parent_pid: int | None) -> bool:
         stderr=asyncio.subprocess.DEVNULL,
     )
     stdout, _ = await proc.communicate()
-    return proc.returncode == 0 and bool(stdout.decode().strip())
+    if proc.returncode != 0:
+        return False
+
+    child_pids = [
+        pid.strip()
+        for pid in stdout.decode().splitlines()
+        if pid.strip().isdigit()
+    ]
+    if not child_pids:
+        return False
+
+    child_proc = await asyncio.create_subprocess_exec(
+        "ps",
+        "-o",
+        "comm=",
+        "-p",
+        ",".join(child_pids),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    child_stdout, _ = await child_proc.communicate()
+    if child_proc.returncode != 0:
+        return True
+
+    child_commands = [
+        line.strip()
+        for line in child_stdout.decode().splitlines()
+        if line.strip()
+    ]
+    return any(not _is_infrastructure_process(command) for command in child_commands)
+
+
+def _is_infrastructure_process(command: str) -> bool:
+    """Whether a child command is infrastructure noise, not a sub-agent."""
+    executable = Path(command.strip()).name.lower()
+    return executable.startswith(_INFRASTRUCTURE_PROCESS_PREFIXES)
 
 
 async def observe_session(session: str) -> SessionObservation:
