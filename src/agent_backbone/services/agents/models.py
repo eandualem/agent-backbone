@@ -16,8 +16,6 @@ class AgentState(StrEnum):
     PERMISSION_WAITING = "permission_waiting"
     SUB_AGENT_WAITING = "sub_agent_waiting"
     OFFLINE = "offline"
-    PROCESSING_ISSUE = "busy"
-    UNKNOWN = "offline"
 
 
 @dataclass

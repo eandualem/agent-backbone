@@ -71,13 +71,7 @@ def reset_push_timestamps() -> None:
 class StateService:
     """Agent state tracking service implementing LifecycleAware."""
 
-    def __init__(
-        self,
-        state_dir: str = "~/.claude/state",
-        stale_threshold: int = 300,
-        db: BackboneDB | None = None,
-    ) -> None:
-        del state_dir, stale_threshold
+    def __init__(self, db: BackboneDB | None = None) -> None:
         self._db = db
 
     async def start(self) -> None:
@@ -117,13 +111,13 @@ class StateService:
         if self._db is None:
             return await _default_snapshot(session)
 
-        if self._db is not None:
-            try:
-                row = await self._db.get_agent_state(session)
-                if row is not None:
-                    return _row_to_snapshot(row)
-            except Exception:
-                log.warning("DB state read failed for %s", session)
+        try:
+            row = await self._db.get_agent_state(session)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to read agent state for {session}") from exc
+
+        if row is not None:
+            return _row_to_snapshot(row)
         return await _default_snapshot(session)
 
     async def observe_session(self, session: str):

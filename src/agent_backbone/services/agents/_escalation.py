@@ -34,23 +34,6 @@ class TelegramService:
         return await _TelegramService.send_notification(*args, **kwargs)
 
 
-async def get_agent_state(
-    state_dir: object,
-    session: str,
-    stale_threshold: float = 300.0,
-):
-    """Compatibility shim for legacy callers patched at this module boundary."""
-    del state_dir, stale_threshold
-    db: BackboneDB | None = None
-    try:
-        from agent_backbone.services._locator import get_db
-
-        db = get_db()
-    except RuntimeError:
-        pass
-    return await StateService(db=db).get_state(session)
-
-
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
     """Check if an escalation should fire, with in-memory dedup.
 
@@ -256,16 +239,13 @@ async def check_for_stalls(
     stalls: list[dict] = []
     threshold = config.escalation.stall_threshold_seconds
     tracked_sessions = config.registry.tracked_sessions
+    state_svc = StateService(db=db)
 
     for entity, session_name in tracked_sessions.items():
         if not session_name or session_name not in active_sessions:
             continue
 
-        snapshot = await get_agent_state(
-            config.agent_state.state_path,
-            session_name,
-            config.agent_state.stale_threshold_seconds,
-        )
+        snapshot = await state_svc.get_state(session_name)
 
         # Only BUSY sessions can be stalled (waiting states are blocked, not stalled).
         if snapshot.state != AgentState.BUSY:
@@ -295,11 +275,7 @@ async def check_for_stalls(
         for entity, session_name in tracked_sessions.items():
             if not session_name or session_name not in active_sessions:
                 continue
-            snapshot = await get_agent_state(
-                config.agent_state.state_path,
-                session_name,
-                config.agent_state.stale_threshold_seconds,
-            )
+            snapshot = await state_svc.get_state(session_name)
             await db.set_agent_state(
                 session_name=session_name,
                 state=snapshot.state.value,
@@ -515,6 +491,7 @@ async def check_plan_waiting(
     """Detect plan-waiting agents and send Telegram + orchestrator notification."""
     now = time.monotonic()
     plan_dedup_seconds = 1800  # 30 minutes
+    state_svc = StateService(db=db)
 
     # Clean expired entries
     expired = [k for k, t in _plan_notify_dedup.items() if now - t > plan_dedup_seconds]
@@ -528,11 +505,7 @@ async def check_plan_waiting(
         if not session_name or session_name not in active_sessions:
             continue
 
-        snapshot = await get_agent_state(
-            config.agent_state.state_path,
-            session_name,
-            config.agent_state.stale_threshold_seconds,
-        )
+        snapshot = await state_svc.get_state(session_name)
         if snapshot.state != AgentState.PLAN_WAITING:
             continue
 

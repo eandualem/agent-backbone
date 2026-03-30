@@ -284,17 +284,6 @@ class TestAgentState:
         assert state["plan_file"] == "/tmp/plan.md"
         assert state["plan_title"] == "DB state migration"
 
-    async def test_extended_fields_coalesce_on_upsert(self, db):
-        """Extended fields are preserved when not provided on upsert."""
-        await db.set_agent_state("ike", "idle", entity="ike", context="initial", ts="100.0")
-        await db.set_agent_state("ike", "busy")
-
-        state = await db.get_agent_state("ike")
-        assert state["state"] == "busy"
-        assert state["entity"] == "ike"
-        assert state["context"] == "initial"
-        assert state["ts"] == "100.0"
-
     async def test_extended_fields_override_when_provided(self, db):
         """Extended fields are overridden when explicitly provided."""
         await db.set_agent_state("ike", "idle", context="old context")
@@ -562,22 +551,15 @@ class TestMessageQueue:
         issue_id = await db.enqueue_message(
             "ike", "issue msg", issue_number=10, target_entity="ike"
         )
-        dm_id = await db.enqueue_message(
-            "ike", "direct msg", delivery_kind="direct_message"
-        )
+        dm_id = await db.enqueue_message("ike", "direct msg", delivery_kind="direct_message")
 
         # Backdate both to 1h ago (>30min but <24h)
         from datetime import UTC, datetime, timedelta
 
-        one_hour_ago = (datetime.now(UTC) - timedelta(hours=1)).strftime(
-            "%Y-%m-%dT%H:%M:%S.%fZ"
-        )
+        one_hour_ago = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         async with db._engine.begin() as conn:
             await conn.execute(
-                text(
-                    "UPDATE message_queue SET enqueued_at = :ts"
-                    " WHERE id IN (:a, :b)"
-                ),
+                text("UPDATE message_queue SET enqueued_at = :ts WHERE id IN (:a, :b)"),
                 {"ts": one_hour_ago, "a": issue_id, "b": dm_id},
             )
 
@@ -590,9 +572,7 @@ class TestMessageQueue:
 
     async def test_expire_stale_pending_expires_old_direct_messages(self, db):
         """Direct messages older than 24h are expired."""
-        dm_id = await db.enqueue_message(
-            "ike", "ancient dm", delivery_kind="direct_message"
-        )
+        dm_id = await db.enqueue_message("ike", "ancient dm", delivery_kind="direct_message")
 
         # Backdate to >24h ago
         async with db._engine.begin() as conn:

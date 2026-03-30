@@ -267,8 +267,8 @@ class TestBuildEnrichedAgent:
         assert agent.current_issue == 42
 
     @pytest.mark.asyncio
-    async def test_online_unknown_state_normalizes_to_offline(self):
-        """Removed unknown state now normalizes to offline."""
+    async def test_online_offline_state_remains_offline(self):
+        """Reported offline state stays offline for online sessions."""
         config = MagicMock()
         config.registry.entry_for_session.return_value = None
         config.registry.entities.get.return_value = None
@@ -278,7 +278,7 @@ class TestBuildEnrichedAgent:
         state_svc = MagicMock()
         state_svc.get_state = AsyncMock(
             return_value=StateSnapshot(
-                state=AgentState.UNKNOWN,
+                state=AgentState.OFFLINE,
                 timestamp=123.0,
                 source="pull",
             )

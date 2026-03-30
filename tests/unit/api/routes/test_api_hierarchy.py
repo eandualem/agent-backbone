@@ -181,7 +181,7 @@ def _make_state_service(snapshot_map: dict[str, StateSnapshot]) -> MagicMock:
     async def get_state(session: str) -> StateSnapshot:
         return snapshot_map.get(
             session,
-            StateSnapshot(state=AgentState.UNKNOWN, source="default"),
+            StateSnapshot(state=AgentState.OFFLINE, source="default"),
         )
 
     svc.get_state = AsyncMock(side_effect=get_state)
@@ -219,7 +219,7 @@ class TestHierarchyEndpoint:
             {
                 "leo": _snapshot(AgentState.BUSY),
                 "ike": _snapshot(AgentState.IDLE),
-                "bell-wf": _snapshot(AgentState.PROCESSING_ISSUE, issue=755),
+                "bell-wf": _snapshot(AgentState.BUSY, issue=755),
                 "bell-loveble": _snapshot(AgentState.IDLE),
                 "ada": _snapshot(AgentState.PLAN_WAITING),
                 "euclid-wf": _snapshot(AgentState.IDLE),

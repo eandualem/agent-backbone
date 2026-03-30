@@ -34,6 +34,7 @@ from agent_backbone.services.agents import (
     handle_stalls,
     monitor_agents,
 )
+from agent_backbone.services.agents.interface import StateService
 from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry, RepoInfo
 
 # Patch target prefixes (keep patch() lines under 100 chars)
@@ -194,7 +195,7 @@ class TestCheckForStalls:
     @pytest.mark.asyncio
     async def test_detects_stall(self, escalation_config):
         stalled_snapshot = StateSnapshot(
-            state=AgentState.PROCESSING_ISSUE,
+            state=AgentState.BUSY,
             current_issue=42,
             timestamp=time.time() - 6000,  # 100 minutes, over 90m threshold
             started_at=time.time() - 7200,
@@ -202,14 +203,13 @@ class TestCheckForStalls:
         )
         mock_db = AsyncMock()
 
-        with patch(
-            f"{_ESC}.get_agent_state",
-            new_callable=AsyncMock,
+        with patch.object(
+            StateService,
+            "get_state",
+            autospec=True,
             return_value=stalled_snapshot,
         ):
-            stalls = await check_for_stalls(
-                escalation_config, {"ike", "feynman", "leo"}, mock_db
-            )
+            stalls = await check_for_stalls(escalation_config, {"ike", "feynman", "leo"}, mock_db)
 
         assert len(stalls) >= 1
         stall_entities = [s["entity"] for s in stalls]
@@ -223,14 +223,13 @@ class TestCheckForStalls:
         )
         mock_db = AsyncMock()
 
-        with patch(
-            f"{_ESC}.get_agent_state",
-            new_callable=AsyncMock,
+        with patch.object(
+            StateService,
+            "get_state",
+            autospec=True,
             return_value=idle_snapshot,
         ):
-            stalls = await check_for_stalls(
-                escalation_config, {"ike", "feynman", "leo"}, mock_db
-            )
+            stalls = await check_for_stalls(escalation_config, {"ike", "feynman", "leo"}, mock_db)
 
         assert len(stalls) == 0
 
@@ -246,14 +245,13 @@ class TestCheckForStalls:
         )
         mock_db = AsyncMock()
 
-        with patch(
-            f"{_ESC}.get_agent_state",
-            new_callable=AsyncMock,
+        with patch.object(
+            StateService,
+            "get_state",
+            autospec=True,
             return_value=busy_no_issue,
         ):
-            stalls = await check_for_stalls(
-                escalation_config, {"ike", "feynman", "leo"}, mock_db
-            )
+            stalls = await check_for_stalls(escalation_config, {"ike", "feynman", "leo"}, mock_db)
 
         assert len(stalls) == 0
 
@@ -261,7 +259,7 @@ class TestCheckForStalls:
     async def test_recent_timestamp_not_stalled(self, escalation_config):
         """Agent with recent ts (state update) should not stall even with old started_at."""
         recent_ts_snapshot = StateSnapshot(
-            state=AgentState.PROCESSING_ISSUE,
+            state=AgentState.BUSY,
             current_issue=42,
             timestamp=time.time() - 60,  # 1 minute ago — well within threshold
             started_at=time.time() - 7200,  # 2 hours — old session
@@ -269,14 +267,13 @@ class TestCheckForStalls:
         )
         mock_db = AsyncMock()
 
-        with patch(
-            f"{_ESC}.get_agent_state",
-            new_callable=AsyncMock,
+        with patch.object(
+            StateService,
+            "get_state",
+            autospec=True,
             return_value=recent_ts_snapshot,
         ):
-            stalls = await check_for_stalls(
-                escalation_config, {"ike", "feynman", "leo"}, mock_db
-            )
+            stalls = await check_for_stalls(escalation_config, {"ike", "feynman", "leo"}, mock_db)
 
         assert len(stalls) == 0
 
@@ -289,14 +286,13 @@ class TestCheckForStalls:
         )
         mock_db = AsyncMock()
 
-        with patch(
-            f"{_ESC}.get_agent_state",
-            new_callable=AsyncMock,
+        with patch.object(
+            StateService,
+            "get_state",
+            autospec=True,
             return_value=busy_no_start,
         ):
-            stalls = await check_for_stalls(
-                escalation_config, {"ike", "feynman", "leo"}, mock_db
-            )
+            stalls = await check_for_stalls(escalation_config, {"ike", "feynman", "leo"}, mock_db)
 
         assert len(stalls) == 0
 
@@ -395,10 +391,10 @@ class TestMonitorAgentsIntegration:
             labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
         )
 
-        call_count = {"get_agent_state": 0}
+        call_count = {"get_state": 0}
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
-            call_count["get_agent_state"] += 1
+        async def mock_get_state(_self, session):
+            call_count["get_state"] += 1
             if session == "feynman":
                 return busy_snapshot
             return idle_snapshot
@@ -417,11 +413,10 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["feynman", "ike"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_PEN}.check_pending_issues",
                 new_callable=AsyncMock,
@@ -461,13 +456,13 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(
-                f"{_PEN}.get_agent_state",
-                new_callable=AsyncMock,
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
                 return_value=idle_snapshot,
             ),
             patch(
@@ -501,7 +496,6 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike", "gateway"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
@@ -510,9 +504,10 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value={},
             ) as mock_collect,
-            patch(
-                f"{_PEN}.get_agent_state",
-                new_callable=AsyncMock,
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
                 return_value=idle_snapshot,
             ),
             patch(
@@ -544,12 +539,10 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
             patch(f"{_MON}.collect_active_session_telemetry", new_callable=AsyncMock),
-
             patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}),
             patch(f"{_MON}.get_sio", return_value=MagicMock()),
             patch(f"{_MON}.emit_sessions_update", new_callable=AsyncMock) as mock_emit,
@@ -581,13 +574,13 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 side_effect=[["ike"], ["ike", "swarm-24-worker"]],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(
-                f"{_PEN}.get_agent_state",
-                new_callable=AsyncMock,
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
                 return_value=idle_snapshot,
             ),
             patch(
@@ -598,9 +591,7 @@ class TestMonitorAgentsIntegration:
         ):
             await monitor_agents()
 
-        mock_db.reconcile_swarm_worker_sessions.assert_awaited_once_with(
-            {"ike", "swarm-24-worker"}
-        )
+        mock_db.reconcile_swarm_worker_sessions.assert_awaited_once_with({"ike", "swarm-24-worker"})
 
     @pytest.mark.asyncio
     async def test_delivers_to_idle_agent(self):
@@ -629,13 +620,13 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(
-                f"{_PEN}.get_agent_state",
-                new_callable=AsyncMock,
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
                 return_value=idle_snapshot,
             ),
             patch(
@@ -696,13 +687,13 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["bell-wf", "bell-loveble"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(
-                f"{_PEN}.get_agent_state",
-                new_callable=AsyncMock,
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
                 return_value=idle_snapshot,
             ),
             patch(
@@ -763,13 +754,13 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(
-                f"{_PEN}.get_agent_state",
-                new_callable=AsyncMock,
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
                 return_value=idle_snapshot,
             ),
             patch(
@@ -816,13 +807,13 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(
-                f"{_PEN}.get_agent_state",
-                new_callable=AsyncMock,
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
                 return_value=idle_snapshot,
             ),
             patch(
@@ -868,13 +859,13 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(
-                f"{_PEN}.get_agent_state",
-                new_callable=AsyncMock,
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
                 return_value=idle_snapshot,
             ),
             patch(
@@ -922,8 +913,8 @@ class TestMonitorAgentsIntegration:
             scheduling=SchedulingConfig(monitor_interval_seconds=60),
         )
         mock_db = AsyncMock()
-        mock_db.is_acknowledged.side_effect = (
-            lambda repo_full_name, num, entity: repo_full_name == "" and num == 49
+        mock_db.is_acknowledged.side_effect = lambda repo_full_name, num, entity: (
+            repo_full_name == "" and num == 49
         )
         mock_db.query_deliveries.return_value = []
         mock_gh = AsyncMock()
@@ -936,13 +927,13 @@ class TestMonitorAgentsIntegration:
                 new_callable=AsyncMock,
                 return_value=["ike"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(
-                f"{_PEN}.get_agent_state",
-                new_callable=AsyncMock,
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
                 return_value=idle_snapshot,
             ),
             patch(
@@ -993,7 +984,6 @@ class TestOfflineDedup:
                 new_callable=AsyncMock,
                 return_value=["ike"],  # feynman is NOT active
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(
                 f"{_ESC}.check_for_unexpected_offline",
@@ -1003,9 +993,10 @@ class TestOfflineDedup:
                 ],
             ),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(
-                f"{_PEN}.get_agent_state",
-                new_callable=AsyncMock,
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
                 return_value=idle_snapshot,
             ),
             patch(
@@ -1162,14 +1153,13 @@ class TestPlanWaitingMonitor:
         )
         mock_db = AsyncMock()
 
-        with patch(
-            f"{_ESC}.get_agent_state",
-            new_callable=AsyncMock,
+        with patch.object(
+            StateService,
+            "get_state",
+            autospec=True,
             return_value=plan_snapshot,
         ):
-            stalls = await check_for_stalls(
-                escalation_config, {"ike", "feynman", "leo"}, mock_db
-            )
+            stalls = await check_for_stalls(escalation_config, {"ike", "feynman", "leo"}, mock_db)
 
         assert len(stalls) == 0
 
@@ -1189,7 +1179,7 @@ class TestPlanWaitingMonitor:
             source="pull",
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "feynman":
                 return plan_snapshot
             return idle_snapshot
@@ -1224,11 +1214,9 @@ class TestPlanWaitingMonitor:
                 new_callable=AsyncMock,
                 return_value=["feynman", "ike"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
-            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
-            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_PEN}.check_pending_issues",
                 new_callable=AsyncMock,
@@ -1289,7 +1277,7 @@ class TestCodingAgentSweep:
             labels=ParsedLabels(sender="bell", targets=["coding-agent"], issue_type="task"),
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             return idle_snapshot
 
         async def mock_check_pending(config, entity, gh):
@@ -1311,11 +1299,10 @@ class TestCodingAgentSweep:
                 new_callable=AsyncMock,
                 return_value=["ike", "agent-backbone"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_PEN}.check_pending_issues",
                 side_effect=mock_check_pending,
@@ -1358,7 +1345,7 @@ class TestCodingAgentSweep:
             labels=ParsedLabels(sender="coding-agent", targets=["coding-agent"], issue_type="task"),
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             return idle_snapshot
 
         async def mock_check_pending(config, entity, gh):
@@ -1387,11 +1374,10 @@ class TestCodingAgentSweep:
                 new_callable=AsyncMock,
                 return_value=["ike", "agent-orchestration-dashboard"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_PEN}.check_pending_issues",
                 side_effect=mock_check_pending,
@@ -1428,7 +1414,7 @@ class TestCodingAgentSweep:
             labels=ParsedLabels(sender="bell", targets=["coding-agent"], issue_type="task"),
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "agent-backbone":
                 return busy_snapshot
             return idle_snapshot
@@ -1452,11 +1438,10 @@ class TestCodingAgentSweep:
                 new_callable=AsyncMock,
                 return_value=["ike", "agent-backbone"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_PEN}.check_pending_issues",
                 side_effect=mock_check_pending,
@@ -1490,7 +1475,7 @@ class TestCodingAgentSweep:
             labels=ParsedLabels(sender="bell", targets=["coding-agent"], issue_type="task"),
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             return idle_snapshot
 
         async def mock_check_pending(config, entity, gh):
@@ -1512,11 +1497,10 @@ class TestCodingAgentSweep:
                 new_callable=AsyncMock,
                 return_value=["ike", "agent-backbone"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_PEN}.check_pending_issues",
                 side_effect=mock_check_pending,
@@ -1550,7 +1534,7 @@ class TestCodingAgentSweep:
             repo_full_name="eandualem/agent-backbone",
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             return idle_snapshot
 
         async def mock_check_pending(config, entity, gh):
@@ -1571,11 +1555,10 @@ class TestCodingAgentSweep:
                 new_callable=AsyncMock,
                 return_value=["ike", "agent-backbone"],
             ),
-
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_PEN}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_PEN}.check_pending_issues",
                 side_effect=mock_check_pending,
@@ -1685,7 +1668,7 @@ class TestPlanOrchestratorNotification:
 
         idle_snapshot = StateSnapshot(state=AgentState.IDLE, source="pull")
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "agent-backbone":
                 return plan_snapshot
             return idle_snapshot
@@ -1693,7 +1676,7 @@ class TestPlanOrchestratorNotification:
         mock_db = AsyncMock()
 
         with (
-            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
@@ -1773,7 +1756,7 @@ class TestPlanOrchestratorNotification:
             telegram=TelegramConfig(notification_chat_id=0),
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "agent-backbone":
                 return plan_snapshot
             return StateSnapshot(state=AgentState.IDLE, source="pull")
@@ -1781,7 +1764,7 @@ class TestPlanOrchestratorNotification:
         mock_db = AsyncMock()
 
         with (
-            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
@@ -1849,13 +1832,13 @@ class TestPlanOrchestratorNotification:
             telegram=TelegramConfig(notification_chat_id=0),
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "agent-backbone":
                 return plan_snapshot
             return StateSnapshot(state=AgentState.IDLE, source="pull")
 
         with (
-            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
@@ -1920,7 +1903,7 @@ class TestPlanOrchestratorNotification:
             telegram=TelegramConfig(notification_chat_id=0),
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "agent-backbone":
                 return plan_snapshot
             return StateSnapshot(state=AgentState.IDLE, source="pull")
@@ -1929,7 +1912,7 @@ class TestPlanOrchestratorNotification:
         mock_db.has_activity_event = AsyncMock(side_effect=[False, True])
 
         with (
-            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
@@ -2004,7 +1987,7 @@ class TestPlanOrchestratorNotification:
 
         snapshots = [first_snapshot, second_snapshot]
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "agent-backbone":
                 return snapshots.pop(0)
             return StateSnapshot(state=AgentState.IDLE, source="pull")
@@ -2013,7 +1996,7 @@ class TestPlanOrchestratorNotification:
         mock_db.has_activity_event = AsyncMock(return_value=False)
 
         with (
-            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
@@ -2076,7 +2059,7 @@ class TestPlanOrchestratorNotification:
             telegram=TelegramConfig(notification_chat_id=12345),
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "agent-backbone":
                 return plan_snapshot
             return StateSnapshot(state=AgentState.IDLE, source="pull")
@@ -2084,7 +2067,7 @@ class TestPlanOrchestratorNotification:
         mock_db = AsyncMock()
 
         with (
-            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
@@ -2154,7 +2137,7 @@ class TestPlanOrchestratorNotification:
             telegram=TelegramConfig(notification_chat_id=0),
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "agent-backbone":
                 return plan_snapshot
             return StateSnapshot(state=AgentState.IDLE, source="pull")
@@ -2163,7 +2146,7 @@ class TestPlanOrchestratorNotification:
         mock_db.has_activity_event = AsyncMock(return_value=False)
 
         with (
-            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
@@ -2223,13 +2206,13 @@ class TestPlanOrchestratorNotification:
             telegram=TelegramConfig(notification_chat_id=0),
         )
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "agent-backbone":
                 return plan_snapshot
             return StateSnapshot(state=AgentState.IDLE, source="pull")
 
         with (
-            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
@@ -2290,13 +2273,13 @@ class TestPlanOrchestratorNotification:
 
         idle_snapshot = StateSnapshot(state=AgentState.IDLE, source="pull")
 
-        async def mock_get_state(state_dir, session, stale_threshold=300.0):
+        async def mock_get_state(_self, session):
             if session == "feynman":
                 return plan_snapshot
             return idle_snapshot
 
         with (
-            patch(f"{_ESC}.get_agent_state", side_effect=mock_get_state),
+            patch.object(StateService, "get_state", autospec=True, side_effect=mock_get_state),
             patch(
                 f"{_ESC}.deliver_message",
                 new_callable=AsyncMock,
@@ -2309,65 +2292,3 @@ class TestPlanOrchestratorNotification:
         # Should deliver to ike (escalation target)
         mock_deliver.assert_called_once()
         assert mock_deliver.call_args[0][0] == "ike"
-
-    @pytest.mark.asyncio
-    async def test_stale_plan_waiting_without_plan_file_does_not_notify_escalation_target(
-        self, tmp_path
-    ):
-        """A dead plan_waiting file must not page Ike for named entities."""
-        state_file = tmp_path / "feynman.json"
-        state_file.write_text(
-            '{"state":"plan_waiting","ts":1.0,"plan_file":"%s","plan_title":"Add caching"}'
-            % (tmp_path / "missing-plan.md")
-        )
-
-        registry = EntityRegistry(
-            entities={
-                "feynman": EntityEntry(
-                    session="feynman",
-                    home="~/ws/feynman/",
-                    groups=["optimization"],
-                    figure="",
-                    role="",
-                ),
-                "ike": EntityEntry(
-                    session="ike",
-                    home="~/ws/core/ike/",
-                    groups=["orchestrators"],
-                    figure="",
-                    role="",
-                    organization="",
-                ),
-            },
-            repos=[],
-        )
-        config = BackboneConfig(
-            webhook_secret="test-secret",
-            github=GitHubConfig(owner="eandualem", repo="orchestration"),
-            entities=EntityConfig(skip=frozenset({"elias"})),
-            registry=registry,
-            agent_state=AgentStateConfig(
-                state_dir=str(tmp_path),
-                stale_threshold_seconds=300,
-            ),
-            escalation=EscalationConfig(escalation_target="ike"),
-            delivery=DeliveryConfig(),
-            capacity_routing=CapacityRoutingConfig(),
-            telegram=TelegramConfig(notification_chat_id=0),
-        )
-
-        with (
-            patch(
-                "agent_backbone.services.agents._inference.capture_pane",
-                new_callable=AsyncMock,
-                return_value="random output",
-            ),
-            patch(
-                f"{_ESC}.deliver_message",
-                new_callable=AsyncMock,
-                return_value="delivered",
-            ) as mock_deliver,
-        ):
-            await check_plan_waiting(config, {"feynman", "ike"})
-
-        mock_deliver.assert_not_called()

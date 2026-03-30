@@ -28,23 +28,6 @@ log = logging.getLogger(__name__)
 _heartbeat_lock = asyncio.Lock()
 
 
-async def get_agent_state(
-    state_dir: object,
-    session: str,
-    stale_threshold: float = 300.0,
-):
-    """Compatibility shim for legacy callers patched at this module boundary."""
-    del state_dir, stale_threshold
-    db: BackboneDB | None = None
-    try:
-        db = get_db()
-    except RuntimeError:
-        pass
-    from agent_backbone.services.agents.interface import StateService
-
-    return await StateService(db=db).get_state(session)
-
-
 def load_schedules(path: Path) -> dict:
     """Read heartbeat schedules from JSON file.
 
@@ -135,6 +118,9 @@ async def evaluate_agent_heartbeat(
 
     # Resolve session name
     session = config.registry.sessions_map.get(agent, agent)
+    from agent_backbone.services.agents.interface import StateService
+
+    state_svc = StateService(db=db)
 
     # Check if due — need last fired from SQLite
     last_fired = await db.get_last_heartbeat(agent)
@@ -143,11 +129,7 @@ async def evaluate_agent_heartbeat(
         return "not_due"
 
     # Check agent state — only deliver to idle
-    snapshot = await get_agent_state(
-        config.agent_state.state_path,
-        session,
-        config.agent_state.stale_threshold_seconds,
-    )
+    snapshot = await state_svc.get_state(session)
     if snapshot.state != AgentState.IDLE:
         log.info("Heartbeat skipped for %s — state=%s", agent, snapshot.state.value)
         await db.record_heartbeat(agent, "skipped_busy")

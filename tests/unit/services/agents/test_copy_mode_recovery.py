@@ -22,6 +22,7 @@ from agent_backbone.services.agents._copy_mode import (
     _last_non_copy_state,
     handle_copy_mode_recovery,
 )
+from agent_backbone.services.agents.interface import StateService
 from agent_backbone.services.agents.models import AgentState, StateSnapshot
 from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
 
@@ -77,7 +78,12 @@ class TestCopyModeRecovery:
 
         with (
             patch(f"{_COPY}.time.monotonic", side_effect=lambda: clock["now"]),
-            patch(f"{_COPY}.get_agent_state", new_callable=AsyncMock, return_value=idle_snapshot),
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
+                return_value=idle_snapshot,
+            ),
             patch(
                 f"{_COPY}.query_format_vars",
                 new_callable=AsyncMock,
@@ -102,7 +108,12 @@ class TestCopyModeRecovery:
         with (
             patch.dict(os.environ, {"TELEGRAM_TOKEN": "test-token"}),
             patch(f"{_COPY}.time.monotonic", side_effect=lambda: clock["now"]),
-            patch(f"{_COPY}.get_agent_state", new_callable=AsyncMock, return_value=idle_snapshot),
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
+                return_value=idle_snapshot,
+            ),
             patch(
                 f"{_COPY}.query_format_vars",
                 new_callable=AsyncMock,
@@ -137,7 +148,12 @@ class TestCopyModeRecovery:
 
         with (
             patch(f"{_COPY}.time.monotonic", side_effect=lambda: clock["now"]),
-            patch(f"{_COPY}.get_agent_state", new_callable=AsyncMock, return_value=idle_snapshot),
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
+                return_value=idle_snapshot,
+            ),
             patch(
                 f"{_COPY}.query_format_vars",
                 new_callable=AsyncMock,
@@ -160,7 +176,12 @@ class TestCopyModeRecovery:
         busy_snapshot = StateSnapshot(state=AgentState.BUSY, source="pull")
 
         with (
-            patch(f"{_COPY}.get_agent_state", new_callable=AsyncMock, return_value=busy_snapshot),
+            patch.object(
+                StateService,
+                "get_state",
+                autospec=True,
+                return_value=busy_snapshot,
+            ),
             patch(
                 f"{_COPY}.query_format_vars",
                 new_callable=AsyncMock,

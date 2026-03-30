@@ -21,6 +21,7 @@ from agent_backbone.services.agents import (
     load_schedules,
     save_schedules,
 )
+from agent_backbone.services.agents.interface import StateService
 from agent_backbone.services.registry import EntityEntry, EntityInstance, EntityRegistry
 
 TZ = "Africa/Addis_Ababa"
@@ -149,10 +150,7 @@ class TestEvaluateAgentHeartbeat:
         idle_snapshot = StateSnapshot(state=AgentState.IDLE, source="push")
 
         with (
-            patch(
-                f"{_HB}.get_agent_state",
-                new_callable=AsyncMock,
-            ) as mock_state,
+            patch.object(StateService, "get_state", autospec=True) as mock_state,
             patch(
                 f"{_HB}.send_message",
                 new_callable=AsyncMock,
@@ -192,10 +190,7 @@ class TestEvaluateAgentHeartbeat:
         schedule = {"cron": "0 * * * *", "timezone": TZ, "enabled": True}
         busy_snapshot = StateSnapshot(state=AgentState.BUSY, source="push")
 
-        with patch(
-            f"{_HB}.get_agent_state",
-            new_callable=AsyncMock,
-        ) as mock_state:
+        with patch.object(StateService, "get_state", autospec=True) as mock_state:
             mock_state.return_value = busy_snapshot
 
             result = await evaluate_agent_heartbeat(
@@ -213,10 +208,7 @@ class TestEvaluateAgentHeartbeat:
         schedule = {"cron": "0 * * * *", "timezone": TZ, "enabled": True}
         idle_snapshot = StateSnapshot(state=AgentState.IDLE, source="push")
 
-        with patch(
-            f"{_HB}.get_agent_state",
-            new_callable=AsyncMock,
-        ) as mock_state:
+        with patch.object(StateService, "get_state", autospec=True) as mock_state:
             mock_state.return_value = idle_snapshot
 
             result = await evaluate_agent_heartbeat(
@@ -279,10 +271,7 @@ class TestHeartbeatSchedulerFlow:
                 f"{_HB}.list_sessions",
                 new_callable=AsyncMock,
             ) as mock_list,
-            patch(
-                f"{_HB}.get_agent_state",
-                new_callable=AsyncMock,
-            ) as mock_state,
+            patch.object(StateService, "get_state", autospec=True) as mock_state,
             patch(
                 f"{_HB}.send_message",
                 new_callable=AsyncMock,
@@ -339,10 +328,7 @@ class TestHeartbeatSchedulerFlow:
                 f"{_HB}.list_sessions",
                 new_callable=AsyncMock,
             ) as mock_list,
-            patch(
-                f"{_HB}.get_agent_state",
-                new_callable=AsyncMock,
-            ) as mock_state,
+            patch.object(StateService, "get_state", autospec=True) as mock_state,
             patch(
                 f"{_HB}.send_message",
                 new_callable=AsyncMock,
@@ -431,7 +417,7 @@ class TestHeartbeatSchedulerFlow:
 
         with (
             patch(f"{_HB}.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch(f"{_HB}.get_agent_state", new_callable=AsyncMock) as mock_state,
+            patch.object(StateService, "get_state", autospec=True) as mock_state,
             patch(f"{_HB}.send_message", new_callable=AsyncMock) as mock_send,
         ):
             mock_list.return_value = ["bell-wf", "bell-loveble"]
@@ -444,9 +430,7 @@ class TestHeartbeatSchedulerFlow:
         assert result["bell-loveble"] == "delivered"
         assert mock_send.await_count == 2
 
-    async def test_unresolved_role_entity_skips_delivery_and_logs_warning(
-        self, tmp_path, caplog
-    ):
+    async def test_unresolved_role_entity_skips_delivery_and_logs_warning(self, tmp_path, caplog):
         """Registry-known roles without concrete instances are skipped cleanly."""
         schedule_path = tmp_path / "schedules.json"
         schedules = {"bell": {"cron": "0 * * * *", "timezone": TZ, "enabled": True}}
@@ -482,7 +466,7 @@ class TestHeartbeatSchedulerFlow:
 
         with (
             patch(f"{_HB}.list_sessions", new_callable=AsyncMock) as mock_list,
-            patch(f"{_HB}.get_agent_state", new_callable=AsyncMock) as mock_state,
+            patch.object(StateService, "get_state", autospec=True) as mock_state,
             patch(f"{_HB}.send_message", new_callable=AsyncMock) as mock_send,
         ):
             mock_list.return_value = []

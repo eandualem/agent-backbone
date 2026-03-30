@@ -17,14 +17,11 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "agent_backbone.services.agents._delivery_check",
         "find_outgoing_comment",
     ),
-    "get_agent_state": ("agent_backbone.services.agents._inference", "get_agent_state"),
     "has_commented_on_issue": (
         "agent_backbone.services.agents._delivery_check",
         "has_commented_on_issue",
     ),
-    "infer_state_from_pane": ("agent_backbone.services.agents._inference", "infer_state_from_pane"),
     "observe_session": ("agent_backbone.services.agents._observation", "observe_session"),
-    "read_state_file": ("agent_backbone.services.agents._file_reader", "read_state_file"),
     "snapshot_from_observation": (
         "agent_backbone.services.agents._observation",
         "snapshot_from_observation",

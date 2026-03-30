@@ -15,23 +15,6 @@ from agent_backbone.services.messaging import deliver_message
 log = logging.getLogger(__name__)
 
 
-async def get_agent_state(
-    state_dir: object,
-    session: str,
-    stale_threshold: float = 300.0,
-):
-    """Compatibility shim for legacy callers patched at this module boundary."""
-    del state_dir, stale_threshold
-    db: BackboneDB | None = None
-    try:
-        from agent_backbone.services._locator import get_db
-
-        db = get_db()
-    except RuntimeError:
-        pass
-    return await StateService(db=db).get_state(session)
-
-
 def _format_next_issue(issue: IssueData) -> str:
     """Format a next-issue notification for tmux delivery."""
     labels = issue.labels
@@ -61,6 +44,8 @@ async def deliver_pending_issues(
     """
     result: dict[str, str] = {}
     comment_ack_cache: dict[tuple[str, int], set[str]] = {}
+    state_svc = StateService(db=db)
+
     async def is_acknowledged(
         issue_number: int,
         target_entity: str,
@@ -163,11 +148,7 @@ async def deliver_pending_issues(
         deliverable_sessions: list[str] = []
         for session_name in session_names:
             result_key = f"{entity}:{session_name}" if multi_session else entity
-            snapshot = await get_agent_state(
-                config.agent_state.state_path,
-                session_name,
-                config.agent_state.stale_threshold_seconds,
-            )
+            snapshot = await state_svc.get_state(session_name)
 
             # Monitor requires confirmed idle — only deliver to agents that are
             # definitively ready for work.
@@ -273,11 +254,7 @@ async def deliver_pending_issues(
         coding_issues: list[IssueData] = await check_pending_issues(config, "coding-agent", gh)
 
         for session_name in sorted(coding_sessions):
-            snapshot = await get_agent_state(
-                config.agent_state.state_path,
-                session_name,
-                config.agent_state.stale_threshold_seconds,
-            )
+            snapshot = await state_svc.get_state(session_name)
             if not should_deliver(snapshot.state, require_idle=True):
                 result[f"coding:{session_name}"] = "deferred"
                 log.info(
@@ -342,11 +319,7 @@ async def deliver_pending_issues(
             if prior_result not in (None, "no_pending", "no_deliverable"):
                 continue
 
-            snapshot = await get_agent_state(
-                config.agent_state.state_path,
-                session_name,
-                config.agent_state.stale_threshold_seconds,
-            )
+            snapshot = await state_svc.get_state(session_name)
             if not should_deliver(snapshot.state, require_idle=True):
                 result[f"repo:{session_name}"] = "deferred"
                 log.info(

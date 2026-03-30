@@ -47,23 +47,6 @@ class TelegramService:
         return await _TelegramService.send_notification(*args, **kwargs)
 
 
-async def get_agent_state(
-    state_dir: object,
-    session: str,
-    stale_threshold: float = 300.0,
-):
-    """Compatibility shim for legacy callers patched at this module boundary."""
-    del state_dir, stale_threshold
-    db: BackboneDB | None = None
-    try:
-        from agent_backbone.services._locator import get_db
-
-        db = get_db()
-    except RuntimeError:
-        pass
-    return await StateService(db=db).get_state(session)
-
-
 def _managed_sessions(config: BackboneConfig, active_sessions: set[str]) -> list[str]:
     """Active non-service sessions managed by backbone."""
     repo_names_lower = {name.lower() for name in config.registry.repo_names}
@@ -135,12 +118,9 @@ async def handle_copy_mode_recovery(
             db = get_db()
         except RuntimeError:
             db = None
+    state_svc = StateService(db=db)
     for session_name in sorted(managed_sessions):
-        snapshot = await get_agent_state(
-            config.agent_state.state_path,
-            session_name,
-            config.agent_state.stale_threshold_seconds,
-        )
+        snapshot = await state_svc.get_state(session_name)
         in_copy_mode = await _pane_in_copy_mode(session_name, snapshot.state)
 
         if not in_copy_mode:
