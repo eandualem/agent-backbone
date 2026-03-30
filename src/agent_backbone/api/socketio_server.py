@@ -99,7 +99,7 @@ class SessionsNamespace(socketio.AsyncNamespace):
             log.warning("Socket.IO sessions connection rejected — invalid auth (sid=%s)", sid)
             return False
         # SUB-6: Default to all-agents for backwards compatibility
-        self.enter_room(sid, "all-agents")
+        await self.enter_room(sid, "all-agents")
         return True
 
     async def on_subscribe(self, sid: str, data: dict) -> None:
@@ -109,19 +109,19 @@ class SessionsNamespace(socketio.AsyncNamespace):
 
         for agent in data.get("agents", []):
             if isinstance(agent, str) and agent:
-                self.enter_room(sid, f"agent:{agent}")
+                await self.enter_room(sid, f"agent:{agent}")
 
         for run_id in data.get("runs", []):
             if isinstance(run_id, str) and run_id:
-                self.enter_room(sid, f"run:{run_id}")
+                await self.enter_room(sid, f"run:{run_id}")
 
         if data.get("all_agents"):
-            self.enter_room(sid, "all-agents")
+            await self.enter_room(sid, "all-agents")
         elif data.get("agents") or data.get("runs"):
             # SUB-7: Remove default all-agents if client subscribes
             # to specific agents/runs without requesting all_agents
             if sid not in self._explicit_subscribers:
-                self.leave_room(sid, "all-agents")
+                await self.leave_room(sid, "all-agents")
 
         self._explicit_subscribers.add(sid)
 
@@ -137,14 +137,14 @@ class SessionsNamespace(socketio.AsyncNamespace):
 
         for agent in data.get("agents", []):
             if isinstance(agent, str) and agent:
-                self.leave_room(sid, f"agent:{agent}")
+                await self.leave_room(sid, f"agent:{agent}")
 
         for run_id in data.get("runs", []):
             if isinstance(run_id, str) and run_id:
-                self.leave_room(sid, f"run:{run_id}")
+                await self.leave_room(sid, f"run:{run_id}")
 
         if data.get("all_agents"):
-            self.leave_room(sid, "all-agents")
+            await self.leave_room(sid, "all-agents")
 
         # SUB-5: Acknowledge with current room list
         rooms = self.rooms(sid) or []

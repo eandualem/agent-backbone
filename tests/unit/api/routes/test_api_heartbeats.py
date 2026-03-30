@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -83,14 +83,18 @@ class TestUpdateHeartbeatSchedule:
         mock_mon_svc.save_schedules = MagicMock()
 
         heartbeats_app.dependency_overrides[get_monitoring_service] = lambda: mock_mon_svc
-        try:
-            resp = await client.put(
-                "/api/heartbeats/schedules/ike",
-                json=new_schedule,
-                headers=auth_headers,
-            )
-        finally:
-            heartbeats_app.dependency_overrides.pop(get_monitoring_service, None)
+        with patch(
+            "agent_backbone.api.routes.heartbeats.notify_stream",
+            new_callable=AsyncMock,
+        ) as mock_notify:
+            try:
+                resp = await client.put(
+                    "/api/heartbeats/schedules/ike",
+                    json=new_schedule,
+                    headers=auth_headers,
+                )
+            finally:
+                heartbeats_app.dependency_overrides.pop(get_monitoring_service, None)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -99,6 +103,7 @@ class TestUpdateHeartbeatSchedule:
         # Verify save was called with the merged schedules
         saved_schedules = mock_mon_svc.save_schedules.call_args[0][0]
         assert saved_schedules["ike"] == new_schedule
+        mock_notify.assert_awaited_once_with("schedule")
 
     async def test_adds_new_agent_schedule(self, client, auth_headers, heartbeats_app):
         """Adding a schedule for a new agent that did not exist before."""

@@ -1081,6 +1081,31 @@ class TestPostAgentState:
         assert session_updates_module._snapshot_cache_ts == 0
         mock_emit.assert_awaited_once()
 
+    async def test_post_processing_state_emits_processing_run_event(
+        self,
+        api_client,
+        auth_headers,
+    ):
+        """Specific processing event uses the processing_issue state value."""
+        with patch(
+            "agent_backbone.api.run_events.emit_run_event",
+            new_callable=AsyncMock,
+        ) as mock_emit:
+            resp = await api_client.post(
+                "/api/agents/feynman/state",
+                json={
+                    "entity": "feynman",
+                    "state": "processing_issue",
+                    "issue": 571,
+                    "ts": 1709500000.0,
+                },
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        emitted_types = [call.args[0] for call in mock_emit.await_args_list]
+        assert emitted_types == ["agent.state_changed", "agent.processing"]
+
 
 # ---------------------------------------------------------------------------
 # POST /api/agents/{session}/activity
@@ -1090,15 +1115,20 @@ class TestPostAgentState:
 class TestPostAgentActivity:
     async def test_post_activity_returns_id(self, api_app, api_client, auth_headers):
         """POST activity returns ok with row ID."""
-        resp = await api_client.post(
-            "/api/agents/feynman/activity",
-            json={"event": "tool_use", "ts": 1709500001.0, "tool": "Edit", "target": "config.py"},
-            headers=auth_headers,
-        )
+        with patch(
+            "agent_backbone.api.routes.agents.notify_stream",
+            new_callable=AsyncMock,
+        ) as mock_notify:
+            resp = await api_client.post(
+                "/api/agents/feynman/activity",
+                json={"event": "tool_use", "ts": 1709500001.0, "tool": "Edit", "target": "config.py"},
+                headers=auth_headers,
+            )
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
         assert data["id"] > 0
+        mock_notify.assert_awaited_once_with("activity")
 
     async def test_post_activity_extra_fields_in_data(self, api_app, api_client, auth_headers):
         """Extra fields beyond event/ts are stored in the data JSON."""

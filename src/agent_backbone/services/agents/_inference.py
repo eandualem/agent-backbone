@@ -56,32 +56,13 @@ async def get_agent_state(
     push = read_state_file(state_dir, session)
     push_age = (time.time() - push.timestamp) if push else None
 
-    if (
-        push
-        and push_age is not None
-        and push_age < stale_threshold
-        and push.state not in _WORKING_STATES
-    ):
+    if push and push_age is not None and push_age < stale_threshold:
         return push
 
     pane_content = await capture_pane(session)
     if pane_content:
         pull = infer_state_from_pane(pane_content)
         pull.timestamp = time.time()
-        if (
-            push
-            and push_age is not None
-            and push_age < stale_threshold
-            and push.state in _WORKING_STATES
-        ):
-            if pull.state == AgentState.IDLE:
-                log.warning(
-                    "Recovered %s from stuck '%s' push state using live prompt detection",
-                    session,
-                    push.state.value,
-                )
-                return pull
-            return push
         if pull.state != AgentState.UNKNOWN:
             return pull
         if push and _trust_stale_push(push):

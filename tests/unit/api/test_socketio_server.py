@@ -58,8 +58,8 @@ def _make_sessions_namespace() -> SessionsNamespace:
     def _rooms_fn(sid):
         return list(_rooms.get(sid, set()) | {sid})
 
-    ns.enter_room = MagicMock(side_effect=_enter_room)
-    ns.leave_room = MagicMock(side_effect=_leave_room)
+    ns.enter_room = AsyncMock(side_effect=_enter_room)
+    ns.leave_room = AsyncMock(side_effect=_leave_room)
     ns.rooms = MagicMock(side_effect=_rooms_fn)
     ns._test_rooms = _rooms
     return ns
@@ -227,7 +227,7 @@ class TestSessionsNamespace:
         """SUB-6: Default room on connect is all-agents."""
         ns = _make_sessions_namespace()
         await ns.on_connect("sid1", {})
-        ns.enter_room.assert_called_with("sid1", "all-agents")
+        ns.enter_room.assert_awaited_once_with("sid1", "all-agents")
 
     async def test_subscribe_agents_joins_agent_rooms(self):
         """SUB-2: subscribe with agents joins agent:{session} rooms."""

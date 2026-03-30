@@ -10,6 +10,7 @@ import pytest
 
 from agent_backbone.api.data_streams import (
     DataStreamNamespace,
+    RunsNamespace,
     _signature,
     get_data_namespace,
     notify_stream,
@@ -67,6 +68,23 @@ class TestDataStreamNamespace:
         with patch.dict(os.environ, {"BACKBONE_API_KEY": "secret"}):
             result = await ns.on_connect("sid1", {}, auth={"api_key": "secret"})
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_connect_bootstraps_initial_snapshot_to_sid(self):
+        """New connections get an immediate targeted snapshot."""
+        fetch = AsyncMock(return_value={"count": 1})
+        ns = _make_namespace(fetch_fn=fetch)
+
+        result = await ns.on_connect("sid1", {}, auth=None)
+        await asyncio.sleep(0)
+
+        assert result is True
+        ns.server.emit.assert_awaited_once_with(
+            "test:update",
+            {"count": 1},
+            namespace="/test",
+            to="sid1",
+        )
 
     @pytest.mark.asyncio
     async def test_connect_rejects_missing_auth_when_key_set(self):
@@ -292,8 +310,8 @@ class TestNotifyStream:
 
 
 class TestRegisterDataStreams:
-    def test_registers_all_11_namespaces(self):
-        """register_data_streams registers exactly 11 namespace domains."""
+    def test_registers_11_snapshot_namespaces_and_runs(self):
+        """register_data_streams registers snapshot domains plus the /runs event namespace."""
         import agent_backbone.api.data_streams as ds_mod
         from agent_backbone.api.data_streams import register_data_streams
 
@@ -304,7 +322,7 @@ class TestRegisterDataStreams:
             register_data_streams(sio)
 
         assert len(ds_mod._namespaces) == 11
-        assert sio.register_namespace.call_count == 11
+        assert sio.register_namespace.call_count == 12
 
     def test_registers_expected_domains(self):
         """All expected domain names are present in the registry."""
@@ -364,6 +382,86 @@ class TestRegisterDataStreams:
 
         for ns in ds_mod._namespaces.values():
             assert isinstance(ns, DataStreamNamespace)
+
+    def test_registers_runs_namespace(self):
+        """The discrete /runs namespace is registered alongside snapshot streams."""
+        from agent_backbone.api.data_streams import register_data_streams
+
+        sio = MagicMock()
+
+        with patch("asyncio.create_task") as mock_create_task:
+            mock_create_task.return_value = MagicMock()
+            register_data_streams(sio)
+
+        namespaces = [call.args[0] for call in sio.register_namespace.call_args_list]
+        assert any(isinstance(ns, RunsNamespace) and ns.namespace == "/runs" for ns in namespaces)
+
+    @pytest.mark.asyncio
+    async def test_agents_fetch_uses_live_issues_pending(self):
+        """The /agents stream mirrors dashboard issue counts instead of hardcoding zero."""
+        import agent_backbone.api.data_streams as ds_mod
+        from agent_backbone.api.data_streams import register_data_streams
+
+        sio = MagicMock()
+
+        with patch("asyncio.create_task") as mock_create_task:
+            mock_create_task.return_value = MagicMock()
+            register_data_streams(sio)
+
+        agent = MagicMock()
+        agent.model_dump.return_value = {"session": "ike"}
+        counts = MagicMock(plan_waiting=2)
+        counts.model_dump.return_value = {"total": 1}
+        services = MagicMock()
+        services.model_dump.return_value = {"gateway": "up", "database": "up"}
+
+        with (
+            patch(
+                "agent_backbone.api.routes.dashboard._fetch_agents",
+                AsyncMock(return_value=[agent]),
+            ),
+            patch("agent_backbone.api.routes.dashboard._compute_counts", return_value=counts),
+            patch(
+                "agent_backbone.api.routes.dashboard._fetch_failed_deliveries",
+                AsyncMock(return_value=4),
+            ),
+            patch(
+                "agent_backbone.api.routes.dashboard._fetch_issues_pending",
+                AsyncMock(return_value=7),
+            ),
+            patch(
+                "agent_backbone.api.routes.dashboard._fetch_service_health",
+                AsyncMock(return_value=services),
+            ),
+            patch("agent_backbone.services._locator.get_config", return_value=MagicMock()),
+            patch("agent_backbone.services._locator.get_db", return_value=MagicMock()),
+            patch("agent_backbone.services._locator.get_gh", return_value=MagicMock()),
+            patch("agent_backbone.services.agents.interface.StateService"),
+            patch("agent_backbone.services.terminal.TmuxService"),
+        ):
+            payload = await ds_mod._namespaces["agents"].fetch_fn()
+
+        assert payload["issues_pending"] == 7
+        assert payload["failed_deliveries"] == 4
+        assert payload["plans_pending"] == 2
+
+
+class TestRunsNamespace:
+    @pytest.mark.asyncio
+    async def test_connect_allows_valid_key(self):
+        """The /runs namespace uses the shared Socket.IO auth contract."""
+        ns = RunsNamespace("/runs")
+        with patch.dict(os.environ, {"BACKBONE_API_KEY": "secret"}):
+            result = await ns.on_connect("sid1", {}, auth={"api_key": "secret"})
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_connect_rejects_invalid_key(self):
+        """Invalid auth is rejected on /runs."""
+        ns = RunsNamespace("/runs")
+        with patch.dict(os.environ, {"BACKBONE_API_KEY": "secret"}):
+            result = await ns.on_connect("sid1", {}, auth={"api_key": "wrong"})
+        assert result is False
 
 
 class TestStopDataStreams:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
+from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.deps import get_db, get_monitoring_service
 from agent_backbone.api.models import HeartbeatRecord, ListEnvelope
 from agent_backbone.services.agents import MonitoringService
@@ -30,6 +31,7 @@ async def update_heartbeat_schedule(
     schedules = monitoring_svc.load_schedules()
     schedules[agent] = body
     monitoring_svc.save_schedules(schedules)
+    await notify_stream("schedule")
     return {"ok": True, "agent": agent}
 
 

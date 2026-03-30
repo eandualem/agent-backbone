@@ -263,3 +263,33 @@ class TestBuildEnrichedAgent:
         state_svc.get_state.assert_not_awaited()
         assert agent.state == "offline"
         assert agent.current_issue == 42
+
+    @pytest.mark.asyncio
+    async def test_online_unknown_state_remains_unknown(self):
+        """Online sessions must not coerce unknown state to idle."""
+        config = MagicMock()
+        config.registry.entry_for_session.return_value = None
+        config.registry.entities.get.return_value = None
+        config.registry.repo_path_by_name = {}
+        config.registry.repos = []
+
+        state_svc = MagicMock()
+        state_svc.get_state = AsyncMock(
+            return_value=StateSnapshot(
+                state=AgentState.UNKNOWN,
+                timestamp=123.0,
+                source="pull",
+            )
+        )
+
+        agent = await build_enriched_agent(
+            session="agent-backbone",
+            entity="agent-backbone",
+            config=config,
+            active_sessions={"agent-backbone"},
+            state_svc=state_svc,
+            agent_type="coding_agent",
+        )
+
+        assert agent.online is True
+        assert agent.state == "unknown"

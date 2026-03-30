@@ -91,8 +91,6 @@ async def build_enriched_agent(
     state_value = snapshot.state.value
     if not online:
         state_value = "offline"
-    elif state_value == "unknown":
-        state_value = "idle"
 
     entity_type = reg_entry.entity_type if reg_entry else "agent"
 

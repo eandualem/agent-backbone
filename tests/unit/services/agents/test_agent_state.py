@@ -298,7 +298,7 @@ class TestGetAgentState:
         assert result.state == AgentState.PROCESSING_ISSUE
         assert result.source == "push"
 
-    async def test_fresh_busy_push_reconciles_when_pane_is_idle(self, tmp_path):
+    async def test_fresh_busy_push_is_authoritative_when_pane_is_idle(self, tmp_path):
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
         with patch(
@@ -307,10 +307,10 @@ class TestGetAgentState:
             return_value="user@host $",
         ):
             result = await get_agent_state(tmp_path, "ike")
-        assert result.state == AgentState.IDLE
-        assert result.source == "pull"
+        assert result.state == AgentState.BUSY
+        assert result.source == "push"
 
-    async def test_fresh_processing_push_reconciles_when_pane_is_idle(self, tmp_path):
+    async def test_fresh_processing_push_is_authoritative_when_pane_is_idle(self, tmp_path):
         state_file = tmp_path / "ike.json"
         state_file.write_text(
             json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
@@ -321,8 +321,8 @@ class TestGetAgentState:
             return_value="user@host $",
         ):
             result = await get_agent_state(tmp_path, "ike")
-        assert result.state == AgentState.IDLE
-        assert result.source == "pull"
+        assert result.state == AgentState.PROCESSING_ISSUE
+        assert result.source == "push"
 
     async def test_fresh_busy_push_survives_unknown_pane(self, tmp_path):
         state_file = tmp_path / "ike.json"

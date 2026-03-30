@@ -59,13 +59,18 @@ class DataStreamNamespace(socketio.AsyncNamespace):
         if not _socket_auth_valid(auth):
             log.warning("Socket.IO %s rejected (sid=%s)", self.namespace, sid)
             return False
+        asyncio.create_task(
+            self.emit_update(force=True, to=sid),
+            name=f"ds-bootstrap-{self.namespace}-{sid}",
+        )
         return True
 
-    async def emit_update(self, *, force: bool = False) -> bool:
+    async def emit_update(self, *, force: bool = False, to: str | None = None) -> bool:
         """Fetch snapshot and emit if changed (RDS-3, RDS-4, RDS-5).
 
         Args:
             force: If True, emit regardless of change detection (imperative trigger).
+            to: If provided, emit only to the targeted Socket.IO sid.
         """
         async with self._lock:
             try:
@@ -79,14 +84,26 @@ class DataStreamNamespace(socketio.AsyncNamespace):
                 return False
 
             self._last_signature = sig
-            await self.server.emit(
-                self.event_name, payload, namespace=self.namespace
-            )
+            kwargs: dict[str, Any] = {"namespace": self.namespace}
+            if to is not None:
+                kwargs["to"] = to
+            await self.server.emit(self.event_name, payload, **kwargs)
             return True
 
     def reset(self) -> None:
         """Reset change detection state (for testing)."""
         self._last_signature = None
+
+
+class RunsNamespace(socketio.AsyncNamespace):
+    """Discrete run lifecycle event stream on the /runs namespace."""
+
+    async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
+        """Authenticate connection using the shared Socket.IO API key."""
+        if not _socket_auth_valid(auth):
+            log.warning("Socket.IO %s rejected (sid=%s)", self.namespace, sid)
+            return False
+        return True
 
 
 # --- Registry of all data stream namespaces ---
@@ -133,30 +150,37 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
     async def fetch_agents() -> dict:
         """RDS-10/11: DashboardResponse payload."""
         from agent_backbone.api.routes.dashboard import (
+            _compute_counts,
             _fetch_agents,
             _fetch_failed_deliveries,
+            _fetch_issues_pending,
             _fetch_service_health,
         )
-        from agent_backbone.services._locator import get_config, get_db
+        from agent_backbone.services._locator import get_config, get_db, get_gh
         from agent_backbone.services.agents.interface import StateService
         from agent_backbone.services.terminal import TmuxService
 
         config = get_config()
         db = get_db()
+        gh = get_gh()
         state_svc = StateService(
             state_dir=config.agent_state.state_dir,
             stale_threshold=config.agent_state.stale_threshold_seconds,
             db=db,
         )
         tmux_svc = TmuxService()
-        agents, counts = await _fetch_agents(config, state_svc, tmux_svc)
-        failed = await _fetch_failed_deliveries(db)
-        services = await _fetch_service_health(db)
+        agents = await _fetch_agents(config, state_svc, tmux_svc)
+        counts = _compute_counts(agents)
+        failed, issues_pending, services = await asyncio.gather(
+            _fetch_failed_deliveries(db),
+            _fetch_issues_pending(gh),
+            _fetch_service_health(db),
+        )
         return {
             "agents": [a.model_dump(mode="json") for a in agents],
             "counts": counts.model_dump(mode="json"),
             "plans_pending": counts.plan_waiting,
-            "issues_pending": 0,
+            "issues_pending": issues_pending,
             "failed_deliveries": failed,
             "services": services.model_dump(mode="json"),
         }
@@ -389,7 +413,8 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
         )
         _poll_tasks.append(task)
 
-    log.info("Registered %d data stream namespaces", len(specs))
+    sio.register_namespace(RunsNamespace("/runs"))
+    log.info("Registered %d snapshot stream namespaces and /runs", len(specs))
 
 
 async def stop_data_streams() -> None:

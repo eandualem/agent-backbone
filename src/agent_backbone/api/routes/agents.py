@@ -288,9 +288,14 @@ async def post_agent_state(
         data={"state": body.state, "issue": body.issue, "context": body.context},
         sio=getattr(request.app.state, "sio", None),
     )
-    if body.state in ("idle", "processing", "plan_waiting"):
+    specific_event = {
+        "idle": "agent.idle",
+        "processing_issue": "agent.processing",
+        "plan_waiting": "agent.plan_waiting",
+    }.get(body.state)
+    if specific_event is not None:
         await emit_run_event(
-            f"agent.{body.state}",
+            specific_event,
             context={"session": session, "entity": body.entity or session},
             source=body.entity or session,
             data={"issue": body.issue},
@@ -318,6 +323,7 @@ async def post_agent_activity(
     data_dict = dict(body.model_extra or {})
     data_json = json.dumps(data_dict) if data_dict else None
     row_id = await db.record_activity(session, body.event, data_json, str(body.ts))
+    await notify_stream("activity")
     return {"ok": True, "id": row_id}
 
 

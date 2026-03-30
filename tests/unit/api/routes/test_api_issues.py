@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -324,12 +324,17 @@ class TestAddComment:
 class TestUpdateIssue:
     async def test_update_issue_close(self, issues_client, auth_headers, mock_github):
         payload = {"state": "closed"}
-        resp = await issues_client.patch("/api/issues/42", json=payload, headers=auth_headers)
+        with patch(
+            "agent_backbone.api.routes.issues.notify_stream",
+            new_callable=AsyncMock,
+        ) as mock_notify:
+            resp = await issues_client.patch("/api/issues/42", json=payload, headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["number"] == 42
         assert data["state"] == "closed"
         mock_github.update_issue.assert_called_once_with(42, "closed", repo_full_name=None)
+        mock_notify.assert_awaited_once_with("tasks")
 
     async def test_update_issue_missing_state(self, issues_client, auth_headers):
         payload = {"title": "new title"}

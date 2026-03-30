@@ -215,4 +215,5 @@ async def update_issue(
         issue = await gh.update_issue(number, state, repo_full_name=repo_full_name)
     except GitHubServiceError as exc:
         _raise_github_http_error(exc, not_found_detail=f"Issue #{number} not found")
+    await notify_stream("tasks")
     return _issue_to_response(issue, config)
