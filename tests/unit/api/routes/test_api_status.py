@@ -34,6 +34,7 @@ def _make_mock_state_svc(snapshot: StateSnapshot | None = None) -> MagicMock:
     """Create a mock StateService that returns the given snapshot."""
     svc = MagicMock()
     svc.get_state = AsyncMock(return_value=snapshot or _idle_snapshot())
+    svc.get_reported_state = AsyncMock(return_value=snapshot or _idle_snapshot())
     svc.read_state = MagicMock(return_value=None)
     return svc
 
