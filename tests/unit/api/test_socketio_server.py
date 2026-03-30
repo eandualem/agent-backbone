@@ -238,13 +238,22 @@ class TestSessionsNamespace:
         assert "agent:bell-wf" in rooms
         assert "agent:ike" in rooms
 
-    async def test_subscribe_runs_joins_run_rooms(self):
-        """SUB-2: subscribe with runs joins run:{runId} rooms."""
+    async def test_subscribe_orgs_joins_org_rooms(self):
+        """SUB-2: subscribe with orgs joins org:{org} rooms."""
         ns = _make_sessions_namespace()
         await ns.on_connect("sid1", {})
-        await ns.on_subscribe("sid1", {"runs": ["bug-validation-49"]})
+        await ns.on_subscribe("sid1", {"orgs": ["WF", "Arclio"]})
         rooms = ns._test_rooms.get("sid1", set())
-        assert "run:bug-validation-49" in rooms
+        assert "org:WF" in rooms
+        assert "org:Arclio" in rooms
+
+    async def test_subscribe_groups_joins_group_rooms(self):
+        """SUB-2: subscribe with groups joins group:{group} rooms."""
+        ns = _make_sessions_namespace()
+        await ns.on_connect("sid1", {})
+        await ns.on_subscribe("sid1", {"groups": ["orchestrators"]})
+        rooms = ns._test_rooms.get("sid1", set())
+        assert "group:orchestrators" in rooms
 
     async def test_subscribe_removes_default_all_agents(self):
         """SUB-7: explicit subscribe removes default all-agents membership."""

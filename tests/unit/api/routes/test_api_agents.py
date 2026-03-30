@@ -533,6 +533,35 @@ class TestGetAgentState:
         assert data["current_issue"] == 99
         assert data["source"] == "push"
 
+    async def test_returns_structured_context(self, api_app, api_client, auth_headers):
+        """Detailed state includes structured waiting context."""
+        snapshot = StateSnapshot(
+            state=AgentState.PERMISSION_WAITING,
+            source="observed",
+            timestamp=time.time(),
+            context={
+                "tool": "Read",
+                "target": "/tmp/example",
+                "prompt": "Do you want to proceed?",
+            },
+        )
+        _set_di_overrides(
+            api_app,
+            state_svc=_make_mock_state_svc(snapshot=snapshot),
+        )
+        try:
+            resp = await api_client.get("/api/agents/feynman/state", headers=auth_headers)
+        finally:
+            _clear_di_overrides(api_app)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["context"] == {
+            "tool": "Read",
+            "target": "/tmp/example",
+            "prompt": "Do you want to proceed?",
+        }
+
     async def test_session_name_case_preserved(self, api_app, api_client, auth_headers):
         """Mixed-case session names are preserved (not lowercased)."""
         snapshot = _processing_snapshot(issue=99)
@@ -1061,6 +1090,55 @@ class TestPostAgentState:
         assert row["plan_file"] == "/tmp/plan.md"
         assert row["plan_title"] == "Add caching"
 
+    async def test_permission_request_hook_uses_idle_enrichment_and_persists_context(
+        self,
+        api_app,
+        api_client,
+        auth_headers,
+    ):
+        """PermissionRequest events are normalized through idle enrichment, not direct mapping."""
+        permission_snapshot = StateSnapshot(
+            state=AgentState.PERMISSION_WAITING,
+            source="observed",
+            timestamp=200.0,
+            context={
+                "tool": "Bash",
+                "target": "git restore src/agent_backbone/api/routes/agents.py",
+                "command": "git restore src/agent_backbone/api/routes/agents.py",
+                "prompt": "Press enter to confirm",
+            },
+        )
+
+        with (
+            patch(
+                "agent_backbone.api.routes.agents.enrich_idle_state",
+                new_callable=AsyncMock,
+                return_value=permission_snapshot,
+            ) as mock_enrich,
+        ):
+            resp = await api_client.post(
+                "/api/agents/ike/state",
+                json={
+                    "state": "",
+                    "hook_event": "PermissionRequest",
+                    "cli": "codex",
+                    "ts": 200.0,
+                },
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        mock_enrich.assert_awaited_once()
+
+        row = await api_app.state.db.get_agent_state("ike")
+        assert row["state"] == "permission_waiting"
+        assert json.loads(row["context"]) == {
+            "tool": "Bash",
+            "target": "git restore src/agent_backbone/api/routes/agents.py",
+            "command": "git restore src/agent_backbone/api/routes/agents.py",
+            "prompt": "Press enter to confirm",
+        }
+
     async def test_post_state_invalidates_cache(self, api_app, api_client, auth_headers):
         """POST state resets the shared session snapshot cache."""
         session_updates_module._snapshot_cache = [MagicMock()]
@@ -1081,30 +1159,27 @@ class TestPostAgentState:
         assert session_updates_module._snapshot_cache_ts == 0
         mock_emit.assert_awaited_once()
 
-    async def test_post_processing_state_emits_busy_run_event(
+    async def test_post_processing_state_normalizes_to_busy(
         self,
+        api_app,
         api_client,
         auth_headers,
     ):
-        """Legacy processing pushes normalize to the busy run event."""
-        with patch(
-            "agent_backbone.api.run_events.emit_run_event",
-            new_callable=AsyncMock,
-        ) as mock_emit:
-            resp = await api_client.post(
-                "/api/agents/feynman/state",
-                json={
-                    "entity": "feynman",
-                    "state": "processing_issue",
-                    "issue": 571,
-                    "ts": 1709500000.0,
-                },
-                headers=auth_headers,
-            )
+        """Legacy processing pushes normalize to the busy state."""
+        resp = await api_client.post(
+            "/api/agents/feynman/state",
+            json={
+                "entity": "feynman",
+                "state": "processing_issue",
+                "issue": 571,
+                "ts": 1709500000.0,
+            },
+            headers=auth_headers,
+        )
 
         assert resp.status_code == 200
-        emitted_types = [call.args[0] for call in mock_emit.await_args_list]
-        assert emitted_types == ["agent.state_changed", "agent.busy"]
+        row = await api_app.state.db.get_agent_state("feynman")
+        assert row["state"] == "busy"
 
 
 # ---------------------------------------------------------------------------

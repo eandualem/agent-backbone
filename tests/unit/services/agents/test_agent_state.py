@@ -226,6 +226,20 @@ class TestRowToSnapshot:
         snap = _row_to_snapshot(row)
         assert snap.timestamp == 0.0
 
+    def test_parses_structured_context_json(self):
+        row = {
+            "state": "permission_waiting",
+            "ts": "1709500000.0",
+            "context": '{"tool":"Read","target":"/tmp/example","prompt":"Do you want to proceed?"}',
+        }
+        snap = _row_to_snapshot(row)
+        assert snap.state == AgentState.PERMISSION_WAITING
+        assert snap.context == {
+            "tool": "Read",
+            "target": "/tmp/example",
+            "prompt": "Do you want to proceed?",
+        }
+
 
 class TestStateServiceDBFirst:
     @pytest.fixture

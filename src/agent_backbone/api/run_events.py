@@ -1,4 +1,4 @@
-"""Fire-and-forget run event broadcasting via Socket.IO."""
+"""Fire-and-forget run event broadcasting on the /runs namespace."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.services._locator import get_sio
 
 if TYPE_CHECKING:
@@ -15,6 +14,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 RUN_EVENT = "run:event"
+RUNS_NAMESPACE = "/runs"
 
 
 async def emit_run_event(
@@ -47,16 +47,19 @@ async def emit_run_event(
             "data": data or {},
         }
 
-        # SUB-10: Route to run room if runId present, always to all-agents
+        # RDS-86A: Route to run room if runId is present, and always broadcast.
         run_id = (context or {}).get("runId")
         if run_id:
             await server.emit(
-                RUN_EVENT, payload, namespace=SESSIONS_NAMESPACE,
+                RUN_EVENT,
+                payload,
+                namespace=RUNS_NAMESPACE,
                 room=f"run:{run_id}",
             )
         await server.emit(
-            RUN_EVENT, payload, namespace=SESSIONS_NAMESPACE,
-            room="all-agents",
+            RUN_EVENT,
+            payload,
+            namespace=RUNS_NAMESPACE,
         )
         log.info("[RUN] Emitted %s from %s context=%s", event_type, source, context)
     except Exception:

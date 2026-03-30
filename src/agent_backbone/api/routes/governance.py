@@ -1,4 +1,4 @@
-"""Track and run management — frontend governance engine triggers actions via the backbone."""
+"""Track and run management — the frontend track engine triggers actions via the backbone."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ async def _handle_notify_backbone(
 ) -> dict[str, Any]:
     from agent_backbone.services.messaging import deliver_message
 
-    msg = f"[via:governance] {params['message']}"
+    msg = f"[via:runs] {params['message']}"
     outcome = await deliver_message(params["session"], msg, config)
     return {"outcome": outcome}
 
@@ -115,7 +115,7 @@ async def _handle_auto_comment(
 
 
 async def _handle_log(params: dict[str, Any]) -> dict[str, Any]:
-    log.info("Governance log action: %s", params.get("message", ""))
+    log.info("Track log action: %s", params.get("message", ""))
     return {"logged": True}
 
 
@@ -131,7 +131,7 @@ async def execute_run_action(
     db: BackboneDB = Depends(get_db),
     gh: GitHubClient = Depends(get_github),
 ) -> RunActionResponse:
-    """Execute a run action dispatched by the frontend governance engine."""
+    """Execute a run action dispatched by the frontend track engine."""
     action_type = body.action_type
     params = body.params
 
@@ -169,7 +169,7 @@ async def execute_run_action(
     await emit_run_event(
         "action.executed",
         context=body.track_context,
-        source="governance",
+        source="track-engine",
         data={"action_type": action_type, "result": result},
         sio=getattr(request.app.state, "sio", None),
     )

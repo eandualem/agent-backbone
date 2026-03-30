@@ -42,6 +42,7 @@ class EnrichedAgent(BaseModel):
     entity_type: str = "agent"  # "agent" | "service"
     state: str = "offline"
     current_issue: int | None = None
+    context: dict[str, Any] | str | None = None
     online: bool = False
     plan_file: str | None = None
     plan_title: str | None = None
@@ -89,6 +90,7 @@ class AgentStateDetail(BaseModel):
     timestamp: float = 0.0
     source: str = "default"
     started_at: float | None = None
+    context: dict[str, Any] | str | None = None
     plan_file: str | None = None
     plan_title: str | None = None
 
@@ -99,7 +101,7 @@ class StateUpdateRequest(BaseModel):
     entity: str = ""
     state: str
     issue: int | None = None
-    context: str = ""
+    context: dict[str, Any] | str | None = None
     ts: float = 0.0
     plan_file: str | None = None
     plan_title: str | None = None

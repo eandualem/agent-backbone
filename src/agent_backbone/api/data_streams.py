@@ -105,6 +105,28 @@ class RunsNamespace(socketio.AsyncNamespace):
             return False
         return True
 
+    async def on_subscribe(self, sid: str, data: dict) -> None:
+        """Join per-run rooms for targeted run-event delivery."""
+        if not isinstance(data, dict):
+            return
+        for run_id in data.get("runs", []):
+            if isinstance(run_id, str) and run_id:
+                await self.enter_room(sid, f"run:{run_id}")
+        rooms = self.rooms(sid) or []
+        filtered = [room for room in rooms if room != sid]
+        await self.emit("subscribed", {"rooms": filtered}, to=sid)
+
+    async def on_unsubscribe(self, sid: str, data: dict) -> None:
+        """Leave per-run rooms."""
+        if not isinstance(data, dict):
+            return
+        for run_id in data.get("runs", []):
+            if isinstance(run_id, str) and run_id:
+                await self.leave_room(sid, f"run:{run_id}")
+        rooms = self.rooms(sid) or []
+        filtered = [room for room in rooms if room != sid]
+        await self.emit("subscribed", {"rooms": filtered}, to=sid)
+
 
 # --- Registry of all data stream namespaces ---
 

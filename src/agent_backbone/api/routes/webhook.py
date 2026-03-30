@@ -1,9 +1,9 @@
 """Webhook intake routes.
 
-Handles GitHub webhook events (signature validation, dedup, governance event
-emission) and Telegram reply routing.
-Pure functions (verify_signature, normalize_event) live in api.webhook_utils.
-Dedup uses the persistence service's hot cache via app.state.db.
+Handles GitHub webhook events (signature validation, dedup, activity recording)
+and Telegram reply routing. Pure functions (verify_signature, normalize_event)
+live in api.webhook_utils. Dedup uses the persistence service's hot cache via
+app.state.db.
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ import os
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
+from agent_backbone.api.activity_events import record_activity_event
 from agent_backbone.api.auth import require_api_key
 from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.deps import (
     get_config,
     get_db,
 )
-from agent_backbone.api.run_events import emit_run_event
 from agent_backbone.api.webhook_utils import normalize_event, verify_signature
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import EventType, parse_governance_tag, repo_session_name
@@ -59,7 +59,7 @@ async def handle_webhook(
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
 ):
-    """Receive GitHub webhook events, validate, dedup, and emit governance events."""
+    """Receive GitHub webhook events, validate, dedup, and record activity."""
     payload_body = await request.body()
 
     # Verify signature
@@ -95,34 +95,45 @@ async def handle_webhook(
         event.issue.repo_full_name,
     )
 
-    gov_event_type = _WEBHOOK_EVENT_MAP.get(event.event_type)
-    if gov_event_type:
-        # Override with governance tag from comment body if present
+    activity_event_type = _WEBHOOK_EVENT_MAP.get(event.event_type)
+    if activity_event_type:
+        # Override with event tag from comment body if present.
         if event.comment and event.comment.body:
-            governance_tag = parse_governance_tag(event.comment.body)
-            if governance_tag:
-                gov_event_type = governance_tag
+            tagged_event = parse_governance_tag(event.comment.body)
+            if tagged_event:
+                activity_event_type = tagged_event
 
         # Derive org from repo name via registry
         repo_name = repo_session_name(event.issue.repo_full_name)
         org = config.registry.organization_for_repo(repo_name) if repo_name else None
 
-        gov_context: dict[str, object] = {
+        context: dict[str, object] = {
             "issue_id": event.issue.number,
             "repo": event.issue.repo_full_name,
         }
         if org:
-            gov_context["org"] = org
+            context["org"] = org
 
-        gov_data: dict[str, object] = {"action": action, "delivery_id": delivery_id}
+        activity_data: dict[str, object] = {
+            "action": action,
+            "delivery_id": delivery_id,
+            **context,
+        }
         if event.comment and event.comment.body:
-            gov_data["comment_body"] = event.comment.body
+            activity_data["comment_body"] = event.comment.body
 
-        await emit_run_event(
-            gov_event_type,
-            context=gov_context,
-            source=event.issue.labels.sender if event.issue.labels.sender != "unknown" else "github",
-            data=gov_data,
+        source_entity = (
+            event.issue.labels.sender
+            if event.issue.labels.sender != "unknown"
+            else "github"
+        )
+        await record_activity_event(
+            db,
+            session=repo_name or source_entity,
+            event_type=activity_event_type,
+            entity=source_entity,
+            data=activity_data,
+            source_ref=delivery_id,
         )
 
     await notify_stream("tasks")

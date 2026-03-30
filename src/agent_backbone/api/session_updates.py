@@ -118,6 +118,7 @@ async def build_enriched_agent(
         entity_type=entity_type,
         state=state_value,
         current_issue=snapshot.current_issue,
+        context=snapshot.context,
         online=online,
         plan_file=snapshot.plan_file,
         plan_title=snapshot.plan_title,
@@ -290,6 +291,23 @@ async def _emit_changed_agents(
                 [agent_dict],
                 namespace=SESSIONS_NAMESPACE,
                 room=f"agent:{session}",
+            )
+        org = str(agent_dict.get("org") or "").strip()
+        if org:
+            await sio.emit(
+                SESSIONS_UPDATE_EVENT,
+                [agent_dict],
+                namespace=SESSIONS_NAMESPACE,
+                room=f"org:{org}",
+            )
+        for group in {
+            str(group).strip() for group in agent_dict.get("groups") or [] if str(group).strip()
+        }:
+            await sio.emit(
+                SESSIONS_UPDATE_EVENT,
+                [agent_dict],
+                namespace=SESSIONS_NAMESPACE,
+                room=f"group:{group}",
             )
     return True
 

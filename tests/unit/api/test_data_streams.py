@@ -463,6 +463,23 @@ class TestRunsNamespace:
             result = await ns.on_connect("sid1", {}, auth={"api_key": "wrong"})
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_subscribe_joins_run_rooms(self):
+        """RDS-86B: subscribe joins run:{runId} rooms."""
+        ns = RunsNamespace("/runs")
+        ns.enter_room = AsyncMock()
+        ns.emit = AsyncMock()
+        ns.rooms = MagicMock(return_value=["sid1", "run:bug-validation-49"])
+
+        await ns.on_subscribe("sid1", {"runs": ["bug-validation-49"]})
+
+        ns.enter_room.assert_awaited_once_with("sid1", "run:bug-validation-49")
+        ns.emit.assert_awaited_once_with(
+            "subscribed",
+            {"rooms": ["run:bug-validation-49"]},
+            to="sid1",
+        )
+
 
 class TestStopDataStreams:
     @pytest.mark.asyncio

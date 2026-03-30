@@ -1,4 +1,4 @@
-"""Tests for api/run_events.py — run event emission."""
+"""Tests for api/run_events.py."""
 
 from __future__ import annotations
 
@@ -8,31 +8,31 @@ from agent_backbone.api.run_events import RUN_EVENT, emit_run_event
 
 
 class TestEmitRunEvent:
-    async def test_emits_to_all_agents_room(self):
-        """SUB-10: Events without runId emit to all-agents room."""
+    async def test_broadcasts_to_runs_namespace(self):
+        """RDS-86A: Events without runId broadcast on /runs."""
         sio = AsyncMock()
         await emit_run_event(
-            "issue.created",
-            context={"issue_id": 42, "repo": "eandualem/agent-backbone"},
-            source="bell-wf",
-            data={"action": "opened"},
+            "action.executed",
+            context={"runId": ""},
+            source="track-engine",
+            data={"action_type": "log"},
             sio=sio,
         )
-        # Should emit once — to all-agents only (no runId)
+        # Should emit once — broadcast only (no runId room)
         assert sio.emit.await_count == 1
         args, kwargs = sio.emit.await_args
         assert args[0] == RUN_EVENT
         payload = args[1]
-        assert payload["type"] == "issue.created"
-        assert payload["context"] == {"issue_id": 42, "repo": "eandualem/agent-backbone"}
-        assert payload["source"] == "bell-wf"
-        assert payload["data"] == {"action": "opened"}
+        assert payload["type"] == "action.executed"
+        assert payload["context"] == {"runId": ""}
+        assert payload["source"] == "track-engine"
+        assert payload["data"] == {"action_type": "log"}
         assert isinstance(payload["timestamp"], int)
-        assert kwargs["namespace"] == "/sessions"
-        assert kwargs["room"] == "all-agents"
+        assert kwargs["namespace"] == "/runs"
+        assert "room" not in kwargs
 
     async def test_routes_to_run_room_when_run_id_present(self):
-        """SUB-10: Events with runId emit to run room AND all-agents."""
+        """RDS-86A: Events with runId emit to run room and broadcast."""
         sio = AsyncMock()
         await emit_run_event(
             "bug.claim.structured",
@@ -42,8 +42,11 @@ class TestEmitRunEvent:
         )
         assert sio.emit.await_count == 2
         calls = sio.emit.await_args_list
-        rooms = {call.kwargs["room"] for call in calls}
-        assert rooms == {"run:bug-validation-49", "all-agents"}
+        run_call = next(call for call in calls if call.kwargs.get("room"))
+        broadcast_call = next(call for call in calls if "room" not in call.kwargs)
+        assert run_call.kwargs["room"] == "run:bug-validation-49"
+        assert run_call.kwargs["namespace"] == "/runs"
+        assert broadcast_call.kwargs["namespace"] == "/runs"
 
     async def test_defaults_context_and_data(self):
         """Context and data default to empty dicts."""

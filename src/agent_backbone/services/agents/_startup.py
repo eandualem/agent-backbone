@@ -6,6 +6,7 @@ import logging
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents._observation import observe_session, snapshot_from_observation
+from agent_backbone.services.agents.models import serialize_state_context
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.terminal import list_sessions
 
@@ -43,7 +44,7 @@ async def seed_startup_states(config: BackboneConfig, db: BackboneDB) -> None:
                 state=snapshot.state.value,
                 current_issue=None,
                 entity=config.registry.entity_by_session.get(session_name, session_name),
-                context=None,
+                context=serialize_state_context(snapshot.context),
                 ts=str(snapshot.timestamp),
                 plan_file=None,
                 plan_title=None,

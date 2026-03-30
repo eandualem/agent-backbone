@@ -36,6 +36,8 @@ def _sample_snapshot() -> list[EnrichedAgent]:
             state="idle",
             online=True,
             type="coding_agent",
+            org="WF",
+            groups=["orchestrators"],
         )
     ]
 
@@ -182,8 +184,8 @@ class TestEmitSessionsUpdate:
         assert await emit_sessions_update(MagicMock(), MagicMock(), MagicMock(), None) is False
 
     @pytest.mark.asyncio
-    async def test_emits_to_all_agents_and_per_agent_rooms(self):
-        """Changed agents emit to all-agents room and per-agent room."""
+    async def test_emits_to_all_agents_agent_org_and_group_rooms(self):
+        """Changed agents emit to all-agents plus targeted session-set rooms."""
         sio = MagicMock()
         sio.emit = AsyncMock()
 
@@ -210,6 +212,18 @@ class TestEmitSessionsUpdate:
             namespace=SESSIONS_NAMESPACE,
             room="agent:agent-backbone",
         )
+        sio.emit.assert_any_await(
+            SESSIONS_UPDATE_EVENT,
+            [agent_dict],
+            namespace=SESSIONS_NAMESPACE,
+            room="org:WF",
+        )
+        sio.emit.assert_any_await(
+            SESSIONS_UPDATE_EVENT,
+            [agent_dict],
+            namespace=SESSIONS_NAMESPACE,
+            room="group:orchestrators",
+        )
 
     @pytest.mark.asyncio
     async def test_per_agent_change_detection_suppresses_unchanged(self):
@@ -227,8 +241,8 @@ class TestEmitSessionsUpdate:
 
         assert first is True
         assert second is False
-        # Only emitted on first call (2 calls: all-agents + per-agent)
-        assert sio.emit.await_count == 2
+        # Only emitted on first call (4 calls: all-agents + agent + org + group)
+        assert sio.emit.await_count == 4
 
 
 class TestBuildEnrichedAgent:
@@ -295,3 +309,41 @@ class TestBuildEnrichedAgent:
 
         assert agent.online is True
         assert agent.state == "offline"
+
+    @pytest.mark.asyncio
+    async def test_permission_context_is_exposed_on_enriched_agent(self):
+        """Structured state context survives into the Socket.IO session payload."""
+        config = MagicMock()
+        config.registry.entry_for_session.return_value = None
+        config.registry.entities.get.return_value = None
+        config.registry.repo_path_by_name = {}
+        config.registry.repos = []
+
+        state_svc = MagicMock()
+        state_svc.get_state = AsyncMock(
+            return_value=StateSnapshot(
+                state=AgentState.PERMISSION_WAITING,
+                timestamp=123.0,
+                source="observed",
+                context={
+                    "tool": "Read",
+                    "target": "/tmp/example",
+                    "prompt": "Do you want to proceed?",
+                },
+            )
+        )
+
+        agent = await build_enriched_agent(
+            session="agent-backbone",
+            entity="agent-backbone",
+            config=config,
+            active_sessions={"agent-backbone"},
+            state_svc=state_svc,
+            agent_type="coding_agent",
+        )
+
+        assert agent.context == {
+            "tool": "Read",
+            "target": "/tmp/example",
+            "prompt": "Do you want to proceed?",
+        }

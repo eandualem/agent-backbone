@@ -24,6 +24,15 @@ _TIMELINE_TELEMETRY_EVENTS = [
     "task.completed",
     "runtime.error",
     "tool.error",
+    "issue.created",
+    "issue.commented",
+    "issue.closed",
+    "issue.labeled",
+    "pr.opened",
+    "message.direct_sent",
+    "message.direct_delivered",
+    "message.direct_queued",
+    "agent.divergence_detected",
 ]
 
 
@@ -126,6 +135,7 @@ def _summarize_telemetry_row(row: dict) -> str:
     event = str(row.get("event") or "activity")
     runtime = str(row.get("runtime") or "").strip()
     runtime_prefix = f"{runtime} " if runtime else ""
+    data = _parse_row_data(row)
 
     labels = {
         "session.started": "session started",
@@ -135,7 +145,38 @@ def _summarize_telemetry_row(row: dict) -> str:
         "runtime.error": "runtime error",
         "tool.error": "tool error",
     }
+    if event in {"issue.created", "issue.commented", "issue.closed", "issue.labeled"}:
+        issue_id = data.get("issue_id")
+        suffix = f" #{issue_id}" if issue_id else ""
+        return f"{event.replace('.', ' ')}{suffix}"
+    if event == "pr.opened":
+        issue_id = data.get("issue_id")
+        suffix = f" #{issue_id}" if issue_id else ""
+        return f"pr opened{suffix}"
+    if event == "message.direct_sent":
+        return f"direct message sent to {data.get('to_session', '?')}"
+    if event == "message.direct_delivered":
+        return f"direct message delivered to {data.get('to_session', '?')}"
+    if event == "message.direct_queued":
+        return f"direct message queued for {data.get('to_session', '?')}"
+    if event == "agent.divergence_detected":
+        reported = data.get("reported_state", "?")
+        observed = data.get("observed_state", "?")
+        return f"state divergence {reported} -> {observed}"
     return f"{runtime_prefix}{labels.get(event, event)}".strip()
+
+
+def _parse_row_data(row: dict) -> dict:
+    """Parse the optional JSON payload stored on an activity row."""
+    raw = row.get("data")
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
 
 
 @router.get("/activity", response_model=ListEnvelope[ActivityEvent])

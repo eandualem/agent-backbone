@@ -84,7 +84,8 @@ class SessionsNamespace(socketio.AsyncNamespace):
 
     Supports room-based filtering per SOCKET_IO_SUBSCRIPTIONS protocol:
     - agent:{session} rooms for per-agent updates
-    - run:{runId} rooms for run events
+    - org:{org} rooms for per-organization agent sets
+    - group:{group} rooms for per-group agent sets
     - all-agents room for full broadcast (default)
     """
 
@@ -111,15 +112,19 @@ class SessionsNamespace(socketio.AsyncNamespace):
             if isinstance(agent, str) and agent:
                 await self.enter_room(sid, f"agent:{agent}")
 
-        for run_id in data.get("runs", []):
-            if isinstance(run_id, str) and run_id:
-                await self.enter_room(sid, f"run:{run_id}")
+        for org in data.get("orgs", []):
+            if isinstance(org, str) and org:
+                await self.enter_room(sid, f"org:{org}")
+
+        for group in data.get("groups", []):
+            if isinstance(group, str) and group:
+                await self.enter_room(sid, f"group:{group}")
 
         if data.get("all_agents"):
             await self.enter_room(sid, "all-agents")
-        elif data.get("agents") or data.get("runs"):
+        elif data.get("agents") or data.get("orgs") or data.get("groups"):
             # SUB-7: Remove default all-agents if client subscribes
-            # to specific agents/runs without requesting all_agents
+            # to specific agents/orgs/groups without requesting all_agents
             if sid not in self._explicit_subscribers:
                 await self.leave_room(sid, "all-agents")
 
@@ -139,9 +144,13 @@ class SessionsNamespace(socketio.AsyncNamespace):
             if isinstance(agent, str) and agent:
                 await self.leave_room(sid, f"agent:{agent}")
 
-        for run_id in data.get("runs", []):
-            if isinstance(run_id, str) and run_id:
-                await self.leave_room(sid, f"run:{run_id}")
+        for org in data.get("orgs", []):
+            if isinstance(org, str) and org:
+                await self.leave_room(sid, f"org:{org}")
+
+        for group in data.get("groups", []):
+            if isinstance(group, str) and group:
+                await self.leave_room(sid, f"group:{group}")
 
         if data.get("all_agents"):
             await self.leave_room(sid, "all-agents")

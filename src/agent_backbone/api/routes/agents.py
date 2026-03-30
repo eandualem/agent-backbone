@@ -34,6 +34,7 @@ from agent_backbone.api.session_updates import (
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import AgentState, StateService, StateSnapshot
 from agent_backbone.services.agents._observation import enrich_idle_state
+from agent_backbone.services.agents.models import serialize_state_context
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.terminal import (
     RUNTIME_ENV_KEY,
@@ -92,15 +93,6 @@ _STATE_ALIASES = {
     "processing_issue": AgentState.BUSY.value,
     "unknown": AgentState.OFFLINE.value,
 }
-_SPECIFIC_STATE_EVENTS = {
-    AgentState.IDLE.value: "agent.idle",
-    AgentState.STARTING.value: "agent.starting",
-    AgentState.BUSY.value: "agent.busy",
-    AgentState.PLAN_WAITING.value: "agent.plan_waiting",
-    AgentState.PERMISSION_WAITING.value: "agent.permission_waiting",
-    AgentState.SUB_AGENT_WAITING.value: "agent.sub_agent_waiting",
-    AgentState.OFFLINE.value: "agent.offline",
-}
 
 
 def _entity_for_session(
@@ -119,12 +111,24 @@ def _normalized_state_value(body: StateUpdateRequest) -> str:
     hook_event = body.hook_event.strip()
     raw_state = (body.state or "").strip().lower()
     if hook_event == "PermissionRequest":
-        raw_state = AgentState.PERMISSION_WAITING.value
+        raw_state = AgentState.IDLE.value
     state = _STATE_ALIASES.get(raw_state, raw_state)
     try:
         return AgentState(state).value
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Unknown state: {body.state}") from exc
+
+
+def _normalized_context_value(
+    context: dict | str | None,
+) -> dict | str | None:
+    """Collapse empty state context values to None."""
+    if context is None:
+        return None
+    if isinstance(context, dict):
+        return context or None
+    value = context.strip()
+    return value or None
 
 
 async def _build_state_snapshot(
@@ -138,12 +142,14 @@ async def _build_state_snapshot(
         current_issue=body.issue,
         timestamp=timestamp,
         source="hook",
+        context=_normalized_context_value(body.context),
         plan_file=body.plan_file,
         plan_title=body.plan_title,
     )
     if snapshot.state == AgentState.IDLE:
         snapshot = await enrich_idle_state(session, snapshot)
     return snapshot
+
 
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
 async def list_agents(
@@ -172,6 +178,7 @@ async def get_agent_state_endpoint(
         timestamp=snapshot.timestamp,
         source=snapshot.source,
         started_at=snapshot.started_at,
+        context=snapshot.context,
         plan_file=snapshot.plan_file,
         plan_title=snapshot.plan_title,
     )
@@ -343,6 +350,9 @@ async def post_agent_state(
     """Update agent state in the database."""
     entity = _entity_for_session(config, session, body)
     snapshot = await _build_state_snapshot(session, body)
+    persisted_context = snapshot.context
+    if persisted_context is None:
+        persisted_context = _normalized_context_value(body.context)
 
     await emit_session_override(
         getattr(request.app.state, "sio", None),
@@ -359,37 +369,12 @@ async def post_agent_state(
         snapshot.state.value,
         current_issue=snapshot.current_issue,
         entity=entity,
-        context=body.context or None,
+        context=serialize_state_context(persisted_context),
         ts=str(snapshot.timestamp),
         plan_file=snapshot.plan_file,
         plan_title=snapshot.plan_title,
     )
     await invalidate_session_snapshot_caches()
-
-    from agent_backbone.api.run_events import emit_run_event
-
-    await emit_run_event(
-        "agent.state_changed",
-        context={"session": session, "entity": entity},
-        source=entity,
-        data={
-            "state": snapshot.state.value,
-            "issue": snapshot.current_issue,
-            "context": body.context,
-            "hook_event": body.hook_event,
-            "cli": body.cli,
-        },
-        sio=getattr(request.app.state, "sio", None),
-    )
-    specific_event = _SPECIFIC_STATE_EVENTS.get(snapshot.state.value)
-    if specific_event is not None:
-        await emit_run_event(
-            specific_event,
-            context={"session": session, "entity": entity},
-            source=entity,
-            data={"issue": snapshot.current_issue, "hook_event": body.hook_event, "cli": body.cli},
-            sio=getattr(request.app.state, "sio", None),
-        )
 
     await notify_stream("agents")
     await notify_stream("plans")

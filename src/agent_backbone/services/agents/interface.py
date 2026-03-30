@@ -11,6 +11,7 @@ from agent_backbone.services.agents._heartbeat import (
     save_schedules as _save_schedules,
 )
 from agent_backbone.services.agents.models import AgentState, StateSnapshot
+from agent_backbone.services.agents.models import deserialize_state_context
 from agent_backbone.services.agents._observation import (
     observe_session,
     snapshot_from_observation,
@@ -50,6 +51,7 @@ def _row_to_snapshot(row: dict) -> StateSnapshot:
         timestamp=timestamp,
         source="db",
         started_at=started_at,
+        context=deserialize_state_context(row.get("context")),
         plan_file=row.get("plan_file"),
         plan_title=row.get("plan_title"),
     )
@@ -101,6 +103,7 @@ class StateService:
                     timestamp=snapshot.timestamp,
                     source="default",
                     started_at=snapshot.started_at,
+                    context=snapshot.context,
                     plan_file=snapshot.plan_file,
                     plan_title=snapshot.plan_title,
                 )
