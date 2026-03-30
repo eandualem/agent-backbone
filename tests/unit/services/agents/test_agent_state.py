@@ -274,7 +274,7 @@ class TestStateServiceDBFirst:
         with patch(
             f"{_IFACE}.observe_session",
             new_callable=AsyncMock,
-            return_value=MagicMock(online=False, has_child_processes=False),
+            return_value=MagicMock(online=False, has_sub_agent_processes=False),
         ):
             snap = await svc.get_state("ike")
         assert snap.state == AgentState.OFFLINE
@@ -285,7 +285,7 @@ class TestStateServiceDBFirst:
         with patch(
             f"{_IFACE}.observe_session",
             new_callable=AsyncMock,
-            return_value=MagicMock(online=True, has_child_processes=False),
+            return_value=MagicMock(online=True, has_sub_agent_processes=False),
         ):
             snap = await svc.get_state("ike")
         assert snap.state == AgentState.STARTING
@@ -296,7 +296,7 @@ class TestStateServiceDBFirst:
         with patch(
             f"{_IFACE}.observe_session",
             new_callable=AsyncMock,
-            return_value=MagicMock(online=False, has_child_processes=False),
+            return_value=MagicMock(online=False, has_sub_agent_processes=False),
         ):
             snap = await svc.get_state("ike")
         assert snap.state == AgentState.OFFLINE
@@ -308,7 +308,7 @@ class TestStateServiceDBFirst:
         with patch(
             f"{_IFACE}.observe_session",
             new_callable=AsyncMock,
-            return_value=MagicMock(online=True, has_child_processes=False),
+            return_value=MagicMock(online=True, has_sub_agent_processes=False),
         ):
             snap = await svc.get_state("ike")
         assert snap.state == AgentState.STARTING

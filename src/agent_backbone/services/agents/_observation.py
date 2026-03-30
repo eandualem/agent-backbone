@@ -21,7 +21,8 @@ from agent_backbone.services.terminal._sessions import query_format_vars
 
 log = logging.getLogger(__name__)
 
-_INFRASTRUCTURE_PROCESS_PREFIXES = ("docker", "containerd", "com.docker.")
+_INFRASTRUCTURE_PROCESS_PREFIXES = ("docker", "containerd", "com.docker.", "caffeinate")
+_TEAMMATE_ARG_MARKERS = ("--agent-id", "--parent-session-id")
 _PERMISSION_CAPTURE_LINES = 40
 _PROMPT_LINE_PATTERNS = (
     re.compile(r"\bdo you want to proceed\??$", re.IGNORECASE),
@@ -76,8 +77,18 @@ class SessionObservation:
     session: str
     online: bool
     pane_pid: int | None = None
-    has_child_processes: bool = False
+    has_sub_agent_processes: bool = False
     permission_request: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ProcessDescendant:
+    """One descendant process under the tmux pane process."""
+
+    pid: int
+    ppid: int
+    comm: str
+    command: str
 
 
 @dataclass(frozen=True)
@@ -104,11 +115,8 @@ class PermissionRequest:
         return context
 
 
-async def _has_child_processes(parent_pid: int | None) -> bool:
-    """Whether the pane process currently has child processes."""
-    if parent_pid is None:
-        return False
-
+async def _list_child_pids(parent_pid: int) -> list[int]:
+    """Return direct child PIDs for a process."""
     proc = await asyncio.create_subprocess_exec(
         "pgrep",
         "-P",
@@ -118,41 +126,113 @@ async def _has_child_processes(parent_pid: int | None) -> bool:
     )
     stdout, _ = await proc.communicate()
     if proc.returncode != 0:
-        return False
+        return []
+    return [int(pid) for pid in stdout.decode().splitlines() if pid.strip().isdigit()]
 
-    child_pids = [
-        pid.strip()
-        for pid in stdout.decode().splitlines()
-        if pid.strip().isdigit()
-    ]
-    if not child_pids:
-        return False
 
-    child_proc = await asyncio.create_subprocess_exec(
+async def _list_descendant_processes(parent_pid: int | None) -> list[ProcessDescendant]:
+    """Return all descendant processes below the pane process."""
+    if parent_pid is None:
+        return []
+
+    descendant_pids: list[int] = []
+    queue = [parent_pid]
+    seen: set[int] = {parent_pid}
+
+    while queue:
+        current_pid = queue.pop(0)
+        for child_pid in await _list_child_pids(current_pid):
+            if child_pid in seen:
+                continue
+            seen.add(child_pid)
+            descendant_pids.append(child_pid)
+            queue.append(child_pid)
+
+    if not descendant_pids:
+        return []
+
+    proc = await asyncio.create_subprocess_exec(
         "ps",
         "-o",
+        "pid=",
+        "-o",
+        "ppid=",
+        "-o",
         "comm=",
+        "-o",
+        "args=",
         "-p",
-        ",".join(child_pids),
+        ",".join(str(pid) for pid in descendant_pids),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )
-    child_stdout, _ = await child_proc.communicate()
-    if child_proc.returncode != 0:
-        return True
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return []
 
-    child_commands = [
-        line.strip()
-        for line in child_stdout.decode().splitlines()
-        if line.strip()
-    ]
-    return any(not _is_infrastructure_process(command) for command in child_commands)
+    descendants: list[ProcessDescendant] = []
+    for line in stdout.decode().splitlines():
+        parts = line.strip().split(None, 3)
+        if len(parts) < 4:
+            continue
+        pid_raw, ppid_raw, comm, command = parts
+        if not pid_raw.isdigit() or not ppid_raw.isdigit():
+            continue
+        descendants.append(
+            ProcessDescendant(
+                pid=int(pid_raw),
+                ppid=int(ppid_raw),
+                comm=comm.strip(),
+                command=command.strip(),
+            )
+        )
+    return descendants
+
+
+def _process_executable(command: str, comm: str) -> str:
+    """Best-effort executable name for a process row."""
+    if command.strip():
+        return Path(command.strip().split()[0]).name.lower()
+    return Path(comm.strip()).name.lower()
 
 
 def _is_infrastructure_process(command: str) -> bool:
     """Whether a child command is infrastructure noise, not a sub-agent."""
-    executable = Path(command.strip()).name.lower()
+    executable = _process_executable(command, command)
     return executable.startswith(_INFRASTRUCTURE_PROCESS_PREFIXES)
+
+
+def _is_cli_process(process: ProcessDescendant) -> bool:
+    """Whether a process row looks like a Claude Code or Codex CLI process."""
+    executable = _process_executable(process.command, process.comm)
+    if executable in {"codex", "claude"}:
+        return True
+    return executable == "node" and "claude" in process.command.lower()
+
+
+def _has_teammate_marker(process: ProcessDescendant) -> bool:
+    """Whether a process argv carries the positive teammate identifiers."""
+    lowered = process.command.lower()
+    return any(marker in lowered for marker in _TEAMMATE_ARG_MARKERS)
+
+
+def _find_sub_agent_processes(
+    descendants: list[ProcessDescendant],
+) -> list[ProcessDescendant]:
+    """Return descendant CLI processes that positively identify as teammates."""
+    cli_processes = [process for process in descendants if _is_cli_process(process)]
+    teammate_processes = [
+        process for process in cli_processes if _has_teammate_marker(process)
+    ]
+    if teammate_processes:
+        return teammate_processes
+
+    if len(cli_processes) > 1:
+        log.debug(
+            "Ambiguous extra CLI descendants treated as idle: %s",
+            [process.command for process in cli_processes],
+        )
+    return []
 
 
 def _normalize_tool_name(tool: str) -> str:
@@ -319,7 +399,7 @@ def _extract_permission_request(pane_content: str) -> dict[str, Any] | None:
 
 
 async def observe_session(session: str) -> SessionObservation:
-    """Observe whether a session is online and whether its pane has children."""
+    """Observe whether a session is online and whether it has teammate processes."""
     online = await session_exists(session)
     if not online:
         return SessionObservation(session=session, online=False)
@@ -332,14 +412,15 @@ async def observe_session(session: str) -> SessionObservation:
 
     pane_pid_raw = tmux_vars.get("pane_pid", "")
     pane_pid = int(pane_pid_raw) if pane_pid_raw.isdigit() else None
-    has_children = False
+    has_sub_agent_processes = False
     try:
-        has_children = await _has_child_processes(pane_pid)
+        descendants = await _list_descendant_processes(pane_pid)
+        has_sub_agent_processes = bool(_find_sub_agent_processes(descendants))
     except Exception:
-        log.exception("Failed to inspect child processes for %s", session)
+        log.exception("Failed to inspect process tree for %s", session)
 
     permission_request: dict[str, Any] | None = None
-    if not has_children:
+    if not has_sub_agent_processes:
         try:
             pane_content = await capture_pane(session, lines=_PERMISSION_CAPTURE_LINES)
             if pane_content:
@@ -351,7 +432,7 @@ async def observe_session(session: str) -> SessionObservation:
         session=session,
         online=True,
         pane_pid=pane_pid,
-        has_child_processes=has_children,
+        has_sub_agent_processes=has_sub_agent_processes,
         permission_request=permission_request,
     )
 
@@ -365,7 +446,7 @@ def snapshot_from_observation(
     ts = time.time() if timestamp is None else timestamp
     if not observation.online:
         return StateSnapshot(state=AgentState.OFFLINE, timestamp=ts, source="observed")
-    if observation.has_child_processes:
+    if observation.has_sub_agent_processes:
         return StateSnapshot(
             state=AgentState.SUB_AGENT_WAITING,
             timestamp=ts,
@@ -389,7 +470,7 @@ async def enrich_idle_state(session: str, snapshot: StateSnapshot) -> StateSnaps
     observation = await observe_session(session)
     if not observation.online:
         return snapshot
-    if not observation.has_child_processes:
+    if not observation.has_sub_agent_processes:
         if observation.permission_request is None:
             return snapshot
         return StateSnapshot(
