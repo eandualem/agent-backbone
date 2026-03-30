@@ -31,8 +31,9 @@ class IssueService:
         self._sio = sio
 
     def _repo_inventory(self) -> list[str]:
-        repos = {f"{repo.org}/{repo.name}" for repo in self._config.registry.repos}
-        repos.add(f"{self._config.github.owner}/{self._config.github.repo}")
+        owner = self._config.github.owner
+        repos = {f"{owner}/{repo.name}" for repo in self._config.registry.repos}
+        repos.add(f"{owner}/{self._config.github.repo}")
         return sorted(repos)
 
     async def _refresh_issue_projection(
