@@ -105,25 +105,29 @@ class IssueService:
         )
         return detail, persisted_comment
 
-    async def sync_repo(self, repo_full_name: str, *, emit_changes: bool = True) -> list[dict]:
-        changed: list[dict] = []
-        try:
-            issues = await self._gh.list_issues(
-                state="all",
-                repo_full_name=repo_full_name,
-                per_page=100,
-            )
-        except Exception:
-            log.warning("Issue sync failed for %s", repo_full_name, exc_info=True)
-            return changed
-
+    async def _process_issues(
+        self,
+        issues: list,
+        repo_full_name: str,
+        *,
+        emit_changes: bool,
+        changed: list[dict],
+    ) -> None:
         for issue in issues:
-            existing = await self._db.issues.get_issue(issue.repo_full_name, issue.number)
-            detail = await self._refresh_issue_projection(issue, emit_changes=emit_changes)
-            if existing is None or existing.get("updated_at") != detail.get("updated_at"):
+            existing = await self._db.issues.get_issue(
+                issue.repo_full_name, issue.number
+            )
+            detail = await self._refresh_issue_projection(
+                issue, emit_changes=emit_changes
+            )
+            if existing is None or existing.get("updated_at") != detail.get(
+                "updated_at"
+            ):
                 if issue.comment_count > 0:
                     try:
-                        await self.sync_issue_comments(repo_full_name, issue.number)
+                        await self.sync_issue_comments(
+                            repo_full_name, issue.number
+                        )
                     except Exception:
                         log.warning(
                             "Issue comment sync failed for %s#%d",
@@ -133,6 +137,57 @@ class IssueService:
                         )
             if detail != existing:
                 changed.append(detail)
+
+    async def sync_repo(
+        self, repo_full_name: str, *, emit_changes: bool = True
+    ) -> list[dict]:
+        """Sync issues for a repo: all open issues first, then recent closed."""
+        changed: list[dict] = []
+
+        # Pass 1: ALL open issues (paginated through every page)
+        try:
+            open_issues = await self._gh.list_issues(
+                state="open",
+                repo_full_name=repo_full_name,
+                per_page=100,
+            )
+        except Exception:
+            log.warning(
+                "Open issue sync failed for %s", repo_full_name, exc_info=True
+            )
+            return changed
+
+        log.info(
+            "Syncing %s: %d open issues", repo_full_name, len(open_issues)
+        )
+        await self._process_issues(
+            open_issues, repo_full_name,
+            emit_changes=emit_changes, changed=changed,
+        )
+
+        # Pass 2: recently-updated closed issues (first page only)
+        try:
+            closed_issues = await self._gh.list_issues(
+                state="closed",
+                repo_full_name=repo_full_name,
+                per_page=100,
+                sort="updated",
+                direction="desc",
+                max_pages=1,
+            )
+        except Exception:
+            log.warning(
+                "Closed issue sync failed for %s",
+                repo_full_name,
+                exc_info=True,
+            )
+            return changed
+
+        await self._process_issues(
+            closed_issues, repo_full_name,
+            emit_changes=emit_changes, changed=changed,
+        )
+
         return changed
 
     async def sync_inventory(self, *, emit_changes: bool = True) -> list[dict]:

@@ -474,11 +474,17 @@ class GitHubClient:
         *,
         repo_full_name: str | None = None,
         params: dict[str, str | int] | None = None,
+        max_pages: int = 0,
     ) -> list[dict[str, Any]]:
-        """Fetch and combine all pages from a GitHub list endpoint."""
+        """Fetch and combine all pages from a GitHub list endpoint.
+
+        Args:
+            max_pages: Stop after this many pages. 0 means fetch all pages.
+        """
         items: list[dict[str, Any]] = []
         next_url: str | None = url
         next_params = dict(params or {})
+        page_count = 0
 
         while next_url:
             resp = await self._request(
@@ -490,6 +496,9 @@ class GitHubClient:
             payload = resp.json()
             if isinstance(payload, list):
                 items.extend(item for item in payload if isinstance(item, dict))
+            page_count += 1
+            if max_pages and page_count >= max_pages:
+                break
             next_url = _next_link(resp)
             next_params = {}
 
@@ -547,14 +556,17 @@ class GitHubClient:
         labels: list[str] | None = None,
         per_page: int = 50,
         repo_full_name: str | None = None,
+        sort: str = "created",
+        direction: str = "asc",
+        max_pages: int = 0,
     ) -> list[IssueData]:
         """List issues with flexible filtering by state and labels."""
         owner, repo = self._resolve_repo(repo_full_name)
         url = f"/repos/{owner}/{repo}/issues"
         params: dict[str, str | int] = {
             "state": state,
-            "sort": "created",
-            "direction": "asc",
+            "sort": sort,
+            "direction": direction,
             "per_page": per_page,
         }
         if labels:
@@ -565,6 +577,7 @@ class GitHubClient:
             url,
             repo_full_name=repo_full_name,
             params=params,
+            max_pages=max_pages,
         ):
             if "pull_request" in item:
                 continue
