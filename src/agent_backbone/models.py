@@ -85,6 +85,7 @@ class EventType(StrEnum):
     """Normalized event types from GitHub webhooks."""
 
     ISSUE_OPENED = "issue_opened"
+    ISSUE_REOPENED = "issue_reopened"
     ISSUE_LABELED = "issue_labeled"
     ISSUE_CLOSED = "issue_closed"
     COMMENT_CREATED = "comment_created"
@@ -97,6 +98,7 @@ class EventType(StrEnum):
         if event_type == "issues":
             mapping = {
                 "opened": cls.ISSUE_OPENED,
+                "reopened": cls.ISSUE_REOPENED,
                 "labeled": cls.ISSUE_LABELED,
                 "closed": cls.ISSUE_CLOSED,
             }
@@ -120,6 +122,7 @@ class ParsedLabels(BaseModel):
     targets: list[str] = Field(default_factory=list)
     issue_type: str = ""
     priority: str = ""
+    all_labels: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_github_labels(cls, labels: list[dict]) -> ParsedLabels:
@@ -128,9 +131,13 @@ class ParsedLabels(BaseModel):
         targets: list[str] = []
         issue_type = ""
         priority = ""
+        all_labels: list[str] = []
 
         for label in labels:
             name = label.get("name", "")
+            if not name:
+                continue
+            all_labels.append(name)
             if name.startswith("from:"):
                 sender = name[5:]
             elif name.startswith("for:"):
@@ -140,18 +147,29 @@ class ParsedLabels(BaseModel):
             elif name in ("blocking", "non-blocking"):
                 priority = name
 
-        return cls(sender=sender, targets=targets, issue_type=issue_type, priority=priority)
+        return cls(
+            sender=sender,
+            targets=targets,
+            issue_type=issue_type,
+            priority=priority,
+            all_labels=all_labels,
+        )
 
 
 class IssueData(BaseModel):
-    """Minimal issue data extracted from webhook payload."""
+    """Canonical issue data extracted from GitHub payloads."""
 
     number: int
     title: str = ""
+    body: str = ""
     state: str = "open"
     labels: ParsedLabels = Field(default_factory=ParsedLabels)
     html_url: str = ""
     repo_full_name: str = ""
+    user_login: str = "unknown"
+    created_at: str = ""
+    updated_at: str = ""
+    comment_count: int = 0
     is_pull_request: bool = False
 
     @property
@@ -161,11 +179,15 @@ class IssueData(BaseModel):
 
 
 class CommentData(BaseModel):
-    """Comment data from issue_comment webhook events."""
+    """Canonical issue-comment data from GitHub payloads."""
 
     id: int = 0
+    repo_full_name: str = ""
+    issue_number: int = 0
     body: str = ""
     user_login: str = "unknown"
+    created_at: str = ""
+    updated_at: str = ""
 
 
 class IssueEvent(BaseModel):
@@ -194,10 +216,15 @@ class IssueEvent(BaseModel):
         issue = IssueData(
             number=issue_data.get("number", 0),
             title=issue_data.get("title", ""),
+            body=issue_data.get("body", "") or "",
             state=issue_data.get("state", "open"),
             labels=labels,
             html_url=issue_data.get("html_url", ""),
             repo_full_name=repository.get("full_name", ""),
+            user_login=issue_data.get("user", {}).get("login", "unknown"),
+            created_at=issue_data.get("created_at", "") or "",
+            updated_at=issue_data.get("updated_at", "") or "",
+            comment_count=issue_data.get("comments", 0) or 0,
             is_pull_request=issue_key == "pull_request",
         )
 
@@ -206,8 +233,12 @@ class IssueEvent(BaseModel):
         if comment_data:
             comment = CommentData(
                 id=comment_data.get("id", 0),
+                repo_full_name=repository.get("full_name", ""),
+                issue_number=issue_data.get("number", 0),
                 body=comment_data.get("body", ""),
                 user_login=comment_data.get("user", {}).get("login", "unknown"),
+                created_at=comment_data.get("created_at", "") or "",
+                updated_at=comment_data.get("updated_at", "") or "",
             )
 
         return cls(

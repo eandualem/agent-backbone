@@ -149,6 +149,13 @@ class PriorityScoringConfig:
 
 
 @dataclass(frozen=True)
+class IssueDomainConfig:
+    """Canonical issue-domain synchronization settings."""
+
+    sync_interval_seconds: int = 300
+
+
+@dataclass(frozen=True)
 class CapacityRoutingConfig:
     """Capacity-aware routing settings."""
 
@@ -223,6 +230,7 @@ class BackboneConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     daily_routines: DailyRoutineConfig = field(default_factory=DailyRoutineConfig)
     priority_scoring: PriorityScoringConfig = field(default_factory=PriorityScoringConfig)
+    issue_domain: IssueDomainConfig = field(default_factory=IssueDomainConfig)
     capacity_routing: CapacityRoutingConfig = field(default_factory=CapacityRoutingConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
@@ -267,6 +275,7 @@ class BackboneConfig:
         tg = raw.get("telegram", {})
         dr = raw.get("daily_routines", {})
         ps = raw.get("priority_scoring", {})
+        issue_domain = raw.get("issue_domain", {})
         cr = raw.get("capacity_routing", {})
         es = raw.get("escalation", {})
         hb = raw.get("heartbeat", {})
@@ -365,6 +374,9 @@ class BackboneConfig:
                 ),
                 dependents_multiplier=ps.get("dependents_multiplier", 1.5),
                 age_tiebreaker_weight=ps.get("age_tiebreaker_weight", 0.01),
+            ),
+            issue_domain=IssueDomainConfig(
+                sync_interval_seconds=issue_domain.get("sync_interval_seconds", 300),
             ),
             capacity_routing=CapacityRoutingConfig(
                 busy_threshold_seconds=cr.get("busy_threshold_seconds", 1800),

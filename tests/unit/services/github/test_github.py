@@ -101,11 +101,11 @@ class TestListOpenIssues:
         async with GitHubClient(config) as gh:
             issues = await gh.list_open_issues("for:ike")
 
-        # Blocking issue should come first
+        # Sorted by number ascending (delivery order)
         assert len(issues) == 2
-        assert issues[0].number == 8
-        assert issues[0].labels.priority == "blocking"
-        assert issues[1].number == 5
+        assert issues[0].number == 5
+        assert issues[1].number == 8
+        assert issues[1].labels.priority == "blocking"
 
     @respx.mock
     async def test_empty_response(self, config, issues_url):

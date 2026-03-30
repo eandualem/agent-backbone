@@ -53,9 +53,16 @@ async def lifespan(app: FastAPI):
 
     # Non-lifecycle services (lightweight, no start/stop needed but exposed for DI)
     from agent_backbone.services.automation.interface import OnboardingService, WorkflowsService
+    from agent_backbone.services.issues import IssueService
 
     app.state.onboarding_service = OnboardingService()
     app.state.workflows_service = WorkflowsService()
+    app.state.issue_service = IssueService(
+        config=config,
+        db=app.state.db,
+        gh=app.state.github,
+        sio=app.state.sio,
+    )
 
     try:
         await lifecycle.start_all()
@@ -74,6 +81,7 @@ async def lifespan(app: FastAPI):
         from agent_backbone.services.agents._startup import seed_startup_states
 
         await seed_startup_states(config=config, db=app.state.db)
+        await app.state.issue_service.sync_inventory(emit_changes=False)
 
         from agent_backbone.api.background import start_background_tasks
 
@@ -178,7 +186,6 @@ def create_app() -> socketio.ASGIApp:
     from agent_backbone.api.routes.dashboard import router as dashboard_router
     from agent_backbone.api.routes.deliveries import router as deliveries_router
     from agent_backbone.api.routes.files import router as files_router
-    from agent_backbone.api.routes.governance import router as tracks_router
     from agent_backbone.api.routes.heartbeats import router as heartbeats_router
     from agent_backbone.api.routes.hierarchy import router as hierarchy_router
     from agent_backbone.api.routes.issues import router as issues_router
@@ -190,6 +197,7 @@ def create_app() -> socketio.ASGIApp:
     from agent_backbone.api.routes.schedule import router as schedule_router
     from agent_backbone.api.routes.status import router as status_router
     from agent_backbone.api.routes.swarms import router as swarms_router
+    from agent_backbone.api.routes.tracks import router as tracks_router
     from agent_backbone.api.routes.workflows import router as workflows_router
 
     api_routers = [

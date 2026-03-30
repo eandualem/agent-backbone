@@ -17,15 +17,16 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from agent_backbone.api.activity_events import record_activity_event
 from agent_backbone.api.auth import require_api_key
-from agent_backbone.api.data_streams import notify_stream
 from agent_backbone.api.deps import (
     get_config,
     get_db,
+    get_issue_service,
 )
 from agent_backbone.api.webhook_utils import normalize_event, verify_signature
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import EventType, parse_governance_tag, repo_session_name
 from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.issues import IssueService
 from agent_backbone.services.telegram._topic_discovery import (
     effective_group_chat_id,
     effective_routes,
@@ -58,6 +59,7 @@ async def handle_webhook(
     request: Request,
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
+    issue_service: IssueService = Depends(get_issue_service),
 ):
     """Receive GitHub webhook events, validate, dedup, and record activity."""
     payload_body = await request.body()
@@ -94,6 +96,8 @@ async def handle_webhook(
         event.issue.number,
         event.issue.repo_full_name,
     )
+
+    await issue_service.handle_webhook_event(event)
 
     activity_event_type = _WEBHOOK_EVENT_MAP.get(event.event_type)
     if activity_event_type:
@@ -136,7 +140,6 @@ async def handle_webhook(
             source_ref=delivery_id,
         )
 
-    await notify_stream("tasks")
     return Response(content="accepted", status_code=200)
 
 

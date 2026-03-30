@@ -9,6 +9,7 @@ from agent_backbone.services.agents import MonitoringService, StateService
 from agent_backbone.services.automation import OnboardingService, WorkflowsService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
+from agent_backbone.services.issues import IssueService
 from agent_backbone.services.terminal import TmuxService
 
 
@@ -25,6 +26,11 @@ def get_db(request: Request) -> BackboneDB:
 def get_github(request: Request) -> GitHubClient:
     """Retrieve the long-lived GitHubClient instance from app state."""
     return request.app.state.github
+
+
+def get_issue_service(request: Request) -> IssueService:
+    """Retrieve the IssueService instance from app state."""
+    return request.app.state.issue_service
 
 
 def get_state_service(request: Request) -> StateService:

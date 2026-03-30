@@ -15,6 +15,8 @@ _EXPECTED_TABLES = {
     "deliveries",
     "heartbeats",
     "issue_dependencies",
+    "issues",
+    "issue_comments",
     "message_queue",
     "swarms",
     "swarm_assignments",
@@ -22,9 +24,9 @@ _EXPECTED_TABLES = {
     "swarm_phase_history",
     "swarm_workers",
     "telemetry_checkpoints",
-    "governance_tracks",
-    "governance_track_instances",
-    "governance_track_layouts",
+    "tracks",
+    "track_instances",
+    "track_layouts",
 }
 
 _EXPECTED_INDEXES = {
@@ -39,6 +41,10 @@ _EXPECTED_INDEXES = {
     "uq_deliveries_active_owner",
     "idx_deps_sub",
     "idx_heartbeats_agent",
+    "idx_issues_repo",
+    "idx_issues_state",
+    "idx_issues_priority",
+    "idx_comments_issue",
     "idx_mq_leased",
     "idx_mq_status",
     "idx_mq_session",
@@ -61,9 +67,10 @@ _EXPECTED_INDEXES = {
     "uq_mq_comment_dedup",
     "uq_mq_dm_dedup",
     "uq_mq_issue_dedup",
-    "idx_governance_tracks_name",
-    "idx_governance_instances_track",
-    "idx_governance_instances_state",
+    "idx_tracks_name",
+    "idx_track_instances_track",
+    "idx_track_instances_state",
+    "idx_track_instances_issue",
 }
 
 

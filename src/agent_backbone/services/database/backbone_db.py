@@ -32,17 +32,19 @@ from agent_backbone.services.database.models import (  # noqa: F401
     AgentStateORM,
     DedupLogORM,
     DeliveryORM,
-    GovernanceTrackInstanceORM,
-    GovernanceTrackLayoutORM,
-    GovernanceTrackORM,
     HeartbeatORM,
+    IssueCommentORM,
     IssueDependencyORM,
+    IssueORM,
     MessageQueueORM,
     SwarmMessageORM,
     SwarmORM,
     SwarmPhaseHistoryORM,
     SwarmWorkerORM,
     TelemetryCheckpointORM,
+    TrackInstanceORM,
+    TrackLayoutORM,
+    TrackORM,
 )
 
 metadata = Base.metadata
@@ -127,7 +129,10 @@ def _coerce_delivery_call(
         )
     if repo_full_name is not None and not isinstance(repo_full_name, str):
         raise TypeError("repo_full_name must be a string or None")
-    return repo_full_name, issue_number, target_entity, session_name, outcome, flow_name, flow_run_id
+    return (
+        repo_full_name, issue_number, target_entity,
+        session_name, outcome, flow_name, flow_run_id,
+    )
 
 
 class BackboneDB:
@@ -988,16 +993,30 @@ class BackboneDB:
         async with self._engine.begin() as conn:
             return await _swarm_repo.reconcile_swarm_worker_sessions(conn, active_sessions)
 
-    # --- Governance tracks (class-based repo with session factory) ---
+    # --- Canonical issue projection (class-based repo with session factory) ---
 
     @property
-    def governance(self):
-        """Lazy-initialized governance track repository."""
-        if not hasattr(self, "_governance_repo"):
+    def issues(self):
+        """Lazy-initialized issue projection repository."""
+        if not hasattr(self, "_issues_repo"):
             from sqlalchemy.ext.asyncio import async_sessionmaker
 
-            from agent_backbone.services.database._governance_repo import GovernanceRepo
+            from agent_backbone.services.database._issues_repo import IssuesRepo
 
             session_factory = async_sessionmaker(self._engine, expire_on_commit=False)
-            self._governance_repo = GovernanceRepo(session_factory)
-        return self._governance_repo
+            self._issues_repo = IssuesRepo(session_factory)
+        return self._issues_repo
+
+    # --- Tracks (class-based repo with session factory) ---
+
+    @property
+    def tracks(self):
+        """Lazy-initialized track repository."""
+        if not hasattr(self, "_tracks_repo"):
+            from sqlalchemy.ext.asyncio import async_sessionmaker
+
+            from agent_backbone.services.database._tracks_repo import TracksRepo
+
+            session_factory = async_sessionmaker(self._engine, expire_on_commit=False)
+            self._tracks_repo = TracksRepo(session_factory)
+        return self._tracks_repo

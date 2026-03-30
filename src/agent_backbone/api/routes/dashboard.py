@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from agent_backbone.api.deps import (
     get_config,
     get_db,
-    get_github,
+    get_issue_service,
     get_state_service,
     get_tmux_service,
 )
@@ -25,7 +25,7 @@ from agent_backbone.api.session_updates import build_session_snapshot, get_cache
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.github import GitHubClient
+from agent_backbone.services.issues import IssueService
 from agent_backbone.services.terminal import TmuxService
 
 log = logging.getLogger(__name__)
@@ -48,18 +48,17 @@ async def _fetch_agents(
     )
 
 
-async def _fetch_issues_pending(gh: GitHubClient) -> int:
-    """Get count of open GitHub issues with TTL cache (60s)."""
+async def _fetch_issues_pending(issue_service: IssueService) -> int:
+    """Get count of open issues from the canonical projection with TTL cache."""
     global _issues_cache, _issues_cache_ts  # noqa: PLW0603
     now = time.monotonic()
     if now - _issues_cache_ts < _ISSUES_CACHE_TTL:
         return _issues_cache
 
     try:
-        open_issues = await gh.list_issues(state="open")
-        count = len(open_issues)
+        count = await issue_service.count_open_issues()
     except Exception:
-        log.warning("Failed to fetch pending issues from GitHub")
+        log.warning("Failed to fetch pending issues from issue projection")
         count = 0
 
     _issues_cache = count
@@ -119,14 +118,14 @@ def _compute_counts(agents: list[EnrichedAgent]) -> DashboardCounts:
 async def get_dashboard(
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
-    gh: GitHubClient = Depends(get_github),
+    issue_service: IssueService = Depends(get_issue_service),
     state_svc: StateService = Depends(get_state_service),
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Unified dashboard endpoint — returns all dashboard data in one request."""
     agents, issues_pending, failed_deliveries, services = await asyncio.gather(
         _fetch_agents(config, state_svc, tmux_svc),
-        _fetch_issues_pending(gh),
+        _fetch_issues_pending(issue_service),
         _fetch_failed_deliveries(db),
         _fetch_service_health(db),
     )

@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, Text, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_backbone.services.database.base import Base
@@ -65,6 +74,49 @@ class AgentStateORM(Base):
     ts: Mapped[str | None] = mapped_column(Text, nullable=True)
     plan_file: Mapped[str | None] = mapped_column(Text, nullable=True)
     plan_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class IssueORM(Base):
+    """Canonical issue projection."""
+
+    __tablename__ = "issues"
+
+    repo_full_name: Mapped[str] = mapped_column(Text, primary_key=True, server_default="")
+    issue_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
+    html_url: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    user_login: Mapped[str] = mapped_column(Text, nullable=False, server_default="unknown")
+    labels_json: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    comment_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    priority_score: Mapped[float] = mapped_column(nullable=False, server_default="0.0")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    synced_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+
+    __table_args__ = (
+        Index("idx_issues_repo", "repo_full_name"),
+        Index("idx_issues_state", "state"),
+        Index("idx_issues_priority", "priority_score"),
+    )
+
+
+class IssueCommentORM(Base):
+    """Canonical issue-comment projection."""
+
+    __tablename__ = "issue_comments"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    repo_full_name: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    user_login: Mapped[str] = mapped_column(Text, nullable=False, server_default="unknown")
+    from_entity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+
+    __table_args__ = (Index("idx_comments_issue", "repo_full_name", "issue_number"),)
 
 
 class IssueDependencyORM(Base):
@@ -359,10 +411,10 @@ class SwarmAssignmentORM(Base):
     )
 
 
-class GovernanceTrackORM(Base):
-    """Governance track definitions — state machine workflow templates."""
+class TrackORM(Base):
+    """Track definitions — state machine workflow templates."""
 
-    __tablename__ = "governance_tracks"
+    __tablename__ = "tracks"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -372,19 +424,21 @@ class GovernanceTrackORM(Base):
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
 
     __table_args__ = (
-        Index("idx_governance_tracks_name", "name"),
+        Index("idx_tracks_name", "name"),
     )
 
 
-class GovernanceTrackInstanceORM(Base):
-    """Active instances of governance tracks — tied to specific work items."""
+class TrackInstanceORM(Base):
+    """Active track runs tied to specific work items."""
 
-    __tablename__ = "governance_track_instances"
+    __tablename__ = "track_instances"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     track_id: Mapped[str] = mapped_column(
-        ForeignKey("governance_tracks.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False
     )
+    repo_full_name: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     context: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
     current_state: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
@@ -394,15 +448,16 @@ class GovernanceTrackInstanceORM(Base):
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
 
     __table_args__ = (
-        Index("idx_governance_instances_track", "track_id"),
-        Index("idx_governance_instances_state", "current_state"),
+        Index("idx_track_instances_track", "track_id"),
+        Index("idx_track_instances_state", "current_state"),
+        Index("idx_track_instances_issue", "repo_full_name", "issue_number"),
     )
 
 
-class GovernanceTrackLayoutORM(Base):
-    """Persisted node positions for governance track graph visualizations."""
+class TrackLayoutORM(Base):
+    """Persisted node positions for track graph visualizations."""
 
-    __tablename__ = "governance_track_layouts"
+    __tablename__ = "track_layouts"
 
     track_id: Mapped[str] = mapped_column(Text, primary_key=True)
     positions: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")

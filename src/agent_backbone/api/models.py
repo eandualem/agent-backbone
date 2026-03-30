@@ -139,18 +139,33 @@ class ParsedLabelsResponse(BaseModel):
     targets: list[str] = Field(default_factory=list)
     issue_type: str = ""
     priority: str = ""
+    all_labels: list[str] = Field(default_factory=list)
 
 
-class IssueResponse(BaseModel):
-    """Issue with parsed labels and priority score."""
+class IssueSummary(BaseModel):
+    """Summary projection for one canonical issue."""
 
+    repo_full_name: str = ""
     number: int
     title: str = ""
     state: str = "open"
     html_url: str = ""
-    repo_full_name: str = ""
     labels: ParsedLabelsResponse = Field(default_factory=ParsedLabelsResponse)
     priority_score: float = 0.0
+    created_at: str = ""
+    updated_at: str = ""
+    comment_count: int = 0
+    user_login: str = "unknown"
+
+
+class IssueDetail(IssueSummary):
+    """Detail projection for one canonical issue."""
+
+    body: str = ""
+
+
+class IssueResponse(IssueSummary):
+    """Backward-compatible alias for summary issue payloads."""
 
 
 class IssueCommentResponse(BaseModel):
@@ -160,13 +175,15 @@ class IssueCommentResponse(BaseModel):
     body: str = ""
     user_login: str = "unknown"
     from_entity: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
 
 
 class IssueDependencies(BaseModel):
     """Sub-issues and parent issues for an issue."""
 
-    sub_issues: list[IssueResponse] = Field(default_factory=list)
-    parents: list[int] = Field(default_factory=list)
+    sub_issues: list[IssueSummary] = Field(default_factory=list)
+    parents: list[IssueSummary] = Field(default_factory=list)
 
 
 # --- Deliveries ---
@@ -1118,6 +1135,8 @@ class RunCreate(BaseModel):
     """Request body for creating a track run."""
 
     id: str
+    repo_full_name: str
+    issue_number: int
     context: dict[str, Any] = Field(default_factory=dict)
     current_state: str
     status: str = "active"
@@ -1127,6 +1146,8 @@ class RunCreate(BaseModel):
 class RunUpdate(BaseModel):
     """Request body for updating a track run."""
 
+    repo_full_name: str | None = None
+    issue_number: int | None = None
     current_state: str | None = None
     status: str | None = None
     last_projected_state: str | None = None
@@ -1139,6 +1160,8 @@ class RunResponse(BaseModel):
 
     id: str
     track_id: str
+    repo_full_name: str
+    issue_number: int
     context: dict[str, Any]
     current_state: str
     status: str

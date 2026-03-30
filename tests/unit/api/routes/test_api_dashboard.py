@@ -9,7 +9,7 @@ import pytest
 
 import agent_backbone.api.routes.dashboard as dashboard_module
 import agent_backbone.api.session_updates as session_updates_module
-from agent_backbone.api.deps import get_db, get_github, get_state_service, get_tmux_service
+from agent_backbone.api.deps import get_db, get_issue_service, get_state_service, get_tmux_service
 from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.services.agents import AgentState, StateSnapshot
 
@@ -45,10 +45,10 @@ def _make_tmux_svc(rich_sessions: list | None = None) -> MagicMock:
     return svc
 
 
-def _make_gh(issue_count: int = 3) -> MagicMock:
-    gh = MagicMock()
-    gh.list_issues = AsyncMock(return_value=[MagicMock() for _ in range(issue_count)])
-    return gh
+def _make_issue_service(issue_count: int = 3) -> MagicMock:
+    svc = MagicMock()
+    svc.count_open_issues = AsyncMock(return_value=issue_count)
+    return svc
 
 
 def _make_db(failed_count: int = 0, connection_ok: bool = True) -> MagicMock:
@@ -58,13 +58,13 @@ def _make_db(failed_count: int = 0, connection_ok: bool = True) -> MagicMock:
     return db
 
 
-def _set_overrides(api_app, *, state_svc=None, tmux_svc=None, gh=None, db=None):
+def _set_overrides(api_app, *, state_svc=None, tmux_svc=None, issue_svc=None, db=None):
     if state_svc is not None:
         api_app.dependency_overrides[get_state_service] = lambda: state_svc
     if tmux_svc is not None:
         api_app.dependency_overrides[get_tmux_service] = lambda: tmux_svc
-    if gh is not None:
-        api_app.dependency_overrides[get_github] = lambda: gh
+    if issue_svc is not None:
+        api_app.dependency_overrides[get_issue_service] = lambda: issue_svc
     if db is not None:
         api_app.dependency_overrides[get_db] = lambda: db
 
@@ -72,7 +72,7 @@ def _set_overrides(api_app, *, state_svc=None, tmux_svc=None, gh=None, db=None):
 def _clear_overrides(api_app):
     api_app.dependency_overrides.pop(get_state_service, None)
     api_app.dependency_overrides.pop(get_tmux_service, None)
-    api_app.dependency_overrides.pop(get_github, None)
+    api_app.dependency_overrides.pop(get_issue_service, None)
     api_app.dependency_overrides.pop(get_db, None)
 
 
@@ -83,7 +83,7 @@ class TestDashboardEndpoint:
             api_app,
             state_svc=_make_state_svc(),
             tmux_svc=_make_tmux_svc(),
-            gh=_make_gh(issue_count=0),
+            issue_svc=_make_issue_service(issue_count=0),
             db=_make_db(),
         )
         try:
@@ -109,7 +109,7 @@ class TestDashboardEndpoint:
                     {"name": "feynman", "windows": 1, "created": 1708000000, "attached": False},
                 ]
             ),
-            gh=_make_gh(issue_count=0),
+            issue_svc=_make_issue_service(issue_count=0),
             db=_make_db(),
         )
         try:
@@ -140,7 +140,7 @@ class TestDashboardEndpoint:
                     {"name": "ike", "windows": 1, "created": 1708000000, "attached": False},
                 ]
             ),
-            gh=_make_gh(issue_count=0),
+            issue_svc=_make_issue_service(issue_count=0),
             db=_make_db(),
         )
         try:
@@ -160,7 +160,7 @@ class TestDashboardEndpoint:
             api_app,
             state_svc=_make_state_svc(),
             tmux_svc=_make_tmux_svc(),
-            gh=_make_gh(issue_count=7),
+            issue_svc=_make_issue_service(issue_count=7),
             db=_make_db(),
         )
         try:
@@ -177,7 +177,7 @@ class TestDashboardEndpoint:
             api_app,
             state_svc=_make_state_svc(),
             tmux_svc=_make_tmux_svc(),
-            gh=_make_gh(issue_count=0),
+            issue_svc=_make_issue_service(issue_count=0),
             db=_make_db(failed_count=4),
         )
         try:
@@ -194,7 +194,7 @@ class TestDashboardEndpoint:
             api_app,
             state_svc=_make_state_svc(),
             tmux_svc=_make_tmux_svc(),
-            gh=_make_gh(issue_count=0),
+            issue_svc=_make_issue_service(issue_count=0),
             db=_make_db(connection_ok=True),
         )
         try:
@@ -209,18 +209,18 @@ class TestDashboardEndpoint:
 
     async def test_cache_returns_same_within_ttl(self, api_app, api_client, auth_headers):
         """Two rapid calls return same data (cache hit)."""
-        gh = _make_gh(issue_count=5)
+        issue_svc = _make_issue_service(issue_count=5)
         _set_overrides(
             api_app,
             state_svc=_make_state_svc(),
             tmux_svc=_make_tmux_svc(),
-            gh=gh,
+            issue_svc=issue_svc,
             db=_make_db(),
         )
         try:
             resp1 = await api_client.get("/api/dashboard", headers=auth_headers)
             # Change the mock — if cache works, the second call still returns 5
-            gh.list_issues = AsyncMock(return_value=[MagicMock() for _ in range(99)])
+            issue_svc.count_open_issues = AsyncMock(return_value=99)
             resp2 = await api_client.get("/api/dashboard", headers=auth_headers)
         finally:
             _clear_overrides(api_app)
@@ -247,7 +247,7 @@ class TestDashboardEndpoint:
             api_app,
             state_svc=_make_state_svc(),
             tmux_svc=_make_tmux_svc(),
-            gh=_make_gh(issue_count=0),
+            issue_svc=_make_issue_service(issue_count=0),
             db=_make_db(),
         )
         try:
@@ -284,7 +284,7 @@ class TestDashboardEndpoint:
                     {"name": "ike", "windows": 1, "created": 1708000000, "attached": False},
                 ]
             ),
-            gh=_make_gh(issue_count=0),
+            issue_svc=_make_issue_service(issue_count=0),
             db=_make_db(),
         )
         try:

@@ -62,6 +62,15 @@ def _parse_github_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(UTC)
 
 
+def _next_link(resp: httpx.Response) -> str | None:
+    """Return the next-page URL from a paginated GitHub response, if present."""
+    next_link = resp.links.get("next")
+    if not isinstance(next_link, dict):
+        return None
+    href = next_link.get("url")
+    return href if isinstance(href, str) and href else None
+
+
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
@@ -430,11 +439,61 @@ class GitHubClient:
         return IssueData(
             number=item["number"],
             title=item.get("title", ""),
+            body=item.get("body", "") or "",
             state=item.get("state", "open"),
             labels=labels,
             html_url=item.get("html_url", ""),
             repo_full_name=repo_full_name or self._default_repo_full_name(),
+            user_login=item.get("user", {}).get("login", "unknown"),
+            created_at=item.get("created_at", "") or "",
+            updated_at=item.get("updated_at", "") or "",
+            comment_count=item.get("comments", 0) or 0,
+            is_pull_request="pull_request" in item,
         )
+
+    def _build_comment(
+        self,
+        item: dict[str, Any],
+        *,
+        repo_full_name: str,
+        issue_number: int,
+    ) -> CommentData:
+        return CommentData(
+            id=item.get("id", 0),
+            repo_full_name=repo_full_name,
+            issue_number=issue_number,
+            body=item.get("body", ""),
+            user_login=item.get("user", {}).get("login", "unknown"),
+            created_at=item.get("created_at", "") or "",
+            updated_at=item.get("updated_at", "") or "",
+        )
+
+    async def _list_paginated_items(
+        self,
+        url: str,
+        *,
+        repo_full_name: str | None = None,
+        params: dict[str, str | int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch and combine all pages from a GitHub list endpoint."""
+        items: list[dict[str, Any]] = []
+        next_url: str | None = url
+        next_params = dict(params or {})
+
+        while next_url:
+            resp = await self._request(
+                "GET",
+                next_url,
+                repo_full_name=repo_full_name,
+                params=next_params or None,
+            )
+            payload = resp.json()
+            if isinstance(payload, list):
+                items.extend(item for item in payload if isinstance(item, dict))
+            next_url = _next_link(resp)
+            next_params = {}
+
+        return items
 
     # --- Issue operations ---
 
@@ -442,27 +501,12 @@ class GitHubClient:
         self, label: str, repo_full_name: str | None = None
     ) -> list[IssueData]:
         """List open issues with a specific label, sorted for delivery."""
-        owner, repo = self._resolve_repo(repo_full_name)
-        url = f"/repos/{owner}/{repo}/issues"
-        resp = await self._request(
-            "GET",
-            url,
+        issues = await self.list_issues(
+            state="open",
+            labels=[label],
+            per_page=100,
             repo_full_name=repo_full_name,
-            params={
-                "state": "open",
-                "labels": label,
-                "sort": "created",
-                "direction": "asc",
-                "per_page": 50,
-            },
         )
-
-        issues: list[IssueData] = []
-        for item in resp.json():
-            if "pull_request" in item:
-                continue
-            issues.append(self._build_issue(item, repo_full_name=repo_full_name))
-
         issues.sort(key=lambda i: _issue_sort_key(i))
         return issues
 
@@ -516,10 +560,12 @@ class GitHubClient:
         if labels:
             params["labels"] = ",".join(labels)
 
-        resp = await self._request("GET", url, repo_full_name=repo_full_name, params=params)
-
         issues: list[IssueData] = []
-        for item in resp.json():
+        for item in await self._list_paginated_items(
+            url,
+            repo_full_name=repo_full_name,
+            params=params,
+        ):
             if "pull_request" in item:
                 continue
             issues.append(self._build_issue(item, repo_full_name=repo_full_name))
@@ -531,22 +577,20 @@ class GitHubClient:
         self, issue_number: int, repo_full_name: str | None = None
     ) -> list[CommentData]:
         """List comments on an issue."""
-        owner, repo = self._resolve_repo(repo_full_name)
+        repo_key = self._repo_key(repo_full_name)
+        owner, repo = self._resolve_repo(repo_key)
         url = f"/repos/{owner}/{repo}/issues/{issue_number}/comments"
-        resp = await self._request(
-            "GET",
-            url,
-            repo_full_name=repo_full_name,
-            params={"per_page": 100},
-        )
-
         return [
-            CommentData(
-                id=item.get("id", 0),
-                body=item.get("body", ""),
-                user_login=item.get("user", {}).get("login", "unknown"),
+            self._build_comment(
+                item,
+                repo_full_name=repo_key,
+                issue_number=issue_number,
             )
-            for item in resp.json()
+            for item in await self._list_paginated_items(
+                url,
+                repo_full_name=repo_key,
+                params={"per_page": 100},
+            )
         ]
 
     async def create_issue(
@@ -566,15 +610,7 @@ class GitHubClient:
 
         resp = await self._request("POST", url, repo_full_name=repo_full_name, json=payload)
         item = resp.json()
-        parsed = ParsedLabels.from_github_labels(item.get("labels", []))
-        return IssueData(
-            number=item["number"],
-            title=item.get("title", ""),
-            state=item.get("state", "open"),
-            labels=parsed,
-            html_url=item.get("html_url", ""),
-            repo_full_name=repo_full_name,
-        )
+        return self._build_issue(item, repo_full_name=repo_full_name)
 
     async def add_comment(
         self,
@@ -593,10 +629,10 @@ class GitHubClient:
             json={"body": body},
         )
         item = resp.json()
-        return CommentData(
-            id=item.get("id", 0),
-            body=item.get("body", ""),
-            user_login=item.get("user", {}).get("login", "unknown"),
+        return self._build_comment(
+            item,
+            repo_full_name=repo_full_name,
+            issue_number=issue_number,
         )
 
     async def update_issue(
@@ -616,12 +652,4 @@ class GitHubClient:
             json={"state": state},
         )
         item = resp.json()
-        parsed = ParsedLabels.from_github_labels(item.get("labels", []))
-        return IssueData(
-            number=item["number"],
-            title=item.get("title", ""),
-            state=item.get("state", "open"),
-            labels=parsed,
-            html_url=item.get("html_url", ""),
-            repo_full_name=repo_full_name,
-        )
+        return self._build_issue(item, repo_full_name=repo_full_name)

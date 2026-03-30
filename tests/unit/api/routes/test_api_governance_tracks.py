@@ -16,6 +16,22 @@ _SAMPLE_TRACK = {
     },
 }
 
+_RUN_DEFAULTS = {
+    "repo_full_name": "eandualem/agent-backbone",
+    "issue_number": 42,
+}
+
+
+def _run_json(run_id: str, *, current_state: str = "created", **overrides) -> dict:
+    """Build a run creation payload with required fields filled."""
+    return {
+        "id": run_id,
+        **_RUN_DEFAULTS,
+        "context": overrides.pop("context", {}),
+        "current_state": current_state,
+        **overrides,
+    }
+
 
 class TestListTracks:
     async def test_empty_list(self, api_client, auth_headers, api_app):
@@ -108,11 +124,10 @@ class TestCreateRun:
         resp = await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={
-                "id": "inst-1",
-                "context": {"issue_id": 42, "repo": "eandualem/agent-backbone"},
-                "current_state": "created",
-            },
+            json=_run_json(
+                "inst-1",
+                context={"issue_id": 42, "repo": "eandualem/agent-backbone"},
+            ),
         )
         assert resp.status_code == 201
         data = resp.json()
@@ -136,7 +151,7 @@ class TestCreateRun:
             resp = await api_client.post(
                 "/api/tracks/bug-fix/runs",
                 headers=auth_headers,
-                json={"id": "run-emit-1", "context": {}, "current_state": "created"},
+                json=_run_json("run-emit-1"),
             )
         finally:
             _locator._sio = old_sio
@@ -160,7 +175,7 @@ class TestCreateRun:
         resp = await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={"id": "inst-s", "context": {}, "current_state": "created"},
+            json=_run_json("inst-s"),
         )
         assert resp.status_code == 201
         assert resp.json()["status"] == "active"
@@ -172,12 +187,7 @@ class TestCreateRun:
         resp = await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={
-                "id": "inst-p",
-                "context": {},
-                "current_state": "created",
-                "status": "paused",
-            },
+            json=_run_json("inst-p", status="paused"),
         )
         assert resp.status_code == 201
         assert resp.json()["status"] == "paused"
@@ -186,7 +196,7 @@ class TestCreateRun:
         resp = await api_client.post(
             "/api/tracks/nonexistent/runs",
             headers=auth_headers,
-            json={"id": "inst-1", "context": {}, "current_state": "start"},
+            json=_run_json("inst-1", current_state="start"),
         )
         assert resp.status_code == 404
 
@@ -199,7 +209,7 @@ class TestLastProjectedState:
         resp = await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={"id": "lps-1", "context": {}, "current_state": "created"},
+            json=_run_json("lps-1"),
         )
         assert resp.status_code == 201
         assert resp.json()["last_projected_state"] is None
@@ -211,7 +221,7 @@ class TestLastProjectedState:
         await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={"id": "lps-2", "context": {}, "current_state": "created"},
+            json=_run_json("lps-2"),
         )
         resp = await api_client.put(
             "/api/tracks/runs/lps-2",
@@ -228,7 +238,7 @@ class TestLastProjectedState:
         await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={"id": "lps-3", "context": {}, "current_state": "created"},
+            json=_run_json("lps-3"),
         )
         await api_client.put(
             "/api/tracks/runs/lps-3",
@@ -249,12 +259,7 @@ class TestLastProjectedState:
         resp = await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={
-                "id": "lps-4",
-                "context": {},
-                "current_state": "created",
-                "last_projected_state": "created",
-            },
+            json=_run_json("lps-4", last_projected_state="created"),
         )
         assert resp.status_code == 201
         assert resp.json()["last_projected_state"] == "created"
@@ -268,7 +273,7 @@ class TestUpdateRunStatus:
         await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={"id": "inst-u", "context": {}, "current_state": "created"},
+            json=_run_json("inst-u"),
         )
         resp = await api_client.put(
             "/api/tracks/runs/inst-u",
@@ -286,7 +291,7 @@ class TestUpdateRunStatus:
         await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={"id": "inst-r", "context": {}, "current_state": "created"},
+            json=_run_json("inst-r"),
         )
         await api_client.put(
             "/api/tracks/runs/inst-r",
@@ -308,7 +313,7 @@ class TestListRuns:
         await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={"id": "inst-1", "context": {}, "current_state": "created"},
+            json=_run_json("inst-1"),
         )
         resp = await api_client.get(
             "/api/tracks/bug-fix/runs", headers=auth_headers
@@ -325,7 +330,7 @@ class TestUpdateRun:
         await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={"id": "inst-1", "context": {}, "current_state": "created"},
+            json=_run_json("inst-1"),
         )
         resp = await api_client.put(
             "/api/tracks/runs/inst-1",
@@ -383,12 +388,12 @@ class TestListAllRuns:
         await api_client.post(
             "/api/tracks/bug-fix/runs",
             headers=auth_headers,
-            json={"id": "bf-1", "context": {}, "current_state": "created"},
+            json=_run_json("bf-1"),
         )
         await api_client.post(
             "/api/tracks/code-review/runs",
             headers=auth_headers,
-            json={"id": "cr-1", "context": {}, "current_state": "pending"},
+            json=_run_json("cr-1", current_state="pending"),
         )
 
         resp = await api_client.get(

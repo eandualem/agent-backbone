@@ -310,18 +310,23 @@ class TestNotifyStream:
 
 
 class TestRegisterDataStreams:
-    def test_registers_11_snapshot_namespaces_and_runs(self):
-        """register_data_streams registers snapshot domains plus the /runs event namespace."""
+    def test_registers_10_snapshot_namespaces_and_runs_and_issues(self):
+        """register_data_streams registers snapshot domains plus /runs and /issues namespaces."""
         import agent_backbone.api.data_streams as ds_mod
         from agent_backbone.api.data_streams import register_data_streams
 
         sio = MagicMock()
 
-        with patch("asyncio.create_task") as mock_create_task:
+        with (
+            patch("asyncio.create_task") as mock_create_task,
+            patch("agent_backbone.services._locator.get_config") as mock_config,
+        ):
             mock_create_task.return_value = MagicMock()
+            mock_config.return_value.issue_domain.sync_interval_seconds = 300
             register_data_streams(sio)
 
-        assert len(ds_mod._namespaces) == 11
+        assert len(ds_mod._namespaces) == 10
+        # 10 snapshot + 1 /issues + 1 /runs = 12
         assert sio.register_namespace.call_count == 12
 
     def test_registers_expected_domains(self):
@@ -331,13 +336,16 @@ class TestRegisterDataStreams:
 
         sio = MagicMock()
 
-        with patch("asyncio.create_task") as mock_create_task:
+        with (
+            patch("asyncio.create_task") as mock_create_task,
+            patch("agent_backbone.services._locator.get_config") as mock_config,
+        ):
             mock_create_task.return_value = MagicMock()
+            mock_config.return_value.issue_domain.sync_interval_seconds = 300
             register_data_streams(sio)
 
         expected = {
             "agents",
-            "tasks",
             "rooms",
             "activity",
             "flows",
@@ -351,7 +359,7 @@ class TestRegisterDataStreams:
         assert set(ds_mod._namespaces.keys()) == expected
 
     def test_creates_periodic_emitter_tasks(self):
-        """Each namespace gets a background periodic emitter task."""
+        """Each snapshot namespace gets a background periodic emitter task, plus issue sync."""
         import agent_backbone.api.data_streams as ds_mod
         from agent_backbone.api.data_streams import register_data_streams
 
@@ -363,9 +371,14 @@ class TestRegisterDataStreams:
             created_tasks.append(task)
             return task
 
-        with patch("asyncio.create_task", side_effect=capture_task):
+        with (
+            patch("asyncio.create_task", side_effect=capture_task),
+            patch("agent_backbone.services._locator.get_config") as mock_config,
+        ):
+            mock_config.return_value.issue_domain.sync_interval_seconds = 300
             register_data_streams(sio)
 
+        # 10 snapshot emitters + 1 issue-sync = 11
         assert len(created_tasks) == 11
         assert len(ds_mod._poll_tasks) == 11
 
@@ -376,8 +389,12 @@ class TestRegisterDataStreams:
 
         sio = MagicMock()
 
-        with patch("asyncio.create_task") as mock_create_task:
+        with (
+            patch("asyncio.create_task") as mock_create_task,
+            patch("agent_backbone.services._locator.get_config") as mock_config,
+        ):
             mock_create_task.return_value = MagicMock()
+            mock_config.return_value.issue_domain.sync_interval_seconds = 300
             register_data_streams(sio)
 
         for ns in ds_mod._namespaces.values():
@@ -389,8 +406,12 @@ class TestRegisterDataStreams:
 
         sio = MagicMock()
 
-        with patch("asyncio.create_task") as mock_create_task:
+        with (
+            patch("asyncio.create_task") as mock_create_task,
+            patch("agent_backbone.services._locator.get_config") as mock_config,
+        ):
             mock_create_task.return_value = MagicMock()
+            mock_config.return_value.issue_domain.sync_interval_seconds = 300
             register_data_streams(sio)
 
         namespaces = [call.args[0] for call in sio.register_namespace.call_args_list]
@@ -404,8 +425,12 @@ class TestRegisterDataStreams:
 
         sio = MagicMock()
 
-        with patch("asyncio.create_task") as mock_create_task:
+        with (
+            patch("asyncio.create_task") as mock_create_task,
+            patch("agent_backbone.services._locator.get_config") as mock_config,
+        ):
             mock_create_task.return_value = MagicMock()
+            mock_config.return_value.issue_domain.sync_interval_seconds = 300
             register_data_streams(sio)
 
         agent = MagicMock()

@@ -100,11 +100,20 @@ async def _handle_auto_comment(
     if not body:
         raise ValueError("Either 'body' or 'message' param is required")
 
-    issue_number = params.get("issue_number") or track_context.get("issue_id")
+    issue_number = (
+        params.get("issue_number")
+        or track_context.get("issue_number")
+        or track_context.get("issue_id")
+    )
     if not issue_number:
         raise ValueError("Either 'issue_number' param or issue_id in track_context is required")
 
-    repo = params.get("repo") or track_context.get("repo")
+    repo = (
+        params.get("repo_full_name")
+        or params.get("repo")
+        or track_context.get("repo_full_name")
+        or track_context.get("repo")
+    )
 
     await gh.add_comment(
         issue_number,
@@ -183,14 +192,14 @@ async def execute_run_action(
 @router.get("/tracks", response_model=ListEnvelope[TrackResponse])
 async def list_tracks(db: BackboneDB = Depends(get_db)):
     """List all track definitions."""
-    tracks = await db.governance.list_tracks()
+    tracks = await db.tracks.list_tracks()
     return ListEnvelope(items=tracks, total=len(tracks))
 
 
 @router.get("/tracks/{track_id}", response_model=TrackResponse)
 async def get_track(track_id: str, db: BackboneDB = Depends(get_db)):
     """Get a specific track definition."""
-    track = await db.governance.get_track(track_id)
+    track = await db.tracks.get_track(track_id)
     if track is None:
         raise HTTPException(status_code=404, detail=f"Track '{track_id}' not found")
     return track
@@ -202,10 +211,10 @@ async def create_track(
     db: BackboneDB = Depends(get_db),
 ):
     """Create a new track definition."""
-    existing = await db.governance.get_track(body.id)
+    existing = await db.tracks.get_track(body.id)
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"Track '{body.id}' already exists")
-    return await db.governance.create_track(
+    return await db.tracks.create_track(
         track_id=body.id,
         name=body.name,
         description=body.description,
@@ -220,7 +229,7 @@ async def update_track(
     db: BackboneDB = Depends(get_db),
 ):
     """Update a track definition."""
-    result = await db.governance.update_track(
+    result = await db.tracks.update_track(
         track_id,
         name=body.name,
         description=body.description,
@@ -234,7 +243,7 @@ async def update_track(
 @router.delete("/tracks/{track_id}", status_code=204)
 async def delete_track(track_id: str, db: BackboneDB = Depends(get_db)):
     """Delete a track definition."""
-    deleted = await db.governance.delete_track(track_id)
+    deleted = await db.tracks.delete_track(track_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Track '{track_id}' not found")
 
@@ -248,7 +257,7 @@ async def delete_track(track_id: str, db: BackboneDB = Depends(get_db)):
 )
 async def list_all_runs(db: BackboneDB = Depends(get_db)):
     """List all track runs across all tracks."""
-    instances = await db.governance.list_all_instances()
+    instances = await db.tracks.list_all_instances()
     return ListEnvelope(items=instances, total=len(instances))
 
 
@@ -258,7 +267,7 @@ async def list_all_runs(db: BackboneDB = Depends(get_db)):
 )
 async def list_runs(track_id: str, db: BackboneDB = Depends(get_db)):
     """List runs of a track."""
-    instances = await db.governance.list_instances(track_id)
+    instances = await db.tracks.list_instances(track_id)
     return ListEnvelope(items=instances, total=len(instances))
 
 
@@ -273,12 +282,14 @@ async def create_run(
     db: BackboneDB = Depends(get_db),
 ):
     """Create a new run of a track."""
-    track = await db.governance.get_track(track_id)
+    track = await db.tracks.get_track(track_id)
     if track is None:
         raise HTTPException(status_code=404, detail=f"Track '{track_id}' not found")
-    result = await db.governance.create_instance(
+    result = await db.tracks.create_instance(
         instance_id=body.id,
         track_id=track_id,
+        repo_full_name=body.repo_full_name,
+        issue_number=body.issue_number,
         context=body.context,
         current_state=body.current_state,
         status=body.status,
@@ -305,11 +316,13 @@ async def update_run(
     db: BackboneDB = Depends(get_db),
 ):
     """Update a track run state."""
-    result = await db.governance.update_instance(
+    result = await db.tracks.update_instance(
         run_id,
         current_state=body.current_state,
         status=body.status,
         last_projected_state=body.last_projected_state,
+        repo_full_name=body.repo_full_name,
+        issue_number=body.issue_number,
         context=body.context,
         history=body.history,
     )
@@ -324,7 +337,7 @@ async def update_run(
 @router.get("/tracks/{track_id}/layout", response_model=TrackLayoutResponse)
 async def get_layout(track_id: str, db: BackboneDB = Depends(get_db)):
     """Get graph layout positions for a track."""
-    layout = await db.governance.get_layout(track_id)
+    layout = await db.tracks.get_layout(track_id)
     if layout is None:
         raise HTTPException(status_code=404, detail=f"Layout for track '{track_id}' not found")
     return layout
@@ -337,4 +350,4 @@ async def upsert_layout(
     db: BackboneDB = Depends(get_db),
 ):
     """Create or update graph layout positions for a track."""
-    return await db.governance.upsert_layout(track_id, body.positions)
+    return await db.tracks.upsert_layout(track_id, body.positions)

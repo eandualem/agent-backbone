@@ -1,4 +1,4 @@
-"""Governance track persistence — CRUD operations for tracks and instances."""
+"""Track persistence — CRUD operations for tracks, runs, and layouts."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from datetime import UTC, datetime
 from sqlalchemy import delete, select, update
 
 from agent_backbone.services.database.models import (
-    GovernanceTrackInstanceORM,
-    GovernanceTrackLayoutORM,
-    GovernanceTrackORM,
+    TrackInstanceORM,
+    TrackLayoutORM,
+    TrackORM,
 )
 
 log = logging.getLogger(__name__)
@@ -21,8 +21,8 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-class GovernanceRepo:
-    """Query repository for governance tracks and instances."""
+class TracksRepo:
+    """Query repository for tracks, runs, and layouts."""
 
     def __init__(self, session_factory) -> None:
         self._session_factory = session_factory
@@ -30,7 +30,7 @@ class GovernanceRepo:
     async def list_tracks(self) -> list[dict]:
         async with self._session_factory() as session:
             result = await session.execute(
-                select(GovernanceTrackORM).order_by(GovernanceTrackORM.name)
+                select(TrackORM).order_by(TrackORM.name)
             )
             rows = result.scalars().all()
             return [
@@ -48,7 +48,7 @@ class GovernanceRepo:
     async def get_track(self, track_id: str) -> dict | None:
         async with self._session_factory() as session:
             result = await session.execute(
-                select(GovernanceTrackORM).where(GovernanceTrackORM.id == track_id)
+                select(TrackORM).where(TrackORM.id == track_id)
             )
             r = result.scalar_one_or_none()
             if r is None:
@@ -67,7 +67,7 @@ class GovernanceRepo:
     ) -> dict:
         now = _now()
         async with self._session_factory() as session:
-            row = GovernanceTrackORM(
+            row = TrackORM(
                 id=track_id,
                 name=name,
                 description=description,
@@ -105,8 +105,8 @@ class GovernanceRepo:
 
         async with self._session_factory() as session:
             result = await session.execute(
-                update(GovernanceTrackORM)
-                .where(GovernanceTrackORM.id == track_id)
+                update(TrackORM)
+                .where(TrackORM.id == track_id)
                 .values(**values)
             )
             await session.commit()
@@ -117,17 +117,17 @@ class GovernanceRepo:
     async def delete_track(self, track_id: str) -> bool:
         async with self._session_factory() as session:
             result = await session.execute(
-                delete(GovernanceTrackORM).where(GovernanceTrackORM.id == track_id)
+                delete(TrackORM).where(TrackORM.id == track_id)
             )
             await session.commit()
             return result.rowcount > 0
 
     async def list_all_instances(self) -> list[dict]:
-        """Return all governance track instances across all tracks."""
+        """Return all track runs across all tracks."""
         async with self._session_factory() as session:
             result = await session.execute(
-                select(GovernanceTrackInstanceORM)
-                .order_by(GovernanceTrackInstanceORM.created_at.desc())
+                select(TrackInstanceORM)
+                .order_by(TrackInstanceORM.created_at.desc())
             )
             rows = result.scalars().all()
             return self._instances_to_dicts(rows)
@@ -135,9 +135,9 @@ class GovernanceRepo:
     async def list_instances(self, track_id: str) -> list[dict]:
         async with self._session_factory() as session:
             result = await session.execute(
-                select(GovernanceTrackInstanceORM)
-                .where(GovernanceTrackInstanceORM.track_id == track_id)
-                .order_by(GovernanceTrackInstanceORM.created_at.desc())
+                select(TrackInstanceORM)
+                .where(TrackInstanceORM.track_id == track_id)
+                .order_by(TrackInstanceORM.created_at.desc())
             )
             rows = result.scalars().all()
             return self._instances_to_dicts(rows)
@@ -147,6 +147,8 @@ class GovernanceRepo:
         return {
             "id": r.id,
             "track_id": r.track_id,
+            "repo_full_name": r.repo_full_name,
+            "issue_number": r.issue_number,
             "context": json.loads(r.context),
             "current_state": r.current_state,
             "status": r.status,
@@ -164,6 +166,8 @@ class GovernanceRepo:
         self,
         instance_id: str,
         track_id: str,
+        repo_full_name: str,
+        issue_number: int,
         context: dict,
         current_state: str,
         status: str = "active",
@@ -171,9 +175,11 @@ class GovernanceRepo:
     ) -> dict:
         now = _now()
         async with self._session_factory() as session:
-            row = GovernanceTrackInstanceORM(
+            row = TrackInstanceORM(
                 id=instance_id,
                 track_id=track_id,
+                repo_full_name=repo_full_name,
+                issue_number=issue_number,
                 context=json.dumps(context),
                 current_state=current_state,
                 status=status,
@@ -187,6 +193,8 @@ class GovernanceRepo:
             return {
                 "id": instance_id,
                 "track_id": track_id,
+                "repo_full_name": repo_full_name,
+                "issue_number": issue_number,
                 "context": context,
                 "current_state": current_state,
                 "status": status,
@@ -203,6 +211,8 @@ class GovernanceRepo:
         current_state: str | None = None,
         status: str | None = None,
         last_projected_state: str | None = None,
+        repo_full_name: str | None = None,
+        issue_number: int | None = None,
         context: dict | None = None,
         history: list | None = None,
     ) -> dict | None:
@@ -214,6 +224,10 @@ class GovernanceRepo:
             values["status"] = status
         if last_projected_state is not None:
             values["last_projected_state"] = last_projected_state
+        if repo_full_name is not None:
+            values["repo_full_name"] = repo_full_name
+        if issue_number is not None:
+            values["issue_number"] = issue_number
         if context is not None:
             values["context"] = json.dumps(context)
         if history is not None:
@@ -221,8 +235,8 @@ class GovernanceRepo:
 
         async with self._session_factory() as session:
             result = await session.execute(
-                update(GovernanceTrackInstanceORM)
-                .where(GovernanceTrackInstanceORM.id == instance_id)
+                update(TrackInstanceORM)
+                .where(TrackInstanceORM.id == instance_id)
                 .values(**values)
             )
             await session.commit()
@@ -231,8 +245,7 @@ class GovernanceRepo:
 
         async with self._session_factory() as session:
             result = await session.execute(
-                select(GovernanceTrackInstanceORM)
-                .where(GovernanceTrackInstanceORM.id == instance_id)
+                select(TrackInstanceORM).where(TrackInstanceORM.id == instance_id)
             )
             r = result.scalar_one_or_none()
             if r is None:
@@ -242,8 +255,7 @@ class GovernanceRepo:
     async def get_instance(self, instance_id: str) -> dict | None:
         async with self._session_factory() as session:
             result = await session.execute(
-                select(GovernanceTrackInstanceORM)
-                .where(GovernanceTrackInstanceORM.id == instance_id)
+                select(TrackInstanceORM).where(TrackInstanceORM.id == instance_id)
             )
             r = result.scalar_one_or_none()
             if r is None:
@@ -256,9 +268,7 @@ class GovernanceRepo:
         """Get layout positions for a track."""
         async with self._session_factory() as session:
             result = await session.execute(
-                select(GovernanceTrackLayoutORM).where(
-                    GovernanceTrackLayoutORM.track_id == track_id
-                )
+                select(TrackLayoutORM).where(TrackLayoutORM.track_id == track_id)
             )
             r = result.scalar_one_or_none()
             if r is None:
@@ -274,9 +284,7 @@ class GovernanceRepo:
         now = _now()
         async with self._session_factory() as session:
             result = await session.execute(
-                select(GovernanceTrackLayoutORM).where(
-                    GovernanceTrackLayoutORM.track_id == track_id
-                )
+                select(TrackLayoutORM).where(TrackLayoutORM.track_id == track_id)
             )
             existing = result.scalar_one_or_none()
             if existing is not None:
@@ -284,7 +292,7 @@ class GovernanceRepo:
                 existing.updated_at = now
             else:
                 session.add(
-                    GovernanceTrackLayoutORM(
+                    TrackLayoutORM(
                         track_id=track_id,
                         positions=json.dumps(positions),
                         updated_at=now,

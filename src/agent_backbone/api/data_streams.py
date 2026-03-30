@@ -128,6 +128,21 @@ class RunsNamespace(socketio.AsyncNamespace):
         await self.emit("subscribed", {"rooms": filtered}, to=sid)
 
 
+async def _periodic_issue_sync(sio: socketio.AsyncServer, interval: float) -> None:
+    """Periodically refresh issue projections from GitHub."""
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            app = getattr(sio, "fastapi_app", None)
+            issue_service = getattr(getattr(app, "state", None), "issue_service", None)
+            if issue_service is not None:
+                await issue_service.sync_inventory(emit_changes=True)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            log.exception("Periodic issue sync failed")
+
+
 # --- Registry of all data stream namespaces ---
 
 _namespaces: dict[str, DataStreamNamespace] = {}
@@ -178,20 +193,20 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
             _fetch_issues_pending,
             _fetch_service_health,
         )
-        from agent_backbone.services._locator import get_config, get_db, get_gh
+        from agent_backbone.services._locator import get_config, get_db
         from agent_backbone.services.agents.interface import StateService
         from agent_backbone.services.terminal import TmuxService
 
         config = get_config()
         db = get_db()
-        gh = get_gh()
         state_svc = StateService(db=db)
+        issue_service = sio.fastapi_app.state.issue_service
         tmux_svc = TmuxService()
         agents = await _fetch_agents(config, state_svc, tmux_svc)
         counts = _compute_counts(agents)
         failed, issues_pending, services = await asyncio.gather(
             _fetch_failed_deliveries(db),
-            _fetch_issues_pending(gh),
+            _fetch_issues_pending(issue_service),
             _fetch_service_health(db),
         )
         return {
@@ -202,26 +217,6 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
             "failed_deliveries": failed,
             "services": services.model_dump(mode="json"),
         }
-
-    async def fetch_tasks() -> dict:
-        """RDS-20/21: ListEnvelope[IssueResponse]."""
-        from agent_backbone.services._locator import get_gh
-
-        gh = get_gh()
-        issues = await gh.list_issues(state="open")
-        items = [
-            {
-                "number": i.number,
-                "title": i.title,
-                "state": i.state,
-                "html_url": i.html_url,
-                "repo_full_name": i.repo_full_name,
-                "labels": i.labels.model_dump(mode="json"),
-                "priority_score": 0.0,
-            }
-            for i in issues
-        ]
-        return {"items": items, "total": len(items)}
 
     async def fetch_rooms() -> dict:
         """RDS-30/31: ListEnvelope[Room]."""
@@ -408,7 +403,6 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
     # --- Register namespaces (RDS-1) ---
     specs: list[tuple[str, str, str, Callable[[], Awaitable[Any]], float]] = [
         ("agents", "/agents", "agents:update", fetch_agents, 30),
-        ("tasks", "/tasks", "tasks:update", fetch_tasks, 60),
         ("rooms", "/rooms", "rooms:update", fetch_rooms, 10),
         ("activity", "/activity", "activity:update", fetch_activity, 15),
         ("flows", "/flows", "flows:update", fetch_flows, 15),
@@ -430,8 +424,17 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
         )
         _poll_tasks.append(task)
 
+    from agent_backbone.api.issue_updates import ISSUES_NAMESPACE, IssuesNamespace
+    from agent_backbone.services._locator import get_config
+
+    sio.register_namespace(IssuesNamespace(ISSUES_NAMESPACE))
     sio.register_namespace(RunsNamespace("/runs"))
-    log.info("Registered %d snapshot stream namespaces and /runs", len(specs))
+    issue_sync_task = asyncio.create_task(
+        _periodic_issue_sync(sio, get_config().issue_domain.sync_interval_seconds),
+        name="issue-sync",
+    )
+    _poll_tasks.append(issue_sync_task)
+    log.info("Registered %d snapshot stream namespaces, /issues, and /runs", len(specs))
 
 
 async def stop_data_streams() -> None:
