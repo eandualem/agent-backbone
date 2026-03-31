@@ -31,8 +31,11 @@ class IssueService:
         self._sio = sio
 
     def _repo_inventory(self) -> list[str]:
+        """Build the full repo inventory — same source as /api/repos."""
+        from agent_backbone.services.automation._pipeline import discover_repos
+
         owner = self._config.github.owner
-        repos = {f"{owner}/{repo.name}" for repo in self._config.registry.repos}
+        repos = {f"{owner}/{entry.repo}" for entry in discover_repos()}
         repos.add(f"{owner}/{self._config.github.repo}")
         return sorted(repos)
 
