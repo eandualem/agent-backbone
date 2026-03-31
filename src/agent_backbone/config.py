@@ -222,6 +222,7 @@ class BackboneConfig:
     github: GitHubConfig = field(default_factory=GitHubConfig)
     entities: EntityConfig = field(default_factory=EntityConfig)
     registry: EntityRegistry = field(default_factory=EntityRegistry)
+    registry_config: RegistryConfig = field(default_factory=RegistryConfig)
     dedup: DedupConfig = field(default_factory=DedupConfig)
     agent_state: AgentStateConfig = field(default_factory=AgentStateConfig)
     scheduling: SchedulingConfig = field(default_factory=SchedulingConfig)
@@ -321,6 +322,7 @@ class BackboneConfig:
                 ),
             ),
             registry=registry,
+            registry_config=reg_cfg,
             dedup=DedupConfig(
                 notification_window_seconds=dd.get("notification_window_seconds", 10),
             ),

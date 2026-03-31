@@ -1094,3 +1094,128 @@ class TestResolveRoleInstance:
     def test_entity_without_role_entity_not_matched(self):
         registry = _role_instance_registry()
         assert registry.resolve_role_instance("koch", "WF") is None
+
+
+# --- Hierarchy field tests ---
+
+
+class TestHierarchyFields:
+    def test_entity_entry_hierarchy_defaults(self):
+        """New hierarchy fields default to empty/None."""
+        entry = EntityEntry(session="test", home="~/test", groups=[], figure="", role="")
+        assert entry.label == ""
+        assert entry.tier == ""
+        assert entry.section is None
+        assert entry.section_order is None
+        assert entry.parent is None
+        assert entry.managed_org is None
+
+    def test_get_entities_by_tier(self):
+        registry = EntityRegistry(
+            entities={
+                "a": EntityEntry(
+                    session="a", home="", groups=[], figure="", role="", tier="orchestrator"
+                ),
+                "b": EntityEntry(
+                    session="b", home="", groups=[], figure="", role="", tier="reviewer"
+                ),
+                "c": EntityEntry(
+                    session="c", home="", groups=[], figure="", role="", tier="orchestrator"
+                ),
+            }
+        )
+        result = registry.get_entities_by_tier("orchestrator")
+        assert [name for name, _ in result] == ["a", "c"]
+
+    def test_get_entities_by_tier_empty(self):
+        registry = EntityRegistry(
+            entities={
+                "a": EntityEntry(session="a", home="", groups=[], figure="", role="", tier="x"),
+            }
+        )
+        assert registry.get_entities_by_tier("nonexistent") == []
+
+    def test_get_sections_ordered(self):
+        registry = EntityRegistry(
+            entities={
+                "a": EntityEntry(
+                    session="a",
+                    home="",
+                    groups=[],
+                    figure="",
+                    role="",
+                    section="review",
+                    section_order=2,
+                ),
+                "b": EntityEntry(
+                    session="b",
+                    home="",
+                    groups=[],
+                    figure="",
+                    role="",
+                    section="operations",
+                    section_order=1,
+                ),
+            }
+        )
+        sections = registry.get_sections()
+        assert [s[0] for s in sections] == ["operations", "review"]
+        assert sections[0][1] == "Operations"
+        assert sections[1][1] == "Review"
+
+    def test_get_entities_in_section_top_level_only(self):
+        registry = EntityRegistry(
+            entities={
+                "ike": EntityEntry(
+                    session="ike",
+                    home="",
+                    groups=[],
+                    figure="",
+                    role="",
+                    section="operations",
+                    section_order=1,
+                ),
+                "bell": EntityEntry(
+                    session="bell",
+                    home="",
+                    groups=[],
+                    figure="",
+                    role="",
+                    section="operations",
+                    section_order=1,
+                    parent="ike",
+                ),
+            }
+        )
+        result = registry.get_entities_in_section("operations")
+        assert [name for name, _ in result] == ["ike"]
+
+    def test_get_children(self):
+        registry = EntityRegistry(
+            entities={
+                "ike": EntityEntry(
+                    session="ike", home="", groups=[], figure="", role=""
+                ),
+                "bell-wf": EntityEntry(
+                    session="bell-wf", home="", groups=[], figure="", role="", parent="ike"
+                ),
+                "bell-loveble": EntityEntry(
+                    session="bell-loveble", home="", groups=[], figure="", role="", parent="ike"
+                ),
+                "ada": EntityEntry(
+                    session="ada", home="", groups=[], figure="", role=""
+                ),
+            }
+        )
+        result = registry.get_children("ike")
+        assert [name for name, _ in result] == ["bell-wf", "bell-loveble"]
+
+    def test_get_children_empty(self):
+        registry = EntityRegistry(
+            entities={
+                "ike": EntityEntry(
+                    session="ike", home="", groups=[], figure="", role=""
+                ),
+            }
+        )
+        assert registry.get_children("nonexistent") == []
