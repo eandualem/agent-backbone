@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from agent_backbone.api.routes import notes as notes_routes
+from agent_backbone.api.routes import files as files_routes
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def notes_tmp(tmp_path):
     """Patch _NOTES_ROOT to use tmp_path for test isolation."""
     notes_dir = tmp_path / "notes"
     notes_dir.mkdir()
-    with patch("agent_backbone.api.routes.notes._NOTES_ROOT", notes_dir):
+    with patch("agent_backbone.api.routes.files._NOTES_ROOT", notes_dir):
         yield notes_dir
 
 
@@ -239,31 +239,31 @@ class TestNotesUseToThread:
         (notes_tmp / "threaded.md").write_text("# Threaded\ncontent")
 
         with patch(
-            "agent_backbone.api.routes.notes.asyncio.to_thread",
+            "agent_backbone.api.routes.files.asyncio.to_thread",
             side_effect=lambda func, *args: func(*args),
         ) as mock_to_thread:
             resp = await client.get("/api/notes", headers=auth_headers)
 
         assert resp.status_code == 200
         mock_to_thread.assert_awaited_once()
-        assert mock_to_thread.await_args.args[0] is notes_routes._list_notes_sync
+        assert mock_to_thread.await_args.args[0] is files_routes._list_notes_sync
 
     async def test_get_note_uses_to_thread(self, client, auth_headers, notes_tmp):
         (notes_tmp / "threaded.md").write_text("# Threaded\ncontent")
 
         with patch(
-            "agent_backbone.api.routes.notes.asyncio.to_thread",
+            "agent_backbone.api.routes.files.asyncio.to_thread",
             side_effect=lambda func, *args: func(*args),
         ) as mock_to_thread:
             resp = await client.get("/api/notes/threaded.md", headers=auth_headers)
 
         assert resp.status_code == 200
         mock_to_thread.assert_awaited_once()
-        assert mock_to_thread.await_args.args[0] is notes_routes._read_note_sync
+        assert mock_to_thread.await_args.args[0] is files_routes._read_note_sync
 
     async def test_create_note_uses_to_thread(self, client, auth_headers, notes_tmp):
         with patch(
-            "agent_backbone.api.routes.notes.asyncio.to_thread",
+            "agent_backbone.api.routes.files.asyncio.to_thread",
             side_effect=lambda func, *args: func(*args),
         ) as mock_to_thread:
             resp = await client.post(
@@ -274,13 +274,13 @@ class TestNotesUseToThread:
 
         assert resp.status_code == 201
         mock_to_thread.assert_awaited_once()
-        assert mock_to_thread.await_args.args[0] is notes_routes._create_note_sync
+        assert mock_to_thread.await_args.args[0] is files_routes._create_note_sync
 
     async def test_update_note_uses_to_thread(self, client, auth_headers, notes_tmp):
         (notes_tmp / "threaded.md").write_text("# Old\ncontent")
 
         with patch(
-            "agent_backbone.api.routes.notes.asyncio.to_thread",
+            "agent_backbone.api.routes.files.asyncio.to_thread",
             side_effect=lambda func, *args: func(*args),
         ) as mock_to_thread:
             resp = await client.put(
@@ -291,17 +291,17 @@ class TestNotesUseToThread:
 
         assert resp.status_code == 200
         mock_to_thread.assert_awaited_once()
-        assert mock_to_thread.await_args.args[0] is notes_routes._update_note_sync
+        assert mock_to_thread.await_args.args[0] is files_routes._update_note_sync
 
     async def test_delete_note_uses_to_thread(self, client, auth_headers, notes_tmp):
         (notes_tmp / "threaded.md").write_text("# Threaded\ncontent")
 
         with patch(
-            "agent_backbone.api.routes.notes.asyncio.to_thread",
+            "agent_backbone.api.routes.files.asyncio.to_thread",
             side_effect=lambda func, *args: func(*args),
         ) as mock_to_thread:
             resp = await client.delete("/api/notes/threaded.md", headers=auth_headers)
 
         assert resp.status_code == 200
         mock_to_thread.assert_awaited_once()
-        assert mock_to_thread.await_args.args[0] is notes_routes._delete_note_sync
+        assert mock_to_thread.await_args.args[0] is files_routes._delete_note_sync

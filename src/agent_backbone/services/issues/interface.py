@@ -4,14 +4,24 @@ from __future__ import annotations
 
 import logging
 
+from agent_backbone.api.activity_events import record_activity_event
 from agent_backbone.api.issue_updates import emit_issue_change
 from agent_backbone.config import BackboneConfig
-from agent_backbone.models import CommentData, EventType, IssueData, parse_from_tag
+from agent_backbone.models import CommentData, EventType, IssueData, parse_from_tag, repo_session_name
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.issues._priority import compute_priority_score
 
 log = logging.getLogger(__name__)
+
+_WEBHOOK_ACTIVITY_MAP: dict[EventType, str] = {
+    EventType.ISSUE_OPENED: "issue.created",
+    EventType.ISSUE_REOPENED: "issue.reopened",
+    EventType.COMMENT_CREATED: "issue.commented",
+    EventType.ISSUE_CLOSED: "issue.closed",
+    EventType.ISSUE_LABELED: "issue.labeled",
+    EventType.PULL_REQUEST_OPENED: "pr.opened",
+}
 
 
 class IssueService:
@@ -195,7 +205,9 @@ class IssueService:
         return changed
 
     async def handle_webhook_event(self, event) -> None:
+        """Process a normalized webhook event: refresh projections and record activity."""
         if event.issue.is_pull_request:
+            await self._record_webhook_activity(event)
             return
 
         if event.event_type in {
@@ -209,15 +221,56 @@ class IssueService:
                 event.issue.number,
                 issue_data=event.issue,
             )
-            return
-
-        if event.event_type == EventType.COMMENT_CREATED:
+        elif event.event_type == EventType.COMMENT_CREATED:
             await self.handle_comment_change(
                 event.issue.repo_full_name,
                 event.issue.number,
                 comment=event.comment,
                 issue_data=event.issue,
             )
+
+        await self._record_webhook_activity(event)
+
+    async def _record_webhook_activity(self, event) -> None:
+        """Record an activity event for a processed webhook."""
+        activity_type = _WEBHOOK_ACTIVITY_MAP.get(event.event_type)
+        if not activity_type:
+            return
+
+        repo_name = repo_session_name(event.issue.repo_full_name)
+        org = (
+            self._config.registry.organization_for_repo(repo_name)
+            if repo_name
+            else None
+        )
+        context: dict[str, object] = {
+            "issue_id": event.issue.number,
+            "repo": event.issue.repo_full_name,
+        }
+        if org:
+            context["org"] = org
+
+        activity_data: dict[str, object] = {
+            "action": event.event_type.value,
+            "delivery_id": event.delivery_id,
+            **context,
+        }
+        if event.comment and event.comment.body:
+            activity_data["comment_body"] = event.comment.body
+
+        source_entity = (
+            event.issue.labels.sender
+            if event.issue.labels.sender != "unknown"
+            else "github"
+        )
+        await record_activity_event(
+            self._db,
+            session=repo_name or source_entity,
+            event_type=activity_type,
+            entity=source_entity,
+            data=activity_data,
+            source_ref=event.delivery_id,
+        )
 
     async def list_issues(
         self,

@@ -231,19 +231,16 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
     async def fetch_activity() -> dict:
         """RDS-40/41: ListEnvelope[ActivityEvent]."""
         from agent_backbone.api.routes.activity import (
-            _load_action_events,
             _load_delivery_events,
             _load_heartbeat_events,
             _load_telemetry_events,
         )
-        from agent_backbone.services._locator import get_config, get_db
+        from agent_backbone.services._locator import get_db
 
-        config = get_config()
         db = get_db()
         limit = 50
         all_events = (
-            _load_action_events(config, limit)
-            + await _load_delivery_events(db, limit)
+            await _load_delivery_events(db, limit)
             + await _load_heartbeat_events(db, limit)
             + await _load_telemetry_events(db, limit)
         )

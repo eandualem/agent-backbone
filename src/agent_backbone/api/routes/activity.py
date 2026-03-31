@@ -1,4 +1,4 @@
-"""Activity timeline endpoint — merged feed from actions, deliveries, heartbeats."""
+"""Activity timeline endpoint — merged feed from deliveries, heartbeats, and telemetry."""
 
 from __future__ import annotations
 
@@ -8,9 +8,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 
-from agent_backbone.api.deps import get_config, get_db
+from agent_backbone.api.deps import get_db
 from agent_backbone.api.models import ActivityEvent, ListEnvelope
-from agent_backbone.config import BackboneConfig
 from agent_backbone.services.database import BackboneDB
 
 log = logging.getLogger(__name__)
@@ -34,35 +33,6 @@ _TIMELINE_TELEMETRY_EVENTS = [
     "message.direct_queued",
     "agent.divergence_detected",
 ]
-
-
-def _load_action_events(config: BackboneConfig, limit: int) -> list[ActivityEvent]:
-    """Load action events from github-actions.jsonl."""
-    actions_file = config.agent_state.state_path / "github-actions.jsonl"
-    if not actions_file.exists():
-        return []
-
-    events: list[ActivityEvent] = []
-    for line in actions_file.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        issue = data.get("issue")
-        issue_str = f" on #{issue}" if issue else ""
-        events.append(
-            ActivityEvent(
-                ts=data.get("ts", 0.0),
-                type="action",
-                entity=data.get("session", "unknown"),
-                summary=f"{data.get('action', 'unknown')}{issue_str}",
-            )
-        )
-    events.sort(key=lambda e: e.ts, reverse=True)
-    return events[:limit]
 
 
 async def _load_delivery_events(db: BackboneDB, limit: int) -> list[ActivityEvent]:
@@ -184,21 +154,16 @@ def _parse_row_data(row: dict) -> dict:
 async def get_activity_timeline(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
 ):
-    """Merged activity timeline from actions, deliveries, heartbeats, and telemetry."""
-    # Load from all sources (fetch more than limit to allow merging)
+    """Merged activity timeline from deliveries, heartbeats, and telemetry."""
     fetch_limit = limit + offset
-    actions = _load_action_events(config, fetch_limit)
     deliveries = await _load_delivery_events(db, fetch_limit)
     heartbeats = await _load_heartbeat_events(db, fetch_limit)
     telemetry = await _load_telemetry_events(db, fetch_limit)
 
-    # Merge and sort
-    all_events = actions + deliveries + heartbeats + telemetry
+    all_events = deliveries + heartbeats + telemetry
     all_events.sort(key=lambda e: e.ts, reverse=True)
 
-    # Apply offset and limit
     paginated = all_events[offset : offset + limit]
     return ListEnvelope(items=paginated, total=len(all_events))
