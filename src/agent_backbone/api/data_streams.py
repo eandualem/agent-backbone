@@ -128,19 +128,88 @@ class RunsNamespace(socketio.AsyncNamespace):
         await self.emit("subscribed", {"rooms": filtered}, to=sid)
 
 
-async def _periodic_issue_sync(sio: socketio.AsyncServer, interval: float) -> None:
-    """Periodically refresh issue projections from GitHub."""
+_VALIDATION_MIN_INTERVAL = 300      # 5 minutes
+_VALIDATION_MAX_INTERVAL = 86400    # 24 hours
+_VALIDATION_BACKOFF_FACTOR = 2.0
+
+
+async def _periodic_issue_validator(sio: socketio.AsyncServer, initial_interval: float) -> None:
+    """Validate issue projections against GitHub API with exponential backoff.
+
+    On valid: interval doubles (up to 24h).
+    On mismatch: logs warning, records activity event, notifies coding agent, resets to min.
+    Does NOT silently update DB data — mismatches are reported for investigation.
+    """
+    interval = max(initial_interval, _VALIDATION_MIN_INTERVAL)
+
     while True:
         try:
             await asyncio.sleep(interval)
             app = getattr(sio, "fastapi_app", None)
             issue_service = getattr(getattr(app, "state", None), "issue_service", None)
-            if issue_service is not None:
-                await issue_service.sync_inventory(emit_changes=True)
+            if issue_service is None:
+                continue
+
+            mismatches = await issue_service.validate_inventory()
+
+            if mismatches:
+                log.warning(
+                    "Issue validation found %d mismatches — resetting interval to %ds",
+                    len(mismatches),
+                    _VALIDATION_MIN_INTERVAL,
+                )
+                interval = _VALIDATION_MIN_INTERVAL
+
+                # Record activity event for visibility
+                from agent_backbone.api.activity_events import record_activity_event
+                from agent_backbone.services._locator import get_db
+
+                db = get_db()
+                await record_activity_event(
+                    db,
+                    session="backbone",
+                    event_type="issue.validation_mismatch",
+                    entity="backbone",
+                    data={
+                        "mismatch_count": len(mismatches),
+                        "mismatches": mismatches[:10],
+                    },
+                )
+
+                # Notify the coding agent for investigation
+                from agent_backbone.services._locator import get_config
+                from agent_backbone.services.messaging import deliver_message
+
+                config = get_config()
+                summary = "\n".join(
+                    f"  - {m['repo']}#{m['number']}: {m['field']} "
+                    f"(db={m['db_value']}, github={m['github_value']})"
+                    for m in mismatches[:5]
+                )
+                await deliver_message(
+                    "agent-backbone",
+                    f"[via:backbone from:backbone] Issue validation found "
+                    f"{len(mismatches)} mismatches:\n{summary}\n"
+                    f"Investigate webhook configuration.",
+                    config,
+                )
+            else:
+                new_interval = min(
+                    interval * _VALIDATION_BACKOFF_FACTOR,
+                    _VALIDATION_MAX_INTERVAL,
+                )
+                if new_interval != interval:
+                    log.info(
+                        "Issue validation passed — increasing interval from %ds to %ds",
+                        int(interval),
+                        int(new_interval),
+                    )
+                interval = new_interval
+
         except asyncio.CancelledError:
             break
         except Exception:
-            log.exception("Periodic issue sync failed")
+            log.exception("Issue validation check failed (will retry)")
 
 
 # --- Registry of all data stream namespaces ---
@@ -305,8 +374,8 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
     sio.register_namespace(IssuesNamespace(ISSUES_NAMESPACE))
     sio.register_namespace(RunsNamespace("/runs"))
     issue_sync_task = asyncio.create_task(
-        _periodic_issue_sync(sio, get_config().issue_domain.sync_interval_seconds),
-        name="issue-sync",
+        _periodic_issue_validator(sio, get_config().issue_domain.sync_interval_seconds),
+        name="issue-validator",
     )
     _poll_tasks.append(issue_sync_task)
     log.info("Registered %d snapshot stream namespaces, /issues, and /runs", len(specs))

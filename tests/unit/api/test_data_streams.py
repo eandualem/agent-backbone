@@ -355,7 +355,7 @@ class TestRegisterDataStreams:
         assert set(ds_mod._namespaces.keys()) == expected
 
     def test_creates_periodic_emitter_tasks(self):
-        """Each snapshot namespace gets a background periodic emitter task, plus issue sync."""
+        """Each snapshot namespace gets a background periodic emitter task, plus issue validator."""
         import agent_backbone.api.data_streams as ds_mod
         from agent_backbone.api.data_streams import register_data_streams
 
@@ -374,7 +374,7 @@ class TestRegisterDataStreams:
             mock_config.return_value.issue_domain.sync_interval_seconds = 300
             register_data_streams(sio)
 
-        # 6 snapshot emitters + 1 issue-sync = 7
+        # 6 snapshot emitters + 1 issue-validator = 7
         assert len(created_tasks) == 7
         assert len(ds_mod._poll_tasks) == 7
 

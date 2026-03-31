@@ -204,6 +204,63 @@ class IssueService:
             changed.extend(await self.sync_repo(repo_full_name, emit_changes=emit_changes))
         return changed
 
+    async def validate_repo(self, repo_full_name: str) -> list[dict]:
+        """Compare DB projection against GitHub API for one repo. Returns mismatches.
+
+        Does NOT update DB data — only reports discrepancies for investigation.
+        Each mismatch is a dict with: repo, number, field, db_value, github_value.
+        """
+        mismatches: list[dict] = []
+        try:
+            github_issues = await self._gh.list_issues(
+                state="open",
+                repo_full_name=repo_full_name,
+                per_page=100,
+            )
+        except Exception:
+            log.warning(
+                "Validation fetch failed for %s", repo_full_name, exc_info=True
+            )
+            return mismatches
+
+        for issue in github_issues:
+            existing = await self._db.issues.get_issue(
+                issue.repo_full_name, issue.number
+            )
+            if existing is None:
+                mismatches.append({
+                    "repo": repo_full_name,
+                    "number": issue.number,
+                    "field": "missing",
+                    "db_value": None,
+                    "github_value": issue.state,
+                })
+                continue
+            if existing.get("state") != issue.state:
+                mismatches.append({
+                    "repo": repo_full_name,
+                    "number": issue.number,
+                    "field": "state",
+                    "db_value": existing.get("state"),
+                    "github_value": issue.state,
+                })
+            if existing.get("title") != issue.title:
+                mismatches.append({
+                    "repo": repo_full_name,
+                    "number": issue.number,
+                    "field": "title",
+                    "db_value": existing.get("title"),
+                    "github_value": issue.title,
+                })
+        return mismatches
+
+    async def validate_inventory(self) -> list[dict]:
+        """Validate all repos. Returns list of all mismatches across repos."""
+        all_mismatches: list[dict] = []
+        for repo_full_name in await self._repo_inventory():
+            all_mismatches.extend(await self.validate_repo(repo_full_name))
+        return all_mismatches
+
     async def handle_webhook_event(self, event) -> None:
         """Process a normalized webhook event: refresh projections and record activity."""
         if event.issue.is_pull_request:
