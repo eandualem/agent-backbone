@@ -152,7 +152,7 @@ class PriorityScoringConfig:
 class IssueDomainConfig:
     """Canonical issue-domain synchronization settings."""
 
-    sync_interval_seconds: int = 300
+    sync_interval_seconds: int = 60
 
 
 @dataclass(frozen=True)

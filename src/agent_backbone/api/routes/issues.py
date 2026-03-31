@@ -277,3 +277,17 @@ async def update_issue(
             not_found_detail=f"Issue {_repo_full_name(owner, repo)}#{number} not found",
         )
     return _summary_from_dict(issue)
+
+
+@router.post("/issues/sync")
+async def trigger_sync(
+    body: dict | None = None,
+    issue_service: IssueService = Depends(get_issue_service),
+):
+    """Trigger an immediate issue sync. Optionally scope to one repo."""
+    repo = (body or {}).get("repo_full_name")
+    if repo:
+        changed = await issue_service.sync_repo(repo, emit_changes=True)
+    else:
+        changed = await issue_service.sync_inventory(emit_changes=True)
+    return {"synced": len(changed)}
