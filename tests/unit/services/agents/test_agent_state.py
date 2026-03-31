@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,9 +9,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.agents import (
     AgentState,
-    find_outgoing_comment,
-    has_commented_on_issue,
-    should_deliver,
 )
 from agent_backbone.services.agents.interface import StateService, _row_to_snapshot
 from agent_backbone.services.database import BackboneDB
@@ -28,15 +23,9 @@ class TestPlanWaiting:
         assert AgentState.PLAN_WAITING == "plan_waiting"
         assert AgentState("plan_waiting") == AgentState.PLAN_WAITING
 
-    def test_should_deliver_plan_waiting_default(self):
-        assert should_deliver(AgentState.PLAN_WAITING) is False
-
     def test_permission_waiting_enum_value(self):
         assert AgentState.PERMISSION_WAITING == "permission_waiting"
         assert AgentState("permission_waiting") == AgentState.PERMISSION_WAITING
-
-    def test_should_deliver_permission_waiting_default(self):
-        assert should_deliver(AgentState.PERMISSION_WAITING) is False
 
 
 class TestInferStateFromPane:
@@ -322,91 +311,3 @@ class TestStateServiceDBFirst:
             await svc.get_reported_state("ike")
 
 
-class TestShouldDeliver:
-    def test_idle_always_delivers(self):
-        assert should_deliver(AgentState.IDLE) is True
-
-    @pytest.mark.parametrize(
-        "state",
-        [
-            AgentState.STARTING,
-            AgentState.BUSY,
-            AgentState.PLAN_WAITING,
-            AgentState.PERMISSION_WAITING,
-            AgentState.SUB_AGENT_WAITING,
-            AgentState.OFFLINE,
-        ],
-    )
-    def test_non_idle_states_do_not_deliver(self, state):
-        assert should_deliver(state) is False
-        assert should_deliver(state, is_blocking=True) is False
-        assert should_deliver(state, require_idle=True) is False
-
-
-def _action_entry(session="ike", action="comment", issue=42, ts=None):
-    """Helper to build a github-actions.jsonl entry."""
-    return {
-        "ts": ts if ts is not None else time.time(),
-        "session": session,
-        "action": action,
-        "issue": issue,
-    }
-
-
-class TestFindOutgoingComment:
-    def test_finds_recent_matching_comment(self, tmp_path):
-        log_file = tmp_path / "github-actions.jsonl"
-        log_file.write_text(json.dumps(_action_entry()) + "\n")
-        result = find_outgoing_comment(42, action_log=str(log_file))
-        assert result == "ike"
-
-    def test_no_match_wrong_issue(self, tmp_path):
-        log_file = tmp_path / "github-actions.jsonl"
-        log_file.write_text(json.dumps(_action_entry(issue=42)) + "\n")
-        result = find_outgoing_comment(99, action_log=str(log_file))
-        assert result is None
-
-    def test_stale_entry_ignored(self, tmp_path):
-        log_file = tmp_path / "github-actions.jsonl"
-        old_ts = time.time() - 60
-        log_file.write_text(json.dumps(_action_entry(ts=old_ts)) + "\n")
-        result = find_outgoing_comment(42, action_log=str(log_file), recency_seconds=30.0)
-        assert result is None
-
-    def test_missing_file_returns_none(self, tmp_path):
-        result = find_outgoing_comment(42, action_log=str(tmp_path / "nonexistent.jsonl"))
-        assert result is None
-
-    def test_malformed_lines_skipped(self, tmp_path):
-        log_file = tmp_path / "github-actions.jsonl"
-        entry = _action_entry(session="leo", issue=10)
-        log_file.write_text("not json\n" + json.dumps(entry) + "\n")
-        result = find_outgoing_comment(10, action_log=str(log_file))
-        assert result == "leo"
-
-    def test_different_action_ignored(self, tmp_path):
-        log_file = tmp_path / "github-actions.jsonl"
-        entry = _action_entry(action="issue_update")
-        log_file.write_text(json.dumps(entry) + "\n")
-        result = find_outgoing_comment(42, action_log=str(log_file))
-        assert result is None
-
-
-class TestHasCommentedOnIssue:
-    def test_finds_matching_comment(self, tmp_path):
-        log_file = tmp_path / "github-actions.jsonl"
-        entry = _action_entry(session="ike", issue=42, ts=time.time() - 3600)
-        log_file.write_text(json.dumps(entry) + "\n")
-        assert has_commented_on_issue(42, "ike", action_log=str(log_file)) is True
-
-    def test_no_match_wrong_issue(self, tmp_path):
-        log_file = tmp_path / "github-actions.jsonl"
-        entry = _action_entry(session="ike", issue=42)
-        log_file.write_text(json.dumps(entry) + "\n")
-        assert has_commented_on_issue(99, "ike", action_log=str(log_file)) is False
-
-    def test_missing_file_returns_false(self, tmp_path):
-        assert (
-            has_commented_on_issue(42, "ike", action_log=str(tmp_path / "nonexistent.jsonl"))
-            is False
-        )

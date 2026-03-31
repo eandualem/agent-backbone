@@ -6,10 +6,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents._heartbeat import (
-    load_schedules as _load_schedules,
-    save_schedules as _save_schedules,
-)
 from agent_backbone.services.agents.models import AgentState, StateSnapshot
 from agent_backbone.services.agents.models import deserialize_state_context
 from agent_backbone.services.agents._observation import (
@@ -150,13 +146,3 @@ class MonitoringService:
     async def health_check(self) -> dict:
         """Check monitoring service health."""
         return {"healthy": True, "service": "monitoring"}
-
-    # --- DI surface for route handlers ---
-
-    def load_schedules(self) -> dict:
-        """Load heartbeat schedules from JSON file."""
-        return _load_schedules(self._schedule_path)
-
-    def save_schedules(self, schedules: dict) -> None:
-        """Save heartbeat schedules to JSON file."""
-        _save_schedules(schedules, self._schedule_path)

@@ -24,7 +24,7 @@ from agent_backbone.api.deps import (
 )
 from agent_backbone.api.webhook_utils import normalize_event, verify_signature
 from agent_backbone.config import BackboneConfig
-from agent_backbone.models import EventType, parse_governance_tag, repo_session_name
+from agent_backbone.models import EventType, repo_session_name
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.issues import IssueService
 from agent_backbone.services.telegram._topic_discovery import (
@@ -102,12 +102,6 @@ async def handle_webhook(
 
     activity_event_type = _WEBHOOK_EVENT_MAP.get(event.event_type)
     if activity_event_type:
-        # Override with event tag from comment body if present.
-        if event.comment and event.comment.body:
-            tagged_event = parse_governance_tag(event.comment.body)
-            if tagged_event:
-                activity_event_type = tagged_event
-
         # Derive org from repo name via registry
         repo_name = repo_session_name(event.issue.repo_full_name)
         org = config.registry.organization_for_repo(repo_name) if repo_name else None
