@@ -1,9 +1,7 @@
 """Webhook intake routes.
 
-Handles GitHub webhook events (signature validation, dedup, activity recording)
-and Telegram reply routing. Pure functions (verify_signature, normalize_event)
-live in api.webhook_utils. Dedup uses the persistence service's hot cache via
-app.state.db.
+Validates GitHub webhook signatures, deduplicates by delivery ID, normalizes
+events, and hands off to IssueService. Also routes Telegram replies.
 """
 
 from __future__ import annotations
@@ -15,7 +13,6 @@ import os
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 
-from agent_backbone.api.activity_events import record_activity_event
 from agent_backbone.api.auth import require_api_key
 from agent_backbone.api.deps import (
     get_config,
@@ -24,7 +21,6 @@ from agent_backbone.api.deps import (
 )
 from agent_backbone.api.webhook_utils import normalize_event, verify_signature
 from agent_backbone.config import BackboneConfig
-from agent_backbone.models import EventType, repo_session_name
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.issues import IssueService
 from agent_backbone.services.telegram._topic_discovery import (
@@ -45,16 +41,6 @@ def _reverse_topic_routes(routes: dict[int, str]) -> dict[str, int]:
     }
 
 
-_WEBHOOK_EVENT_MAP: dict[EventType, str] = {
-    EventType.ISSUE_OPENED: "issue.created",
-    EventType.ISSUE_REOPENED: "issue.reopened",
-    EventType.COMMENT_CREATED: "issue.commented",
-    EventType.ISSUE_CLOSED: "issue.closed",
-    EventType.ISSUE_LABELED: "issue.labeled",
-    EventType.PULL_REQUEST_OPENED: "pr.opened",
-}
-
-
 @router.post("/")
 async def handle_webhook(
     request: Request,
@@ -62,7 +48,7 @@ async def handle_webhook(
     db: BackboneDB = Depends(get_db),
     issue_service: IssueService = Depends(get_issue_service),
 ):
-    """Receive GitHub webhook events, validate, dedup, and record activity."""
+    """Receive GitHub webhook events — validate, dedup, normalize, hand off."""
     payload_body = await request.body()
 
     # Verify signature
@@ -99,41 +85,6 @@ async def handle_webhook(
     )
 
     await issue_service.handle_webhook_event(event)
-
-    activity_event_type = _WEBHOOK_EVENT_MAP.get(event.event_type)
-    if activity_event_type:
-        # Derive org from repo name via registry
-        repo_name = repo_session_name(event.issue.repo_full_name)
-        org = config.registry.organization_for_repo(repo_name) if repo_name else None
-
-        context: dict[str, object] = {
-            "issue_id": event.issue.number,
-            "repo": event.issue.repo_full_name,
-        }
-        if org:
-            context["org"] = org
-
-        activity_data: dict[str, object] = {
-            "action": action,
-            "delivery_id": delivery_id,
-            **context,
-        }
-        if event.comment and event.comment.body:
-            activity_data["comment_body"] = event.comment.body
-
-        source_entity = (
-            event.issue.labels.sender
-            if event.issue.labels.sender != "unknown"
-            else "github"
-        )
-        await record_activity_event(
-            db,
-            session=repo_name or source_entity,
-            event_type=activity_event_type,
-            entity=source_entity,
-            data=activity_data,
-            source_ref=delivery_id,
-        )
 
     return Response(content="accepted", status_code=200)
 

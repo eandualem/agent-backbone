@@ -180,7 +180,6 @@ def create_app() -> socketio.ASGIApp:
     from agent_backbone.api.routes.hierarchy import router as hierarchy_router
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
-    from agent_backbone.api.routes.notes import router as notes_router
     from agent_backbone.api.routes.repos import router as repos_router
     from agent_backbone.api.routes.rooms import router as rooms_router
     from agent_backbone.api.routes.status import router as status_router
@@ -199,7 +198,6 @@ def create_app() -> socketio.ASGIApp:
         activity_router,
         messages_router,
         swarms_router,
-        notes_router,
         rooms_router,
         repos_router,
     ]
