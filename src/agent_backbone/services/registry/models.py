@@ -16,6 +16,15 @@ class EntityInstance:
     organization: str = ""
 
 
+SECTION_TITLES: dict[str, str] = {
+    "operations": "Operations",
+    "review": "Review",
+    "architecture": "Architecture",
+    "quality": "Quality",
+    "knowledge-workers": "Knowledge Workers",
+}
+
+
 @dataclass(frozen=True)
 class EntityEntry:
     """A single entity from entity-registry.json."""
@@ -30,6 +39,13 @@ class EntityEntry:
     role_definition: str = ""
     role_entity: str = ""
     instances: dict[str, EntityInstance] = field(default_factory=dict)
+    # Hierarchy metadata
+    label: str = ""
+    tier: str = ""
+    section: str | None = None
+    section_order: int | None = None
+    parent: str | None = None
+    managed_org: str | None = None
 
 
 @dataclass(frozen=True)
@@ -259,3 +275,47 @@ class EntityRegistry:
             if entry.role_entity.casefold() == key and entry.organization.casefold() == org_lower:
                 return entry.session
         return None
+
+    # --- Hierarchy query methods ---
+
+    def get_entities_by_tier(self, tier: str) -> list[tuple[str, EntityEntry]]:
+        """Return (name, entry) pairs for all entities with the given tier."""
+        return [
+            (name, entry)
+            for name, entry in self.entities.items()
+            if entry.tier == tier
+        ]
+
+    def get_sections(self) -> list[tuple[str, str, int]]:
+        """Return ordered (section_id, title, order) triples for all sections."""
+        seen: dict[str, int] = {}
+        for entry in self.entities.values():
+            if entry.section is not None and entry.section not in seen:
+                seen[entry.section] = entry.section_order if entry.section_order is not None else 999
+        return sorted(
+            [
+                (
+                    section_id,
+                    SECTION_TITLES.get(section_id, section_id.replace("-", " ").title()),
+                    order,
+                )
+                for section_id, order in seen.items()
+            ],
+            key=lambda t: t[2],
+        )
+
+    def get_entities_in_section(self, section_id: str) -> list[tuple[str, EntityEntry]]:
+        """Return (name, entry) pairs for top-level entities in a section (parent is None)."""
+        return [
+            (name, entry)
+            for name, entry in self.entities.items()
+            if entry.section == section_id and entry.parent is None
+        ]
+
+    def get_children(self, parent_name: str) -> list[tuple[str, EntityEntry]]:
+        """Return (name, entry) pairs for entities whose parent equals parent_name."""
+        return [
+            (name, entry)
+            for name, entry in self.entities.items()
+            if entry.parent == parent_name
+        ]

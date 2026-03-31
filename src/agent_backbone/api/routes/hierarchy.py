@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Depends
 
@@ -17,11 +16,11 @@ from agent_backbone.api.models import (
     HierarchySection,
     HierarchyState,
     HierarchySwarmWorkerNode,
-    HierarchyTier,
 )
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import AgentState, StateService
 from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.registry.models import EntityEntry
 from agent_backbone.services.terminal import TmuxService
 
 log = logging.getLogger(__name__)
@@ -38,267 +37,6 @@ _STATE_PRIORITY: tuple[HierarchyState, ...] = (
     "offline",
 )
 _TERMINAL_SWARM_PHASES = frozenset({"merged", "cleaned_up", "failed", "discarded"})
-
-
-@dataclass(frozen=True)
-class _HierarchyNodeSpec:
-    """Static backend-owned hierarchy node definition."""
-
-    id: str
-    label: str
-    role: str
-    tier: HierarchyTier
-    session: str | None
-    managed_org: str | None = None
-    children: tuple[_HierarchyNodeSpec, ...] = field(default_factory=tuple)
-
-
-@dataclass(frozen=True)
-class _HierarchySectionSpec:
-    """Static backend-owned section definition."""
-
-    id: str
-    title: str
-    nodes: tuple[_HierarchyNodeSpec, ...]
-
-
-_ROOT_NODE = _HierarchyNodeSpec(
-    id="jarvis",
-    label="Jarvis",
-    role="Personal Assistant",
-    tier="assistant",
-    session=None,
-)
-
-_STRATEGY_NODE = _HierarchyNodeSpec(
-    id="leo",
-    label="Da Vinci",
-    role="Strategy Co-Architect",
-    tier="strategic",
-    session="leo",
-)
-
-_INDEPENDENT_PEERS = (
-    _HierarchyNodeSpec(
-        id="feynman",
-        label="Feynman",
-        role="Orchestration Optimizer",
-        tier="independent-peer",
-        session="feynman",
-    ),
-    _HierarchyNodeSpec(
-        id="brunel",
-        label="Brunel",
-        role="Infrastructure Agent",
-        tier="independent-peer",
-        session="brunel",
-    ),
-)
-
-_SECTIONS = (
-    _HierarchySectionSpec(
-        id="operations",
-        title="Operations",
-        nodes=(
-            _HierarchyNodeSpec(
-                id="ike",
-                label="Eisenhower",
-                role="Core Orchestrator",
-                tier="orchestrator",
-                session="ike",
-                children=(
-                    _HierarchyNodeSpec(
-                        id="bell-wf",
-                        label="Bell (WF)",
-                        role="Org Orchestrator",
-                        tier="sub-orchestrator",
-                        session="bell-wf",
-                        managed_org="WF",
-                    ),
-                    _HierarchyNodeSpec(
-                        id="bell-loveble",
-                        label="Bell (Loveble)",
-                        role="Org Orchestrator",
-                        tier="sub-orchestrator",
-                        session="bell-loveble",
-                        managed_org="Loveble",
-                    ),
-                ),
-            ),
-            _HierarchyNodeSpec(
-                id="ada",
-                label="Lovelace",
-                role="Spec Methodology Architect",
-                tier="orchestrator",
-                session="ada",
-                children=(
-                    _HierarchyNodeSpec(
-                        id="euclid-wf",
-                        label="Euclid (WF)",
-                        role="Spec Manager",
-                        tier="sub-orchestrator",
-                        session="euclid-wf",
-                    ),
-                    _HierarchyNodeSpec(
-                        id="euclid-loveble",
-                        label="Euclid (Loveble)",
-                        role="Spec Manager",
-                        tier="sub-orchestrator",
-                        session="euclid-loveble",
-                    ),
-                ),
-            ),
-        ),
-    ),
-    _HierarchySectionSpec(
-        id="review",
-        title="Review",
-        nodes=(
-            _HierarchyNodeSpec(
-                id="oppenheimer",
-                label="Oppenheimer",
-                role="Review Process Architect",
-                tier="reviewer",
-                session="oppenheimer",
-                children=(
-                    _HierarchyNodeSpec(
-                        id="hemingway-wf",
-                        label="Hemingway (WF)",
-                        role="Code Reviewer",
-                        tier="reviewer",
-                        session="hemingway-wf",
-                        managed_org="WF",
-                    ),
-                    _HierarchyNodeSpec(
-                        id="hemingway-loveble",
-                        label="Hemingway (Loveble)",
-                        role="Code Reviewer",
-                        tier="reviewer",
-                        session="hemingway-loveble",
-                        managed_org="Loveble",
-                    ),
-                ),
-            ),
-        ),
-    ),
-    _HierarchySectionSpec(
-        id="architecture",
-        title="Architecture",
-        nodes=(
-            _HierarchyNodeSpec(
-                id="wright",
-                label="Wright",
-                role="System Architect",
-                tier="architect",
-                session="wright",
-                children=(
-                    _HierarchyNodeSpec(
-                        id="gaudi-wf",
-                        label="Gaudi (WF)",
-                        role="Repo Architect",
-                        tier="architect",
-                        session="gaudi-wf",
-                        managed_org="WF",
-                    ),
-                    _HierarchyNodeSpec(
-                        id="gaudi-loveble",
-                        label="Gaudi (Loveble)",
-                        role="Repo Architect",
-                        tier="architect",
-                        session="gaudi-loveble",
-                        managed_org="Loveble",
-                    ),
-                ),
-            ),
-        ),
-    ),
-    _HierarchySectionSpec(
-        id="quality",
-        title="Quality",
-        nodes=(
-            _HierarchyNodeSpec(
-                id="koch",
-                label="Koch",
-                role="Bug Quality Architect",
-                tier="quality",
-                session="koch",
-                children=(
-                    _HierarchyNodeSpec(
-                        id="snow-wf",
-                        label="Snow (WF)",
-                        role="Bug Validator",
-                        tier="quality",
-                        session="snow-wf",
-                        managed_org="WF",
-                    ),
-                    _HierarchyNodeSpec(
-                        id="snow-loveble",
-                        label="Snow (Loveble)",
-                        role="Bug Validator",
-                        tier="quality",
-                        session="snow-loveble",
-                        managed_org="Loveble",
-                    ),
-                ),
-            ),
-        ),
-    ),
-    _HierarchySectionSpec(
-        id="knowledge-workers",
-        title="Knowledge Workers",
-        nodes=(
-            _HierarchyNodeSpec(
-                id="darwin",
-                label="Darwin",
-                role="System Evolution Architect",
-                tier="knowledge-worker",
-                session="darwin",
-            ),
-            _HierarchyNodeSpec(
-                id="gallup",
-                label="Gallup",
-                role="Market Research",
-                tier="knowledge-worker",
-                session="gallup",
-            ),
-            _HierarchyNodeSpec(
-                id="twain",
-                label="Twain",
-                role="Social Content Agent",
-                tier="knowledge-worker",
-                session="twain",
-            ),
-            _HierarchyNodeSpec(
-                id="durant",
-                label="Durant",
-                role="Narrative Historian",
-                tier="knowledge-worker",
-                session="durant",
-            ),
-        ),
-    ),
-)
-
-
-def _iter_specs() -> list[_HierarchyNodeSpec]:
-    """Flatten the static hierarchy into a pre-order list."""
-    flattened: list[_HierarchyNodeSpec] = [_ROOT_NODE, _STRATEGY_NODE, *_INDEPENDENT_PEERS]
-
-    def visit(node: _HierarchyNodeSpec) -> None:
-        flattened.append(node)
-        for child in node.children:
-            visit(child)
-
-    for section in _SECTIONS:
-        for node in section.nodes:
-            visit(node)
-
-    return flattened
-
-
-def _managed_orgs() -> set[str]:
-    """Managed organizations owned by sub-orchestrator nodes."""
-    return {node.managed_org for node in _iter_specs() if node.managed_org is not None}
 
 
 def _normalize_state(raw_state: AgentState, online: bool) -> HierarchyState:
@@ -394,16 +132,44 @@ async def _load_active_swarm_workers(
     return dict(grouped)
 
 
-def _resolve_role(config: BackboneConfig, spec: _HierarchyNodeSpec) -> str:
-    """Prefer registry role data when the entity exists."""
-    if spec.session is not None:
-        reg_entry = config.registry.entry_for_session(spec.session)
-        if reg_entry and reg_entry.role:
-            return reg_entry.role
-    reg_entry = config.registry.entities.get(spec.id)
-    if reg_entry and reg_entry.role:
-        return reg_entry.role
-    return spec.role
+def _build_node_from_entry(
+    entity_id: str,
+    entry: EntityEntry,
+    config: BackboneConfig,
+    active_sessions: set[str],
+    snapshots: dict[str, object],
+    coding_agents_by_org: dict[str, list[CodingAgentNode]],
+) -> HierarchyNode:
+    """Build one named hierarchy node from a registry entry, recursing into children."""
+    direct_states: list[HierarchyState] = []
+    if entry.session is not None:
+        snapshot = snapshots.get(entry.session)
+        if snapshot is not None:
+            direct_states.append(_normalize_state(snapshot.state, entry.session in active_sessions))
+
+    children = [
+        _build_node_from_entry(
+            child_id, child_entry, config, active_sessions, snapshots, coding_agents_by_org,
+        )
+        for child_id, child_entry in config.registry.get_children(entity_id)
+    ]
+
+    coding_agents = None
+    if entry.managed_org is not None:
+        coding_agents = list(coding_agents_by_org.get(entry.managed_org, []))
+
+    return HierarchyNode(
+        id=entity_id,
+        label=entry.label or entity_id,
+        role=entry.role,
+        tier=entry.tier or "agent",
+        state=_summarize_states(direct_states),
+        session=entry.session,
+        online=entry.session in active_sessions if entry.session is not None else False,
+        managed_org=entry.managed_org,
+        children=children or None,
+        coding_agents=coding_agents,
+    )
 
 
 def _build_coding_agent_nodes(
@@ -435,42 +201,6 @@ def _build_coding_agent_nodes(
     return nodes
 
 
-def _build_named_node(
-    spec: _HierarchyNodeSpec,
-    config: BackboneConfig,
-    active_sessions: set[str],
-    snapshots: dict[str, object],
-    coding_agents_by_org: dict[str, list[CodingAgentNode]],
-) -> HierarchyNode:
-    """Build one named hierarchy node recursively."""
-    direct_states: list[HierarchyState] = []
-    if spec.session is not None:
-        snapshot = snapshots.get(spec.session)
-        if snapshot is not None:
-            direct_states.append(_normalize_state(snapshot.state, spec.session in active_sessions))
-
-    children = [
-        _build_named_node(child, config, active_sessions, snapshots, coding_agents_by_org)
-        for child in spec.children
-    ]
-    coding_agents = None
-    if spec.managed_org is not None:
-        coding_agents = list(coding_agents_by_org.get(spec.managed_org, []))
-
-    return HierarchyNode(
-        id=spec.id,
-        label=spec.label,
-        role=_resolve_role(config, spec),
-        tier=spec.tier,
-        state=_summarize_states(direct_states),
-        session=spec.session,
-        online=spec.session in active_sessions if spec.session is not None else False,
-        managed_org=spec.managed_org,
-        children=children or None,
-        coding_agents=coding_agents,
-    )
-
-
 def _coding_agents_by_org(coding_agents: list[CodingAgentNode]) -> dict[str, list[CodingAgentNode]]:
     """Group coding agents by org and sort them by label."""
     grouped: dict[str, list[CodingAgentNode]] = defaultdict(list)
@@ -491,9 +221,14 @@ async def get_hierarchy(
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Return the canonical organizational hierarchy with live state."""
-    static_sessions = {spec.session for spec in _iter_specs() if spec.session is not None}
+    # Collect all sessions: entity sessions + repo sessions
+    entity_sessions = {
+        entry.session
+        for entry in config.registry.entities.values()
+        if entry.session is not None
+    }
     repo_sessions = {repo.name for repo in config.registry.repos}
-    sessions = static_sessions | repo_sessions
+    sessions = entity_sessions | repo_sessions
 
     active_sessions = set(await tmux_svc.list_sessions())
     snapshots = await _load_snapshot_details(state_svc, sessions)
@@ -505,43 +240,51 @@ async def get_hierarchy(
         snapshots,
         swarm_workers_by_agent,
     )
-    coding_agents_by_org = _coding_agents_by_org(coding_agents)
-    assigned_orgs = _managed_orgs()
+    ca_by_org = _coding_agents_by_org(coding_agents)
 
-    sections = [
-        HierarchySection(
-            id=section.id,
-            title=section.title,
-            nodes=[
-                _build_named_node(node, config, active_sessions, snapshots, coding_agents_by_org)
-                for node in section.nodes
-            ],
-        )
-        for section in _SECTIONS
+    # Build root (assistant tier)
+    assistant_entries = config.registry.get_entities_by_tier("assistant")
+    root_id, root_entry = assistant_entries[0]
+    root = _build_node_from_entry(
+        root_id, root_entry, config, active_sessions, snapshots, ca_by_org,
+    )
+
+    # Build strategy node
+    strategic_entries = config.registry.get_entities_by_tier("strategic")
+    strat_id, strat_entry = strategic_entries[0]
+    strategy = _build_node_from_entry(
+        strat_id, strat_entry, config, active_sessions, snapshots, ca_by_org,
+    )
+
+    # Build independent peers
+    independent_peers = [
+        _build_node_from_entry(eid, entry, config, active_sessions, snapshots, ca_by_org)
+        for eid, entry in config.registry.get_entities_by_tier("independent-peer")
     ]
 
+    # Build sections from registry
+    section_list = []
+    for section_id, title, _order in config.registry.get_sections():
+        section_nodes = [
+            _build_node_from_entry(eid, entry, config, active_sessions, snapshots, ca_by_org)
+            for eid, entry in config.registry.get_entities_in_section(section_id)
+        ]
+        section_list.append(HierarchySection(id=section_id, title=title, nodes=section_nodes))
+
+    # Managed orgs: scan all entities for managed_org
+    managed_orgs = {
+        entry.managed_org
+        for entry in config.registry.entities.values()
+        if entry.managed_org is not None
+    }
+
     return HierarchyResponse(
-        root=_build_named_node(
-            _ROOT_NODE,
-            config,
-            active_sessions,
-            snapshots,
-            coding_agents_by_org,
-        ),
-        strategy=_build_named_node(
-            _STRATEGY_NODE,
-            config,
-            active_sessions,
-            snapshots,
-            coding_agents_by_org,
-        ),
-        independent_peers=[
-            _build_named_node(node, config, active_sessions, snapshots, coding_agents_by_org)
-            for node in _INDEPENDENT_PEERS
-        ],
-        sections=sections,
+        root=root,
+        strategy=strategy,
+        independent_peers=independent_peers,
+        sections=section_list,
         unassigned_coding_agents=sorted(
-            (agent for agent in coding_agents if agent.org not in assigned_orgs),
+            (agent for agent in coding_agents if agent.org not in managed_orgs),
             key=lambda agent: (agent.org.casefold(), agent.label.casefold()),
         ),
     )

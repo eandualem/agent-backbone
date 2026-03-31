@@ -36,6 +36,8 @@ def _hierarchy_registry() -> EntityRegistry:
                 figure="Jarvis",
                 role="Personal Assistant",
                 entity_type="service",
+                label="Jarvis",
+                tier="assistant",
             ),
             "leo": EntityEntry(
                 session="leo",
@@ -43,6 +45,8 @@ def _hierarchy_registry() -> EntityRegistry:
                 groups=["orchestrators"],
                 figure="Leonardo da Vinci",
                 role="Strategy Co-Architect",
+                label="Da Vinci",
+                tier="strategic",
             ),
             "feynman": EntityEntry(
                 session="feynman",
@@ -50,6 +54,8 @@ def _hierarchy_registry() -> EntityRegistry:
                 groups=["orchestrators"],
                 figure="Richard Feynman",
                 role="Orchestration Optimizer",
+                label="Feynman",
+                tier="independent-peer",
             ),
             "brunel": EntityEntry(
                 session="brunel",
@@ -57,6 +63,8 @@ def _hierarchy_registry() -> EntityRegistry:
                 groups=["orchestrators"],
                 figure="Isambard Kingdom Brunel",
                 role="Infrastructure Agent",
+                label="Brunel",
+                tier="independent-peer",
             ),
             "ike": EntityEntry(
                 session="ike",
@@ -64,6 +72,10 @@ def _hierarchy_registry() -> EntityRegistry:
                 groups=["orchestrators"],
                 figure="Dwight Eisenhower",
                 role="Core Orchestrator",
+                label="Eisenhower",
+                tier="orchestrator",
+                section="operations",
+                section_order=1,
             ),
             "bell-wf": EntityEntry(
                 session="bell-wf",
@@ -73,6 +85,12 @@ def _hierarchy_registry() -> EntityRegistry:
                 role="Org Orchestrator",
                 organization="WF",
                 entity_type="role-instance",
+                label="Bell (WF)",
+                tier="sub-orchestrator",
+                section="operations",
+                section_order=1,
+                parent="ike",
+                managed_org="WF",
             ),
             "bell-loveble": EntityEntry(
                 session="bell-loveble",
@@ -82,6 +100,12 @@ def _hierarchy_registry() -> EntityRegistry:
                 role="Org Orchestrator",
                 organization="Loveble",
                 entity_type="role-instance",
+                label="Bell (Loveble)",
+                tier="sub-orchestrator",
+                section="operations",
+                section_order=1,
+                parent="ike",
+                managed_org="Loveble",
             ),
             "ada": EntityEntry(
                 session="ada",
@@ -89,6 +113,10 @@ def _hierarchy_registry() -> EntityRegistry:
                 groups=["orchestrators"],
                 figure="Ada Lovelace",
                 role="Spec Methodology Architect",
+                label="Lovelace",
+                tier="orchestrator",
+                section="operations",
+                section_order=1,
             ),
             "euclid-wf": EntityEntry(
                 session="euclid-wf",
@@ -98,6 +126,11 @@ def _hierarchy_registry() -> EntityRegistry:
                 role="Spec Manager",
                 organization="WF",
                 entity_type="role-instance",
+                label="Euclid (WF)",
+                tier="sub-orchestrator",
+                section="operations",
+                section_order=1,
+                parent="ada",
             ),
             "euclid-loveble": EntityEntry(
                 session="euclid-loveble",
@@ -107,34 +140,93 @@ def _hierarchy_registry() -> EntityRegistry:
                 role="Spec Manager",
                 organization="Loveble",
                 entity_type="role-instance",
+                label="Euclid (Loveble)",
+                tier="sub-orchestrator",
+                section="operations",
+                section_order=1,
+                parent="ada",
             ),
-            "darwin": EntityEntry(
-                session="darwin",
-                home="~/ws/core/darwin",
-                groups=["standalone"],
-                figure="Charles Darwin",
-                role="System Evolution Architect",
+            "oppenheimer": EntityEntry(
+                session="oppenheimer",
+                home="~/ws/core/review/oppenheimer",
+                groups=["reviewers"],
+                figure="J. Robert Oppenheimer",
+                role="Review Process Architect",
+                label="Oppenheimer",
+                tier="reviewer",
+                section="review",
+                section_order=2,
             ),
-            "gallup": EntityEntry(
-                session="gallup",
-                home="~/ws/core/gallup",
-                groups=["standalone"],
-                figure="George Gallup",
-                role="Market Research",
+            "hemingway-wf": EntityEntry(
+                session="hemingway-wf",
+                home="~/ws/core/review/WF/hemingway",
+                groups=["reviewers"],
+                figure="Ernest Hemingway",
+                role="Code Reviewer",
+                organization="WF",
+                entity_type="role-instance",
+                label="Hemingway (WF)",
+                tier="reviewer",
+                section="review",
+                section_order=2,
+                parent="oppenheimer",
+                managed_org="WF",
             ),
-            "twain": EntityEntry(
-                session="twain",
-                home="~/ws/core/twain",
-                groups=["standalone"],
-                figure="Mark Twain",
-                role="Social Content Agent",
+            "hemingway-loveble": EntityEntry(
+                session="hemingway-loveble",
+                home="~/ws/core/review/Loveble/hemingway",
+                groups=["reviewers"],
+                figure="Ernest Hemingway",
+                role="Code Reviewer",
+                organization="Loveble",
+                entity_type="role-instance",
+                label="Hemingway (Loveble)",
+                tier="reviewer",
+                section="review",
+                section_order=2,
+                parent="oppenheimer",
+                managed_org="Loveble",
             ),
-            "durant": EntityEntry(
-                session="durant",
-                home="~/ws/core/durant",
-                groups=["standalone"],
-                figure="Will Durant",
-                role="Narrative Historian",
+            "wright": EntityEntry(
+                session="wright",
+                home="~/ws/core/arch/wright",
+                groups=["architects"],
+                figure="Frank Lloyd Wright",
+                role="System Architect",
+                label="Wright",
+                tier="architect",
+                section="architecture",
+                section_order=3,
+            ),
+            "gaudi-wf": EntityEntry(
+                session="gaudi-wf",
+                home="~/ws/core/arch/WF/gaudi",
+                groups=["architects"],
+                figure="Antoni Gaudi",
+                role="Repo Architect",
+                organization="WF",
+                entity_type="role-instance",
+                label="Gaudi (WF)",
+                tier="architect",
+                section="architecture",
+                section_order=3,
+                parent="wright",
+                managed_org="WF",
+            ),
+            "gaudi-loveble": EntityEntry(
+                session="gaudi-loveble",
+                home="~/ws/core/arch/Loveble/gaudi",
+                groups=["architects"],
+                figure="Antoni Gaudi",
+                role="Repo Architect",
+                organization="Loveble",
+                entity_type="role-instance",
+                label="Gaudi (Loveble)",
+                tier="architect",
+                section="architecture",
+                section_order=3,
+                parent="wright",
+                managed_org="Loveble",
             ),
             "koch": EntityEntry(
                 session="koch",
@@ -142,6 +234,10 @@ def _hierarchy_registry() -> EntityRegistry:
                 groups=["orchestrators"],
                 figure="Robert Koch",
                 role="Bug Quality Architect",
+                label="Koch",
+                tier="quality",
+                section="quality",
+                section_order=4,
             ),
             "snow-wf": EntityEntry(
                 session="snow-wf",
@@ -151,6 +247,12 @@ def _hierarchy_registry() -> EntityRegistry:
                 role="Bug Validator",
                 organization="WF",
                 entity_type="role-instance",
+                label="Snow (WF)",
+                tier="quality",
+                section="quality",
+                section_order=4,
+                parent="koch",
+                managed_org="WF",
             ),
             "snow-loveble": EntityEntry(
                 session="snow-loveble",
@@ -160,6 +262,56 @@ def _hierarchy_registry() -> EntityRegistry:
                 role="Bug Validator",
                 organization="Loveble",
                 entity_type="role-instance",
+                label="Snow (Loveble)",
+                tier="quality",
+                section="quality",
+                section_order=4,
+                parent="koch",
+                managed_org="Loveble",
+            ),
+            "darwin": EntityEntry(
+                session="darwin",
+                home="~/ws/core/darwin",
+                groups=["standalone"],
+                figure="Charles Darwin",
+                role="System Evolution Architect",
+                label="Darwin",
+                tier="knowledge-worker",
+                section="knowledge-workers",
+                section_order=5,
+            ),
+            "gallup": EntityEntry(
+                session="gallup",
+                home="~/ws/core/gallup",
+                groups=["standalone"],
+                figure="George Gallup",
+                role="Market Research",
+                label="Gallup",
+                tier="knowledge-worker",
+                section="knowledge-workers",
+                section_order=5,
+            ),
+            "twain": EntityEntry(
+                session="twain",
+                home="~/ws/core/twain",
+                groups=["standalone"],
+                figure="Mark Twain",
+                role="Social Content Agent",
+                label="Twain",
+                tier="knowledge-worker",
+                section="knowledge-workers",
+                section_order=5,
+            ),
+            "durant": EntityEntry(
+                session="durant",
+                home="~/ws/core/durant",
+                groups=["standalone"],
+                figure="Will Durant",
+                role="Narrative Historian",
+                label="Durant",
+                tier="knowledge-worker",
+                section="knowledge-workers",
+                section_order=5,
             ),
         },
         repos=[
@@ -426,4 +578,40 @@ class TestHierarchyEndpoint:
             _clear_di_overrides(api_app)
             api_app.state.config = old_config
 
+        assert resp.status_code == 401
+
+
+class TestRegistryEndpoints:
+    async def test_list_entities(self, api_app, api_client, auth_headers):
+        """GET /api/registry/entities returns all registry entities."""
+        old_config = api_app.state.config
+        api_app.state.config = dc_replace(old_config, registry=_hierarchy_registry())
+        try:
+            resp = await api_client.get("/api/registry/entities", headers=auth_headers)
+        finally:
+            api_app.state.config = old_config
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 23  # 17 original + 6 new
+        ids = {item["id"] for item in data["items"]}
+        assert "ike" in ids
+        assert "jarvis" in ids
+
+    async def test_list_repos(self, api_app, api_client, auth_headers):
+        """GET /api/registry/repos returns repos sorted by org/name."""
+        old_config = api_app.state.config
+        api_app.state.config = dc_replace(old_config, registry=_hierarchy_registry())
+        try:
+            resp = await api_client.get("/api/registry/repos", headers=auth_headers)
+        finally:
+            api_app.state.config = old_config
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 3
+        orgs = [item["org"] for item in data["items"]]
+        assert orgs == sorted(orgs, key=str.casefold)
+
+    async def test_registry_requires_auth(self, api_app, api_client, api_key):
+        """Registry endpoints require authentication."""
+        resp = await api_client.get("/api/registry/entities")
         assert resp.status_code == 401

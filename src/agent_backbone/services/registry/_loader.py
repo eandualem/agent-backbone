@@ -83,6 +83,7 @@ def load_entity_registry(path: Path) -> dict[str, EntityEntry]:
     entities: dict[str, EntityEntry] = {}
     for name, data in raw.items():
         instances = _load_instances(data)
+        section_order_raw = data.get("section_order")
         entities[name] = EntityEntry(
             session=_default_session(name, data, instances),
             home=_default_home(data, instances),
@@ -94,6 +95,12 @@ def load_entity_registry(path: Path) -> dict[str, EntityEntry]:
             role_definition=data.get("roleDefinition", ""),
             role_entity=data.get("roleEntity", ""),
             instances=instances,
+            label=data.get("label", ""),
+            tier=data.get("tier", ""),
+            section=data.get("section"),
+            section_order=int(section_order_raw) if section_order_raw is not None else None,
+            parent=data.get("parent"),
+            managed_org=data.get("managed_org"),
         )
     return entities
 
