@@ -30,14 +30,9 @@ class IssueService:
         self._gh = gh
         self._sio = sio
 
-    def _repo_inventory(self) -> list[str]:
-        """Build the full repo inventory — same source as /api/repos."""
-        from agent_backbone.services.automation._pipeline import discover_repos
-
-        owner = self._config.github.owner
-        repos = {f"{owner}/{entry.repo}" for entry in discover_repos()}
-        repos.add(f"{owner}/{self._config.github.repo}")
-        return sorted(repos)
+    async def _repo_inventory(self) -> list[str]:
+        """List all repos for the GitHub owner via the GitHub API."""
+        return await self._gh.list_owner_repos()
 
     async def _refresh_issue_projection(
         self,
@@ -195,7 +190,7 @@ class IssueService:
 
     async def sync_inventory(self, *, emit_changes: bool = True) -> list[dict]:
         changed: list[dict] = []
-        for repo_full_name in self._repo_inventory():
+        for repo_full_name in await self._repo_inventory():
             changed.extend(await self.sync_repo(repo_full_name, emit_changes=emit_changes))
         return changed
 

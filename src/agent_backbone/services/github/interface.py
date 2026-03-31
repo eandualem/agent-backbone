@@ -504,6 +504,32 @@ class GitHubClient:
 
         return items
 
+    # --- Repository operations ---
+
+    async def list_owner_repos(self) -> list[str]:
+        """List all repo full names accessible to the GitHub App installation."""
+        items: list[dict[str, Any]] = []
+        next_url: str | None = "/installation/repositories"
+        next_params: dict[str, str | int] = {"per_page": 100}
+
+        while next_url:
+            resp = await self._request(
+                "GET", next_url, params=next_params or None,
+            )
+            payload = resp.json()
+            for repo in payload.get("repositories", []):
+                if isinstance(repo, dict):
+                    items.append(repo)
+            next_url = _next_link(resp)
+            next_params = {}
+
+        return sorted(
+            item["full_name"]
+            for item in items
+            if isinstance(item.get("full_name"), str)
+            and not item.get("archived")
+        )
+
     # --- Issue operations ---
 
     async def list_open_issues(
