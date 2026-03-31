@@ -22,7 +22,7 @@ GitHub webhook --> FastAPI (port 7120) --> Prefect flows --> tmux / Jarvis
 - **Python 3.11+** with **uv** (package manager)
 - **Docker** (for PostgreSQL container)
 - **tmux** (agent session management)
-- **ngrok** (webhook tunnel — free tier works)
+- **Webhook tunnel** (configured externally — delivers GitHub events to port 7120)
 
 ---
 
@@ -102,7 +102,7 @@ All commands use `make` targets or the infrastructure module CLI (`uv run python
 ```bash
 make db-up              # PostgreSQL (if not already running)
 make start-backbone     # Prefect server + gateway + worker + telegram
-make start-tunnel       # ngrok tunnel
+make start-tunnel       # webhook tunnel
 ```
 
 ### Individual Control
