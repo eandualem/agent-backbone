@@ -310,7 +310,7 @@ class TestNotifyStream:
 
 
 class TestRegisterDataStreams:
-    def test_registers_10_snapshot_namespaces_and_runs_and_issues(self):
+    def test_registers_6_snapshot_namespaces_and_runs_and_issues(self):
         """register_data_streams registers snapshot domains plus /runs and /issues namespaces."""
         import agent_backbone.api.data_streams as ds_mod
         from agent_backbone.api.data_streams import register_data_streams
@@ -325,9 +325,9 @@ class TestRegisterDataStreams:
             mock_config.return_value.issue_domain.sync_interval_seconds = 300
             register_data_streams(sio)
 
-        assert len(ds_mod._namespaces) == 10
-        # 10 snapshot + 1 /issues + 1 /runs = 12
-        assert sio.register_namespace.call_count == 12
+        assert len(ds_mod._namespaces) == 6
+        # 6 snapshot + 1 /issues + 1 /runs = 8
+        assert sio.register_namespace.call_count == 8
 
     def test_registers_expected_domains(self):
         """All expected domain names are present in the registry."""
@@ -348,12 +348,8 @@ class TestRegisterDataStreams:
             "agents",
             "rooms",
             "activity",
-            "flows",
             "swarms",
-            "plans",
             "repos",
-            "notes",
-            "schedule",
             "settings",
         }
         assert set(ds_mod._namespaces.keys()) == expected
@@ -378,9 +374,9 @@ class TestRegisterDataStreams:
             mock_config.return_value.issue_domain.sync_interval_seconds = 300
             register_data_streams(sio)
 
-        # 10 snapshot emitters + 1 issue-sync = 11
-        assert len(created_tasks) == 11
-        assert len(ds_mod._poll_tasks) == 11
+        # 6 snapshot emitters + 1 issue-sync = 7
+        assert len(created_tasks) == 7
+        assert len(ds_mod._poll_tasks) == 7
 
     def test_registered_namespaces_are_data_stream_instances(self):
         """Every registered namespace is a DataStreamNamespace."""

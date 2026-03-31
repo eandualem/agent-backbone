@@ -1,4 +1,4 @@
-"""Automation service — repo onboarding, workflow registry, and step execution."""
+"""Automation service — repo onboarding and workflow registry."""
 
 from agent_backbone.services.automation._checks import (
     CheckResult,
@@ -11,14 +11,6 @@ from agent_backbone.services.automation._checks import (
     _check_spec_dir,
     _check_symlinks_created,
     run_status_checks,
-)
-from agent_backbone.services.automation._engine import execute_workflow_steps
-from agent_backbone.services.automation._flows import (
-    arclio_start,
-    arclio_stop,
-    evening_shutdown,
-    full_shutdown,
-    morning_startup,
 )
 from agent_backbone.services.automation._pipeline import (
     _ORCH_ROOT,
@@ -43,7 +35,7 @@ from agent_backbone.services.automation._pipeline import (
 )
 from agent_backbone.services.automation._registry import WorkflowRegistry
 from agent_backbone.services.automation.exceptions import OnboardingError, WorkflowServiceError
-from agent_backbone.services.automation.interface import OnboardingService, WorkflowsService
+from agent_backbone.services.automation.interface import OnboardingService
 from agent_backbone.services.automation.models import WorkflowEntry
 
 __all__ = [
@@ -57,7 +49,6 @@ __all__ = [
     "WorkflowEntry",
     "WorkflowRegistry",
     "WorkflowServiceError",
-    "WorkflowsService",
     "_ORCH_ROOT",
     "_REGISTRY_PATH",
     "_REPOS_JSON",
@@ -73,14 +64,8 @@ __all__ = [
     "_check_spec_dir",
     "_check_symlinks_created",
     "_symlink_block",
-    "arclio_start",
-    "arclio_stop",
     "discover_repos",
-    "evening_shutdown",
-    "execute_workflow_steps",
-    "full_shutdown",
     "load_repos_json",
-    "morning_startup",
     "parse_ssh_url",
     "register_repo",
     "run_onboarding",

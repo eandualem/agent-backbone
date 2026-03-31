@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import Request
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents import MonitoringService, StateService
-from agent_backbone.services.automation import OnboardingService, WorkflowsService
+from agent_backbone.services.agents import StateService
+from agent_backbone.services.automation import OnboardingService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.issues import IssueService
@@ -43,16 +43,6 @@ def get_tmux_service(request: Request) -> TmuxService:
     return request.app.state.tmux_service
 
 
-def get_monitoring_service(request: Request) -> MonitoringService:
-    """Retrieve the MonitoringService instance from app state."""
-    return request.app.state.monitoring_service
-
-
 def get_onboarding_service(request: Request) -> OnboardingService:
     """Retrieve the OnboardingService instance from app state."""
     return request.app.state.onboarding_service
-
-
-def get_workflows_service(request: Request) -> WorkflowsService:
-    """Retrieve the WorkflowsService instance from app state."""
-    return request.app.state.workflows_service

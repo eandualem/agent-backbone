@@ -251,10 +251,6 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
         items = [e.model_dump(mode="json") for e in all_events[:limit]]
         return {"items": items, "total": len(items)}
 
-    async def fetch_flows() -> dict:
-        """RDS-50/51: ListEnvelope[FlowRunResponse] (stub — Prefect API)."""
-        return {"items": [], "total": 0}
-
     async def fetch_swarms() -> dict:
         """RDS-55/56: ListEnvelope[SwarmSummaryResponse]."""
         from agent_backbone.services._locator import get_db
@@ -263,37 +259,6 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
         swarms = await db.list_swarms()
         visible = [s for s in swarms if s.get("phase") != "discarded"]
         return {"items": visible, "total": len(visible)}
-
-    async def fetch_plans() -> dict:
-        """RDS-60/61: ListEnvelope[PlanDetail]."""
-        from agent_backbone.api.models import PlanDetail
-        from agent_backbone.services._locator import get_config, get_db
-        from agent_backbone.services.agents import AgentState
-        from agent_backbone.services.agents.interface import StateService
-        from agent_backbone.services.terminal import TmuxService
-
-        config = get_config()
-        db = get_db()
-        state_svc = StateService(db=db)
-        tmux_svc = TmuxService()
-        all_sessions = list(config.registry.sessions_map.values())
-        active = await tmux_svc.list_sessions()
-        named = set(config.registry.sessions_map.values())
-        all_sessions.extend(s for s in active if s not in named)
-
-        plans: list[dict] = []
-        for session in all_sessions:
-            snapshot = await state_svc.get_state(session)
-            if snapshot.state == AgentState.PLAN_WAITING:
-                plans.append(
-                    PlanDetail(
-                        session=session,
-                        state=snapshot.state.value,
-                        plan_file=snapshot.plan_file,
-                        plan_title=snapshot.plan_title,
-                    ).model_dump(mode="json")
-                )
-        return {"items": plans, "total": len(plans)}
 
     async def fetch_repos() -> dict:
         """RDS-65/66: ListEnvelope[RepoStatusResponse]."""
@@ -307,89 +272,6 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
             status = svc.run_status_checks(entry.org, entry.repo)
             items.append(_status_to_response(status).model_dump(mode="json"))
         return {"items": items, "total": len(items)}
-
-    async def fetch_notes() -> dict:
-        """RDS-70/71: ListEnvelope[NoteItem]."""
-        from pathlib import Path
-
-        from agent_backbone.api.routes.notes import _list_notes_sync
-
-        target = Path.home() / "notes"
-        notes = await asyncio.to_thread(_list_notes_sync, target)
-        return {
-            "items": [n.model_dump(mode="json") for n in notes],
-            "total": len(notes),
-        }
-
-    async def fetch_schedule() -> dict:
-        """RDS-75/76: ListEnvelope[ScheduleEntry]."""
-        from datetime import datetime
-        from pathlib import Path
-        from zoneinfo import ZoneInfo
-
-        from agent_backbone.api.models import ScheduleEntry
-        from agent_backbone.api.routes.schedule import (
-            _ROUTINE_PATHS,
-            _get_cron_fire_times_today,
-            _load_done_state,
-            _load_personal_schedule,
-            _parse_routine_labels,
-            _personal_items_for_today,
-        )
-        from agent_backbone.services._locator import get_config
-        from agent_backbone.services.agents.interface import MonitoringService
-
-        config = get_config()
-        monitoring_svc = MonitoringService(config)
-        schedules = monitoring_svc.load_schedules()
-        done_state = _load_done_state(config.agent_state.state_path)
-        entries: list[dict] = []
-
-        for entity, schedule in schedules.items():
-            if not schedule.get("enabled", True):
-                continue
-            cron_expr = schedule.get("cron")
-            if not cron_expr:
-                continue
-            tz = ZoneInfo(schedule.get("timezone", config.heartbeat.default_timezone))
-            fire_times = _get_cron_fire_times_today(cron_expr, tz)
-            routine_path_str = _ROUTINE_PATHS.get(entity)
-            routine_labels: dict[str, str] = {}
-            if routine_path_str:
-                routine_labels = _parse_routine_labels(Path(routine_path_str).expanduser())
-            for time_str in fire_times:
-                item_id = f"{entity}-{time_str}"
-                entries.append(
-                    ScheduleEntry(
-                        id=item_id,
-                        entity=entity,
-                        time=time_str,
-                        label=routine_labels.get(
-                            time_str,
-                            schedule.get("description", "Heartbeat"),
-                        ),
-                        type="heartbeat",
-                        done=done_state.get(item_id, False),
-                    ).model_dump(mode="json")
-                )
-
-        personal_data = _load_personal_schedule(config.agent_state.state_path)
-        today_items = _personal_items_for_today(personal_data["items"])
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        for item in today_items:
-            entries.append(
-                ScheduleEntry(
-                    id=item["id"],
-                    entity="elias",
-                    time=item["time"],
-                    label=item["label"],
-                    type="personal",
-                    done=today_str in item.get("done_dates", []),
-                ).model_dump(mode="json")
-            )
-
-        entries.sort(key=lambda e: (e["time"], e["entity"]))
-        return {"items": entries, "total": len(entries)}
 
     async def fetch_settings() -> dict:
         """RDS-80/81: ServiceHealth."""
@@ -405,12 +287,8 @@ def register_data_streams(sio: socketio.AsyncServer) -> None:
         ("agents", "/agents", "agents:update", fetch_agents, 30),
         ("rooms", "/rooms", "rooms:update", fetch_rooms, 10),
         ("activity", "/activity", "activity:update", fetch_activity, 15),
-        ("flows", "/flows", "flows:update", fetch_flows, 15),
         ("swarms", "/swarms", "swarms:update", fetch_swarms, 30),
-        ("plans", "/plans", "plans:update", fetch_plans, 30),
         ("repos", "/repos", "repos:update", fetch_repos, 60),
-        ("notes", "/notes", "notes:update", fetch_notes, 60),
-        ("schedule", "/schedule", "schedule:update", fetch_schedule, 60),
         ("settings", "/settings", "settings:update", fetch_settings, 30),
     ]
 

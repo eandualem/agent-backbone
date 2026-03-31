@@ -272,11 +272,10 @@ async def api_app(config, tmp_path):
     app.state.github = None  # Tests override via dependency_overrides when needed
 
     # Non-lifecycle services for DI
-    from agent_backbone.services.automation import OnboardingService, WorkflowsService
+    from agent_backbone.services.automation import OnboardingService
     from agent_backbone.services.issues import IssueService
 
     app.state.onboarding_service = OnboardingService()
-    app.state.workflows_service = WorkflowsService()
     app.state.issue_service = IssueService(
         config=test_config,
         db=db,

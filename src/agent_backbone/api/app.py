@@ -52,11 +52,10 @@ async def lifespan(app: FastAPI):
     app.state.infrastructure_service = await register_infrastructure(lifecycle, config)
 
     # Non-lifecycle services (lightweight, no start/stop needed but exposed for DI)
-    from agent_backbone.services.automation.interface import OnboardingService, WorkflowsService
+    from agent_backbone.services.automation.interface import OnboardingService
     from agent_backbone.services.issues import IssueService
 
     app.state.onboarding_service = OnboardingService()
-    app.state.workflows_service = WorkflowsService()
     app.state.issue_service = IssueService(
         config=config,
         db=app.state.db,
@@ -83,10 +82,6 @@ async def lifespan(app: FastAPI):
         await seed_startup_states(config=config, db=app.state.db)
         await app.state.issue_service.sync_inventory(emit_changes=False)
 
-        from agent_backbone.api.background import start_background_tasks
-
-        start_background_tasks()
-
         from agent_backbone.api.data_streams import register_data_streams
 
         register_data_streams(app.state.sio)
@@ -96,10 +91,8 @@ async def lifespan(app: FastAPI):
     finally:
         await lifecycle.stop_all()
 
-        from agent_backbone.api.background import stop_background_tasks
         from agent_backbone.api.data_streams import stop_data_streams
 
-        await stop_background_tasks()
         await stop_data_streams()
 
         # Non-lifecycle cleanup (PTY)
@@ -179,26 +172,20 @@ def create_app() -> socketio.ASGIApp:
     # API routers (authenticated) — imported lazily to avoid circular imports
     from fastapi import Depends
 
-    from agent_backbone.api.routes.actions import router as actions_router
     from agent_backbone.api.routes.activity import router as activity_router
     from agent_backbone.api.routes.agents import router as agents_router
-    from agent_backbone.api.routes.analytics import router as analytics_router
     from agent_backbone.api.routes.dashboard import router as dashboard_router
     from agent_backbone.api.routes.deliveries import router as deliveries_router
     from agent_backbone.api.routes.files import router as files_router
-    from agent_backbone.api.routes.heartbeats import router as heartbeats_router
     from agent_backbone.api.routes.hierarchy import router as hierarchy_router
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.notes import router as notes_router
-    from agent_backbone.api.routes.plans import router as plans_router
     from agent_backbone.api.routes.repos import router as repos_router
     from agent_backbone.api.routes.rooms import router as rooms_router
-    from agent_backbone.api.routes.schedule import router as schedule_router
     from agent_backbone.api.routes.status import router as status_router
     from agent_backbone.api.routes.swarms import router as swarms_router
     from agent_backbone.api.routes.tracks import router as tracks_router
-    from agent_backbone.api.routes.workflows import router as workflows_router
 
     api_routers = [
         agents_router,
@@ -206,16 +193,10 @@ def create_app() -> socketio.ASGIApp:
         deliveries_router,
         issues_router,
         hierarchy_router,
-        plans_router,
         status_router,
-        heartbeats_router,
-        workflows_router,
         files_router,
         tracks_router,
-        actions_router,
-        schedule_router,
         activity_router,
-        analytics_router,
         messages_router,
         swarms_router,
         notes_router,
