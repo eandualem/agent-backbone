@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import os
@@ -61,7 +62,42 @@ class IssuesNamespace(socketio.AsyncNamespace):
             log.warning("Socket.IO issues connection rejected — invalid auth (sid=%s)", sid)
             return False
         await self.enter_room(sid, all_issues_room())
+        asyncio.create_task(
+            self._bootstrap_snapshot(sid),
+            name=f"issues-bootstrap-{sid}",
+        )
         return True
+
+    async def _bootstrap_snapshot(self, sid: str) -> None:
+        """Send the full open-issue list to a newly connected client."""
+        try:
+            app = getattr(self.server, "fastapi_app", None)
+            issue_service = getattr(
+                getattr(app, "state", None), "issue_service", None
+            )
+            if issue_service is None:
+                return
+            items, total = await issue_service.list_issues(
+                state="open",
+                repo_full_name=None,
+                for_entity=None,
+                from_entity=None,
+                issue_type=None,
+                label=None,
+                page=1,
+                per_page=500,
+            )
+            await self.emit(
+                ISSUES_UPDATE_EVENT,
+                items,
+                to=sid,
+            )
+        except Exception:
+            log.warning(
+                "Issues bootstrap snapshot failed for sid=%s",
+                sid,
+                exc_info=True,
+            )
 
     async def on_subscribe(self, sid: str, data: dict) -> None:
         if not isinstance(data, dict):

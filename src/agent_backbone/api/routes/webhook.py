@@ -47,6 +47,7 @@ def _reverse_topic_routes(routes: dict[int, str]) -> dict[str, int]:
 
 _WEBHOOK_EVENT_MAP: dict[EventType, str] = {
     EventType.ISSUE_OPENED: "issue.created",
+    EventType.ISSUE_REOPENED: "issue.reopened",
     EventType.COMMENT_CREATED: "issue.commented",
     EventType.ISSUE_CLOSED: "issue.closed",
     EventType.ISSUE_LABELED: "issue.labeled",
