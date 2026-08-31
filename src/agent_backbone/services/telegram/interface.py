@@ -1,13 +1,16 @@
-"""Telegram bot service — thin orchestration layer.
+"""Telegram bot service.
 
-Commands are in _commands.py, topic routing in _routing.py,
-topic discovery in _topic_discovery.py. This module wires them together.
+Runs inside the backbone process as a LifecycleAware component: ``start()``
+launches long-polling in the background when ``TELEGRAM_TOKEN`` is set,
+``stop()`` shuts it down. Commands live in ``_commands.py``, topic routing in
+``_routing.py``, topic discovery in ``_topic_discovery.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 import httpx
 from telegram import Update
@@ -20,7 +23,6 @@ from telegram.ext import (
 )
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.automation import WorkflowRegistry
 from agent_backbone.services.telegram import _commands, _routing
 from agent_backbone.services.telegram._topic_discovery import (
     effective_group_chat_id,
@@ -28,27 +30,34 @@ from agent_backbone.services.telegram._topic_discovery import (
     load_discovery,
 )
 
+if TYPE_CHECKING:
+    from agent_backbone.services.database import BackboneDB
+
 log = logging.getLogger(__name__)
 
 
-# Module-level convenience alias for TelegramService.send_notification
 async def send_notification(token: str, chat_id: int, text: str) -> bool:
-    """Send a proactive push notification via Telegram API.
-
-    Module-level convenience wrapper around TelegramService.send_notification.
-    """
+    """Send a proactive push notification via Telegram API."""
     return await TelegramService.send_notification(token, chat_id, text)
 
 
 class TelegramService:
     """Telegram bot for agent backbone management."""
 
-    def __init__(self, config: BackboneConfig) -> None:
+    def __init__(self, config: BackboneConfig, db: BackboneDB | None = None) -> None:
         self._config = config
+        self._db = db
         self._app: Application | None = None
-        self._registry = WorkflowRegistry()
-        self._registry.discover()
-        self._discovery = load_discovery(config.telegram.topic_discovery_path)
+        self._discovery = load_discovery(config.telegram_topic_discovery_path)
+        self._running = False
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self._config.telegram_token)
+
+    @property
+    def running(self) -> bool:
+        return self._running
 
     def _effective_routes(self) -> dict[int, str]:
         """Merged routes: discovery + config (config wins)."""
@@ -67,19 +76,12 @@ class TelegramService:
         return "unknown"
 
     def _is_authorized(self, chat_id: int) -> bool:
-        """Check if a chat ID is authorized."""
-        allowed = self._config.telegram.allowed_chat_ids
-        return not allowed or chat_id in allowed
+        """Only chats on the allowlist may control the backbone."""
+        return chat_id in self._config.telegram.allowed_chat_ids
 
     @staticmethod
     async def send_notification(token: str, chat_id: int, text: str) -> bool:
-        """Send a proactive push notification via Telegram API.
-
-        Used by monitor flows where the bot isn't running. Direct httpx POST
-        to the Telegram sendMessage endpoint.
-
-        Returns True if the message was sent successfully.
-        """
+        """Send a proactive push notification via the Telegram HTTP API."""
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat_id, "text": text}
         try:
@@ -87,11 +89,7 @@ class TelegramService:
                 resp = await client.post(url, json=payload, timeout=10)
                 if resp.status_code == 200:
                     return True
-                log.warning(
-                    "Telegram sendMessage failed: %s %s",
-                    resp.status_code,
-                    resp.text,
-                )
+                log.warning("Telegram sendMessage failed: %s %s", resp.status_code, resp.text)
                 return False
         except httpx.HTTPError as e:
             log.warning("Telegram sendMessage error: %s", e)
@@ -120,9 +118,6 @@ class TelegramService:
     async def cmd_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _commands.cmd_digest(self, update, context)
 
-    async def cmd_workflow(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await _commands.cmd_workflow(self, update, context)
-
     async def cmd_identify(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _commands.cmd_identify(self, update, context)
 
@@ -140,19 +135,44 @@ class TelegramService:
     # -- Lifecycle --
 
     async def start(self) -> None:
-        pass
+        if not self.enabled:
+            log.info("Telegram bot disabled (TELEGRAM_TOKEN not set)")
+            return
+        if not self._config.telegram.allowed_chat_ids:
+            log.error(
+                "Telegram bot NOT started: [telegram] allowed_chat_ids is empty. "
+                "Add your chat id (use /identify after a temporary allowlist) to enable."
+            )
+            return
+        app = self.build_app()
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        self._running = True
+        log.info("Telegram bot polling started")
 
     async def stop(self) -> None:
-        pass
+        if self._app is None or not self._running:
+            return
+        try:
+            await self._app.updater.stop()
+            await self._app.stop()
+            await self._app.shutdown()
+        finally:
+            self._running = False
+            self._app = None
 
     async def health_check(self) -> dict:
-        return {"healthy": True, "service": "telegram"}
+        return {
+            "healthy": self._running or not self.enabled,
+            "service": "telegram",
+            "enabled": self.enabled,
+            "running": self._running,
+        }
 
     def build_app(self) -> Application:
         """Build the Telegram bot application with all command handlers."""
-        import os
-
-        token = os.environ.get("TELEGRAM_TOKEN", "")
+        token = self._config.telegram_token
         if not token:
             raise ValueError("TELEGRAM_TOKEN environment variable not set")
 
@@ -164,7 +184,6 @@ class TelegramService:
         self._app.add_handler(CommandHandler("stop", self.cmd_stop_agent))
         self._app.add_handler(CommandHandler("tell", self.cmd_tell))
         self._app.add_handler(CommandHandler("digest", self.cmd_digest))
-        self._app.add_handler(CommandHandler("workflow", self.cmd_workflow))
         self._app.add_handler(CommandHandler("identify", self.cmd_identify))
         self._app.add_handler(CommandHandler("viewplan", self.cmd_viewplan))
         self._app.add_handler(CommandHandler("approve", self.cmd_approve))
@@ -177,20 +196,14 @@ class TelegramService:
         return self._app
 
     async def run(self) -> None:
-        """Run the bot with polling."""
-        app = self.build_app()
-        log.info("Starting Telegram bot...")
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling()
-        log.info("Bot is running. Press Ctrl+C to stop.")
-        # Keep running until interrupted
+        """Run the bot in the foreground until cancelled (standalone use)."""
+        await self.start()
+        if not self._running:
+            return
         try:
             while True:
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             pass
         finally:
-            await app.updater.stop()
-            await app.stop()
-            await app.shutdown()
+            await self.stop()

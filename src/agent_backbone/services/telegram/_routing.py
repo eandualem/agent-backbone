@@ -11,7 +11,10 @@ if TYPE_CHECKING:
     from agent_backbone.services.telegram.interface import TelegramService
 
 from agent_backbone.services.routing import safe_deliver
-from agent_backbone.services.telegram._topic_discovery import process_message_for_discovery
+from agent_backbone.services.telegram._topic_discovery import (
+    CATCH_ALL_TOPIC,
+    process_message_for_discovery,
+)
 
 
 def _delivery_reply(agent: str, status: str) -> str:
@@ -30,7 +33,7 @@ def _delivery_reply(agent: str, status: str) -> str:
 async def handle_topic_message(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Route plain text messages in forum topics to mapped tmux sessions."""
+    """Route plain text messages in forum topics to mapped agent sessions."""
     if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
         return
 
@@ -38,12 +41,11 @@ async def handle_topic_message(
     if thread_id is None:
         return
 
-    # Run discovery before route lookup
     process_message_for_discovery(
         update,
         bot._config,
         bot._discovery,
-        bot._config.telegram.topic_discovery_path,
+        bot._config.telegram_topic_discovery_path,
     )
 
     routes = bot._effective_routes()
@@ -58,7 +60,7 @@ async def handle_topic_message(
     sender = bot._sender_tag(update)
     tag = f"[via:telegram from:{sender}]"
 
-    if target == "coding-agents":
+    if target == CATCH_ALL_TOPIC:
         # Parse "agent-name: message" or "agent-name message"
         parts = text.split(":", 1) if ":" in text else text.split(None, 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -73,5 +75,7 @@ async def handle_topic_message(
         agent = target
         message = f"{tag} {text}"
 
-    result = await safe_deliver(agent, message, bot._config)
+    result = await safe_deliver(
+        agent, message, bot._config, db=bot._db, delivery_kind="direct_message"
+    )
     await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")

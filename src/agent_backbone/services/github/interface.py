@@ -1,7 +1,13 @@
-"""GitHub REST API client for querying issues.
+"""GitHub REST API client for issue operations.
 
-Uses httpx for async HTTP and authenticates every repository request through
-GitHub App installation tokens derived from the configured App credentials.
+Two authentication modes:
+
+* **Token** — ``GITHUB_TOKEN`` (a PAT or ``gh auth token``). Simplest; use it.
+* **GitHub App** — ``GITHUB_APP_ID`` + ``GITHUB_APP_PRIVATE_KEY_PATH``; requests
+  are authenticated with per-repository installation tokens. Needed when the
+  backbone should act as its own identity rather than as you.
+
+When both are present the token wins.
 """
 
 from __future__ import annotations
@@ -16,8 +22,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
 
 from agent_backbone.models import CommentData, IssueData, ParsedLabels
 
@@ -62,7 +66,7 @@ class GitHubClient:
 
     Usage:
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:ike")
+            issues = await gh.list_open_issues("for:reviewer")
     """
 
     def __init__(self, config: BackboneConfig) -> None:
@@ -81,10 +85,24 @@ class GitHubClient:
 
     # --- LifecycleAware methods ---
 
+    @property
+    def auth_mode(self) -> str:
+        if self._config.github_token:
+            return "token"
+        if self._config.github_app_ready:
+            return "github_app"
+        return "none"
+
     async def start(self) -> None:
         """Initialize the HTTP client (LifecycleAware)."""
-        self._validate_app_config()
-        self._load_private_key()
+        if self.auth_mode == "none":
+            raise RuntimeError(
+                "GitHub auth not configured: set GITHUB_TOKEN, or GITHUB_APP_ID + "
+                "GITHUB_APP_PRIVATE_KEY_PATH"
+            )
+        if self.auth_mode == "github_app":
+            self._validate_app_config()
+            self._load_private_key()
         self._client = httpx.AsyncClient(
             base_url=API_BASE,
             headers={
@@ -108,35 +126,33 @@ class GitHubClient:
             "healthy": self._client is not None,
             "service": "github",
             "client_active": self._client is not None,
-            "auth_mode": "github_app",
+            "auth_mode": self.auth_mode,
+            "repo": self._config.github.repo,
         }
 
+    # --- Repo resolution ---
+
     def _default_repo_full_name(self) -> str:
-        return f"{self._config.github.owner}/{self._config.github.repo}"
+        return self._config.github.repo
 
     def _resolve_repo(self, repo_full_name: str | None = None) -> tuple[str, str]:
-        if repo_full_name and "/" in repo_full_name:
-            owner, repo = repo_full_name.split("/", 1)
+        candidate = repo_full_name or self._default_repo_full_name()
+        if candidate and "/" in candidate:
+            owner, repo = candidate.split("/", 1)
             if owner and repo:
                 return owner, repo
-        return (self._config.github.owner, self._config.github.repo)
+        raise ValueError(
+            'No GitHub repository configured — set [github] repo = "owner/name" '
+            "in backbone.toml or pass repo_full_name"
+        )
 
     def _repo_key(self, repo_full_name: str | None = None) -> str:
         owner, repo = self._resolve_repo(repo_full_name)
         return f"{owner}/{repo}"
 
-    def _validate_app_config(self) -> None:
-        missing: list[str] = []
-        if not self._config.github_app_id:
-            missing.append("GITHUB_APP_ID")
-        if not self._config.github_app_private_key_path:
-            missing.append("GITHUB_APP_PRIVATE_KEY_PATH")
-        if missing:
-            missing_str = ", ".join(missing)
-            raise RuntimeError(
-                f"GitHub App auth requires {missing_str}; PAT auth is no longer supported"
-            )
+    # --- GitHub App auth ---
 
+    def _validate_app_config(self) -> None:
         key_path = Path(self._config.github_app_private_key_path).expanduser()
         if not key_path.is_file():
             raise RuntimeError(f"GitHub App private key not found: {key_path}")
@@ -144,6 +160,8 @@ class GitHubClient:
     def _load_private_key(self) -> Any:
         if self._private_key is not None:
             return self._private_key
+
+        from cryptography.hazmat.primitives import serialization
 
         key_path = Path(self._config.github_app_private_key_path).expanduser()
         try:
@@ -156,6 +174,9 @@ class GitHubClient:
         return self._private_key
 
     def _build_app_jwt(self) -> str:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+
         private_key = self._load_private_key()
         header = {"alg": "RS256", "typ": "JWT"}
         now = int(time.time())
@@ -212,12 +233,16 @@ class GitHubClient:
         if not isinstance(expires_at_raw, str) or not expires_at_raw:
             raise RuntimeError("GitHub App installation token response missing expires_at")
 
-        expires_at = _parse_github_timestamp(expires_at_raw)
         self._installation_tokens[repo_key] = _CachedInstallationToken(
             token=token,
-            expires_at=expires_at,
+            expires_at=_parse_github_timestamp(expires_at_raw),
         )
         return token
+
+    async def _auth_header(self, repo_full_name: str | None) -> str:
+        if self._config.github_token:
+            return f"Bearer {self._config.github_token}"
+        return f"Bearer {await self._get_installation_token(repo_full_name)}"
 
     async def _request(
         self,
@@ -229,8 +254,7 @@ class GitHubClient:
     ) -> httpx.Response:
         assert self._client is not None
         headers = dict(kwargs.pop("headers", {}))
-        token = await self._get_installation_token(repo_full_name)
-        headers["Authorization"] = f"Bearer {token}"
+        headers["Authorization"] = await self._auth_header(repo_full_name)
         resp = await self._client.request(method, url, headers=headers, **kwargs)
         resp.raise_for_status()
         return resp
@@ -253,10 +277,9 @@ class GitHubClient:
     ) -> list[IssueData]:
         """List open issues with a specific label, sorted for delivery."""
         owner, repo = self._resolve_repo(repo_full_name)
-        url = f"/repos/{owner}/{repo}/issues"
         resp = await self._request(
             "GET",
-            url,
+            f"/repos/{owner}/{repo}/issues",
             repo_full_name=repo_full_name,
             params={
                 "state": "open",
@@ -267,22 +290,18 @@ class GitHubClient:
             },
         )
 
-        issues: list[IssueData] = []
-        for item in resp.json():
-            if "pull_request" in item:
-                continue
-            issues.append(self._build_issue(item, repo_full_name=repo_full_name))
-
+        issues = [
+            self._build_issue(item, repo_full_name=repo_full_name)
+            for item in resp.json()
+            if "pull_request" not in item
+        ]
         issues.sort(key=lambda i: _issue_sort_key(i, self._config))
         return issues
 
     async def get_sub_issues(
         self, issue_number: int, repo_full_name: str | None = None
     ) -> list[IssueData]:
-        """Fetch sub-issues of a parent.
-
-        Returns empty list on error (404, timeout, rate limit).
-        """
+        """Fetch sub-issues of a parent. Returns empty list on error."""
         owner, repo = self._resolve_repo(repo_full_name)
         url = f"/repos/{owner}/{repo}/issues/{issue_number}/sub_issues"
         try:
@@ -306,8 +325,9 @@ class GitHubClient:
     async def get_issue(self, issue_number: int, repo_full_name: str | None = None) -> IssueData:
         """Get a single issue by number."""
         owner, repo = self._resolve_repo(repo_full_name)
-        url = f"/repos/{owner}/{repo}/issues/{issue_number}"
-        resp = await self._request("GET", url, repo_full_name=repo_full_name)
+        resp = await self._request(
+            "GET", f"/repos/{owner}/{repo}/issues/{issue_number}", repo_full_name=repo_full_name
+        )
         return self._build_issue(resp.json(), repo_full_name=repo_full_name)
 
     async def list_issues(
@@ -319,7 +339,6 @@ class GitHubClient:
     ) -> list[IssueData]:
         """List issues with flexible filtering by state and labels."""
         owner, repo = self._resolve_repo(repo_full_name)
-        url = f"/repos/{owner}/{repo}/issues"
         params: dict[str, str | int] = {
             "state": state,
             "sort": "created",
@@ -329,14 +348,15 @@ class GitHubClient:
         if labels:
             params["labels"] = ",".join(labels)
 
-        resp = await self._request("GET", url, repo_full_name=repo_full_name, params=params)
+        resp = await self._request(
+            "GET", f"/repos/{owner}/{repo}/issues", repo_full_name=repo_full_name, params=params
+        )
 
-        issues: list[IssueData] = []
-        for item in resp.json():
-            if "pull_request" in item:
-                continue
-            issues.append(self._build_issue(item, repo_full_name=repo_full_name))
-
+        issues = [
+            self._build_issue(item, repo_full_name=repo_full_name)
+            for item in resp.json()
+            if "pull_request" not in item
+        ]
         issues.sort(key=lambda issue: _issue_sort_key(issue, self._config))
         return issues
 
@@ -345,10 +365,9 @@ class GitHubClient:
     ) -> list[CommentData]:
         """List comments on an issue."""
         owner, repo = self._resolve_repo(repo_full_name)
-        url = f"/repos/{owner}/{repo}/issues/{issue_number}/comments"
         resp = await self._request(
             "GET",
-            url,
+            f"/repos/{owner}/{repo}/issues/{issue_number}/comments",
             repo_full_name=repo_full_name,
             params={"per_page": 100},
         )
@@ -363,36 +382,31 @@ class GitHubClient:
         ]
 
     async def create_issue(
-        self, title: str, body: str, labels: list[str] | None = None
+        self,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        repo_full_name: str | None = None,
     ) -> IssueData:
-        """Create a new issue in the configured orchestration repo."""
-        repo_full_name = self._default_repo_full_name()
+        """Create a new issue (defaults to the configured coordination repo)."""
         owner, repo = self._resolve_repo(repo_full_name)
-        url = f"/repos/{owner}/{repo}/issues"
         payload: dict[str, Any] = {"title": title, "body": body}
         if labels:
             payload["labels"] = labels
 
-        resp = await self._request("POST", url, repo_full_name=repo_full_name, json=payload)
-        item = resp.json()
-        parsed = ParsedLabels.from_github_labels(item.get("labels", []))
-        return IssueData(
-            number=item["number"],
-            title=item.get("title", ""),
-            state=item.get("state", "open"),
-            labels=parsed,
-            html_url=item.get("html_url", ""),
-            repo_full_name=repo_full_name,
+        resp = await self._request(
+            "POST", f"/repos/{owner}/{repo}/issues", repo_full_name=repo_full_name, json=payload
         )
+        return self._build_issue(resp.json(), repo_full_name=f"{owner}/{repo}")
 
-    async def add_comment(self, issue_number: int, body: str) -> CommentData:
+    async def add_comment(
+        self, issue_number: int, body: str, repo_full_name: str | None = None
+    ) -> CommentData:
         """Add a comment to an issue."""
-        repo_full_name = self._default_repo_full_name()
         owner, repo = self._resolve_repo(repo_full_name)
-        url = f"/repos/{owner}/{repo}/issues/{issue_number}/comments"
         resp = await self._request(
             "POST",
-            url,
+            f"/repos/{owner}/{repo}/issues/{issue_number}/comments",
             repo_full_name=repo_full_name,
             json={"body": body},
         )
@@ -403,24 +417,15 @@ class GitHubClient:
             user_login=item.get("user", {}).get("login", "unknown"),
         )
 
-    async def update_issue(self, issue_number: int, state: str) -> IssueData:
+    async def update_issue(
+        self, issue_number: int, state: str, repo_full_name: str | None = None
+    ) -> IssueData:
         """Update an issue's state (open/closed)."""
-        repo_full_name = self._default_repo_full_name()
         owner, repo = self._resolve_repo(repo_full_name)
-        url = f"/repos/{owner}/{repo}/issues/{issue_number}"
         resp = await self._request(
             "PATCH",
-            url,
+            f"/repos/{owner}/{repo}/issues/{issue_number}",
             repo_full_name=repo_full_name,
             json={"state": state},
         )
-        item = resp.json()
-        parsed = ParsedLabels.from_github_labels(item.get("labels", []))
-        return IssueData(
-            number=item["number"],
-            title=item.get("title", ""),
-            state=item.get("state", "open"),
-            labels=parsed,
-            html_url=item.get("html_url", ""),
-            repo_full_name=repo_full_name,
-        )
+        return self._build_issue(resp.json(), repo_full_name=f"{owner}/{repo}")

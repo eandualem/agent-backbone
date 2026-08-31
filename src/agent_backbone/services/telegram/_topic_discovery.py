@@ -19,6 +19,9 @@ from agent_backbone.config import BackboneConfig
 
 log = logging.getLogger(__name__)
 
+CATCH_ALL_TOPIC = "agents"
+"""A topic named like this routes ``agent: message`` lines to any agent."""
+
 
 @dataclass
 class TopicDiscovery:
@@ -66,23 +69,17 @@ def resolve_topic_name(name: str, config: BackboneConfig) -> str | None:
     """Normalize a topic name and match against known sessions/repos.
 
     Normalization: lowercase, spaces and underscores -> hyphens.
-    Match order: (1) entity sessions, (2) coding repos, (3) literal "coding-agents".
-    Returns session name or None if no match.
+    Matches configured agent names, or the catch-all topic name.
+    Returns the agent name or None if no match.
     """
     normalized = re.sub(r"[\s_]+", "-", name.strip().lower())
 
-    # Match named entity sessions
-    for entity, session in config.registry.sessions_map.items():
-        if normalized == entity or normalized == session:
-            return session
+    for agent_name in config.agents.names:
+        if normalized == agent_name.lower():
+            return agent_name
 
-    # Match coding repos
-    if normalized in config.registry.repo_names:
-        return normalized
-
-    # Literal catch-all
-    if normalized == "coding-agents":
-        return "coding-agents"
+    if normalized in (CATCH_ALL_TOPIC, "coding-agents"):
+        return CATCH_ALL_TOPIC
 
     return None
 
