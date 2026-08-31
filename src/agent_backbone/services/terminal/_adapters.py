@@ -430,6 +430,10 @@ class ClaudeCodeAdapter(TerminalAdapter):
     prompt_markers = (
         "do you want to proceed?",
         "do you want to make this edit",
+        "do you trust the files in this folder",
+        "quick safety check",
+        "yes, i trust this folder",
+        "yes, proceed",
         "yes, allow",
         "yes, and don't ask again",
         "would you like to proceed",
@@ -512,8 +516,11 @@ class AiderAdapter(TerminalAdapter):
 
 
 class ShellAdapter(TerminalAdapter):
+    """Plain shells: classic ``$``/``%`` prompts and modern ``❯``/``›`` themes."""
+
     runtime = TerminalRuntime.SHELL
-    prompt_suffixes = ("$", "%", ">", "#")
+    prompt_prefixes = ("\u276f", "\u203a", "$ ", "% ", "> ", "# ")
+    prompt_suffixes = ("$", "%", ">", "#", "\u276f", "\u203a")
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 

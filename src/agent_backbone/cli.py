@@ -466,6 +466,7 @@ def _print_start_result(data: dict) -> None:
     repo = f" repo {data['repo']}" if data.get("repo") else " (no GitHub remote)"
     label = {
         "ready": "ready",
+        "waiting_for_human": "started, waiting for you",
         "timeout": "started but not at its prompt yet",
         "not_waited": "started",
     }
@@ -473,8 +474,8 @@ def _print_start_result(data: dict) -> None:
     print(f"  dir: {data.get('working_directory')}")
     for line in data.get("evidence", []):
         print(f"  - {line}")
-    if ready == "timeout":
-        print(f"  attach to check: tmux attach -t {name}")
+    if ready in ("timeout", "waiting_for_human"):
+        print(f"  answer it there: tmux attach -t {name}")
 
 
 async def _agent_start(args: argparse.Namespace) -> int:

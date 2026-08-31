@@ -17,6 +17,7 @@ from agent_backbone.services.terminal import (
     capture_pane,
     get_terminal_adapter,
     list_sessions,
+    sanitize_pane_content,
     session_exists,
     start_session,
     stop_session,
@@ -162,8 +163,9 @@ async def wait_until_ready(
 ) -> tuple[str, list[str]]:
     """Wait until the agent is at its prompt.
 
-    Returns ``(outcome, evidence)`` with outcome ``ready``, ``exited`` or
-    ``timeout``. Readiness is a fresh hook-written ``idle`` state, or — for
+    Returns ``(outcome, evidence)`` with outcome ``ready``, ``waiting_for_human``
+    (the runtime is asking something, e.g. a folder-trust prompt), ``exited``
+    or ``timeout``. Readiness is a fresh hook-written ``idle`` state, or — for
     runtimes without hooks — a visible empty prompt in the terminal.
     """
     from agent_backbone.services.agents._file_reader import read_state_file
@@ -182,13 +184,14 @@ async def wait_until_ready(
             if snapshot.state == AgentState.IDLE:
                 return "ready", [f"hook reported idle {time.time() - snapshot.timestamp:.0f}s ago"]
             if snapshot.state == AgentState.WAITING_FOR_HUMAN:
-                return "ready", [f"hook reported waiting_for_human ({snapshot.reason})"]
+                return "waiting_for_human", [f"hook reported waiting_for_human ({snapshot.reason})"]
 
         pane = await capture_pane(name, lines=60)
         if pane:
             last_pane = pane
             if adapter.detect_waiting_for_human(pane):
-                return "ready", ["terminal shows a question for the human (e.g. trust prompt)"]
+                tail = [ln for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-6:]
+                return "waiting_for_human", ["terminal shows a question for the human:", *tail]
             if adapter.detect_idle(pane):
                 return "ready", ["terminal shows an empty prompt"]
 

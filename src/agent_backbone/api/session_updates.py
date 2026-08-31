@@ -61,11 +61,7 @@ async def build_enriched_agent(
         if activity_ts:
             last_activity = float(activity_ts)
 
-    state_value = snapshot.state.value
-    if not online:
-        state_value = "offline"
-    elif state_value == "unknown":
-        state_value = "idle"
+    state_value = snapshot.state.value if online else "offline"
 
     runtime: str | None = spec.runtime if spec else None
     if online:

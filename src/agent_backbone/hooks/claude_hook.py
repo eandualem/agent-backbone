@@ -215,7 +215,7 @@ def read_current(state_dir: Path, agent: str) -> dict | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--state-dir", required=True)
+    parser.add_argument("--state-dir", default=None)
     parser.add_argument("--agent", default=None)
     parser.add_argument("--tag", default=None, help="marker used by the installer; ignored")
     args = parser.parse_args(argv)
@@ -231,7 +231,12 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(payload, dict):
         return 0
 
-    state_dir = Path(args.state_dir).expanduser()
+    # The backbone exports BACKBONE_STATE_DIR into every session it starts;
+    # that wins over the path baked into the installed hook command.
+    raw_state_dir = os.environ.get("BACKBONE_STATE_DIR", "").strip() or args.state_dir
+    if not raw_state_dir:
+        return 0
+    state_dir = Path(raw_state_dir).expanduser()
     try:
         record, action = derive(payload, read_current(state_dir, agent))
         if record is not None:

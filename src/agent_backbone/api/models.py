@@ -86,7 +86,7 @@ class AgentStartResponse(BaseModel):
     repo: str = ""
     already_existed: bool = False
     ready: str = "unknown"
-    """``ready`` | ``timeout`` | ``exited`` | ``not_waited``."""
+    """``ready`` | ``waiting_for_human`` | ``timeout`` | ``exited`` | ``not_waited``."""
     evidence: list[str] = Field(default_factory=list)
 
 
