@@ -93,7 +93,10 @@ async def _write_message_buffer(session_name: str, message: str) -> bool:
         log.error("tmux load-buffer failed for '%s': %s", session_name, stderr.decode())
         return False
 
-    rc, _, stderr = await _run_tmux("paste-buffer", "-t", session_name, "-d")
+    # -p uses bracketed paste when the pane's program enabled it (Claude Code,
+    # zsh, …): a multi-line message then arrives as ONE paste instead of each
+    # newline acting as Enter and shredding the message line by line.
+    rc, _, stderr = await _run_tmux("paste-buffer", "-p", "-t", session_name, "-d")
     if rc != 0:
         log.error("tmux paste-buffer failed for '%s': %s", session_name, stderr.decode())
         return False

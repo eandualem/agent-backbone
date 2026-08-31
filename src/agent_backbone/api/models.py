@@ -289,6 +289,8 @@ class MessageResponse(BaseModel):
     ok: bool
     session: str
     outcome: str
+    queued: bool = False
+    """Whether the message was queued for delivery when the agent is ready."""
 
 
 class TelegramReplyRequest(BaseModel):

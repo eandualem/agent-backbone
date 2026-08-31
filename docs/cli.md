@@ -129,8 +129,13 @@ app: already running
 Delivers `[via:backbone from:NAME] MESSAGE` through the running backbone
 (`POST /api/messages`) and prints the outcome JSON. `--priority` lets the
 message through while a human is typing or the agent is settling; it never
-interrupts a busy agent. Exit code 0 if delivered, 2 if queued, 1 on API
-errors.
+interrupts a busy agent — that is an invariant, not a gap. A message that
+cannot be delivered now (`agent_working`, `offline`, …) is **queued
+durably** — the response carries `"queued": true` — and the monitor
+delivers it when the agent is ready, oldest first; queued messages expire
+after `timing.queue_expiry_minutes` (default 30). Exit code 0 if
+delivered, 2 if queued, 1 on API errors. Multi-line messages are pasted
+with bracketed paste and arrive intact as a single message.
 
 ## `backbone hooks install|uninstall claude [--dir PROJECT]`
 

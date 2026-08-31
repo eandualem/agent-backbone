@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 
 from agent_backbone.api.deps import get_config, get_db
 from agent_backbone.api.models import MessageRequest, MessageResponse
-from agent_backbone.services.routing._delivery import safe_deliver
+from agent_backbone.services.routing._delivery import outcome_queues, safe_deliver
 
 log = logging.getLogger(__name__)
 
@@ -39,4 +39,9 @@ async def send_message(
     )
 
     log.info("Message from %s → %s: %s", body.from_entity, body.target_session, outcome)
-    return MessageResponse(ok=outcome == "delivered", session=body.target_session, outcome=outcome)
+    return MessageResponse(
+        ok=outcome == "delivered",
+        session=body.target_session,
+        outcome=outcome,
+        queued=outcome_queues(outcome, "direct_message"),
+    )

@@ -43,6 +43,22 @@ _BLOCKING: dict[SessionIntelligence, tuple[str, bool]] = {
 }
 
 
+def outcome_queues(outcome: str, kind: str) -> bool:
+    """Whether ``safe_deliver`` queued the message for this blocked outcome.
+
+    Mirrors the queueing decision in ``safe_deliver``: non-issue kinds are
+    queued durably on every blocking condition and on paste failure; issue
+    deliveries rely on the retry job except when the agent is offline.
+    """
+    if outcome == "delivery_failed":
+        return True
+    if outcome not in {o for o, _ in _BLOCKING.values()}:
+        return False
+    if kind == "issue":
+        return outcome == "offline"
+    return True
+
+
 def _comment_matches_active_issue(
     repo: str, issue_number: int | None, current_repo: str | None, current_issue: int | None
 ) -> bool:

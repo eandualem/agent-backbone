@@ -159,6 +159,26 @@ class TestDeliveryRetryQueueDrain:
         assert row["status"] == "pending"
         assert row["leased_at"] is None
 
+    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    async def test_drain_releases_every_leased_row_on_block(self, mock_deliver, db, config):
+        """A blocked head must not strand the rest of the batch in_progress."""
+        for i in range(3):
+            await db.enqueue_message(
+                session_name="ike",
+                message=f"payload {i}",
+                delivery_kind="direct_message",
+                flow_name="api-messages",
+            )
+        mock_deliver.return_value = "agent_working"
+
+        await drain_message_queue(config, db, AsyncMock(), active_sessions={"ike"})
+
+        mock_deliver.assert_awaited_once()  # stops at the head, order preserved
+        for message_id in (1, 2, 3):
+            row = await db.get_message_by_id(message_id)
+            assert row["status"] == "pending"
+            assert row["leased_at"] is None
+
     async def test_drain_calls_expire_stale_leases(self, db, config):
         db.expire_stale_leases = AsyncMock(return_value=0)
         db.expire_stale_pending = AsyncMock(return_value=0)
@@ -306,3 +326,21 @@ class TestDeliveryDedupPrefixedOutcomes:
 
         assert outcome == "delivered"
         mock_send.assert_called_once()
+
+
+class TestOutcomeQueues:
+    def test_direct_message_queues_on_every_block(self):
+        from agent_backbone.services.routing._delivery import outcome_queues
+
+        blocked = ("offline", "waiting_for_human", "agent_working", "human_typing", "settling")
+        for outcome in blocked:
+            assert outcome_queues(outcome, "direct_message") is True
+        assert outcome_queues("delivery_failed", "direct_message") is True
+        assert outcome_queues("delivered", "direct_message") is False
+
+    def test_issue_kind_queues_only_offline(self):
+        from agent_backbone.services.routing._delivery import outcome_queues
+
+        assert outcome_queues("offline", "issue") is True
+        assert outcome_queues("agent_working", "issue") is False
+        assert outcome_queues("already_delivered", "issue") is False

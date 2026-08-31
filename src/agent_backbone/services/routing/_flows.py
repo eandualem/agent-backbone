@@ -78,7 +78,12 @@ async def drain_message_queue(
                 key = "queue_delivered" if outcome == "delivered" else "queue_cleared"
                 summary[key] = summary.get(key, 0) + 1
             else:
-                await db.release_lease(record["id"])
+                # Still blocked: release every remaining lease of this batch so
+                # the next drain retries in a minute, not after the 5-minute
+                # stale-lease sweep. Stop here to preserve oldest-first order.
+                index = queued.index(record)
+                for leased in queued[index:]:
+                    await db.release_lease(leased["id"])
                 break
     return summary
 

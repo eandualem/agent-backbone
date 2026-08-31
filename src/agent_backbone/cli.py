@@ -803,6 +803,8 @@ async def _tell(args: argparse.Namespace) -> int:
         print(f"error {status}: {data}")
         return 1
     print(json.dumps(data))
+    if not data.get("ok") and data.get("queued"):
+        print(f"queued — delivered when the agent is ready (blocked: {data.get('outcome')})")
     return 0 if data.get("ok") else 2
 
 
