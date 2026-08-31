@@ -147,7 +147,7 @@ make dev         # backbone up --reload
 
 Optional PostgreSQL: `make db-up` starts one via Docker; set `[database] url` or `BACKBONE_DATABASE_URL`.
 
-Architecture notes and the decision record for the v2 rewrite live in [`docs/design/`](docs/design/).
+Full documentation lives in [`docs/`](docs/README.md): concepts, getting started, how every flow works, configuration, CLI, API, GitHub, Telegram, security, and the roadmap. The v2 decision record is in [`docs/design/`](docs/design/).
 
 ## License
 
