@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 
 from agent_backbone.config import BackboneConfig
@@ -30,15 +29,8 @@ class TelegramService:
 
 
 def _managed_sessions(config: BackboneConfig, active_sessions: set[str]) -> list[str]:
-    """Active non-service sessions managed by backbone."""
-    repo_names_lower = {name.lower() for name in config.registry.repo_names}
-    known_sessions = set(config.registry.entity_by_session)
-    return sorted(
-        session
-        for session in active_sessions
-        if session not in config.entities.service_sessions
-        and (session in known_sessions or session.lower() in repo_names_lower)
-    )
+    """Active sessions that belong to configured agents."""
+    return sorted(session for session in active_sessions if session in config.agents)
 
 
 def _clear_stale_sessions(managed_sessions: set[str]) -> None:
@@ -74,11 +66,11 @@ async def handle_copy_mode_recovery(
     from agent_backbone.services.agents._inference import get_agent_state
 
     notification_chat_id = config.telegram.notification_chat_id
-    telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
+    telegram_token = config.telegram_token
 
     for session_name in sorted(managed_sessions):
         snapshot = await get_agent_state(
-            config.agent_state.state_path,
+            config.state_dir,
             session_name,
             config.agent_state.stale_threshold_seconds,
         )
@@ -108,11 +100,7 @@ async def handle_copy_mode_recovery(
         if not adapter.detect_copy_mode(tmux_vars, snapshot.state):
             _last_non_copy_state[session_name] = snapshot.state.value
             _copy_mode_alerted_at.pop(session_name, None)
-            log.info(
-                "Copy mode cleared for %s via %s adapter",
-                session_name,
-                adapter.runtime.value,
-            )
+            log.info("Copy mode cleared for %s via %s adapter", session_name, adapter.runtime.value)
             continue
 
         last_alert = _copy_mode_alerted_at.get(session_name)

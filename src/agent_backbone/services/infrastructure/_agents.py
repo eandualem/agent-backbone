@@ -1,61 +1,133 @@
-"""Agent group operations — start/stop agents, orchestrators, org groups."""
+"""Agent session operations — start/stop configured agents in tmux."""
 
 from __future__ import annotations
 
 import logging
+import shutil
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.terminal import (
     RUNTIME_ENV_KEY,
     list_sessions,
-    resolve_agent_dir,
     session_exists,
     start_session,
     stop_session,
 )
 
 if TYPE_CHECKING:
-    from agent_backbone.config import BackboneConfig
+    from agent_backbone.config import AgentSpec, BackboneConfig
 
 log = logging.getLogger(__name__)
 
+# Fallback directories for binaries not on PATH (common for npm/bun global installs)
+_FALLBACK_DIRS = (
+    Path.home() / ".bun" / "bin",
+    Path.home() / ".local" / "bin",
+    Path.home() / ".npm-global" / "bin",
+)
 
-async def start_agent(
-    name: str,
-    config: BackboneConfig,
-    cli: str = "claude",
-    model: str | None = None,
-) -> bool:
-    """Start a single agent session.
+RUNTIME_COMMANDS: dict[str, str | None] = {
+    "claude": "claude",
+    "gemini": "gemini",
+    "codex": "codex",
+    "cursor": "cursor",
+    "opencode": "opencode",
+    "aider": "aider",
+    "shell": None,
+}
 
-    Resolves the working directory from the registry. Supports cli and model overrides.
+RUNTIME_DISPLAY_NAMES: dict[str, str] = {
+    "claude": "Claude Code",
+    "gemini": "Gemini CLI",
+    "codex": "Codex",
+    "cursor": "Cursor Agent",
+    "opencode": "OpenCode",
+    "aider": "Aider",
+    "shell": "Plain shell",
+}
+
+
+def resolve_command(name: str | None) -> str | None:
+    """Resolve a command name to an absolute path (PATH first, then fallbacks)."""
+    if name is None:
+        return None
+    path = shutil.which(name)
+    if path:
+        return path
+    for directory in _FALLBACK_DIRS:
+        candidate = directory / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def runtime_available(runtime: str) -> bool:
+    """Whether the runtime's binary is installed (shell is always available)."""
+    if runtime not in RUNTIME_COMMANDS:
+        return False
+    command = RUNTIME_COMMANDS[runtime]
+    return command is None or resolve_command(command) is not None
+
+
+def build_command(
+    runtime: str, *, model: str | None = None, resume: bool = False
+) -> list[str] | None:
+    """Build the launch command for a runtime, or None for a plain shell.
+
+    Raises ValueError for unknown runtimes and RuntimeError when the binary is missing.
     """
-    if await session_exists(name):
-        log.info("Agent '%s' already running", name)
-        return True
-
-    working_dir = resolve_agent_dir(name, config.registry)
-    if not working_dir:
-        log.error("Unknown agent '%s' — not in registry", name)
-        return False
-    if not Path(working_dir).is_dir():
-        log.error("Directory '%s' does not exist for agent '%s'", working_dir, name)
-        return False
-
-    command = [cli]
+    if runtime not in RUNTIME_COMMANDS:
+        raise ValueError(f"Unknown runtime: {runtime}")
+    binary = RUNTIME_COMMANDS[runtime]
+    if binary is None:
+        return None
+    resolved = resolve_command(binary)
+    if resolved is None:
+        raise RuntimeError(f"Runtime '{runtime}' binary not found: {binary}")
+    command = [resolved]
     if model:
         command.extend(["--model", model])
+    if resume:
+        command.append("--resume")
+    return command
 
+
+async def start_agent(
+    spec: AgentSpec,
+    *,
+    runtime: str | None = None,
+    model: str | None = None,
+    resume: bool = False,
+) -> bool:
+    """Start a configured agent in its tmux session (idempotent)."""
+    if await session_exists(spec.name):
+        log.info("Agent '%s' already running", spec.name)
+        return True
+
+    if not spec.path.is_dir():
+        log.error("Directory '%s' does not exist for agent '%s'", spec.path, spec.name)
+        return False
+
+    effective_runtime = runtime or spec.runtime
+    effective_model = model if model is not None else spec.model
+    try:
+        command = build_command(effective_runtime, model=effective_model, resume=resume)
+    except (ValueError, RuntimeError) as exc:
+        log.error("Cannot start agent '%s': %s", spec.name, exc)
+        return False
+
+    environment = {RUNTIME_ENV_KEY: effective_runtime, **spec.env}
     ok = await start_session(
-        name,
-        working_dir=working_dir,
+        spec.name,
+        working_dir=str(spec.path),
         command=command,
-        environment={RUNTIME_ENV_KEY: cli},
+        environment=environment,
     )
     if ok:
-        extra = f", model: {model}" if model else ""
-        log.info("Agent '%s' started (cli: %s%s)", name, cli, extra)
+        extra = f", model: {effective_model}" if effective_model else ""
+        log.info("Agent '%s' started (runtime: %s%s)", spec.name, effective_runtime, extra)
     return ok
 
 
@@ -67,130 +139,42 @@ async def stop_agent(name: str) -> bool:
     return ok
 
 
-async def start_group(
-    label: str,
-    names: list[str],
-    config: BackboneConfig,
-    cli: str = "claude",
-    model: str | None = None,
-) -> int:
-    """Start a group of agents. Returns count of newly started agents."""
+async def start_group(specs: Iterable[AgentSpec], **overrides) -> int:
+    """Start several agents. Returns the count of newly started sessions."""
     started = 0
-    log.info("=== Starting %s ===", label)
-    for name in names:
-        if await session_exists(name):
-            log.info("  Already running: %s", name)
+    for spec in specs:
+        if await session_exists(spec.name):
             continue
-
-        working_dir = resolve_agent_dir(name, config.registry)
-        if not working_dir or not Path(working_dir).is_dir():
-            log.warning("  Skipped (dir not found): %s", name)
-            continue
-
-        command = [cli]
-        if model:
-            command.extend(["--model", model])
-
-        ok = await start_session(
-            name,
-            working_dir=working_dir,
-            command=command,
-            environment={RUNTIME_ENV_KEY: cli},
-        )
-        if ok:
-            extra = f", model: {model}" if model else ""
-            log.info("  Started: %s (cli: %s%s)", name, cli, extra)
+        if await start_agent(spec, **overrides):
             started += 1
-
-    log.info("Started %d agent(s)", started)
     return started
 
 
+async def start_all(config: BackboneConfig, **overrides) -> int:
+    """Start every configured agent."""
+    return await start_group(list(config.agents), **overrides)
+
+
 async def stop_all_agents(config: BackboneConfig) -> int:
-    """Stop all agent sessions (excluding service sessions)."""
+    """Stop every running session that belongs to a configured agent."""
     sessions = await list_sessions()
-    service_sessions = config.entities.service_sessions
     stopped = 0
-    for s in sessions:
-        if s in service_sessions:
+    for session in sessions:
+        if session not in config.agents:
             continue
-        ok = await stop_session(s)
-        if ok:
-            log.info("  Stopped: %s", s)
+        if await stop_session(session):
             stopped += 1
-    if stopped == 0:
-        log.info("No agent sessions running")
-    else:
-        log.info("Stopped %d agent session(s)", stopped)
+    log.info("Stopped %d agent session(s)", stopped)
     return stopped
 
 
-async def start_orchestrators(
-    config: BackboneConfig,
-    cli: str = "claude",
-    model: str | None = None,
-) -> int:
-    """Start all entities in the 'orchestrators' group."""
-    names = [
-        name for name, entry in config.registry.entities.items() if "orchestrators" in entry.groups
-    ]
-    if not names:
-        log.warning("No orchestrators found in registry")
-        return 0
-    return await start_group("Orchestrators", names, config, cli=cli, model=model)
-
-
-async def start_org(
-    org: str,
-    config: BackboneConfig,
-    cli: str = "claude",
-    model: str | None = None,
-) -> int:
-    """Start all coding agents for an organization."""
-    names = [r.name for r in config.registry.repos if r.org == org]
-    if not names:
-        log.warning("No repos found for org '%s'", org)
-        return 0
-    return await start_group(org, names, config, cli=cli, model=model)
-
-
-async def start_all(
-    config: BackboneConfig,
-    cli: str = "claude",
-    model: str | None = None,
-) -> int:
-    """Start all orchestrators + standalone agents + all coding agents."""
-    total = 0
-    total += await start_orchestrators(config, cli=cli, model=model)
-
-    # Standalone agents
-    standalone = [
-        name for name, entry in config.registry.entities.items() if "standalone" in entry.groups
-    ]
-    if standalone:
-        total += await start_group("Standalone Agents", standalone, config, cli=cli, model=model)
-
-    # All orgs
-    for org in sorted(config.registry.orgs):
-        total += await start_org(org, config, cli=cli, model=model)
-
-    return total
-
-
 def list_agents(config: BackboneConfig) -> str:
-    """Format a list of all known agents with their directories."""
-    lines = ["=== Named Entities ==="]
-    for name, entry in config.registry.entities.items():
-        home = str(Path(entry.home).expanduser())
-        lines.append(f"  {name:<20s} {home}")
-
-    # Group repos by org
-    orgs: dict[str, list[str]] = {}
-    for repo in config.registry.repos:
-        orgs.setdefault(repo.org, []).append(f"  {repo.name:<30s} {repo.path}")
-
-    for org in sorted(orgs):
-        lines.append(f"\n=== Coding Agents ({org}) ===")
-        lines.extend(orgs[org])
-
+    """Format a list of all configured agents with their directories."""
+    if not config.agents:
+        return "No agents configured. Add [agents.<name>] tables to backbone.toml."
+    width = max(len(name) for name in config.agents.names)
+    lines = []
+    for spec in config.agents:
+        model = f" ({spec.model})" if spec.model else ""
+        lines.append(f"  {spec.name:<{width}s}  {spec.runtime}{model}  {spec.path}")
     return "\n".join(lines)

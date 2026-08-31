@@ -9,7 +9,21 @@ log = logging.getLogger(__name__)
 
 # Subprocess concurrency limiter — prevents storms from any caller
 _MAX_CONCURRENT = 5
-_semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+_semaphores: dict[int, asyncio.Semaphore] = {}
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    """Per-event-loop concurrency limiter for tmux subprocess calls.
+
+    asyncio primitives bind to the loop that first uses them, so a module-level
+    semaphore breaks when the process runs more than one loop (tests, reloads).
+    """
+    loop_id = id(asyncio.get_running_loop())
+    sem = _semaphores.get(loop_id)
+    if sem is None:
+        _semaphores.clear()
+        sem = _semaphores[loop_id] = asyncio.Semaphore(_MAX_CONCURRENT)
+    return sem
 
 
 async def _run_tmux(
@@ -23,7 +37,7 @@ async def _run_tmux(
     when capture_stdout=True; otherwise it's empty bytes.
     When stdin_data is provided, it is piped to the process's stdin.
     """
-    async with _semaphore:
+    async with _get_semaphore():
         kwargs: dict = {
             "stdout": asyncio.subprocess.PIPE if capture_stdout else asyncio.subprocess.DEVNULL,
             "stderr": asyncio.subprocess.PIPE,

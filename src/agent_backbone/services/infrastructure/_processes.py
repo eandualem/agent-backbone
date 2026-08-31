@@ -10,7 +10,14 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-PID_DIR = Path.home() / ".claude" / "state" / "pids"
+_DEFAULT_DATA_DIR = os.environ.get("BACKBONE_DATA_DIR", "~/.local/share/agent-backbone")
+PID_DIR = Path(_DEFAULT_DATA_DIR).expanduser() / "pids"
+
+
+def set_pid_dir(path: Path) -> None:
+    """Point PID files at a directory (called once from config at startup)."""
+    global PID_DIR
+    PID_DIR = Path(path)
 
 
 def _ensure_pid_dir() -> None:

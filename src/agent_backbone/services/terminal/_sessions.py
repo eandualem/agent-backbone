@@ -6,11 +6,6 @@ import asyncio
 import logging
 import os
 import signal
-from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from agent_backbone.services.registry import EntityRegistry
 
 from agent_backbone.services.terminal._core import session_exists
 
@@ -43,33 +38,10 @@ async def query_environment_var(session_name: str, key: str) -> str | None:
     return env_value or None
 
 
-def resolve_agent_dir(session_name: str, registry: EntityRegistry | None = None) -> str:
-    """Resolve the working directory for an agent session.
-
-    Named entities resolve via registry home dirs. Coding repos resolve
-    via registry repo paths. Returns empty string if unresolvable.
-    """
-    if registry is None:
-        return ""
-
-    # Named entities: look up home dir by session name
-    home = registry.home_by_session.get(session_name)
-    if home:
-        return home
-
-    # Coding repos: look up path by repo name
-    repo_path = registry.repo_path_by_name.get(session_name)
-    if repo_path:
-        return repo_path
-
-    return ""
-
-
 async def start_session(
     session_name: str,
     working_dir: str | None = None,
     command: list[str] | None = None,
-    apply_theme: bool = True,
     environment: dict[str, str] | None = None,
 ) -> bool:
     """Start a new detached tmux session.
@@ -78,7 +50,6 @@ async def start_session(
         session_name: Name for the tmux session.
         working_dir: Starting directory for the session.
         command: Command args to run in the session (e.g. ["claude", "--resume"]).
-        apply_theme: Whether to apply the tmux theme script after creation.
         environment: Optional dict of environment variables to set in the session.
 
     Returns True if the session was created, False if it already exists or failed.
@@ -107,21 +78,6 @@ async def start_session(
         log.error("Failed to start session '%s': %s", session_name, stderr.decode())
         return False
     log.info("Started tmux session '%s'", session_name)
-
-    # Apply theme (fire-and-forget, non-critical)
-    if apply_theme:
-        theme_script = Path.home() / "orchestration" / "tmux" / "hooks" / "apply-theme.sh"
-        if theme_script.is_file():
-            try:
-                theme_proc = await asyncio.create_subprocess_exec(
-                    str(theme_script),
-                    session_name,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await theme_proc.wait()
-            except Exception:
-                log.debug("Theme application failed for '%s' (non-critical)", session_name)
 
     # Set environment variables
     if environment:

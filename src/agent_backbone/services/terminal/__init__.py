@@ -36,7 +36,6 @@ from agent_backbone.services.terminal._sessions import (
     list_sessions_rich,
     query_environment_var,
     query_format_vars,
-    resolve_agent_dir,
     start_session,
     stop_session,
 )
@@ -90,7 +89,6 @@ __all__ = [
     "resize_pane",
     "resize_window",
     "resolve_terminal_runtime",
-    "resolve_agent_dir",
     "sanitize_pane_content",
     "select_window",
     "send_keys",
