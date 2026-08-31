@@ -7,36 +7,125 @@ nothing to configure per repository**.
 
 ## Setup — once
 
+Two decisions, independent of each other:
+
+- **Intake** — how events reach the backbone: *poll* (zero setup, no public
+  URL, ≤60 s latency) or *webhook* (instant, needs a stable public URL).
+- **Auth** — who the backbone is on GitHub: a *token* (acts as you) or a
+  *GitHub App* (acts as its own bot).
+
+### Simplest: token + poll
+
 ```bash
-# <data_dir>/.env — either a token…
+# <data_dir>/.env
 GITHUB_TOKEN=$(gh auth token)      # or a PAT with `repo` scope
-# …or a GitHub App
-GITHUB_APP_ID=12345
-GITHUB_APP_PRIVATE_KEY_PATH=~/.config/agent-backbone/app.pem
 ```
 
 Restart the backbone. `backbone status` now shows `github intake: poll` and
 the tracked repositories: every repository an agent owns (its directory's
-`origin`) or watches.
+`origin`) or watches. Nothing is exposed and there is no URL to maintain —
+this is the right starting point when you do not have a domain.
+
+### Recommended long-term: GitHub App + webhook through a Cloudflare Tunnel
+
+One-time setup, then *every* repository on your account is covered forever —
+no per-repository webhooks, and the backbone acts as its own bot identity.
+
+**1. A stable public URL for the webhook** (any tunnel works; a named
+[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+tunnel on a domain you have on Cloudflare is free and permanent):
+
+```bash
+brew install cloudflared
+cloudflared tunnel login                          # pick your zone
+cloudflared tunnel create backbone
+cloudflared tunnel route dns backbone hooks.example.com   # creates the DNS record
+```
+
+`~/.cloudflared/config.yml` — only the webhook path is exposed; the rest of
+the API stays on 127.0.0.1:
+
+```yaml
+tunnel: <TUNNEL-ID>
+credentials-file: /Users/you/.cloudflared/<TUNNEL-ID>.json
+ingress:
+  - hostname: hooks.example.com
+    path: ^/webhooks/github$
+    service: http://127.0.0.1:7120
+  - service: http_status:404
+```
+
+Run it (`cloudflared tunnel run backbone`) and make it survive reboots with
+`sudo cloudflared service install` — then copy the config where the daemon
+looks and give the launchd job its run command (the installer misses both on
+macOS):
+
+```bash
+sudo mkdir -p /etc/cloudflared
+sudo cp ~/.cloudflared/config.yml ~/.cloudflared/<TUNNEL-ID>.json /etc/cloudflared/
+sudo sed -i '' 's|/Users/you/.cloudflared/|/etc/cloudflared/|' /etc/cloudflared/config.yml
+sudo /usr/libexec/PlistBuddy -c "Add :ProgramArguments:1 string tunnel" \
+     -c "Add :ProgramArguments:2 string run" /Library/LaunchDaemons/com.cloudflare.cloudflared.plist
+sudo launchctl kickstart -k system/com.cloudflare.cloudflared
+cloudflared tunnel info backbone     # should list the daemon's connector
+```
+
+Sanity check: `curl -i -X POST https://hooks.example.com/webhooks/github`
+returns 403 from the backbone (signature check), and `/health` returns 404
+(path-filtered).
+
+**2. The GitHub App** (Settings → Developer settings → GitHub Apps → New):
+
+- Webhook: Active, URL `https://hooks.example.com/webhooks/github` — **the
+  path matters**, a bare hostname gets a 530/404 — secret: `openssl rand -hex 32`.
+- Repository permissions: *Issues: Read and write*, *Pull requests: Read and
+  write*. Subscribe to events: *Issues*, *Issue comment*, *Pull request*.
+- Generate a private key (downloads a `.pem`); note the **App ID**.
+- **Install App** on your account → **All repositories** — this is what makes
+  new repositories work with zero further setup. The backbone ignores events
+  from repositories no agent owns or watches.
+
+**3. Point the backbone at it:**
+
+```bash
+# <data_dir>/.env  (remove GITHUB_TOKEN — a token takes precedence over the App)
+GITHUB_APP_ID=12345
+GITHUB_APP_PRIVATE_KEY_PATH=~/.local/share/agent-backbone/github-app.pem
+GITHUB_WEBHOOK_SECRET=<the same secret>
+```
+
+`chmod 600` the key, restart, and `backbone status` shows
+`github intake: webhook`. Verify with the app's *Advanced → Recent
+Deliveries* page: the ping and every event should show **200**. A 530 means
+the URL's hostname is wrong; a 403 means the secret in the app form differs
+from `.env` (both fixable under the app's Webhook settings, or via
+`PATCH /app/hook/config`).
+
+### Token + webhook
+
+Possible, but GitHub only attaches token-visible webhooks **per repository**
+(personal accounts have no account-wide webhook) — Repo → Settings →
+Webhooks → Add webhook with the same URL/secret/events for each repository.
+Use the App instead unless you have a reason not to.
 
 Labels are created on first use through the API; if you open issues from
 the GitHub UI, create `for:<agent>`, `from:<agent>`, the types (`task`,
 `bug`, `question`, `spec-gap`, `optimization`) and `blocking` once per
 repository.
 
-## Intake
+## Intake details
 
-| Intake | Needs | Latency | Notes |
-|---|---|---|---|
-| **poll** (default) | a token | ≤ `github.poll_interval_seconds` (60 s) | Lists issues and comments updated since the last stored event, per tracked repository. Zero setup |
-| **webhook** via `gh webhook forward` | token + `GITHUB_WEBHOOK_SECRET` | instant | `gh webhook forward --repo=acme/app --events=issues,issue_comment,pull_request --url=http://127.0.0.1:7120/webhooks/github --secret=$GITHUB_WEBHOOK_SECRET` — one per repository, no public URL |
-| **webhook** via a stable URL (recommended long-term) | token + secret + a named [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) tunnel (or ngrok domain) | instant | Repository → Settings → Webhooks → `https://<host>/webhooks/github`, content type JSON, events: Issues, Issue comments, Pull requests. With a GitHub App, one app-level webhook covers every installed repository |
-
-Setting `GITHUB_WEBHOOK_SECRET` switches intake to webhook (`github.intake`
-is `auto`). In webhook intake the backbone still runs **one poll at
-startup** (`github.backfill_on_start`) to catch what happened while it was
-down. Both paths produce the same event; the `events` table deduplicates
-by delivery id, so overlap is safe.
+Setting `GITHUB_WEBHOOK_SECRET` switches intake from poll to webhook
+(`github.intake` is `auto`). In webhook intake the backbone still runs
+**one poll at startup** (`github.backfill_on_start`) to catch what happened
+while it was down, and the monitor independently notices new open issues in
+agents' queues. All paths produce the same event; the `events` table
+deduplicates by delivery id and the per-issue delivery claim guarantees an
+issue reaches an agent once, so overlap is safe. For a quick real-time test
+without any tunnel, `gh webhook forward --repo=acme/app
+--events=issues,issue_comment,pull_request
+--url=http://127.0.0.1:7120/webhooks/github --secret=$GITHUB_WEBHOOK_SECRET`
+also works.
 
 ## Who hears about what
 

@@ -20,7 +20,9 @@ Honest inventory of what works, what is missing, and what is next. Updated
 - GitHub per repository: owner / `for:` / `from:` / watch routing,
   one-issue-at-a-time with acknowledgement, close-then-next, sub-issue
   unblock, poll intake with the events table as checkpoint, webhook intake
-  with startup backfill.
+  with startup backfill. Verified live end to end through a Cloudflare
+  Tunnel with a GitHub App (app-level webhook, all repositories): open →
+  deliver, comment → route, close → next, duplicates suppressed.
 - Telegram: commands, forum-topic routing, plan-waiting and dead-session
   alerts, live configuration.
 - REST API + Socket.IO snapshots + read-only terminal streaming; events
@@ -33,8 +35,8 @@ Honest inventory of what works, what is missing, and what is next. Updated
 | Gap | Why it matters | Plan |
 |---|---|---|
 | Hooks for Codex / Gemini / OpenCode / Aider | Those runtimes are read from the terminal only; permission prompts and busy markers are recognised, but the signal is weaker than a hook | Codex has a `notify` hook; Gemini CLI has hooks; OpenCode has plugins; Aider has none. Ship a hook adapter per runtime where one exists, keep the terminal path for the rest |
-| GitHub App onboarding | With a token every agent comments as you; an App gives the backbone its own identity and one webhook for all repositories | Document the App setup; the client already supports installation tokens |
 | Scheduled messages (`08:00 → tell app "daily triage"`) | Recurring nudges without a cron job | A `schedules` table → scheduler jobs that call `safe_deliver` |
+| Auto-registering per-repo webhooks for token users | Personal accounts have no account-wide webhook; today token+webhook means clicking per repository | On agent discovery, `POST /repos/{owner}/{repo}/hooks` when a token with `admin:repo_hook` is present (the App path already avoids this entirely) |
 | Swarms (N worker sessions in worktrees on one task) | "Orchestrate multiple agents on one job" | Thin layer over `agent start` with tags and a brief; no new state machine |
 | Other trackers (GitLab, Linear) | GitHub-only today | Only if someone needs it; the GitHub client is the only tracker-specific code |
 | Windows | tmux-only | Not planned |
