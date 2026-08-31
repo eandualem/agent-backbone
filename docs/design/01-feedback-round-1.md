@@ -112,3 +112,42 @@ startup (since the last stored event) and optionally on a slow interval
 "Different environments" may mean different machines. v2 is single-host.
 If multi-host is in scope: one backbone per host, issues as the cross-host
 channel, a small peer API for direct messages. Awaiting the owner's answer.
+
+---
+
+# Round 2 — clarifications (2026-08-31)
+
+*Decided by the owner:*
+- "Multiple environments" means multiple runtimes (Claude, Codex, Gemini …)
+  on **one machine**. Multi-host is out of scope.
+- GitHub and Telegram are configured **once**; nothing is configured per
+  repository. Information must flow from every repository the agents use.
+- A TOML file next to a database is two sources of truth. The **database is
+  the only source of truth**; a CLI edits it.
+- An orchestrator produces configuration, documents and data of its own and
+  therefore has its own directory/repository, while watching the repos it
+  coordinates.
+
+*Proposed, awaiting go:*
+- **No `backbone.toml`.** The data directory is the configuration:
+  `backbone.db` (agents, settings with built-in defaults, events,
+  deliveries, state), `.env` (secrets only), `state/`, `hooks/`.
+  `backbone config get|set`, `backbone agent set|watch|forget`. The only
+  external knob is `BACKBONE_DATA_DIR`.
+- **GitHub intake = auto**: one credential; a GitHub App (installed once on
+  the user/org → one webhook URL for all repos) when a URL is configured,
+  otherwise token + polling of every watched repo (zero-setup path). The
+  poller also backfills webhook gaps.
+- **Orchestrator = ordinary agent** whose home directory is its own repo
+  (owned like any other) and which *watches* other repos. Its notes and
+  data live in its home repo; the backbone tracks only the agent record,
+  state, events and deliveries.
+- Per-repository relationships: owner (home dir is the repo) → unlabelled
+  issues; `for:<agent>` → queue, in any owned or watched repo;
+  `from:<agent>` → replies; watch → informational only. No coordination
+  repository. Two owners of one repo: announce to both, first
+  acknowledgement claims.
+
+*Implementation order proposed:* (1) config collapse into the database,
+(2) discovery-based `agent start` that returns at prompt, (3) generic
+states + `agent inspect` + hooks survey, (4) GitHub intake and routing.
