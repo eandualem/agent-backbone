@@ -1,31 +1,170 @@
 """Configuration for agent-backbone.
 
-One TOML file (``backbone.toml``) describes everything structural: the agents,
-the task tracker, Telegram, tuning knobs. Secrets come from environment
-variables (or a ``.env`` file next to the config).
+The **data directory** is the configuration. Inside it:
 
-Config discovery order:
+- ``backbone.db`` — settings (with built-in defaults), the known agents,
+  events, deliveries, queue, state. The single source of truth.
+- ``.env`` — secrets only (API key, GitHub/Telegram tokens). Loaded into the
+  process environment; never stored in the database.
+- ``state/``, ``hooks/``, ``pids/`` — runtime files.
 
-1. ``BACKBONE_CONFIG`` environment variable (explicit path)
-2. ``backbone.toml`` in the current directory or any parent
-3. ``~/.config/agent-backbone/backbone.toml``
-4. Built-in defaults (no agents, no tracker, SQLite in the data dir)
+The only knobs that live outside the directory are environment variables:
+``BACKBONE_DATA_DIR`` (where the directory is) and ``BACKBONE_DATABASE_URL``
+(to use PostgreSQL instead of the SQLite file).
+
+Code reads a frozen ``BackboneConfig`` snapshot built from the database by
+``build_config``; ``backbone config set`` changes a setting and the running
+backbone picks it up on its next refresh.
 """
 
 from __future__ import annotations
 
 import os
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
 from agent_backbone.services.database.config import DatabaseConfig
 
-CONFIG_FILENAME = "backbone.toml"
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
 DEFAULT_PORT = 7120
+
+
+# ---------------------------------------------------------------------------
+# Settings schema: key -> (default, type)
+# ---------------------------------------------------------------------------
+
+SETTINGS_DEFAULTS: dict[str, Any] = {
+    "backbone.host": "127.0.0.1",
+    "backbone.port": DEFAULT_PORT,
+    "backbone.session_name": "backbone",
+    "backbone.cors_origins": [],
+    "backbone.max_delivery_ids": 100,
+    "agents.default_runtime": "claude",
+    "github.intake": "auto",  # auto | webhook | poll | off
+    "github.poll_interval_seconds": 60,
+    "github.backfill_on_start": True,
+    "github.backfill_lookback_hours": 24,
+    "routing.ignore_targets": [],
+    "routing.notification_dedup_seconds": 10,
+    "timing.stale_threshold_seconds": 300,
+    "timing.grace_period_seconds": 5,
+    "timing.queue_expiry_minutes": 30,
+    "timing.stall_threshold_seconds": 5400,
+    "timing.escalation_dedup_seconds": 1800,
+    "timing.monitor_interval_seconds": 60,
+    "timing.retry_interval_seconds": 300,
+    "timing.start_timeout_seconds": 60,
+    "timing.delivery_retention_days": 30,
+    "telegram.allowed_chat_ids": [],
+    "telegram.notification_chat_id": None,
+    "telegram.group_chat_id": None,
+    "telegram.topic_routes": {},
+    "escalation.target": "",
+    "priority.blocking_weight": 1000.0,
+    "priority.type_weights": {
+        "spec-gap": 100.0,
+        "bug": 90.0,
+        "task": 50.0,
+        "question": 20.0,
+        "optimization": 10.0,
+    },
+    "priority.dependents_multiplier": 1.5,
+    "priority.age_tiebreaker_weight": 0.01,
+    "security.allow_remote_plan_control": False,
+    "security.allow_unauthenticated": False,
+}
+
+SETTINGS_HELP: dict[str, str] = {
+    "backbone.host": "Bind address for the API (keep 127.0.0.1 unless you add TLS+auth in front)",
+    "backbone.port": "API port",
+    "backbone.session_name": "tmux session used by `backbone up --detach`",
+    "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",
+    "agents.default_runtime": "Runtime used by `agent start` when none is given",
+    "github.intake": "auto | webhook | poll | off — how GitHub events arrive",
+    "github.poll_interval_seconds": "Poll frequency when intake resolves to poll",
+    "github.backfill_on_start": "Fetch events missed while the backbone was down",
+    "github.backfill_lookback_hours": "How far back a first-ever backfill looks",
+    "routing.ignore_targets": "for:/from: values that are people, not agents (JSON list)",
+    "timing.stale_threshold_seconds": "Hook state older than this is verified against the terminal",
+    "timing.grace_period_seconds": "Settle time after an agent becomes idle before delivering",
+    "timing.queue_expiry_minutes": "Queued messages older than this are dropped",
+    "timing.stall_threshold_seconds": "Busy on one issue longer than this is a stall",
+    "timing.escalation_dedup_seconds": "Do not repeat the same escalation within this window",
+    "timing.monitor_interval_seconds": "agent-monitor job period",
+    "timing.retry_interval_seconds": "delivery-retry job period",
+    "timing.start_timeout_seconds": "How long `agent start` waits for the prompt",
+    "timing.delivery_retention_days": "Delivery history retention",
+    "telegram.allowed_chat_ids": "Chat ids allowed to control the backbone (JSON list) — required",
+    "telegram.notification_chat_id": "Where alerts are sent",
+    "telegram.group_chat_id": "Forum group for topic routing",
+    "telegram.topic_routes": "JSON object thread_id -> agent name",
+    "escalation.target": "Agent that receives stall/offline/plan escalations",
+    "security.allow_remote_plan_control": "Allow approving plans via API/Telegram (sends keys)",
+    "security.allow_unauthenticated": "Serve the API without an API key (dev only)",
+}
+
+
+_SETTING_CHOICES: dict[str, tuple[str, ...]] = {
+    "github.intake": ("auto", "webhook", "poll", "off"),
+    "agents.default_runtime": ("claude", "codex", "gemini", "opencode", "aider", "cursor", "shell"),
+}
+_INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids"})
+
+
+def validate_setting(key: str, value: Any) -> Any:
+    """Check a key exists and coerce/validate the value against the default's type."""
+    if key not in SETTINGS_DEFAULTS:
+        raise KeyError(f"unknown setting {key!r}")
+    default = SETTINGS_DEFAULTS[key]
+    if key in _SETTING_CHOICES:
+        if not isinstance(value, str) or value not in _SETTING_CHOICES[key]:
+            raise ValueError(f"{key}: expected one of {', '.join(_SETTING_CHOICES[key])}")
+        return value
+    if key in _INT_LIST_SETTINGS:
+        if not isinstance(value, list):
+            raise ValueError(f"{key}: expected a JSON list of integers")
+        try:
+            return [int(item) for item in value]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key}: expected a JSON list of integers") from exc
+    if default is None:
+        if value is None or isinstance(value, int | str):
+            return value
+        raise ValueError(f"{key}: expected an integer, string or null")
+    if isinstance(default, bool):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.lower() in ("true", "false", "1", "0", "yes", "no"):
+            return value.lower() in ("true", "1", "yes")
+        raise ValueError(f"{key}: expected true/false")
+    if isinstance(default, int) and not isinstance(default, bool):
+        if isinstance(value, bool):
+            raise ValueError(f"{key}: expected an integer")
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key}: expected an integer") from exc
+    if isinstance(default, float):
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key}: expected a number") from exc
+    if isinstance(default, str):
+        if not isinstance(value, str):
+            raise ValueError(f"{key}: expected a string")
+        return value
+    if isinstance(default, list):
+        if not isinstance(value, list):
+            raise ValueError(f"{key}: expected a JSON list")
+        return value
+    if isinstance(default, dict):
+        if not isinstance(value, dict):
+            raise ValueError(f"{key}: expected a JSON object")
+        return value
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -35,10 +174,12 @@ DEFAULT_PORT = 7120
 
 @dataclass(frozen=True)
 class AgentSpec:
-    """A configured terminal agent.
+    """A known agent.
 
-    The agent's name doubles as its tmux session name and as the value of the
-    ``for:<name>`` label that routes tracker issues to it.
+    The name doubles as the tmux session name, the ``for:<name>`` label value
+    and the ``from:`` identity. ``repo`` is the repository the agent's
+    directory belongs to (owned); ``watches`` are repositories it follows
+    without owning.
     """
 
     name: str
@@ -46,8 +187,7 @@ class AgentSpec:
     runtime: str = "claude"
     model: str | None = None
     repo: str = ""
-    """Optional ``owner/name`` repository this agent owns. Issues opened in that
-    repository without ``for:`` labels are routed to this agent."""
+    watches: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     description: str = ""
@@ -56,10 +196,19 @@ class AgentSpec:
     def path(self) -> Path:
         return Path(self.dir).expanduser()
 
+    @property
+    def repos(self) -> tuple[str, ...]:
+        """Owned repo first, then watched repos, deduplicated."""
+        seen: list[str] = []
+        for candidate in (self.repo, *self.watches):
+            if candidate and candidate not in seen:
+                seen.append(candidate)
+        return tuple(seen)
+
 
 @dataclass(frozen=True)
 class AgentsConfig:
-    """The set of configured agents, keyed by name."""
+    """Snapshot of the known agents, keyed by name."""
 
     specs: dict[str, AgentSpec] = field(default_factory=dict)
 
@@ -84,28 +233,52 @@ class AgentsConfig:
         return str(spec.path) if spec else ""
 
     def for_repo(self, repo_full_name: str) -> list[AgentSpec]:
-        """Agents that own the given ``owner/name`` repository."""
+        """Every agent that owns or watches a repository (owners first)."""
+        return self.owners(repo_full_name) + self.watchers(repo_full_name)
+
+    def owners(self, repo_full_name: str) -> list[AgentSpec]:
+        """Agents whose directory *is* the repository."""
         key = repo_full_name.casefold()
+        if not key:
+            return []
         return [spec for spec in self.specs.values() if spec.repo.casefold() == key]
+
+    def watchers(self, repo_full_name: str) -> list[AgentSpec]:
+        """Agents that watch a repository without owning it."""
+        key = repo_full_name.casefold()
+        return [
+            spec
+            for spec in self.specs.values()
+            if spec.repo.casefold() != key and any(w.casefold() == key for w in spec.watches)
+        ]
 
     def with_tag(self, tag: str) -> list[AgentSpec]:
         return [spec for spec in self.specs.values() if tag in spec.tags]
 
+    @property
+    def repos(self) -> list[str]:
+        """Every repository any agent owns or watches, deduplicated, casefold-unique."""
+        out: list[str] = []
+        seen: set[str] = set()
+        for spec in self.specs.values():
+            for repo in spec.repos:
+                if repo.casefold() not in seen:
+                    seen.add(repo.casefold())
+                    out.append(repo)
+        return out
+
 
 # ---------------------------------------------------------------------------
-# Sections
+# Sections (frozen snapshots built from settings)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class BackboneSection:
-    """Process-level settings."""
-
     data_dir: str = DEFAULT_DATA_DIR
     host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
     session_name: str = "backbone"
-    """tmux session used by ``backbone up --detach``."""
     cors_origins: tuple[str, ...] = ()
     max_delivery_ids: int = 100
 
@@ -115,97 +288,58 @@ class BackboneSection:
 
 
 @dataclass(frozen=True)
+class AgentsSection:
+    default_runtime: str = "claude"
+
+
+@dataclass(frozen=True)
 class GitHubConfig:
-    """GitHub task tracker settings (non-secret)."""
+    """GitHub intake settings (non-secret). Credentials come from the environment."""
 
-    repo: str = ""
-    """Default ``owner/name`` repository used for coordination issues."""
-    mode: str = "webhook"
-    """``webhook`` (push, needs a public URL) or ``poll`` (pull, no URL)."""
-    poll_interval_seconds: int = 30
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.repo)
-
-    @property
-    def owner(self) -> str:
-        return self.repo.split("/", 1)[0] if "/" in self.repo else ""
-
-    @property
-    def name(self) -> str:
-        return self.repo.split("/", 1)[1] if "/" in self.repo else ""
+    intake: str = "auto"
+    poll_interval_seconds: int = 60
+    backfill_on_start: bool = True
+    backfill_lookback_hours: int = 24
 
 
 @dataclass(frozen=True)
 class RoutingConfig:
-    """Routing knobs."""
-
     ignore_targets: frozenset[str] = frozenset()
-    """``for:`` label values that should never be routed (e.g. humans)."""
     notification_dedup_seconds: int = 10
 
 
 @dataclass(frozen=True)
 class AgentStateConfig:
-    """Where agents push their state (hook-written files) and how fresh it must be."""
-
-    state_dir: str = ""
-    """Defaults to ``<data_dir>/state`` when empty."""
     stale_threshold_seconds: int = 300
-
-    def state_path(self, data_dir: Path) -> Path:
-        if self.state_dir:
-            return Path(self.state_dir).expanduser()
-        return data_dir / "state"
 
 
 @dataclass(frozen=True)
 class MonitorConfig:
-    """Background job intervals."""
-
     interval_seconds: int = 60
     retry_interval_seconds: int = 300
+    start_timeout_seconds: int = 60
 
 
 @dataclass(frozen=True)
 class DeliveryConfig:
-    """Delivery persistence and timing."""
-
     retention_days: int = 30
     grace_period_seconds: int = 5
-    queue_retry_seconds: int = 30
+    queue_expiry_minutes: int = 30
 
 
 @dataclass(frozen=True)
 class TelegramConfig:
-    """Telegram bot settings (token comes from ``TELEGRAM_TOKEN``)."""
-
     allowed_chat_ids: tuple[int, ...] = ()
     topic_routes: dict[int, str] = field(default_factory=dict)
     group_chat_id: int | None = None
     notification_chat_id: int | None = None
-    topic_discovery_file: str = ""
-
-    def topic_discovery_path(self, data_dir: Path) -> Path:
-        if self.topic_discovery_file:
-            return Path(self.topic_discovery_file).expanduser()
-        return data_dir / "telegram-topics.json"
 
 
 @dataclass(frozen=True)
 class PriorityScoringConfig:
-    """Priority scoring weights for issue queue ordering."""
-
     blocking_weight: float = 1000.0
     type_weights: dict[str, float] = field(
-        default_factory=lambda: {
-            "spec-gap": 100.0,
-            "bug": 90.0,
-            "task": 50.0,
-            "question": 20.0,
-            "optimization": 10.0,
-        }
+        default_factory=lambda: dict(SETTINGS_DEFAULTS["priority.type_weights"])
     )
     dependents_multiplier: float = 1.5
     age_tiebreaker_weight: float = 0.01
@@ -213,22 +347,15 @@ class PriorityScoringConfig:
 
 @dataclass(frozen=True)
 class EscalationConfig:
-    """Stall / offline / plan-waiting escalation."""
-
     target: str = ""
-    """Agent that receives escalations. Empty disables agent escalation."""
     stall_threshold_seconds: int = 5400
     dedup_seconds: int = 1800
 
 
 @dataclass(frozen=True)
 class SecurityConfig:
-    """Security toggles."""
-
     allow_remote_plan_control: bool = False
-    """Allow approving/rejecting plans (keystroke injection) via API/Telegram."""
     allow_unauthenticated: bool = False
-    """Serve the API without an API key. Only for isolated dev setups."""
 
 
 # ---------------------------------------------------------------------------
@@ -238,9 +365,9 @@ class SecurityConfig:
 
 @dataclass(frozen=True)
 class BackboneConfig:
-    """Fully-resolved configuration."""
+    """Frozen configuration snapshot: secrets from the environment, settings
+    and agents from the database."""
 
-    # Secrets (environment only)
     api_key: str = ""
     webhook_secret: str = ""
     github_token: str = ""
@@ -248,9 +375,9 @@ class BackboneConfig:
     github_app_private_key_path: str = ""
     telegram_token: str = ""
 
-    # Sections
     backbone: BackboneSection = field(default_factory=BackboneSection)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
+    agents_section: AgentsSection = field(default_factory=AgentsSection)
     github: GitHubConfig = field(default_factory=GitHubConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     agent_state: AgentStateConfig = field(default_factory=AgentStateConfig)
@@ -261,7 +388,8 @@ class BackboneConfig:
     priority_scoring: PriorityScoringConfig = field(default_factory=PriorityScoringConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
-    source_path: Path | None = None
+    settings: dict[str, Any] = field(default_factory=dict)
+    """Raw effective settings (defaults overlaid with stored values)."""
 
     # --- Derived paths -----------------------------------------------------
 
@@ -271,7 +399,7 @@ class BackboneConfig:
 
     @property
     def state_dir(self) -> Path:
-        return self.agent_state.state_path(self.data_dir)
+        return self.data_dir / "state"
 
     @property
     def action_log_path(self) -> Path:
@@ -279,7 +407,11 @@ class BackboneConfig:
 
     @property
     def telegram_topic_discovery_path(self) -> Path:
-        return self.telegram.topic_discovery_path(self.data_dir)
+        return self.data_dir / "telegram-topics.json"
+
+    @property
+    def env_path(self) -> Path:
+        return self.data_dir / ".env"
 
     @property
     def database_url(self) -> str:
@@ -293,7 +425,17 @@ class BackboneConfig:
 
     @property
     def github_ready(self) -> bool:
-        return self.github.enabled and (bool(self.github_token) or self.github_app_ready)
+        return self.github.intake != "off" and (bool(self.github_token) or self.github_app_ready)
+
+    @property
+    def github_intake(self) -> str:
+        """The effective intake mode: ``webhook``, ``poll`` or ``off``."""
+        if not self.github_ready:
+            return "off"
+        mode = self.github.intake
+        if mode == "auto":
+            return "webhook" if self.webhook_secret else "poll"
+        return mode
 
     @property
     def telegram_ready(self) -> bool:
@@ -303,167 +445,141 @@ class BackboneConfig:
     def webhook_secrets(self) -> tuple[str, ...]:
         return (self.webhook_secret,) if self.webhook_secret else ()
 
-    # --- Loading -----------------------------------------------------------
-
-    @classmethod
-    def load(cls, path: Path | str | None = None) -> BackboneConfig:
-        """Load config from TOML (discovered or explicit) plus environment."""
-        toml_path = Path(path).expanduser() if path else find_config_file()
-        raw: dict = {}
-        if toml_path and toml_path.exists():
-            load_dotenv(toml_path.parent / ".env")
-            with open(toml_path, "rb") as fh:
-                raw = tomllib.load(fh)
-        load_dotenv()
-        return cls.from_dict(raw, source_path=toml_path)
-
-    @classmethod
-    def from_dict(cls, raw: dict, *, source_path: Path | None = None) -> BackboneConfig:
-        """Build a config from an already-parsed TOML dictionary."""
-        env = os.environ
-
-        bb = raw.get("backbone", {})
-        gh = raw.get("github", {})
-        rt = raw.get("routing", {})
-        ag = raw.get("agent_state", {})
-        mo = raw.get("monitor", {})
-        dl = raw.get("delivery", {})
-        db = raw.get("database", {})
-        tg = raw.get("telegram", {})
-        ps = raw.get("priority_scoring", {})
-        es = raw.get("escalation", {})
-        sec = raw.get("security", {})
-
-        agents = _parse_agents(raw.get("agents", {}))
-
-        defaults = PriorityScoringConfig()
-        return cls(
-            api_key=env.get("BACKBONE_API_KEY", ""),
-            webhook_secret=env.get("GITHUB_WEBHOOK_SECRET", env.get("WEBHOOK_SECRET", "")),
-            github_token=env.get("GITHUB_TOKEN", ""),
-            github_app_id=_optional_int(env.get("GITHUB_APP_ID", "")),
-            github_app_private_key_path=env.get("GITHUB_APP_PRIVATE_KEY_PATH", ""),
-            telegram_token=env.get("TELEGRAM_TOKEN", ""),
-            backbone=BackboneSection(
-                data_dir=env.get("BACKBONE_DATA_DIR") or bb.get("data_dir", DEFAULT_DATA_DIR),
-                host=bb.get("host", "127.0.0.1"),
-                port=int(env.get("BACKBONE_PORT") or bb.get("port", DEFAULT_PORT)),
-                session_name=bb.get("session_name", "backbone"),
-                cors_origins=tuple(bb.get("cors_origins", [])),
-                max_delivery_ids=bb.get("max_delivery_ids", 100),
-            ),
-            agents=agents,
-            github=GitHubConfig(
-                repo=gh.get("repo", ""),
-                mode=gh.get("mode", "webhook"),
-                poll_interval_seconds=gh.get("poll_interval_seconds", 30),
-            ),
-            routing=RoutingConfig(
-                ignore_targets=frozenset(rt.get("ignore_targets", [])),
-                notification_dedup_seconds=rt.get("notification_dedup_seconds", 10),
-            ),
-            agent_state=AgentStateConfig(
-                state_dir=ag.get("state_dir", ""),
-                stale_threshold_seconds=ag.get("stale_threshold_seconds", 300),
-            ),
-            monitor=MonitorConfig(
-                interval_seconds=mo.get("interval_seconds", 60),
-                retry_interval_seconds=mo.get("retry_interval_seconds", 300),
-            ),
-            delivery=DeliveryConfig(
-                retention_days=dl.get("retention_days", 30),
-                grace_period_seconds=dl.get("grace_period_seconds", 5),
-                queue_retry_seconds=dl.get("queue_retry_seconds", 30),
-            ),
-            database=DatabaseConfig(
-                url=env.get("BACKBONE_DATABASE_URL") or db.get("url", ""),
-                pool_size=db.get("pool_size", 5),
-                pool_overflow=db.get("pool_overflow", 10),
-                echo=db.get("echo", False),
-            ),
-            telegram=TelegramConfig(
-                allowed_chat_ids=tuple(int(x) for x in tg.get("allowed_chat_ids", [])),
-                topic_routes={int(k): v for k, v in tg.get("topic_routes", {}).items()},
-                group_chat_id=tg.get("group_chat_id"),
-                notification_chat_id=tg.get("notification_chat_id"),
-                topic_discovery_file=tg.get("topic_discovery_file", ""),
-            ),
-            priority_scoring=PriorityScoringConfig(
-                blocking_weight=ps.get("blocking_weight", defaults.blocking_weight),
-                type_weights=ps.get("type_weights", dict(defaults.type_weights)),
-                dependents_multiplier=ps.get(
-                    "dependents_multiplier", defaults.dependents_multiplier
-                ),
-                age_tiebreaker_weight=ps.get(
-                    "age_tiebreaker_weight", defaults.age_tiebreaker_weight
-                ),
-            ),
-            escalation=EscalationConfig(
-                target=es.get("target", ""),
-                stall_threshold_seconds=es.get("stall_threshold_seconds", 5400),
-                dedup_seconds=es.get("dedup_seconds", 1800),
-            ),
-            security=SecurityConfig(
-                allow_remote_plan_control=bool(sec.get("allow_remote_plan_control", False)),
-                allow_unauthenticated=bool(
-                    env.get("BACKBONE_ALLOW_UNAUTHENTICATED", "").lower() in ("1", "true")
-                    or sec.get("allow_unauthenticated", False)
-                ),
-            ),
-            source_path=source_path,
-        )
-
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Building
 # ---------------------------------------------------------------------------
 
 
-def find_config_file(start: Path | None = None) -> Path | None:
-    """Locate ``backbone.toml`` via env var, CWD ancestors, then the user config dir."""
-    explicit = os.environ.get("BACKBONE_CONFIG", "")
-    if explicit:
-        return Path(explicit).expanduser()
-
-    here = (start or Path.cwd()).resolve()
-    for candidate_dir in (here, *here.parents):
-        candidate = candidate_dir / CONFIG_FILENAME
-        if candidate.is_file():
-            return candidate
-
-    user_config = Path.home() / ".config" / "agent-backbone" / CONFIG_FILENAME
-    if user_config.is_file():
-        return user_config
-    return None
+def resolve_data_dir(explicit: str | Path | None = None) -> Path:
+    """Data directory from an explicit value, ``BACKBONE_DATA_DIR``, or the default."""
+    raw = explicit or os.environ.get("BACKBONE_DATA_DIR") or DEFAULT_DATA_DIR
+    return Path(raw).expanduser()
 
 
-def _parse_agents(raw: dict) -> AgentsConfig:
+def load_secrets(data_dir: Path) -> None:
+    """Load ``<data_dir>/.env`` into the environment (existing variables win)."""
+    load_dotenv(data_dir / ".env")
+    load_dotenv()
+
+
+def bootstrap_config(data_dir: str | Path | None = None) -> BackboneConfig:
+    """Minimal config (paths + secrets + defaults) available before the database is open."""
+    path = resolve_data_dir(data_dir)
+    load_secrets(path)
+    return build_config(path, settings={}, agents=AgentsConfig())
+
+
+def effective_settings(stored: dict[str, Any]) -> dict[str, Any]:
+    """Defaults overlaid with stored values (unknown keys are ignored)."""
+    merged = dict(SETTINGS_DEFAULTS)
+    for key, value in stored.items():
+        if key in SETTINGS_DEFAULTS:
+            try:
+                merged[key] = validate_setting(key, value)
+            except (ValueError, TypeError):
+                continue
+    return merged
+
+
+def build_config(
+    data_dir: Path,
+    *,
+    settings: dict[str, Any],
+    agents: AgentsConfig,
+) -> BackboneConfig:
+    """Assemble a frozen snapshot from the data dir, environment and stored settings."""
+    env = os.environ
+    s = effective_settings(settings)
+
+    def _opt_int(value: Any) -> int | None:
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    return BackboneConfig(
+        api_key=env.get("BACKBONE_API_KEY", ""),
+        webhook_secret=env.get("GITHUB_WEBHOOK_SECRET", env.get("WEBHOOK_SECRET", "")),
+        github_token=env.get("GITHUB_TOKEN", ""),
+        github_app_id=_opt_int(env.get("GITHUB_APP_ID", "")),
+        github_app_private_key_path=env.get("GITHUB_APP_PRIVATE_KEY_PATH", ""),
+        telegram_token=env.get("TELEGRAM_TOKEN", ""),
+        backbone=BackboneSection(
+            data_dir=str(data_dir),
+            host=s["backbone.host"],
+            port=int(env.get("BACKBONE_PORT") or s["backbone.port"]),
+            session_name=s["backbone.session_name"],
+            cors_origins=tuple(s["backbone.cors_origins"]),
+            max_delivery_ids=s["backbone.max_delivery_ids"],
+        ),
+        agents=agents,
+        agents_section=AgentsSection(default_runtime=s["agents.default_runtime"]),
+        github=GitHubConfig(
+            intake=s["github.intake"],
+            poll_interval_seconds=s["github.poll_interval_seconds"],
+            backfill_on_start=s["github.backfill_on_start"],
+            backfill_lookback_hours=s["github.backfill_lookback_hours"],
+        ),
+        routing=RoutingConfig(
+            ignore_targets=frozenset(s["routing.ignore_targets"]),
+            notification_dedup_seconds=s["routing.notification_dedup_seconds"],
+        ),
+        agent_state=AgentStateConfig(stale_threshold_seconds=s["timing.stale_threshold_seconds"]),
+        monitor=MonitorConfig(
+            interval_seconds=s["timing.monitor_interval_seconds"],
+            retry_interval_seconds=s["timing.retry_interval_seconds"],
+            start_timeout_seconds=s["timing.start_timeout_seconds"],
+        ),
+        delivery=DeliveryConfig(
+            retention_days=s["timing.delivery_retention_days"],
+            grace_period_seconds=s["timing.grace_period_seconds"],
+            queue_expiry_minutes=s["timing.queue_expiry_minutes"],
+        ),
+        database=DatabaseConfig(url=env.get("BACKBONE_DATABASE_URL", "")),
+        telegram=TelegramConfig(
+            allowed_chat_ids=tuple(int(x) for x in s["telegram.allowed_chat_ids"]),
+            topic_routes={int(k): str(v) for k, v in s["telegram.topic_routes"].items()},
+            group_chat_id=_opt_int(s["telegram.group_chat_id"]),
+            notification_chat_id=_opt_int(s["telegram.notification_chat_id"]),
+        ),
+        priority_scoring=PriorityScoringConfig(
+            blocking_weight=float(s["priority.blocking_weight"]),
+            type_weights={k: float(v) for k, v in s["priority.type_weights"].items()},
+            dependents_multiplier=float(s["priority.dependents_multiplier"]),
+            age_tiebreaker_weight=float(s["priority.age_tiebreaker_weight"]),
+        ),
+        escalation=EscalationConfig(
+            target=s["escalation.target"],
+            stall_threshold_seconds=s["timing.stall_threshold_seconds"],
+            dedup_seconds=s["timing.escalation_dedup_seconds"],
+        ),
+        security=SecurityConfig(
+            allow_remote_plan_control=bool(s["security.allow_remote_plan_control"]),
+            allow_unauthenticated=(
+                env.get("BACKBONE_ALLOW_UNAUTHENTICATED", "").lower() in ("1", "true")
+                or bool(s["security.allow_unauthenticated"])
+            ),
+        ),
+        settings=s,
+    )
+
+
+def agents_from_rows(rows: list[dict]) -> AgentsConfig:
+    """Build the agents snapshot from ``agents`` table rows."""
     specs: dict[str, AgentSpec] = {}
-    for name, data in raw.items():
-        if not isinstance(data, dict):
-            raise ValueError(f"[agents.{name}] must be a table")
-        directory = data.get("dir", "")
-        if not directory:
-            raise ValueError(f"[agents.{name}] is missing required key 'dir'")
-        model = data.get("model")
-        specs[name] = AgentSpec(
-            name=name,
-            dir=directory,
-            runtime=data.get("runtime", "claude"),
-            model=str(model) if model else None,
-            repo=data.get("repo", ""),
-            tags=tuple(data.get("tags", [])),
-            env={str(k): str(v) for k, v in data.get("env", {}).items()},
-            description=data.get("description", ""),
+    for row in rows:
+        specs[row["name"]] = AgentSpec(
+            name=row["name"],
+            dir=row["dir"],
+            runtime=row.get("runtime") or "claude",
+            model=row.get("model") or None,
+            repo=row.get("repo") or "",
+            watches=tuple(row.get("watches") or ()),
+            tags=tuple(row.get("tags") or ()),
+            env=dict(row.get("env") or {}),
+            description=row.get("description") or "",
         )
     return AgentsConfig(specs=specs)
-
-
-def _optional_int(value: str) -> int | None:
-    value = value.strip()
-    if not value:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None

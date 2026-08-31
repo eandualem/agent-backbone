@@ -1,15 +1,17 @@
 """FastAPI application factory.
 
 One process hosts everything: the REST API, the Socket.IO feed, the periodic
-scheduler (monitor + delivery retry), the Telegram bot and the GitHub
-connector. Services are registered with LifecycleManager for ordered
-startup/shutdown.
+scheduler (monitor + delivery retry + GitHub intake), the Telegram bot and
+the GitHub client. Configuration comes from the database: the lifespan opens
+the data directory, starts the database, loads settings and agents, and only
+then wires the remaining services against that snapshot.
 """
 
 from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 import socketio
@@ -18,25 +20,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from agent_backbone.base import LifecycleManager
-from agent_backbone.config import BackboneConfig
+from agent_backbone.config import BackboneConfig, bootstrap_config
 
 log = logging.getLogger(__name__)
 
 API_VERSION = "2.0.0"
 
 
-def _register_jobs(app: FastAPI, config: BackboneConfig):
-    """Wire the periodic jobs that replace the old Prefect deployments."""
+def _register_jobs(app: FastAPI):
+    """Wire the periodic jobs. Each job reads app.state.config at run time so
+    setting changes and newly discovered agents are picked up without a restart."""
     from agent_backbone.services.agents._monitor import monitor_agents
     from agent_backbone.services.routing._flows import delivery_retry
     from agent_backbone.services.scheduler import PeriodicScheduler
 
     scheduler = PeriodicScheduler()
     state = app.state
+    config: BackboneConfig = state.config
 
     async def _monitor():
+        await state.agent_store.refresh()
         return await monitor_agents(
-            config,
+            state.config,
             state.db,
             getattr(state, "github", None),
             state_svc=state.state_service,
@@ -45,44 +50,55 @@ def _register_jobs(app: FastAPI, config: BackboneConfig):
         )
 
     async def _retry():
-        return await delivery_retry(config, state.db, getattr(state, "github", None))
+        return await delivery_retry(state.config, state.db, getattr(state, "github", None))
 
     async def _prune():
-        pruned = await state.db.prune_old_deliveries(config.delivery.retention_days)
+        pruned = await state.db.prune_old_deliveries(state.config.delivery.retention_days)
         ids = await state.db.prune_delivery_ids(max_age_hours=24)
-        return {"deliveries_pruned": pruned, "delivery_ids_pruned": ids}
+        events = await state.db.prune_events(state.config.delivery.retention_days)
+        return {"deliveries": pruned, "delivery_ids": ids, "events": events}
 
     scheduler.add("agent-monitor", config.monitor.interval_seconds, _monitor)
     scheduler.add("delivery-retry", config.monitor.retry_interval_seconds, _retry)
     scheduler.add("prune", 6 * 3600, _prune)
 
-    if config.github.mode == "poll" and getattr(state, "github", None) is not None:
+    if getattr(state, "github", None) is not None:
         from agent_backbone.services.github._poller import GitHubPoller
 
         poller = GitHubPoller(
-            config, state.db, state.github, state.delivery_service, state.dispatch_service
+            lambda: state.config,
+            state.db,
+            state.github,
+            state.delivery_service,
+            state.dispatch_service,
         )
         state.github_poller = poller
-        scheduler.add(
-            "github-poll", config.github.poll_interval_seconds, poller.run, run_immediately=True
-        )
+        intake = config.github_intake
+        if intake == "poll":
+            scheduler.add(
+                "github-poll", config.github.poll_interval_seconds, poller.run, run_immediately=True
+            )
+        elif intake == "webhook" and config.github.backfill_on_start:
+            scheduler.add("github-backfill", 24 * 3600, poller.run, run_immediately=True)
     return scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Wire services via LifecycleManager and manage startup/shutdown."""
-    config: BackboneConfig = getattr(app.state, "config", None) or BackboneConfig.load()
-    app.state.config = config
-    config.data_dir.mkdir(parents=True, exist_ok=True)
+    """Open the data directory, start the database, load config, wire services."""
+    boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
+    data_dir: Path = boot.data_dir
+    data_dir.mkdir(parents=True, exist_ok=True)
+    app.state.config = boot
 
     from agent_backbone.services.infrastructure._processes import set_pid_dir
 
-    set_pid_dir(config.data_dir / "pids")
+    set_pid_dir(data_dir / "pids")
 
     lifecycle = LifecycleManager()
     app.state.lifecycle = lifecycle
 
+    from agent_backbone.services.agent_store import AgentStore
     from agent_backbone.services.agents.factory import register_state
     from agent_backbone.services.database.factory import register_database, register_persistence
     from agent_backbone.services.github.factory import register_github
@@ -94,23 +110,32 @@ async def lifespan(app: FastAPI):
     from agent_backbone.services.telegram.factory import register_telegram
     from agent_backbone.services.terminal.factory import register_tmux
 
-    app.state.database_service = await register_database(lifecycle, config)
+    # Stage 1: database, then configuration from it.
+    app.state.database_service = await register_database(lifecycle, boot)
     app.state.db = await register_persistence(lifecycle, app.state.database_service)
+    await lifecycle.start_all()
+
+    def _publish(new_config: BackboneConfig) -> None:
+        app.state.config = new_config
+
+    app.state.agent_store = AgentStore(app.state.db, data_dir, on_change=_publish)
+    lifecycle.register("agents", app.state.agent_store)
+    await app.state.agent_store.start()
+    config: BackboneConfig = app.state.config
+
+    # Stage 2: everything else against the loaded snapshot.
     app.state.github = None
     if config.github_ready:
         app.state.github = await register_github(lifecycle, config)
-    elif config.github.enabled:
-        log.warning(
-            "[github] repo is set but no credentials found — set GITHUB_TOKEN "
-            "(or GitHub App credentials). Issue routing is disabled."
-        )
     app.state.tmux_service = await register_tmux(lifecycle)
     app.state.state_service = await register_state(lifecycle, config, db=app.state.db)
     app.state.notification_service = await register_notifications(lifecycle)
     app.state.delivery_service = await register_delivery(lifecycle)
     app.state.dispatch_service = await register_dispatch(lifecycle)
-    app.state.telegram_service = await register_telegram(lifecycle, config, db=app.state.db)
-    app.state.scheduler = _register_jobs(app, config)
+    app.state.telegram_service = await register_telegram(
+        lifecycle, lambda: app.state.config, db=app.state.db
+    )
+    app.state.scheduler = _register_jobs(app)
     lifecycle.register("scheduler", app.state.scheduler)
 
     try:
@@ -121,11 +146,14 @@ async def lifespan(app: FastAPI):
         await reconcile_startup_states(config=config, db=app.state.db)
 
         log.info(
-            "agent-backbone %s listening on http://%s:%d — %d agent(s) configured",
+            "agent-backbone %s on http://%s:%d — data %s, %d agent(s), github=%s, telegram=%s",
             API_VERSION,
             config.backbone.host,
             config.backbone.port,
+            data_dir,
             len(config.agents),
+            config.github_intake,
+            "on" if app.state.telegram_service.enabled else "off",
         )
         yield
     finally:
@@ -139,7 +167,7 @@ async def lifespan(app: FastAPI):
 
 def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     """Build and return the ASGI application (Socket.IO wrapping FastAPI)."""
-    config = config or BackboneConfig.load()
+    config = config or bootstrap_config()
     app = FastAPI(
         title="agent-backbone",
         description="Local control plane for terminal AI agents",
@@ -192,7 +220,9 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
 
     from agent_backbone.api.auth import require_api_key
     from agent_backbone.api.routes.agents import router as agents_router
+    from agent_backbone.api.routes.config import router as config_router
     from agent_backbone.api.routes.deliveries import router as deliveries_router
+    from agent_backbone.api.routes.events import router as events_router
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.plans import router as plans_router
@@ -204,11 +234,13 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
 
     for router in (
         agents_router,
+        status_router,  # before config_router: /api/config/agents vs /api/config/{key}
+        config_router,
         deliveries_router,
+        events_router,
         issues_router,
         messages_router,
         plans_router,
-        status_router,
         telegram_router,
     ):
         app.include_router(router, dependencies=[Depends(require_api_key)])

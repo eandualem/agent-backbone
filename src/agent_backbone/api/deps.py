@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import HTTPException, Request
 
 from agent_backbone.config import BackboneConfig
+from agent_backbone.services.agent_store import AgentStore
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
@@ -22,13 +23,17 @@ def get_db(request: Request) -> BackboneDB:
     return request.app.state.db
 
 
+def get_agent_store(request: Request) -> AgentStore:
+    return request.app.state.agent_store
+
+
 def get_github(request: Request) -> GitHubClient:
-    """The GitHub client, or 503 when no tracker is configured."""
+    """The GitHub client, or 503 when GitHub is not configured."""
     gh = getattr(request.app.state, "github", None)
     if gh is None:
         raise HTTPException(
             status_code=503,
-            detail="GitHub is not configured — set [github] repo and GITHUB_TOKEN",
+            detail="GitHub is not configured — set GITHUB_TOKEN (or GitHub App credentials)",
         )
     return gh
 
