@@ -28,6 +28,12 @@ decompose it, assign it, track it, and synthesize it.
    matters: merging the PR closes the issue, and closing the issue tears
    the swarm down automatically. Post a final summary comment on the
    issue before the PR.
+6. **Verify the PR as GitHub computes it** before reporting done — your
+   local view is not the diff reviewers see:
+   `gh pr view <N> --repo {repo} --json changedFiles,additions,deletions`.
+   If the numbers do not match the work you intended to ship, something
+   is wrong (usually the base) — investigate and report honestly instead
+   of declaring success.
 
 ## Boundaries
 

@@ -18,7 +18,7 @@ a swarm costs several times the tokens.
 
    ```bash
    backbone swarm create NAME --issue OWNER/REPO#N \
-       --member scout*2@claude/sonnet --member coder@claude/opus
+       --member 'scout*2@claude/sonnet' --member coder@claude/opus
    ```
 
    Member spec: `ROLE[*N][@RUNTIME[/MODEL]]`. Roles with shipped briefs:

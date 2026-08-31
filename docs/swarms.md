@@ -8,7 +8,7 @@ attach to any member's tmux session and watch it work.
 
 ```bash
 backbone swarm create research --issue acme/app#42 \
-    --member scout*3@claude/sonnet --member coder@claude/opus
+    --member 'scout*3@claude/sonnet' --member coder@claude/opus
 ```
 
 That single command:
@@ -60,7 +60,7 @@ backbone swarm disband research  # manual teardown
 
 | Example | Meaning |
 |---|---|
-| `scout*3@claude/sonnet` | three scouts on Claude Code with the Sonnet model |
+| `'scout*3@claude/sonnet'` | three scouts on Claude Code with the Sonnet model |
 | `coder@codex` | one coder on Codex, its default model |
 | `reviewer` | one reviewer on the default runtime |
 | `coordinator@claude/opus` | the coordinator (at most one; added automatically if omitted) |

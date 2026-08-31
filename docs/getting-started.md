@@ -235,7 +235,7 @@ it: a coordinator plus members sharing one worktree and branch,
 finishing in a single PR whose merge tears everything down.
 
 ```bash
-backbone swarm create research --issue acme/app#42 --member scout*3@claude/sonnet
+backbone swarm create research --issue acme/app#42 --member 'scout*3@claude/sonnet'
 backbone tell research "How is it going?"      # the swarm's name reaches its coordinator
 ```
 

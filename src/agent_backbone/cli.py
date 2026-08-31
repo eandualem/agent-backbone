@@ -1069,7 +1069,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--member",
         action="append",
         metavar="ROLE[*N][@RUNTIME[/MODEL]]",
-        help="roster entry, repeatable (e.g. scout*3@claude/sonnet, coder@codex); "
+        help="roster entry, repeatable — quote specs with a count so the shell "
+        "does not glob the * (e.g. 'scout*3@claude/sonnet', coder@codex); "
         "a coordinator@claude is added when none is given",
     )
     psc.add_argument(
