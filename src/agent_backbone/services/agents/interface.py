@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,9 +42,11 @@ def _row_to_snapshot(row: dict) -> StateSnapshot:
     )
 
 
-def _should_use_db_snapshot(snapshot: StateSnapshot) -> bool:
+def _should_use_db_snapshot(snapshot: StateSnapshot, trust_seconds: float) -> bool:
     """Whether a persisted snapshot is safe to reuse without live verification."""
-    return snapshot.state not in _LIVE_RECONCILIATION_STATES
+    if snapshot.state in _LIVE_RECONCILIATION_STATES:
+        return False
+    return snapshot.timestamp > 0 and (time.time() - snapshot.timestamp) <= trust_seconds
 
 
 def _should_sync_db_snapshot(current: StateSnapshot | None, live: StateSnapshot) -> bool:
@@ -67,9 +70,11 @@ class StateService:
         state_dir: str | Path,
         stale_threshold: int = 300,
         db: BackboneDB | None = None,
+        snapshot_trust: int = 20,
     ) -> None:
         self._state_dir = Path(state_dir).expanduser()
         self._stale_threshold = stale_threshold
+        self._snapshot_trust = snapshot_trust
         self._db = db
 
     @property
@@ -93,14 +98,23 @@ class StateService:
     # --- DI surface for route handlers ---
 
     async def get_state(self, session: str) -> StateSnapshot:
-        """Get reconciled agent state — DB first, file+tmux fallback."""
+        """Get reconciled agent state.
+
+        A hook-written state file fresher than the stored snapshot is
+        authoritative, so the DB shortcut only applies when no newer hook
+        state exists and the snapshot is recent enough to trust.
+        """
         db_snapshot: StateSnapshot | None = None
         if self._db is not None:
             try:
                 row = await self._db.get_agent_state(session)
                 if row is not None:
                     db_snapshot = _row_to_snapshot(row)
-                    if _should_use_db_snapshot(db_snapshot):
+                    push = read_state_file(self._state_dir, session)
+                    push_is_newer = push is not None and push.timestamp > db_snapshot.timestamp
+                    if not push_is_newer and _should_use_db_snapshot(
+                        db_snapshot, self._snapshot_trust
+                    ):
                         return db_snapshot
             except Exception:
                 log.warning("DB state read failed for %s, falling back to file", session)

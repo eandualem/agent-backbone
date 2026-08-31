@@ -64,6 +64,7 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | Key | Default | Meaning |
 |---|---|---|
 | `timing.stale_threshold_seconds` | `300` | Hook state older than this is verified against the terminal |
+| `timing.snapshot_trust_seconds` | `20` | A stored state snapshot older than this is re-verified live |
 | `timing.grace_period_seconds` | `5` | Settle time after an agent becomes idle before delivering (`settling`) |
 | `timing.queue_expiry_minutes` | `30` | Queued messages older than this are expired |
 | `timing.stall_threshold_seconds` | `5400` | Busy on one issue for longer than this is a stall |

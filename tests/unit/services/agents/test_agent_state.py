@@ -552,14 +552,38 @@ class TestStateServiceDBFirst:
             db._engine = None
             await engine.dispose()
 
-    async def test_db_first_returns_idle_db_state(self, db, tmp_path):
-        """Stable idle snapshots are served from DB without live reconciliation."""
-        await db.set_agent_state("ike", "idle", current_issue=None, ts="1709500000.0")
+    async def test_db_first_returns_recent_idle_db_state(self, db, tmp_path):
+        """Recent stable idle snapshots are served from DB without live reconciliation."""
+        await db.set_agent_state("ike", "idle", current_issue=None, ts=str(time.time()))
         svc = StateService(state_dir=str(tmp_path), db=db)
         snap = await svc.get_state("ike")
         assert snap.state == AgentState.IDLE
         assert snap.current_issue is None
         assert snap.source == "db"
+
+    async def test_old_idle_db_state_is_reverified_live(self, db, tmp_path):
+        """A stored snapshot older than the trust window is re-verified live."""
+        await db.set_agent_state("ike", "idle", current_issue=None, ts=str(time.time() - 120))
+        svc = StateService(state_dir=str(tmp_path), db=db, snapshot_trust=20)
+        live_snapshot = StateSnapshot(state=AgentState.BUSY, source="pull", timestamp=time.time())
+        with patch(
+            f"{_IFACE}._get_agent_state",
+            new_callable=AsyncMock,
+            return_value=live_snapshot,
+        ):
+            snap = await svc.get_state("ike")
+        assert snap.state == AgentState.BUSY
+        row = await db.get_agent_state("ike")
+        assert row["state"] == "busy"
+
+    async def test_fresh_hook_state_overrides_recent_db_snapshot(self, db, tmp_path):
+        """A hook state file newer than the stored snapshot wins over the DB shortcut."""
+        await db.set_agent_state("ike", "idle", current_issue=None, ts=str(time.time() - 5))
+        (tmp_path / "ike.json").write_text(json.dumps({"state": "busy", "ts": time.time()}))
+        svc = StateService(state_dir=str(tmp_path), db=db, snapshot_trust=20)
+        snap = await svc.get_state("ike")
+        assert snap.state == AgentState.BUSY
+        assert snap.source == "push"
 
     async def test_db_working_state_uses_live_reconciliation(self, db, tmp_path):
         """Cached working states are refreshed from the live reconciler."""

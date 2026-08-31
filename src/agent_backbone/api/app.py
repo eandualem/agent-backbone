@@ -125,7 +125,10 @@ async def lifespan(app: FastAPI):
     app.state.tmux_service = TmuxService()
     lifecycle.register("tmux", app.state.tmux_service)
     app.state.state_service = StateService(
-        config.state_dir, config.agent_state.stale_threshold_seconds, db=app.state.db
+        config.state_dir,
+        config.agent_state.stale_threshold_seconds,
+        db=app.state.db,
+        snapshot_trust=config.agent_state.snapshot_trust_seconds,
     )
     lifecycle.register("state", app.state.state_service)
     app.state.delivery_service = DeliveryService()
