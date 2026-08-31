@@ -15,7 +15,8 @@ That single command:
 
 1. verifies `acme/app#42` exists and is open (the issue is a
    prerequisite — an agent or human writes it first; the swarm never
-   creates it),
+   creates it, and an agent may only swarm on its **own** repository —
+   the swarm runs in the initiator's checkout),
 2. creates a worktree at `<checkout>/.backbone/swarms/research` on the
    branch `swarm/research`, inside the repository checkout of the
    initiating agent (`--initiator`, defaulting to `$BACKBONE_AGENT`, or

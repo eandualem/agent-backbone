@@ -9,9 +9,11 @@ a swarm costs several times the tokens.
 
 ## The flow, end to end
 
-1. **Write the issue first.** The swarm never creates it. Describe the
-   task, constraints and the definition of done in an issue on the
-   repository the work belongs to:
+1. **Write the issue first — in YOUR OWN repository.** The swarm never
+   creates the issue, and it runs in the initiator's checkout, so an
+   agent may only swarm on a repository it owns (creating the issue
+   elsewhere is rejected with guidance). Describe the task, constraints
+   and the definition of done:
    `gh issue create --repo OWNER/REPO --title … --body …`
 2. **Create the swarm on it** (from inside your session; you become the
    initiator):

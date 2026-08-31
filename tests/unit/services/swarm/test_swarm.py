@@ -301,3 +301,23 @@ class TestTeardown:
     async def test_no_swarm_for_issue_is_none(self, db, tmp_path):
         config, _ = _swarm_config(tmp_path)
         assert await teardown_for_issue(config, db, _FakeStore(config), "acme/app", 99) is None
+
+
+class TestOwnRepoGuardrail:
+    @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
+    async def test_agent_cannot_swarm_on_foreign_repo(self, _git, db, tmp_path):
+        """An agent initiator must own the issue's repository."""
+        config, _ = _swarm_config(tmp_path)  # simon owns acme/app
+        gh = AsyncMock()
+        gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
+        with pytest.raises(SwarmError, match="own repository"):
+            await create_swarm(
+                config,
+                db,
+                _FakeStore(config),
+                gh,
+                name="foreign",
+                issue_ref="acme/other#5",
+                member_specs=[],
+                initiator="simon",
+            )

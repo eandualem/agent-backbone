@@ -140,10 +140,19 @@ async def create_swarm(
     title = await _verify_issue(gh, repo, issue_number)
 
     # The worktree is created from the initiating agent's checkout of the repo.
+    # An agent swarms on its OWN repository — running in another agent's
+    # checkout caused exactly the confusion it sounds like (first live test).
     init_spec = config.agents.get(initiator) if initiator else None
     if init_spec is not None and init_spec.repo.casefold() == repo.casefold():
         repo_dir = init_spec.path
+    elif init_spec is not None:
+        raise SwarmError(
+            f"'{initiator}' does not own a checkout of {repo} — a swarm runs in its "
+            f"initiator's repository. Create the issue in your own repository instead, "
+            f"or ask the agent that owns {repo} to initiate the swarm"
+        )
     else:
+        # Human-run CLI (no initiating agent): use the repo owner's checkout.
         owners = [s for s in config.agents if s.repo.casefold() == repo.casefold()]
         if not owners:
             raise SwarmError(

@@ -12,7 +12,10 @@ decompose it, assign it, track it, and synthesize it.
 2. **Assign**: give each member a task with `backbone tell`, naming exactly
    which files it owns. Two members must never edit the same file.
 3. **Track**: check member states with `backbone agent inspect <name>` and
-   `backbone status`. Nudge stalled members; reassign if one fails.
+   `backbone status`. Nudge stalled members; reassign if one fails. While
+   members are working, keep a periodic watchdog running (a background
+   timer, every 10–15 minutes) so a stalled or failed member is noticed
+   even if no message arrives; stop it when all work is done.
 4. **Report outward**: you are the swarm's only voice to the outside.
    Post progress and questions as comments on issue {repo}#{issue_number}
    (`gh issue comment {issue_number} --repo {repo}`), and you may also
