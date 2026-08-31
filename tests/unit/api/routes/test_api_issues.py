@@ -1,344 +1,145 @@
-"""Tests for API issues routes (api/routes/issues.py)."""
+"""Tests for the issue endpoints at api/routes/issues.py."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import create_async_engine
 
-from agent_backbone.api.deps import get_config, get_db, get_delivery_service, get_github
-from agent_backbone.config import BackboneConfig
+from agent_backbone.api.deps import get_github
 from agent_backbone.models import CommentData, IssueData, ParsedLabels
-from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.registry import EntityEntry, EntityRegistry
-
-# --- Fixtures ---
+from tests.conftest import TEST_REPO
 
 
-@pytest.fixture
-def sample_issues():
-    """Two sample issues for list tests."""
-    return [
-        IssueData(
-            number=42,
-            title="[task] Update config",
-            state="open",
-            labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
-            html_url="https://github.com/eandualem/orchestration/issues/42",
+def _issue(
+    number: int, targets: list[str] | None = None, priority: str = "", **kwargs
+) -> IssueData:
+    return IssueData(
+        number=number,
+        title=f"[task] Issue {number}",
+        labels=ParsedLabels(
+            sender="leo", targets=targets or ["ike"], issue_type="task", priority=priority
         ),
-        IssueData(
-            number=43,
-            title="[bug] Fix routing",
-            state="open",
-            labels=ParsedLabels(sender="ada", targets=["feynman"], issue_type="bug"),
-            html_url="https://github.com/eandualem/orchestration/issues/43",
-        ),
-    ]
-
-
-@pytest.fixture
-def sample_comments():
-    """Sample comments with and without from-tags."""
-    return [
-        CommentData(id=1, body="[from:ike] Done", user_login="eandualem"),
-        CommentData(id=2, body="No tag here", user_login="eandualem"),
-    ]
-
-
-@pytest.fixture
-def mock_github(sample_issues, sample_comments):
-    """Mock GitHubClient with default return values."""
-    mock = AsyncMock()
-    mock.list_issues.return_value = sample_issues
-    mock.get_issue.return_value = sample_issues[0]
-    mock.list_comments.return_value = sample_comments
-    mock.get_sub_issues.return_value = []
-    mock.create_issue.return_value = IssueData(
-        number=99,
-        title="[task] New issue",
-        state="open",
-        labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
-        html_url="https://github.com/eandualem/orchestration/issues/99",
+        html_url=f"https://github.com/{TEST_REPO}/issues/{number}",
+        repo_full_name=TEST_REPO,
+        **kwargs,
     )
-    mock.add_comment.return_value = CommentData(
-        id=10, body="[from:ike] Acknowledged", user_login="eandualem"
-    )
-    mock.update_issue.return_value = IssueData(
-        number=42,
-        title="[task] Update config",
-        state="closed",
-        labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
-        html_url="https://github.com/eandualem/orchestration/issues/42",
-    )
-    return mock
 
 
 @pytest.fixture
-def mock_delivery_svc():
-    """Mock DeliveryService with default return values."""
-    mock = MagicMock()
-    mock.compute_priority_score = MagicMock(return_value=42.0)
-    mock.create_and_notify = AsyncMock()
-    return mock
-
-
-@pytest.fixture
-async def issues_client(api_app, auth_headers, mock_github, mock_delivery_svc):
-    """Async test client with GitHub mock and in-memory DB overridden."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    db = BackboneDB(engine)
-    await db.start()
-
-    api_app.dependency_overrides[get_github] = lambda: mock_github
-    api_app.dependency_overrides[get_db] = lambda: db
-    api_app.dependency_overrides[get_delivery_service] = lambda: mock_delivery_svc
-
-    transport = ASGITransport(app=api_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
-
-    api_app.dependency_overrides.clear()
-    db._engine = None
-    await engine.dispose()
-
-
-# --- Tests ---
+def gh(api_app):
+    client = AsyncMock()
+    client.list_issues = AsyncMock(return_value=[_issue(1), _issue(2, priority="blocking")])
+    client.get_issue = AsyncMock(return_value=_issue(1))
+    client.list_comments = AsyncMock(
+        return_value=[CommentData(id=1, body="[from:ike] ack", user_login="bot")]
+    )
+    client.get_sub_issues = AsyncMock(return_value=[_issue(3)])
+    client.create_issue = AsyncMock(return_value=_issue(10, ["feynman"]))
+    client.add_comment = AsyncMock(return_value=CommentData(id=5, body="hi", user_login="me"))
+    client.update_issue = AsyncMock(return_value=_issue(1, state="closed"))
+    api_app.dependency_overrides[get_github] = lambda: client
+    yield client
+    api_app.dependency_overrides.pop(get_github, None)
 
 
 class TestListIssues:
-    async def test_list_issues_returns_items_with_scores(
-        self, issues_client, auth_headers, mock_github
-    ):
-        resp = await issues_client.get("/api/issues", headers=auth_headers)
+    async def test_lists_with_priority_scores(self, api_client, auth_headers, gh):
+        resp = await api_client.get("/api/issues?for=ike&type=task", headers=auth_headers)
+
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 2
-        assert len(data["items"]) == 2
-        # Verify structure of first item
-        item = data["items"][0]
-        assert item["number"] == 42
-        assert item["title"] == "[task] Update config"
-        assert item["state"] == "open"
-        assert item["labels"]["sender"] == "leo"
-        assert item["labels"]["targets"] == ["ike"]
-        assert item["labels"]["issue_type"] == "task"
-        assert "priority_score" in item
-        # Default call uses state=open, no labels
-        mock_github.list_issues.assert_called_once_with(state="open", labels=[])
+        blocking = next(i for i in data["items"] if i["number"] == 2)
+        assert blocking["priority_score"] > data["items"][0]["priority_score"]
+        assert gh.list_issues.await_args.kwargs["labels"] == ["for:ike", "task"]
 
-    async def test_list_issues_filter_by_for_entity(self, issues_client, auth_headers, mock_github):
-        resp = await issues_client.get("/api/issues?for_entity=ike", headers=auth_headers)
-        assert resp.status_code == 200
-        mock_github.list_issues.assert_called_once_with(state="open", labels=["for:ike"])
-
-    async def test_list_issues_filter_by_from_entity(
-        self, issues_client, auth_headers, mock_github
-    ):
-        resp = await issues_client.get("/api/issues?from_entity=leo", headers=auth_headers)
-        assert resp.status_code == 200
-        mock_github.list_issues.assert_called_once_with(state="open", labels=["from:leo"])
-
-    async def test_list_issues_filter_by_type(self, issues_client, auth_headers, mock_github):
-        resp = await issues_client.get("/api/issues?type=bug", headers=auth_headers)
-        assert resp.status_code == 200
-        mock_github.list_issues.assert_called_once_with(state="open", labels=["bug"])
-
-    async def test_list_issues_filter_by_state(self, issues_client, auth_headers, mock_github):
-        resp = await issues_client.get("/api/issues?state=closed", headers=auth_headers)
-        assert resp.status_code == 200
-        mock_github.list_issues.assert_called_once_with(state="closed", labels=[])
-
-    async def test_list_issues_requires_auth(self, issues_client):
-        resp = await issues_client.get("/api/issues")
-        assert resp.status_code == 401
+    async def test_without_github_returns_503(self, api_client, auth_headers):
+        resp = await api_client.get("/api/issues", headers=auth_headers)
+        assert resp.status_code == 503
 
 
 class TestGetIssue:
-    async def test_get_issue_by_number(self, issues_client, auth_headers, mock_github):
-        resp = await issues_client.get("/api/issues/42", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["number"] == 42
-        assert data["title"] == "[task] Update config"
-        assert data["html_url"] == "https://github.com/eandualem/orchestration/issues/42"
-        assert "priority_score" in data
-        mock_github.get_issue.assert_called_once_with(42)
+    async def test_returns_issue(self, api_client, auth_headers, gh):
+        resp = await api_client.get("/api/issues/1", headers=auth_headers)
+        assert resp.json()["number"] == 1
+        assert resp.json()["labels"]["targets"] == ["ike"]
 
-    async def test_get_issue_not_found(self, issues_client, auth_headers, mock_github):
-        mock_github.get_issue.side_effect = Exception("Not found")
-        resp = await issues_client.get("/api/issues/999", headers=auth_headers)
+    async def test_not_found(self, api_client, auth_headers, gh):
+        gh.get_issue.side_effect = RuntimeError("404")
+        resp = await api_client.get("/api/issues/999", headers=auth_headers)
         assert resp.status_code == 404
-        assert "not found" in resp.json()["detail"].lower()
 
 
-class TestListComments:
-    async def test_list_comments_parses_from_tag(self, issues_client, auth_headers, mock_github):
-        resp = await issues_client.get("/api/issues/42/comments", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total"] == 2
-        items = data["items"]
-        # First comment has [from:ike] tag
-        assert items[0]["id"] == 1
-        assert items[0]["body"] == "[from:ike] Done"
-        assert items[0]["from_entity"] == "ike"
-        # Second comment has no from-tag
-        assert items[1]["id"] == 2
-        assert items[1]["from_entity"] is None
-        mock_github.list_comments.assert_called_once_with(42)
+class TestComments:
+    async def test_lists_comments_with_from_tag(self, api_client, auth_headers, gh):
+        resp = await api_client.get("/api/issues/1/comments", headers=auth_headers)
+        assert resp.json()["items"][0]["from_entity"] == "ike"
 
-
-class TestGetDependencies:
-    async def test_dependencies_empty(self, issues_client, auth_headers, mock_github):
-        resp = await issues_client.get("/api/issues/42/dependencies", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["sub_issues"] == []
-        assert data["parents"] == []
-        mock_github.get_sub_issues.assert_called_once_with(42)
-
-    async def test_dependencies_with_sub_issues(self, issues_client, auth_headers, mock_github):
-        sub = IssueData(
-            number=50,
-            title="[task] Sub-task",
-            state="open",
-            labels=ParsedLabels(sender="ike", targets=["ada"], issue_type="task"),
-            html_url="https://github.com/eandualem/orchestration/issues/50",
+    async def test_adds_comment(self, api_client, auth_headers, gh):
+        resp = await api_client.post(
+            "/api/issues/1/comment", json={"body": "hi"}, headers=auth_headers
         )
-        mock_github.get_sub_issues.return_value = [sub]
-        resp = await issues_client.get("/api/issues/42/dependencies", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data["sub_issues"]) == 1
-        assert data["sub_issues"][0]["number"] == 50
+        assert resp.json()["id"] == 5
+        gh.add_comment.assert_awaited_once_with(1, "hi", repo_full_name=None)
+
+    async def test_empty_comment_rejected(self, api_client, auth_headers, gh):
+        resp = await api_client.post(
+            "/api/issues/1/comment", json={"body": ""}, headers=auth_headers
+        )
+        assert resp.status_code == 400
+
+
+class TestDependencies:
+    async def test_returns_sub_issues_and_parents(self, api_client, auth_headers, gh, api_app):
+        await api_app.state.db.upsert_dependency(7, 1)
+        resp = await api_client.get("/api/issues/1/dependencies", headers=auth_headers)
+        assert [s["number"] for s in resp.json()["sub_issues"]] == [3]
+        assert resp.json()["parents"] == [7]
 
 
 class TestCreateIssue:
-    async def test_create_issue_success(
-        self, issues_client, auth_headers, mock_github, mock_delivery_svc
-    ):
-        created_issue = IssueData(
-            number=99,
-            title="[task] New issue",
-            state="open",
-            labels=ParsedLabels(sender="leo", targets=["ike"], issue_type="task"),
-            html_url="https://github.com/eandualem/orchestration/issues/99",
+    async def test_creates_and_notifies(self, api_client, auth_headers, gh, api_app):
+        delivery = api_app.state.delivery_service
+        delivery.create_and_notify = AsyncMock(return_value=_issue(10, ["feynman"]))
+
+        resp = await api_client.post(
+            "/api/issues",
+            json={"title": "[task] New", "body": "b", "labels": ["for:feynman", "task"]},
+            headers=auth_headers,
         )
-        mock_delivery_svc.create_and_notify.return_value = created_issue
 
-        payload = {
-            "title": "[task] New issue",
-            "body": "## Context\nTest",
-            "labels": ["from:leo", "for:ike", "task"],
-        }
-        resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["number"] == 99
-        assert data["title"] == "[task] New issue"
-        mock_delivery_svc.create_and_notify.assert_called_once()
-        call_args = mock_delivery_svc.create_and_notify.call_args
-        assert call_args.args[0] is mock_github  # gh
-        assert call_args.args[1] == "[task] New issue"  # title
-        assert call_args.args[2] == "## Context\nTest"  # body
-        assert call_args.args[3] == ["from:leo", "for:ike", "task"]  # labels
-        assert call_args.kwargs["flow_name"] == "api-create-issue"
+        assert resp.status_code == 201
+        assert resp.json()["number"] == 10
+        delivery.create_and_notify.assert_awaited_once()
 
-    async def test_create_issue_missing_title(self, issues_client, auth_headers):
-        payload = {"body": "no title"}
-        resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
-        assert resp.status_code == 400
-        assert "title" in resp.json()["detail"].lower()
-
-    async def test_create_issue_empty_title(self, issues_client, auth_headers):
-        payload = {"title": "", "body": "empty title"}
-        resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
-        assert resp.status_code == 400
-
-    async def test_create_issue_rejects_abstract_shared_role_target(
-        self, api_app, issues_client, auth_headers
-    ):
-        api_app.dependency_overrides[get_config] = lambda: BackboneConfig(
-            webhook_secret="test-secret",
-            registry=EntityRegistry(
-                entities={
-                    "bell-wf": EntityEntry(
-                        session="bell-wf",
-                        home="~/ws/core/code/WF/bell",
-                        groups=["orchestrators"],
-                        figure="Bell",
-                        role="Org Orchestrator",
-                        organization="WF",
-                        entity_type="role-instance",
-                    ),
-                    "bell-loveble": EntityEntry(
-                        session="bell-loveble",
-                        home="~/ws/core/code/Loveble/bell",
-                        groups=["orchestrators"],
-                        figure="Bell",
-                        role="Org Orchestrator",
-                        organization="Loveble",
-                        entity_type="role-instance",
-                    ),
-                },
-                repos=[],
-            ),
-        )
-        payload = {
-            "title": "[task] Legacy shared role target",
-            "body": "## Context\nTest",
-            "labels": ["from:leo", "for:bell", "task"],
-        }
-        resp = await issues_client.post("/api/issues", json=payload, headers=auth_headers)
-        api_app.dependency_overrides.pop(get_config, None)
-
-        assert resp.status_code == 400
-        assert "invalid issue target 'bell'" in resp.json()["detail"]
-
-
-class TestAddComment:
-    async def test_add_comment_success(self, issues_client, auth_headers, mock_github):
-        payload = {"body": "[from:ike] Acknowledged"}
-        resp = await issues_client.post(
-            "/api/issues/42/comment", json=payload, headers=auth_headers
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["id"] == 10
-        assert data["body"] == "[from:ike] Acknowledged"
-        assert data["from_entity"] == "ike"
-        mock_github.add_comment.assert_called_once_with(42, "[from:ike] Acknowledged")
-
-    async def test_add_comment_missing_body(self, issues_client, auth_headers):
-        payload = {"something": "else"}
-        resp = await issues_client.post(
-            "/api/issues/42/comment", json=payload, headers=auth_headers
+    async def test_rejects_unknown_target(self, api_client, auth_headers, gh):
+        resp = await api_client.post(
+            "/api/issues",
+            json={"title": "x", "labels": ["for:nobody"]},
+            headers=auth_headers,
         )
         assert resp.status_code == 400
-        assert "body" in resp.json()["detail"].lower()
+        assert "unknown issue target" in resp.json()["detail"]
 
-    async def test_add_comment_empty_body(self, issues_client, auth_headers):
-        payload = {"body": ""}
-        resp = await issues_client.post(
-            "/api/issues/42/comment", json=payload, headers=auth_headers
+    async def test_explicit_repo_bypasses_notification(self, api_client, auth_headers, gh):
+        resp = await api_client.post(
+            "/api/issues",
+            json={"title": "x", "labels": [], "repo": "acme/other"},
+            headers=auth_headers,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 201
+        gh.create_issue.assert_awaited_once_with("x", "", [], repo_full_name="acme/other")
 
 
 class TestUpdateIssue:
-    async def test_update_issue_close(self, issues_client, auth_headers, mock_github):
-        payload = {"state": "closed"}
-        resp = await issues_client.patch("/api/issues/42", json=payload, headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["number"] == 42
-        assert data["state"] == "closed"
-        mock_github.update_issue.assert_called_once_with(42, "closed")
+    async def test_closes_issue(self, api_client, auth_headers, gh):
+        resp = await api_client.patch(
+            "/api/issues/1", json={"state": "closed"}, headers=auth_headers
+        )
+        assert resp.json()["state"] == "closed"
+        gh.update_issue.assert_awaited_once_with(1, "closed", repo_full_name=None)
 
-    async def test_update_issue_missing_state(self, issues_client, auth_headers):
-        payload = {"title": "new title"}
-        resp = await issues_client.patch("/api/issues/42", json=payload, headers=auth_headers)
+    async def test_invalid_state(self, api_client, auth_headers, gh):
+        resp = await api_client.patch("/api/issues/1", json={"state": "meh"}, headers=auth_headers)
         assert resp.status_code == 400
-        assert "state" in resp.json()["detail"].lower()

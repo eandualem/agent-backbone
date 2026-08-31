@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from agent_backbone.config import BackboneConfig, GatewayConfig, GitHubConfig
+from agent_backbone.config import (
+    AgentsConfig,
+    AgentSpec,
+    BackboneConfig,
+    BackboneSection,
+    GitHubConfig,
+    RoutingConfig,
+)
 from agent_backbone.models import (
     CommentData,
     EventType,
@@ -18,136 +24,82 @@ from agent_backbone.models import (
     ParsedLabels,
 )
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.registry import EntityEntry, EntityRegistry
 
 _TEST_GITHUB_APP_KEY = Path(__file__).parent / "fixtures" / "github-app-test-key.pem"
 
+TEST_API_KEY = "test-api-key-123"
+TEST_REPO = "example/orchestration"
+
+# Agent names used throughout the suite. They are arbitrary test data.
+AGENT_NAMES = ("feynman", "ike", "leo", "ada", "brunel", "hamilton", "curie", "bell", "gallup")
+
+
+def make_agents(tmp_path: Path | None = None, names=AGENT_NAMES) -> AgentsConfig:
+    base = str(tmp_path) if tmp_path else "~/agents"
+    return AgentsConfig(
+        specs={name: AgentSpec(name=name, dir=f"{base}/{name}", runtime="claude") for name in names}
+    )
+
+
+def make_config(tmp_path: Path, **overrides) -> BackboneConfig:
+    """Build a test config with agents and a temp data dir."""
+    defaults = dict(
+        api_key=TEST_API_KEY,
+        webhook_secret="test-secret",
+        github_token="ghp_test",
+        backbone=BackboneSection(data_dir=str(tmp_path / "data"), port=7120),
+        agents=make_agents(tmp_path),
+        github=GitHubConfig(repo=TEST_REPO),
+        routing=RoutingConfig(ignore_targets=frozenset({"elias"})),
+    )
+    defaults.update(overrides)
+    config = BackboneConfig(**defaults)
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    return config
+
 
 @pytest.fixture(autouse=True)
-def reset_flow_services():
-    """Reset the flow service locator between tests."""
+def reset_module_state():
+    """Reset module-level caches between tests."""
     from agent_backbone.api.session_updates import reset_sessions_update_state
-    from agent_backbone.services._locator import reset
+    from agent_backbone.services.routing import _dedup
 
     yield
-    reset()
+    _dedup.clear()
     reset_sessions_update_state()
 
 
 @pytest.fixture
-def config():
-    """Test BackboneConfig with dummy values."""
-    test_registry = EntityRegistry(
-        entities={
-            "feynman": EntityEntry(
-                session="feynman",
-                home="~/orchestration",
-                groups=["orchestrators"],
-                figure="Richard Feynman",
-                role="Orchestration Optimizer",
-            ),
-            "ike": EntityEntry(
-                session="ike",
-                home="~/ws/core/ike",
-                groups=["orchestrators"],
-                figure="Dwight Eisenhower",
-                role="Core Orchestrator",
-            ),
-            "leo": EntityEntry(
-                session="leo",
-                home="~/ws/leo",
-                groups=["orchestrators"],
-                figure="Leonardo da Vinci",
-                role="Strategy Co-Architect",
-            ),
-            "ada": EntityEntry(
-                session="ada",
-                home="~/ws/core/spec",
-                groups=["standalone"],
-                figure="Ada Lovelace",
-                role="Spec Agent",
-            ),
-            "brunel": EntityEntry(
-                session="brunel",
-                home="~/infra",
-                groups=["orchestrators"],
-                figure="Isambard Kingdom Brunel",
-                role="Infrastructure Agent",
-            ),
-            "hamilton": EntityEntry(
-                session="hamilton",
-                home="~/ws/core/hamilton",
-                groups=["orchestrators"],
-                figure="Alexander Hamilton",
-                role="Arclio Orchestrator",
-            ),
-            "curie": EntityEntry(
-                session="curie",
-                home="~/ws/core/curie",
-                groups=["orchestrators"],
-                figure="Marie Curie",
-                role="Loveble Orchestrator",
-            ),
-            "bell": EntityEntry(
-                session="bell",
-                home="~/ws/core/bell",
-                groups=["orchestrators"],
-                figure="Alexander Graham Bell",
-                role="WF Orchestrator",
-            ),
-            "gallup": EntityEntry(
-                session="gallup",
-                home="~/ws/core/gallup",
-                groups=["standalone"],
-                figure="George Gallup",
-                role="Market Research",
-            ),
-        },
-        repos=[],
-    )
-    return BackboneConfig(
-        webhook_secret="test-secret",
-        github_app_id=3075015,
-        github_app_private_key_path=str(_TEST_GITHUB_APP_KEY),
-        gateway=GatewayConfig(port=7120),
-        github=GitHubConfig(owner="eandualem", repo="orchestration"),
-        registry=test_registry,
-    )
+def config(tmp_path):
+    """Test BackboneConfig with agents and a temp data dir."""
+    return make_config(tmp_path)
 
 
 @pytest.fixture
 def sample_labels():
-    """Sample parsed labels."""
-    return ParsedLabels(
-        sender="leo",
-        targets=["ike"],
-        issue_type="task",
-        priority="",
-    )
+    return ParsedLabels(sender="leo", targets=["ike"], issue_type="task", priority="")
 
 
 @pytest.fixture
 def sample_issue(sample_labels):
-    """Sample issue data."""
     return IssueData(
         number=42,
         title="[task] Update config",
         state="open",
         labels=sample_labels,
-        html_url="https://github.com/eandualem/orchestration/issues/42",
-        repo_full_name="eandualem/orchestration",
+        html_url=f"https://github.com/{TEST_REPO}/issues/42",
+        repo_full_name=TEST_REPO,
     )
 
 
 @pytest.fixture
 def sample_comment():
-    """Sample comment data."""
-    return CommentData(body="This is a test comment", user_login="eandualem")
+    return CommentData(body="This is a test comment", user_login="someone")
 
 
 @pytest.fixture
 def sample_issue_event(sample_issue):
-    """Sample issue opened event."""
     return IssueEvent(
         event_type=EventType.ISSUE_OPENED,
         issue=sample_issue,
@@ -157,7 +109,6 @@ def sample_issue_event(sample_issue):
 
 @pytest.fixture
 def sample_comment_event(sample_issue, sample_comment):
-    """Sample comment created event."""
     return IssueEvent(
         event_type=EventType.COMMENT_CREATED,
         issue=sample_issue,
@@ -168,112 +119,82 @@ def sample_comment_event(sample_issue, sample_comment):
 
 @pytest.fixture
 def sample_close_event():
-    """Sample issue closed event."""
     labels = ParsedLabels(sender="ike", targets=["feynman"], issue_type="task")
-    issue = IssueData(number=10, title="[task] Fix something", state="closed", labels=labels)
+    issue = IssueData(
+        number=10,
+        title="[task] Fix something",
+        state="closed",
+        labels=labels,
+        repo_full_name=TEST_REPO,
+    )
     return IssueEvent(event_type=EventType.ISSUE_CLOSED, issue=issue)
 
 
 @pytest.fixture
 def mock_tmux():
-    """Mock tmux operations."""
+    """Mock tmux operations behind the TmuxService facade."""
     with (
         patch(
-            "agent_backbone.services.terminal.interface.session_exists", new_callable=AsyncMock
+            "agent_backbone.services.terminal.interface._session_exists", new_callable=AsyncMock
         ) as mock_exists,
         patch(
-            "agent_backbone.services.terminal.interface.send_message", new_callable=AsyncMock
-        ) as mock_send,
-        patch(
-            "agent_backbone.services.terminal.interface.list_sessions", new_callable=AsyncMock
+            "agent_backbone.services.terminal.interface._list_sessions", new_callable=AsyncMock
         ) as mock_list,
     ):
         mock_exists.return_value = True
-        mock_send.return_value = True
-        mock_list.return_value = [
-            "feynman",
-            "ike",
-            "leo",
-            "ada",
-            "brunel",
-            "hamilton",
-            "curie",
-            "bell",
-            "gallup",
-        ]
-        yield {
-            "session_exists": mock_exists,
-            "send_message": mock_send,
-            "list_sessions": mock_list,
-        }
+        mock_list.return_value = list(AGENT_NAMES)
+        yield {"session_exists": mock_exists, "list_sessions": mock_list}
 
 
 @pytest.fixture
 def github_issue_json():
-    """Raw GitHub issue JSON as returned by the API."""
     return {
         "number": 42,
         "title": "[task] Update config",
         "state": "open",
-        "html_url": "https://github.com/eandualem/orchestration/issues/42",
-        "labels": [
-            {"name": "from:leo"},
-            {"name": "for:ike"},
-            {"name": "task"},
-        ],
+        "html_url": f"https://github.com/{TEST_REPO}/issues/42",
+        "labels": [{"name": "from:leo"}, {"name": "for:ike"}, {"name": "task"}],
     }
 
 
 @pytest.fixture
 def webhook_payload(github_issue_json):
-    """Raw webhook payload for an issue opened event."""
     return {
         "action": "opened",
         "issue": github_issue_json,
-        "repository": {"full_name": "eandualem/orchestration"},
+        "repository": {"full_name": TEST_REPO},
     }
 
 
 @pytest.fixture
-async def api_app(config, tmp_path):
-    """Create a FastAPI app with test config and in-memory DB.
+async def api_app(config):
+    """FastAPI app with test config and in-memory DB (lifespan is not run).
 
-    create_app() returns a socketio.ASGIApp wrapping FastAPI.
-    Tests need the inner FastAPI app for dependency_overrides and state.
+    create_app() returns a socketio.ASGIApp wrapping FastAPI; tests need the
+    inner FastAPI app for dependency_overrides and state.
     """
     from agent_backbone.api.app import create_app
+    from agent_backbone.base import LifecycleManager
+    from agent_backbone.services.agents.interface import StateService
+    from agent_backbone.services.database import build_engine
+    from agent_backbone.services.routing import DeliveryService, DispatchService
+    from agent_backbone.services.terminal import TmuxService
 
-    asgi_app = create_app()
-    # Extract the inner FastAPI app from the socketio.ASGIApp wrapper
+    asgi_app = create_app(config)
     app = asgi_app.other_asgi_app
 
-    # Override config with test config using in-memory DB
-    from dataclasses import replace
-
-    from agent_backbone.base import LifecycleManager
-    from agent_backbone.config import DeliveryConfig
-
-    test_config = replace(
-        config,
-        delivery=DeliveryConfig(),
-    )
-    app.state.config = test_config
-
-    # Wire lifecycle and services for tests
-    from sqlalchemy.ext.asyncio import create_async_engine
-
     app.state.lifecycle = LifecycleManager()
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    engine = build_engine("sqlite+aiosqlite:///:memory:")
     db = BackboneDB(engine)
     await db.start()
     app.state.db = db
     app.state.github = None  # Tests override via dependency_overrides when needed
-
-    # Non-lifecycle services for DI
-    from agent_backbone.services.automation import OnboardingService, WorkflowsService
-
-    app.state.onboarding_service = OnboardingService()
-    app.state.workflows_service = WorkflowsService()
+    app.state.state_service = StateService(config.state_dir, db=db)
+    app.state.tmux_service = TmuxService()
+    app.state.delivery_service = DeliveryService()
+    app.state.dispatch_service = DispatchService()
+    app.state.telegram_service = None
+    app.state.scheduler = None
 
     yield app
 
@@ -283,7 +204,6 @@ async def api_app(config, tmp_path):
 
 @pytest.fixture
 async def api_client(api_app):
-    """Async test client for the FastAPI app."""
     transport = ASGITransport(app=api_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
@@ -291,14 +211,9 @@ async def api_client(api_app):
 
 @pytest.fixture
 def api_key():
-    """Set and return a test API key."""
-    key = "test-api-key-123"
-    os.environ["BACKBONE_API_KEY"] = key
-    yield key
-    os.environ.pop("BACKBONE_API_KEY", None)
+    return TEST_API_KEY
 
 
 @pytest.fixture
 def auth_headers(api_key):
-    """Authorization headers with test API key."""
     return {"Authorization": f"Bearer {api_key}"}

@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
 from agent_backbone.services.terminal import (
     TerminalRuntime,
     close_pane,
@@ -23,7 +22,6 @@ from agent_backbone.services.terminal import (
     query_format_vars,
     rename_window,
     resize_pane,
-    resolve_agent_dir,
     select_window,
     send_keys,
     send_message,
@@ -355,60 +353,6 @@ class TestSendKeys:
             assert await send_keys("offline", "Escape") is False
 
 
-class TestResolveAgentDir:
-    def _make_registry(self, entities=None, repos=None):
-        return EntityRegistry(
-            entities=entities or {},
-            repos=repos or [],
-        )
-
-    def test_named_entity_feynman(self):
-        registry = self._make_registry(
-            entities={
-                "feynman": EntityEntry(
-                    session="feynman",
-                    home="~/orchestration",
-                    groups=[],
-                    figure="",
-                    role="",
-                ),
-            }
-        )
-        result = resolve_agent_dir("feynman", registry)
-        assert result.endswith("orchestration")
-
-    def test_named_entity_ike(self):
-        registry = self._make_registry(
-            entities={
-                "ike": EntityEntry(
-                    session="ike", home="~/ws/core/ike", groups=[], figure="", role=""
-                ),
-            }
-        )
-        result = resolve_agent_dir("ike", registry)
-        assert "ws/core/ike" in result
-
-    def test_coding_repo_found(self, tmp_path):
-        repo_dir = tmp_path / "my-repo"
-        repo_dir.mkdir()
-        registry = self._make_registry(
-            repos=[
-                RepoInfo(org="WF", name="my-repo", path=str(repo_dir)),
-            ]
-        )
-        result = resolve_agent_dir("my-repo", registry)
-        assert result == str(repo_dir)
-
-    def test_unknown_returns_empty(self):
-        registry = self._make_registry()
-        result = resolve_agent_dir("nonexistent-xyz", registry)
-        assert result == ""
-
-    def test_no_registry_returns_empty(self):
-        result = resolve_agent_dir("feynman")
-        assert result == ""
-
-
 class TestStartSession:
     async def test_start_with_working_dir_and_command(self, mock_subprocess):
         with patch(
@@ -425,7 +369,6 @@ class TestStartSession:
                 "test",
                 working_dir="/tmp/wd",
                 command=["claude"],
-                apply_theme=False,
             )
             assert result is True
             call_args = mock_subprocess.call_args_list[0][0]  # first call positional args
@@ -439,7 +382,7 @@ class TestStartSession:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            result = await start_session("ike", apply_theme=False)
+            result = await start_session("ike")
             assert result is True
             mock_subprocess.assert_not_called()
 
@@ -454,7 +397,7 @@ class TestStartSession:
             proc.communicate = AsyncMock(return_value=(b"", b""))
             proc.wait = AsyncMock()
             mock_subprocess.return_value = proc
-            result = await start_session("test", apply_theme=False)
+            result = await start_session("test")
             assert result is True
             call_args = mock_subprocess.call_args_list[0][0]
             assert "-c" not in call_args
@@ -475,7 +418,6 @@ class TestStartSession:
                 "test",
                 working_dir="/tmp/wd",
                 command=["claude", "--model", "opus"],
-                apply_theme=False,
             )
             assert result is True
             call_args = mock_subprocess.call_args_list[0][0]
@@ -1004,7 +946,6 @@ class TestStartSessionEnvironment:
             result = await start_session(
                 "test",
                 command=["uv", "run", "prefect", "worker", "start"],
-                apply_theme=False,
                 environment={"PREFECT_API_URL": "http://127.0.0.1:4200/api"},
             )
 
@@ -1030,7 +971,6 @@ class TestStartSessionEnvironment:
 
             result = await start_session(
                 "test",
-                apply_theme=False,
                 environment={"MY_VAR": "hello", "OTHER": "world"},
             )
             assert result is True
@@ -1051,7 +991,7 @@ class TestStartSessionEnvironment:
             proc.wait = AsyncMock()
             mock_subprocess.return_value = proc
 
-            result = await start_session("test", apply_theme=False)
+            result = await start_session("test")
             assert result is True
             set_env_calls = [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
             assert len(set_env_calls) == 0
@@ -1078,7 +1018,6 @@ class TestStartSessionEnvironment:
 
             result = await start_session(
                 "test",
-                apply_theme=False,
                 environment={"BAD_VAR": "value"},
             )
             # Session creation succeeded, env var failure is non-fatal

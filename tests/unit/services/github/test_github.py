@@ -20,7 +20,7 @@ def config():
     return BackboneConfig(
         github_app_id=3075015,
         github_app_private_key_path=str(_TEST_GITHUB_APP_KEY),
-        github=GitHubConfig(owner="eandualem", repo="orchestration"),
+        github=GitHubConfig(repo="eandualem/orchestration"),
     )
 
 

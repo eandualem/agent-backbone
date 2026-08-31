@@ -40,9 +40,8 @@ class TestRunTmux:
         current_concurrent = 0
         lock = asyncio.Lock()
 
-        original_semaphore = core_mod._semaphore
-        # Use a semaphore with limit 5 (matching _MAX_CONCURRENT)
-        core_mod._semaphore = asyncio.Semaphore(5)
+        # Start from a clean per-loop semaphore (limit _MAX_CONCURRENT == 5)
+        core_mod._semaphores.clear()
 
         async def fake_exec(*args, **kwargs):
             nonlocal max_concurrent_seen, current_concurrent
@@ -69,7 +68,7 @@ class TestRunTmux:
                 coros = [_run_tmux("has-session", "-t", f"s{i}") for i in range(10)]
                 await asyncio.gather(*coros)
         finally:
-            core_mod._semaphore = original_semaphore
+            core_mod._semaphores.clear()
 
         assert max_concurrent_seen <= 5
 
