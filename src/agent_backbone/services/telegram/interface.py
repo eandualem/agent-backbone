@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import httpx
@@ -44,12 +45,21 @@ async def send_notification(token: str, chat_id: int, text: str) -> bool:
 class TelegramService:
     """Telegram bot for agent backbone management."""
 
-    def __init__(self, config: BackboneConfig, db: BackboneDB | None = None) -> None:
-        self._config = config
+    def __init__(
+        self,
+        config: BackboneConfig | Callable[[], BackboneConfig],
+        db: BackboneDB | None = None,
+    ) -> None:
+        self._config_provider = config if callable(config) else (lambda: config)
         self._db = db
         self._app: Application | None = None
-        self._discovery = load_discovery(config.telegram_topic_discovery_path)
+        self._discovery = load_discovery(self._config.telegram_topic_discovery_path)
         self._running = False
+
+    @property
+    def _config(self) -> BackboneConfig:
+        """Always the latest published configuration snapshot."""
+        return self._config_provider()
 
     @property
     def enabled(self) -> bool:
@@ -140,8 +150,8 @@ class TelegramService:
             return
         if not self._config.telegram.allowed_chat_ids:
             log.error(
-                "Telegram bot NOT started: [telegram] allowed_chat_ids is empty. "
-                "Add your chat id (use /identify after a temporary allowlist) to enable."
+                "Telegram bot NOT started: telegram.allowed_chat_ids is empty. "
+                "Run `backbone config set telegram.allowed_chat_ids '[<your chat id>]'`."
             )
             return
         app = self.build_app()

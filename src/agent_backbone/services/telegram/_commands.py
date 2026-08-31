@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from agent_backbone.services.telegram.interface import TelegramService
 
 from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.infrastructure._agents import start_agent, stop_agent
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.telegram._routing import _delivery_reply
@@ -21,6 +20,13 @@ from agent_backbone.services.telegram._topic_discovery import process_message_fo
 from agent_backbone.services.terminal import list_sessions, send_keys, session_exists
 
 log = logging.getLogger(__name__)
+
+
+def _ref(row: dict) -> str:
+    """Short reference for a delivery row: ``repo#N`` or the kind."""
+    if row.get("issue_number"):
+        return f"{row.get('repo') or ''}#{row['issue_number']}"
+    return row.get("kind") or "message"
 
 
 def _authorized(bot: TelegramService, update: Update) -> bool:
@@ -88,12 +94,12 @@ async def cmd_queue(
     if failed:
         lines.append(f"*Failed/Pending:* {len(failed)}")
         for d in failed[:5]:
-            lines.append(f"  • #{d['issue_number']} → {d['target_entity']} ({d['outcome']})")
+            lines.append(f"  • {_ref(d)} → {d['target_entity']} ({d['outcome']})")
 
     if recent:
         lines.append(f"\n*Recent Deliveries:* {len(recent)}")
         for d in recent[:5]:
-            lines.append(f"  • #{d['issue_number']} → {d['target_entity']} ({d['outcome']})")
+            lines.append(f"  • {_ref(d)} → {d['target_entity']} ({d['outcome']})")
 
     text = "\n".join(lines) if lines else "No delivery records."
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -227,8 +233,9 @@ async def cmd_identify(
         await update.message.reply_text(
             f"Thread ID: `{thread_id}`\n"
             f"Not yet mapped.{name_line}\n"
-            f"Add to `backbone.toml`:\n"
-            f'```\n[telegram.topic_routes]\n{thread_id} = "agent-name"\n```',
+            f"Map it with:\n"
+            f"```\nbackbone config set telegram.topic_routes "
+            f'\'{{"{thread_id}": "agent-name"}}\'\n```',
             parse_mode="Markdown",
         )
 
@@ -247,7 +254,7 @@ async def cmd_viewplan(
     agent = context.args[0]
     snapshot = read_state_file(bot._config.state_dir, agent)
 
-    if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
+    if not snapshot or not snapshot.is_plan_waiting:
         state_str = snapshot.state.value if snapshot else "unknown"
         await update.message.reply_text(
             f"Agent `{agent}` is not waiting for plan approval (state: {state_str})",
@@ -283,7 +290,7 @@ async def cmd_approve(
     if not bot._config.security.allow_remote_plan_control:
         await update.message.reply_text(
             "Remote plan approval is disabled. Enable with "
-            "`[security] allow_remote_plan_control = true` in backbone.toml.",
+            "`backbone config set security.allow_remote_plan_control true`.",
             parse_mode="Markdown",
         )
         return
@@ -295,7 +302,7 @@ async def cmd_approve(
     agent = context.args[0]
     snapshot = read_state_file(bot._config.state_dir, agent)
 
-    if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
+    if not snapshot or not snapshot.is_plan_waiting:
         state_str = snapshot.state.value if snapshot else "unknown"
         await update.message.reply_text(
             f"Agent `{agent}` is not waiting for plan approval (state: {state_str})",

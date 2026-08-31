@@ -1,22 +1,25 @@
-"""GitHub polling connector — the no-webhook path.
+"""GitHub polling connector.
 
-Every ``poll_interval_seconds`` the poller asks GitHub for issues and comments
-updated since the last run in the coordination repository and in every
-repository owned by an agent, turns them into the same ``IssueEvent`` objects
-the webhook produces, and hands them to the routing layer. Delivery ids are
-synthesised from the item's id and update time and recorded in the dedup log,
-so restarts and overlapping windows do not double-deliver.
+Used two ways:
 
-The checkpoint (``since`` per repository) is a small JSON file in the data dir.
+* **poll intake** (no webhook secret): every ``github.poll_interval_seconds``
+  ask GitHub for issues and comments updated since the last run in every
+  repository an agent owns or watches.
+* **backfill** (webhook intake): run once at startup to catch what happened
+  while the backbone was down.
+
+Both produce the same ``IssueEvent`` objects the webhook produces and hand
+them to ``dispatch_event``. Delivery ids are synthesised from the item id and
+update time; the ``events`` table dedups them, so overlapping windows and
+restarts never double-deliver. The "since" point per repository is the
+newest stored event for that repository (or the configured lookback).
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agent_backbone.models import IssueEvent
@@ -29,8 +32,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-CHECKPOINT_FILENAME = "github-poll.json"
-_INITIAL_LOOKBACK = timedelta(minutes=5)
+_OVERLAP = timedelta(minutes=2)
 
 
 def _iso(dt: datetime) -> str:
@@ -42,42 +44,8 @@ def _parse(value: str) -> datetime:
 
 
 def polled_repos(config: BackboneConfig) -> list[str]:
-    """Coordination repo plus every agent-owned repo, deduplicated."""
-    repos: list[str] = []
-    if config.github.repo:
-        repos.append(config.github.repo)
-    for spec in config.agents:
-        if spec.repo and spec.repo not in repos:
-            repos.append(spec.repo)
-    return repos
-
-
-class PollCheckpoint:
-    """``since`` timestamps per repository, persisted as JSON."""
-
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self._since: dict[str, str] = {}
-        self._load()
-
-    def _load(self) -> None:
-        try:
-            raw = json.loads(self._path.read_text())
-            self._since = {str(k): str(v) for k, v in raw.get("since", {}).items()}
-        except (OSError, ValueError, AttributeError):
-            self._since = {}
-
-    def since(self, repo: str) -> str:
-        return self._since.get(repo) or _iso(datetime.now(UTC) - _INITIAL_LOOKBACK)
-
-    def advance(self, repo: str, value: str) -> None:
-        self._since[repo] = value
-
-    def save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"since": self._since}, indent=2))
-        os.replace(tmp, self._path)
+    """Every repository an agent owns or watches, deduplicated."""
+    return list(config.agents.repos)
 
 
 def issue_event_from_api(
@@ -95,8 +63,6 @@ def issue_event_from_api(
     elif created and created >= since:
         action = "opened"
     else:
-        # Edited/labelled issue. The dispatcher's claims and dedup make
-        # re-delivery of an already-delivered issue a no-op.
         action = "labeled"
 
     delivery_id = f"poll:{repo_full_name}#{item.get('number')}@{updated}"
@@ -129,26 +95,48 @@ class GitHubPoller:
 
     def __init__(
         self,
-        config: BackboneConfig,
+        config: BackboneConfig | Callable[[], BackboneConfig],
         db: BackboneDB,
         gh: GitHubClient,
         delivery_svc: DeliveryService,
         dispatch_svc: DispatchService,
-        checkpoint_path: Path | None = None,
     ) -> None:
-        self._config = config
+        self._config_provider = config if callable(config) else (lambda: config)
         self._db = db
         self._gh = gh
         self._delivery_svc = delivery_svc
         self._dispatch_svc = dispatch_svc
-        self._checkpoint = PollCheckpoint(checkpoint_path or config.data_dir / CHECKPOINT_FILENAME)
+        self._since: dict[str, str] = {}
+
+    @property
+    def _config(self) -> BackboneConfig:
+        return self._config_provider()
+
+    async def _since_for(self, repo: str, last_events: dict[str, str]) -> str:
+        if repo in self._since:
+            return self._since[repo]
+        last = last_events.get(repo)
+        if last:
+            try:
+                return _iso(_parse(last) - _OVERLAP)
+            except ValueError:
+                pass
+        lookback = timedelta(hours=self._config.github.backfill_lookback_hours)
+        return _iso(datetime.now(UTC) - lookback)
 
     async def run(self) -> dict[str, int]:
         from agent_backbone.services.routing._ingest import dispatch_event
 
+        config = self._config
         summary: dict[str, int] = {}
-        for repo in polled_repos(self._config):
-            since = self._checkpoint.since(repo)
+        try:
+            last_events = await self._db.last_event_time_by_repo()
+        except Exception:
+            log.exception("Could not read last event times (using lookback)")
+            last_events = {}
+
+        for repo in polled_repos(config):
+            since = await self._since_for(repo, last_events)
             newest = since
             try:
                 issues = await self._gh.list_issues_since(repo, since)
@@ -174,27 +162,19 @@ class GitHubPoller:
                     try:
                         issue = await self._gh.get_issue_raw(number, repo)
                     except Exception:
-                        log.warning("Could not fetch issue #%d for comment (skipped)", number)
+                        log.warning("Could not fetch %s#%d for comment (skipped)", repo, number)
                         continue
                     issue_cache[number] = issue
                 events.append(comment_event_from_api(comment, issue, repo))
                 newest = max(newest, comment.get("updated_at", comment.get("created_at", "")))
 
             for event in events:
-                if self._db.is_duplicate(event.delivery_id, self._config.backbone.max_delivery_ids):
-                    summary["deduped"] = summary.get("deduped", 0) + 1
-                    continue
-                if await self._db.is_duplicate_delivery_id(event.delivery_id):
+                if self._db.is_duplicate(event.delivery_id, config.backbone.max_delivery_ids):
                     summary["deduped"] = summary.get("deduped", 0) + 1
                     continue
                 try:
                     outcome = await dispatch_event(
-                        event,
-                        self._config,
-                        self._db,
-                        self._gh,
-                        self._delivery_svc,
-                        self._dispatch_svc,
+                        event, config, self._db, self._gh, self._delivery_svc, self._dispatch_svc
                     )
                     key = outcome.split(":", 1)[0]
                     summary[key] = summary.get(key, 0) + 1
@@ -203,12 +183,10 @@ class GitHubPoller:
                     summary["errors"] = summary.get("errors", 0) + 1
 
             if newest > since:
-                # Nudge by one second so the newest item is not re-fetched forever.
-                self._checkpoint.advance(repo, _iso(_parse(newest) + timedelta(seconds=1)))
-            elif not self._checkpoint._since.get(repo):
-                self._checkpoint.advance(repo, since)
+                self._since[repo] = _iso(_parse(newest) + timedelta(seconds=1))
+            else:
+                self._since[repo] = since
 
-        self._checkpoint.save()
         if summary:
             log.info("GitHub poll: %s", summary)
         return summary

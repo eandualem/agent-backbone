@@ -64,9 +64,11 @@ def _b64url(data: bytes) -> str:
 class GitHubClient:
     """Async GitHub REST API client.
 
+    Every call names its repository: there is no default repository.
+
     Usage:
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:reviewer")
+            issues = await gh.list_open_issues("for:reviewer", repo_full_name="me/app")
     """
 
     def __init__(self, config: BackboneConfig) -> None:
@@ -127,24 +129,17 @@ class GitHubClient:
             "service": "github",
             "client_active": self._client is not None,
             "auth_mode": self.auth_mode,
-            "repo": self._config.github.repo,
         }
 
     # --- Repo resolution ---
 
-    def _default_repo_full_name(self) -> str:
-        return self._config.github.repo
-
     def _resolve_repo(self, repo_full_name: str | None = None) -> tuple[str, str]:
-        candidate = repo_full_name or self._default_repo_full_name()
+        candidate = repo_full_name or ""
         if candidate and "/" in candidate:
             owner, repo = candidate.split("/", 1)
             if owner and repo:
                 return owner, repo
-        raise ValueError(
-            'No GitHub repository configured — set [github] repo = "owner/name" '
-            "in backbone.toml or pass repo_full_name"
-        )
+        raise ValueError("A repository (owner/name) is required for GitHub operations")
 
     def _repo_key(self, repo_full_name: str | None = None) -> str:
         owner, repo = self._resolve_repo(repo_full_name)
@@ -267,7 +262,7 @@ class GitHubClient:
             state=item.get("state", "open"),
             labels=labels,
             html_url=item.get("html_url", ""),
-            repo_full_name=repo_full_name or self._default_repo_full_name(),
+            repo_full_name=repo_full_name or "",
         )
 
     # --- Raw listing (used by the poller) ---
@@ -426,7 +421,7 @@ class GitHubClient:
         labels: list[str] | None = None,
         repo_full_name: str | None = None,
     ) -> IssueData:
-        """Create a new issue (defaults to the configured coordination repo)."""
+        """Create a new issue in ``repo_full_name``."""
         owner, repo = self._resolve_repo(repo_full_name)
         payload: dict[str, Any] = {"title": title, "body": body}
         if labels:

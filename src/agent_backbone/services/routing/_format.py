@@ -125,6 +125,35 @@ def format_plan_notification(
     )
 
 
+def format_watch_notification(issue: IssueData) -> str:
+    """Informational notice for watchers (never queued as work)."""
+    labels = issue.labels
+    type_str = f" [{labels.issue_type}]" if labels.issue_type else ""
+    targets = f" for {', '.join(labels.targets)}" if labels.targets else ""
+    return (
+        f"[via:github issue:{issue.number}] "
+        f'FYI: new issue {_issue_ref(issue)}{type_str} "{issue.title}" '
+        f"(from {labels.sender}{targets}). {_link(issue)}"
+    ).rstrip()
+
+
+def format_unassigned_notification(issue: IssueData, owners: list[str]) -> str:
+    """An unlabelled issue in a repository with several owners."""
+    return (
+        f"[via:github issue:{issue.number}] "
+        f'Unassigned issue {_issue_ref(issue)} "{issue.title}" (from {issue.labels.sender}). '
+        f"Owners: {', '.join(owners)} — comment on it to claim it. {_link(issue)}"
+    ).rstrip()
+
+
+def format_closed_notification(issue: IssueData) -> str:
+    """Tell the opener that an issue they opened was closed."""
+    return (
+        f"[via:github issue:{issue.number}] "
+        f'Issue you opened was closed: {_issue_ref(issue)} "{issue.title}". {_link(issue)}'
+    ).rstrip()
+
+
 def format_next_issue_notification(issue: IssueData) -> str:
     """Format a close-then-next notification."""
     labels = issue.labels

@@ -24,9 +24,11 @@ def _delivery_reply(agent: str, status: str) -> str:
     if status == "offline":
         return f"`{agent}` is offline."
     if status == "agent_working":
-        return f"`{agent}` is busy."
-    if status == "plan_waiting":
-        return f"`{agent}` is awaiting plan approval."
+        return f"`{agent}` is busy — queued."
+    if status == "waiting_for_human":
+        return f"`{agent}` is waiting for a human — queued."
+    if status in ("human_typing", "settling"):
+        return f"`{agent}` has someone at the keyboard — queued."
     return f"Not delivered to `{agent}` ({status})."
 
 

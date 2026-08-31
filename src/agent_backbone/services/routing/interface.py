@@ -87,13 +87,14 @@ class DeliveryService:
         config: BackboneConfig,
         *,
         db: BackboneDB | None = None,
+        repo: str = "",
         issue_number: int | None = None,
         target_entity: str | None = None,
         flow_name: str = "",
         priority: bool = False,
         idle_since: float | None = None,
         enforce_issue_queue: bool = False,
-        queue_scope_issue_numbers: Collection[int] | None = None,
+        queue_scope: Collection[tuple[str, int]] | None = None,
         delivery_kind: str = "issue",
     ) -> str:
         """Deliver a message with state pre-checks."""
@@ -102,13 +103,14 @@ class DeliveryService:
             message,
             config,
             db=db,
+            repo=repo,
             issue_number=issue_number,
             target_entity=target_entity,
             flow_name=flow_name,
             priority=priority,
             idle_since=idle_since,
             enforce_issue_queue=enforce_issue_queue,
-            queue_scope_issue_numbers=queue_scope_issue_numbers,
+            queue_scope=queue_scope,
             delivery_kind=delivery_kind,
         )
 
@@ -119,16 +121,12 @@ class DeliveryService:
         body: str,
         labels: list[str],
         config: BackboneConfig,
+        *,
+        repo: str,
         db: BackboneDB | None = None,
         flow_name: str = "",
     ) -> IssueData:
         """Create an issue and notify targets."""
         return await _create_and_notify(
-            gh,
-            title,
-            body,
-            labels,
-            config,
-            db=db,
-            flow_name=flow_name,
+            gh, title, body, labels, config, repo=repo, db=db, flow_name=flow_name
         )

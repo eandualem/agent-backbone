@@ -26,14 +26,17 @@ from agent_backbone.services.routing._flows import (
 )
 from agent_backbone.services.routing._format import (
     NotificationService,
+    format_closed_notification,
     format_comment_notification,
     format_issue_notification,
     format_next_issue_notification,
     format_plan_notification,
     format_pull_request_notification,
     format_stall_notification,
+    format_unassigned_notification,
     format_unblock_notification,
     format_unexpected_offline_notification,
+    format_watch_notification,
 )
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing._lifecycle import (
@@ -50,8 +53,12 @@ from agent_backbone.services.routing._resolution import (
 )
 from agent_backbone.services.routing._router import issue_dispatcher
 from agent_backbone.services.routing._targets import (
+    EventRouting,
+    comment_audience,
     list_open_queue_for_target,
+    queue_scope,
     resolve_event_targets,
+    route_issue_event,
 )
 from agent_backbone.services.routing.exceptions import (
     DeliveryServiceError,
@@ -70,6 +77,13 @@ __all__ = [
     "DeliveryServiceError",
     "DispatchResult",
     "DispatchService",
+    "EventRouting",
+    "comment_audience",
+    "format_closed_notification",
+    "format_unassigned_notification",
+    "format_watch_notification",
+    "queue_scope",
+    "route_issue_event",
     "NotificationError",
     "NotificationService",
     "SessionIntelligence",

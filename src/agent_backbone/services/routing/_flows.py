@@ -1,9 +1,4 @@
-"""Delivery retry: re-attempt failed deliveries and drain the message queue.
-
-Run periodically by the in-process scheduler. Queries the persistence layer
-for failed/offline/deferred deliveries and retries them if the target agent
-is now online and idle.
-"""
+"""Delivery retry: re-attempt failed issue deliveries and drain the queue."""
 
 from __future__ import annotations
 
@@ -14,22 +9,11 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_next_issue_notification
-from agent_backbone.services.routing._targets import (
-    list_open_queue_for_target,
-    repo_full_name_for_target,
-)
+from agent_backbone.services.routing._targets import list_open_queue_for_target, queue_scope
 
 log = logging.getLogger(__name__)
 
-_BUSY_OUTCOMES = frozenset(
-    {
-        "agent_working",
-        "plan_waiting",
-        "permission_waiting",
-        "user_interacting",
-        "grace_period",
-    }
-)
+_BUSY_OUTCOMES = frozenset({"agent_working", "waiting_for_human", "human_typing", "settling"})
 
 
 async def drain_message_queue(
@@ -45,147 +29,127 @@ async def drain_message_queue(
     try:
         stale_leases = await db.expire_stale_leases(max_age_minutes=5)
         if stale_leases:
-            log.info("Recovered %d stale leased messages", stale_leases)
             summary["leases_recovered"] = stale_leases
     except Exception:
         log.exception("Failed to recover stale leases (non-fatal)")
 
     try:
-        expired = await db.expire_stale_pending(max_age_minutes=30)
+        expired = await db.expire_stale_pending(
+            max_age_minutes=config.delivery.queue_expiry_minutes
+        )
         if expired:
-            log.info("Expired %d stale queued messages (>30min old)", expired)
+            log.info(
+                "Expired %d queued messages (> %d min)",
+                expired,
+                config.delivery.queue_expiry_minutes,
+            )
             summary["queue_expired"] = expired
     except Exception:
         log.exception("Failed to expire stale messages (non-fatal)")
 
     queued_sessions = set(await db.get_sessions_with_pending())
-    all_sessions = set(active_sessions) | queued_sessions
-
-    for session_name in sorted(all_sessions):
+    for session_name in sorted(set(active_sessions) | queued_sessions):
         queued = await db.dequeue_messages(session_name, limit=5)
-        if not isinstance(queued, list) or not queued:
+        if not queued:
             continue
-
-        for msg_record in queued:
-            target_entity = msg_record.get("target_entity")
-            queue_scope: set[int] | None = None
-            if target_entity and gh is not None:
+        for record in queued:
+            target = record.get("target_entity")
+            scope: set[tuple[str, int]] | None = None
+            if target and gh is not None and record.get("delivery_kind") == "issue":
                 try:
-                    queue_scope = {
-                        item.number
-                        for item in await list_open_queue_for_target(config, target_entity, gh)
-                    }
+                    scope = queue_scope(await list_open_queue_for_target(config, target, gh))
                 except Exception:
-                    log.exception("Failed to load queue scope for %s (non-fatal)", target_entity)
-
-            q_outcome = await safe_deliver(
+                    log.exception("Failed to load queue scope for %s (non-fatal)", target)
+            outcome = await safe_deliver(
                 session_name,
-                msg_record["message"],
+                record["message"],
                 config,
                 db=db,
-                issue_number=msg_record.get("issue_number"),
-                target_entity=target_entity,
+                repo=record.get("repo") or "",
+                issue_number=record.get("issue_number"),
+                target_entity=target,
                 flow_name="delivery-retry-queue",
                 enforce_issue_queue=True,
-                queue_scope_issue_numbers=queue_scope,
-                delivery_kind=msg_record.get("delivery_kind", "issue"),
+                queue_scope=scope,
+                delivery_kind=record.get("delivery_kind", "issue"),
             )
-            if q_outcome == "delivered":
-                await db.mark_message_delivered(msg_record["id"])
-                summary["queue_delivered"] = summary.get("queue_delivered", 0) + 1
-            elif q_outcome == "already_delivered":
-                await db.mark_message_delivered(msg_record["id"])
-                summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
+            if outcome in ("delivered", "already_delivered"):
+                await db.mark_message_delivered(record["id"])
+                key = "queue_delivered" if outcome == "delivered" else "queue_cleared"
+                summary[key] = summary.get(key, 0) + 1
             else:
-                await db.release_lease(msg_record["id"])
-                break  # Stop draining this session if delivery fails
-
+                await db.release_lease(record["id"])
+                break
     return summary
 
 
 async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB, gh: object) -> str:
-    """Attempt to retry a single failed delivery.
-
-    Returns outcome string: retried, still_offline, still_busy, issue_closed, ...
-    """
+    """Re-attempt one failed issue delivery."""
     session_name = delivery["session_name"]
     issue_number = delivery["issue_number"]
-    target_entity = delivery["target_entity"]
+    target = delivery["target_entity"]
+    repo = delivery.get("repo") or ""
 
-    if await db.is_acknowledged(issue_number, target_entity):
+    if await db.is_acknowledged(issue_number, target, repo=repo):
         return "acknowledged"
-    if session_name != target_entity and await db.is_acknowledged(issue_number, session_name):
+    if session_name != target and await db.is_acknowledged(issue_number, session_name, repo=repo):
         return "acknowledged"
+    if not repo:
+        return "no_repo"
 
-    repo_full_name = repo_full_name_for_target(target_entity, config)
     try:
-        issue = await gh.get_issue(issue_number, repo_full_name=repo_full_name)
+        issue = await gh.get_issue(issue_number, repo_full_name=repo)
     except Exception:
-        log.warning("Failed to fetch issue #%d for retry", issue_number)
+        log.warning("Failed to fetch %s#%d for retry", repo, issue_number)
         return "fetch_failed"
-
     if issue.state == "closed":
         return "issue_closed"
 
-    message = format_next_issue_notification(issue)
-    queue_scope_issue_numbers = {
-        item.number
-        for item in await list_open_queue_for_target(
-            config,
-            target_entity,
-            gh,
-            issue_repo_full_name=issue.repo_full_name,
-        )
-    }
+    scope = queue_scope(await list_open_queue_for_target(config, target, gh))
     outcome = await safe_deliver(
         session_name,
-        message,
+        format_next_issue_notification(issue),
         config,
         db=db,
+        repo=repo,
         issue_number=issue_number,
-        target_entity=target_entity,
+        target_entity=target,
         flow_name="delivery-retry",
         enforce_issue_queue=True,
-        queue_scope_issue_numbers=queue_scope_issue_numbers,
+        queue_scope=scope,
     )
-
     if outcome == "delivered":
-        log.info("Retry delivered #%d to %s (%s)", issue_number, target_entity, session_name)
         return "retried"
     if outcome == "offline":
         return "still_offline"
     if outcome in _BUSY_OUTCOMES:
         return "still_busy"
-    if outcome in ("already_delivered", "awaiting_ack", "unknown_state"):
+    if outcome in ("already_delivered", "awaiting_ack"):
         return outcome
     return "delivery_failed"
 
 
 async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: object | None) -> dict:
-    """Retry failed deliveries for agents that are now online, then drain the queue."""
+    """Retry failed issue deliveries, then drain the queue."""
     summary: dict[str, int] = {}
-
     try:
         reclaimed = await db.reclaim_stale_attempts(max_age_minutes=5)
         if reclaimed:
-            log.info("Reclaimed %d stale delivery attempts", reclaimed)
             summary["attempts_reclaimed"] = reclaimed
     except Exception:
         log.exception("Failed to reclaim stale attempts (non-fatal)")
 
     if gh is not None:
-        failed = await db.get_failed_deliveries(limit=20)
-        if failed:
-            log.info("Found %d failed deliveries to retry", len(failed))
-            for delivery in failed:
-                outcome = await retry_delivery(config, delivery, db, gh)
-                summary[outcome] = summary.get(outcome, 0) + 1
+        for delivery in await db.get_failed_deliveries(limit=20):
+            outcome = await retry_delivery(config, delivery, db, gh)
+            summary[outcome] = summary.get(outcome, 0) + 1
 
     try:
         from agent_backbone.services.terminal import list_sessions
 
-        active_sessions = set(await list_sessions())
-        drained = await drain_message_queue(config, db, gh, active_sessions=active_sessions)
+        drained = await drain_message_queue(
+            config, db, gh, active_sessions=set(await list_sessions())
+        )
         for key, value in drained.items():
             summary[key] = summary.get(key, 0) + value
     except Exception:

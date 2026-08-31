@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 
 async def register_telegram(
     lifecycle: LifecycleManager,
-    config: BackboneConfig,
+    config: BackboneConfig | Callable[[], BackboneConfig],
     db: BackboneDB | None = None,
 ) -> TelegramService:
     """Create and register the Telegram bot service."""

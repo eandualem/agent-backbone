@@ -1,4 +1,9 @@
-"""Event ingestion — one entry point for webhook and polled GitHub events."""
+"""Event ingestion — one entry point for webhook and polled GitHub events.
+
+Every event is stored in the ``events`` table before routing (that is the
+activity feed and the dedup record), then handed to the lifecycle or
+dispatch handler, and marked with its outcome.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import EventType, IssueEvent
-from agent_backbone.services.routing._targets import resolve_event_targets
+from agent_backbone.services.routing._targets import issue_repo, resolve_event_targets
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -17,6 +22,17 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _source(delivery_id: str) -> str:
+    return "poll" if delivery_id.startswith("poll:") else "webhook"
+
+
+def _summary(event: IssueEvent) -> str:
+    title = event.issue.title[:120]
+    if event.event_type == EventType.COMMENT_CREATED and event.comment:
+        return f'comment on "{title}": {event.comment.body[:120]}'
+    return f'{event.event_type.value}: "{title}"'
+
+
 async def dispatch_event(
     event: IssueEvent,
     config: BackboneConfig,
@@ -25,26 +41,43 @@ async def dispatch_event(
     delivery_svc: DeliveryService,
     dispatch_svc: DispatchService,
 ) -> str:
-    """Route a normalized event to the lifecycle or dispatch handler.
-
-    Returns a short outcome string (``dispatch: …``, ``lifecycle: …``,
-    ``deduped: …``, ``ignored: …``) used for logging and HTTP responses.
-    """
+    """Store, route and mark an event. Returns a short outcome string."""
+    event_id: int | None = None
     if event.delivery_id:
         try:
             await db.record_delivery_id(event.delivery_id)
+            event_id = await db.record_event(
+                delivery_id=event.delivery_id,
+                source=_source(event.delivery_id),
+                repo=issue_repo(event.issue),
+                event_type=event.event_type.value,
+                issue_number=event.issue.number or None,
+                sender=(event.comment.user_login if event.comment else event.issue.labels.sender),
+                summary=_summary(event),
+            )
+            if event_id is None:
+                return f"deduped: event {event.delivery_id} already stored"
         except Exception:
-            log.warning("Failed to persist delivery ID")
+            log.warning("Failed to persist event %s (continuing)", event.delivery_id)
 
+    outcome = await _route(event, config, db, gh, delivery_svc, dispatch_svc)
+
+    if event_id is not None:
+        try:
+            await db.mark_event_processed(event_id, outcome)
+        except Exception:
+            log.debug("Failed to mark event processed (non-fatal)")
+    return outcome
+
+
+async def _route(event, config, db, gh, delivery_svc, dispatch_svc) -> str:
     if event.event_type == EventType.ISSUE_CLOSED:
         if gh is None:
             return "ignored: github client not configured"
         result = await dispatch_svc.on_issue_closed(event, config, gh, db)
         return f"lifecycle: {result}"
 
-    # Comments on closed issues cannot be actionable and would loop in the queue.
     if event.event_type == EventType.COMMENT_CREATED and event.issue.state == "closed":
-        log.info("Ignoring comment on closed issue #%d", event.issue.number)
         return f"ignored: comment on closed issue #{event.issue.number}"
 
     if event.event_type in (
@@ -58,11 +91,6 @@ async def dispatch_event(
             if targets and all(
                 delivery_svc.is_recent_notification(event.issue.number, t) for t in targets
             ):
-                log.info(
-                    "Dedup: #%d reason=all_targets_recently_notified targets=%s",
-                    event.issue.number,
-                    targets,
-                )
                 return f"deduped: all targets already notified for #{event.issue.number}"
 
         result = await dispatch_svc.issue_dispatcher(event, config, db, gh)
