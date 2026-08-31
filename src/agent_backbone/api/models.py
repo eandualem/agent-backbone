@@ -39,8 +39,11 @@ class EnrichedAgent(BaseModel):
     repo: str = ""
     tags: list[str] = Field(default_factory=list)
     description: str = ""
+    watches: list[str] = Field(default_factory=list)
     state: str = "unknown"
+    reason: str | None = None
     current_issue: int | None = None
+    current_repo: str | None = None
     online: bool = False
     plan_file: str | None = None
     plan_title: str | None = None
@@ -52,13 +55,23 @@ class EnrichedAgent(BaseModel):
 
 
 class AgentStartRequest(BaseModel):
-    """Request body for starting an agent session."""
+    """Request body for starting an agent.
 
+    ``dir`` discovers (or re-registers) the agent for that directory; the
+    name defaults to the directory name. Without ``dir`` the agent must
+    already be known.
+    """
+
+    name: str | None = None
+    dir: str | None = None
     runtime: str | None = None
     model: str | None = None
     resume: bool = False
+    watch: list[str] = Field(default_factory=list)
+    wait: bool = True
+    """Block until the agent is at its prompt (or the start timeout passes)."""
     working_directory: str | None = None
-    """Required for sessions that are not configured agents."""
+    """Alias of ``dir`` kept for older clients."""
 
 
 class AgentStartResponse(BaseModel):
@@ -66,10 +79,55 @@ class AgentStartResponse(BaseModel):
 
     ok: bool
     session: str
+    name: str = ""
     working_directory: str | None = None
     runtime: str = "claude"
     model: str | None = None
+    repo: str = ""
     already_existed: bool = False
+    ready: str = "unknown"
+    """``ready`` | ``timeout`` | ``exited`` | ``not_waited``."""
+    evidence: list[str] = Field(default_factory=list)
+
+
+class AgentUpdateRequest(BaseModel):
+    """Fields that ``PATCH /api/agents/{name}`` may change."""
+
+    dir: str | None = None
+    runtime: str | None = None
+    model: str | None = None
+    repo: str | None = None
+    tags: list[str] | None = None
+    env: dict[str, str] | None = None
+    description: str | None = None
+
+
+class WatchRequest(BaseModel):
+    repo: str
+
+
+class AgentInspectResponse(BaseModel):
+    """Everything the backbone knows about one agent, with the evidence."""
+
+    name: str
+    known: bool = True
+    online: bool = False
+    dir: str = ""
+    runtime: str = ""
+    model: str | None = None
+    repo: str = ""
+    watches: list[str] = Field(default_factory=list)
+    state: str = "unknown"
+    reason: str | None = None
+    current_issue: int | None = None
+    current_repo: str | None = None
+    state_source: str = "default"
+    state_age_seconds: float | None = None
+    delivery: str = "unknown"
+    evidence: list[str] = Field(default_factory=list)
+    tmux: dict = Field(default_factory=dict)
+    pane_tail: list[str] = Field(default_factory=list)
+    recent_deliveries: list[DeliveryRecord] = Field(default_factory=list)
 
 
 class AgentStopResponse(BaseModel):
@@ -84,19 +142,24 @@ class AgentStateDetail(BaseModel):
 
     session: str
     state: str = "unknown"
+    reason: str | None = None
     current_issue: int | None = None
+    current_repo: str | None = None
     timestamp: float = 0.0
     source: str = "default"
     started_at: float | None = None
     plan_file: str | None = None
     plan_title: str | None = None
+    evidence: list[str] = Field(default_factory=list)
 
 
 class StateUpdateRequest(BaseModel):
     """Request body for updating agent state via API (used by runtime hooks)."""
 
     state: str
+    reason: str | None = None
     issue: int | None = None
+    repo: str | None = None
     entity: str = ""
     context: str = ""
     ts: float = 0.0
@@ -142,8 +205,8 @@ class IssueCreateRequest(BaseModel):
     title: str
     body: str = ""
     labels: list[str] = Field(default_factory=list)
-    repo: str | None = None
-    """``owner/name``; defaults to the configured coordination repo."""
+    repo: str
+    """``owner/name`` the issue is opened in."""
 
 
 class IssueCommentRequest(BaseModel):
@@ -177,11 +240,14 @@ class DeliveryRecord(BaseModel):
     """A single delivery attempt record."""
 
     id: int
-    issue_number: int
+    kind: str = "issue"
+    repo: str = ""
+    issue_number: int | None = None
     target_entity: str
     session_name: str
     outcome: str
     flow_name: str = ""
+    preview: str = ""
     created_at: str = ""
 
 
@@ -202,7 +268,7 @@ class PlanDetail(BaseModel):
     """Plan awaiting approval."""
 
     session: str
-    state: str = "plan_waiting"
+    state: str = "waiting_for_human"
     plan_file: str | None = None
     plan_title: str | None = None
     content: str | None = None
@@ -266,6 +332,15 @@ class ServiceHealth(BaseModel):
     jobs: list[JobStatusResponse] = Field(default_factory=list)
 
 
+class RepoStatus(BaseModel):
+    """One tracked repository: who owns/watches it and the last event seen."""
+
+    repo: str
+    owners: list[str] = Field(default_factory=list)
+    watchers: list[str] = Field(default_factory=list)
+    last_event_at: str | None = None
+
+
 class SystemDigest(BaseModel):
     """System-wide status digest."""
 
@@ -273,7 +348,25 @@ class SystemDigest(BaseModel):
     agent_count: int = 0
     pending_issues: int | None = 0
     failed_deliveries: int = 0
+    github_intake: str = "off"
     agents: list[EnrichedAgent] = Field(default_factory=list)
+    repos: list[RepoStatus] = Field(default_factory=list)
+
+
+class EventRecord(BaseModel):
+    """An inbound event (webhook, poll) and what the backbone did with it."""
+
+    id: int
+    delivery_id: str = ""
+    source: str = ""
+    repo: str = ""
+    event_type: str = ""
+    issue_number: int | None = None
+    sender: str = ""
+    summary: str = ""
+    received_at: str = ""
+    processed_at: str | None = None
+    outcome: str | None = None
 
 
 class AgentConfigResponse(BaseModel):
@@ -284,5 +377,6 @@ class AgentConfigResponse(BaseModel):
     runtime: str
     model: str | None = None
     repo: str = ""
+    watches: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     description: str = ""

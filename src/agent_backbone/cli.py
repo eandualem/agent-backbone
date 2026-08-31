@@ -1,12 +1,18 @@
 """``backbone`` command-line interface.
 
-backbone init                 write a starter backbone.toml + .env
-backbone up [--detach]        run the backbone (API + scheduler + Telegram)
-backbone down                 stop a detached backbone
-backbone status               show agents, sessions and service health
-backbone doctor               check tmux, runtimes, config and credentials
-backbone agent list|start|stop|start-all|stop-all
-backbone tell <agent> <msg>   deliver a message to an agent
+backbone init                        create the data directory, .env and database
+backbone up [--detach]               run the backbone (API + scheduler + Telegram)
+backbone down                        stop a detached backbone
+backbone status                      agents, sessions, repositories and health
+backbone doctor                      check tmux, runtimes, credentials
+backbone config list|get|set|unset   settings (stored in the database)
+backbone agent start [--dir D]       discover + start an agent (waits for its prompt)
+backbone agent list|stop|inspect|set|watch|unwatch|forget|start-all|stop-all
+backbone tell <agent> <msg>          deliver a message to an agent
+backbone hooks install claude        install the state-reporting hooks
+
+Commands talk to the running backbone API when it is up and fall back to the
+database directly when it is not.
 """
 
 from __future__ import annotations
@@ -20,61 +26,25 @@ import secrets
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
-from agent_backbone.config import CONFIG_FILENAME, BackboneConfig, find_config_file
+from agent_backbone.config import (
+    SETTINGS_DEFAULTS,
+    SETTINGS_HELP,
+    BackboneConfig,
+    bootstrap_config,
+    validate_setting,
+)
 
 log = logging.getLogger(__name__)
-
-_EXAMPLE_TOML = """\
-# agent-backbone configuration
-# Docs: https://github.com/eandualem/agent-backbone
-
-[backbone]
-# data_dir = "~/.local/share/agent-backbone"   # SQLite db, state files, pids
-# host = "127.0.0.1"
-# port = 7120
-
-# ---- Agents -------------------------------------------------------------
-# One table per agent. The name is the tmux session name and the value of the
-# `for:<name>` label that routes issues to it.
-
-[agents.reviewer]
-dir = "~/code/my-app"
-runtime = "claude"          # claude | codex | gemini | opencode | aider | cursor | shell
-# model = "claude-opus-5"
-# repo = "me/my-app"        # issues opened in this repo route here automatically
-# tags = ["review"]
-# description = "Reviews pull requests"
-
-# ---- GitHub task tracker (optional) -------------------------------------
-# [github]
-# repo = "me/my-app"        # coordination repo for `for:`-labelled issues
-# mode = "webhook"          # webhook (needs GITHUB_WEBHOOK_SECRET + a public URL) or poll
-
-# ---- Telegram (optional) -------------------------------------------------
-# [telegram]
-# allowed_chat_ids = [123456789]   # required — the bot ignores everyone else
-# notification_chat_id = 123456789
-# [telegram.topic_routes]
-# 42 = "reviewer"
-
-# ---- Escalation ----------------------------------------------------------
-# [escalation]
-# target = "reviewer"       # agent that hears about stalls / offline agents
-# stall_threshold_seconds = 5400
-
-# ---- Security ------------------------------------------------------------
-# [security]
-# allow_remote_plan_control = false   # approve/reject plans via API/Telegram
-"""
 
 _EXAMPLE_ENV = """\
 # Secrets for agent-backbone (never commit this file)
 BACKBONE_API_KEY={api_key}
 
-# GitHub: a token (PAT or `gh auth token`) is the simplest option
+# GitHub — a token (PAT or `gh auth token`) is the simplest option
 # GITHUB_TOKEN=ghp_...
-# GITHUB_WEBHOOK_SECRET=...           # required in webhook mode
+# GITHUB_WEBHOOK_SECRET=...           # set this and the backbone switches to webhook intake
 
 # GitHub App (alternative to GITHUB_TOKEN)
 # GITHUB_APP_ID=
@@ -86,40 +56,108 @@ BACKBONE_API_KEY={api_key}
 
 
 # ---------------------------------------------------------------------------
-# Commands
+# Helpers: API-first, database fallback
+# ---------------------------------------------------------------------------
+
+
+def _api_url(config: BackboneConfig, path: str) -> str:
+    return f"http://{config.backbone.host}:{config.backbone.port}{path}"
+
+
+def _headers(config: BackboneConfig) -> dict[str, str]:
+    return {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+
+
+async def _api(
+    config: BackboneConfig, method: str, path: str, *, json_body: Any = None, timeout: float = 10.0
+) -> tuple[int, Any] | None:
+    """Call the running API. Returns None when the backbone is not reachable."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.request(
+                method, _api_url(config, path), headers=_headers(config), json=json_body
+            )
+    except httpx.HTTPError:
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        data = resp.text
+    return resp.status_code, data
+
+
+async def _api_up(config: BackboneConfig) -> bool:
+    result = await _api(config, "GET", "/health", timeout=3.0)
+    return result is not None
+
+
+class _Direct:
+    """Direct database access for when the backbone is not running."""
+
+    def __init__(self, config: BackboneConfig) -> None:
+        self._boot = config
+        self.db = None
+        self.store = None
+        self.config = config
+
+    async def __aenter__(self) -> _Direct:
+        from agent_backbone.services.agent_store import AgentStore
+        from agent_backbone.services.database import BackboneDB, DatabaseService
+
+        self._service = DatabaseService(self._boot.database_url, self._boot.database)
+        await self._service.start()
+        self.db = BackboneDB(self._service.engine)
+        await self.db.start()
+        self.store = AgentStore(self.db, self._boot.data_dir)
+        self.config = await self.store.refresh()
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.db.stop()
+        await self._service.stop()
+
+
+def _print_json(data: Any) -> None:
+    print(json.dumps(data, indent=2, default=str))
+
+
+# ---------------------------------------------------------------------------
+# init / doctor
 # ---------------------------------------------------------------------------
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    target_dir = Path(args.dir).expanduser().resolve()
-    target_dir.mkdir(parents=True, exist_ok=True)
-    toml_path = target_dir / CONFIG_FILENAME
-    env_path = target_dir / ".env"
+    config = bootstrap_config(args.data_dir)
+    data_dir = config.data_dir
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "state").mkdir(exist_ok=True)
 
-    if toml_path.exists() and not args.force:
-        print(f"{toml_path} already exists (use --force to overwrite)")
-        return 1
-
-    toml_path.write_text(_EXAMPLE_TOML)
-    print(f"wrote {toml_path}")
-
+    env_path = config.env_path
     if not env_path.exists() or args.force:
         env_path.write_text(_EXAMPLE_ENV.format(api_key=secrets.token_urlsafe(32)))
         os.chmod(env_path, 0o600)
         print(f"wrote {env_path} (contains a generated BACKBONE_API_KEY)")
+    else:
+        print(f"{env_path} exists (kept; use --force to regenerate)")
+
+    async def _migrate() -> None:
+        async with _Direct(config):
+            pass
+
+    asyncio.run(_migrate())
+    print(f"database ready: {config.database_url}")
 
     print("\nNext steps:")
-    print(f"  1. edit {toml_path.name}: add your agents under [agents.<name>]")
-    print("  2. backbone doctor")
-    print("  3. backbone up")
+    print("  1. backbone doctor")
+    print("  2. backbone up --detach")
+    print("  3. cd ~/code/my-app && backbone agent start")
     return 0
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    from agent_backbone.services.infrastructure._agents import (
-        RUNTIME_COMMANDS,
-        resolve_command,
-    )
+    from agent_backbone.services.infrastructure._agents import RUNTIME_COMMANDS, runtime_available
 
     ok = True
 
@@ -129,77 +167,74 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(f"  {mark} {label}" + (f"  — {hint}" if (hint and not passed) else ""))
         ok = ok and passed
 
-    config_path = find_config_file()
-    print("Config")
-    check(
-        f"backbone.toml: {config_path or 'not found'}",
-        config_path is not None,
-        "run `backbone init`",
-    )
-    try:
-        config = BackboneConfig.load()
-    except Exception as exc:  # pragma: no cover - defensive
-        print(f"  ✗ config failed to load: {exc}")
-        return 1
+    async def run() -> int:
+        nonlocal ok
+        boot = bootstrap_config()
+        print("Storage")
+        check(f"data dir exists: {boot.data_dir}", boot.data_dir.is_dir(), "run `backbone init`")
+        check(f".env present: {boot.env_path}", boot.env_path.is_file(), "run `backbone init`")
+        try:
+            async with _Direct(boot) as direct:
+                config = direct.config
+                check(f"database reachable: {config.database_url}", True)
+        except Exception as exc:
+            check(f"database reachable: {boot.database_url}", False, f"{exc}; run `backbone init`")
+            return 1
 
-    check(
-        f"{len(config.agents)} agent(s) configured",
-        len(config.agents) > 0,
-        "add [agents.<name>] tables",
-    )
-    for spec in config.agents:
-        check(f"agent '{spec.name}' dir exists: {spec.path}", spec.path.is_dir())
-        check(
-            f"agent '{spec.name}' runtime '{spec.runtime}' installed",
-            spec.runtime in RUNTIME_COMMANDS
-            and (
-                RUNTIME_COMMANDS[spec.runtime] is None
-                or resolve_command(RUNTIME_COMMANDS[spec.runtime]) is not None
-            ),
-        )
-
-    print("Tools")
-    check("tmux on PATH", shutil.which("tmux") is not None, "install tmux")
-
-    print("Security")
-    check(
-        "API key configured",
-        bool(config.api_key) or config.security.allow_unauthenticated,
-        "set BACKBONE_API_KEY in .env",
-    )
-    if config.security.allow_unauthenticated:
-        print("  ! API authentication is disabled (allow_unauthenticated)")
-
-    print("Integrations")
-    if config.github.enabled:
-        check(
-            f"GitHub credentials for {config.github.repo}",
-            config.github_ready,
-            "set GITHUB_TOKEN (or GitHub App credentials)",
-        )
-        if config.github.mode == "webhook":
+        print("Agents")
+        if not config.agents:
+            print("  - none yet (run `backbone agent start` from a project directory)")
+        for spec in config.agents:
+            check(f"'{spec.name}' dir exists: {spec.path}", spec.path.is_dir())
             check(
-                "GITHUB_WEBHOOK_SECRET set (webhook mode)",
-                bool(config.webhook_secret),
-                'set GITHUB_WEBHOOK_SECRET or use mode = "poll"',
+                f"'{spec.name}' runtime '{spec.runtime}' installed", runtime_available(spec.runtime)
             )
-    else:
-        print("  - GitHub tracker not configured (optional)")
-    if config.telegram_ready:
+            if not spec.repo:
+                print(f"  ! '{spec.name}' has no GitHub remote — issue routing is off for it")
+
+        print("Tools")
+        check("tmux on PATH", shutil.which("tmux") is not None, "install tmux")
+        installed = [r for r in RUNTIME_COMMANDS if runtime_available(r) and r != "shell"]
+        print(f"  - runtimes installed: {', '.join(installed) or 'none'}")
+
+        print("Security")
         check(
-            "Telegram allowed_chat_ids set",
-            bool(config.telegram.allowed_chat_ids),
-            "add your chat id to [telegram] allowed_chat_ids",
+            "API key configured",
+            bool(config.api_key) or config.security.allow_unauthenticated,
+            "set BACKBONE_API_KEY in .env",
         )
-    else:
-        print("  - Telegram not configured (optional)")
+        if config.security.allow_unauthenticated:
+            print("  ! API authentication is disabled (security.allow_unauthenticated)")
 
-    print("Storage")
-    print(f"  - data dir: {config.data_dir}")
-    print(f"  - database: {config.database_url}")
+        print("Integrations")
+        if config.github_ready:
+            print(f"  ✓ GitHub credentials found — intake: {config.github_intake}")
+            if config.github_intake == "poll":
+                print(
+                    "    (set GITHUB_WEBHOOK_SECRET + expose /webhooks/github for instant delivery)"
+                )
+        else:
+            print("  - GitHub not configured (optional): set GITHUB_TOKEN in .env")
+        if config.telegram_ready:
+            check(
+                "Telegram allowed_chat_ids set",
+                bool(config.telegram.allowed_chat_ids),
+                "backbone config set telegram.allowed_chat_ids '[<chat id>]'",
+            )
+        else:
+            print("  - Telegram not configured (optional): set TELEGRAM_TOKEN in .env")
 
-    print("\nAll good." if ok else "\nSome checks failed.")
-    return 0 if ok else 1
+        print("Backbone")
+        print(f"  - API: {'up' if await _api_up(config) else 'down'} ({_api_url(config, '')})")
+        print("\nAll good." if ok else "\nSome checks failed.")
+        return 0 if ok else 1
+
+    return asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# up / down / status
+# ---------------------------------------------------------------------------
 
 
 def _run_server(config: BackboneConfig, reload: bool = False) -> None:
@@ -220,11 +255,14 @@ def _run_server(config: BackboneConfig, reload: bool = False) -> None:
     from agent_backbone.api.app import create_app
 
     uvicorn.run(
-        create_app(config),
-        host=config.backbone.host,
-        port=config.backbone.port,
-        log_level="info",
+        create_app(config), host=config.backbone.host, port=config.backbone.port, log_level="info"
     )
+
+
+async def _load_config() -> BackboneConfig:
+    """Full configuration (settings + agents) from the database."""
+    async with _Direct(bootstrap_config()) as direct:
+        return direct.config
 
 
 async def _up_detached(config: BackboneConfig) -> int:
@@ -235,7 +273,7 @@ async def _up_detached(config: BackboneConfig) -> int:
         print(f"backbone already running in tmux session '{session}'")
         return 0
     command = [sys.executable, "-m", "agent_backbone.cli", "up"]
-    env = {"BACKBONE_CONFIG": str(config.source_path)} if config.source_path else None
+    env = {"BACKBONE_DATA_DIR": str(config.data_dir)}
     ok = await start_session(session, working_dir=str(Path.cwd()), command=command, environment=env)
     if ok:
         print(f"backbone started in tmux session '{session}' (attach: tmux attach -t {session})")
@@ -245,7 +283,7 @@ async def _up_detached(config: BackboneConfig) -> int:
 
 
 def cmd_up(args: argparse.Namespace) -> int:
-    config = BackboneConfig.load()
+    config = asyncio.run(_load_config())
     if args.detach:
         return asyncio.run(_up_detached(config))
     _run_server(config, reload=args.reload)
@@ -265,84 +303,423 @@ async def _down(config: BackboneConfig) -> int:
 
 
 def cmd_down(args: argparse.Namespace) -> int:
-    return asyncio.run(_down(BackboneConfig.load()))
+    return asyncio.run(_down(asyncio.run(_load_config())))
 
 
-async def _api_get(config: BackboneConfig, path: str) -> dict | None:
-    import httpx
-
-    url = f"http://{config.backbone.host}:{config.backbone.port}{path}"
-    headers = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 200:
-                return resp.json()
-            print(f"API {path} returned {resp.status_code}: {resp.text[:200]}")
-    except httpx.HTTPError:
-        return None
-    return None
-
-
-async def _status(config: BackboneConfig) -> int:
+async def _status() -> int:
     from agent_backbone.services.terminal import list_sessions
 
+    config = await _load_config()
     sessions = set(await list_sessions())
-    api_up = await _api_get(config, "/health")
-    print(
-        f"backbone API : {'up' if api_up else 'down'} (http://{config.backbone.host}:{config.backbone.port})"
-    )
-    if api_up:
-        components = api_up.get("components", {})
-        for name, comp in components.items():
+    health = await _api(config, "GET", "/health", timeout=3.0)
+    api_up = health is not None
+    print(f"backbone API : {'up' if api_up else 'down'} ({_api_url(config, '')})")
+    if api_up and isinstance(health[1], dict):
+        for name, comp in health[1].get("components", {}).items():
             print(f"  {name:<14s} {'ok' if comp.get('healthy') else 'DEGRADED'}")
+    print(f"github intake: {config.github_intake}")
 
     print("\nagents:")
     if not config.agents:
-        print("  (none configured)")
+        print("  (none yet — run `backbone agent start` from a project directory)")
+    states: dict[str, dict] = {}
+    if api_up:
+        result = await _api(config, "GET", "/api/agents")
+        if result and result[0] == 200:
+            states = {a["name"]: a for a in result[1].get("items", [])}
     width = max((len(n) for n in config.agents.names), default=8)
     for spec in config.agents:
-        state = "running" if spec.name in sessions else "stopped"
-        print(f"  {spec.name:<{width}s}  {state:<8s} {spec.runtime}  {spec.path}")
+        live = states.get(spec.name, {})
+        if spec.name in sessions:
+            state = live.get("state") or "running"
+            if live.get("reason"):
+                state += f"({live['reason']})"
+        else:
+            state = "offline"
+        watches = f"  watches {', '.join(spec.watches)}" if spec.watches else ""
+        repo = spec.repo or "-"
+        print(
+            f"  {spec.name:<{width}s}  {state:<18s} {spec.runtime:<8s} {repo:<28s} "
+            f"{spec.path}{watches}"
+        )
     others = sorted(
         s for s in sessions if s not in config.agents and s != config.backbone.session_name
     )
     if others:
         print("\nother tmux sessions: " + ", ".join(others))
+
+    if config.agents.repos:
+        print("\nrepositories:")
+        last: dict[str, str] = {}
+        if api_up:
+            result = await _api(config, "GET", "/api/status")
+            if result and result[0] == 200:
+                last = {
+                    r["repo"]: r.get("last_event_at") or "-" for r in result[1].get("repos", [])
+                }
+        for repo in config.agents.repos:
+            owners = ", ".join(s.name for s in config.agents.owners(repo)) or "-"
+            watchers = ", ".join(s.name for s in config.agents.watchers(repo))
+            line = f"  {repo:<30s} owner: {owners}"
+            if watchers:
+                line += f"  watchers: {watchers}"
+            if last.get(repo):
+                line += f"  last event: {last[repo]}"
+            print(line)
     return 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    return asyncio.run(_status(BackboneConfig.load()))
+    return asyncio.run(_status())
 
 
-async def _agent(args: argparse.Namespace, config: BackboneConfig) -> int:
-    from agent_backbone.services.infrastructure import _agents
+# ---------------------------------------------------------------------------
+# config
+# ---------------------------------------------------------------------------
 
-    sub = args.agent_command
+
+def _parse_value(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+async def _config_cmd(args: argparse.Namespace) -> int:
+    sub = args.config_command
+    boot = bootstrap_config()
+
     if sub == "list":
-        print(_agents.list_agents(config))
+        async with _Direct(boot) as direct:
+            stored = await direct.db.get_all_settings()
+        width = max(len(k) for k in SETTINGS_DEFAULTS)
+        for key in sorted(SETTINGS_DEFAULTS):
+            value = stored.get(key, SETTINGS_DEFAULTS[key])
+            marker = "*" if key in stored else " "
+            print(f"{marker} {key:<{width}s} = {json.dumps(value)}")
+        print("\n(* = set explicitly; others are defaults)")
         return 0
-    if sub == "start":
-        spec = config.agents.get(args.name)
-        if spec is None:
-            print(f"unknown agent '{args.name}' — configured: {', '.join(config.agents.names)}")
+
+    if sub == "get":
+        async with _Direct(boot) as direct:
+            stored = await direct.db.get_all_settings()
+        if args.key not in SETTINGS_DEFAULTS:
+            print(f"unknown setting '{args.key}'")
             return 1
-        ok = await _agents.start_agent(
+        print(json.dumps(stored.get(args.key, SETTINGS_DEFAULTS[args.key])))
+        if args.key in SETTINGS_HELP:
+            print(f"  {SETTINGS_HELP[args.key]}")
+        return 0
+
+    if sub == "set":
+        value = _parse_value(args.value)
+        try:
+            clean = validate_setting(args.key, value)
+        except (KeyError, ValueError) as exc:
+            print(f"error: {exc}")
+            return 1
+        if await _api_up(boot):
+            result = await _api(boot, "PUT", f"/api/config/{args.key}", json_body={"value": clean})
+            if result and result[0] == 200:
+                print(f"{args.key} = {json.dumps(clean)} (applied to the running backbone)")
+                return 0
+            print(f"API error: {result[1] if result else 'unreachable'}")
+            return 1
+        async with _Direct(boot) as direct:
+            await direct.db.set_setting(args.key, clean)
+        print(f"{args.key} = {json.dumps(clean)}")
+        return 0
+
+    if sub == "unset":
+        if await _api_up(boot):
+            result = await _api(boot, "DELETE", f"/api/config/{args.key}")
+            if result and result[0] == 200:
+                print(f"{args.key} reset to default")
+                return 0
+        async with _Direct(boot) as direct:
+            await direct.db.delete_setting(args.key)
+        print(f"{args.key} reset to default")
+        return 0
+    return 1
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    return asyncio.run(_config_cmd(args))
+
+
+# ---------------------------------------------------------------------------
+# agent
+# ---------------------------------------------------------------------------
+
+
+def _print_start_result(data: dict) -> None:
+    name = data.get("name") or data.get("session")
+    if data.get("already_existed"):
+        print(f"{name}: already running")
+        return
+    if not data.get("ok"):
+        print(f"{name}: failed to start ({data.get('ready', 'unknown')})")
+        for line in data.get("evidence", []):
+            print(f"  - {line}")
+        return
+    ready = data.get("ready", "not_waited")
+    repo = f" repo {data['repo']}" if data.get("repo") else " (no GitHub remote)"
+    label = {
+        "ready": "ready",
+        "timeout": "started but not at its prompt yet",
+        "not_waited": "started",
+    }
+    print(f"{name}: {label.get(ready, ready)} — {data.get('runtime')}{repo}")
+    print(f"  dir: {data.get('working_directory')}")
+    for line in data.get("evidence", []):
+        print(f"  - {line}")
+    if ready == "timeout":
+        print(f"  attach to check: tmux attach -t {name}")
+
+
+async def _agent_start(args: argparse.Namespace) -> int:
+    boot = bootstrap_config()
+    directory = args.dir
+    if directory is None and args.name is None:
+        directory = os.getcwd()
+    body = {
+        "name": args.name,
+        "dir": str(Path(directory).expanduser().resolve()) if directory else None,
+        "runtime": args.runtime,
+        "model": args.model,
+        "resume": args.resume,
+        "watch": args.watch or [],
+        "wait": not args.no_wait,
+    }
+
+    if await _api_up(boot):
+        result = await _api(boot, "POST", "/api/agents/start", json_body=body, timeout=120.0)
+        if result is None:
+            print("backbone API unreachable")
+            return 1
+        status, data = result
+        if status != 200:
+            print(f"error {status}: {data.get('detail') if isinstance(data, dict) else data}")
+            return 1
+        _print_start_result(data)
+        return 0 if data.get("ok") else 1
+
+    # Backbone not running: register + start directly.
+    from agent_backbone.config import AgentSpec
+    from agent_backbone.services.infrastructure._agents import start_agent, wait_until_ready
+
+    async with _Direct(boot) as direct:
+        store = direct.store
+        if body["dir"]:
+            spec = store.discover(
+                body["dir"], name=args.name, runtime=args.runtime, model=args.model
+            )
+            if args.watch:
+                spec = AgentSpec(
+                    **{
+                        **spec.__dict__,
+                        "watches": tuple(dict.fromkeys([*spec.watches, *args.watch])),
+                    }
+                )
+            spec = await store.register(spec)
+        else:
+            spec = store.agents.get(args.name)
+            if spec is None:
+                print(f"unknown agent '{args.name}' — pass --dir to register it")
+                return 1
+        config = direct.config
+        runtime = args.runtime or spec.runtime
+        ok = await start_agent(
             spec,
             runtime=args.runtime,
             model=args.model,
             resume=args.resume,
             state_dir=config.state_dir,
         )
-        return 0 if ok else 1
+        if not ok:
+            print(f"{spec.name}: failed to start")
+            return 1
+        await store.touch_started(spec.name)
+        ready, evidence = "not_waited", []
+        if not args.no_wait:
+            ready, evidence = await wait_until_ready(
+                spec.name,
+                state_dir=config.state_dir,
+                runtime=runtime,
+                timeout=config.monitor.start_timeout_seconds,
+            )
+        _print_start_result(
+            {
+                "ok": ready != "exited",
+                "name": spec.name,
+                "runtime": runtime,
+                "repo": spec.repo,
+                "working_directory": str(spec.path),
+                "ready": ready,
+                "evidence": evidence,
+            }
+        )
+        print(
+            "note: the backbone is not running — start it with `backbone up --detach` for routing"
+        )
+        return 0 if ready != "exited" else 1
+
+
+async def _agent(args: argparse.Namespace) -> int:
+    from agent_backbone.services.infrastructure import _agents
+
+    sub = args.agent_command
+    if sub == "start":
+        return await _agent_start(args)
+
+    boot = bootstrap_config()
+    api_up = await _api_up(boot)
+
+    if sub == "list":
+        config = await _load_config()
+        print(_agents.list_agents(config))
+        return 0
+
     if sub == "stop":
-        return 0 if await _agents.stop_agent(args.name) else 1
+        if api_up:
+            result = await _api(boot, "POST", f"/api/agents/{args.name}/stop", timeout=30.0)
+            ok = bool(result and result[0] == 200 and result[1].get("ok"))
+        else:
+            ok = await _agents.stop_agent(args.name)
+        print(f"{args.name}: {'stopped' if ok else 'not stopped'}")
+        return 0 if ok else 1
+
+    if sub == "inspect":
+        if api_up:
+            result = await _api(boot, "GET", f"/api/agents/{args.name}/inspect", timeout=30.0)
+            if result and result[0] == 200:
+                data = result[1]
+                if args.json:
+                    _print_json(data)
+                    return 0
+                print(
+                    f"{data['name']}: {'online' if data['online'] else 'offline'}"
+                    f"{'' if data['known'] else ' (not a known agent)'}"
+                )
+                print(f"  dir:      {data['dir'] or '-'}")
+                print(f"  runtime:  {data['runtime'] or '-'}   model: {data['model'] or '-'}")
+                watches = ", ".join(data["watches"]) or "-"
+                print(f"  repo:     {data['repo'] or '-'}   watches: {watches}")
+                reason = f" ({data['reason']})" if data.get("reason") else ""
+                issue = (
+                    f"   on {data.get('current_repo') or ''}#{data['current_issue']}"
+                    if data.get("current_issue")
+                    else ""
+                )
+                age = (
+                    f" (hook state {data['state_age_seconds']}s old)"
+                    if data.get("state_age_seconds") is not None
+                    else ""
+                )
+                print(f"  state:    {data['state']}{reason}{issue}{age}")
+                print(f"  delivery: {data['delivery']}")
+                print("  evidence:")
+                for line in data["evidence"]:
+                    print(f"    - {line}")
+                if data.get("pane_tail"):
+                    print("  terminal tail:")
+                    for line in data["pane_tail"]:
+                        print(f"    | {line}")
+                if data.get("recent_deliveries"):
+                    print("  recent deliveries:")
+                    for d in data["recent_deliveries"][:5]:
+                        ref = (
+                            f"{d.get('repo') or ''}#{d['issue_number']}"
+                            if d.get("issue_number")
+                            else d.get("kind")
+                        )
+                        print(f"    {d['created_at'][:19]}  {ref:<24s} {d['outcome']}")
+                return 0
+            print(f"error: {result[1] if result else 'API unreachable'}")
+            return 1
+        # Offline inspection: state file + tmux only.
+        from agent_backbone.services.agents._inference import get_agent_state
+        from agent_backbone.services.terminal import session_exists
+
+        config = await _load_config()
+        online = await session_exists(args.name)
+        snapshot = await get_agent_state(
+            config.state_dir, args.name, config.agent_state.stale_threshold_seconds
+        )
+        print(f"{args.name}: {'online' if online else 'offline'} (backbone not running)")
+        print(
+            f"  state: {snapshot.state.value}{f' ({snapshot.reason})' if snapshot.reason else ''}"
+        )
+        for line in snapshot.evidence:
+            print(f"    - {line}")
+        return 0
+
+    if sub == "set":
+        changes: dict[str, Any] = {}
+        for item in args.assignments:
+            if "=" not in item:
+                print(f"expected key=value, got {item!r}")
+                return 1
+            key, raw = item.split("=", 1)
+            changes[key] = _parse_value(raw) if key in ("tags", "env") else raw
+        if api_up:
+            result = await _api(boot, "PATCH", f"/api/agents/{args.name}", json_body=changes)
+            if result and result[0] == 200:
+                _print_json(result[1])
+                return 0
+            print(f"error: {result[1] if result else 'API unreachable'}")
+            return 1
+        async with _Direct(boot) as direct:
+            try:
+                spec = await direct.store.update(args.name, **changes)
+            except (KeyError, ValueError) as exc:
+                print(f"error: {exc}")
+                return 1
+        print(f"{spec.name}: updated")
+        return 0
+
+    if sub in ("watch", "unwatch"):
+        for repo in args.repos:
+            if api_up:
+                result = await _api(
+                    boot, "POST", f"/api/agents/{args.name}/{sub}", json_body={"repo": repo}
+                )
+                if not result or result[0] != 200:
+                    print(f"error: {result[1] if result else 'API unreachable'}")
+                    return 1
+            else:
+                async with _Direct(boot) as direct:
+                    try:
+                        if sub == "watch":
+                            await direct.store.watch(args.name, repo)
+                        else:
+                            await direct.store.unwatch(args.name, repo)
+                    except KeyError:
+                        print(f"unknown agent '{args.name}'")
+                        return 1
+            print(f"{args.name}: {'now watching' if sub == 'watch' else 'stopped watching'} {repo}")
+        return 0
+
+    if sub == "forget":
+        if api_up:
+            result = await _api(boot, "DELETE", f"/api/agents/{args.name}")
+            if result and result[0] == 200:
+                print(f"{args.name}: forgotten")
+                return 0
+            print(f"error: {result[1] if result else 'API unreachable'}")
+            return 1
+        async with _Direct(boot) as direct:
+            removed = await direct.store.forget(args.name)
+        print(f"{args.name}: {'forgotten' if removed else 'unknown agent'}")
+        return 0 if removed else 1
+
     if sub == "start-all":
+        config = await _load_config()
         started = await _agents.start_all(config)
         print(f"started {started} agent(s)")
         return 0
     if sub == "stop-all":
+        config = await _load_config()
         stopped = await _agents.stop_all_agents(config)
         print(f"stopped {stopped} agent(s)")
         return 0
@@ -350,43 +727,43 @@ async def _agent(args: argparse.Namespace, config: BackboneConfig) -> int:
 
 
 def cmd_agent(args: argparse.Namespace) -> int:
-    return asyncio.run(_agent(args, BackboneConfig.load()))
+    return asyncio.run(_agent(args))
 
 
-async def _tell(args: argparse.Namespace, config: BackboneConfig) -> int:
-    import httpx
+# ---------------------------------------------------------------------------
+# tell / hooks
+# ---------------------------------------------------------------------------
 
+
+async def _tell(args: argparse.Namespace) -> int:
+    boot = bootstrap_config()
     text = " ".join(args.message)
-    url = f"http://{config.backbone.host}:{config.backbone.port}/api/messages"
-    headers = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
     payload = {
         "target_session": args.agent,
         "from_entity": args.sender,
         "message": text,
         "priority": args.priority,
     }
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-    except httpx.HTTPError as exc:
-        print(f"backbone API unreachable ({exc}); is `backbone up` running?")
+    result = await _api(boot, "POST", "/api/messages", json_body=payload, timeout=30.0)
+    if result is None:
+        print("backbone API unreachable; is `backbone up` running?")
         return 1
-    if resp.status_code != 200:
-        print(f"error {resp.status_code}: {resp.text[:300]}")
+    status, data = result
+    if status != 200:
+        print(f"error {status}: {data}")
         return 1
-    data = resp.json()
     print(json.dumps(data))
     return 0 if data.get("ok") else 2
 
 
 def cmd_tell(args: argparse.Namespace) -> int:
-    return asyncio.run(_tell(args, BackboneConfig.load()))
+    return asyncio.run(_tell(args))
 
 
 def cmd_hooks(args: argparse.Namespace) -> int:
     from agent_backbone.hooks import install as hooks
 
-    config = BackboneConfig.load()
+    config = bootstrap_config()
     if args.runtime != "claude":
         print(f"hooks are only available for 'claude' right now (got {args.runtime!r})")
         return 1
@@ -420,9 +797,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("init", help="write a starter backbone.toml and .env")
-    p.add_argument("--dir", default=".", help="directory to write into (default: cwd)")
-    p.add_argument("--force", action="store_true", help="overwrite existing files")
+    p = sub.add_parser("init", help="create the data directory, .env and database")
+    p.add_argument(
+        "--data-dir",
+        default=None,
+        help="data directory (default: $BACKBONE_DATA_DIR or ~/.local/share/agent-backbone)",
+    )
+    p.add_argument("--force", action="store_true", help="regenerate .env")
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("doctor", help="check the environment and configuration")
@@ -436,21 +817,68 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("down", help="stop a detached backbone")
     p.set_defaults(func=cmd_down)
 
-    p = sub.add_parser("status", help="show agents, sessions and health")
+    p = sub.add_parser("status", help="show agents, repositories, sessions and health")
     p.set_defaults(func=cmd_status)
 
-    p = sub.add_parser("agent", help="manage agent sessions")
+    p = sub.add_parser("config", help="settings (stored in the database)")
+    csub = p.add_subparsers(dest="config_command", required=True)
+    csub.add_parser("list", help="show every setting")
+    pc = csub.add_parser("get", help="show one setting")
+    pc.add_argument("key")
+    pc = csub.add_parser("set", help="change a setting (JSON values accepted)")
+    pc.add_argument("key")
+    pc.add_argument("value")
+    pc = csub.add_parser("unset", help="reset a setting to its default")
+    pc.add_argument("key")
+    p.set_defaults(func=cmd_config)
+
+    p = sub.add_parser("agent", help="manage agents")
     asub = p.add_subparsers(dest="agent_command", required=True)
-    asub.add_parser("list", help="list configured agents")
-    ps = asub.add_parser("start", help="start a configured agent")
-    ps.add_argument("name")
-    ps.add_argument("--runtime", default=None)
+    asub.add_parser("list", help="list known agents")
+    ps = asub.add_parser("start", help="start an agent (discovers it from a directory)")
+    ps.add_argument("name", nargs="?", default=None, help="agent name (default: directory name)")
+    ps.add_argument(
+        "--dir", default=None, help="project directory (default: cwd when no name is given)"
+    )
+    ps.add_argument(
+        "--runtime",
+        default=None,
+        help="claude | codex | gemini | opencode | aider | cursor | shell",
+    )
     ps.add_argument("--model", default=None)
     ps.add_argument("--resume", action="store_true")
+    ps.add_argument(
+        "--watch",
+        action="append",
+        default=None,
+        metavar="OWNER/REPO",
+        help="also watch this repository (repeatable)",
+    )
+    ps.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="return immediately instead of waiting for the prompt",
+    )
     pst = asub.add_parser("stop", help="stop an agent session")
     pst.add_argument("name")
-    asub.add_parser("start-all", help="start every configured agent")
-    asub.add_parser("stop-all", help="stop every configured agent")
+    pi = asub.add_parser("inspect", help="show state, delivery readiness and the evidence")
+    pi.add_argument("name")
+    pi.add_argument("--json", action="store_true")
+    pse = asub.add_parser(
+        "set", help="change agent fields: runtime=… model=… repo=… dir=… description=…"
+    )
+    pse.add_argument("name")
+    pse.add_argument("assignments", nargs="+", metavar="key=value")
+    pw = asub.add_parser("watch", help="watch one or more repositories")
+    pw.add_argument("name")
+    pw.add_argument("repos", nargs="+", metavar="OWNER/REPO")
+    pu = asub.add_parser("unwatch", help="stop watching repositories")
+    pu.add_argument("name")
+    pu.add_argument("repos", nargs="+", metavar="OWNER/REPO")
+    pf = asub.add_parser("forget", help="remove an agent from the backbone")
+    pf.add_argument("name")
+    asub.add_parser("start-all", help="start every known agent")
+    asub.add_parser("stop-all", help="stop every known agent")
     p.set_defaults(func=cmd_agent)
 
     p = sub.add_parser("hooks", help="install runtime hooks that report agent state")
@@ -472,7 +900,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("agent")
     p.add_argument("message", nargs="+")
     p.add_argument("--from", dest="sender", default=os.environ.get("USER", "cli"))
-    p.add_argument("--priority", action="store_true", help="bypass user-interacting checks")
+    p.add_argument("--priority", action="store_true", help="deliver even while someone is typing")
     p.set_defaults(func=cmd_tell)
 
     return parser
@@ -482,7 +910,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )

@@ -1,8 +1,8 @@
 """Plan management endpoints — view and (optionally) act on pending plans.
 
 Approving/rejecting a plan injects keystrokes into the agent's terminal, so
-those endpoints are disabled unless ``[security] allow_remote_plan_control``
-is set in backbone.toml.
+those endpoints are disabled unless the ``security.allow_remote_plan_control``
+setting is on (``backbone config set security.allow_remote_plan_control true``).
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from agent_backbone.api.models import (
 )
 from agent_backbone.api.session_updates import listable_sessions
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents import AgentState, StateService
+from agent_backbone.services.agents import StateService
 from agent_backbone.services.terminal import TmuxService, send_message
 
 log = logging.getLogger(__name__)
@@ -34,8 +34,8 @@ def _require_plan_control(config: BackboneConfig) -> None:
         raise HTTPException(
             status_code=403,
             detail=(
-                "Remote plan control is disabled. Set "
-                "[security] allow_remote_plan_control = true in backbone.toml to enable."
+                "Remote plan control is disabled. Run "
+                "`backbone config set security.allow_remote_plan_control true` to enable."
             ),
         )
 
@@ -52,7 +52,7 @@ async def list_pending_plans(
 
     for session in listable_sessions(config, active):
         snapshot = await state_svc.get_state(session)
-        if snapshot.state == AgentState.PLAN_WAITING:
+        if snapshot.is_plan_waiting:
             plans.append(
                 PlanDetail(
                     session=session,
@@ -72,7 +72,7 @@ async def get_plan_detail(
 ):
     """Get plan details including file content for a specific session."""
     snapshot = state_svc.read_state(session)
-    if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
+    if not snapshot or not snapshot.is_plan_waiting:
         raise HTTPException(status_code=404, detail=f"No pending plan for session '{session}'")
 
     content = None
@@ -122,9 +122,9 @@ async def reject_plan(
     """Reject a pending plan: exit plan mode and deliver the feedback."""
     _require_plan_control(config)
     snapshot = state_svc.read_state(session)
-    if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
+    if not snapshot or not snapshot.is_plan_waiting:
         raise HTTPException(
-            status_code=409, detail=f"Session '{session}' is not in plan_waiting state"
+            status_code=409, detail=f"Session '{session}' is not waiting for plan approval"
         )
 
     if not await tmux_svc.session_exists(session):
@@ -148,9 +148,9 @@ async def respond_to_plan(
     """Send input to a plan-waiting session (option selection or free text)."""
     _require_plan_control(config)
     snapshot = state_svc.read_state(session)
-    if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
+    if not snapshot or not snapshot.is_plan_waiting:
         raise HTTPException(
-            status_code=409, detail=f"Session '{session}' is not in plan_waiting state"
+            status_code=409, detail=f"Session '{session}' is not waiting for plan approval"
         )
 
     if not await tmux_svc.session_exists(session):

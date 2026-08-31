@@ -14,7 +14,10 @@ router = APIRouter(prefix="/api", tags=["deliveries"])
 @router.get("/deliveries", response_model=ListEnvelope[DeliveryRecord])
 async def list_deliveries(
     issue_number: int | None = Query(default=None),
+    repo: str | None = Query(default=None),
+    kind: str | None = Query(default=None),
     target_entity: str | None = Query(default=None),
+    session: str | None = Query(default=None),
     outcome: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     db: BackboneDB = Depends(get_db),
@@ -23,8 +26,11 @@ async def list_deliveries(
     rows = await db.query_deliveries(
         issue_number=issue_number,
         target_entity=target_entity,
+        session_name=session,
         outcome=outcome,
         limit=limit,
+        repo=repo,
+        kind=kind,
     )
     items = [DeliveryRecord(**row) for row in rows]
     return ListEnvelope(items=items, total=len(items))
@@ -55,10 +61,14 @@ async def get_delivery_stats(db: BackboneDB = Depends(get_db)):
             stats.delivered += count
         elif outcome == "offline":
             stats.offline += count
-        elif outcome == "deferred":
-            stats.deferred += count
         elif outcome in ("delivery_failed", "failed"):
             stats.failed += count
-        else:
-            stats.total += 0  # already counted
+        elif outcome in (
+            "agent_working",
+            "waiting_for_human",
+            "human_typing",
+            "settling",
+            "deferred",
+        ):
+            stats.deferred += count
     return stats

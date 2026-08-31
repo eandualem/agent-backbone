@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
+import time
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,6 +14,8 @@ from agent_backbone.services.terminal import (
     AGENT_ENV_KEY,
     RUNTIME_ENV_KEY,
     STATE_DIR_ENV_KEY,
+    capture_pane,
+    get_terminal_adapter,
     list_sessions,
     session_exists,
     start_session,
@@ -148,6 +152,52 @@ async def start_agent(
     return ok
 
 
+async def wait_until_ready(
+    name: str,
+    *,
+    state_dir: Path | str,
+    runtime: str,
+    timeout: float = 60.0,
+    poll_interval: float = 0.5,
+) -> tuple[str, list[str]]:
+    """Wait until the agent is at its prompt.
+
+    Returns ``(outcome, evidence)`` with outcome ``ready``, ``exited`` or
+    ``timeout``. Readiness is a fresh hook-written ``idle`` state, or — for
+    runtimes without hooks — a visible empty prompt in the terminal.
+    """
+    from agent_backbone.services.agents._file_reader import read_state_file
+    from agent_backbone.services.agents.models import AgentState
+
+    started = time.monotonic()
+    adapter = get_terminal_adapter(runtime)
+    state_path = Path(state_dir).expanduser()
+    last_pane = ""
+    while True:
+        if not await session_exists(name):
+            return "exited", ["tmux session ended before the agent reached its prompt"]
+
+        snapshot = read_state_file(state_path, name)
+        if snapshot and snapshot.timestamp >= time.time() - (time.monotonic() - started) - 2:
+            if snapshot.state == AgentState.IDLE:
+                return "ready", [f"hook reported idle {time.time() - snapshot.timestamp:.0f}s ago"]
+            if snapshot.state == AgentState.WAITING_FOR_HUMAN:
+                return "ready", [f"hook reported waiting_for_human ({snapshot.reason})"]
+
+        pane = await capture_pane(name, lines=60)
+        if pane:
+            last_pane = pane
+            if adapter.detect_waiting_for_human(pane):
+                return "ready", ["terminal shows a question for the human (e.g. trust prompt)"]
+            if adapter.detect_idle(pane):
+                return "ready", ["terminal shows an empty prompt"]
+
+        if time.monotonic() - started >= timeout:
+            tail = [ln for ln in last_pane.strip().splitlines() if ln.strip()][-3:]
+            return "timeout", [f"no prompt after {timeout:.0f}s; last lines: {tail}"]
+        await asyncio.sleep(poll_interval)
+
+
 async def stop_agent(name: str) -> bool:
     """Stop a single agent session."""
     ok = await stop_session(name)
@@ -189,7 +239,7 @@ async def stop_all_agents(config: BackboneConfig) -> int:
 def list_agents(config: BackboneConfig) -> str:
     """Format a list of all configured agents with their directories."""
     if not config.agents:
-        return "No agents configured. Add [agents.<name>] tables to backbone.toml."
+        return "No agents known yet. Run `backbone agent start` from a project directory."
     width = max(len(name) for name in config.agents.names)
     lines = []
     for spec in config.agents:

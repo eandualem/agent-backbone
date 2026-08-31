@@ -65,12 +65,12 @@ async def list_issues(
     from_entity: str | None = Query(default=None, alias="from"),
     issue_type: str | None = Query(default=None, alias="type"),
     label: str | None = Query(default=None),
-    repo: str | None = Query(default=None),
+    repo: str = Query(..., description="owner/name"),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
-    """List issues with filtering. Enriched with priority scores."""
+    """List issues in a repository with filtering. Enriched with priority scores."""
     labels: list[str] = []
     if for_entity:
         labels.append(f"for:{for_entity}")
@@ -89,7 +89,7 @@ async def list_issues(
 @router.get("/issues/{number}", response_model=IssueResponse)
 async def get_issue(
     number: int,
-    repo: str | None = Query(default=None),
+    repo: str = Query(..., description="owner/name"),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
@@ -105,7 +105,7 @@ async def get_issue(
 @router.get("/issues/{number}/comments", response_model=ListEnvelope[IssueCommentResponse])
 async def list_issue_comments(
     number: int,
-    repo: str | None = Query(default=None),
+    repo: str = Query(..., description="owner/name"),
     gh: GitHubClient = Depends(get_github),
 ):
     """List comments on an issue with parsed [from:X] tags."""
@@ -117,7 +117,7 @@ async def list_issue_comments(
 @router.get("/issues/{number}/dependencies", response_model=IssueDependencies)
 async def get_issue_dependencies(
     number: int,
-    repo: str | None = Query(default=None),
+    repo: str = Query(..., description="owner/name"),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     db: BackboneDB = Depends(get_db),
@@ -125,7 +125,7 @@ async def get_issue_dependencies(
 ):
     """Get sub-issues and parent issues for an issue."""
     sub_issues = await gh.get_sub_issues(number, repo_full_name=repo)
-    parents = await db.get_parents(number)
+    parents = await db.get_parents(number, repo=repo)
     return IssueDependencies(
         sub_issues=[_issue_to_response(s, config, delivery_svc) for s in sub_issues],
         parents=parents,
@@ -148,18 +148,16 @@ async def create_issue(
         validate_issue_targets(targets, config)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if body.repo:
-        issue = await gh.create_issue(body.title, body.body, body.labels, repo_full_name=body.repo)
-    else:
-        issue = await delivery_svc.create_and_notify(
-            gh,
-            body.title,
-            body.body,
-            body.labels,
-            config,
-            db=db,
-            flow_name="api-create-issue",
-        )
+    issue = await delivery_svc.create_and_notify(
+        gh,
+        body.title,
+        body.body,
+        body.labels,
+        config,
+        repo=body.repo,
+        db=db,
+        flow_name="api-create-issue",
+    )
     return _issue_to_response(issue, config, delivery_svc)
 
 
@@ -167,7 +165,7 @@ async def create_issue(
 async def add_issue_comment(
     number: int,
     body: IssueCommentRequest,
-    repo: str | None = Query(default=None),
+    repo: str = Query(..., description="owner/name"),
     gh: GitHubClient = Depends(get_github),
 ):
     """Add a comment to an issue."""
@@ -181,7 +179,7 @@ async def add_issue_comment(
 async def update_issue(
     number: int,
     body: IssueUpdateRequest,
-    repo: str | None = Query(default=None),
+    repo: str = Query(..., description="owner/name"),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     delivery_svc: DeliveryService = Depends(get_delivery_service),

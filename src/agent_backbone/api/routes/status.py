@@ -19,6 +19,7 @@ from agent_backbone.api.models import (
     AgentConfigResponse,
     EnrichedAgent,
     JobStatusResponse,
+    RepoStatus,
     ServiceHealth,
     SystemDigest,
 )
@@ -55,19 +56,38 @@ async def get_system_status(
 
     failed_rows = await db.get_failed_deliveries(limit=1000)
 
+    try:
+        last_events = await db.last_event_time_by_repo()
+    except Exception:
+        last_events = {}
+    repos = [
+        RepoStatus(
+            repo=repo,
+            owners=[s.name for s in config.agents.owners(repo)],
+            watchers=[s.name for s in config.agents.watchers(repo)],
+            last_event_at=last_events.get(repo),
+        )
+        for repo in config.agents.repos
+    ]
+
     pending_issues: int | None = None
-    if gh is not None and config.github.enabled:
+    if gh is not None and repos:
         try:
-            pending_issues = len(await gh.list_issues(state="open"))
+            pending_issues = 0
+            for repo in config.agents.repos:
+                pending_issues += len(await gh.list_issues(state="open", repo_full_name=repo))
         except Exception:
             log.warning("Failed to fetch pending issues from GitHub")
+            pending_issues = None
 
     return SystemDigest(
         active_sessions=active,
         agent_count=len(agents),
         pending_issues=pending_issues,
         failed_deliveries=len(failed_rows),
+        github_intake=config.github_intake,
         agents=agents,
+        repos=repos,
     )
 
 
@@ -108,8 +128,8 @@ async def get_service_health(
         health.telegram = "up" if telegram.running else "down"
 
     if gh is not None:
-        health.github = "up"
-    elif config.github.enabled:
+        health.github = config.github_intake
+    elif config.github.intake != "off":
         health.github = "unconfigured"
 
     return health
@@ -125,6 +145,7 @@ async def get_agent_config(config: BackboneConfig = Depends(get_config)):
             runtime=spec.runtime,
             model=spec.model,
             repo=spec.repo,
+            watches=list(spec.watches),
             tags=list(spec.tags),
             description=spec.description,
         )
