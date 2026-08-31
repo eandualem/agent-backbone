@@ -27,7 +27,6 @@ class TestPeriodicScheduler:
         status = scheduler.jobs[0]
         assert status.runs == len(calls)
         assert status.failures == 0
-        assert status.last_result == len(calls)
 
     async def test_failures_are_recorded_and_loop_continues(self):
         scheduler = PeriodicScheduler()
@@ -60,11 +59,12 @@ class TestPeriodicScheduler:
             return "done"
 
         scheduler.add("slow", 60, slow)
-        task = asyncio.create_task(scheduler.run_now("slow"))
+        job = scheduler._jobs["slow"]
+        task = asyncio.create_task(scheduler._run_once(job))
         await started.wait()
-        assert await scheduler.run_now("slow") is None  # skipped while running
+        await scheduler._run_once(job)  # skipped while running
         release.set()
-        assert await task == "done"
+        await task
         assert scheduler.jobs[0].runs == 1
 
     async def test_health_and_validation(self):

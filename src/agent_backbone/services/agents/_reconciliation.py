@@ -40,7 +40,6 @@ async def reconcile_startup_states(config: BackboneConfig, db: BackboneDB) -> No
                 session_name=name,
                 state=snapshot.state.value,
                 current_issue=snapshot.current_issue,
-                entity=name,
                 plan_file=snapshot.plan_file,
                 plan_title=snapshot.plan_title,
                 reason=snapshot.reason,

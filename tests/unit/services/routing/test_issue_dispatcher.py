@@ -185,7 +185,6 @@ class TestIssueDispatcher:
             labels=ParsedLabels(),
             html_url="https://github.com/acme/backbone/pull/78",
             repo_full_name="acme/backbone",
-            is_pull_request=True,
         )
         event = IssueEvent(event_type=EventType.PULL_REQUEST_OPENED, issue=issue)
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 import socketio
 
@@ -21,7 +22,7 @@ from agent_backbone.api.auth import api_key_valid
 from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.services.terminal import (
     PtyManager,
-    list_panes,
+    active_pane_size,
     resize_window,
     session_exists,
     set_window_size_mode,
@@ -29,15 +30,24 @@ from agent_backbone.services.terminal import (
 
 log = logging.getLogger(__name__)
 
-_pty_manager = PtyManager()
+_pty_manager: PtyManager | None = None
 
 MIN_COLS, MAX_COLS = 10, 500
 MIN_ROWS, MAX_ROWS = 2, 200
 COALESCE_MS = 3
 
 
+def configure_pty_manager(data_dir: Path) -> None:
+    """Create the shared PTY manager, tracking attach processes under ``data_dir``."""
+    global _pty_manager
+    _pty_manager = PtyManager(data_dir / "pty-pids.txt")
+
+
 def get_pty_manager() -> PtyManager:
-    """Get the shared PtyManager instance."""
+    """The shared PTY manager (created on first use when not configured)."""
+    global _pty_manager
+    if _pty_manager is None:
+        _pty_manager = PtyManager()
     return _pty_manager
 
 
@@ -105,6 +115,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
         # sid -> {session_name: forwarding_task or None when collapsed/detached}
         self._subscriptions: dict[str, dict[str, asyncio.Task | None]] = {}
         self._active_sessions: dict[str, set[str]] = {}
+        self._background: set[asyncio.Task] = set()
 
     async def _attach_subscription_client(
         self, sid: str, session_name: str, cols: int, rows: int
@@ -164,10 +175,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
             except (ValueError, TypeError):
                 cols, rows = 80, 24
         else:
-            panes = await list_panes(session_name)
-            active_pane = next((p for p in panes if p["pane_active"]), None)
-            cols = int(active_pane["pane_width"]) if active_pane else 80
-            rows = int(active_pane["pane_height"]) if active_pane else 24
+            cols, rows = await active_pane_size(session_name) or (80, 24)
 
         try:
             await self.enter_room(sid, f"session:{session_name}")
@@ -254,14 +262,15 @@ class TerminalNamespace(_AuthenticatedNamespace):
 
     def _on_data_dropped(self, sid: str, session_name: str) -> None:
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(
-                    self.emit("data_dropped", {"session": session_name}, to=sid),
-                    name=f"data-dropped-{sid}-{session_name}",
-                )
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            pass
+            return
+        task = loop.create_task(
+            self.emit("data_dropped", {"session": session_name}, to=sid),
+            name=f"data-dropped-{sid}-{session_name}",
+        )
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
 
     async def _emit_output(self, sid: str, session_name: str, buffer: list[str]) -> None:
         if not buffer:

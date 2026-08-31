@@ -1,13 +1,14 @@
 """In-process periodic job scheduler.
 
-Replaces the Prefect server/worker pair. Jobs are plain coroutines run on a
-fixed interval inside the API process; overlapping runs of the same job are
-skipped, and job failures are logged without stopping the loop.
+Jobs are plain coroutines run on a fixed interval inside the API process.
+Overlapping runs of the same job are skipped and failures are logged without
+stopping the loop.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -27,7 +28,6 @@ class JobStatus:
     last_started: float | None = None
     last_finished: float | None = None
     last_error: str | None = None
-    last_result: object = None
     running: bool = False
 
 
@@ -50,7 +50,6 @@ class PeriodicScheduler:
 
     def __init__(self) -> None:
         self._jobs: dict[str, _Job] = {}
-        self._started = False
 
     def add(
         self,
@@ -71,17 +70,11 @@ class PeriodicScheduler:
     def jobs(self) -> list[JobStatus]:
         return [job.status for job in self._jobs.values()]
 
-    async def run_now(self, name: str) -> object:
-        """Run a job immediately (used by CLI/tests). Skips if already running."""
-        job = self._jobs[name]
-        return await self._run_once(job)
-
     # --- LifecycleAware ---
 
     async def start(self) -> None:
         for job in self._jobs.values():
             job.task = asyncio.create_task(self._loop(job), name=f"scheduler-{job.name}")
-        self._started = True
         log.info("Scheduler started with %d job(s): %s", len(self._jobs), ", ".join(self._jobs))
 
     async def stop(self) -> None:
@@ -89,13 +82,10 @@ class PeriodicScheduler:
         for task in tasks:
             task.cancel()
         for task in tasks:
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-            except (asyncio.CancelledError, Exception):
-                pass
         for job in self._jobs.values():
             job.task = None
-        self._started = False
 
     async def health_check(self) -> dict:
         alive = all(job.task is not None and not job.task.done() for job in self._jobs.values())
@@ -122,26 +112,23 @@ class PeriodicScheduler:
             await self._run_once(job)
             await asyncio.sleep(job.interval)
 
-    async def _run_once(self, job: _Job) -> object:
+    async def _run_once(self, job: _Job) -> None:
         if job.lock.locked():
             log.debug("Job %s still running — skipping this tick", job.name)
-            return None
+            return
         async with job.lock:
             status = job.status
             status.running = True
             status.last_started = time.time()
             try:
-                result = await job.fn()
-                status.last_result = result
+                await job.fn()
                 status.last_error = None
-                return result
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 status.failures += 1
                 status.last_error = f"{type(exc).__name__}: {exc}"
                 log.exception("Job %s failed", job.name)
-                return None
             finally:
                 status.runs += 1
                 status.running = False

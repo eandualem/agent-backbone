@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 4d6f8e73129d
+Revision ID: 17dfbbf97e79
 Revises:
-Create Date: 2026-08-31 16:21:15.633963
+Create Date: 2026-08-31 17:18:40.606259
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "4d6f8e73129d"
+revision: str = "17dfbbf97e79"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -36,11 +36,8 @@ def upgrade() -> None:
         sa.Column("reason", sa.Text(), nullable=True),
         sa.Column("current_issue", sa.Integer(), nullable=True),
         sa.Column("current_repo", sa.Text(), nullable=True),
-        sa.Column("last_activity", sa.Text(), nullable=True),
         sa.Column("started_at", sa.Text(), nullable=True),
         sa.Column("updated_at", sa.Text(), nullable=False),
-        sa.Column("entity", sa.Text(), nullable=True),
-        sa.Column("context", sa.Text(), nullable=True),
         sa.Column("ts", sa.Text(), nullable=True),
         sa.Column("plan_file", sa.Text(), nullable=True),
         sa.Column("plan_title", sa.Text(), nullable=True),
@@ -67,12 +64,6 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.Text(), nullable=False),
         sa.Column("last_started_at", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("name", name=op.f("pk_agents")),
-    )
-    op.create_table(
-        "dedup_log",
-        sa.Column("delivery_id", sa.Text(), nullable=False),
-        sa.Column("received_at", sa.Text(), nullable=False),
-        sa.PrimaryKeyConstraint("delivery_id", name=op.f("pk_dedup_log")),
     )
     op.create_table(
         "deliveries",
@@ -276,7 +267,6 @@ def downgrade() -> None:
         batch_op.drop_index("idx_deliveries_created")
 
     op.drop_table("deliveries")
-    op.drop_table("dedup_log")
     op.drop_table("agents")
     op.drop_table("agent_watches")
     op.drop_table("agent_states")

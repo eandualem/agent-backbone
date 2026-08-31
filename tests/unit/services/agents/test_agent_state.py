@@ -19,9 +19,9 @@ from agent_backbone.services.agents import (
     read_state_file,
     should_deliver,
 )
-from agent_backbone.services.agents._inference import prompt_has_pending_input
 from agent_backbone.services.agents.interface import StateService, _row_to_snapshot
 from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.terminal import prompt_has_pending_input
 
 _INF = "agent_backbone.services.agents._inference"
 _IFACE = "agent_backbone.services.agents.interface"
@@ -38,11 +38,9 @@ class TestReadStateFile:
 
     def test_processing_with_issue(self, tmp_path):
         state_file = tmp_path / "ike.json"
-        state_file.write_text(
-            json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
-        )
+        state_file.write_text(json.dumps({"state": "busy", "issue": 42, "ts": time.time()}))
         result = read_state_file(tmp_path, "ike")
-        assert result.state == AgentState.BUSY  # legacy value maps to busy
+        assert result.state == AgentState.BUSY
         assert result.current_issue == 42
 
     def test_missing_file(self, tmp_path):
@@ -66,7 +64,8 @@ class TestReadStateFile:
         state_file.write_text(
             json.dumps(
                 {
-                    "state": "plan_waiting",
+                    "state": "waiting_for_human",
+                    "reason": "plan",
                     "issue": None,
                     "ts": time.time(),
                     "plan_file": "/tmp/plan.md",
@@ -87,7 +86,8 @@ class TestReadStateFile:
         state_file.write_text(
             json.dumps(
                 {
-                    "state": "permission_waiting",
+                    "state": "waiting_for_human",
+                    "reason": "permission",
                     "issue": 42,
                     "ts": time.time(),
                 }
@@ -129,14 +129,11 @@ class TestWaitingForHuman:
             "unknown",
         }
 
-    def test_legacy_values_parse(self):
-        assert AgentState.parse("plan_waiting") == (AgentState.WAITING_FOR_HUMAN, "plan")
-        assert AgentState.parse("permission_waiting") == (
-            AgentState.WAITING_FOR_HUMAN,
-            "permission",
-        )
-        assert AgentState.parse("processing_issue") == (AgentState.BUSY, None)
-        assert AgentState.parse("sleeping") == (AgentState.UNKNOWN, None)
+    def test_parse_is_total(self):
+        assert AgentState.parse("busy") == AgentState.BUSY
+        assert AgentState.parse("waiting_for_human") == AgentState.WAITING_FOR_HUMAN
+        assert AgentState.parse("sleeping") == AgentState.UNKNOWN
+        assert AgentState.parse(None) == AgentState.UNKNOWN
 
     def test_should_deliver_waiting_default(self):
         assert should_deliver(AgentState.WAITING_FOR_HUMAN) is False
@@ -331,9 +328,7 @@ class TestInferStateFromPane:
 class TestGetAgentState:
     async def test_fresh_push_preferred(self, tmp_path):
         state_file = tmp_path / "ike.json"
-        state_file.write_text(
-            json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
-        )
+        state_file.write_text(json.dumps({"state": "busy", "issue": 42, "ts": time.time()}))
         with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
             result = await get_agent_state(tmp_path, "ike")
         assert result.state == AgentState.BUSY
@@ -354,9 +349,7 @@ class TestGetAgentState:
 
     async def test_fresh_processing_push_is_trusted(self, tmp_path):
         state_file = tmp_path / "ike.json"
-        state_file.write_text(
-            json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
-        )
+        state_file.write_text(json.dumps({"state": "busy", "issue": 42, "ts": time.time()}))
         with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="user@host $"):
             result = await get_agent_state(tmp_path, "ike")
         assert result.state == AgentState.BUSY
@@ -378,7 +371,7 @@ class TestGetAgentState:
         """Stale push for states NOT in the trusted set triggers pane capture."""
         state_file = tmp_path / "ike.json"
         state_file.write_text(
-            json.dumps({"state": "plan_waiting", "ts": time.time() - 600})  # 10 min old
+            json.dumps({"state": "waiting_for_human", "reason": "plan", "ts": time.time() - 600})
         )
         with patch(
             f"{_INF}.capture_pane",
@@ -434,9 +427,7 @@ class TestGetAgentState:
     async def test_stale_processing_verified_via_tmux(self, tmp_path):
         """Stale processing_issue push state is re-checked from tmux before fallback."""
         state_file = tmp_path / "ike.json"
-        state_file.write_text(
-            json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time() - 600})
-        )
+        state_file.write_text(json.dumps({"state": "busy", "issue": 42, "ts": time.time() - 600}))
         mock_capture = AsyncMock(return_value="user@host $")
         with patch(f"{_INF}.capture_pane", mock_capture):
             result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
@@ -450,7 +441,8 @@ class TestGetAgentState:
         state_file.write_text(
             json.dumps(
                 {
-                    "state": "plan_waiting",
+                    "state": "waiting_for_human",
+                    "reason": "plan",
                     "ts": time.time() - 600,
                     "plan_file": str(tmp_path / "missing-plan.md"),
                     "plan_title": "Add caching",
@@ -470,7 +462,8 @@ class TestGetAgentState:
         state_file.write_text(
             json.dumps(
                 {
-                    "state": "plan_waiting",
+                    "state": "waiting_for_human",
+                    "reason": "plan",
                     "ts": time.time() - 600,
                     "plan_file": str(plan_file),
                     "plan_title": "Add caching",
@@ -489,7 +482,8 @@ class TestGetAgentState:
         state_file.write_text(
             json.dumps(
                 {
-                    "state": "permission_waiting",
+                    "state": "waiting_for_human",
+                    "reason": "permission",
                     "issue": 42,
                     "ts": time.time() - 600,
                 }
@@ -521,7 +515,7 @@ class TestRowToSnapshot:
     def test_converts_processing_row(self):
         row = {
             "session_name": "feynman",
-            "state": "processing_issue",
+            "state": "busy",
             "current_issue": 571,
             "ts": "1709500000.0",
             "started_at": "1709499000.0",

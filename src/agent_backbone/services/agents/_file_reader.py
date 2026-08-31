@@ -31,11 +31,11 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         log.warning("Failed to read state file for %s: %s", session, e)
         return None
 
-    state, legacy_reason = AgentState.parse(data.get("state"))
+    state = AgentState.parse(data.get("state"))
     started_at_raw = data.get("started_at")
     return StateSnapshot(
         state=state,
-        reason=data.get("reason") or legacy_reason,
+        reason=data.get("reason") or None,
         current_issue=data.get("issue"),
         current_repo=data.get("repo") or None,
         timestamp=float(data.get("ts", 0)),

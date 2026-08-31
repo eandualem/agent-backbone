@@ -16,13 +16,6 @@ class ListEnvelope(BaseModel, Generic[T]):
     total: int = 0
 
 
-class ErrorDetail(BaseModel):
-    """Standard error response."""
-
-    error: str
-    detail: str = ""
-
-
 # --- Agents ---
 
 
@@ -160,8 +153,6 @@ class StateUpdateRequest(BaseModel):
     reason: str | None = None
     issue: int | None = None
     repo: str | None = None
-    entity: str = ""
-    context: str = ""
     ts: float = 0.0
     plan_file: str | None = None
     plan_title: str | None = None

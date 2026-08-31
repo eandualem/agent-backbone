@@ -141,7 +141,7 @@ class TestHandleStalls:
 class TestOffline:
     async def test_detects_and_clears_offline_agent(self, config, db):
         config = replace(config, escalation=EscalationConfig(target="leo"))
-        await db.set_agent_state("ike", "busy", current_issue=3, entity="ike")
+        await db.set_agent_state("ike", "busy", current_issue=3)
         gh = AsyncMock()
         gh.list_open_issues = AsyncMock(return_value=[_issue(3)])
         with patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d:
@@ -152,8 +152,8 @@ class TestOffline:
         assert (await db.get_agent_state("ike"))["state"] == "unknown"
 
     async def test_active_or_unknown_not_flagged(self, config, db):
-        await db.set_agent_state("ike", "busy", entity="ike")
-        await db.set_agent_state("leo", "unknown", entity="leo")
+        await db.set_agent_state("ike", "busy")
+        await db.set_agent_state("leo", "unknown")
         assert await esc.check_for_unexpected_offline(config, {"ike"}, db, AsyncMock()) == []
 
 

@@ -19,13 +19,6 @@ RETRYABLE_OUTCOMES = (
     "waiting_for_human",
     "human_typing",
     "settling",
-    # legacy names kept for rows written by earlier versions
-    "deferred",
-    "user_interacting",
-    "plan_waiting",
-    "permission_waiting",
-    "grace_period",
-    "copy_mode",
 )
 
 

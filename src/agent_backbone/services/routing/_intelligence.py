@@ -16,6 +16,7 @@ The agent-reported state (2, 3) always outranks terminal-only signals.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -110,10 +111,8 @@ async def get_session_intelligence(
     if tmux_vars.get("pane_in_mode") == "1":
         cleared = await adapter.exit_copy_mode(session_name)
         evidence.append(f"tmux copy mode detected — {'cleared' if cleared else 'could not clear'}")
-        try:
+        with contextlib.suppress(Exception):
             pane_content = await capture_pane(session_name)
-        except Exception:
-            pass
 
     if (
         agent_state == AgentState.IDLE

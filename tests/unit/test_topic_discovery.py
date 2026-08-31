@@ -36,7 +36,6 @@ class TestResolveTopicName:
     def test_catchall(self):
         config = _make_config()
         assert resolve_topic_name("Agents", config) == CATCH_ALL_TOPIC
-        assert resolve_topic_name("Coding Agents", config) == CATCH_ALL_TOPIC
 
     def test_case_insensitive(self):
         config = _make_config()

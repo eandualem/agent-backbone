@@ -1,7 +1,4 @@
-"""Pydantic models for webhook event validation.
-
-Validates untrusted GitHub webhook payloads into typed structures.
-"""
+"""Normalised GitHub event models shared by the webhook, the poller and routing."""
 
 from __future__ import annotations
 
@@ -95,7 +92,6 @@ class IssueData(BaseModel):
     labels: ParsedLabels = Field(default_factory=ParsedLabels)
     html_url: str = ""
     repo_full_name: str = ""
-    is_pull_request: bool = False
 
 
 class CommentData(BaseModel):
@@ -136,7 +132,6 @@ class IssueEvent(BaseModel):
             labels=labels,
             html_url=issue_data.get("html_url", ""),
             repo_full_name=repository.get("full_name", ""),
-            is_pull_request=issue_key == "pull_request",
         )
 
         comment = None

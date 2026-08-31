@@ -6,7 +6,6 @@ import asyncio
 import logging
 import shutil
 import time
-from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -209,21 +208,14 @@ async def stop_agent(name: str) -> bool:
     return ok
 
 
-async def start_group(specs: Iterable[AgentSpec], **overrides) -> int:
-    """Start several agents. Returns the count of newly started sessions."""
+async def start_all(config: BackboneConfig, **overrides) -> int:
+    """Start every known agent that is not running. Returns the count started."""
+    overrides.setdefault("state_dir", config.state_dir)
     started = 0
-    for spec in specs:
-        if await session_exists(spec.name):
-            continue
-        if await start_agent(spec, **overrides):
+    for spec in config.agents:
+        if not await session_exists(spec.name) and await start_agent(spec, **overrides):
             started += 1
     return started
-
-
-async def start_all(config: BackboneConfig, **overrides) -> int:
-    """Start every configured agent."""
-    overrides.setdefault("state_dir", config.state_dir)
-    return await start_group(list(config.agents), **overrides)
 
 
 async def stop_all_agents(config: BackboneConfig) -> int:
@@ -237,15 +229,3 @@ async def stop_all_agents(config: BackboneConfig) -> int:
             stopped += 1
     log.info("Stopped %d agent session(s)", stopped)
     return stopped
-
-
-def list_agents(config: BackboneConfig) -> str:
-    """Format a list of all configured agents with their directories."""
-    if not config.agents:
-        return "No agents known yet. Run `backbone agent start` from a project directory."
-    width = max(len(name) for name in config.agents.names)
-    lines = []
-    for spec in config.agents:
-        model = f" ({spec.model})" if spec.model else ""
-        lines.append(f"  {spec.name:<{width}s}  {spec.runtime}{model}  {spec.path}")
-    return "\n".join(lines)

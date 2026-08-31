@@ -26,7 +26,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from agent_backbone.services.database.config import DatabaseConfig
+from agent_backbone.services.database.interface import sqlite_url
 
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
 DEFAULT_PORT = 7120
@@ -228,10 +228,6 @@ class AgentsConfig:
     def names(self) -> list[str]:
         return list(self.specs)
 
-    def dir_for(self, name: str) -> str:
-        spec = self.specs.get(name)
-        return str(spec.path) if spec else ""
-
     def for_repo(self, repo_full_name: str) -> list[AgentSpec]:
         """Every agent that owns or watches a repository (owners first)."""
         return self.owners(repo_full_name) + self.watchers(repo_full_name)
@@ -383,7 +379,8 @@ class BackboneConfig:
     agent_state: AgentStateConfig = field(default_factory=AgentStateConfig)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     delivery: DeliveryConfig = field(default_factory=DeliveryConfig)
-    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    database_url_override: str = ""
+    """``BACKBONE_DATABASE_URL`` when set (PostgreSQL); empty means SQLite in the data dir."""
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     priority_scoring: PriorityScoringConfig = field(default_factory=PriorityScoringConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
@@ -415,7 +412,7 @@ class BackboneConfig:
 
     @property
     def database_url(self) -> str:
-        return self.database.resolved_url(self.data_dir)
+        return self.database_url_override or sqlite_url(self.data_dir)
 
     # --- Derived flags -----------------------------------------------------
 
@@ -538,7 +535,7 @@ def build_config(
             grace_period_seconds=s["timing.grace_period_seconds"],
             queue_expiry_minutes=s["timing.queue_expiry_minutes"],
         ),
-        database=DatabaseConfig(url=env.get("BACKBONE_DATABASE_URL", "")),
+        database_url_override=env.get("BACKBONE_DATABASE_URL", ""),
         telegram=TelegramConfig(
             allowed_chat_ids=tuple(int(x) for x in s["telegram.allowed_chat_ids"]),
             topic_routes={int(k): str(v) for k, v in s["telegram.topic_routes"].items()},

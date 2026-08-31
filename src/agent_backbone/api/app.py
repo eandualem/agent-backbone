@@ -1,17 +1,16 @@
 """FastAPI application factory.
 
 One process hosts everything: the REST API, the Socket.IO feed, the periodic
-scheduler (monitor + delivery retry + GitHub intake), the Telegram bot and
-the GitHub client. Configuration comes from the database: the lifespan opens
-the data directory, starts the database, loads settings and agents, and only
-then wires the remaining services against that snapshot.
+scheduler (monitor, delivery retry, GitHub intake), the Telegram bot and the
+GitHub client. Configuration comes from the database: the lifespan opens the
+data directory, starts the database, loads settings and agents, and only then
+wires the remaining services against that snapshot.
 """
 
 from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import httpx
 import socketio
@@ -28,7 +27,7 @@ API_VERSION = "2.0.0"
 
 
 def _register_jobs(app: FastAPI):
-    """Wire the periodic jobs. Each job reads app.state.config at run time so
+    """Wire the periodic jobs. Each job reads ``app.state.config`` at run time so
     setting changes and newly discovered agents are picked up without a restart."""
     from agent_backbone.services.agents._monitor import monitor_agents
     from agent_backbone.services.routing._flows import delivery_retry
@@ -43,26 +42,27 @@ def _register_jobs(app: FastAPI):
         return await monitor_agents(
             state.config,
             state.db,
-            getattr(state, "github", None),
+            state.github,
             state_svc=state.state_service,
             tmux_svc=state.tmux_service,
             sio=getattr(state, "sio", None),
         )
 
     async def _retry():
-        return await delivery_retry(state.config, state.db, getattr(state, "github", None))
+        return await delivery_retry(state.config, state.db, state.github)
 
     async def _prune():
-        pruned = await state.db.prune_old_deliveries(state.config.delivery.retention_days)
-        ids = await state.db.prune_delivery_ids(max_age_hours=24)
-        events = await state.db.prune_events(state.config.delivery.retention_days)
-        return {"deliveries": pruned, "delivery_ids": ids, "events": events}
+        days = state.config.delivery.retention_days
+        return {
+            "deliveries": await state.db.prune_old_deliveries(days),
+            "events": await state.db.prune_events(days),
+        }
 
     scheduler.add("agent-monitor", config.monitor.interval_seconds, _monitor)
     scheduler.add("delivery-retry", config.monitor.retry_interval_seconds, _retry)
     scheduler.add("prune", 6 * 3600, _prune)
 
-    if getattr(state, "github", None) is not None:
+    if state.github is not None:
         from agent_backbone.services.github._poller import GitHubPoller
 
         poller = GitHubPoller(
@@ -72,13 +72,11 @@ def _register_jobs(app: FastAPI):
             state.delivery_service,
             state.dispatch_service,
         )
-        state.github_poller = poller
-        intake = config.github_intake
-        if intake == "poll":
+        if config.github_intake == "poll":
             scheduler.add(
                 "github-poll", config.github.poll_interval_seconds, poller.run, run_immediately=True
             )
-        elif intake == "webhook" and config.github.backfill_on_start:
+        elif config.github_intake == "webhook" and config.github.backfill_on_start:
             scheduler.add("github-backfill", 24 * 3600, poller.run, run_immediately=True)
     return scheduler
 
@@ -86,33 +84,30 @@ def _register_jobs(app: FastAPI):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Open the data directory, start the database, load config, wire services."""
+    from agent_backbone.api.socketio_server import configure_pty_manager, get_pty_manager
+    from agent_backbone.services.agent_store import AgentStore
+    from agent_backbone.services.agents import StateService
+    from agent_backbone.services.agents._reconciliation import reconcile_startup_states
+    from agent_backbone.services.database import BackboneDB, DatabaseService
+    from agent_backbone.services.github import GitHubClient
+    from agent_backbone.services.routing import DeliveryService, DispatchService
+    from agent_backbone.services.telegram import TelegramService
+    from agent_backbone.services.terminal import TmuxService
+
     boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
-    data_dir: Path = boot.data_dir
+    data_dir = boot.data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
     app.state.config = boot
-
-    from agent_backbone.services.infrastructure._processes import set_pid_dir
-
-    set_pid_dir(data_dir / "pids")
+    configure_pty_manager(data_dir)
 
     lifecycle = LifecycleManager()
     app.state.lifecycle = lifecycle
 
-    from agent_backbone.services.agent_store import AgentStore
-    from agent_backbone.services.agents.factory import register_state
-    from agent_backbone.services.database.factory import register_database, register_persistence
-    from agent_backbone.services.github.factory import register_github
-    from agent_backbone.services.routing.factory import (
-        register_delivery,
-        register_dispatch,
-        register_notifications,
-    )
-    from agent_backbone.services.telegram.factory import register_telegram
-    from agent_backbone.services.terminal.factory import register_tmux
-
-    # Stage 1: database, then configuration from it.
-    app.state.database_service = await register_database(lifecycle, boot)
-    app.state.db = await register_persistence(lifecycle, app.state.database_service)
+    # Stage 1: the database, then the configuration stored in it.
+    app.state.database_service = DatabaseService(boot.database_url)
+    app.state.db = BackboneDB(database_service=app.state.database_service)
+    lifecycle.register("database", app.state.database_service)
+    lifecycle.register("persistence", app.state.db)
     await lifecycle.start_all()
 
     def _publish(new_config: BackboneConfig) -> None:
@@ -123,28 +118,28 @@ async def lifespan(app: FastAPI):
     await app.state.agent_store.start()
     config: BackboneConfig = app.state.config
 
-    # Stage 2: everything else against the loaded snapshot.
-    app.state.github = None
-    if config.github_ready:
-        app.state.github = await register_github(lifecycle, config)
-    app.state.tmux_service = await register_tmux(lifecycle)
-    app.state.state_service = await register_state(lifecycle, config, db=app.state.db)
-    app.state.notification_service = await register_notifications(lifecycle)
-    app.state.delivery_service = await register_delivery(lifecycle)
-    app.state.dispatch_service = await register_dispatch(lifecycle)
-    app.state.telegram_service = await register_telegram(
-        lifecycle, lambda: app.state.config, db=app.state.db
+    # Stage 2: everything else, against the loaded snapshot.
+    app.state.github = GitHubClient(config) if config.github_ready else None
+    if app.state.github is not None:
+        lifecycle.register("github", app.state.github)
+    app.state.tmux_service = TmuxService()
+    lifecycle.register("tmux", app.state.tmux_service)
+    app.state.state_service = StateService(
+        config.state_dir, config.agent_state.stale_threshold_seconds, db=app.state.db
     )
+    lifecycle.register("state", app.state.state_service)
+    app.state.delivery_service = DeliveryService()
+    lifecycle.register("delivery", app.state.delivery_service)
+    app.state.dispatch_service = DispatchService()
+    lifecycle.register("dispatch", app.state.dispatch_service)
+    app.state.telegram_service = TelegramService(lambda: app.state.config, db=app.state.db)
+    lifecycle.register("telegram", app.state.telegram_service)
     app.state.scheduler = _register_jobs(app)
     lifecycle.register("scheduler", app.state.scheduler)
 
     try:
         await lifecycle.start_all()
-
-        from agent_backbone.services.agents._reconciliation import reconcile_startup_states
-
         await reconcile_startup_states(config=config, db=app.state.db)
-
         log.info(
             "agent-backbone %s on http://%s:%d — data %s, %d agent(s), github=%s, telegram=%s",
             API_VERSION,
@@ -158,9 +153,6 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await lifecycle.stop_all()
-
-        from agent_backbone.api.socketio_server import get_pty_manager
-
         await get_pty_manager().cleanup_all()
         log.info("agent-backbone shutting down")
 

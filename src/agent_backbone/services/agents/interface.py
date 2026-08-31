@@ -19,7 +19,7 @@ _LIVE_RECONCILIATION_STATES = frozenset({AgentState.STARTING, AgentState.BUSY, A
 
 def _row_to_snapshot(row: dict) -> StateSnapshot:
     """Convert a DB agent_states row dict to a StateSnapshot."""
-    state, legacy_reason = AgentState.parse(row.get("state"))
+    state = AgentState.parse(row.get("state"))
 
     ts_raw = row.get("ts")
     timestamp = float(ts_raw) if ts_raw else 0.0
@@ -29,7 +29,7 @@ def _row_to_snapshot(row: dict) -> StateSnapshot:
 
     return StateSnapshot(
         state=state,
-        reason=row.get("reason") or legacy_reason,
+        reason=row.get("reason") or None,
         current_issue=row.get("current_issue"),
         current_repo=row.get("current_repo"),
         timestamp=timestamp,

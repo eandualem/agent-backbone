@@ -55,19 +55,20 @@ class TestIsRecentNotification:
         clear_dedup()
 
     def test_first_notification(self):
-        assert is_recent_notification(42, "ike") is False
+        assert is_recent_notification("acme/app", 42, "ike") is False
 
     def test_duplicate_within_window(self):
-        is_recent_notification(42, "ike", dedup_seconds=60)
-        assert is_recent_notification(42, "ike", dedup_seconds=60) is True
+        is_recent_notification("acme/app", 42, "ike", dedup_seconds=60)
+        assert is_recent_notification("acme/app", 42, "ike", dedup_seconds=60) is True
 
     def test_different_issue_not_duplicate(self):
-        is_recent_notification(42, "ike")
-        assert is_recent_notification(43, "ike") is False
+        is_recent_notification("acme/app", 42, "ike")
+        assert is_recent_notification("acme/app", 43, "ike") is False
+        assert is_recent_notification("acme/other", 42, "ike") is False
 
     def test_different_target_not_duplicate(self):
-        is_recent_notification(42, "ike")
-        assert is_recent_notification(42, "feynman") is False
+        is_recent_notification("acme/app", 42, "ike")
+        assert is_recent_notification("acme/app", 42, "feynman") is False
 
 
 class TestNormalizeEvent:
@@ -128,5 +129,4 @@ class TestNormalizeEvent:
         event = normalize_event("pull_request", "opened", payload, "d")
         assert event.event_type == EventType.PULL_REQUEST_OPENED
         assert event.issue.number == 73
-        assert event.issue.is_pull_request is True
         assert event.issue.repo_full_name == "acme/agent-backbone"

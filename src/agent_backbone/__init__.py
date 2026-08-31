@@ -1,14 +1,3 @@
-"""Agent backbone — Prefect-based automation for agent orchestration."""
+"""agent-backbone — a local control plane for terminal AI agents."""
 
-from agent_backbone.base import BackboneError, LifecycleAware, LifecycleManager
-from agent_backbone.config import BackboneConfig
-from agent_backbone.models import IssueEvent, ParsedLabels
-
-__all__ = [
-    "BackboneConfig",
-    "BackboneError",
-    "IssueEvent",
-    "LifecycleAware",
-    "LifecycleManager",
-    "ParsedLabels",
-]
+__version__ = "2.0.0a0"

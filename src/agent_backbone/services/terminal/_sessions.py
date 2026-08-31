@@ -1,4 +1,4 @@
-"""Tmux session management — start, stop, list, query, graceful close."""
+"""tmux session management — start, stop, list, query, graceful close."""
 
 from __future__ import annotations
 
@@ -7,30 +7,21 @@ import logging
 import os
 import signal
 
-from agent_backbone.services.terminal._core import session_exists
+from agent_backbone.services.terminal._core import _run_tmux, session_exists
 
 log = logging.getLogger(__name__)
 
-
-# Default format string for session intelligence queries
 SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}\nclient_activity=#{client_activity}"
+"""Format variables the readiness check asks tmux for."""
 
 
 async def query_environment_var(session_name: str, key: str) -> str | None:
-    """Read a tmux session environment variable."""
-    proc = await asyncio.create_subprocess_exec(
-        "tmux",
-        "show-environment",
-        "-t",
-        session_name,
-        key,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
+    """Read one variable from a session's tmux environment."""
+    rc, stdout, _ = await _run_tmux(
+        "show-environment", "-t", session_name, key, capture_stdout=True
     )
-    stdout, _ = await proc.communicate()
-    if proc.returncode != 0:
+    if rc != 0:
         return None
-
     value = stdout.decode().strip()
     if not value or value.startswith("-"):
         return None
@@ -44,85 +35,49 @@ async def start_session(
     command: list[str] | None = None,
     environment: dict[str, str] | None = None,
 ) -> bool:
-    """Start a new detached tmux session.
+    """Start a detached tmux session running ``command`` (or a shell).
 
-    Args:
-        session_name: Name for the tmux session.
-        working_dir: Starting directory for the session.
-        command: Command args to run in the session (e.g. ["claude", "--resume"]).
-        environment: Optional dict of environment variables to set in the session.
-
-    Returns True if the session was created, False if it already exists or failed.
+    ``environment`` is exported both into the initial command (via ``env``)
+    and into the tmux session environment, so hooks and later shells see it.
+    Returns True when the session exists afterwards.
     """
     if await session_exists(session_name):
         log.info("Session '%s' already exists", session_name)
         return True
 
-    args = ["tmux", "new-session", "-d", "-s", session_name]
+    args = ["new-session", "-d", "-s", session_name]
     if working_dir:
         args.extend(["-c", working_dir])
     if command:
         if environment:
-            env_prefix = ["env", *(f"{key}={value}" for key, value in environment.items())]
-            args.extend(env_prefix + command)
-        else:
-            args.extend(command)
+            args.extend(["env", *(f"{key}={value}" for key, value in environment.items())])
+        args.extend(command)
 
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, stderr = await proc.communicate()
-    if proc.returncode != 0:
+    rc, _, stderr = await _run_tmux(*args)
+    if rc != 0:
         log.error("Failed to start session '%s': %s", session_name, stderr.decode())
         return False
     log.info("Started tmux session '%s'", session_name)
 
-    # Set environment variables
-    if environment:
-        for key, value in environment.items():
-            env_proc = await asyncio.create_subprocess_exec(
-                "tmux",
-                "set-environment",
-                "-t",
-                session_name,
+    for key, value in (environment or {}).items():
+        rc, _, stderr = await _run_tmux("set-environment", "-t", session_name, key, value)
+        if rc != 0:
+            log.warning(
+                "Failed to set env var '%s' for session '%s': %s",
                 key,
-                value,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
+                session_name,
+                stderr.decode(),
             )
-            _, env_stderr = await env_proc.communicate()
-            if env_proc.returncode != 0:
-                log.warning(
-                    "Failed to set env var '%s' for session '%s': %s",
-                    key,
-                    session_name,
-                    env_stderr.decode(),
-                )
-
     return True
 
 
 async def stop_session(session_name: str) -> bool:
-    """Kill a tmux session.
-
-    Returns True if session was killed, False if it didn't exist or failed.
-    """
+    """Kill a tmux session. True when the session is gone afterwards."""
     if not await session_exists(session_name):
         log.info("Session '%s' does not exist", session_name)
         return True
-
-    proc = await asyncio.create_subprocess_exec(
-        "tmux",
-        "kill-session",
-        "-t",
-        session_name,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, stderr = await proc.communicate()
-    if proc.returncode != 0:
+    rc, _, stderr = await _run_tmux("kill-session", "-t", session_name)
+    if rc != 0:
         log.error("Failed to stop session '%s': %s", session_name, stderr.decode())
         return False
     log.info("Stopped tmux session '%s'", session_name)
@@ -130,17 +85,9 @@ async def stop_session(session_name: str) -> bool:
 
 
 async def list_sessions() -> list[str]:
-    """List all active tmux session names."""
-    proc = await asyncio.create_subprocess_exec(
-        "tmux",
-        "list-sessions",
-        "-F",
-        "#{session_name}",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    stdout, _ = await proc.communicate()
-    if proc.returncode != 0:
+    """Names of every active tmux session."""
+    rc, stdout, _ = await _run_tmux("list-sessions", "-F", "#{session_name}", capture_stdout=True)
+    if rc != 0:
         return []
     return [s.strip() for s in stdout.decode().splitlines() if s.strip()]
 
@@ -148,57 +95,32 @@ async def list_sessions() -> list[str]:
 async def query_format_vars(
     session_name: str, format_str: str = SESSION_FORMAT_STR
 ) -> dict[str, str]:
-    """Query tmux format variables for a session.
-
-    Runs `tmux display-message -p -t {session} '{format_str}'` and parses
-    key=value lines from the output. Returns empty dict on error or missing session.
-    """
-    proc = await asyncio.create_subprocess_exec(
-        "tmux",
-        "display-message",
-        "-p",
-        "-t",
-        session_name,
-        format_str,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
+    """``key=value`` lines from ``tmux display-message -p`` for a session."""
+    rc, stdout, _ = await _run_tmux(
+        "display-message", "-p", "-t", session_name, format_str, capture_stdout=True
     )
-    stdout, _ = await proc.communicate()
-    if proc.returncode != 0:
+    if rc != 0:
         return {}
-
     result: dict[str, str] = {}
     for line in stdout.decode().splitlines():
-        line = line.strip()
-        if "=" in line:
-            key, _, value = line.partition("=")
+        key, sep, value = line.strip().partition("=")
+        if sep:
             result[key.strip()] = value.strip()
     return result
 
 
 async def list_sessions_rich() -> list[dict]:
-    """List sessions with metadata: name, windows, created, attached, activity."""
+    """Sessions with metadata: name, windows, created, attached, activity."""
     fmt = (
         "#{session_name}\t#{session_windows}\t#{session_created}"
         "\t#{session_attached}\t#{session_activity}"
     )
-    proc = await asyncio.create_subprocess_exec(
-        "tmux",
-        "list-sessions",
-        "-F",
-        fmt,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    stdout, _ = await proc.communicate()
-    if proc.returncode != 0:
+    rc, stdout, _ = await _run_tmux("list-sessions", "-F", fmt, capture_stdout=True)
+    if rc != 0:
         return []
     results: list[dict] = []
     for line in stdout.decode().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split("\t")
+        parts = line.strip().split("\t")
         if len(parts) < 4:
             continue
         results.append(
@@ -214,64 +136,37 @@ async def list_sessions_rich() -> list[dict]:
 
 
 async def graceful_close(session_name: str, timeout: float = 30.0) -> bool:
-    """Gracefully close a tmux session by signaling the foreground process.
+    """SIGTERM the pane's foreground process, wait, then kill the session.
 
-    Sends SIGTERM to the pane's foreground process, then polls for exit.
-    Falls back to kill-session if the process doesn't exit within timeout.
-
-    Returns True if the session is gone after this call, False on error.
+    Used to stop the backbone's own detached session. True when the session
+    is gone afterwards.
     """
-    # Get foreground PID (with timeout to prevent indefinite hang)
-    try:
-        vars_result = await asyncio.wait_for(
-            query_format_vars(session_name, "pane_pid=#{pane_pid}"),
-            timeout=5.0,
-        )
-    except TimeoutError:
-        log.warning("Timed out querying pane_pid for '%s', falling back to kill", session_name)
-        return await stop_session(session_name)
-    pid_str = vars_result.get("pane_pid", "")
-    if not pid_str or not pid_str.isdigit():
+    pid_str = (await query_format_vars(session_name, "pane_pid=#{pane_pid}")).get("pane_pid", "")
+    if not pid_str.isdigit():
         log.warning("Could not get pane_pid for '%s', falling back to kill", session_name)
         return await stop_session(session_name)
 
     pid = int(pid_str)
-
-    # Send SIGTERM
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         log.info("Process %d already gone for '%s'", pid, session_name)
-        # Session may still exist even if process is gone
-        if not await session_exists(session_name):
-            return True
-        return await stop_session(session_name)
-    except OSError as e:
-        log.warning("Failed to signal PID %d for '%s': %s", pid, session_name, e)
+        return not await session_exists(session_name) or await stop_session(session_name)
+    except OSError as exc:
+        log.warning("Failed to signal PID %d for '%s': %s", pid, session_name, exc)
         return await stop_session(session_name)
 
-    # Poll for pane_dead (with per-query timeout to prevent indefinite hang)
-    elapsed = 0.0
     poll_interval = 0.5
+    elapsed = 0.0
     while elapsed < timeout:
-        try:
-            dead_vars = await asyncio.wait_for(
-                query_format_vars(session_name, "pane_dead=#{pane_dead}"),
-                timeout=5.0,
-            )
-        except TimeoutError:
-            log.warning("Timed out polling pane_dead for '%s', falling back to kill", session_name)
-            return await stop_session(session_name)
+        dead_vars = await query_format_vars(session_name, "pane_dead=#{pane_dead}")
         if dead_vars.get("pane_dead") == "1":
             log.info("Process exited gracefully in '%s'", session_name)
-            # Clean up the session
             return await stop_session(session_name)
         if not await session_exists(session_name):
-            log.info("Session '%s' gone during graceful close", session_name)
             return True
         await asyncio.sleep(poll_interval)
         elapsed += poll_interval
 
-    # Timeout — force kill
     log.warning("Graceful close timed out for '%s', killing session", session_name)
     return await stop_session(session_name)

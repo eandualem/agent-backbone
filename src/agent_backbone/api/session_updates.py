@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -65,10 +66,8 @@ async def build_enriched_agent(
 
     runtime: str | None = spec.runtime if spec else None
     if online:
-        try:
+        with contextlib.suppress(Exception):
             runtime = await query_environment_var(session, RUNTIME_ENV_KEY) or runtime
-        except Exception:
-            pass
 
     return EnrichedAgent(
         name=session,
@@ -127,7 +126,7 @@ async def get_cached_session_snapshot(
     force_refresh: bool = False,
 ) -> list[Any]:
     """Return a cached session snapshot, rebuilding under a shared lock when needed."""
-    global _snapshot_cache, _snapshot_cache_ts  # noqa: PLW0603
+    global _snapshot_cache, _snapshot_cache_ts
 
     now = time.monotonic()
     if not force_refresh and now - _snapshot_cache_ts < ttl and _snapshot_cache:
@@ -144,7 +143,7 @@ async def get_cached_session_snapshot(
 
 
 def _invalidate_session_snapshot_caches_unlocked() -> None:
-    global _snapshot_cache, _snapshot_cache_ts  # noqa: PLW0603
+    global _snapshot_cache, _snapshot_cache_ts
 
     _snapshot_cache = []
     _snapshot_cache_ts = 0.0
@@ -158,7 +157,7 @@ async def invalidate_session_snapshot_caches() -> None:
 
 def reset_sessions_update_state() -> None:
     """Reset module-level update dedup state for test isolation."""
-    global _last_sessions_update_signature, _sessions_update_lock, _snapshot_cache_lock  # noqa: PLW0603
+    global _last_sessions_update_signature, _sessions_update_lock, _snapshot_cache_lock
     _snapshot_cache_lock = asyncio.Lock()
     _invalidate_session_snapshot_caches_unlocked()
     _last_sessions_update_signature = None
@@ -182,7 +181,7 @@ async def emit_sessions_update(
     only_if_changed: bool = False,
 ) -> bool:
     """Broadcast the current enriched session snapshot to `/sessions` subscribers."""
-    global _last_sessions_update_signature  # noqa: PLW0603
+    global _last_sessions_update_signature
     if sio is None or state_svc is None or tmux_svc is None:
         return False
 

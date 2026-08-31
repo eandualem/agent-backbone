@@ -1,19 +1,18 @@
 """PTY-based terminal session management for interactive tmux access.
 
-Spawns `tmux attach-session` in a PTY so that xterm.js receives the exact
-same byte stream as a native terminal (Ghostty, iTerm). This gives correct
-ANSI rendering, input echo via PTY line discipline, and proper SIGWINCH
-resize propagation.
+Spawns ``tmux attach-session`` in a PTY so a browser terminal receives the
+exact byte stream a native terminal would (faithful ANSI rendering, proper
+SIGWINCH resize propagation). Output only: nothing is ever written to the
+PTY, so remote viewers cannot type into an agent.
 
-One PtySession per WebSocket connection (1:1 model). Each browser client
-gets its own `tmux attach-session` process, delegating multiplexing to
-tmux natively.
+One PtySession per Socket.IO connection; tmux does the multiplexing.
 """
 
 from __future__ import annotations
 
 import asyncio
 import codecs
+import contextlib
 import fcntl
 import logging
 import os
@@ -26,33 +25,23 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# Max queued output chunks before dropping oldest
 _MAX_QUEUE_SIZE = 1000
-
-# PID tracking file for orphan cleanup on restart
-_PID_FILE = Path("/tmp/agent-backbone-pty-pids.txt")
+"""Queued output chunks per viewer before the oldest are dropped."""
 
 
 class PtySession:
-    """Manages a PTY running `tmux attach-session`.
+    """A PTY running ``tmux attach-session``, read-only from our side."""
 
-    The PTY master fd provides bidirectional communication:
-    - Read: terminal output bytes (same as a real terminal receives)
-    - Write: keyboard input bytes (with PTY echo handling)
-    - Resize: TIOCSWINSZ ioctl sends SIGWINCH to tmux attach
-    """
-
-    def __init__(self, session_name: str) -> None:
+    def __init__(self, session_name: str, pid_file: Path | None = None) -> None:
         self.session_name = session_name
+        self._pid_file = pid_file
         self.master_fd: int | None = None
         self.tty_name: str | None = None
         self._process: subprocess.Popen | None = None
         self._reader_task: asyncio.Task | None = None
         # Single output queue for the 1:1 connection
         self._output_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=_MAX_QUEUE_SIZE)
-        # Simple pause flag for flow control
-        self._paused: bool = False
-        # Event signalled when resumed (unblocks the read loop)
+        # Cleared while the viewer asks for backpressure; the read loop waits on it
         self._resume_event: asyncio.Event = asyncio.Event()
         self._resume_event.set()  # Start unpaused
         # Dedicated thread pool so blocking os.read doesn't starve the default executor
@@ -86,7 +75,7 @@ class PtySession:
                 self.tty_name = None
 
             env = {**os.environ, "TERM": "xterm-256color", "COLORTERM": "truecolor"}
-            env.pop("TMUX", None)  # Prevent tmux nesting guard when gateway runs inside tmux
+            env.pop("TMUX", None)  # the backbone itself may run inside tmux
             self._process = subprocess.Popen(
                 ["tmux", "attach-session", "-t", self.session_name],
                 stdin=slave_fd,
@@ -104,8 +93,7 @@ class PtySession:
         os.close(slave_fd)
         self.master_fd = master_fd
 
-        # Track PID for orphan cleanup on restart
-        _record_pid(self._process.pid)
+        _record_pid(self._pid_file, self._process.pid)
 
         # Start background reader
         self._reader_task = asyncio.create_task(
@@ -148,21 +136,14 @@ class PtySession:
                 try:
                     self._output_queue.put_nowait(text)
                 except asyncio.QueueFull:
-                    # Drop oldest for slow client
-                    try:
+                    # Slow viewer: drop the oldest chunk and tell the client
+                    with contextlib.suppress(asyncio.QueueEmpty):
                         self._output_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
-                    try:
+                    with contextlib.suppress(asyncio.QueueFull):
                         self._output_queue.put_nowait(text)
-                    except asyncio.QueueFull:
-                        pass
-                    # Notify about data loss
                     if self.on_data_dropped is not None:
-                        try:
+                        with contextlib.suppress(Exception):
                             self.on_data_dropped(self.session_name)
-                        except Exception:
-                            pass
         except asyncio.CancelledError:
             return
         finally:
@@ -170,10 +151,8 @@ class PtySession:
             try:
                 self._output_queue.put_nowait(None)
             except asyncio.QueueFull:
-                try:
+                with contextlib.suppress(asyncio.QueueEmpty):
                     self._output_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
                 try:
                     self._output_queue.put_nowait(None)
                 except asyncio.QueueFull:
@@ -182,14 +161,6 @@ class PtySession:
                         self.session_name,
                     )
             log.info("PTY read loop ended for '%s'", self.session_name)
-
-    def write(self, data: str) -> None:
-        """Write keyboard input to PTY master fd."""
-        if self.master_fd is not None:
-            try:
-                os.write(self.master_fd, data.encode("utf-8"))
-            except OSError:
-                log.warning("PTY write failed for '%s'", self.session_name)
 
     def resize(self, cols: int, rows: int) -> None:
         """Resize PTY via TIOCSWINSZ ioctl — sends SIGWINCH to tmux attach.
@@ -206,13 +177,11 @@ class PtySession:
                 log.warning("PTY resize failed for '%s'", self.session_name)
 
     def pause(self) -> None:
-        """Pause output — client write buffer full."""
-        self._paused = True
+        """Stop reading from the PTY (viewer backpressure)."""
         self._resume_event.clear()
 
     def resume(self) -> None:
-        """Resume output — client write buffer drained."""
-        self._paused = False
+        """Resume reading from the PTY."""
         self._resume_event.set()
 
     async def cleanup(self) -> None:
@@ -235,7 +204,7 @@ class PtySession:
 
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._terminate_process, proc)
-            _unrecord_pid(pid)
+            _unrecord_pid(self._pid_file, pid)
 
         # Now safe to wait for the executor — the read thread should have exited
         loop = asyncio.get_running_loop()
@@ -246,10 +215,8 @@ class PtySession:
 
         # FD is safe to close — no threads reading it
         if self.master_fd is not None:
-            try:
+            with contextlib.suppress(OSError):
                 os.close(self.master_fd)
-            except OSError:
-                pass
             self.master_fd = None
 
         log.info("PTY cleaned up for '%s'", self.session_name)
@@ -269,26 +236,23 @@ class PtySession:
 
 
 class PtyManager:
-    """Manages PTY sessions — one per (sid, session_name) pair.
+    """PTY sessions, one per (viewer sid, tmux session) pair.
 
-    In the 1:1 model, each WebSocket connection gets its own PTY process.
-    No grace periods — disconnect kills the PTY immediately.
+    ``pid_file`` records the attach processes this backbone spawned so a
+    restart can kill orphans without touching the user's own tmux clients.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, pid_file: Path | None = None) -> None:
         self._sessions: dict[tuple[str, str], PtySession] = {}
+        self._pid_file = pid_file
         self._cleanup_orphaned_processes()
 
     def _cleanup_orphaned_processes(self) -> None:
-        """Kill orphaned tmux attach-session processes from previous instances.
-
-        Uses a PID tracking file to only kill processes spawned by this
-        application — not the user's own tmux attach terminals.
-        """
+        pid_file = self._pid_file
         try:
-            if not _PID_FILE.exists():
+            if pid_file is None or not pid_file.exists():
                 return
-            content = _PID_FILE.read_text().strip()
+            content = pid_file.read_text().strip()
             if not content:
                 return
             pids = [int(p) for p in content.split("\n") if p.strip()]
@@ -302,8 +266,7 @@ class PtyManager:
                     pass  # Already dead
             if killed:
                 log.info("Cleaned up %d orphaned PTY process(es)", killed)
-            # Clear the PID file
-            _PID_FILE.write_text("")
+            pid_file.write_text("")
         except Exception:
             log.warning("Failed to clean up orphaned PTY processes", exc_info=True)
 
@@ -325,7 +288,7 @@ class PtyManager:
         if existing:
             await existing.cleanup()
 
-        pty_session = PtySession(session_name)
+        pty_session = PtySession(session_name, self._pid_file)
         pty_session.start(cols, rows)
         self._sessions[key] = pty_session
         return pty_session
@@ -355,22 +318,25 @@ class PtyManager:
         log.info("All PTY sessions cleaned up")
 
 
-def _record_pid(pid: int) -> None:
-    """Append a PID to the tracking file."""
+def _record_pid(pid_file: Path | None, pid: int) -> None:
+    if pid_file is None:
+        return
     try:
-        with _PID_FILE.open("a") as f:
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        with pid_file.open("a") as f:
             f.write(f"{pid}\n")
     except OSError:
         log.debug("Failed to record PID %d", pid)
 
 
-def _unrecord_pid(pid: int) -> None:
-    """Remove a PID from the tracking file."""
+def _unrecord_pid(pid_file: Path | None, pid: int) -> None:
+    if pid_file is None:
+        return
     try:
-        if not _PID_FILE.exists():
+        if not pid_file.exists():
             return
-        lines = _PID_FILE.read_text().strip().split("\n")
+        lines = pid_file.read_text().strip().split("\n")
         remaining = [ln for ln in lines if ln.strip() and ln.strip() != str(pid)]
-        _PID_FILE.write_text("\n".join(remaining) + "\n" if remaining else "")
+        pid_file.write_text("\n".join(remaining) + "\n" if remaining else "")
     except OSError:
         log.debug("Failed to unrecord PID %d", pid)

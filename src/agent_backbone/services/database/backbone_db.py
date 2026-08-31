@@ -16,6 +16,7 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+import agent_backbone.services.database.models  # noqa: F401  (registers the ORM tables)
 from agent_backbone.services.database import (
     _agents_repo,
     _delivery_repo,
@@ -26,18 +27,6 @@ from agent_backbone.services.database import (
 )
 from agent_backbone.services.database.base import Base
 from agent_backbone.services.database.interface import build_engine
-from agent_backbone.services.database.models import (  # noqa: F401
-    AcknowledgmentORM,
-    AgentORM,
-    AgentStateORM,
-    AgentWatchORM,
-    DedupLogORM,
-    DeliveryORM,
-    EventORM,
-    IssueDependencyORM,
-    MessageQueueORM,
-    SettingORM,
-)
 
 metadata = Base.metadata
 
@@ -86,7 +75,6 @@ class BackboneDB:
                 await conn.run_sync(metadata.create_all)
         if not self._is_memory:
             await self._run_migrations()
-        await self.load_dedup_cache()
 
     async def stop(self) -> None:
         """Release engine reference. Engine lifecycle is owned by DatabaseService."""
@@ -147,9 +135,7 @@ class BackboneDB:
                 existing_app_tables = existing_tables & app_tables
 
                 alembic_cfg.attributes["connection"] = sync_conn
-                if has_alembic:
-                    command.upgrade(alembic_cfg, "head")
-                elif not existing_app_tables:
+                if has_alembic or not existing_app_tables:
                     command.upgrade(alembic_cfg, "head")
                 elif existing_app_tables == app_tables:
                     # SQLite initializes schema with metadata.create_all() before
@@ -265,22 +251,7 @@ class BackboneDB:
         async with self._engine.begin() as conn:
             return await _delivery_repo.get_delivery_stats(conn)
 
-    # --- Dedup (delegates to _queue_repo, except in-memory cache) ---
-
-    async def is_duplicate_delivery_id(self, delivery_id: str) -> bool:
-        """Check if a delivery ID has been seen before."""
-        async with self._engine.begin() as conn:
-            return await _queue_repo.is_duplicate_delivery_id(conn, delivery_id)
-
-    async def record_delivery_id(self, delivery_id: str) -> None:
-        """Record a delivery ID for dedup."""
-        async with self._engine.begin() as conn:
-            await _queue_repo.record_delivery_id(conn, delivery_id)
-
-    async def prune_delivery_ids(self, max_age_hours: int = 24) -> int:
-        """Remove old dedup entries. Returns count deleted."""
-        async with self._engine.begin() as conn:
-            return await _queue_repo.prune_delivery_ids(conn, max_age_hours)
+    # --- Webhook dedup hot cache (the events table is the durable record) ---
 
     def is_duplicate(self, delivery_id: str, max_ids: int = 100) -> bool:
         """Check and record delivery ID in hot cache for dedup."""
@@ -292,21 +263,6 @@ class BackboneDB:
         while len(self._seen_deliveries) > max_ids:
             self._seen_deliveries.popitem(last=False)
         return False
-
-    async def load_dedup_cache(self, max_ids: int = 100) -> None:
-        """Load recent delivery IDs from database into hot cache on startup."""
-        try:
-            async with self._engine.begin() as conn:
-                result = await conn.execute(
-                    text("SELECT delivery_id FROM dedup_log ORDER BY received_at DESC LIMIT :lim"),
-                    {"lim": max_ids},
-                )
-                rows = result.fetchall()
-                for row in reversed(rows):
-                    self._seen_deliveries[row._mapping["delivery_id"]] = True
-                log.info("Loaded %d delivery IDs into hot cache", len(self._seen_deliveries))
-        except Exception:
-            log.warning("Could not load dedup state from database — starting fresh")
 
     # --- Agent state (delegates to _state_repo) ---
 
@@ -320,10 +276,7 @@ class BackboneDB:
         session_name: str,
         state: str,
         current_issue: int | None = None,
-        last_activity: str | None = None,
         started_at: str | None = None,
-        entity: str | None = None,
-        context: str | None = None,
         ts: str | None = None,
         plan_file: str | None = None,
         plan_title: str | None = None,
@@ -337,10 +290,7 @@ class BackboneDB:
                 session_name,
                 state,
                 current_issue,
-                last_activity,
                 started_at,
-                entity=entity,
-                context=context,
                 ts=ts,
                 plan_file=plan_file,
                 plan_title=plan_title,
@@ -354,11 +304,6 @@ class BackboneDB:
             return await _state_repo.get_all_agent_states(conn)
 
     # --- Issue dependencies (delegates to _queue_repo) ---
-
-    async def upsert_dependency(self, parent: int, sub: int, *, repo: str = "") -> None:
-        """Record a parent->sub-issue dependency."""
-        async with self._engine.begin() as conn:
-            await _queue_repo.upsert_dependency(conn, parent, sub, repo=repo)
 
     async def get_parents(self, sub_issue_number: int, *, repo: str = "") -> list[int]:
         """Get parent issue numbers for a given sub-issue."""
@@ -489,10 +434,6 @@ class BackboneDB:
     async def list_agents(self) -> list[dict]:
         async with self._engine.begin() as conn:
             return await _agents_repo.list_agents(conn)
-
-    async def get_agent(self, name: str) -> dict | None:
-        async with self._engine.begin() as conn:
-            return await _agents_repo.get_agent(conn, name)
 
     async def upsert_agent(self, name: str, **fields) -> None:
         async with self._engine.begin() as conn:

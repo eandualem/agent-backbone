@@ -170,4 +170,3 @@ class TestAgents:
         assert [s.name for s in agents.for_repo("acme/app")] == ["a", "b", "orch"]
         assert agents.repos == ["acme/app", "acme/orch"]
         assert "orch" in agents
-        assert agents.dir_for("orch") == "/o"

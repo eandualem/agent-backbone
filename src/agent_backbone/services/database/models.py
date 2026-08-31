@@ -115,17 +115,8 @@ class DeliveryORM(Base):
     )
 
 
-class DedupLogORM(Base):
-    """Webhook delivery deduplication log."""
-
-    __tablename__ = "dedup_log"
-
-    delivery_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    received_at: Mapped[str] = mapped_column(Text, nullable=False)
-
-
 class AgentStateORM(Base):
-    """Agent state snapshots."""
+    """Last known state per agent session (mirrors the hook state files)."""
 
     __tablename__ = "agent_states"
 
@@ -134,11 +125,8 @@ class AgentStateORM(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_issue: Mapped[int | None] = mapped_column(Integer, nullable=True)
     current_repo: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_activity: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
-    entity: Mapped[str | None] = mapped_column(Text, nullable=True)
-    context: Mapped[str | None] = mapped_column(Text, nullable=True)
     ts: Mapped[str | None] = mapped_column(Text, nullable=True)
     plan_file: Mapped[str | None] = mapped_column(Text, nullable=True)
     plan_title: Mapped[str | None] = mapped_column(Text, nullable=True)

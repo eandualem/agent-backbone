@@ -21,21 +21,12 @@ class AgentState(StrEnum):
     UNKNOWN = "unknown"
 
     @classmethod
-    def parse(cls, value: str | None) -> tuple[AgentState, str | None]:
-        """Parse a stored/legacy value into (state, reason)."""
-        if not value:
-            return cls.UNKNOWN, None
-        legacy = {
-            "processing_issue": (cls.BUSY, None),
-            "plan_waiting": (cls.WAITING_FOR_HUMAN, "plan"),
-            "permission_waiting": (cls.WAITING_FOR_HUMAN, "permission"),
-        }
-        if value in legacy:
-            return legacy[value]
+    def parse(cls, value: str | None) -> AgentState:
+        """A stored value as a state; anything unrecognised is ``unknown``."""
         try:
-            return cls(value), None
+            return cls(value or "")
         except ValueError:
-            return cls.UNKNOWN, None
+            return cls.UNKNOWN
 
 
 WORKING_STATES = frozenset({AgentState.STARTING, AgentState.BUSY})

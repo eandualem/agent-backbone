@@ -1,4 +1,4 @@
-"""Queue, dedup, dependencies, and acknowledgments repository (repository-keyed)."""
+"""Message queue, issue dependencies and acknowledgments (repository-keyed)."""
 
 from __future__ import annotations
 
@@ -13,55 +13,7 @@ def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-# --- Dedup ---
-
-
-async def is_duplicate_delivery_id(conn: AsyncConnection, delivery_id: str) -> bool:
-    if not delivery_id:
-        return False
-    result = await conn.execute(
-        text("SELECT 1 FROM dedup_log WHERE delivery_id = :delivery_id"),
-        {"delivery_id": delivery_id},
-    )
-    return result.fetchone() is not None
-
-
-async def record_delivery_id(conn: AsyncConnection, delivery_id: str) -> None:
-    if not delivery_id:
-        return
-    await conn.execute(
-        text(
-            """INSERT INTO dedup_log (delivery_id, received_at)
-               VALUES (:delivery_id, :received_at)
-               ON CONFLICT DO NOTHING"""
-        ),
-        {"delivery_id": delivery_id, "received_at": _now_iso()},
-    )
-
-
-async def prune_delivery_ids(conn: AsyncConnection, max_age_hours: int = 24) -> int:
-    cutoff = (datetime.now(UTC) - timedelta(hours=max_age_hours)).isoformat()
-    result = await conn.execute(
-        text("DELETE FROM dedup_log WHERE received_at < :cutoff"), {"cutoff": cutoff}
-    )
-    return result.rowcount
-
-
 # --- Issue dependencies ---
-
-
-async def upsert_dependency(
-    conn: AsyncConnection, parent: int, sub: int, *, repo: str = ""
-) -> None:
-    await conn.execute(
-        text(
-            """INSERT INTO issue_dependencies (repo, parent_number, sub_issue_number, updated_at)
-               VALUES (:repo, :parent, :sub, :now)
-               ON CONFLICT(repo, parent_number, sub_issue_number) DO UPDATE SET
-                 updated_at = excluded.updated_at"""
-        ),
-        {"repo": repo, "parent": parent, "sub": sub, "now": _now_iso()},
-    )
 
 
 async def get_parents(conn: AsyncConnection, sub_issue_number: int, *, repo: str = "") -> list[int]:

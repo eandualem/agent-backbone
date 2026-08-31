@@ -71,34 +71,24 @@ class TestDeliveryTracking:
         await db.record_delivery(1, "ike", "ike", "delivered")
         await db.record_delivery(2, "feynman", "feynman", "offline")
         await db.record_delivery(3, "leo", "leo", "delivery_failed")
-        await db.record_delivery(4, "ada", "ada", "deferred")
+        await db.record_delivery(4, "ada", "ada", "agent_working")
 
         failed = await db.get_failed_deliveries()
         assert len(failed) == 3
         outcomes = {r["outcome"] for r in failed}
-        assert outcomes == {"offline", "delivery_failed", "deferred"}
+        assert outcomes == {"offline", "delivery_failed", "agent_working"}
 
     async def test_get_failed_deliveries_includes_transient(self, db):
-        """Transient outcomes, including busy-state deferrals, are retryable."""
+        """Every blocking delivery condition is retryable."""
         await db.record_delivery(1, "ike", "ike", "delivered")
-        await db.record_delivery(2, "feynman", "feynman", "copy_mode")
-        await db.record_delivery(3, "leo", "leo", "user_interacting")
+        await db.record_delivery(2, "feynman", "feynman", "human_typing")
+        await db.record_delivery(3, "leo", "leo", "settling")
         await db.record_delivery(4, "ada", "ada", "agent_working")
-        await db.record_delivery(5, "brunel", "brunel", "plan_waiting")
-        await db.record_delivery(6, "darwin", "darwin", "grace_period")
+        await db.record_delivery(5, "brunel", "brunel", "waiting_for_human")
 
         failed = await db.get_failed_deliveries()
-        assert len(failed) == 5
         outcomes = {r["outcome"] for r in failed}
-        assert outcomes == {
-            "agent_working",
-            "copy_mode",
-            "grace_period",
-            "plan_waiting",
-            "user_interacting",
-        }
-        # 'delivered' must not appear
-        assert "delivered" not in outcomes
+        assert outcomes == {"agent_working", "human_typing", "settling", "waiting_for_human"}
 
     async def test_get_failed_deliveries_excludes_superseded(self, db):
         """A failed delivery superseded by a later retried/delivered row is excluded."""
@@ -198,29 +188,6 @@ class TestDeliveryTracking:
         assert await db.query_deliveries(issue_number=42, session_name="ike") == []
 
 
-class TestDedupLog:
-    async def test_first_delivery_not_duplicate(self, db):
-        assert await db.is_duplicate_delivery_id("abc-123") is False
-
-    async def test_recorded_delivery_is_duplicate(self, db):
-        await db.record_delivery_id("abc-123")
-        assert await db.is_duplicate_delivery_id("abc-123") is True
-
-    async def test_empty_id_never_duplicate(self, db):
-        assert await db.is_duplicate_delivery_id("") is False
-
-    async def test_different_ids_not_duplicate(self, db):
-        await db.record_delivery_id("abc-123")
-        assert await db.is_duplicate_delivery_id("def-456") is False
-
-    async def test_prune_delivery_ids(self, db):
-        await db.record_delivery_id("old-1")
-        # Prune with 0 hours retention — removes everything
-        deleted = await db.prune_delivery_ids(max_age_hours=0)
-        assert deleted == 1
-        assert await db.is_duplicate_delivery_id("old-1") is False
-
-
 class TestAgentState:
     async def test_set_and_get(self, db):
         await db.set_agent_state("ike", "idle")
@@ -250,58 +217,25 @@ class TestAgentState:
         names = {s["session_name"] for s in states}
         assert names == {"feynman", "ike"}
 
-    async def test_preserves_last_activity_on_upsert(self, db):
-        await db.set_agent_state("ike", "idle", last_activity="2025-01-01T00:00:00Z")
-        # Update state without explicitly providing last_activity
-        await db.set_agent_state("ike", "processing_issue")
-
-        state = await db.get_agent_state("ike")
-        assert state["last_activity"] == "2025-01-01T00:00:00Z"
-
-    async def test_overrides_last_activity_when_provided(self, db):
-        await db.set_agent_state("ike", "idle", last_activity="2025-01-01T00:00:00Z")
-        await db.set_agent_state("ike", "idle", last_activity="2025-06-01T00:00:00Z")
-
-        state = await db.get_agent_state("ike")
-        assert state["last_activity"] == "2025-06-01T00:00:00Z"
-
-    async def test_set_with_extended_fields(self, db):
-        """New extended fields (entity, context, ts, plan_file, plan_title) are stored."""
-        await db.set_agent_state(
-            "feynman",
-            "processing_issue",
-            current_issue=571,
-            entity="feynman",
-            context="Phase 1 work",
-            ts="1709500000.0",
-            plan_file="/tmp/plan.md",
-            plan_title="DB state migration",
-        )
-        state = await db.get_agent_state("feynman")
-        assert state["entity"] == "feynman"
-        assert state["context"] == "Phase 1 work"
-        assert state["ts"] == "1709500000.0"
-        assert state["plan_file"] == "/tmp/plan.md"
-        assert state["plan_title"] == "DB state migration"
-
-    async def test_extended_fields_coalesce_on_upsert(self, db):
-        """Extended fields are preserved when not provided on upsert."""
-        await db.set_agent_state("ike", "idle", entity="ike", context="initial", ts="100.0")
-        await db.set_agent_state("ike", "busy")
+    async def test_started_at_and_ts_coalesce_on_upsert(self, db):
+        await db.set_agent_state("ike", "idle", ts="100.0", started_at="50.0")
+        await db.set_agent_state("ike", "busy", current_issue=7, reason=None)
 
         state = await db.get_agent_state("ike")
         assert state["state"] == "busy"
-        assert state["entity"] == "ike"
-        assert state["context"] == "initial"
+        assert state["current_issue"] == 7
         assert state["ts"] == "100.0"
+        assert state["started_at"] == "50.0"
 
-    async def test_extended_fields_override_when_provided(self, db):
-        """Extended fields are overridden when explicitly provided."""
-        await db.set_agent_state("ike", "idle", context="old context")
-        await db.set_agent_state("ike", "busy", context="new context")
+    async def test_reason_and_repo_are_replaced_not_coalesced(self, db):
+        await db.set_agent_state(
+            "ike", "waiting_for_human", reason="plan", current_repo="acme/app", plan_file="/p.md"
+        )
+        await db.set_agent_state("ike", "idle")
 
         state = await db.get_agent_state("ike")
-        assert state["context"] == "new context"
+        assert state["reason"] is None and state["current_repo"] is None
+        assert state["plan_file"] == "/p.md"
 
 
 class TestAcknowledgments:
@@ -605,14 +539,3 @@ class TestDedupHotCache:
             db.is_duplicate(f"delivery-{i}", max_ids=100)
         assert db.is_duplicate("delivery-0", max_ids=100) is False
         assert db.is_duplicate("delivery-149", max_ids=100) is True
-
-    async def test_load_dedup_cache(self, db):
-        """load_dedup_cache populates hot cache from database."""
-        await db.record_delivery_id("cached-1")
-        await db.record_delivery_id("cached-2")
-        # Clear the hot cache to simulate cold start
-        db._seen_deliveries.clear()
-        await db.load_dedup_cache()
-        assert db.is_duplicate("cached-1") is True
-        assert db.is_duplicate("cached-2") is True
-        assert db.is_duplicate("not-cached") is False

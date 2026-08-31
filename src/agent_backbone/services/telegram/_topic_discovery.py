@@ -1,8 +1,8 @@
 """Telegram topic auto-discovery — learn thread_id -> session mappings from messages.
 
-The bot discovers topic names from forum_topic_created replies, normalizes them
-against known entity sessions and coding repos, and persists the mapping to JSON.
-Manual TOML config always overrides discovered routes.
+The bot discovers topic names from forum_topic_created replies, normalizes
+them against the known agents, and persists the mapping to JSON. Explicit
+``telegram.topic_routes`` always override discovered routes.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def resolve_topic_name(name: str, config: BackboneConfig) -> str | None:
         if normalized == agent_name.lower():
             return agent_name
 
-    if normalized in (CATCH_ALL_TOPIC, "coding-agents"):
+    if normalized == CATCH_ALL_TOPIC:
         return CATCH_ALL_TOPIC
 
     return None
@@ -121,10 +121,9 @@ def process_message_for_discovery(
     if chat is not None:
         chat_type = getattr(chat, "type", None)
         chat_id = getattr(chat, "id", None)
-        if chat_type == "supergroup" and chat_id is not None:
-            if discovery.group_chat_id != chat_id:
-                discovery.group_chat_id = chat_id
-                changed = True
+        if chat_type == "supergroup" and chat_id is not None and discovery.group_chat_id != chat_id:
+            discovery.group_chat_id = chat_id
+            changed = True
 
     # Discover topic mapping from forum_topic_created
     thread_id = getattr(message, "message_thread_id", None)

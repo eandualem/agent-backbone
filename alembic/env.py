@@ -14,19 +14,8 @@ import asyncio
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+import agent_backbone.services.database.models  # noqa: F401  (registers the ORM tables)
 from agent_backbone.services.database.base import Base
-from agent_backbone.services.database.models import (  # noqa: F401
-    AcknowledgmentORM,
-    AgentORM,
-    AgentStateORM,
-    AgentWatchORM,
-    DedupLogORM,
-    DeliveryORM,
-    EventORM,
-    IssueDependencyORM,
-    MessageQueueORM,
-    SettingORM,
-)
 from alembic import context
 
 metadata = Base.metadata

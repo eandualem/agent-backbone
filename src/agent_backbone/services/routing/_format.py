@@ -165,16 +165,3 @@ def format_next_issue_notification(issue: IssueData) -> str:
         f'Next issue in your queue: {_issue_ref(issue)}{type_str}{priority_str} "{issue.title}" '
         f"(from {labels.sender}). {_link(issue)}"
     ).rstrip()
-
-
-class NotificationService:
-    """Stateless notification formatting service implementing LifecycleAware."""
-
-    async def start(self) -> None:
-        pass
-
-    async def stop(self) -> None:
-        pass
-
-    async def health_check(self) -> dict:
-        return {"healthy": True, "service": "notifications"}

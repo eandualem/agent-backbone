@@ -121,7 +121,10 @@ async def on_issue_closed(
         scope = queue_scope(await list_open_queue_for_target(config, target, gh))
         scope.discard(closed)
         if is_recent_notification(
-            next_issue.number, session_name, config.routing.notification_dedup_seconds
+            issue_repo(next_issue),
+            next_issue.number,
+            session_name,
+            config.routing.notification_dedup_seconds,
         ):
             result[target] = f"deduped_#{next_issue.number}"
             continue

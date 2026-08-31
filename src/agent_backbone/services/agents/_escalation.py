@@ -104,7 +104,6 @@ async def check_for_stalls(
                 session_name=name,
                 state=snapshot.state.value,
                 current_issue=snapshot.current_issue,
-                entity=name,
                 reason=snapshot.reason,
                 current_repo=snapshot.current_repo,
                 plan_file=snapshot.plan_file,

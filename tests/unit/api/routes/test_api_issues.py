@@ -101,7 +101,7 @@ class TestComments:
 
 class TestDependencies:
     async def test_returns_sub_issues_and_parents(self, api_client, auth_headers, gh, api_app):
-        await api_app.state.db.upsert_dependency(7, 1, repo=TEST_REPO)
+        await api_app.state.db.sync_dependencies(7, [1], repo=TEST_REPO)
         resp = await api_client.get(
             f"/api/issues/1/dependencies?repo={TEST_REPO}", headers=auth_headers
         )

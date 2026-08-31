@@ -6,14 +6,13 @@ from pathlib import Path
 
 from agent_backbone.services.database import build_engine
 from agent_backbone.services.database.backbone_db import BackboneDB, metadata
-from agent_backbone.services.database.config import DatabaseConfig
+from agent_backbone.services.database.interface import sqlite_url
 
 _EXPECTED_TABLES = {
     "acknowledgments",
     "agent_states",
     "agent_watches",
     "agents",
-    "dedup_log",
     "deliveries",
     "events",
     "issue_dependencies",
@@ -103,14 +102,8 @@ async def test_file_db_idempotent_start(tmp_path):
         await engine2.dispose()
 
 
-def test_database_config_defaults_to_sqlite_in_data_dir(tmp_path):
-    config = DatabaseConfig()
-    assert config.resolved_url(tmp_path) == f"sqlite+aiosqlite:///{tmp_path / 'backbone.db'}"
-
-
-def test_database_config_explicit_url_wins(tmp_path):
-    url = "postgresql+asyncpg://u:p@db:5432/backbone"
-    assert DatabaseConfig(url=url).resolved_url(tmp_path) == url
+def test_sqlite_url_points_into_data_dir(tmp_path):
+    assert sqlite_url(tmp_path) == f"sqlite+aiosqlite:///{tmp_path / 'backbone.db'}"
 
 
 def test_build_engine_creates_parent_directory(tmp_path):

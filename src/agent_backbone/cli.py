@@ -106,7 +106,7 @@ class _Direct:
         from agent_backbone.services.agent_store import AgentStore
         from agent_backbone.services.database import BackboneDB, DatabaseService
 
-        self._service = DatabaseService(self._boot.database_url, self._boot.database)
+        self._service = DatabaseService(self._boot.database_url)
         await self._service.start()
         self.db = BackboneDB(self._service.engine)
         await self.db.start()
@@ -578,7 +578,13 @@ async def _agent(args: argparse.Namespace) -> int:
 
     if sub == "list":
         config = await _load_config()
-        print(_agents.list_agents(config))
+        if not config.agents:
+            print("No agents known yet. Run `backbone agent start` from a project directory.")
+            return 0
+        width = max(len(name) for name in config.agents.names)
+        for spec in config.agents:
+            model = f" ({spec.model})" if spec.model else ""
+            print(f"  {spec.name:<{width}s}  {spec.runtime}{model}  {spec.path}")
         return 0
 
     if sub == "stop":

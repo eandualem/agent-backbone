@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 log = logging.getLogger(__name__)
@@ -49,10 +50,8 @@ async def _run_tmux(
             async with asyncio.timeout(10.0):
                 stdout, stderr = await proc.communicate(input=stdin_data)
         except TimeoutError:
-            try:
+            with contextlib.suppress(OSError):
                 proc.kill()
-            except OSError:
-                pass
             log.error("tmux command timed out: %s", " ".join(args))
             return -1, b"", b"tmux command timed out"
 
@@ -190,28 +189,22 @@ async def set_window_size_mode(session_name: str, mode: str) -> bool:
     return True
 
 
-async def get_window_size(session_name: str) -> tuple[int, int] | None:
-    """Query current tmux window dimensions (cols, rows).
-
-    Returns None if session doesn't exist or query fails.
-    """
+async def active_pane_size(session_name: str) -> tuple[int, int] | None:
+    """(cols, rows) of the session's active pane, or None if unavailable."""
     rc, stdout, _ = await _run_tmux(
         "display-message",
         "-t",
         session_name,
         "-p",
-        "#{window_width} #{window_height}",
+        "#{pane_width} #{pane_height}",
         capture_stdout=True,
     )
     if rc != 0:
         return None
-    parts = stdout.decode().strip().split()
-    if len(parts) != 2:
+    parts = stdout.decode().split()
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
         return None
-    try:
-        return int(parts[0]), int(parts[1])
-    except ValueError:
-        return None
+    return int(parts[0]), int(parts[1])
 
 
 async def capture_pane(session_name: str, lines: int = 50) -> str:

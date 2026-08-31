@@ -56,11 +56,9 @@ async def _is_acknowledged_for_session(
 ) -> bool:
     if await db.is_acknowledged(issue_number, target_entity, repo=repo):
         return True
-    if session_name != target_entity and await db.is_acknowledged(
+    return session_name != target_entity and await db.is_acknowledged(
         issue_number, session_name, repo=repo
-    ):
-        return True
-    return False
+    )
 
 
 async def _has_successful_issue_delivery(

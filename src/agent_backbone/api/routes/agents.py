@@ -413,8 +413,6 @@ async def post_agent_state(
         session,
         body.state,
         current_issue=body.issue,
-        entity=body.entity or None,
-        context=body.context or None,
         ts=str(body.ts) if body.ts else None,
         plan_file=body.plan_file,
         plan_title=body.plan_title,

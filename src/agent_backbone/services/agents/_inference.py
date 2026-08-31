@@ -7,14 +7,15 @@ import time
 from pathlib import Path
 
 from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.agents.models import AgentState, StateSnapshot
-from agent_backbone.services.terminal._adapters import (
-    infer_state_from_pane as _infer_state_from_pane,
+from agent_backbone.services.agents.models import REASON_PERMISSION, AgentState, StateSnapshot
+from agent_backbone.services.terminal import (
+    TerminalRuntime,
+    capture_pane,
+    detect_runtime_from_pane,
+    get_terminal_adapter,
+    normalize_runtime,
+    sanitize_pane_content,
 )
-from agent_backbone.services.terminal._adapters import (
-    prompt_has_pending_input as _prompt_has_pending_input,
-)
-from agent_backbone.services.terminal._core import capture_pane
 
 log = logging.getLogger(__name__)
 
@@ -28,12 +29,48 @@ def _trust_stale_push(snapshot: StateSnapshot) -> bool:
     return False
 
 
-def prompt_has_pending_input(pane_content: str) -> bool:
-    return _prompt_has_pending_input(pane_content)
-
-
 def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) -> StateSnapshot:
-    return _infer_state_from_pane(pane_content, runtime_hint)
+    """Infer the agent state from visible terminal output (with evidence)."""
+    lines = sanitize_pane_content(pane_content).strip().splitlines()
+    if not lines:
+        return StateSnapshot(state=AgentState.UNKNOWN, source="pull", evidence=["empty pane"])
+
+    runtime = normalize_runtime(runtime_hint)
+    if runtime == TerminalRuntime.UNKNOWN:
+        runtime = detect_runtime_from_pane(pane_content)
+    adapter = get_terminal_adapter(runtime)
+
+    if adapter.detect_busy(pane_content):
+        return StateSnapshot(
+            state=AgentState.BUSY,
+            source="pull",
+            evidence=[f"terminal shows a busy marker ({runtime.value})"],
+        )
+    if adapter.detect_waiting_for_human(pane_content):
+        return StateSnapshot(
+            state=AgentState.WAITING_FOR_HUMAN,
+            reason=REASON_PERMISSION,
+            source="pull",
+            evidence=[f"terminal shows a permission prompt ({runtime.value})"],
+        )
+    if adapter.detect_idle(pane_content):
+        return StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+            evidence=[f"terminal shows an empty prompt ({runtime.value})"],
+        )
+
+    recent = "\n".join(ln.strip().lower() for ln in lines[-20:] if ln.strip())
+    if "thinking..." in recent or "tool call" in recent:
+        return StateSnapshot(
+            state=AgentState.BUSY, source="pull", evidence=["terminal shows thinking/tool output"]
+        )
+
+    return StateSnapshot(
+        state=AgentState.UNKNOWN,
+        source="pull",
+        evidence=[f"terminal inconclusive: no prompt, busy or question marker ({runtime.value})"],
+    )
 
 
 async def get_agent_state(
@@ -75,8 +112,9 @@ async def get_agent_state(
         if pull.state != AgentState.UNKNOWN:
             return pull
         if push and _trust_stale_push(push):
-            push.evidence = pull.evidence + [
-                f"terminal inconclusive; falling back to stale hook state '{push.state.value}'"
+            push.evidence = [
+                *pull.evidence,
+                f"terminal inconclusive; falling back to stale hook state '{push.state.value}'",
             ]
             return push
         return pull

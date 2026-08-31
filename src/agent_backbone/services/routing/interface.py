@@ -70,9 +70,9 @@ class DeliveryService:
     async def health_check(self) -> dict:
         return {"healthy": True, "service": "delivery"}
 
-    def is_recent_notification(self, issue_number: int, target: str) -> bool:
-        """Check if issue+target was already notified recently."""
-        return _is_recent_notification(issue_number, target)
+    def is_recent_notification(self, repo: str, issue_number: int, target: str) -> bool:
+        """Whether this issue was announced to this target within the dedup window."""
+        return _is_recent_notification(repo, issue_number, target)
 
     def compute_priority_score(
         self, issue: IssueData, scoring_config: PriorityScoringConfig, dependents: int = 0

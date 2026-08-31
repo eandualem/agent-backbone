@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.services.agents import AgentState, StateSnapshot, _plan_notify_dedup
+from agent_backbone.services.agents import AgentState, StateSnapshot
+from agent_backbone.services.agents._escalation import _plan_notify_dedup
 from agent_backbone.services.agents._reconciliation import reconcile_startup_states
 from tests.conftest import make_agents, make_config
 
@@ -68,7 +69,6 @@ class TestReconcileStartupStates:
             session_name="ike",
             state="idle",
             current_issue=None,
-            entity="ike",
             plan_file=None,
             plan_title=None,
             reason=None,
@@ -96,7 +96,6 @@ class TestReconcileStartupStates:
             session_name="ike",
             state="waiting_for_human",
             current_issue=99,
-            entity="ike",
             plan_file="/tmp/plan.md",
             plan_title="Add feature X",
             reason="plan",

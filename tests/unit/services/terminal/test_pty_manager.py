@@ -24,11 +24,6 @@ class TestPtySession:
         queue = session.output_queue
         assert queue is session._output_queue
 
-    def test_write_no_fd(self):
-        """Write with no master_fd is a no-op."""
-        session = PtySession("test")
-        session.write("hello")  # No crash
-
     def test_resize_no_fd(self):
         """Resize with no master_fd is a no-op."""
         session = PtySession("test")
@@ -71,15 +66,6 @@ class TestPtySession:
             except OSError:
                 pass
 
-    def test_write_sends_to_fd(self):
-        """Write encodes and sends data to master fd."""
-        session = PtySession("test")
-        session.master_fd = 42
-
-        with patch(f"{_PTY}.os.write") as mock_write:
-            session.write("hello")
-            mock_write.assert_called_once_with(42, b"hello")
-
     def test_resize_sends_ioctl(self):
         """Resize calls ioctl with TIOCSWINSZ."""
         session = PtySession("test")
@@ -96,7 +82,6 @@ class TestPtySession:
         session = PtySession("test")
         assert session._resume_event.is_set()
         session.pause()
-        assert session._paused is True
         assert not session._resume_event.is_set()
 
     def test_resume_sets_resume_event(self):
@@ -104,7 +89,6 @@ class TestPtySession:
         session = PtySession("test")
         session.pause()
         session.resume()
-        assert session._paused is False
         assert session._resume_event.is_set()
 
     async def test_cleanup_kills_process_before_closing_fd(self):
@@ -490,19 +474,6 @@ class TestFullCleanupOrdering:
 
 class TestWriteResizeOSErrorHandling:
     """Gap 4: OSError handling in write() and resize() when FD is valid."""
-
-    def test_write_oserror_caught_and_logged(self, caplog):
-        """os.write raising OSError is caught and logged."""
-        session = PtySession("test")
-        session.master_fd = 42
-
-        with (
-            patch(f"{_PTY}.os.write", side_effect=OSError("broken pipe")),
-            caplog.at_level(logging.WARNING),
-        ):
-            session.write("hello")  # Should not raise
-
-        assert "PTY write failed" in caplog.text
 
     def test_resize_oserror_caught_and_logged(self, caplog):
         """fcntl.ioctl raising OSError is caught and logged."""

@@ -9,7 +9,8 @@ import pytest
 
 from agent_backbone.config import SecurityConfig, TelegramConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.telegram import TelegramService, _delivery_reply
+from agent_backbone.services.telegram import TelegramService
+from agent_backbone.services.telegram._routing import _delivery_reply
 from agent_backbone.services.telegram._topic_discovery import CATCH_ALL_TOPIC
 
 _CMD = "agent_backbone.services.telegram._commands"

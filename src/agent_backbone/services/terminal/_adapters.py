@@ -5,15 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from abc import ABC
 from enum import StrEnum
 
-from agent_backbone.services.agents.models import (
-    REASON_PERMISSION,
-    WORKING_STATES,
-    AgentState,
-    StateSnapshot,
-)
 from agent_backbone.services.terminal._core import (
     _run_tmux,
     _send_escape_key,
@@ -34,7 +27,6 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
 _BOX_CHARS = "\u2500\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u253c\u2501"
 _PROMPT_START_CHARS = ">$\u276f\u203a%#"
-_WORKING_STATES = WORKING_STATES
 _BACKBONE_ENVELOPE_PREFIX = "[via:"
 
 
@@ -168,7 +160,7 @@ def _runtime_analysis_text(pane_content: str) -> str:
     )
 
 
-def _normalize_runtime(value: str | None) -> TerminalRuntime:
+def normalize_runtime(value: str | None) -> TerminalRuntime:
     """Normalize a free-form runtime label to a known runtime."""
     if not value:
         return TerminalRuntime.UNKNOWN
@@ -187,7 +179,7 @@ def _normalize_runtime(value: str | None) -> TerminalRuntime:
         return aliases.get(normalized, TerminalRuntime.UNKNOWN)
 
 
-class TerminalAdapter(ABC):
+class TerminalAdapter:
     """Behavioral contract for a single interactive CLI."""
 
     runtime: TerminalRuntime = TerminalRuntime.UNKNOWN
@@ -265,14 +257,15 @@ class TerminalAdapter(ABC):
             # Dim text after the prompt is a suggestion/placeholder, not typed input.
             return False
 
-        # --- Stuck delivery guards (issue #766) ---
+        # --- Guards against mistaking leftover output for typed input ---
 
         # Prefix guard: if the adapter defines prompt_prefixes and the sanitized
         # line doesn't start with any of them, we matched via a suffix — the
         # "pending text" is just trailing output, not user input.
-        if self.prompt_prefixes:
-            if not any(sanitized.startswith(prefix) for prefix in self.prompt_prefixes):
-                return False
+        if self.prompt_prefixes and not any(
+            sanitized.startswith(prefix) for prefix in self.prompt_prefixes
+        ):
+            return False
 
         # Stuck envelope: text after the prompt char that begins with a backbone
         # message envelope tag is a prior delivery that wasn't consumed, not user
@@ -282,14 +275,7 @@ class TerminalAdapter(ABC):
             if sanitized.startswith(prefix):
                 remainder = sanitized[len(prefix) :].lstrip()
                 break
-        if remainder.startswith(_BACKBONE_ENVELOPE_PREFIX):
-            return False
-
-        return True
-
-    def detect_copy_mode(self, tmux_vars: dict[str, str], agent_state: AgentState) -> bool:
-        """Whether copy mode should block delivery for this adapter."""
-        return tmux_vars.get("pane_in_mode") == "1" and agent_state not in _WORKING_STATES
+        return not remainder.startswith(_BACKBONE_ENVELOPE_PREFIX)
 
     async def exit_copy_mode(self, session_name: str) -> bool:
         """Immediately attempt to leave copy mode."""
@@ -539,7 +525,7 @@ _ADAPTERS: dict[TerminalRuntime, TerminalAdapter] = {
 
 def get_terminal_adapter(runtime: TerminalRuntime | str) -> TerminalAdapter:
     """Return the adapter for a known runtime."""
-    runtime_enum = runtime if isinstance(runtime, TerminalRuntime) else _normalize_runtime(runtime)
+    runtime_enum = runtime if isinstance(runtime, TerminalRuntime) else normalize_runtime(runtime)
     return _ADAPTERS.get(runtime_enum, _ADAPTERS[TerminalRuntime.SHELL])
 
 
@@ -578,11 +564,11 @@ async def resolve_terminal_runtime(
     pane_content: str | None = None,
 ) -> TerminalRuntime:
     """Resolve the runtime for a tmux session using hint, env, then prompt."""
-    hinted = _normalize_runtime(runtime_hint)
+    hinted = normalize_runtime(runtime_hint)
     if hinted != TerminalRuntime.UNKNOWN:
         return hinted
 
-    env_runtime = _normalize_runtime(await query_environment_var(session_name, RUNTIME_ENV_KEY))
+    env_runtime = normalize_runtime(await query_environment_var(session_name, RUNTIME_ENV_KEY))
     if env_runtime != TerminalRuntime.UNKNOWN:
         return env_runtime
 
@@ -609,55 +595,7 @@ async def get_terminal_adapter_for_session(
 
 def prompt_has_pending_input(pane_content: str, runtime_hint: str | None = None) -> bool:
     """Whether the current runtime prompt holds buffered input."""
-    runtime = _normalize_runtime(runtime_hint)
+    runtime = normalize_runtime(runtime_hint)
     if runtime == TerminalRuntime.UNKNOWN:
         runtime = detect_runtime_from_pane(pane_content)
     return get_terminal_adapter(runtime).prompt_has_pending_input(pane_content)
-
-
-def infer_state_from_pane(
-    pane_content: str,
-    runtime_hint: str | None = None,
-) -> StateSnapshot:
-    """Infer the agent state from visible terminal output (with evidence)."""
-    sanitized = sanitize_pane_content(pane_content)
-    lines = sanitized.strip().splitlines()
-    if not lines:
-        return StateSnapshot(state=AgentState.UNKNOWN, source="pull", evidence=["empty pane"])
-
-    runtime = _normalize_runtime(runtime_hint)
-    if runtime == TerminalRuntime.UNKNOWN:
-        runtime = detect_runtime_from_pane(pane_content)
-    adapter = get_terminal_adapter(runtime)
-
-    if adapter.detect_busy(pane_content):
-        return StateSnapshot(
-            state=AgentState.BUSY,
-            source="pull",
-            evidence=[f"terminal shows a busy marker ({runtime.value})"],
-        )
-    if adapter.detect_waiting_for_human(pane_content):
-        return StateSnapshot(
-            state=AgentState.WAITING_FOR_HUMAN,
-            reason=REASON_PERMISSION,
-            source="pull",
-            evidence=[f"terminal shows a permission prompt ({runtime.value})"],
-        )
-    if adapter.detect_idle(pane_content):
-        return StateSnapshot(
-            state=AgentState.IDLE,
-            source="pull",
-            evidence=[f"terminal shows an empty prompt ({runtime.value})"],
-        )
-
-    recent = "\n".join(ln.strip().lower() for ln in lines[-20:] if ln.strip())
-    if "thinking..." in recent or "tool call" in recent:
-        return StateSnapshot(
-            state=AgentState.BUSY, source="pull", evidence=["terminal shows thinking/tool output"]
-        )
-
-    return StateSnapshot(
-        state=AgentState.UNKNOWN,
-        source="pull",
-        evidence=[f"terminal inconclusive: no prompt, busy or question marker ({runtime.value})"],
-    )
