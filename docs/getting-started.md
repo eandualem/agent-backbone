@@ -46,16 +46,25 @@ Creates the data directory (`~/.local/share/agent-backbone`, or
 There is no configuration file. Settings have defaults and are changed with
 `backbone config set` (see [Configuration](configuration.md)).
 
-## 3. Install the Claude Code hooks
+## 3. State hooks — nothing to install
+
+With hooks, Claude Code tells the backbone the moment it becomes busy, idle,
+or waits for a person (plan approval, permission prompt, question). Without
+them the backbone reads the terminal, which works but is less precise.
+
+Every Claude Code session the backbone starts gets the hooks automatically:
+`agent start` launches `claude --settings <data_dir>/hooks/claude-settings.json`,
+a file the backbone owns and regenerates on every start. No repository and no
+`~/.claude/settings.json` is touched.
+
+For Claude Code sessions you start *outside* the backbone, an optional
+one-time global install adds the same hooks to `~/.claude/settings.json`:
 
 ```bash
 backbone hooks install claude              # global: ~/.claude/settings.json
 backbone hooks install claude --dir ~/code/app   # or one project
 ```
 
-With hooks, Claude Code tells the backbone the moment it becomes busy, idle,
-or waits for a person (plan approval, permission prompt, question). Without
-them the backbone reads the terminal, which works but is less precise.
 Other runtimes are read from the terminal for now.
 
 ## 4. Run the backbone

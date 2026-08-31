@@ -18,6 +18,10 @@ This page follows real requests through the system. Read
 3. **Launch.** `tmux new-session -d -s <name> -c <dir>` running the runtime
    command (`claude --model …`), with `BACKBONE_RUNTIME`, `BACKBONE_AGENT`,
    `BACKBONE_STATE_DIR` and the agent's `env` exported into the session.
+   For Claude Code the command also carries
+   `--settings <data_dir>/hooks/claude-settings.json` — a backbone-owned
+   settings file, regenerated at every start, that wires the state hooks
+   without touching the repository or `~/.claude/settings.json`.
 4. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
    fresh hook-written `idle` state, or a visible empty prompt for runtimes
    without hooks. If the runtime is asking a question (Claude's folder-trust

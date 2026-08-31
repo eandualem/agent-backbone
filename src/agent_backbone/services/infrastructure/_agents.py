@@ -76,8 +76,36 @@ def runtime_available(runtime: str) -> bool:
     return command is None or resolve_command(command) is not None
 
 
+def hook_launch_args(
+    runtime: str, data_dir: Path | str | None, state_dir: Path | str | None
+) -> list[str]:
+    """Extra CLI args that wire the runtime's state hooks to the backbone.
+
+    Claude Code accepts an additional settings file via ``--settings``; the
+    backbone keeps one under ``<data_dir>/hooks/`` so every session it starts
+    reports state without the user configuring hooks per repository (or at
+    all). Runtimes without hook support get no extra args and rely on
+    terminal inference.
+    """
+    if runtime != "claude" or data_dir is None or state_dir is None:
+        return []
+    from agent_backbone.hooks.install import ensure_launch_settings
+
+    try:
+        settings = ensure_launch_settings(Path(data_dir), Path(state_dir))
+    except OSError as exc:
+        log.warning("Could not write the launch hook settings: %s", exc)
+        return []
+    return ["--settings", str(settings)]
+
+
 def build_command(
-    runtime: str, *, model: str | None = None, resume: bool = False
+    runtime: str,
+    *,
+    model: str | None = None,
+    resume: bool = False,
+    data_dir: Path | str | None = None,
+    state_dir: Path | str | None = None,
 ) -> list[str] | None:
     """Build the launch command for a runtime, or None for a plain shell.
 
@@ -96,6 +124,7 @@ def build_command(
         command.extend(["--model", model])
     if resume:
         command.append("--resume")
+    command.extend(hook_launch_args(runtime, data_dir, state_dir))
     return command
 
 
@@ -120,6 +149,7 @@ async def start_agent(
     model: str | None = None,
     resume: bool = False,
     state_dir: Path | str | None = None,
+    data_dir: Path | str | None = None,
 ) -> bool:
     """Start a configured agent in its tmux session (idempotent)."""
     if await session_exists(spec.name):
@@ -133,7 +163,13 @@ async def start_agent(
     effective_runtime = runtime or spec.runtime
     effective_model = model if model is not None else spec.model
     try:
-        command = build_command(effective_runtime, model=effective_model, resume=resume)
+        command = build_command(
+            effective_runtime,
+            model=effective_model,
+            resume=resume,
+            data_dir=data_dir,
+            state_dir=state_dir,
+        )
     except (ValueError, RuntimeError) as exc:
         log.error("Cannot start agent '%s': %s", spec.name, exc)
         return False

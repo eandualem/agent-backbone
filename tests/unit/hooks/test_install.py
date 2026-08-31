@@ -83,3 +83,27 @@ class TestInstallClaude:
             assert "not valid JSON" in str(exc)
         else:
             raise AssertionError("expected ValueError")
+
+
+class TestLaunchSettings:
+    def test_writes_backbone_owned_settings_file(self, tmp_path):
+        data_dir = tmp_path / "data"
+        path = install.ensure_launch_settings(
+            data_dir, data_dir / "state", python="/usr/bin/python3"
+        )
+
+        assert path == data_dir / "hooks" / "claude-settings.json"
+        assert (data_dir / "hooks" / "claude_hook.py").is_file()
+        saved = json.loads(path.read_text())
+        assert set(saved) == {"hooks"}
+        assert set(saved["hooks"]) == {e for e, _ in install.CLAUDE_EVENTS}
+        command = saved["hooks"]["Stop"][0]["hooks"][0]["command"]
+        assert f'--state-dir "{data_dir / "state"}"' in command
+        assert command.endswith("--tag agent-backbone")
+
+    def test_regeneration_is_idempotent(self, tmp_path):
+        first = install.ensure_launch_settings(tmp_path, tmp_path / "state")
+        before = first.read_text()
+        second = install.ensure_launch_settings(tmp_path, tmp_path / "state")
+        assert first == second
+        assert second.read_text() == before

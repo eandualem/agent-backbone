@@ -556,6 +556,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
             model=args.model,
             resume=args.resume,
             state_dir=config.state_dir,
+            data_dir=config.data_dir,
         )
         if not ok:
             print(f"{spec.name}: failed to start")

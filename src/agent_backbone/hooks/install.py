@@ -115,6 +115,20 @@ def claude_settings_path(project_dir: Path | None) -> Path:
     return CLAUDE_SETTINGS_GLOBAL.expanduser()
 
 
+def ensure_launch_settings(data_dir: Path, state_dir: Path, *, python: str | None = None) -> Path:
+    """Backbone-owned Claude settings file passed at launch via ``--settings``.
+
+    Regenerated on every agent start so the hook script and command stay
+    current. Nothing outside ``<data_dir>/hooks/`` is touched — the user's
+    ``~/.claude/settings.json`` and per-project settings are left alone.
+    """
+    script = install_hook_script(data_dir)
+    command = hook_command(script, state_dir, python=python or default_python())
+    path = data_dir / "hooks" / "claude-settings.json"
+    save_settings(path, merge_claude_hooks({}, command))
+    return path
+
+
 def install_claude(
     data_dir: Path,
     state_dir: Path,

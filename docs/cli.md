@@ -96,9 +96,15 @@ errors.
 
 ## `backbone hooks install|uninstall claude [--dir PROJECT]`
 
-Copies the hook script into `<data_dir>/hooks/` and adds tagged entries to
-`~/.claude/settings.json` (or `PROJECT/.claude/settings.json`). Re-running
-is idempotent; `uninstall` removes only the backbone's entries. The hook
-prefers `$BACKBONE_STATE_DIR` (exported into every session the backbone
-starts), so one global install serves any data directory. Restart running
-Claude Code sessions afterwards.
+Sessions started by `agent start` need no install: the backbone passes
+`--settings <data_dir>/hooks/claude-settings.json` (a file it owns and
+regenerates on every start) to every Claude Code launch, so the hooks are
+wired without touching any repository or the user's settings.
+
+`hooks install` is for Claude Code sessions started outside the backbone.
+It copies the hook script into `<data_dir>/hooks/` and adds tagged entries
+to `~/.claude/settings.json` (or `PROJECT/.claude/settings.json`).
+Re-running is idempotent; `uninstall` removes only the backbone's entries.
+The hook prefers `$BACKBONE_STATE_DIR` (exported into every session the
+backbone starts), so one global install serves any data directory. Restart
+running Claude Code sessions afterwards.

@@ -122,7 +122,7 @@ async def cmd_start_agent(
         await update.message.reply_text(f"Unknown agent `{name}`", parse_mode="Markdown")
         return
 
-    ok = await start_agent(spec)
+    ok = await start_agent(spec, state_dir=bot._config.state_dir, data_dir=bot._config.data_dir)
     status = "Started" if ok else "Failed to start"
     await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
 

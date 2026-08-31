@@ -222,7 +222,13 @@ async def _start(
             ready="not_waited",
         )
 
-    command = build_command(runtime, model=model, resume=req.resume)
+    command = build_command(
+        runtime,
+        model=model,
+        resume=req.resume,
+        data_dir=config.data_dir,
+        state_dir=config.state_dir,
+    )
     environment = launch_environment(spec.name, runtime, config.state_dir, spec.env)
     ok = await tmux_svc.start_session(
         spec.name, working_dir=str(spec.path), command=command, environment=environment

@@ -142,7 +142,9 @@ class TestStartAgent:
                 headers=auth_headers,
             )
         assert resp.json()["runtime"] == "codex"
-        build.assert_called_once_with("codex", model="x", resume=True)
+        assert build.call_args.args == ("codex",)
+        assert build.call_args.kwargs["model"] == "x"
+        assert build.call_args.kwargs["resume"] is True
 
     async def test_unknown_runtime_400(self, api_client, auth_headers):
         resp = await api_client.post(
