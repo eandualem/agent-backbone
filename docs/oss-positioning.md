@@ -235,12 +235,16 @@ no-git-installs policy.
 
 ## 4. Path to adoption
 
-Concrete, prioritized — not exhaustive.
+Concrete, prioritized — not exhaustive. The repository is currently
+**private**, so item 1 below is a precondition for everything else on this
+list, not an optional first step.
 
-1. **Fix #81 before any public push.** A control plane whose own pitch is
-   "you can trust what gets pasted into your agents" cannot launch while it
-   leaks its own control-plane credentials into every agent's environment.
-   This is a blocker, not a backlog item, for anything below.
+1. **Make the repository public — after #81 is fixed, not before.** A
+   control plane whose own pitch is "you can trust what gets pasted into
+   your agents" cannot go public while it leaks its own control-plane
+   credentials into every agent's environment. Fixing #81 and flipping the
+   repo to public are the two preconditions everything below assumes; treat
+   them as one blocking step, in that order.
 2. **Ship a PyPI package.** `uv tool install`/`pipx install` from a git URL
    is real friction; comparable tools converge on listing `uv tool install`,
    `pipx install`, and (later) Homebrew side by side as parallel one-liners
@@ -277,10 +281,11 @@ Concrete, prioritized — not exhaustive.
    are all genuine, verifiable signals this project already has; they're
    just not visible at a glance today.
 
-**Minimum credible first public release:** a PyPI package
-(`pip install`/`uvx agent-backbone`), a five-minute recorded demo at the top
-of the README, a SECURITY.md, and #81 fixed — in that order of blocking
-priority. Everything else in this list (Releases/changelog, badges, naming
-disambiguation) improves the pitch; these four are what stand between
-"a strong alpha a technical stranger can evaluate" and "a project a
-skeptical senior engineer would actually recommend running."
+**Minimum credible first public release:** fix #81 and make the repository
+public, then a PyPI package (`pip install`/`uvx agent-backbone`), a
+five-minute recorded demo at the top of the README, and a SECURITY.md — in
+that order of blocking priority. Everything else in this list
+(Releases/changelog, badges, naming disambiguation) improves the pitch;
+these five are what stand between "a strong alpha a technical stranger can
+evaluate" and "a project a skeptical senior engineer would actually
+recommend running."
