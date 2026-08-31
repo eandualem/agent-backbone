@@ -1,4 +1,4 @@
-"""Queue, dedup, dependencies, acknowledgments, and heartbeat repository."""
+"""Queue, dedup, dependencies, and acknowledgments repository."""
 
 from __future__ import annotations
 
@@ -185,75 +185,6 @@ async def clear_acknowledgment(
         ),
         {"issue_number": issue_number, "target_entity": target_entity},
     )
-
-
-# --- Heartbeats ---
-
-
-async def record_heartbeat(
-    conn: AsyncConnection,
-    agent: str,
-    outcome: str,
-    message: str | None = None,
-) -> int:
-    """Record a heartbeat delivery attempt. Returns the row ID."""
-    result = await conn.execute(
-        text(
-            """INSERT INTO heartbeats (agent, delivered_at, outcome, message)
-               VALUES (:agent, :delivered_at, :outcome, :message)
-               RETURNING id"""
-        ),
-        {
-            "agent": agent,
-            "delivered_at": _now_iso(),
-            "outcome": outcome,
-            "message": message,
-        },
-    )
-    return result.scalar_one()
-
-
-async def get_last_heartbeat(
-    conn: AsyncConnection,
-    agent: str,
-    outcome: str = "delivered",
-) -> str | None:
-    """Get the delivered_at ISO string of the most recent matching heartbeat."""
-    result = await conn.execute(
-        text(
-            """SELECT delivered_at FROM heartbeats
-               WHERE agent = :agent AND outcome = :outcome
-               ORDER BY delivered_at DESC LIMIT 1"""
-        ),
-        {"agent": agent, "outcome": outcome},
-    )
-    row = result.fetchone()
-    return row._mapping["delivered_at"] if row else None
-
-
-async def query_heartbeats(
-    conn: AsyncConnection,
-    agent: str | None = None,
-    outcome: str | None = None,
-    limit: int = 50,
-) -> list[dict]:
-    """Query heartbeat records with optional filters."""
-    conditions: list[str] = []
-    params: dict[str, object] = {}
-    if agent is not None:
-        conditions.append("agent = :agent")
-        params["agent"] = agent
-    if outcome is not None:
-        conditions.append("outcome = :outcome")
-        params["outcome"] = outcome
-
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    sql = f"SELECT * FROM heartbeats {where} ORDER BY delivered_at DESC LIMIT :lim"
-    params["lim"] = limit
-
-    result = await conn.execute(text(sql), params)
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
 
 
 # --- Message queue ---

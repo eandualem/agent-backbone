@@ -18,7 +18,7 @@ async def register_database(
     """Create and register the database service."""
     from agent_backbone.services.database.interface import DatabaseService
 
-    service = DatabaseService(config.database)
+    service = DatabaseService(config.database_url, config.database)
     lifecycle.register("database", service)
     return service
 

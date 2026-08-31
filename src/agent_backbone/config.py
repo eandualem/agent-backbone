@@ -1,13 +1,20 @@
-"""Configuration for the agent backbone.
+"""Configuration for agent-backbone.
 
-Loads structural config from backbone.toml (committed), secrets from env vars.
-Nested frozen dataclasses per section. Works without TOML file (falls back to defaults).
+One TOML file (``backbone.toml``) describes everything structural: the agents,
+the task tracker, Telegram, tuning knobs. Secrets come from environment
+variables (or a ``.env`` file next to the config).
+
+Config discovery order:
+
+1. ``BACKBONE_CONFIG`` environment variable (explicit path)
+2. ``backbone.toml`` in the current directory or any parent
+3. ``~/.config/agent-backbone/backbone.toml``
+4. Built-in defaults (no agents, no tracker, SQLite in the data dir)
 """
 
 from __future__ import annotations
 
 import os
-import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,124 +22,175 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from agent_backbone.services.database.config import DatabaseConfig
-from agent_backbone.services.registry import EntityRegistry, build_registry
 
-load_dotenv()
+CONFIG_FILENAME = "backbone.toml"
+DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
+DEFAULT_PORT = 7120
 
-# Repo name pattern: "[type] repo-name: description" or "[type] org/repo-name: description"
-REPO_NAME_PATTERN: re.Pattern[str] = re.compile(r"^\[[^\]]+\]\s+([\w/.-]+):")
 
-# Default TOML path: backbone.toml in repo root
-_DEFAULT_TOML_PATH = Path(__file__).resolve().parent.parent.parent / "backbone.toml"
+# ---------------------------------------------------------------------------
+# Agents
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class GatewayConfig:
-    """Gateway server settings."""
+class AgentSpec:
+    """A configured terminal agent.
 
-    port: int = 7120
+    The agent's name doubles as its tmux session name and as the value of the
+    ``for:<name>`` label that routes tracker issues to it.
+    """
+
+    name: str
+    dir: str
+    runtime: str = "claude"
+    model: str | None = None
+    repo: str = ""
+    """Optional ``owner/name`` repository this agent owns. Issues opened in that
+    repository without ``for:`` labels are routed to this agent."""
+    tags: tuple[str, ...] = ()
+    env: dict[str, str] = field(default_factory=dict)
+    description: str = ""
+
+    @property
+    def path(self) -> Path:
+        return Path(self.dir).expanduser()
+
+
+@dataclass(frozen=True)
+class AgentsConfig:
+    """The set of configured agents, keyed by name."""
+
+    specs: dict[str, AgentSpec] = field(default_factory=dict)
+
+    def get(self, name: str) -> AgentSpec | None:
+        return self.specs.get(name)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.specs
+
+    def __iter__(self):
+        return iter(self.specs.values())
+
+    def __len__(self) -> int:
+        return len(self.specs)
+
+    @property
+    def names(self) -> list[str]:
+        return list(self.specs)
+
+    def dir_for(self, name: str) -> str:
+        spec = self.specs.get(name)
+        return str(spec.path) if spec else ""
+
+    def for_repo(self, repo_full_name: str) -> list[AgentSpec]:
+        """Agents that own the given ``owner/name`` repository."""
+        key = repo_full_name.casefold()
+        return [spec for spec in self.specs.values() if spec.repo.casefold() == key]
+
+    def with_tag(self, tag: str) -> list[AgentSpec]:
+        return [spec for spec in self.specs.values() if tag in spec.tags]
+
+
+# ---------------------------------------------------------------------------
+# Sections
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BackboneSection:
+    """Process-level settings."""
+
+    data_dir: str = DEFAULT_DATA_DIR
+    host: str = "127.0.0.1"
+    port: int = DEFAULT_PORT
+    session_name: str = "backbone"
+    """tmux session used by ``backbone up --detach``."""
+    cors_origins: tuple[str, ...] = ()
     max_delivery_ids: int = 100
+
+    @property
+    def data_path(self) -> Path:
+        return Path(self.data_dir).expanduser()
 
 
 @dataclass(frozen=True)
 class GitHubConfig:
-    """GitHub API settings (non-secret)."""
+    """GitHub task tracker settings (non-secret)."""
 
-    owner: str = "eandualem"
-    repo: str = "orchestration"
-
-
-@dataclass(frozen=True)
-class RegistryConfig:
-    """Registry file paths for entity and repo discovery."""
-
-    path: str = "~/.claude/state/entity-registry.json"
-    code_base_dir: str = "~/ws/core/code"
+    repo: str = ""
+    """Default ``owner/name`` repository used for coordination issues."""
+    mode: str = "webhook"
+    """``webhook`` (push, needs a public URL) or ``poll`` (pull, no URL)."""
+    poll_interval_seconds: int = 30
 
     @property
-    def registry_path(self) -> Path:
-        return Path(self.path).expanduser()
+    def enabled(self) -> bool:
+        return bool(self.repo)
 
     @property
-    def code_base_path(self) -> Path:
-        return Path(self.code_base_dir).expanduser()
+    def owner(self) -> str:
+        return self.repo.split("/", 1)[0] if "/" in self.repo else ""
+
+    @property
+    def name(self) -> str:
+        return self.repo.split("/", 1)[1] if "/" in self.repo else ""
 
 
 @dataclass(frozen=True)
-class EntityConfig:
-    """Entity routing configuration (non-registry parts)."""
+class RoutingConfig:
+    """Routing knobs."""
 
-    skip: frozenset[str] = frozenset({"elias"})
-    fallback: dict[str, str] = field(default_factory=lambda: {"coding-agent": "ike"})
-    service_sessions: frozenset[str] = frozenset(
-        {
-            "prefect",
-            "prefect-worker",
-            "prefect-server",
-            "telegram-bot",
-            "gateway",
-            "backbone-worker",
-        }
-    )
-
-
-@dataclass(frozen=True)
-class DedupConfig:
-    """Notification deduplication settings."""
-
-    notification_window_seconds: int = 10
+    ignore_targets: frozenset[str] = frozenset()
+    """``for:`` label values that should never be routed (e.g. humans)."""
+    notification_dedup_seconds: int = 10
 
 
 @dataclass(frozen=True)
 class AgentStateConfig:
-    """Agent state tracking settings."""
+    """Where agents push their state (hook-written files) and how fresh it must be."""
 
-    state_dir: str = "~/.claude/state"
+    state_dir: str = ""
+    """Defaults to ``<data_dir>/state`` when empty."""
     stale_threshold_seconds: int = 300
 
-    @property
-    def state_path(self) -> Path:
-        return Path(self.state_dir).expanduser()
+    def state_path(self, data_dir: Path) -> Path:
+        if self.state_dir:
+            return Path(self.state_dir).expanduser()
+        return data_dir / "state"
 
 
 @dataclass(frozen=True)
-class SchedulingConfig:
-    """Scheduling and retry settings."""
+class MonitorConfig:
+    """Background job intervals."""
 
-    monitor_interval_seconds: int = 60
-    delivery_retry_interval_seconds: int = 300
-    work_pool_name: str = "agent-pool"
+    interval_seconds: int = 60
+    retry_interval_seconds: int = 300
 
 
 @dataclass(frozen=True)
 class DeliveryConfig:
-    """Delivery tracking / persistence settings."""
+    """Delivery persistence and timing."""
 
     retention_days: int = 30
+    grace_period_seconds: int = 5
+    queue_retry_seconds: int = 30
 
 
 @dataclass(frozen=True)
 class TelegramConfig:
-    """Telegram bot settings."""
+    """Telegram bot settings (token comes from ``TELEGRAM_TOKEN``)."""
 
-    allowed_chat_ids: list[int] = field(default_factory=list)
+    allowed_chat_ids: tuple[int, ...] = ()
     topic_routes: dict[int, str] = field(default_factory=dict)
     group_chat_id: int | None = None
     notification_chat_id: int | None = None
-    topic_discovery_file: str = "~/.claude/state/telegram-topics.json"
+    topic_discovery_file: str = ""
 
-    @property
-    def topic_discovery_path(self) -> Path:
-        return Path(self.topic_discovery_file).expanduser()
-
-
-@dataclass(frozen=True)
-class DailyRoutineConfig:
-    """Daily routine scheduling settings."""
-
-    morning_time: str = "08:00"
-    evening_time: str = "18:00"
-    timezone: str = "Africa/Addis_Ababa"
+    def topic_discovery_path(self, data_dir: Path) -> Path:
+        if self.topic_discovery_file:
+            return Path(self.topic_discovery_file).expanduser()
+        return data_dir / "telegram-topics.json"
 
 
 @dataclass(frozen=True)
@@ -154,277 +212,255 @@ class PriorityScoringConfig:
 
 
 @dataclass(frozen=True)
-class CapacityRoutingConfig:
-    """Capacity-aware routing settings."""
-
-    busy_threshold_seconds: int = 1800
-
-
-@dataclass(frozen=True)
-class HeartbeatConfig:
-    """Heartbeat scheduler settings."""
-
-    schedule_file: str = "~/.claude/state/heartbeat-schedules.json"
-    default_timezone: str = "Africa/Addis_Ababa"
-
-    @property
-    def schedule_path(self) -> Path:
-        return Path(self.schedule_file).expanduser()
-
-
-@dataclass(frozen=True)
-class SessionBridgeConfig:
-    """Session bridge settings."""
-
-    grace_period_seconds: int = 5
-    queue_retry_seconds: int = 30
-
-
-@dataclass(frozen=True)
 class EscalationConfig:
-    """Escalation settings for stalled/offline agent detection."""
+    """Stall / offline / plan-waiting escalation."""
 
-    stall_threshold_seconds: int = 5400  # 90 minutes
-    escalation_target: str = "ike"
-    escalation_dedup_seconds: int = 1800  # 30 minutes
+    target: str = ""
+    """Agent that receives escalations. Empty disables agent escalation."""
+    stall_threshold_seconds: int = 5400
+    dedup_seconds: int = 1800
 
 
 @dataclass(frozen=True)
-class JarvisConfig:
-    """Jarvis injection endpoint settings."""
+class SecurityConfig:
+    """Security toggles."""
 
-    inject_url: str = ""
-    sessions_url: str = ""
+    allow_remote_plan_control: bool = False
+    """Allow approving/rejecting plans (keystroke injection) via API/Telegram."""
+    allow_unauthenticated: bool = False
+    """Serve the API without an API key. Only for isolated dev setups."""
 
-    @property
-    def enabled(self) -> bool:
-        return bool(self.inject_url)
+
+# ---------------------------------------------------------------------------
+# Top-level
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class BackboneConfig:
-    """Top-level configuration. Assembled from TOML + env vars."""
+    """Fully-resolved configuration."""
 
-    # Secrets (env vars only)
-    webhook_secret: str = field(default_factory=lambda: _load_webhook_secret())
-    github_app_id: int | None = field(default_factory=lambda: _load_optional_int("GITHUB_APP_ID"))
-    github_app_private_key_path: str = field(
-        default_factory=lambda: os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH", "")
-    )
-    github_app_webhook_secret: str = field(
-        default_factory=lambda: os.environ.get("GITHUB_APP_WEBHOOK_SECRET", "")
-    )
+    # Secrets (environment only)
+    api_key: str = ""
+    webhook_secret: str = ""
+    github_token: str = ""
+    github_app_id: int | None = None
+    github_app_private_key_path: str = ""
+    telegram_token: str = ""
 
-    # Nested structural config
-    gateway: GatewayConfig = field(default_factory=GatewayConfig)
+    # Sections
+    backbone: BackboneSection = field(default_factory=BackboneSection)
+    agents: AgentsConfig = field(default_factory=AgentsConfig)
     github: GitHubConfig = field(default_factory=GitHubConfig)
-    entities: EntityConfig = field(default_factory=EntityConfig)
-    registry: EntityRegistry = field(default_factory=EntityRegistry)
-    dedup: DedupConfig = field(default_factory=DedupConfig)
+    routing: RoutingConfig = field(default_factory=RoutingConfig)
     agent_state: AgentStateConfig = field(default_factory=AgentStateConfig)
-    scheduling: SchedulingConfig = field(default_factory=SchedulingConfig)
-    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    monitor: MonitorConfig = field(default_factory=MonitorConfig)
     delivery: DeliveryConfig = field(default_factory=DeliveryConfig)
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
-    daily_routines: DailyRoutineConfig = field(default_factory=DailyRoutineConfig)
     priority_scoring: PriorityScoringConfig = field(default_factory=PriorityScoringConfig)
-    capacity_routing: CapacityRoutingConfig = field(default_factory=CapacityRoutingConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
-    heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
-    session_bridge: SessionBridgeConfig = field(default_factory=SessionBridgeConfig)
-    jarvis: JarvisConfig = field(default_factory=JarvisConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
+    source_path: Path | None = None
+
+    # --- Derived paths -----------------------------------------------------
 
     @property
-    def webhook_secrets(self) -> tuple[str, ...]:
-        """Return the configured webhook secrets in validation order."""
-        return tuple(
-            dict.fromkeys(
-                secret for secret in (self.webhook_secret, self.github_app_webhook_secret) if secret
-            )
-        )
+    def data_dir(self) -> Path:
+        return self.backbone.data_path
+
+    @property
+    def state_dir(self) -> Path:
+        return self.agent_state.state_path(self.data_dir)
+
+    @property
+    def action_log_path(self) -> Path:
+        return self.state_dir / "actions.jsonl"
+
+    @property
+    def telegram_topic_discovery_path(self) -> Path:
+        return self.telegram.topic_discovery_path(self.data_dir)
+
+    @property
+    def database_url(self) -> str:
+        return self.database.resolved_url(self.data_dir)
+
+    # --- Derived flags -----------------------------------------------------
 
     @property
     def github_app_ready(self) -> bool:
-        """Whether GitHub App credentials are configured for REST API access."""
         return bool(self.github_app_id and self.github_app_private_key_path)
 
+    @property
+    def github_ready(self) -> bool:
+        return self.github.enabled and (bool(self.github_token) or self.github_app_ready)
+
+    @property
+    def telegram_ready(self) -> bool:
+        return bool(self.telegram_token)
+
+    @property
+    def webhook_secrets(self) -> tuple[str, ...]:
+        return (self.webhook_secret,) if self.webhook_secret else ()
+
+    # --- Loading -----------------------------------------------------------
+
     @classmethod
-    def from_toml(cls, path: Path | None = None) -> BackboneConfig:
-        """Load config from TOML file + env var overrides.
-
-        Falls back to defaults if TOML file doesn't exist.
-        """
-        toml_path = path or _DEFAULT_TOML_PATH
+    def load(cls, path: Path | str | None = None) -> BackboneConfig:
+        """Load config from TOML (discovered or explicit) plus environment."""
+        toml_path = Path(path).expanduser() if path else find_config_file()
         raw: dict = {}
-        if toml_path.exists():
-            with open(toml_path, "rb") as f:
-                raw = tomllib.load(f)
+        if toml_path and toml_path.exists():
+            load_dotenv(toml_path.parent / ".env")
+            with open(toml_path, "rb") as fh:
+                raw = tomllib.load(fh)
+        load_dotenv()
+        return cls.from_dict(raw, source_path=toml_path)
 
-        gw = raw.get("gateway", {})
+    @classmethod
+    def from_dict(cls, raw: dict, *, source_path: Path | None = None) -> BackboneConfig:
+        """Build a config from an already-parsed TOML dictionary."""
+        env = os.environ
+
+        bb = raw.get("backbone", {})
         gh = raw.get("github", {})
-        ent = raw.get("entities", {})
-        reg = raw.get("registry", {})
-        dd = raw.get("dedup", {})
+        rt = raw.get("routing", {})
         ag = raw.get("agent_state", {})
-        sc = raw.get("scheduling", {})
-        db = raw.get("database", {})
+        mo = raw.get("monitor", {})
         dl = raw.get("delivery", {})
+        db = raw.get("database", {})
         tg = raw.get("telegram", {})
-        dr = raw.get("daily_routines", {})
         ps = raw.get("priority_scoring", {})
-        cr = raw.get("capacity_routing", {})
         es = raw.get("escalation", {})
-        hb = raw.get("heartbeat", {})
-        sb = raw.get("session_bridge", {})
+        sec = raw.get("security", {})
 
-        # Build registry from JSON + filesystem
-        import logging
+        agents = _parse_agents(raw.get("agents", {}))
 
-        _log = logging.getLogger(__name__)
-        reg_cfg = RegistryConfig(
-            path=reg.get("path", "~/.claude/state/entity-registry.json"),
-            code_base_dir=reg.get("code_base_dir", "~/ws/core/code"),
-        )
-        try:
-            registry = build_registry(reg_cfg.registry_path, reg_cfg.code_base_path)
-        except FileNotFoundError:
-            _log.warning(
-                "Entity registry not found at %s — using empty registry",
-                reg_cfg.registry_path,
-            )
-            registry = EntityRegistry()
-
+        defaults = PriorityScoringConfig()
         return cls(
-            gateway=GatewayConfig(
-                port=gw.get("port", 7120),
-                max_delivery_ids=gw.get("max_delivery_ids", 100),
+            api_key=env.get("BACKBONE_API_KEY", ""),
+            webhook_secret=env.get("GITHUB_WEBHOOK_SECRET", env.get("WEBHOOK_SECRET", "")),
+            github_token=env.get("GITHUB_TOKEN", ""),
+            github_app_id=_optional_int(env.get("GITHUB_APP_ID", "")),
+            github_app_private_key_path=env.get("GITHUB_APP_PRIVATE_KEY_PATH", ""),
+            telegram_token=env.get("TELEGRAM_TOKEN", ""),
+            backbone=BackboneSection(
+                data_dir=env.get("BACKBONE_DATA_DIR") or bb.get("data_dir", DEFAULT_DATA_DIR),
+                host=bb.get("host", "127.0.0.1"),
+                port=int(env.get("BACKBONE_PORT") or bb.get("port", DEFAULT_PORT)),
+                session_name=bb.get("session_name", "backbone"),
+                cors_origins=tuple(bb.get("cors_origins", [])),
+                max_delivery_ids=bb.get("max_delivery_ids", 100),
             ),
+            agents=agents,
             github=GitHubConfig(
-                owner=gh.get("owner", "eandualem"),
-                repo=gh.get("repo", "orchestration"),
+                repo=gh.get("repo", ""),
+                mode=gh.get("mode", "webhook"),
+                poll_interval_seconds=gh.get("poll_interval_seconds", 30),
             ),
-            entities=EntityConfig(
-                skip=frozenset(ent.get("skip", ["elias"])),
-                fallback=ent.get("fallback", {"coding-agent": "ike"}),
-                service_sessions=frozenset(
-                    ent.get(
-                        "service_sessions",
-                        [
-                            "prefect",
-                            "prefect-worker",
-                            "prefect-server",
-                            "telegram-bot",
-                            "gateway",
-                            "backbone-worker",
-                        ],
-                    )
-                ),
-            ),
-            registry=registry,
-            dedup=DedupConfig(
-                notification_window_seconds=dd.get("notification_window_seconds", 10),
+            routing=RoutingConfig(
+                ignore_targets=frozenset(rt.get("ignore_targets", [])),
+                notification_dedup_seconds=rt.get("notification_dedup_seconds", 10),
             ),
             agent_state=AgentStateConfig(
-                state_dir=ag.get("state_dir", "~/.claude/state"),
+                state_dir=ag.get("state_dir", ""),
                 stale_threshold_seconds=ag.get("stale_threshold_seconds", 300),
             ),
-            scheduling=SchedulingConfig(
-                monitor_interval_seconds=sc.get("monitor_interval_seconds", 60),
-                delivery_retry_interval_seconds=sc.get("delivery_retry_interval_seconds", 300),
-                work_pool_name=sc.get("work_pool_name", "agent-pool"),
+            monitor=MonitorConfig(
+                interval_seconds=mo.get("interval_seconds", 60),
+                retry_interval_seconds=mo.get("retry_interval_seconds", 300),
+            ),
+            delivery=DeliveryConfig(
+                retention_days=dl.get("retention_days", 30),
+                grace_period_seconds=dl.get("grace_period_seconds", 5),
+                queue_retry_seconds=dl.get("queue_retry_seconds", 30),
             ),
             database=DatabaseConfig(
-                host=db.get("host", "localhost"),
-                port=db.get("port", 5435),
-                user=db.get("user", "backbone"),
-                password=db.get("password", "backbone"),
-                name=db.get("name", "backbone"),
+                url=env.get("BACKBONE_DATABASE_URL") or db.get("url", ""),
                 pool_size=db.get("pool_size", 5),
                 pool_overflow=db.get("pool_overflow", 10),
                 echo=db.get("echo", False),
             ),
-            delivery=DeliveryConfig(
-                retention_days=dl.get("retention_days", 30),
-            ),
             telegram=TelegramConfig(
-                allowed_chat_ids=tg.get("allowed_chat_ids", []),
+                allowed_chat_ids=tuple(int(x) for x in tg.get("allowed_chat_ids", [])),
                 topic_routes={int(k): v for k, v in tg.get("topic_routes", {}).items()},
                 group_chat_id=tg.get("group_chat_id"),
                 notification_chat_id=tg.get("notification_chat_id"),
-                topic_discovery_file=tg.get(
-                    "topic_discovery_file",
-                    "~/.claude/state/telegram-topics.json",
-                ),
-            ),
-            daily_routines=DailyRoutineConfig(
-                morning_time=dr.get("morning_time", "08:00"),
-                evening_time=dr.get("evening_time", "18:00"),
-                timezone=dr.get("timezone", "Africa/Addis_Ababa"),
+                topic_discovery_file=tg.get("topic_discovery_file", ""),
             ),
             priority_scoring=PriorityScoringConfig(
-                blocking_weight=ps.get("blocking_weight", 1000.0),
-                type_weights=ps.get(
-                    "type_weights",
-                    {
-                        "spec-gap": 100.0,
-                        "bug": 90.0,
-                        "task": 50.0,
-                        "question": 20.0,
-                        "optimization": 10.0,
-                    },
+                blocking_weight=ps.get("blocking_weight", defaults.blocking_weight),
+                type_weights=ps.get("type_weights", dict(defaults.type_weights)),
+                dependents_multiplier=ps.get(
+                    "dependents_multiplier", defaults.dependents_multiplier
                 ),
-                dependents_multiplier=ps.get("dependents_multiplier", 1.5),
-                age_tiebreaker_weight=ps.get("age_tiebreaker_weight", 0.01),
-            ),
-            capacity_routing=CapacityRoutingConfig(
-                busy_threshold_seconds=cr.get("busy_threshold_seconds", 1800),
+                age_tiebreaker_weight=ps.get(
+                    "age_tiebreaker_weight", defaults.age_tiebreaker_weight
+                ),
             ),
             escalation=EscalationConfig(
+                target=es.get("target", ""),
                 stall_threshold_seconds=es.get("stall_threshold_seconds", 5400),
-                escalation_target=es.get("escalation_target", "ike"),
-                escalation_dedup_seconds=es.get("escalation_dedup_seconds", 1800),
+                dedup_seconds=es.get("dedup_seconds", 1800),
             ),
-            heartbeat=HeartbeatConfig(
-                schedule_file=hb.get("schedule_file", "~/.claude/state/heartbeat-schedules.json"),
-                default_timezone=hb.get("default_timezone", "Africa/Addis_Ababa"),
+            security=SecurityConfig(
+                allow_remote_plan_control=bool(sec.get("allow_remote_plan_control", False)),
+                allow_unauthenticated=bool(
+                    env.get("BACKBONE_ALLOW_UNAUTHENTICATED", "").lower() in ("1", "true")
+                    or sec.get("allow_unauthenticated", False)
+                ),
             ),
-            session_bridge=SessionBridgeConfig(
-                grace_period_seconds=sb.get("grace_period_seconds", 5),
-                queue_retry_seconds=sb.get("queue_retry_seconds", 30),
-            ),
-            jarvis=JarvisConfig(
-                inject_url=os.environ.get("JARVIS_INJECT_URL", ""),
-                sessions_url=os.environ.get("JARVIS_SESSIONS_URL", ""),
-            ),
+            source_path=source_path,
         )
 
 
-def _load_webhook_secret() -> str:
-    """Load webhook secret from env or fallback to file.
-
-    Checks repo root first (.webhook-secret next to backbone.toml),
-    then legacy path (~/.claude/services/.webhook-secret).
-    """
-    secret = os.environ.get("WEBHOOK_SECRET", "")
-    if secret:
-        return secret
-    # Repo root (next to backbone.toml)
-    repo_secret = _DEFAULT_TOML_PATH.parent / ".webhook-secret"
-    try:
-        return repo_secret.read_text().strip()
-    except FileNotFoundError:
-        pass
-    # Legacy path
-    legacy_secret = Path.home() / ".claude" / "services" / ".webhook-secret"
-    try:
-        return legacy_secret.read_text().strip()
-    except FileNotFoundError:
-        return ""
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-def _load_optional_int(env_var: str) -> int | None:
-    """Load an optional integer from the environment."""
-    value = os.environ.get(env_var, "").strip()
+def find_config_file(start: Path | None = None) -> Path | None:
+    """Locate ``backbone.toml`` via env var, CWD ancestors, then the user config dir."""
+    explicit = os.environ.get("BACKBONE_CONFIG", "")
+    if explicit:
+        return Path(explicit).expanduser()
+
+    here = (start or Path.cwd()).resolve()
+    for candidate_dir in (here, *here.parents):
+        candidate = candidate_dir / CONFIG_FILENAME
+        if candidate.is_file():
+            return candidate
+
+    user_config = Path.home() / ".config" / "agent-backbone" / CONFIG_FILENAME
+    if user_config.is_file():
+        return user_config
+    return None
+
+
+def _parse_agents(raw: dict) -> AgentsConfig:
+    specs: dict[str, AgentSpec] = {}
+    for name, data in raw.items():
+        if not isinstance(data, dict):
+            raise ValueError(f"[agents.{name}] must be a table")
+        directory = data.get("dir", "")
+        if not directory:
+            raise ValueError(f"[agents.{name}] is missing required key 'dir'")
+        model = data.get("model")
+        specs[name] = AgentSpec(
+            name=name,
+            dir=directory,
+            runtime=data.get("runtime", "claude"),
+            model=str(model) if model else None,
+            repo=data.get("repo", ""),
+            tags=tuple(data.get("tags", [])),
+            env={str(k): str(v) for k, v in data.get("env", {}).items()},
+            description=data.get("description", ""),
+        )
+    return AgentsConfig(specs=specs)
+
+
+def _optional_int(value: str) -> int | None:
+    value = value.strip()
     if not value:
         return None
     try:

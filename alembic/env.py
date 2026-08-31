@@ -1,47 +1,39 @@
 """Alembic environment configuration for agent-backbone.
 
 Supports two modes:
-1. CLI: `alembic upgrade head` — creates async engine via DatabaseConfig
-2. Programmatic: BackboneDB._run_migrations() — injects a connection via
-   config.attributes["connection"]
+1. CLI: ``alembic upgrade head`` — resolves the database URL from backbone.toml
+   / ``BACKBONE_DATABASE_URL`` and creates an async engine.
+2. Programmatic: ``BackboneDB._run_migrations()`` injects a connection via
+   ``config.attributes["connection"]``.
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from dotenv import load_dotenv
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from agent_backbone.services.database.base import Base
-from agent_backbone.services.database.config import database_config_from_env
 from agent_backbone.services.database.models import (  # noqa: F401
     AcknowledgmentORM,
-    AgentActivityORM,
     AgentStateORM,
     DedupLogORM,
     DeliveryORM,
-    HeartbeatORM,
     IssueDependencyORM,
     MessageQueueORM,
-    SwarmORM,
-    SwarmWorkerORM,
-    TelemetryCheckpointORM,
 )
 from alembic import context
 
 metadata = Base.metadata
-
-# Load .env for database connection settings (BACKBONE_DATABASE_* vars)
-load_dotenv()
-
 target_metadata = metadata
 
-# Build URL from DatabaseConfig with BACKBONE_DATABASE_* overrides applied
 config = context.config
-db_config = database_config_from_env()
-config.set_main_option("sqlalchemy.url", db_config.async_url)
+
+if config.attributes.get("connection") is None and not config.get_main_option("sqlalchemy.url"):
+    from agent_backbone.config import BackboneConfig
+
+    config.set_main_option("sqlalchemy.url", BackboneConfig.load().database_url)
 
 
 def run_migrations_offline() -> None:
@@ -52,6 +44,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        render_as_batch=True,
     )
 
     with context.begin_transaction():
@@ -63,6 +56,7 @@ def _do_run_migrations(connection) -> None:  # noqa: ANN001
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
+        render_as_batch=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -82,14 +76,11 @@ async def _run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode (connected to database)."""
-    # Check for programmatic connection injection
     connectable = config.attributes.get("connection")
 
     if connectable is not None:
-        # Programmatic mode — connection provided by BackboneDB._run_migrations()
         _do_run_migrations(connectable)
     else:
-        # CLI mode — async engine from config
         asyncio.run(_run_async_migrations())
 
 
