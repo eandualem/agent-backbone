@@ -328,6 +328,52 @@ class TestDeliveryDedupPrefixedOutcomes:
         mock_send.assert_called_once()
 
 
+class TestIssueRedeliveryRegression:
+    """The old system's repeat-delivery bug: after a successful issue
+    delivery, later activity on the issue (comments, relabels, poll/webhook
+    overlap, the retry job) must never paste the issue notification again."""
+
+    @patch(
+        "agent_backbone.services.routing._delivery.get_session_intelligence",
+        new_callable=AsyncMock,
+    )
+    @patch("agent_backbone.services.routing._delivery.send_message", new_callable=AsyncMock)
+    async def test_delivered_issue_is_never_redelivered(self, mock_send, mock_intel, db, config):
+        from agent_backbone.services.routing._delivery import safe_deliver
+        from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+        mock_intel.return_value = SessionProfile(
+            session_name="ike",
+            intelligence=SessionIntelligence.READY,
+            agent_state="idle",
+            runtime="shell",
+        )
+        mock_send.return_value = True
+
+        def deliver(kind: str):
+            return safe_deliver(
+                "ike",
+                f"{kind} for issue 300",
+                config,
+                db=db,
+                repo=TEST_REPO,
+                issue_number=300,
+                target_entity="ike",
+                flow_name="issue-dispatcher",
+                delivery_kind=kind,
+            )
+
+        assert await deliver("issue") == "delivered"
+        # A comment on the issue is its own kind and goes through …
+        assert await deliver("comment") == "delivered"
+        # … but every re-dispatch of the issue itself is suppressed.
+        assert await deliver("issue") == "already_delivered"
+        assert await deliver("issue") == "already_delivered"
+        assert mock_send.await_count == 2
+        # And the retry job no longer sees the issue as failed.
+        assert 300 not in [r["issue_number"] for r in await db.get_failed_deliveries()]
+
+
 class TestOutcomeQueues:
     def test_direct_message_queues_on_every_block(self):
         from agent_backbone.services.routing._delivery import outcome_queues
