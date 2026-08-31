@@ -17,9 +17,7 @@ from agent_backbone.services.terminal._adapters import (
 from agent_backbone.services.terminal._core import capture_pane
 
 log = logging.getLogger(__name__)
-_WORKING_STATES = frozenset(
-    {AgentState.STARTING, AgentState.BUSY, AgentState.PROCESSING_ISSUE}
-)
+_WORKING_STATES = frozenset({AgentState.STARTING, AgentState.BUSY, AgentState.PROCESSING_ISSUE})
 
 
 def _trust_stale_push(snapshot: StateSnapshot) -> bool:

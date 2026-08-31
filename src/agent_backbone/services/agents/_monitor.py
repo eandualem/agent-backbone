@@ -1,6 +1,6 @@
 """Periodic agent monitor — orchestrates escalation, delivery, and sync.
 
-Runs on a 60-second interval. Delegates to specialized submodules:
+Runs on the scheduler interval (default 60s). Delegates to:
 - agents._escalation: stall detection, offline detection, plan-waiting notification
 - agents._pending: state-aware delivery loop
 - routing._dependencies: sub-issue relationship sync
@@ -10,137 +10,101 @@ from __future__ import annotations
 
 import asyncio
 import logging
-
-from prefect import flow
+from typing import TYPE_CHECKING
 
 from agent_backbone.api.session_updates import emit_sessions_update
-from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh, get_sio
 from agent_backbone.services.agents._escalation import (
     check_plan_waiting,
     handle_offline,
     handle_stalls,
 )
 from agent_backbone.services.agents._pending import deliver_pending_issues
-from agent_backbone.services.agents.interface import StateService
 from agent_backbone.services.routing._dependencies import sync_dependencies
 from agent_backbone.services.routing._flows import drain_message_queue
-from agent_backbone.services.telemetry import collect_active_session_telemetry
-from agent_backbone.services.terminal import TmuxService, handle_copy_mode_recovery, list_sessions
+from agent_backbone.services.terminal import handle_copy_mode_recovery, list_sessions
+
+if TYPE_CHECKING:
+    import socketio
+
+    from agent_backbone.config import BackboneConfig
+    from agent_backbone.services.agents.interface import StateService
+    from agent_backbone.services.database import BackboneDB
+    from agent_backbone.services.terminal import TmuxService
 
 log = logging.getLogger(__name__)
 
-# Concurrency guard — prevents parallel monitor runs on startup burst
+# Concurrency guard — prevents overlapping monitor runs
 _monitor_lock = asyncio.Lock()
 
 
-@flow(name="agent-monitor")
-async def monitor_agents() -> dict:
-    """Check all entity sessions and deliver pending issues to online agents.
+async def monitor_agents(
+    config: BackboneConfig,
+    db: BackboneDB,
+    gh: object | None,
+    *,
+    state_svc: StateService | None = None,
+    tmux_svc: TmuxService | None = None,
+    sio: socketio.AsyncServer | None = None,
+) -> dict:
+    """Check all configured agents; escalate problems and deliver pending issues.
 
-    Also detects stalled and unexpectedly offline agents, escalating to
-    the configured target with dedup.
-
-    Returns a dict mapping entity → action taken.
+    Returns a dict mapping agent → action taken.
     """
-    # Prevent concurrent runs (Prefect may schedule a burst on startup)
     if _monitor_lock.locked():
         log.info("Monitor already running — skipping concurrent run")
         return {"_skipped": "concurrent_run"}
 
-    await ensure_initialized()
-
     async with _monitor_lock:
-        return await _monitor_agents_impl()
+        active_sessions = set(await list_sessions())
+        if not active_sessions:
+            log.debug("No tmux sessions active")
+            return {}
 
+        if gh is not None:
+            try:
+                await sync_dependencies(config, db, gh)
+            except Exception:
+                log.exception("Dependency sync failed (non-fatal)")
 
-async def _monitor_agents_impl() -> dict:
-    """Inner implementation of monitor_agents, guarded by _monitor_lock."""
-    config = get_config()
-    db = get_db()
-    gh = get_gh()
+        try:
+            await handle_stalls(config, active_sessions, db)
+        except Exception:
+            log.exception("Stall detection failed (non-fatal)")
 
-    active_sessions = set(await list_sessions())
-    if not active_sessions:
-        log.info("No tmux sessions active")
-        return {}
+        try:
+            await handle_offline(config, active_sessions, db, gh)
+        except Exception:
+            log.exception("Offline detection failed (non-fatal)")
 
-    # Sync sub-issue dependencies for open issues
-    try:
-        await sync_dependencies(config, db, gh)
-    except Exception:
-        log.exception("Dependency sync failed (non-fatal)")
+        try:
+            await check_plan_waiting(config, active_sessions, db=db)
+        except Exception:
+            log.exception("Plan-waiting notification failed (non-fatal)")
 
-    # Detect stalled agents
-    try:
-        await handle_stalls(config, active_sessions, db)
-    except Exception:
-        log.exception("Stall detection failed (non-fatal)")
+        try:
+            await handle_copy_mode_recovery(config, active_sessions)
+        except Exception:
+            log.exception("Copy-mode recovery failed (non-fatal)")
 
-    # Detect unexpectedly offline agents
-    try:
-        await handle_offline(config, active_sessions, db, gh)
-    except Exception:
-        log.exception("Offline detection failed (non-fatal)")
+        # Reconcile out-of-band session churn to live Socket.IO subscribers.
+        try:
+            await emit_sessions_update(sio, config, state_svc, tmux_svc, only_if_changed=True)
+        except Exception:
+            log.exception("Session subscription reconciliation failed (non-fatal)")
 
-    # Mark swarm workers failed if their tmux session vanished mid-run.
-    try:
-        fresh_active_sessions = set(await list_sessions())
-        lost_workers = await db.reconcile_swarm_worker_sessions(fresh_active_sessions)
-        if lost_workers:
-            log.warning("Marked %d swarm worker session(s) lost", lost_workers)
-    except Exception:
-        log.exception("Swarm worker session reconciliation failed (non-fatal)")
-
-    # Detect plan-waiting agents and send Telegram notification
-    try:
-        await check_plan_waiting(config, active_sessions, db=db)
-    except Exception:
-        log.exception("Plan-waiting notification failed (non-fatal)")
-
-    # Detect copy mode, attempt auto-recovery, and escalate stuck incidents.
-    try:
-        await handle_copy_mode_recovery(config, active_sessions)
-    except Exception:
-        log.exception("Copy-mode recovery failed (non-fatal)")
-
-    # Collect runtime-native telemetry into agent_activity.
-    try:
-        await collect_active_session_telemetry(
-            config=config,
-            db=db,
-            active_sessions=active_sessions,
-        )
-    except Exception:
-        log.exception("Telemetry collection failed (non-fatal)")
-
-    # Reconcile out-of-band session churn to live Socket.IO subscribers.
-    try:
-        await emit_sessions_update(
-            get_sio(),
-            config,
-            StateService(
-                state_dir=config.agent_state.state_dir,
-                stale_threshold=config.agent_state.stale_threshold_seconds,
+        # Drain deferred comments/messages for sessions that are now idle.
+        try:
+            queue_summary = await drain_message_queue(
+                config=config,
                 db=db,
-            ),
-            TmuxService(),
-            only_if_changed=True,
-        )
-    except Exception:
-        log.exception("Session subscription reconciliation failed (non-fatal)")
+                gh=gh,
+                active_sessions=active_sessions,
+            )
+            if queue_summary:
+                log.info("Monitor queue drain: %s", queue_summary)
+        except Exception:
+            log.exception("Queue drain during monitor failed (non-fatal)")
 
-    # Drain deferred comments/messages for sessions that are now idle.
-    try:
-        queue_summary = await drain_message_queue(
-            config=config,
-            db=db,
-            gh=gh,
-            active_sessions=active_sessions,
-        )
-        if queue_summary:
-            log.info("Monitor queue drain: %s", queue_summary)
-    except Exception:
-        log.exception("Queue drain during monitor failed (non-fatal)")
-
-    # State-aware delivery loop
-    return await deliver_pending_issues(config, active_sessions, db, gh)
+        if gh is None:
+            return {}
+        return await deliver_pending_issues(config, active_sessions, db, gh)

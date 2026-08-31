@@ -1,4 +1,4 @@
-"""Agent state tracking service and monitoring coordination service — LifecycleAware wrappers."""
+"""Agent state tracking service — LifecycleAware wrapper."""
 
 from __future__ import annotations
 
@@ -7,12 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.agents._heartbeat import (
-    load_schedules as _load_schedules,
-)
-from agent_backbone.services.agents._heartbeat import (
-    save_schedules as _save_schedules,
-)
 from agent_backbone.services.agents._inference import get_agent_state as _get_agent_state
 from agent_backbone.services.agents.models import AgentState, StateSnapshot
 
@@ -76,7 +70,7 @@ class StateService:
 
     def __init__(
         self,
-        state_dir: str = "~/.claude/state",
+        state_dir: str | Path,
         stale_threshold: int = 300,
         db: BackboneDB | None = None,
     ) -> None:
@@ -84,7 +78,12 @@ class StateService:
         self._stale_threshold = stale_threshold
         self._db = db
 
+    @property
+    def state_dir(self) -> Path:
+        return self._state_dir
+
     async def start(self) -> None:
+        self._state_dir.mkdir(parents=True, exist_ok=True)
         log.info("State service started: state_dir=%s, db=%s", self._state_dir, bool(self._db))
 
     async def stop(self) -> None:
@@ -94,7 +93,7 @@ class StateService:
         return {
             "healthy": self._state_dir.is_dir(),
             "service": "state",
-            "state_dir_exists": self._state_dir.is_dir(),
+            "state_dir": str(self._state_dir),
         }
 
     # --- DI surface for route handlers ---
@@ -129,32 +128,3 @@ class StateService:
     def read_state(self, session: str) -> StateSnapshot | None:
         """Read push-based state file for a session."""
         return read_state_file(self._state_dir, session)
-
-
-class MonitoringService:
-    """Monitoring coordination service implementing LifecycleAware."""
-
-    def __init__(self, schedule_path: Path | None = None) -> None:
-        self._schedule_path = schedule_path
-
-    async def start(self) -> None:
-        """Start monitoring service."""
-        log.info("Monitoring service started")
-
-    async def stop(self) -> None:
-        """Stop monitoring service."""
-        pass
-
-    async def health_check(self) -> dict:
-        """Check monitoring service health."""
-        return {"healthy": True, "service": "monitoring"}
-
-    # --- DI surface for route handlers ---
-
-    def load_schedules(self) -> dict:
-        """Load heartbeat schedules from JSON file."""
-        return _load_schedules(self._schedule_path)
-
-    def save_schedules(self, schedules: dict) -> None:
-        """Save heartbeat schedules to JSON file."""
-        _save_schedules(schedules, self._schedule_path)

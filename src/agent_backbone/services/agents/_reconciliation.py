@@ -14,11 +14,7 @@ log = logging.getLogger(__name__)
 
 
 async def reconcile_startup_states(config: BackboneConfig, db: BackboneDB) -> None:
-    """Sync disk agent states to DB and fire plan-waiting notifications.
-
-    Called once from lifespan after init_flow_services(). On a fresh startup the
-    plan_notify_dedup dict is empty, so any plan_waiting agents get notified
-    immediately without waiting for the first monitor cycle (60s).
+    """Sync agent states to DB and fire plan-waiting notifications on startup.
 
     All errors are non-fatal — a reconciliation failure must not block startup.
     """
@@ -32,30 +28,25 @@ async def reconcile_startup_states(config: BackboneConfig, db: BackboneDB) -> No
         log.info("Startup reconciliation: no active sessions")
         return
 
-    state_path = config.agent_state.state_path
+    state_path = config.state_dir
     stale_threshold = config.agent_state.stale_threshold_seconds
 
-    for entity, session_name in config.registry.tracked_sessions.items():
-        if not session_name or session_name not in active_sessions:
+    for name in config.agents.names:
+        if name not in active_sessions:
             continue
-
         try:
-            snapshot = await get_agent_state(state_path, session_name, stale_threshold)
+            snapshot = await get_agent_state(state_path, name, stale_threshold)
             await db.set_agent_state(
-                session_name=session_name,
+                session_name=name,
                 state=snapshot.state.value,
                 current_issue=snapshot.current_issue,
-                entity=entity,
+                entity=name,
                 plan_file=snapshot.plan_file,
                 plan_title=snapshot.plan_title,
             )
         except Exception:
-            log.exception(
-                "Startup reconciliation: failed to sync state for %s (non-fatal)",
-                entity,
-            )
+            log.exception("Startup reconciliation: failed to sync state for %s", name)
 
-    # Fire plan-waiting notifications for any agents in plan_waiting state
     try:
         await check_plan_waiting(config, active_sessions, db=db)
     except Exception:

@@ -11,19 +11,21 @@ from agent_backbone.services.agents.models import AgentState
 
 def find_outgoing_comment(
     issue_number: int,
-    action_log: str = "~/.claude/state/github-actions.jsonl",
+    action_log: str | Path | None = None,
     max_lines: int = 50,
     recency_seconds: float = 30.0,
 ) -> str | None:
     """Check if a comment on this issue was recently made by one of our agents.
 
-    Reads the tail of the JSONL action log written by PostToolUse hooks.
+    Reads the tail of the JSONL action log written by agent hooks.
     Matches by issue number + recency window (no comment_id in the log).
     Returns the originating session name, or None if not found.
     Graceful: returns None if the log file doesn't exist (hooks not yet set up).
 
     Log format: {"ts": 1234567890.0, "session": "ike", "action": "comment", "issue": 42}
     """
+    if action_log is None:
+        return None
     log_path = Path(action_log).expanduser()
     if not log_path.exists():
         return None
@@ -48,7 +50,7 @@ def find_outgoing_comment(
 def has_commented_on_issue(
     issue_number: int,
     session: str,
-    action_log: str = "~/.claude/state/github-actions.jsonl",
+    action_log: str | Path | None = None,
     max_lines: int = 200,
 ) -> bool:
     """Check if a session has ever commented on this issue (per action log).
@@ -56,6 +58,8 @@ def has_commented_on_issue(
     Unlike find_outgoing_comment(), this has NO recency window.
     Any comment at any time counts as acknowledgment.
     """
+    if action_log is None:
+        return False
     log_path = Path(action_log).expanduser()
     if not log_path.exists():
         return False
