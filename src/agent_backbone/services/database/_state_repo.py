@@ -37,21 +37,25 @@ async def set_agent_state(
     ts: str | None = None,
     plan_file: str | None = None,
     plan_title: str | None = None,
+    reason: str | None = None,
+    current_repo: str | None = None,
 ) -> None:
     """Upsert agent state."""
     now = _now_iso()
     await conn.execute(
         text(
             """INSERT INTO agent_states
-               (session_name, state, current_issue,
+               (session_name, state, reason, current_issue, current_repo,
                 last_activity, started_at, updated_at,
                 entity, context, ts, plan_file, plan_title)
-               VALUES (:session_name, :state, :current_issue,
+               VALUES (:session_name, :state, :reason, :current_issue, :current_repo,
                        :last_activity, :started_at, :updated_at,
                        :entity, :context, :ts, :plan_file, :plan_title)
                ON CONFLICT(session_name) DO UPDATE SET
                  state = excluded.state,
+                 reason = excluded.reason,
                  current_issue = excluded.current_issue,
+                 current_repo = excluded.current_repo,
                  last_activity = COALESCE(
                      excluded.last_activity,
                      agent_states.last_activity),
@@ -78,7 +82,9 @@ async def set_agent_state(
         {
             "session_name": session_name,
             "state": state,
+            "reason": reason,
             "current_issue": current_issue,
+            "current_repo": current_repo,
             "last_activity": last_activity,
             "started_at": started_at,
             "updated_at": now,

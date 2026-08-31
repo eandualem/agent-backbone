@@ -16,16 +16,27 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from agent_backbone.services.database import _delivery_repo, _queue_repo, _state_repo
+from agent_backbone.services.database import (
+    _agents_repo,
+    _delivery_repo,
+    _events_repo,
+    _queue_repo,
+    _settings_repo,
+    _state_repo,
+)
 from agent_backbone.services.database.base import Base
 from agent_backbone.services.database.interface import build_engine
 from agent_backbone.services.database.models import (  # noqa: F401
     AcknowledgmentORM,
+    AgentORM,
     AgentStateORM,
+    AgentWatchORM,
     DedupLogORM,
     DeliveryORM,
+    EventORM,
     IssueDependencyORM,
     MessageQueueORM,
+    SettingORM,
 )
 
 metadata = Base.metadata
@@ -157,12 +168,16 @@ class BackboneDB:
 
     async def record_delivery(
         self,
-        issue_number: int,
+        issue_number: int | None,
         target_entity: str,
         session_name: str,
         outcome: str,
         flow_name: str = "",
         flow_run_id: str = "",
+        *,
+        repo: str = "",
+        kind: str = "issue",
+        preview: str = "",
     ) -> int:
         """Record a delivery attempt. Returns the row ID."""
         async with self._engine.begin() as conn:
@@ -174,6 +189,9 @@ class BackboneDB:
                 outcome,
                 flow_name,
                 flow_run_id,
+                repo=repo,
+                kind=kind,
+                preview=preview,
             )
 
     async def claim_delivery_attempt(
@@ -182,6 +200,9 @@ class BackboneDB:
         target_entity: str,
         session_name: str,
         flow_name: str,
+        *,
+        repo: str = "",
+        preview: str = "",
     ) -> int | None:
         """Reserve an issue delivery attempt before sending."""
         async with self._engine.begin() as conn:
@@ -191,6 +212,8 @@ class BackboneDB:
                 target_entity,
                 session_name,
                 flow_name,
+                repo=repo,
+                preview=preview,
             )
 
     async def finalize_delivery_attempt(self, delivery_id: int, outcome: str) -> None:
@@ -210,6 +233,9 @@ class BackboneDB:
         session_name: str | None = None,
         outcome: str | None = None,
         limit: int = 50,
+        *,
+        repo: str | None = None,
+        kind: str | None = None,
     ) -> list[dict]:
         """Query delivery records with optional filters."""
         async with self._engine.begin() as conn:
@@ -220,6 +246,8 @@ class BackboneDB:
                 session_name,
                 outcome,
                 limit,
+                repo=repo,
+                kind=kind,
             )
 
     async def get_failed_deliveries(self, limit: int = 50) -> list[dict]:
@@ -299,6 +327,8 @@ class BackboneDB:
         ts: str | None = None,
         plan_file: str | None = None,
         plan_title: str | None = None,
+        reason: str | None = None,
+        current_repo: str | None = None,
     ) -> None:
         """Upsert agent state."""
         async with self._engine.begin() as conn:
@@ -314,6 +344,8 @@ class BackboneDB:
                 ts=ts,
                 plan_file=plan_file,
                 plan_title=plan_title,
+                reason=reason,
+                current_repo=current_repo,
             )
 
     async def get_all_agent_states(self) -> list[dict]:
@@ -323,37 +355,45 @@ class BackboneDB:
 
     # --- Issue dependencies (delegates to _queue_repo) ---
 
-    async def upsert_dependency(self, parent: int, sub: int) -> None:
+    async def upsert_dependency(self, parent: int, sub: int, *, repo: str = "") -> None:
         """Record a parent->sub-issue dependency."""
         async with self._engine.begin() as conn:
-            await _queue_repo.upsert_dependency(conn, parent, sub)
+            await _queue_repo.upsert_dependency(conn, parent, sub, repo=repo)
 
-    async def get_parents(self, sub_issue_number: int) -> list[int]:
+    async def get_parents(self, sub_issue_number: int, *, repo: str = "") -> list[int]:
         """Get parent issue numbers for a given sub-issue."""
         async with self._engine.begin() as conn:
-            return await _queue_repo.get_parents(conn, sub_issue_number)
+            return await _queue_repo.get_parents(conn, sub_issue_number, repo=repo)
 
-    async def sync_dependencies(self, parent: int, sub_issues: list[int]) -> None:
+    async def sync_dependencies(
+        self, parent: int, sub_issues: list[int], *, repo: str = ""
+    ) -> None:
         """Sync the dependency table for a parent."""
         async with self._engine.begin() as conn:
-            await _queue_repo.sync_dependencies(conn, parent, sub_issues)
+            await _queue_repo.sync_dependencies(conn, parent, sub_issues, repo=repo)
 
     # --- Acknowledgments (delegates to _queue_repo) ---
 
-    async def record_acknowledgment(self, issue_number: int, target_entity: str) -> None:
+    async def record_acknowledgment(
+        self, issue_number: int, target_entity: str, *, repo: str = ""
+    ) -> None:
         """Record that an entity has acknowledged an issue."""
         async with self._engine.begin() as conn:
-            await _queue_repo.record_acknowledgment(conn, issue_number, target_entity)
+            await _queue_repo.record_acknowledgment(conn, issue_number, target_entity, repo=repo)
 
-    async def is_acknowledged(self, issue_number: int, target_entity: str) -> bool:
+    async def is_acknowledged(
+        self, issue_number: int, target_entity: str, *, repo: str = ""
+    ) -> bool:
         """Check if entity has acknowledged this issue."""
         async with self._engine.begin() as conn:
-            return await _queue_repo.is_acknowledged(conn, issue_number, target_entity)
+            return await _queue_repo.is_acknowledged(conn, issue_number, target_entity, repo=repo)
 
-    async def clear_acknowledgment(self, issue_number: int, target_entity: str) -> None:
+    async def clear_acknowledgment(
+        self, issue_number: int, target_entity: str, *, repo: str = ""
+    ) -> None:
         """Clear acknowledgment for entity on issue."""
         async with self._engine.begin() as conn:
-            await _queue_repo.clear_acknowledgment(conn, issue_number, target_entity)
+            await _queue_repo.clear_acknowledgment(conn, issue_number, target_entity, repo=repo)
 
     # --- Message queue (delegates to _queue_repo) ---
 
@@ -365,6 +405,8 @@ class BackboneDB:
         target_entity: str | None = None,
         delivery_kind: str = "issue",
         flow_name: str = "",
+        *,
+        repo: str = "",
     ) -> int:
         """Enqueue a message for later delivery. Returns the row ID."""
         async with self._engine.begin() as conn:
@@ -376,6 +418,7 @@ class BackboneDB:
                 target_entity,
                 delivery_kind,
                 flow_name,
+                repo=repo,
             )
 
     async def dequeue_messages(
@@ -407,10 +450,10 @@ class BackboneDB:
         async with self._engine.begin() as conn:
             await _queue_repo.mark_message_delivered(conn, message_id)
 
-    async def purge_pending_for_issue(self, issue_number: int) -> int:
+    async def purge_pending_for_issue(self, issue_number: int, *, repo: str = "") -> int:
         """Mark all pending queue messages for an issue as delivered."""
         async with self._engine.begin() as conn:
-            return await _queue_repo.purge_pending_for_issue(conn, issue_number)
+            return await _queue_repo.purge_pending_for_issue(conn, issue_number, repo=repo)
 
     async def expire_stale_pending(self, max_age_minutes: int = 30) -> int:
         """Expire pending queue messages older than max_age_minutes."""
@@ -426,3 +469,69 @@ class BackboneDB:
             )
             row = result.fetchone()
             return dict(row._mapping) if row else None
+
+    # --- Settings (delegates to _settings_repo) ---
+
+    async def get_all_settings(self) -> dict[str, object]:
+        async with self._engine.begin() as conn:
+            return await _settings_repo.get_all_settings(conn)
+
+    async def set_setting(self, key: str, value: object) -> None:
+        async with self._engine.begin() as conn:
+            await _settings_repo.set_setting(conn, key, value)
+
+    async def delete_setting(self, key: str) -> bool:
+        async with self._engine.begin() as conn:
+            return await _settings_repo.delete_setting(conn, key)
+
+    # --- Agents (delegates to _agents_repo) ---
+
+    async def list_agents(self) -> list[dict]:
+        async with self._engine.begin() as conn:
+            return await _agents_repo.list_agents(conn)
+
+    async def get_agent(self, name: str) -> dict | None:
+        async with self._engine.begin() as conn:
+            return await _agents_repo.get_agent(conn, name)
+
+    async def upsert_agent(self, name: str, **fields) -> None:
+        async with self._engine.begin() as conn:
+            await _agents_repo.upsert_agent(conn, name, **fields)
+
+    async def touch_agent_started(self, name: str) -> None:
+        async with self._engine.begin() as conn:
+            await _agents_repo.touch_agent_started(conn, name)
+
+    async def delete_agent(self, name: str) -> bool:
+        async with self._engine.begin() as conn:
+            return await _agents_repo.delete_agent(conn, name)
+
+    async def add_watch(self, name: str, repo: str) -> None:
+        async with self._engine.begin() as conn:
+            await _agents_repo.add_watch(conn, name, repo)
+
+    async def remove_watch(self, name: str, repo: str) -> bool:
+        async with self._engine.begin() as conn:
+            return await _agents_repo.remove_watch(conn, name, repo)
+
+    # --- Events (delegates to _events_repo) ---
+
+    async def record_event(self, **fields) -> int | None:
+        async with self._engine.begin() as conn:
+            return await _events_repo.record_event(conn, **fields)
+
+    async def mark_event_processed(self, event_id: int, outcome: str) -> None:
+        async with self._engine.begin() as conn:
+            await _events_repo.mark_event_processed(conn, event_id, outcome)
+
+    async def query_events(self, *, repo: str | None = None, limit: int = 50) -> list[dict]:
+        async with self._engine.begin() as conn:
+            return await _events_repo.query_events(conn, repo=repo, limit=limit)
+
+    async def last_event_time_by_repo(self) -> dict[str, str]:
+        async with self._engine.begin() as conn:
+            return await _events_repo.last_event_time_by_repo(conn)
+
+    async def prune_events(self, retention_days: int = 30) -> int:
+        async with self._engine.begin() as conn:
+            return await _events_repo.prune_events(conn, retention_days)

@@ -7,16 +7,22 @@ from agent_backbone.services.database.exceptions import DatabaseError, Persisten
 from agent_backbone.services.database.interface import DatabaseService, build_engine
 from agent_backbone.services.database.models import (
     AcknowledgmentORM,
+    AgentORM,
     AgentStateORM,
+    AgentWatchORM,
     DedupLogORM,
     DeliveryORM,
+    EventORM,
     IssueDependencyORM,
     MessageQueueORM,
+    SettingORM,
 )
 
 __all__ = [
     "AcknowledgmentORM",
+    "AgentORM",
     "AgentStateORM",
+    "AgentWatchORM",
     "BackboneDB",
     "Base",
     "DatabaseConfig",
@@ -24,8 +30,10 @@ __all__ = [
     "DatabaseService",
     "DedupLogORM",
     "DeliveryORM",
+    "EventORM",
     "IssueDependencyORM",
     "MessageQueueORM",
     "PersistenceError",
+    "SettingORM",
     "build_engine",
 ]

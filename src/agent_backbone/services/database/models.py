@@ -1,4 +1,11 @@
-"""ORM models for all backbone database tables."""
+"""ORM models for all backbone database tables.
+
+The database is the single source of truth for configuration (``settings``),
+the known agents (``agents``, ``agent_watches``), inbound events, deliveries,
+acknowledgments, the message queue and agent state. Issue-keyed tables carry
+the repository (``owner/name``) so several repositories can share issue
+numbers.
+"""
 
 from __future__ import annotations
 
@@ -8,32 +15,102 @@ from sqlalchemy.orm import Mapped, mapped_column
 from agent_backbone.services.database.base import Base
 
 
+class SettingORM(Base):
+    """Configuration values (JSON-encoded) keyed by dotted name."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class AgentORM(Base):
+    """A known agent: discovered on first start or registered through the CLI/API."""
+
+    __tablename__ = "agents"
+
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    dir: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime: Mapped[str] = mapped_column(Text, nullable=False, server_default="claude")
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    tags: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    env: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+    last_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AgentWatchORM(Base):
+    """Repositories an agent watches (informational notifications + for: routing)."""
+
+    __tablename__ = "agent_watches"
+
+    agent_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    repo: Mapped[str] = mapped_column(Text, primary_key=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class EventORM(Base):
+    """Every inbound event (webhook, poll, telegram, api) before/after routing."""
+
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    delivery_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sender: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    received_at: Mapped[str] = mapped_column(Text, nullable=False)
+    processed_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+
+    __table_args__ = (
+        Index("uq_events_delivery_id", "delivery_id", unique=True),
+        Index("idx_events_received", "received_at"),
+        Index("idx_events_repo", "repo"),
+    )
+
+
 class DeliveryORM(Base):
-    """Delivery tracking records."""
+    """Delivery tracking records (issue, comment, PR and direct messages)."""
 
     __tablename__ = "deliveries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="issue")
+    repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     target_entity: Mapped[str] = mapped_column(Text, nullable=False)
     session_name: Mapped[str] = mapped_column(Text, nullable=False)
     outcome: Mapped[str] = mapped_column(Text, nullable=False)
     flow_name: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     flow_run_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    preview: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
     __table_args__ = (
-        Index("idx_deliveries_issue", "issue_number"),
+        Index("idx_deliveries_issue", "repo", "issue_number"),
         Index("idx_deliveries_entity", "target_entity"),
         Index("idx_deliveries_outcome", "outcome"),
         Index("idx_deliveries_created", "created_at"),
         Index(
             "uq_deliveries_active_owner",
+            "repo",
             "issue_number",
             "session_name",
             unique=True,
-            postgresql_where=text("outcome IN ('attempting','delivered','retried')"),
-            sqlite_where=text("outcome IN ('attempting','delivered','retried')"),
+            postgresql_where=text(
+                "issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+            ),
+            sqlite_where=text(
+                "issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+            ),
         ),
     )
 
@@ -54,7 +131,9 @@ class AgentStateORM(Base):
 
     session_name: Mapped[str] = mapped_column(Text, primary_key=True)
     state: Mapped[str] = mapped_column(Text, nullable=False, server_default="unknown")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_issue: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    current_repo: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_activity: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
@@ -66,22 +145,24 @@ class AgentStateORM(Base):
 
 
 class IssueDependencyORM(Base):
-    """Parent/sub-issue dependency tracking."""
+    """Parent/sub-issue dependency tracking (per repository)."""
 
     __tablename__ = "issue_dependencies"
 
+    repo: Mapped[str] = mapped_column(Text, primary_key=True, server_default="")
     parent_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     sub_issue_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
 
-    __table_args__ = (Index("idx_deps_sub", "sub_issue_number"),)
+    __table_args__ = (Index("idx_deps_sub", "repo", "sub_issue_number"),)
 
 
 class AcknowledgmentORM(Base):
-    """Issue acknowledgment tracking."""
+    """Issue acknowledgment tracking (per repository)."""
 
     __tablename__ = "acknowledgments"
 
+    repo: Mapped[str] = mapped_column(Text, primary_key=True, server_default="")
     issue_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     target_entity: Mapped[str] = mapped_column(Text, primary_key=True)
     acknowledged_at: Mapped[str] = mapped_column(Text, nullable=False)
@@ -95,6 +176,7 @@ class MessageQueueORM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_name: Mapped[str] = mapped_column(Text, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
+    repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     target_entity: Mapped[str | None] = mapped_column(Text, nullable=True)
     delivery_kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="issue")
@@ -117,6 +199,7 @@ class MessageQueueORM(Base):
         Index(
             "uq_mq_issue_dedup",
             "session_name",
+            "repo",
             "issue_number",
             unique=True,
             postgresql_where=text(
@@ -131,6 +214,7 @@ class MessageQueueORM(Base):
         Index(
             "uq_mq_comment_dedup",
             "session_name",
+            "repo",
             "issue_number",
             "content_hash",
             unique=True,

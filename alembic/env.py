@@ -17,11 +17,15 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from agent_backbone.services.database.base import Base
 from agent_backbone.services.database.models import (  # noqa: F401
     AcknowledgmentORM,
+    AgentORM,
     AgentStateORM,
+    AgentWatchORM,
     DedupLogORM,
     DeliveryORM,
+    EventORM,
     IssueDependencyORM,
     MessageQueueORM,
+    SettingORM,
 )
 from alembic import context
 
@@ -31,9 +35,9 @@ target_metadata = metadata
 config = context.config
 
 if config.attributes.get("connection") is None and not config.get_main_option("sqlalchemy.url"):
-    from agent_backbone.config import BackboneConfig
+    from agent_backbone.config import bootstrap_config
 
-    config.set_main_option("sqlalchemy.url", BackboneConfig.load().database_url)
+    config.set_main_option("sqlalchemy.url", bootstrap_config().database_url)
 
 
 def run_migrations_offline() -> None:

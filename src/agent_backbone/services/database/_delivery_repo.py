@@ -1,4 +1,9 @@
-"""Delivery tracking repository."""
+"""Delivery tracking repository.
+
+Every delivery attempt — issue, comment, pull request, direct message,
+watch notification — is recorded with its ``kind``. Issue-keyed rows carry
+the repository so several repositories may share issue numbers.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,22 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+RETRYABLE_OUTCOMES = (
+    "offline",
+    "delivery_failed",
+    "agent_working",
+    "waiting_for_human",
+    "human_typing",
+    "settling",
+    # legacy names kept for rows written by earlier versions
+    "deferred",
+    "user_interacting",
+    "plan_waiting",
+    "permission_waiting",
+    "grace_period",
+    "copy_mode",
+)
+
 
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -14,30 +35,37 @@ def _now_iso() -> str:
 
 async def record_delivery(
     conn: AsyncConnection,
-    issue_number: int,
+    issue_number: int | None,
     target_entity: str,
     session_name: str,
     outcome: str,
     flow_name: str = "",
     flow_run_id: str = "",
+    *,
+    repo: str = "",
+    kind: str = "issue",
+    preview: str = "",
 ) -> int:
     """Record a delivery attempt. Returns the row ID."""
     result = await conn.execute(
         text(
             """INSERT INTO deliveries
-               (issue_number, target_entity, session_name,
-                outcome, flow_name, flow_run_id, created_at)
-               VALUES (:issue_number, :target_entity, :session_name,
-                       :outcome, :flow_name, :flow_run_id, :created_at)
+               (kind, repo, issue_number, target_entity, session_name,
+                outcome, flow_name, flow_run_id, preview, created_at)
+               VALUES (:kind, :repo, :issue_number, :target_entity, :session_name,
+                       :outcome, :flow_name, :flow_run_id, :preview, :created_at)
                RETURNING id"""
         ),
         {
+            "kind": kind,
+            "repo": repo,
             "issue_number": issue_number,
             "target_entity": target_entity,
             "session_name": session_name,
             "outcome": outcome,
             "flow_name": flow_name,
             "flow_run_id": flow_run_id,
+            "preview": preview[:200],
             "created_at": _now_iso(),
         },
     )
@@ -50,23 +78,31 @@ async def claim_delivery_attempt(
     target_entity: str,
     session_name: str,
     flow_name: str,
+    *,
+    repo: str = "",
+    preview: str = "",
 ) -> int | None:
     """Reserve an issue delivery slot before sending to avoid duplicate sends."""
     result = await conn.execute(
         text(
             """INSERT INTO deliveries
-               (issue_number, target_entity, session_name, outcome, flow_name, created_at)
-               VALUES (:issue_number, :target_entity, :session_name, 'attempting', :flow_name, :now)
-               ON CONFLICT (issue_number, session_name)
-               WHERE outcome IN ('attempting','delivered','retried')
+               (kind, repo, issue_number, target_entity, session_name, outcome,
+                flow_name, preview, created_at)
+               VALUES ('issue', :repo, :issue_number, :target_entity, :session_name,
+                       'attempting', :flow_name, :preview, :now)
+               ON CONFLICT (repo, issue_number, session_name)
+               WHERE issue_number IS NOT NULL
+                 AND outcome IN ('attempting','delivered','retried')
                DO NOTHING
                RETURNING id"""
         ),
         {
+            "repo": repo,
             "issue_number": issue_number,
             "target_entity": target_entity,
             "session_name": session_name,
             "flow_name": flow_name,
+            "preview": preview[:200],
             "now": _now_iso(),
         },
     )
@@ -114,6 +150,9 @@ async def query_deliveries(
     session_name: str | None = None,
     outcome: str | None = None,
     limit: int = 50,
+    *,
+    repo: str | None = None,
+    kind: str | None = None,
 ) -> list[dict]:
     """Query delivery records with optional filters."""
     conditions: list[str] = []
@@ -121,6 +160,12 @@ async def query_deliveries(
     if issue_number is not None:
         conditions.append("issue_number = :issue_number")
         params["issue_number"] = issue_number
+    if repo is not None:
+        conditions.append("repo = :repo")
+        params["repo"] = repo
+    if kind is not None:
+        conditions.append("kind = :kind")
+        params["kind"] = kind
     if target_entity is not None:
         conditions.append("target_entity = :target_entity")
         params["target_entity"] = target_entity
@@ -132,40 +177,39 @@ async def query_deliveries(
         params["outcome"] = outcome
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    sql = f"SELECT * FROM deliveries {where} ORDER BY created_at DESC LIMIT :lim"
+    sql = f"SELECT * FROM deliveries {where} ORDER BY created_at DESC, id DESC LIMIT :lim"
     params["lim"] = limit
 
     result = await conn.execute(text(sql), params)
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return [dict(row._mapping) for row in result.fetchall()]
 
 
 async def get_failed_deliveries(
     conn: AsyncConnection,
     limit: int = 50,
 ) -> list[dict]:
-    """Get deliveries with failed outcomes for retry."""
+    """Issue deliveries whose latest outcome is retryable (no later success)."""
+    placeholders = ",".join(f"'{o}'" for o in RETRYABLE_OUTCOMES)
     result = await conn.execute(
         text(
-            """SELECT d.* FROM deliveries d
-               WHERE d.outcome IN (
-                   'offline', 'delivery_failed', 'deferred',
-                   'copy_mode', 'user_interacting', 'unknown_state',
-                   'agent_working', 'plan_waiting', 'permission_waiting', 'grace_period'
-               )
+            f"""SELECT d.* FROM deliveries d
+               WHERE d.kind = 'issue'
+                 AND d.issue_number IS NOT NULL
+                 AND d.outcome IN ({placeholders})
                  AND NOT EXISTS (
                    SELECT 1 FROM deliveries d2
-                   WHERE d2.issue_number = d.issue_number
+                   WHERE d2.kind = 'issue'
+                     AND d2.repo = d.repo
+                     AND d2.issue_number = d.issue_number
                      AND d2.target_entity = d.target_entity
-                     AND (d2.outcome LIKE '%delivered' OR d2.outcome LIKE '%retried')
+                     AND d2.outcome IN ('delivered', 'retried')
                      AND d2.created_at > d.created_at
                  )
                ORDER BY d.created_at ASC LIMIT :lim"""
         ),
         {"lim": limit},
     )
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return [dict(row._mapping) for row in result.fetchall()]
 
 
 async def prune_old_deliveries(
@@ -188,5 +232,4 @@ async def get_delivery_stats(
     result = await conn.execute(
         text("SELECT outcome, COUNT(*) as cnt FROM deliveries GROUP BY outcome")
     )
-    rows = result.fetchall()
-    return [dict(row._mapping) for row in rows]
+    return [dict(row._mapping) for row in result.fetchall()]
