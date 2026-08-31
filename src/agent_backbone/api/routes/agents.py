@@ -44,6 +44,7 @@ from agent_backbone.services.infrastructure._agents import (
     RUNTIME_DISPLAY_NAMES,
     build_command,
     launch_environment,
+    pre_trust_directory,
     runtime_available,
     wait_until_ready,
 )
@@ -232,6 +233,8 @@ async def _start(
             ready="not_waited",
         )
 
+    if config.agents_section.pre_trust and runtime == "claude":
+        pre_trust_directory(spec.path)
     command = build_command(
         runtime,
         model=model,

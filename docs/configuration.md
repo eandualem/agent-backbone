@@ -42,6 +42,7 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | Key | Default | Meaning |
 |---|---|---|
 | `agents.default_runtime` | `claude` | Runtime used by `agent start` when none is given |
+| `agents.pre_trust` | `true` | Mark an agent's directory as trusted in Claude Code before starting it, so the folder-trust dialog never blocks an unattended start. Starting an agent in a directory is treated as the trust decision; set `false` to answer the dialog yourself |
 
 ### `github.*`
 

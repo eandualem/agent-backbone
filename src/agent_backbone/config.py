@@ -43,6 +43,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "backbone.cors_origins": [],
     "backbone.max_delivery_ids": 100,
     "agents.default_runtime": "claude",
+    "agents.pre_trust": True,
     "github.intake": "auto",  # auto | webhook | poll | off
     "github.poll_interval_seconds": 60,
     "github.backfill_on_start": True,
@@ -84,6 +85,7 @@ SETTINGS_HELP: dict[str, str] = {
     "backbone.session_name": "tmux session used by `backbone up --detach`",
     "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",
     "agents.default_runtime": "Runtime used by `agent start` when none is given",
+    "agents.pre_trust": "Mark an agent's directory as trusted in Claude Code before starting it",
     "github.intake": "auto | webhook | poll | off — how GitHub events arrive",
     "github.poll_interval_seconds": "Poll frequency when intake resolves to poll",
     "github.backfill_on_start": "Fetch events missed while the backbone was down",
@@ -288,6 +290,7 @@ class BackboneSection:
 @dataclass(frozen=True)
 class AgentsSection:
     default_runtime: str = "claude"
+    pre_trust: bool = True
 
 
 @dataclass(frozen=True)
@@ -516,7 +519,10 @@ def build_config(
             max_delivery_ids=s["backbone.max_delivery_ids"],
         ),
         agents=agents,
-        agents_section=AgentsSection(default_runtime=s["agents.default_runtime"]),
+        agents_section=AgentsSection(
+            default_runtime=s["agents.default_runtime"],
+            pre_trust=s["agents.pre_trust"],
+        ),
         github=GitHubConfig(
             intake=s["github.intake"],
             poll_interval_seconds=s["github.poll_interval_seconds"],

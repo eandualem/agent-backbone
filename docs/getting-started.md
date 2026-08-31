@@ -102,11 +102,13 @@ backbone agent start --model opus                  # cheaper model, same repo
 backbone agent start --runtime codex --model gpt-5.2
 ```
 
-> **First launch in a new directory**: Claude Code asks whether you trust
-> the folder. `start` reports `started, waiting for you` with the question
-> shown; answer it with `tmux attach -t app` (choose *Yes, I trust this
-> folder*, then `Ctrl-b d`). Claude remembers the answer for that directory
-> and the next `start` is instant.
+> **Folder trust**: Claude Code normally asks once per new directory
+> whether you trust it. The backbone answers this for you: starting an
+> agent in a directory is a deliberate act, so `agent start` records the
+> directory as trusted (the same record the dialog writes) before
+> launching. Set `backbone config set agents.pre_trust false` to keep the
+> interactive dialog — `start` then reports `started, waiting for you`
+> and you answer with `tmux attach -t <name>`.
 
 Useful right away:
 

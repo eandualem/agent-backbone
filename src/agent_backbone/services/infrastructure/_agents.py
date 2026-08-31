@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 import time
@@ -74,6 +75,37 @@ def runtime_available(runtime: str) -> bool:
         return False
     command = RUNTIME_COMMANDS[runtime]
     return command is None or resolve_command(command) is not None
+
+
+def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = None) -> bool:
+    """Mark a directory as trusted in Claude Code's per-project state.
+
+    Writes the same record the interactive folder-trust dialog writes
+    (``projects.<dir>.hasTrustDialogAccepted`` in ``~/.claude.json``), so a
+    backbone-started session reaches its prompt without a human attaching.
+    Starting an agent in a directory is a deliberate act by the owner or an
+    authorized agent — that decision replaces the dialog. The write is
+    best-effort: on any error the dialog simply appears as before.
+    """
+    path = str(Path(directory).expanduser().resolve())
+    config_file = claude_config or (Path.home() / ".claude.json")
+    try:
+        data = json.loads(config_file.read_text()) if config_file.is_file() else {}
+        if not isinstance(data, dict):
+            return False
+        projects = data.setdefault("projects", {})
+        entry = projects.setdefault(path, {})
+        if entry.get("hasTrustDialogAccepted") is True:
+            return True
+        entry["hasTrustDialogAccepted"] = True
+        tmp = config_file.with_suffix(".json.backbone-tmp")
+        tmp.write_text(json.dumps(data, indent=2))
+        tmp.replace(config_file)
+        log.info("Pre-trusted %s for Claude Code", path)
+        return True
+    except (OSError, ValueError):
+        log.warning("Could not pre-trust %s (the trust dialog will appear)", path)
+        return False
 
 
 def hook_launch_args(
@@ -150,6 +182,7 @@ async def start_agent(
     resume: bool = False,
     state_dir: Path | str | None = None,
     data_dir: Path | str | None = None,
+    pre_trust: bool = False,
 ) -> bool:
     """Start a configured agent in its tmux session (idempotent)."""
     if await session_exists(spec.name):
@@ -162,6 +195,8 @@ async def start_agent(
 
     effective_runtime = runtime or spec.runtime
     effective_model = model if model is not None else spec.model
+    if pre_trust and effective_runtime == "claude":
+        pre_trust_directory(spec.path)
     try:
         command = build_command(
             effective_runtime,

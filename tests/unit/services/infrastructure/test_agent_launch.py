@@ -52,3 +52,53 @@ class TestBuildCommand:
 
     def test_shell_stays_none(self, tmp_path):
         assert build_command("shell", data_dir=tmp_path, state_dir=tmp_path) is None
+
+
+class TestPreTrust:
+    def test_writes_trust_record_preserving_existing_state(self, tmp_path):
+        from agent_backbone.services.infrastructure._agents import pre_trust_directory
+
+        config = tmp_path / "claude.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "theme": "dark",
+                    "projects": {"/existing": {"hasTrustDialogAccepted": True, "lastCost": 1}},
+                }
+            )
+        )
+        project = tmp_path / "proj"
+        project.mkdir()
+
+        assert pre_trust_directory(project, claude_config=config) is True
+
+        saved = json.loads(config.read_text())
+        assert saved["theme"] == "dark"
+        assert saved["projects"]["/existing"]["lastCost"] == 1
+        assert saved["projects"][str(project)]["hasTrustDialogAccepted"] is True
+
+    def test_creates_config_when_missing(self, tmp_path):
+        from agent_backbone.services.infrastructure._agents import pre_trust_directory
+
+        config = tmp_path / "claude.json"
+        assert pre_trust_directory(tmp_path / "p", claude_config=config) is True
+        saved = json.loads(config.read_text())
+        assert saved["projects"][str(tmp_path / "p")]["hasTrustDialogAccepted"] is True
+
+    def test_already_trusted_is_a_noop(self, tmp_path):
+        from agent_backbone.services.infrastructure._agents import pre_trust_directory
+
+        config = tmp_path / "claude.json"
+        project = tmp_path / "p"
+        assert pre_trust_directory(project, claude_config=config) is True
+        before = config.read_text()
+        assert pre_trust_directory(project, claude_config=config) is True
+        assert config.read_text() == before
+
+    def test_corrupt_config_fails_softly(self, tmp_path):
+        from agent_backbone.services.infrastructure._agents import pre_trust_directory
+
+        config = tmp_path / "claude.json"
+        config.write_text("{broken")
+        assert pre_trust_directory(tmp_path / "p", claude_config=config) is False
+        assert config.read_text() == "{broken"
