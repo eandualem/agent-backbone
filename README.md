@@ -1,127 +1,139 @@
-# Agent Backbone
+# agent-backbone
 
-Webhook processing pipeline and orchestration infrastructure for the multi-agent workspace. Receives GitHub webhook events from `eandualem/orchestration`, routes them to the right agent tmux sessions, manages delivery lifecycle (retry, dedup, close-then-next), and exposes a REST API with real-time streaming for a dashboard frontend.
+A local control plane for terminal AI agents — Claude Code, Codex, Gemini CLI, OpenCode, Aider.
 
-## Quick Start
+It starts and stops your agents, delivers messages to them **only when they're ready to receive one**, lets them talk to each other and to you, and coordinates multi-agent work through GitHub Issues. Reach it from the CLI, from Telegram, or from any HTTP/Socket.IO client.
+
+> **Status:** v2 is a ground-up cleanup of an internal tool and is pre-release. The core (delivery engine, runtime adapters, GitHub routing, Telegram) is tested; the docs and packaging are still being finished.
+
+## What it does
+
+- **Runs agents.** Each agent is a named tmux session running a CLI in a directory you choose. `backbone agent start reviewer`.
+- **Delivers safely.** A message is pasted into an agent's terminal only when the agent is idle — not while it is thinking, waiting for plan approval, waiting for a permission prompt, or while you are typing in that terminal. Otherwise it is queued durably and retried.
+- **Coordinates through GitHub Issues.** Label an issue `for:reviewer` and the reviewer agent gets it. When an agent closes an issue, it gets the next one in its queue. Comments are routed to the other participants. Agents acknowledge by commenting.
+- **Talks to you on Telegram.** `/tell reviewer fix the flaky test`, `/status`, plan-approval alerts, forum topics that map to agents.
+- **Feeds dashboards.** A small REST API plus a Socket.IO stream of agent state changes and (read-only) terminal output. It does not ship a dashboard; build your own on top.
+
+## Quick start
+
+Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/) (or pip), `tmux`, and at least one agent CLI on your PATH.
 
 ```bash
-# 1. Start PostgreSQL
-make db-up
+git clone https://github.com/eandualem/agent-backbone && cd agent-backbone
+uv sync                     # or: pip install -e .
 
-# 2. Run database migrations
-make db-upgrade
-
-# 3. Configure environment
-cp .env.example .env
-# Edit .env: set GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY_PATH,
-# GITHUB_APP_WEBHOOK_SECRET, TELEGRAM_TOKEN
-
-# 4. Install dependencies
-make install
-
-# 5. Start the gateway
-make dev
+uv run backbone init        # writes backbone.toml + .env (with a generated API key)
+$EDITOR backbone.toml       # add your agents under [agents.<name>]
+uv run backbone doctor      # checks tmux, runtimes, config, credentials
+uv run backbone up          # runs the API + scheduler (+ Telegram/GitHub if configured)
 ```
 
-## Architecture
+In another terminal:
 
-```
-GitHub webhook --> FastAPI (api/app.py) --> Prefect flows --> tmux / Jarvis
-                        |                        |
-                  LifecycleManager         services/_locator.py
-                  (ordered start/stop)     (service locator)
-                        |                        |
-                  14 services on           scheduled flows use
-                  app.state                locator getters
-                        |
-                  REST API  <-- Socket.IO (PTY terminals)
-                  SSE streaming    WebSocket attach-session
-                        |
-                  Telegram bot -- mobile control
-                        |
-                  PostgreSQL (port 5435) -- persistent state
+```bash
+uv run backbone agent start reviewer
+uv run backbone tell reviewer "review PR #12 and summarize the risks"
+uv run backbone status
 ```
 
-## Services
+No database server, no workflow engine, no tunnel: state lives in a SQLite file under `~/.local/share/agent-backbone/`.
 
-14 services under `src/agent_backbone/services/`, each following the pattern: `interface.py` + `factory.py` + `exceptions.py`.
+## Configuration
 
-| # | Service | Purpose |
-|---|---------|---------|
-| 1 | `database` | PostgreSQL engine lifecycle, connection pooling, ORM models, session factory |
-| 2 | `persistence` | Domain-specific query repositories (delivery, state, queue, dedup) |
-| 3 | `registry` | Entity/repo registry from JSON + filesystem discovery |
-| 4 | `github` | GitHub REST API client (httpx, async) |
-| 5 | `tmux` | Async tmux operations (sessions, panes, windows, key sending) |
-| 6 | `state` | Agent state tracking (push + pull), delivery decision matrix |
-| 7 | `notifications` | Message formatting templates |
-| 8 | `delivery` | Delivery orchestration, session intelligence, retry, dedup |
-| 9 | `dispatch` | GitHub event routing, issue/comment handling |
-| 10 | `monitoring` | Agent health monitoring, stall detection, escalation, heartbeats |
-| 11 | `telegram` | Bot with 12 commands, topic routing, workflow integration |
-| 12 | `onboarding` | Workspace repo discovery, status checks, automated setup |
-| 13 | `streaming` | Control mode, SSE broker, PTY management |
-| 14 | `workflows` | Workflow discovery and execution engine |
+Everything structural lives in one `backbone.toml` (found by walking up from the current directory, or at `~/.config/agent-backbone/backbone.toml`). Secrets live in `.env` next to it. See [`backbone.example.toml`](backbone.example.toml) for every option.
 
-## Project Structure
+```toml
+[agents.reviewer]
+dir = "~/code/my-app"
+runtime = "claude"          # claude | codex | gemini | opencode | aider | cursor | shell
+model = "claude-opus-5"
+repo = "me/my-app"          # issues opened in this repo route here automatically
 
+[agents.builder]
+dir = "~/code/my-app"
+runtime = "codex"
+
+[github]                    # optional
+repo = "me/my-app"          # coordination repo for for:<agent> issues
+
+[telegram]                  # optional
+allowed_chat_ids = [123456789]
 ```
-src/agent_backbone/
-  base/              # LifecycleAware protocol, LifecycleManager, exceptions
-  services/          # 14 service packages (see table above)
-  config.py          # BackboneConfig from TOML + env vars
-  settings.py        # Pydantic BaseSettings entry point
-  models.py          # Pydantic domain models
-api/
-  app.py             # FastAPI application factory, lifespan
-  routes/            # 18 route modules (webhook, agents, issues, plans, ...)
-  deps.py            # FastAPI dependency injection
-  auth.py            # API key authentication
-gateway/
-  server.py          # Legacy standalone gateway
-alembic/             # Database migrations
-tests/               # 952 tests across 47 files
-docs/
-  specifications/    # SDD behavioral contracts (31 specs)
-  protocols/         # REST API protocol
-```
+
+| Env var | Purpose |
+|---|---|
+| `BACKBONE_API_KEY` | Required. Bearer token for the API (generated by `backbone init`). |
+| `GITHUB_TOKEN` | A PAT (or `gh auth token`) for the GitHub connector. |
+| `GITHUB_WEBHOOK_SECRET` | Required only in webhook mode. |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | Optional alternative to a token. |
+| `TELEGRAM_TOKEN` | Bot token from @BotFather. |
+
+## GitHub integration
+
+Issues are the shared task ledger. Conventions:
+
+| Label | Meaning |
+|---|---|
+| `for:<agent>` | Deliver this issue to that agent's queue. |
+| `from:<agent>` | Who opened it (self-notifications are suppressed). |
+| `task` / `bug` / `question` / `spec-gap` / `optimization` | Type, used for queue ordering. |
+| `blocking` | Delivered even when the agent is mid-interaction. |
+
+Issues opened in a repository an agent owns (`repo = "owner/name"`) are routed to it without labels. Closing an issue delivers the next one in the agent's queue; a comment on an issue is delivered to the other participants.
+
+Getting events into the backbone, from simplest to most robust:
+
+1. **Webhook via the GitHub CLI** — no public URL: `gh webhook forward --repo=me/my-app --events=issues,issue_comment --url=http://localhost:7120/webhooks/github --secret=$GITHUB_WEBHOOK_SECRET`
+2. **Webhook via a tunnel** — a named [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) tunnel gives a stable hostname; point the repository webhook at `https://<host>/webhooks/github` with the same secret.
+3. **Polling** (`[github] mode = "poll"`) — planned; no URL or secret needed.
+
+## Agent readiness
+
+The backbone decides whether an agent can receive a message from two sources: state pushed by the agent's own hooks (idle / busy / plan-waiting / permission-waiting) and, as a fallback, what its terminal currently shows. The decision order is:
+
+`offline → plan_waiting → permission_waiting → working → copy_mode → user_interacting → idle`
+
+Anything not deliverable is queued in SQLite and retried by the built-in scheduler (every 60s for the monitor, every 5 min for retries). Deliveries, acknowledgments and the queue are all inspectable via the API.
+
+## API
+
+All routes except `/health` and the webhook require `Authorization: Bearer <BACKBONE_API_KEY>`. Interactive docs at `http://127.0.0.1:7120/docs` while running.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/agents` · `POST /api/agents/{name}/start` · `/stop` | Agents with live state; start/stop sessions |
+| `POST /api/agents/{name}/state` | State push from runtime hooks |
+| `POST /api/messages` | Deliver a message to an agent (state-aware) |
+| `GET /api/issues` · `POST /api/issues` · … | Issue proxy with routing enrichment |
+| `GET /api/deliveries` · `/failed` · `/stats` | Delivery history |
+| `GET /api/plans` · `POST /api/plans/{name}/approve` | Plan review (approval must be enabled in config) |
+| `GET /api/status` · `/status/services` · `/config/agents` | Digest, component health, configured agents |
+| `POST /webhooks/github` | GitHub webhook intake |
+| Socket.IO `/sessions` · `/terminal` | Live agent snapshots; read-only terminal streaming |
+
+## Security defaults
+
+- API key required; `[security] allow_unauthenticated` exists for isolated dev boxes only.
+- Binds `127.0.0.1`; CORS is off unless origins are listed.
+- Webhooks are rejected unless a secret is configured and the signature matches.
+- The Telegram bot refuses to start with an empty `allowed_chat_ids`.
+- Approving/rejecting plans remotely injects keystrokes into an agent's terminal, so it is off until `[security] allow_remote_plan_control = true`.
+- Terminal streaming is read-only; nothing typed in a browser reaches an agent.
+- Every message delivered to an agent carries a provenance envelope (`[via:github issue:42]`, `[via:telegram from:alice]`). Treat the content after it as untrusted input — the backbone cannot stop prompt injection in a GitHub comment, it only makes the source visible.
 
 ## Development
 
 ```bash
-make install          # Install dependencies (uv sync)
-make test             # Run all tests
-make lint             # Ruff check
-make format           # Ruff format
-make fix              # Auto-fix lint + format
-make check            # lint + format-check + tests (CI gate)
-make cov              # Tests with coverage
-
-# Database
-make db-up            # Start PostgreSQL (Docker, port 5435)
-make db-down          # Stop PostgreSQL
-make db-upgrade       # Run Alembic migrations
-make db-migrate MSG="description"  # Create new migration
-
-# Services
-make dev              # Start gateway server
-make run-prefect      # Start Prefect server (port 4200)
-make setup-pool       # Create agent-pool work pool (one-time)
-make deploy           # Deploy all scheduled flows
-make run-worker       # Start Prefect worker
+make install     # uv sync --all-extras
+make test        # pytest — SQLite in memory, no services required
+make check       # lint + format check + tests
+make dev         # backbone up --reload
 ```
 
-## Configuration
+Optional PostgreSQL: `make db-up` starts one via Docker; set `[database] url` or `BACKBONE_DATABASE_URL`.
 
-Two layers: `AppSettings` (Pydantic `BaseSettings`, `BACKBONE_` env prefix) for secrets, then `BackboneConfig.from_toml()` for structural config from `backbone.toml`.
+Architecture notes and the decision record for the v2 rewrite live in [`docs/design/`](docs/design/).
 
-**Required env vars:** `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_APP_WEBHOOK_SECRET`
-**Optional:** `TELEGRAM_TOKEN`, `BACKBONE_API_KEY`, `JARVIS_INJECT_URL`, `BACKBONE_DATABASE_HOST/PORT/USER/PASSWORD/NAME`
+## License
 
-Tests use in-memory SQLite — no PostgreSQL required for `make test`.
-
-## Docs
-
-- **[USAGE.md](USAGE.md)** — Detailed operational guide
-- **[docs/specifications/SPEC_INDEX.md](docs/specifications/SPEC_INDEX.md)** — All behavioral contracts
-- **[docs/protocols/REST_API.md](docs/protocols/REST_API.md)** — HTTP endpoint contracts
+MIT — see [LICENSE](LICENSE).
