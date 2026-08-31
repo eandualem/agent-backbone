@@ -108,6 +108,36 @@ def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = N
         return False
 
 
+def agent_brief_file(
+    name: str, repo: str, data_dir: Path | str, *, runtime: str = "claude"
+) -> Path | None:
+    """Render the common backbone brief for a claude agent, return its path.
+
+    The brief is appended to Claude Code's system prompt at launch
+    (complementing the project's CLAUDE.md, never replacing it). Runtimes
+    without system-prompt injection get None. Best-effort: on any error the
+    agent simply starts without the brief.
+    """
+    if runtime != "claude":
+        return None
+    from agent_backbone.help import render_agent_brief
+
+    try:
+        briefs_dir = Path(data_dir) / "briefs"
+        briefs_dir.mkdir(parents=True, exist_ok=True)
+        brief = briefs_dir / f"{name}.md"
+        brief.write_text(
+            render_agent_brief(
+                {"agent_name": name, "repo": repo or "(no GitHub remote)"},
+                data_dir=Path(data_dir),
+            )
+        )
+        return brief
+    except OSError as exc:
+        log.warning("Could not write the agent brief for %s: %s", name, exc)
+        return None
+
+
 def hook_launch_args(
     runtime: str, data_dir: Path | str | None, state_dir: Path | str | None
 ) -> list[str]:
@@ -191,6 +221,7 @@ async def start_agent(
     data_dir: Path | str | None = None,
     pre_trust: bool = False,
     system_prompt_file: Path | str | None = None,
+    inject_brief: bool = False,
 ) -> bool:
     """Start a configured agent in its tmux session (idempotent)."""
     if await session_exists(spec.name):
@@ -205,6 +236,10 @@ async def start_agent(
     effective_model = model if model is not None else spec.model
     if pre_trust and effective_runtime == "claude":
         pre_trust_directory(spec.path)
+    if system_prompt_file is None and inject_brief and data_dir is not None:
+        system_prompt_file = agent_brief_file(
+            spec.name, spec.repo, data_dir, runtime=effective_runtime
+        )
     try:
         command = build_command(
             effective_runtime,

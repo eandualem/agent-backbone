@@ -44,6 +44,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "backbone.max_delivery_ids": 100,
     "agents.default_runtime": "claude",
     "agents.pre_trust": True,
+    "agents.inject_brief": True,
     "github.intake": "auto",  # auto | webhook | poll | off
     "github.poll_interval_seconds": 60,
     "github.backfill_on_start": True,
@@ -86,6 +87,7 @@ SETTINGS_HELP: dict[str, str] = {
     "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",
     "agents.default_runtime": "Runtime used by `agent start` when none is given",
     "agents.pre_trust": "Mark an agent's directory as trusted in Claude Code before starting it",
+    "agents.inject_brief": "Append the backbone's common brief to each agent's system prompt",
     "github.intake": "auto | webhook | poll | off — how GitHub events arrive",
     "github.poll_interval_seconds": "Poll frequency when intake resolves to poll",
     "github.backfill_on_start": "Fetch events missed while the backbone was down",
@@ -291,6 +293,7 @@ class BackboneSection:
 class AgentsSection:
     default_runtime: str = "claude"
     pre_trust: bool = True
+    inject_brief: bool = True
 
 
 @dataclass(frozen=True)
@@ -522,6 +525,7 @@ def build_config(
         agents_section=AgentsSection(
             default_runtime=s["agents.default_runtime"],
             pre_trust=s["agents.pre_trust"],
+            inject_brief=s["agents.inject_brief"],
         ),
         github=GitHubConfig(
             intake=s["github.intake"],

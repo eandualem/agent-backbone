@@ -43,6 +43,7 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 |---|---|---|
 | `agents.default_runtime` | `claude` | Runtime used by `agent start` when none is given |
 | `agents.pre_trust` | `true` | Mark an agent's directory as trusted in Claude Code before starting it, so the folder-trust dialog never blocks an unattended start. Starting an agent in a directory is treated as the trust decision; set `false` to answer the dialog yourself |
+| `agents.inject_brief` | `true` | Append the backbone's common brief to each Claude Code agent's system prompt at start — who it is, how to message other agents, and where to get details (`backbone help`). Complements the project's CLAUDE.md; override the text with `<data_dir>/agent-brief.md` |
 
 ### `github.*`
 

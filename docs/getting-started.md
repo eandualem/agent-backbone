@@ -195,6 +195,12 @@ access can run `backbone agent start`, `stop`, `inspect` and `tell` itself
 — delegating "start the recruiter desk on an Opus model" is just
 `backbone agent start recruiter-desk --model opus`.
 
+Every backbone-started Claude agent also knows all of this without being
+told: a short brief is appended to its system prompt at start (its name,
+how to message agents, how to start them, `backbone help` for the
+playbooks) — complementing the project's own CLAUDE.md, never touching
+the repository. See `agents.inject_brief`.
+
 Agent runners usually gate shell commands behind permission prompts, which
 an unattended agent cannot answer. For Claude Code, allow the lifecycle
 commands once in `~/.claude/settings.json` (a human edit — agents cannot
@@ -203,6 +209,8 @@ grant themselves permissions):
 ```json
 "permissions": {
   "allow": [
+    "Bash(backbone help)",
+    "Bash(backbone help *)",
     "Bash(backbone status)",
     "Bash(backbone agent list)",
     "Bash(backbone agent start)",

@@ -31,6 +31,9 @@ The swarm exists to complete one GitHub issue: **{repo}#{issue_number}**
   the swarm's initiator. Do not comment on it unless you are the
   coordinator.
 
+Full playbooks for any backbone capability: `backbone help` lists the
+topics, `backbone help messaging` (etc.) prints one.
+
 ## Rules
 
 - Stay on task; the swarm brief is the whole scope. No scope creep.

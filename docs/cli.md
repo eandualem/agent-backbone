@@ -133,6 +133,16 @@ and removes the worktree (the branch is kept). The swarm's issue being
 closed (normally by merging the coordinator's PR) tears it down
 automatically. `backbone tell <swarm-name> …` reaches its coordinator.
 
+## `backbone help [TOPIC]`
+
+The backbone explains its own capabilities to agents: no argument lists
+the topics (`agents`, `messaging`, `swarms`, `github`, …), a topic name
+prints the full playbook. Also served at `GET /api/help[/{topic}]`.
+Every backbone-started Claude agent carries a short injected brief (see
+`agents.inject_brief`) that points here, so the injected text stays
+small while the capability surface can grow. Add or override topics by
+dropping markdown files into `<data_dir>/help-topics/`.
+
 ## `backbone tell AGENT MESSAGE… [--from NAME] [--priority]`
 
 Delivers `[via:backbone from:NAME] MESSAGE` through the running backbone

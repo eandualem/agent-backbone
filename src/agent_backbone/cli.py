@@ -573,6 +573,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
             state_dir=config.state_dir,
             data_dir=config.data_dir,
             pre_trust=config.agents_section.pre_trust,
+            inject_brief=config.agents_section.inject_brief,
         )
         if not ok:
             print(f"{spec.name}: failed to start")
@@ -917,6 +918,30 @@ def cmd_swarm(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# help
+# ---------------------------------------------------------------------------
+
+
+def cmd_help(args: argparse.Namespace) -> int:
+    """Agent-facing capability help, straight from the installed package."""
+    from agent_backbone.help import get_topic, list_topics
+
+    data_dir = bootstrap_config().data_dir
+    if not args.topic:
+        print("backbone capabilities — `backbone help <topic>` for the details:\n")
+        for topic in list_topics(data_dir):
+            print(f"  {topic['name']:<12s} {topic['summary']}")
+        return 0
+    content = get_topic(args.topic, data_dir)
+    if content is None:
+        known = ", ".join(t["name"] for t in list_topics(data_dir))
+        print(f"unknown topic '{args.topic}' — try: {known}")
+        return 1
+    print(content)
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
 
@@ -1058,6 +1083,10 @@ def build_parser() -> argparse.ArgumentParser:
     psd = ssub.add_parser("disband", help="stop members, remove the worktree, keep the branch")
     psd.add_argument("name")
     p.set_defaults(func=cmd_swarm)
+
+    p = sub.add_parser("help", help="capability help for agents (topics: swarms, messaging, …)")
+    p.add_argument("topic", nargs="?", default=None)
+    p.set_defaults(func=cmd_help)
 
     p = sub.add_parser("tell", help="deliver a message to an agent (via the running API)")
     p.add_argument("agent")

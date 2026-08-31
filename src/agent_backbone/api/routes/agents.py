@@ -42,6 +42,7 @@ from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.infrastructure._agents import (
     RUNTIME_COMMANDS,
     RUNTIME_DISPLAY_NAMES,
+    agent_brief_file,
     build_command,
     launch_environment,
     pre_trust_directory,
@@ -235,12 +236,18 @@ async def _start(
 
     if config.agents_section.pre_trust and runtime == "claude":
         pre_trust_directory(spec.path)
+    system_prompt_file = None
+    if config.agents_section.inject_brief:
+        system_prompt_file = agent_brief_file(
+            spec.name, spec.repo, config.data_dir, runtime=runtime
+        )
     command = build_command(
         runtime,
         model=model,
         resume=req.resume,
         data_dir=config.data_dir,
         state_dir=config.state_dir,
+        system_prompt_file=system_prompt_file,
     )
     environment = launch_environment(spec.name, runtime, config.state_dir, spec.env)
     ok = await tmux_svc.start_session(
