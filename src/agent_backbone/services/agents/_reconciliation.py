@@ -43,6 +43,8 @@ async def reconcile_startup_states(config: BackboneConfig, db: BackboneDB) -> No
                 entity=name,
                 plan_file=snapshot.plan_file,
                 plan_title=snapshot.plan_title,
+                reason=snapshot.reason,
+                current_repo=snapshot.current_repo,
             )
         except Exception:
             log.exception("Startup reconciliation: failed to sync state for %s", name)

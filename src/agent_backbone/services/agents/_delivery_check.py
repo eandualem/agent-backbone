@@ -1,4 +1,4 @@
-"""Delivery decision logic — outgoing comment detection and should_deliver."""
+"""Delivery decision helpers — action-log lookups and the idle check."""
 
 from __future__ import annotations
 
@@ -9,42 +9,54 @@ from pathlib import Path
 from agent_backbone.services.agents.models import AgentState
 
 
+def _read_tail(action_log: str | Path | None, max_lines: int) -> list[dict]:
+    if action_log is None:
+        return []
+    log_path = Path(action_log).expanduser()
+    if not log_path.exists():
+        return []
+    try:
+        lines = log_path.read_text().strip().splitlines()
+    except OSError:
+        return []
+    entries: list[dict] = []
+    for line in reversed(lines[-max_lines:]):
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries
+
+
+def _repo_matches(entry: dict, repo: str) -> bool:
+    entry_repo = entry.get("repo") or ""
+    return not entry_repo or not repo or entry_repo.casefold() == repo.casefold()
+
+
 def find_outgoing_comment(
     issue_number: int,
     action_log: str | Path | None = None,
     max_lines: int = 50,
     recency_seconds: float = 30.0,
+    *,
+    repo: str = "",
 ) -> str | None:
-    """Check if a comment on this issue was recently made by one of our agents.
+    """Session that recently commented on an issue according to the hook action log.
 
-    Reads the tail of the JSONL action log written by agent hooks.
-    Matches by issue number + recency window (no comment_id in the log).
-    Returns the originating session name, or None if not found.
-    Graceful: returns None if the log file doesn't exist (hooks not yet set up).
-
-    Log format: {"ts": 1234567890.0, "session": "ike", "action": "comment", "issue": 42}
+    Log format: ``{"ts": 1234567890.0, "session": "reviewer", "action": "comment",
+    "issue": 42, "repo": "owner/name"}``.
     """
-    if action_log is None:
-        return None
-    log_path = Path(action_log).expanduser()
-    if not log_path.exists():
-        return None
-    try:
-        lines = log_path.read_text().strip().splitlines()
-        now = time.time()
-        # Only check the tail, most recent first
-        for line in reversed(lines[-max_lines:]):
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if entry.get("action") == "comment" and entry.get("issue") == issue_number:
-                ts = entry.get("ts", 0)
-                if now - ts <= recency_seconds:
-                    return entry.get("session")
-        return None
-    except OSError:
-        return None
+    now = time.time()
+    for entry in _read_tail(action_log, max_lines):
+        if entry.get("action") != "comment" or entry.get("issue") != issue_number:
+            continue
+        if not _repo_matches(entry, repo):
+            continue
+        if now - float(entry.get("ts", 0)) <= recency_seconds:
+            return entry.get("session")
+    return None
 
 
 def has_commented_on_issue(
@@ -52,47 +64,21 @@ def has_commented_on_issue(
     session: str,
     action_log: str | Path | None = None,
     max_lines: int = 200,
+    *,
+    repo: str = "",
 ) -> bool:
-    """Check if a session has ever commented on this issue (per action log).
-
-    Unlike find_outgoing_comment(), this has NO recency window.
-    Any comment at any time counts as acknowledgment.
-    """
-    if action_log is None:
-        return False
-    log_path = Path(action_log).expanduser()
-    if not log_path.exists():
-        return False
-    try:
-        lines = log_path.read_text().strip().splitlines()
-        for line in reversed(lines[-max_lines:]):
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if (
-                entry.get("action") == "comment"
-                and entry.get("issue") == issue_number
-                and entry.get("session") == session
-            ):
-                return True
-        return False
-    except OSError:
-        return False
+    """Whether a session has ever commented on this issue (per action log)."""
+    for entry in _read_tail(action_log, max_lines):
+        if (
+            entry.get("action") == "comment"
+            and entry.get("issue") == issue_number
+            and entry.get("session") == session
+            and _repo_matches(entry, repo)
+        ):
+            return True
+    return False
 
 
-def should_deliver(
-    state: AgentState,
-    is_blocking: bool = False,
-    busy_duration: float | None = None,
-    busy_threshold: float = 1800.0,
-    require_idle: bool = False,
-) -> bool:
-    """Decide whether to deliver a notification based on agent state.
-
-    Delivery gating is strict in all modes: only confirmed idle agents
-    should receive a new issue. Extra parameters are retained for API
-    compatibility with older call sites and tests.
-    """
-    del is_blocking, busy_duration, busy_threshold, require_idle
+def should_deliver(state: AgentState, **_ignored) -> bool:
+    """Only a confirmed idle agent should receive a new issue."""
     return state == AgentState.IDLE

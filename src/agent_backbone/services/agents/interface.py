@@ -14,22 +14,12 @@ if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
 
 log = logging.getLogger(__name__)
-_LIVE_RECONCILIATION_STATES = frozenset(
-    {
-        AgentState.STARTING,
-        AgentState.BUSY,
-        AgentState.PROCESSING_ISSUE,
-        AgentState.UNKNOWN,
-    }
-)
+_LIVE_RECONCILIATION_STATES = frozenset({AgentState.STARTING, AgentState.BUSY, AgentState.UNKNOWN})
 
 
 def _row_to_snapshot(row: dict) -> StateSnapshot:
     """Convert a DB agent_states row dict to a StateSnapshot."""
-    try:
-        state = AgentState(row.get("state", "unknown"))
-    except ValueError:
-        state = AgentState.UNKNOWN
+    state, legacy_reason = AgentState.parse(row.get("state"))
 
     ts_raw = row.get("ts")
     timestamp = float(ts_raw) if ts_raw else 0.0
@@ -39,12 +29,15 @@ def _row_to_snapshot(row: dict) -> StateSnapshot:
 
     return StateSnapshot(
         state=state,
+        reason=row.get("reason") or legacy_reason,
         current_issue=row.get("current_issue"),
+        current_repo=row.get("current_repo"),
         timestamp=timestamp,
         source="db",
         started_at=started_at,
         plan_file=row.get("plan_file"),
         plan_title=row.get("plan_title"),
+        evidence=["database snapshot"],
     )
 
 
@@ -59,6 +52,7 @@ def _should_sync_db_snapshot(current: StateSnapshot | None, live: StateSnapshot)
         return False
     return (
         current.state != live.state
+        or current.reason != live.reason
         or current.current_issue != live.current_issue
         or current.plan_file != live.plan_file
         or current.plan_title != live.plan_title
@@ -120,6 +114,8 @@ class StateService:
                     ts=str(live_snapshot.timestamp) if live_snapshot.timestamp else None,
                     plan_file=live_snapshot.plan_file,
                     plan_title=live_snapshot.plan_title,
+                    reason=live_snapshot.reason,
+                    current_repo=live_snapshot.current_repo,
                 )
             except Exception:
                 log.warning("DB state refresh failed for %s after live reconciliation", session)

@@ -25,7 +25,7 @@ CLAUDE_EVENTS: tuple[tuple[str, str | None], ...] = (
     ("UserPromptSubmit", None),
     ("Stop", None),
     ("Notification", None),
-    ("PreToolUse", "ExitPlanMode"),
+    ("PreToolUse", "ExitPlanMode|AskUserQuestion"),
     ("PostToolUse", ""),
 )
 

@@ -6,6 +6,12 @@ script for the configured hook events with a JSON payload on stdin. It
 writes ``<state_dir>/<agent>.json`` (read by the backbone's readiness check)
 and appends GitHub comment actions to ``<state_dir>/actions.jsonl``.
 
+States written (runtime-agnostic vocabulary shared by every hook):
+
+    idle                       at the prompt, nothing running
+    busy                       working on a prompt
+    waiting_for_human (reason) plan | permission | question
+
 Standard library only — it must run under any ``python3``.
 
 Usage (as configured by the installer):
@@ -28,13 +34,18 @@ from pathlib import Path
 
 STATE_IDLE = "idle"
 STATE_BUSY = "busy"
-STATE_PLAN_WAITING = "plan_waiting"
-STATE_PERMISSION_WAITING = "permission_waiting"
+STATE_WAITING = "waiting_for_human"
 STATE_STARTING = "starting"
 STATE_UNKNOWN = "unknown"
 
+REASON_PLAN = "plan"
+REASON_PERMISSION = "permission"
+REASON_QUESTION = "question"
+
 _GH_COMMENT_RE = re.compile(r"\bgh\s+issue\s+comment\s+(?:\S+\s+)*?(\d+)\b")
+_GH_REPO_RE = re.compile(r"(?:--repo|-R)[\s=]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
 _ISSUE_NUMBER_RE = re.compile(r"(?:^|[\s#])(\d{1,7})\b")
+_ISSUE_REF_RE = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d{1,7})\b")
 
 
 def resolve_agent(explicit: str | None) -> str | None:
@@ -61,9 +72,13 @@ def resolve_agent(explicit: str | None) -> str | None:
     return None
 
 
-def _issue_from_text(text: str) -> int | None:
+def _issue_from_text(text: str) -> tuple[int | None, str | None]:
+    """``(number, repo)`` mentioned in a prompt, e.g. ``owner/name#42`` or ``issue #42``."""
+    ref = _ISSUE_REF_RE.search(text or "")
+    if ref:
+        return int(ref.group(2)), ref.group(1)
     match = _ISSUE_NUMBER_RE.search(text or "")
-    return int(match.group(1)) if match else None
+    return (int(match.group(1)) if match else None), None
 
 
 def _plan_title(plan: str) -> str:
@@ -77,73 +92,97 @@ def _plan_title(plan: str) -> str:
 def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | None]:
     """Map a hook payload to (new_state_record, action_record).
 
-    ``current`` is the previously written state (used to keep ``issue`` and
-    ``started_at`` stable across events). Either return value may be None.
+    ``current`` is the previously written state (used to keep ``issue``,
+    ``repo`` and ``started_at`` stable across events).
     """
     event = payload.get("hook_event_name", "")
     now = time.time()
     current = current or {}
     issue = current.get("issue")
+    repo = current.get("repo")
     started_at = current.get("started_at") or now
 
-    def state(new_state: str, **extra) -> dict:
-        record = {"state": new_state, "issue": issue, "ts": now, "started_at": started_at}
+    def state(new_state: str, reason: str | None = None, **extra) -> dict:
+        record = {
+            "state": new_state,
+            "reason": reason,
+            "issue": issue,
+            "repo": repo,
+            "ts": now,
+            "started_at": started_at,
+        }
         record.update(extra)
         return record
 
     if event == "SessionStart":
-        # Claude Code fires this once it is at the prompt, so the agent is
-        # ready for input — reporting "starting" here would block deliveries
-        # until the first prompt.
+        # Fired once Claude Code is at its prompt: ready for input.
         return state(STATE_IDLE, started_at=now), None
     if event == "SessionEnd":
         return state(STATE_UNKNOWN), None
     if event == "UserPromptSubmit":
         prompt = payload.get("prompt", "") or ""
-        found = _issue_from_text(prompt) if "issue" in prompt.lower() else None
-        if found is not None:
-            issue = found
+        if "issue" in prompt.lower() or "#" in prompt:
+            found, found_repo = _issue_from_text(prompt)
+            if found is not None:
+                issue = found
+                if found_repo:
+                    repo = found_repo
         return state(STATE_BUSY), None
     if event == "Stop":
         return state(STATE_IDLE), None
     if event == "Notification":
         message = (payload.get("message", "") or "").lower()
         if "permission" in message:
-            return state(STATE_PERMISSION_WAITING), None
+            return state(STATE_WAITING, REASON_PERMISSION), None
         if "waiting for your input" in message:
             return state(STATE_IDLE), None
         return None, None
     if event == "PreToolUse":
-        if payload.get("tool_name") == "ExitPlanMode":
+        tool = payload.get("tool_name", "")
+        if tool == "ExitPlanMode":
             plan = (payload.get("tool_input") or {}).get("plan", "") or ""
-            return state(STATE_PLAN_WAITING, plan_title=_plan_title(plan), plan_text=plan), None
+            return state(
+                STATE_WAITING, REASON_PLAN, plan_title=_plan_title(plan), plan_text=plan
+            ), None
+        if tool == "AskUserQuestion":
+            return state(STATE_WAITING, REASON_QUESTION), None
         return None, None
     if event == "PostToolUse":
         tool = payload.get("tool_name", "")
         tool_input = payload.get("tool_input") or {}
-        if tool == "ExitPlanMode":
+        if tool in ("ExitPlanMode", "AskUserQuestion"):
             return state(STATE_BUSY), None
-        action = _comment_action(tool, tool_input, now)
-        return None, action
+        return None, _comment_action(tool, tool_input, now)
     return None, None
 
 
 def _comment_action(tool: str, tool_input: dict, now: float) -> dict | None:
     """Detect a GitHub issue comment posted through a tool call."""
     number: int | None = None
+    repo: str | None = None
     if tool == "Bash":
-        match = _GH_COMMENT_RE.search(tool_input.get("command", "") or "")
+        command = tool_input.get("command", "") or ""
+        match = _GH_COMMENT_RE.search(command)
         if match:
             number = int(match.group(1))
+            repo_match = _GH_REPO_RE.search(command)
+            repo = repo_match.group(1) if repo_match else None
     elif tool.startswith("mcp__github__") and "comment" in tool:
         raw = tool_input.get("issue_number") or tool_input.get("issueNumber")
         try:
             number = int(raw) if raw is not None else None
         except (TypeError, ValueError):
             number = None
+        owner = tool_input.get("owner")
+        name = tool_input.get("repo")
+        if owner and name:
+            repo = f"{owner}/{name}"
     if number is None:
         return None
-    return {"ts": now, "action": "comment", "issue": number}
+    action = {"ts": now, "action": "comment", "issue": number}
+    if repo:
+        action["repo"] = repo
+    return action
 
 
 def write_state(state_dir: Path, agent: str, record: dict) -> None:
@@ -200,7 +239,6 @@ def main(argv: list[str] | None = None) -> int:
         if action is not None:
             append_action(state_dir, agent, action)
     except OSError:
-        # Never break the agent because the backbone's disk is unhappy.
         return 0
     return 0
 

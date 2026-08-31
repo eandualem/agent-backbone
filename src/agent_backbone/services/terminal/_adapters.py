@@ -8,7 +8,12 @@ import re
 from abc import ABC
 from enum import StrEnum
 
-from agent_backbone.services.agents.models import AgentState, StateSnapshot
+from agent_backbone.services.agents.models import (
+    REASON_PERMISSION,
+    WORKING_STATES,
+    AgentState,
+    StateSnapshot,
+)
 from agent_backbone.services.terminal._core import (
     _run_tmux,
     _send_escape_key,
@@ -29,7 +34,7 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
 _BOX_CHARS = "\u2500\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u253c\u2501"
 _PROMPT_START_CHARS = ">$\u276f\u203a%#"
-_WORKING_STATES = frozenset({AgentState.PROCESSING_ISSUE, AgentState.BUSY, AgentState.STARTING})
+_WORKING_STATES = WORKING_STATES
 _BACKBONE_ENVELOPE_PREFIX = "[via:"
 
 
@@ -194,6 +199,8 @@ class TerminalAdapter(ABC):
     queue_markers: tuple[str, ...] = ()
     busy_markers: tuple[str, ...] = ()
     """Fragments shown only while the runtime is working (e.g. a spinner line)."""
+    prompt_markers: tuple[str, ...] = ()
+    """Fragments shown when the runtime is asking the human a yes/no question."""
     auto_submit: bool = False
     submit_attempts: int = 1
     interrupt_queued_delivery: bool = False
@@ -226,9 +233,17 @@ class TerminalAdapter(ABC):
         lowered = "\n".join(line.lower() for line in tail)
         return any(marker in lowered for marker in self.busy_markers)
 
+    def detect_waiting_for_human(self, pane_content: str) -> bool:
+        """Whether the runtime is visibly blocked on a question to the human."""
+        if not self.prompt_markers:
+            return False
+        tail = sanitize_pane_content(pane_content).strip().splitlines()[-15:]
+        lowered = "\n".join(line.lower() for line in tail)
+        return any(marker in lowered for marker in self.prompt_markers)
+
     def detect_idle(self, pane_content: str) -> bool:
         """Whether the pane currently shows an interactive prompt surface."""
-        if self.detect_busy(pane_content):
+        if self.detect_busy(pane_content) or self.detect_waiting_for_human(pane_content):
             return False
         return self.detect_prompt(pane_content) is not None
 
@@ -288,15 +303,6 @@ class TerminalAdapter(ABC):
 
         log.error("tmux copy-mode cancel failed for '%s': %s", session_name, stderr.decode())
         return False
-
-    def detect_plan_waiting(
-        self,
-        snapshot: StateSnapshot,
-        pane_content: str = "",
-    ) -> bool:
-        """Whether the session is in plan-approval state."""
-        del pane_content
-        return snapshot.state == AgentState.PLAN_WAITING
 
     async def deliver_message(self, session_name: str, message: str) -> bool:
         """Paste a message and submit it according to runtime-specific rules."""
@@ -421,6 +427,13 @@ class ClaudeCodeAdapter(TerminalAdapter):
         "shift+tab to cycle",
     )
     busy_markers = ("esc to interrupt",)
+    prompt_markers = (
+        "do you want to proceed?",
+        "do you want to make this edit",
+        "yes, allow",
+        "yes, and don't ask again",
+        "would you like to proceed",
+    )
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -441,6 +454,8 @@ class GeminiAdapter(TerminalAdapter):
         "? for shortcuts",
         "gemini 3",
     )
+    busy_markers = ("esc to cancel",)
+    prompt_markers = ("allow execution", "yes, allow once", "yes, allow always")
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -461,6 +476,8 @@ class CodexAdapter(TerminalAdapter):
         "messages to be submitted after next tool call",
         "press esc to interrupt and send immediately",
     )
+    busy_markers = ("esc to interrupt",)
+    prompt_markers = ("approve this command", "allow command", "yes, and don't ask again")
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     interrupt_queued_delivery = True
     paste_settle_seconds = 0.2
@@ -489,6 +506,7 @@ class AiderAdapter(TerminalAdapter):
     prompt_prefixes = ("aider>", ">")
     runtime_markers = ("aider", "aider v", "model:", "/help")
     status_fragments = ("tokens:", "cost:")
+    prompt_markers = ("(y)es/(n)o", "[y/n]", "(y/n)")
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -594,37 +612,45 @@ def infer_state_from_pane(
     pane_content: str,
     runtime_hint: str | None = None,
 ) -> StateSnapshot:
-    """Infer the agent state from visible terminal output."""
+    """Infer the agent state from visible terminal output (with evidence)."""
     sanitized = sanitize_pane_content(pane_content)
     lines = sanitized.strip().splitlines()
     if not lines:
-        return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
+        return StateSnapshot(state=AgentState.UNKNOWN, source="pull", evidence=["empty pane"])
 
     runtime = _normalize_runtime(runtime_hint)
     if runtime == TerminalRuntime.UNKNOWN:
         runtime = detect_runtime_from_pane(pane_content)
     adapter = get_terminal_adapter(runtime)
 
+    if adapter.detect_busy(pane_content):
+        return StateSnapshot(
+            state=AgentState.BUSY,
+            source="pull",
+            evidence=[f"terminal shows a busy marker ({runtime.value})"],
+        )
+    if adapter.detect_waiting_for_human(pane_content):
+        return StateSnapshot(
+            state=AgentState.WAITING_FOR_HUMAN,
+            reason=REASON_PERMISSION,
+            source="pull",
+            evidence=[f"terminal shows a permission prompt ({runtime.value})"],
+        )
     if adapter.detect_idle(pane_content):
-        return StateSnapshot(state=AgentState.IDLE, source="pull")
+        return StateSnapshot(
+            state=AgentState.IDLE,
+            source="pull",
+            evidence=[f"terminal shows an empty prompt ({runtime.value})"],
+        )
 
-    non_empty = [ln.strip().lower() for ln in lines if ln.strip()]
-    recent_lines = [ln.strip().lower() for ln in non_empty[-20:]]
-    recent_content = "\n".join(recent_lines)
+    recent = "\n".join(ln.strip().lower() for ln in lines[-20:] if ln.strip())
+    if "thinking..." in recent or "tool call" in recent:
+        return StateSnapshot(
+            state=AgentState.BUSY, source="pull", evidence=["terminal shows thinking/tool output"]
+        )
 
-    if "thinking..." in recent_content or "tool call" in recent_content:
-        return StateSnapshot(state=AgentState.BUSY, source="pull")
-
-    for stripped in reversed(recent_lines):
-        if "working on issue #" in stripped or "processing issue #" in stripped:
-            for word in stripped.split("#"):
-                if word and word.split()[0].isdigit():
-                    issue_num = int(word.split()[0])
-                    return StateSnapshot(
-                        state=AgentState.PROCESSING_ISSUE,
-                        current_issue=issue_num,
-                        source="pull",
-                    )
-            return StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="pull")
-
-    return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
+    return StateSnapshot(
+        state=AgentState.UNKNOWN,
+        source="pull",
+        evidence=[f"terminal inconclusive: no prompt, busy or question marker ({runtime.value})"],
+    )

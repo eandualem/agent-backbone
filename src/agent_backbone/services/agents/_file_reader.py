@@ -1,4 +1,4 @@
-"""Push-based state file reading."""
+"""Push-based state file reading (written by runtime hooks)."""
 
 from __future__ import annotations
 
@@ -12,33 +12,36 @@ log = logging.getLogger(__name__)
 
 
 def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
-    """Read push-based state from ~/.claude/state/{session}.json.
+    """Read hook-written state from ``<state_dir>/<session>.json``.
 
-    Expected JSON shape:
-        {"state": "idle|processing_issue|busy", "issue": 42, "ts": 1234567890.0}
+    Expected JSON shape::
 
-    Returns None if file doesn't exist or is unparseable.
+        {"state": "idle|busy|waiting_for_human|starting|unknown", "reason": "plan",
+         "issue": 42, "repo": "owner/name", "ts": 1234567890.0,
+         "started_at": 1234567800.0, "plan_file": "...", "plan_title": "..."}
+
+    Returns None if the file does not exist or cannot be parsed.
     """
     state_file = state_dir / f"{session}.json"
     if not state_file.exists():
         return None
     try:
         data = json.loads(state_file.read_text())
-        state_str = data.get("state", "unknown")
-        try:
-            state = AgentState(state_str)
-        except ValueError:
-            state = AgentState.UNKNOWN
-        started_at_raw = data.get("started_at")
-        return StateSnapshot(
-            state=state,
-            current_issue=data.get("issue"),
-            timestamp=float(data.get("ts", 0)),
-            source="push",
-            started_at=float(started_at_raw) if started_at_raw is not None else None,
-            plan_file=data.get("plan_file"),
-            plan_title=data.get("plan_title"),
-        )
     except (json.JSONDecodeError, OSError) as e:
         log.warning("Failed to read state file for %s: %s", session, e)
         return None
+
+    state, legacy_reason = AgentState.parse(data.get("state"))
+    started_at_raw = data.get("started_at")
+    return StateSnapshot(
+        state=state,
+        reason=data.get("reason") or legacy_reason,
+        current_issue=data.get("issue"),
+        current_repo=data.get("repo") or None,
+        timestamp=float(data.get("ts", 0)),
+        source="push",
+        started_at=float(started_at_raw) if started_at_raw is not None else None,
+        plan_file=data.get("plan_file"),
+        plan_title=data.get("plan_title"),
+        evidence=[f"hook state file {state_file.name}: {state.value}"],
+    )

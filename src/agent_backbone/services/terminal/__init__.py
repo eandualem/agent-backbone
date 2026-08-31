@@ -13,7 +13,7 @@ from agent_backbone.services.terminal._adapters import (
     resolve_terminal_runtime,
     sanitize_pane_content,
 )
-from agent_backbone.services.terminal._copy_mode import handle_copy_mode_recovery
+from agent_backbone.services.terminal._copy_mode import clear_copy_mode, handle_copy_mode_recovery
 from agent_backbone.services.terminal._core import (
     capture_pane,
     get_window_size,
@@ -71,6 +71,7 @@ __all__ = [
     "TmuxService",
     "WindowInfo",
     "capture_pane",
+    "clear_copy_mode",
     "close_pane",
     "close_window",
     "create_layout",
