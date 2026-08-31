@@ -498,13 +498,19 @@ async def _agent_start(args: argparse.Namespace) -> int:
         # A group start: each name must already be a known agent.
         worst = 0
         for name in args.names:
-            single = argparse.Namespace(**{**vars(args), "names": [name]})
+            single = argparse.Namespace(**{**vars(args), "names": [name], "group": True})
             worst = max(worst, await _agent_start(single))
         return worst
     name = args.names[0] if args.names else None
     directory = args.dir
     if directory is None and name is None:
         directory = os.getcwd()
+    elif directory is None and name is not None and not getattr(args, "group", False):
+        # A bare unknown name registers the current directory under that name.
+        config = await _load_config()
+        if config.agents.get(name) is None:
+            directory = os.getcwd()
+            print(f"'{name}' is new — registering it for {directory}")
     body = {
         "name": name,
         "dir": str(Path(directory).expanduser().resolve()) if directory else None,
@@ -710,10 +716,25 @@ async def _agent(args: argparse.Namespace) -> int:
         return 0
 
     if sub in ("watch", "unwatch"):
-        for repo in args.repos:
+        # Repositories contain a slash, agent names cannot — so the name is
+        # optional and, inside an agent session, defaults to the agent itself.
+        repos = [t for t in args.targets if "/" in t]
+        names = [t for t in args.targets if "/" not in t]
+        if len(names) > 1:
+            print("give at most one agent name")
+            return 1
+        name = names[0] if names else os.environ.get("BACKBONE_AGENT", "").strip()
+        if not name:
+            print(f"usage: backbone agent {sub} [NAME] OWNER/REPO…")
+            print("(without NAME, $BACKBONE_AGENT must be set — it is inside agent sessions)")
+            return 1
+        if not repos:
+            print("no repositories given — expected OWNER/REPO")
+            return 1
+        for repo in repos:
             if api_up:
                 result = await _api(
-                    boot, "POST", f"/api/agents/{args.name}/{sub}", json_body={"repo": repo}
+                    boot, "POST", f"/api/agents/{name}/{sub}", json_body={"repo": repo}
                 )
                 if not result or result[0] != 200:
                     print(f"error: {result[1] if result else 'API unreachable'}")
@@ -722,13 +743,13 @@ async def _agent(args: argparse.Namespace) -> int:
                 async with _Direct(boot) as direct:
                     try:
                         if sub == "watch":
-                            await direct.store.watch(args.name, repo)
+                            await direct.store.watch(name, repo)
                         else:
-                            await direct.store.unwatch(args.name, repo)
+                            await direct.store.unwatch(name, repo)
                     except KeyError:
-                        print(f"unknown agent '{args.name}'")
+                        print(f"unknown agent '{name}'")
                         return 1
-            print(f"{args.name}: {'now watching' if sub == 'watch' else 'stopped watching'} {repo}")
+            print(f"{name}: {'now watching' if sub == 'watch' else 'stopped watching'} {repo}")
         return 0
 
     if sub == "forget":
@@ -896,12 +917,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pse.add_argument("name")
     pse.add_argument("assignments", nargs="+", metavar="key=value")
-    pw = asub.add_parser("watch", help="watch one or more repositories")
-    pw.add_argument("name")
-    pw.add_argument("repos", nargs="+", metavar="OWNER/REPO")
-    pu = asub.add_parser("unwatch", help="stop watching repositories")
-    pu.add_argument("name")
-    pu.add_argument("repos", nargs="+", metavar="OWNER/REPO")
+    pw = asub.add_parser("watch", help="watch repositories (NAME optional inside an agent session)")
+    pw.add_argument("targets", nargs="+", metavar="[NAME] OWNER/REPO")
+    pu = asub.add_parser(
+        "unwatch", help="stop watching repositories (NAME optional inside an agent session)"
+    )
+    pu.add_argument("targets", nargs="+", metavar="[NAME] OWNER/REPO")
     pf = asub.add_parser("forget", help="remove an agent from the backbone")
     pf.add_argument("name")
     p.set_defaults(func=cmd_agent)

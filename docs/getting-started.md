@@ -172,6 +172,14 @@ It hears about new issues in both repositories, can be addressed with
 `for:orchestration` in either, and opens issues for the others with
 `for:app` / `for:web` and `from:orchestration`.
 
+You don't have to decide the watches up front. Inside its own session the
+agent can subscribe itself — just tell it which repositories to follow and
+it runs:
+
+```bash
+backbone agent watch acme/api        # NAME defaults to $BACKBONE_AGENT
+```
+
 ## 9. Optional: Telegram
 
 Create a bot with @BotFather, put `TELEGRAM_TOKEN=…` in `.env`, allow your

@@ -130,10 +130,25 @@ class AgentStore:
         runtime: str | None = None,
         model: str | None = None,
     ) -> AgentSpec:
-        """Describe an agent for a directory without saving it."""
+        """Describe an agent for a directory without saving it.
+
+        When the name is taken by an agent registered elsewhere: if that
+        directory is gone the project has moved and the record follows it;
+        if it still exists this is a different project sharing a folder
+        name, and the new one gets a numbered name (``app-2``).
+        """
         path = Path(directory).expanduser().resolve()
         agent_name = sanitize_name(name or path.name)
         existing = self._agents.get(agent_name)
+        if existing is not None and existing.path != path and existing.path.is_dir():
+            base = agent_name
+            counter = 2
+            while True:
+                agent_name = f"{base}-{counter}"
+                existing = self._agents.get(agent_name)
+                if existing is None or existing.path == path or not existing.path.is_dir():
+                    break
+                counter += 1
         return AgentSpec(
             name=agent_name,
             dir=str(path),

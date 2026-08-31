@@ -11,7 +11,10 @@ This page follows real requests through the system. Read
 1. **Discover.** Resolve the directory (default: cwd), derive the name from
    the directory name, read `git remote get-url origin` for the repository.
    If the agent is already known, its recorded settings are reused and
-   updated.
+   updated. A known name registered for a directory that no longer exists
+   is a move — the record follows the project; if the old directory still
+   exists, the new one is a different project sharing a folder name and is
+   registered as `name-2`.
 2. **Record.** Upsert the agent (and any `--watch` repositories) in the
    database. The running backbone publishes a new configuration snapshot;
    every job uses it from the next tick.

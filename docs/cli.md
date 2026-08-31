@@ -69,13 +69,20 @@ backbone config set escalation.target orch
 
 | Command | Effect |
 |---|---|
-| `agent start [NAME…] [--dir D] [--name N] [--runtime R] [--model M] [--resume] [--watch REPO]… [--no-wait]` | Discover the agent from `--dir` (default: cwd when no name is given), record it, start its tmux session and **wait until it is at its prompt**. Bare `NAME`s must already be known; several names start a group (`ab agent start app web orch`) |
+| `agent start [NAME…] [--dir D] [--name N] [--runtime R] [--model M] [--resume] [--watch REPO]… [--no-wait]` | Discover the agent from `--dir` (default: cwd), record it, start its tmux session and **wait until it is at its prompt**. A bare known `NAME` starts from its recorded directory; a bare unknown `NAME` registers the cwd under that name. Several names start a group of known agents (`ab agent start app web orch`) |
 | `agent list` | Known agents with runtime, model and directory |
 | `agent inspect NAME [--json]` | State, reason, current issue, delivery condition, the evidence, the terminal tail, recent deliveries |
 | `agent stop NAME…` | Kill the session(s) |
 | `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object) |
-| `agent watch NAME REPO…` / `agent unwatch NAME REPO…` | Add / remove watched repositories |
+| `agent watch [NAME] REPO…` / `agent unwatch [NAME] REPO…` | Add / remove watched repositories. Inside an agent session `NAME` defaults to the agent itself (`$BACKBONE_AGENT`), so an agent can subscribe on its own |
 | `agent forget NAME` | Remove a stopped agent from the backbone |
+
+Moving a project: registration is keyed by name (default: the folder name).
+Starting a known name from a new directory updates the record **if the old
+directory is gone** — the agent follows the move, keeping its watches and
+settings. If the old directory still exists, the new one is a different
+project that happens to share a folder name and is registered as `name-2`.
+A changed folder name is a new agent; `agent forget` removes the old one.
 
 `agent start` reports one of:
 

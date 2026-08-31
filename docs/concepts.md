@@ -27,7 +27,9 @@ app: ready — claude repo acme/app
 - **Repository** — read from `git remote origin`. An agent whose directory is
   a GitHub checkout **owns** that repository.
 - **Watches** — other repositories the agent wants to hear about
-  (`backbone agent watch orch acme/app acme/web`).
+  (`backbone agent watch orch acme/app acme/web`). Inside its own session
+  an agent can subscribe itself: `backbone agent watch acme/app` (the name
+  defaults to `$BACKBONE_AGENT`).
 
 There are no roles, groups or hierarchies. An orchestrator is an ordinary
 agent whose directory is its own repository and which watches the others.

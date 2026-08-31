@@ -23,6 +23,7 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     monkeypatch.delenv("BACKBONE_API_KEY", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
+    monkeypatch.delenv("BACKBONE_AGENT", raising=False)
     # Never talk to a real backbone during tests
     with patch("agent_backbone.cli._api_up", new_callable=AsyncMock, return_value=False):
         yield tmp_path / "data"
@@ -118,10 +119,63 @@ class TestAgentCommands:
         out = capsys.readouterr().out
         assert "my-app" in out and str(project) in out
 
-    def test_start_unknown_agent_without_dir(self, capsys):
+    def test_start_unknown_name_registers_cwd(self, tmp_path, monkeypatch, capsys):
         assert _run(["init"]) == 0
-        assert _run(["agent", "start", "zzz"]) == 1
+        project = tmp_path / "some-project"
+        project.mkdir()
+        monkeypatch.chdir(project)
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as start,
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "orch", "--no-wait"]) == 0
+        out = capsys.readouterr().out
+        assert "'orch' is new" in out
+        assert start.await_args.args[0].name == "orch"
+        assert start.await_args.args[0].path == project
+
+    def test_group_start_requires_known_names(self, capsys):
+        assert _run(["init"]) == 0
+        assert _run(["agent", "start", "zzz", "yyy"]) == 1
         assert "unknown agent" in capsys.readouterr().out
+
+    def test_moved_directory_follows_and_same_name_gets_suffix(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        old = tmp_path / "projects" / "app"
+        old.mkdir(parents=True)
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as start,
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "--dir", str(old), "--no-wait"]) == 0
+
+            # Same folder name while the old directory still exists: a
+            # different project, registered with a numbered name.
+            twin = tmp_path / "elsewhere" / "app"
+            twin.mkdir(parents=True)
+            assert _run(["agent", "start", "--dir", str(twin), "--no-wait"]) == 0
+            assert start.await_args.args[0].name == "app-2"
+
+            # The old directory is gone: the record follows the move.
+            moved = tmp_path / "moved-app"
+            old.rename(moved)
+            new_home = tmp_path / "workspace" / "app"
+            new_home.mkdir(parents=True)
+            assert _run(["agent", "start", "--dir", str(new_home), "--no-wait"]) == 0
+            assert start.await_args.args[0].name == "app"
+            assert start.await_args.args[0].path == new_home
+        capsys.readouterr()
+        assert _run(["agent", "list"]) == 0
+        out = capsys.readouterr().out
+        assert str(new_home) in out and str(twin) in out
 
     def test_set_watch_forget(self, tmp_path, capsys):
         assert _run(["init"]) == 0
@@ -144,6 +198,32 @@ class TestAgentCommands:
         assert _run(["agent", "unwatch", "orch", "acme/web"]) == 0
         assert _run(["agent", "forget", "orch"]) == 0
         assert _run(["agent", "forget", "orch"]) == 1
+
+    def test_watch_defaults_to_own_session(self, tmp_path, monkeypatch, capsys):
+        """Inside an agent session, the agent can watch repos without naming itself."""
+        assert _run(["init"]) == 0
+        project = tmp_path / "orch"
+        project.mkdir()
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
+        capsys.readouterr()
+
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        assert _run(["agent", "watch", "acme/app", "acme/web"]) == 0
+        out = capsys.readouterr().out
+        assert "orch: now watching acme/app" in out and "acme/web" in out
+        assert _run(["agent", "unwatch", "acme/web"]) == 0
+
+        monkeypatch.delenv("BACKBONE_AGENT")
+        assert _run(["agent", "watch", "acme/app"]) == 1
+        assert "$BACKBONE_AGENT" in capsys.readouterr().out
 
 
 class TestTell:
