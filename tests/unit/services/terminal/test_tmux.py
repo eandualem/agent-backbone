@@ -1139,3 +1139,88 @@ class TestGracefulClose:
             result = await graceful_close("ike")
             assert result is True
             mock_stop.assert_called_once_with("ike")
+
+
+class TestLaunchEnvironment:
+    def test_includes_agent_runtime_and_state_dir(self):
+        from agent_backbone.services.infrastructure._agents import launch_environment
+
+        env = launch_environment("reviewer", "claude", "/data/state", {"FOO": "1"})
+        assert env == {
+            "BACKBONE_RUNTIME": "claude",
+            "BACKBONE_AGENT": "reviewer",
+            "BACKBONE_STATE_DIR": "/data/state",
+            "FOO": "1",
+        }
+
+
+class TestClaudeCodeUi:
+    """Regression fixtures captured from Claude Code (Aug 2026 UI)."""
+
+    _BUSY = (
+        "\u276f [via:backbone from:elias] Count slowly from 1 to 5.\n"
+        "\u2733 Brewing\u2026 (esc to interrupt \u00b7 2s)\n"
+        "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        "\u276f \n"
+        "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        "  \u23f5\u23f5 auto mode on (shift+tab to cycle) \u00b7 \u2190 for agents\n"
+    )
+    _IDLE = (
+        "\u23fa pong\n"
+        "\u2733 Churned for 2s \u00b7 done 3:00 PM\n"
+        "                                    \u25cf high \u00b7 /effort\n"
+        "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        "\u276f \n"
+        "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        "  \u23f5\u23f5 auto mode on (shift+tab to cycle) \u00b7 \u2190 for agents\n"
+    )
+
+    def test_detects_runtime_from_new_status_line(self):
+        assert detect_runtime_from_pane(self._IDLE) == TerminalRuntime.CLAUDE
+
+    def test_idle_prompt_is_idle(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        assert adapter.detect_idle(self._IDLE) is True
+        assert adapter.prompt_has_pending_input(self._IDLE) is False
+
+    def test_spinner_means_busy_even_with_prompt_visible(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        assert adapter.detect_busy(self._BUSY) is True
+        assert adapter.detect_idle(self._BUSY) is False
+
+    def test_dim_suggestion_is_not_pending_input(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        pane = self._IDLE.replace("\u276f \n", "\u276f \x1b[2mCount from 5 down to 1\x1b[0m\n")
+        assert adapter.prompt_has_pending_input(pane) is False
+
+    def test_typed_text_is_pending_input(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        pane = self._IDLE.replace("\u276f \n", "\u276f fix the flaky test\n")
+        assert adapter.prompt_has_pending_input(pane) is True
+
+    async def test_input_buffered_while_busy_counts_as_queued(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        busy_with_input = self._BUSY.replace(
+            "\u276f \n", "\u276f [via:backbone from:elias] second message\n"
+        )
+        with (
+            patch(
+                "agent_backbone.services.terminal._adapters._write_message_buffer",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters._send_submit_key",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.capture_pane",
+                new_callable=AsyncMock,
+                return_value=busy_with_input.replace("[via:backbone from:elias] ", "typed "),
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.asyncio.sleep", new_callable=AsyncMock
+            ),
+        ):
+            assert await adapter.deliver_message("s", "second message") is True

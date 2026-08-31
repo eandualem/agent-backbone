@@ -298,31 +298,27 @@ class TestGetAgentState:
         assert result.state == AgentState.PROCESSING_ISSUE
         assert result.source == "push"
 
-    async def test_fresh_busy_push_reconciles_when_pane_is_idle(self, tmp_path):
+    async def test_fresh_busy_push_is_trusted_even_when_pane_shows_prompt(self, tmp_path):
+        """Hooks win: modern CLIs keep the prompt visible while working."""
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
         with patch(
-            f"{_INF}.capture_pane",
-            new_callable=AsyncMock,
-            return_value="user@host $",
-        ):
+            f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="\u276f "
+        ) as capture:
             result = await get_agent_state(tmp_path, "ike")
-        assert result.state == AgentState.IDLE
-        assert result.source == "pull"
+        assert result.state == AgentState.BUSY
+        assert result.source == "push"
+        capture.assert_not_called()
 
-    async def test_fresh_processing_push_reconciles_when_pane_is_idle(self, tmp_path):
+    async def test_fresh_processing_push_is_trusted(self, tmp_path):
         state_file = tmp_path / "ike.json"
         state_file.write_text(
             json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
         )
-        with patch(
-            f"{_INF}.capture_pane",
-            new_callable=AsyncMock,
-            return_value="user@host $",
-        ):
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="user@host $"):
             result = await get_agent_state(tmp_path, "ike")
-        assert result.state == AgentState.IDLE
-        assert result.source == "pull"
+        assert result.state == AgentState.PROCESSING_ISSUE
+        assert result.current_issue == 42
 
     async def test_fresh_busy_push_survives_unknown_pane(self, tmp_path):
         state_file = tmp_path / "ike.json"

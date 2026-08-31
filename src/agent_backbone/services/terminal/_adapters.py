@@ -21,6 +21,8 @@ from agent_backbone.services.terminal._sessions import query_environment_var
 log = logging.getLogger(__name__)
 
 RUNTIME_ENV_KEY = "BACKBONE_RUNTIME"
+AGENT_ENV_KEY = "BACKBONE_AGENT"
+STATE_DIR_ENV_KEY = "BACKBONE_STATE_DIR"
 _SUBMIT_RECHECK_DELAY_SECONDS = 0.1
 _MAX_SUBMIT_ATTEMPTS = 2
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -190,6 +192,8 @@ class TerminalAdapter(ABC):
     placeholder_fragments: tuple[str, ...] = ()
     status_fragments: tuple[str, ...] = ()
     queue_markers: tuple[str, ...] = ()
+    busy_markers: tuple[str, ...] = ()
+    """Fragments shown only while the runtime is working (e.g. a spinner line)."""
     auto_submit: bool = False
     submit_attempts: int = 1
     interrupt_queued_delivery: bool = False
@@ -214,8 +218,18 @@ class TerminalAdapter(ABC):
             return fallback
         return None
 
+    def detect_busy(self, pane_content: str) -> bool:
+        """Whether the runtime is visibly working (spinner / interrupt hint)."""
+        if not self.busy_markers:
+            return False
+        tail = sanitize_pane_content(pane_content).strip().splitlines()[-12:]
+        lowered = "\n".join(line.lower() for line in tail)
+        return any(marker in lowered for marker in self.busy_markers)
+
     def detect_idle(self, pane_content: str) -> bool:
         """Whether the pane currently shows an interactive prompt surface."""
+        if self.detect_busy(pane_content):
+            return False
         return self.detect_prompt(pane_content) is not None
 
     def prompt_has_pending_input(self, pane_content: str) -> bool:
@@ -232,7 +246,8 @@ class TerminalAdapter(ABC):
             return False
         if any(fragment in lowered for fragment in self.placeholder_fragments):
             return False
-        if self.runtime == TerminalRuntime.CODEX and _prompt_line_is_dim_placeholder(prompt_line):
+        if _prompt_line_is_dim_placeholder(prompt_line):
+            # Dim text after the prompt is a suggestion/placeholder, not typed input.
             return False
 
         # --- Stuck delivery guards (issue #766) ---
@@ -329,6 +344,14 @@ class TerminalAdapter(ABC):
                 state = await self.delivery_submission_state(session_name)
                 break
 
+        if state == "queued" and not self.interrupt_queued_delivery:
+            log.info(
+                "Terminal delivery queued in '%s' via %s adapter (runtime will run it next)",
+                session_name,
+                self.runtime.value,
+            )
+            return True
+
         if state != "submitted":
             log.warning(
                 "Terminal delivery remained unsent in '%s' via %s adapter (state=%s)",
@@ -355,6 +378,10 @@ class TerminalAdapter(ABC):
         if any(marker in lowered for marker in self.queue_markers):
             return "queued"
         if self.prompt_has_pending_input(pane_content):
+            # Input left in the box while the runtime is working is queued by
+            # runtimes that support it; otherwise it is simply unsent.
+            if self.detect_busy(pane_content):
+                return "queued"
             return "prompt_buffered"
         return "submitted"
 
@@ -385,8 +412,15 @@ class ClaudeCodeAdapter(TerminalAdapter):
     runtime = TerminalRuntime.CLAUDE
     prompt_prefixes = ("\u276f",)
     prompt_suffixes = ("$", "%")
-    runtime_markers = ("claude code", "claude max", "opus 4.6")
-    status_fragments = ("for shortcuts", "medium · /effort", "accept edits on")
+    runtime_markers = ("claude code", "claude max", "/effort", "shift+tab to cycle")
+    status_fragments = (
+        "for shortcuts",
+        "/effort",
+        "accept edits on",
+        "auto mode on",
+        "shift+tab to cycle",
+    )
+    busy_markers = ("esc to interrupt",)
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 

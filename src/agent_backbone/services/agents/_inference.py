@@ -47,39 +47,21 @@ async def get_agent_state(
 ) -> StateSnapshot:
     """Get reconciled agent state from push + pull sources.
 
-    Push (state file) is preferred when fresh.
-    Stale or missing push state is actively verified from tmux before any
-    stale fallback is trusted.
+    A fresh push (hook-written state file) is trusted as-is. Stale or missing
+    push state is verified from the terminal before any stale fallback is used.
     """
     push = read_state_file(state_dir, session)
     push_age = (time.time() - push.timestamp) if push else None
 
-    if (
-        push
-        and push_age is not None
-        and push_age < stale_threshold
-        and push.state not in _WORKING_STATES
-    ):
+    # A fresh hook-written state is authoritative: modern CLIs keep the prompt
+    # box visible while working, so the pane cannot tell busy from idle.
+    if push and push_age is not None and push_age < stale_threshold:
         return push
 
     pane_content = await capture_pane(session)
     if pane_content:
         pull = infer_state_from_pane(pane_content)
         pull.timestamp = time.time()
-        if (
-            push
-            and push_age is not None
-            and push_age < stale_threshold
-            and push.state in _WORKING_STATES
-        ):
-            if pull.state == AgentState.IDLE:
-                log.warning(
-                    "Recovered %s from stuck '%s' push state using live prompt detection",
-                    session,
-                    push.state.value,
-                )
-                return pull
-            return push
         if pull.state != AgentState.UNKNOWN:
             return pull
         if push and _trust_stale_push(push):
@@ -90,9 +72,6 @@ async def get_agent_state(
             )
             return push
         return pull
-
-    if push and push_age is not None and push_age < stale_threshold:
-        return push
 
     if push and _trust_stale_push(push):
         log.info(
