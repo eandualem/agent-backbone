@@ -30,9 +30,10 @@ from agent_backbone.services.infrastructure._agents import (
     RUNTIME_COMMANDS,
     RUNTIME_DISPLAY_NAMES,
     build_command,
+    launch_environment,
     runtime_available,
 )
-from agent_backbone.services.terminal import RUNTIME_ENV_KEY, TmuxService
+from agent_backbone.services.terminal import TmuxService
 
 log = logging.getLogger(__name__)
 
@@ -134,7 +135,7 @@ async def start_agent(
         )
 
     command = build_command(runtime, model=model, resume=req.resume)
-    environment = {RUNTIME_ENV_KEY: runtime, **(spec.env if spec else {})}
+    environment = launch_environment(session, runtime, config.state_dir, spec.env if spec else None)
     ok = await tmux_svc.start_session(
         session,
         working_dir=working_dir,

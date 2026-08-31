@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.terminal import (
+    AGENT_ENV_KEY,
     RUNTIME_ENV_KEY,
+    STATE_DIR_ENV_KEY,
     list_sessions,
     session_exists,
     start_session,
@@ -94,12 +96,27 @@ def build_command(
     return command
 
 
+def launch_environment(
+    name: str,
+    runtime: str,
+    state_dir: Path | str | None = None,
+    extra: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Environment exported into an agent session so shipped hooks can find the backbone."""
+    env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name}
+    if state_dir:
+        env[STATE_DIR_ENV_KEY] = str(state_dir)
+    env.update(extra or {})
+    return env
+
+
 async def start_agent(
     spec: AgentSpec,
     *,
     runtime: str | None = None,
     model: str | None = None,
     resume: bool = False,
+    state_dir: Path | str | None = None,
 ) -> bool:
     """Start a configured agent in its tmux session (idempotent)."""
     if await session_exists(spec.name):
@@ -118,7 +135,7 @@ async def start_agent(
         log.error("Cannot start agent '%s': %s", spec.name, exc)
         return False
 
-    environment = {RUNTIME_ENV_KEY: effective_runtime, **spec.env}
+    environment = launch_environment(spec.name, effective_runtime, state_dir, spec.env)
     ok = await start_session(
         spec.name,
         working_dir=str(spec.path),
@@ -152,6 +169,7 @@ async def start_group(specs: Iterable[AgentSpec], **overrides) -> int:
 
 async def start_all(config: BackboneConfig, **overrides) -> int:
     """Start every configured agent."""
+    overrides.setdefault("state_dir", config.state_dir)
     return await start_group(list(config.agents), **overrides)
 
 

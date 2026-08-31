@@ -116,3 +116,19 @@ class TestTell:
             "priority": False,
         }
         assert client.post.await_args.kwargs["headers"] == {"Authorization": "Bearer k"}
+
+
+class TestHooks:
+    def test_install_claude_into_project(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_CONFIG", str(tmp_path / "backbone.toml"))
+        (tmp_path / "backbone.toml").write_text(
+            f'[backbone]\ndata_dir = "{tmp_path / "data"}"\n[agents.a]\ndir = "/x"\n'
+        )
+        project = tmp_path / "proj"
+        assert _run(["hooks", "install", "claude", "--dir", str(project)]) == 0
+        out = capsys.readouterr().out
+        assert "installed Claude Code hooks" in out
+        settings = project / ".claude" / "settings.json"
+        assert settings.is_file()
+        assert (tmp_path / "data" / "hooks" / "claude_hook.py").is_file()
+        assert _run(["hooks", "uninstall", "claude", "--dir", str(project)]) == 0

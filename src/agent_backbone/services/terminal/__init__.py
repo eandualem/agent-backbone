@@ -1,7 +1,9 @@
 """Terminal service — async tmux session operations and PTY management."""
 
 from agent_backbone.services.terminal._adapters import (
+    AGENT_ENV_KEY,
     RUNTIME_ENV_KEY,
+    STATE_DIR_ENV_KEY,
     TerminalRuntime,
     detect_runtime_from_pane,
     get_terminal_adapter,
@@ -60,7 +62,9 @@ __all__ = [
     "PaneInfo",
     "PtyManager",
     "PtySession",
+    "AGENT_ENV_KEY",
     "RUNTIME_ENV_KEY",
+    "STATE_DIR_ENV_KEY",
     "SESSION_FORMAT_STR",
     "TerminalRuntime",
     "TmuxError",

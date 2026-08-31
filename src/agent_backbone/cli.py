@@ -329,7 +329,11 @@ async def _agent(args: argparse.Namespace, config: BackboneConfig) -> int:
             print(f"unknown agent '{args.name}' — configured: {', '.join(config.agents.names)}")
             return 1
         ok = await _agents.start_agent(
-            spec, runtime=args.runtime, model=args.model, resume=args.resume
+            spec,
+            runtime=args.runtime,
+            model=args.model,
+            resume=args.resume,
+            state_dir=config.state_dir,
         )
         return 0 if ok else 1
     if sub == "stop":
@@ -379,6 +383,33 @@ def cmd_tell(args: argparse.Namespace) -> int:
     return asyncio.run(_tell(args, BackboneConfig.load()))
 
 
+def cmd_hooks(args: argparse.Namespace) -> int:
+    from agent_backbone.hooks import install as hooks
+
+    config = BackboneConfig.load()
+    if args.runtime != "claude":
+        print(f"hooks are only available for 'claude' right now (got {args.runtime!r})")
+        return 1
+    project_dir = Path(args.dir).expanduser() if args.dir else None
+    if args.hooks_command == "install":
+        settings_path, command = hooks.install_claude(
+            config.data_dir,
+            config.state_dir,
+            project_dir=project_dir,
+            python=hooks.default_python(),
+        )
+        print(f"installed Claude Code hooks in {settings_path}")
+        print(f"  command: {command}")
+        print(f"  state:   {config.state_dir}")
+        print("Restart running Claude Code sessions for the hooks to take effect.")
+        return 0
+    if args.hooks_command == "uninstall":
+        settings_path = hooks.uninstall_claude(project_dir=project_dir)
+        print(f"removed agent-backbone hooks from {settings_path}")
+        return 0
+    return 1
+
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -421,6 +452,21 @@ def build_parser() -> argparse.ArgumentParser:
     asub.add_parser("start-all", help="start every configured agent")
     asub.add_parser("stop-all", help="stop every configured agent")
     p.set_defaults(func=cmd_agent)
+
+    p = sub.add_parser("hooks", help="install runtime hooks that report agent state")
+    hsub = p.add_subparsers(dest="hooks_command", required=True)
+    for name, help_text in (
+        ("install", "add the hooks to the runtime's settings"),
+        ("uninstall", "remove the hooks"),
+    ):
+        hp = hsub.add_parser(name, help=help_text)
+        hp.add_argument("runtime", choices=["claude"], help="runtime to configure")
+        hp.add_argument(
+            "--dir",
+            default=None,
+            help="project directory (writes .claude/settings.json there); default: global",
+        )
+    p.set_defaults(func=cmd_hooks)
 
     p = sub.add_parser("tell", help="deliver a message to an agent (via the running API)")
     p.add_argument("agent")
