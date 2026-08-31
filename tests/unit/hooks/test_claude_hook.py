@@ -17,6 +17,13 @@ def _payload(event: str, **extra) -> dict:
     return {"hook_event_name": event, "session_id": "abc", "cwd": "/tmp", **extra}
 
 
+@pytest.fixture(autouse=True)
+def _no_backbone_env(monkeypatch):
+    # In a backbone-started session BACKBONE_STATE_DIR points at the real
+    # state dir and would win over --state-dir; the tests must never touch it.
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+
+
 class TestDerive:
     @pytest.mark.parametrize(
         ("event", "expected"),

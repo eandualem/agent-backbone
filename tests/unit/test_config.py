@@ -20,7 +20,15 @@ from agent_backbone.config import (
 
 class TestDefaults:
     def test_bootstrap_is_generic(self, monkeypatch, tmp_path):
-        for var in ("BACKBONE_API_KEY", "GITHUB_TOKEN", "TELEGRAM_TOKEN", "BACKBONE_DATABASE_URL"):
+        for var in (
+            "BACKBONE_API_KEY",
+            "GITHUB_TOKEN",
+            "GITHUB_APP_ID",
+            "GITHUB_APP_PRIVATE_KEY_PATH",
+            "GITHUB_WEBHOOK_SECRET",
+            "TELEGRAM_TOKEN",
+            "BACKBONE_DATABASE_URL",
+        ):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path / "d"))
         config = bootstrap_config()
