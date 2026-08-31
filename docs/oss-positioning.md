@@ -113,12 +113,17 @@ shipping no UI (`README.md`, `docs/concepts.md`).
    (claude-squad, CAO, amux, Tmux-Orchestrator) has no GitHub-issue intake.
    agent-backbone is the only one surveyed that combines both — this is the
    lead differentiator.
-2. **No competitor documents an enforced busy/idle delivery-safety
-   mechanism equivalent to `safe_deliver` + `get_agent_state`.** amux comes
-   closest in spirit — it claims turn-boundary delivery — but publishes no
-   detection mechanism and names terminal scraping as its present-day
-   fallback; CAO documents nothing on this axis. The honest framing is
-   "nobody has published an equivalent," not "nobody has this."
+2. **amux is the only competitor that states turn-boundary delivery safety
+   as a goal; agent-backbone is the only one that documents the actual
+   detection mechanism.** amux's README asserts messages are "delivered at
+   turn boundaries" but never explains how a turn boundary is identified —
+   no hook, no polling method, no protocol description — and names terminal
+   scraping as its present-day fallback while that coverage is incomplete.
+   `safe_deliver` + `get_agent_state` is a specified, inspectable state
+   machine (fresh hook state authoritative, terminal fallback, every
+   snapshot carrying `evidence`); CAO documents nothing on this axis at
+   all. The honest framing is "amux states the goal, agent-backbone
+   documents the mechanism" — not "no competitor attempts this."
 
 **Secondary, real but smaller differentiators:** hook-pushed state with an
 inspectable `evidence` trail (six of the seven session managers surveyed
