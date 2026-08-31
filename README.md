@@ -65,7 +65,6 @@ That is **poll intake**: the backbone asks GitHub for new issues and comments ev
 | [GitHub](docs/github.md) · [Telegram](docs/telegram.md) | Integrations |
 | [Security](docs/security.md) | Defaults and what you opt into |
 | [Status and roadmap](docs/status-and-roadmap.md) | What works, what is missing, what is next |
-| [Design record](docs/design/) | Why v2 looks the way it does |
 
 ## Development
 

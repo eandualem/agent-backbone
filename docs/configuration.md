@@ -7,8 +7,7 @@ There is no configuration file. The **data directory** is the configuration:
 ├── .env            secrets only (API key, tokens) — never in the database
 ├── backbone.db     settings, agents, watches, events, deliveries, queue, state
 ├── state/          hook-written agent state, actions.jsonl, plans/
-├── hooks/          the installed hook script
-└── pids/
+└── hooks/          the installed hook script
 ```
 
 - **Settings** are keys with built-in defaults, stored in the database and

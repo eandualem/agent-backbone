@@ -26,7 +26,7 @@ Honest inventory of what works, what is missing, and what is next. Updated
 - REST API + Socket.IO snapshots + read-only terminal streaming; events
   feed; per-repository status.
 - SQLite by default; Postgres optional; single Alembic migration.
-- 734 unit tests; `make check` is the CI gate.
+- 669 unit tests; `make check` is the CI gate (GitHub Actions on 3.11–3.13).
 
 ## Missing on purpose (not yet built)
 

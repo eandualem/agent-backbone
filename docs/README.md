@@ -16,7 +16,6 @@ reference.
 | [Telegram](telegram.md) | Bot setup, allowlist, forum topics, commands |
 | [Security](security.md) | What is protected by default and what you opt into |
 | [Status and roadmap](status-and-roadmap.md) | What works today, what is deliberately missing, what is next |
-| [Design record](design/) | Why v2 looks the way it does (decision record and feedback rounds, not a user guide) |
 
 Conventions: `reviewer`, `builder`, `orch` are example agent names; `acme/app`
 and `acme/web` are example repositories; `<data_dir>` is
