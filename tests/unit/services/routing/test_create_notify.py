@@ -48,12 +48,16 @@ class TestCreateAndNotify:
                 body="## Context\nTest",
                 labels=["from:backbone", "for:brunel", "task"],
                 config=config,
+                repo=TEST_REPO,
                 flow_name="test",
             )
 
         assert result.number == 99
         mock_gh.create_issue.assert_called_once_with(
-            "[task] Test issue", "## Context\nTest", ["from:backbone", "for:brunel", "task"]
+            "[task] Test issue",
+            "## Context\nTest",
+            ["from:backbone", "for:brunel", "task"],
+            repo_full_name=TEST_REPO,
         )
         mock_deliver.assert_called_once()
         kwargs = mock_deliver.call_args.kwargs
@@ -61,7 +65,8 @@ class TestCreateAndNotify:
         assert kwargs["target_entity"] == "brunel"
         assert kwargs["flow_name"] == "test"
         assert kwargs["enforce_issue_queue"] is True
-        assert kwargs["queue_scope_issue_numbers"] == {99}
+        assert kwargs["repo"] == TEST_REPO
+        assert kwargs["queue_scope"] == {("", 99)}
 
     async def test_multiple_targets(self, config):
         mock_gh = AsyncMock()
@@ -74,6 +79,7 @@ class TestCreateAndNotify:
                 body="body",
                 labels=["from:backbone", "for:brunel", "for:leo", "task"],
                 config=config,
+                repo=TEST_REPO,
             )
 
         assert {c.kwargs["target_entity"] for c in mock_deliver.call_args_list} == {"brunel", "leo"}
@@ -87,6 +93,7 @@ class TestCreateAndNotify:
                 body="body",
                 labels=["from:backbone", "for:unknown-entity", "task"],
                 config=config,
+                repo=TEST_REPO,
             )
         mock_gh.create_issue.assert_not_called()
 
@@ -95,7 +102,12 @@ class TestCreateAndNotify:
         mock_gh.create_issue.return_value = _make_issue(70, [])
         with _patch_deliver() as mock_deliver:
             result = await create_and_notify(
-                mock_gh, title="[task] No targets", body="body", labels=["task"], config=config
+                mock_gh,
+                title="[task] No targets",
+                body="body",
+                labels=["task"],
+                config=config,
+                repo=TEST_REPO,
             )
         assert result.number == 70
         mock_deliver.assert_not_called()
@@ -111,6 +123,7 @@ class TestCreateAndNotify:
                 body="body",
                 labels=["for:brunel"],
                 config=config,
+                repo=TEST_REPO,
                 db=mock_db,
             )
         assert mock_deliver.call_args.kwargs["db"] is mock_db
@@ -126,5 +139,6 @@ class TestCreateAndNotify:
                 body="body",
                 labels=["for:brunel"],
                 config=config,
+                repo=TEST_REPO,
             )
         assert mock_deliver.call_args.args[1] == format_issue_notification(created)

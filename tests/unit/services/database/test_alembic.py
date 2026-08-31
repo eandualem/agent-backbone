@@ -11,13 +11,20 @@ from agent_backbone.services.database.config import DatabaseConfig
 _EXPECTED_TABLES = {
     "acknowledgments",
     "agent_states",
+    "agent_watches",
+    "agents",
     "dedup_log",
     "deliveries",
+    "events",
     "issue_dependencies",
     "message_queue",
+    "settings",
 }
 
 _EXPECTED_INDEXES = {
+    "uq_events_delivery_id",
+    "idx_events_received",
+    "idx_events_repo",
     "idx_deliveries_issue",
     "idx_deliveries_entity",
     "idx_deliveries_outcome",

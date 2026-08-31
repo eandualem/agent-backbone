@@ -49,11 +49,16 @@ def _patch_states(mapping: dict[str, StateSnapshot], module: str = _ESC):
     return patch(f"{module}.get_agent_state", side_effect=_get)
 
 
+_REPO = "example/orchestration"
+_WAITING = AgentState.WAITING_FOR_HUMAN
+
+
 def _issue(number: int, target: str = "ike") -> IssueData:
     return IssueData(
         number=number,
         title=f"[task] #{number}",
         labels=ParsedLabels(sender="leo", targets=[target], issue_type="task"),
+        repo_full_name=_REPO,
     )
 
 
@@ -74,21 +79,28 @@ class TestShouldEscalate:
 
 class TestCheckForStalls:
     async def test_detects_stall(self, config, db):
-        states = {"ike": _snap(AgentState.PROCESSING_ISSUE, issue=42, age=6000)}
+        states = {"ike": _snap(AgentState.BUSY, issue=42, age=6000, current_repo=_REPO)}
         with _patch_states(states):
             stalls = await esc.check_for_stalls(config, {"ike"}, db)
         assert stalls == [
-            {"entity": "ike", "session": "ike", "issue_number": 42, "duration_minutes": 100}
+            {
+                "entity": "ike",
+                "session": "ike",
+                "issue_number": 42,
+                "repo": _REPO,
+                "duration_minutes": 100,
+            }
         ]
-        assert (await db.get_agent_state("ike"))["state"] == "processing_issue"
+        row = await db.get_agent_state("ike")
+        assert row["state"] == "busy" and row["current_repo"] == _REPO
 
     @pytest.mark.parametrize(
         "snap",
         [
             _snap(AgentState.IDLE, age=6000),
             _snap(AgentState.BUSY, issue=None, age=6000),
-            _snap(AgentState.PROCESSING_ISSUE, issue=1, age=10),
-            _snap(AgentState.PLAN_WAITING, issue=1, age=6000),
+            _snap(AgentState.BUSY, issue=1, age=10),
+            _snap(_WAITING, issue=1, age=6000, reason="plan"),
         ],
     )
     async def test_not_stalled(self, config, db, snap):
@@ -103,23 +115,24 @@ class TestCheckForStalls:
 class TestHandleStalls:
     async def test_escalates_to_target_once(self, config, db):
         config = replace(config, escalation=EscalationConfig(target="leo"))
-        states = {"ike": _snap(AgentState.PROCESSING_ISSUE, issue=42, age=6000)}
+        states = {"ike": _snap(AgentState.BUSY, issue=42, age=6000)}
         with _patch_states(states), patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d:
             await esc.handle_stalls(config, {"ike", "leo"}, db)
             await esc.handle_stalls(config, {"ike", "leo"}, db)
         d.assert_awaited_once()
         assert d.await_args.args[0] == "leo"
         assert "stalled" in d.await_args.args[1]
+        assert d.await_args.kwargs["delivery_kind"] == "escalation"
 
     async def test_no_escalation_target(self, config, db):
-        states = {"ike": _snap(AgentState.PROCESSING_ISSUE, issue=42, age=6000)}
+        states = {"ike": _snap(AgentState.BUSY, issue=42, age=6000)}
         with _patch_states(states), patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d:
             await esc.handle_stalls(config, {"ike"}, db)
         d.assert_not_called()
 
     async def test_target_offline_skips_delivery(self, config, db):
         config = replace(config, escalation=EscalationConfig(target="leo"))
-        states = {"ike": _snap(AgentState.PROCESSING_ISSUE, issue=42, age=6000)}
+        states = {"ike": _snap(AgentState.BUSY, issue=42, age=6000)}
         with _patch_states(states), patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d:
             await esc.handle_stalls(config, {"ike"}, db)
         d.assert_not_called()
@@ -152,7 +165,7 @@ class TestPlanWaiting:
             telegram=TelegramConfig(notification_chat_id=5),
             escalation=EscalationConfig(target="leo"),
         )
-        states = {"ike": _snap(AgentState.PLAN_WAITING, plan_file="/p.md", plan_title="T")}
+        states = {"ike": _snap(_WAITING, reason="plan", plan_file="/p.md", plan_title="T")}
         with (
             _patch_states(states),
             patch(
@@ -175,7 +188,7 @@ class TestPlanWaiting:
         config = replace(
             config, telegram_token="tok", telegram=TelegramConfig(notification_chat_id=5)
         )
-        first = _snap(AgentState.PLAN_WAITING, plan_file="/p.md", plan_title="T")
+        first = _snap(_WAITING, reason="plan", plan_file="/p.md", plan_title="T")
         second = replace(first, timestamp=first.timestamp + 10)
         with patch(
             f"{_ESC}.TelegramService.send_notification", new_callable=AsyncMock, return_value=True
@@ -187,7 +200,7 @@ class TestPlanWaiting:
         assert tg.await_count == 2
 
     async def test_nothing_without_telegram_or_target(self, config, db):
-        states = {"ike": _snap(AgentState.PLAN_WAITING)}
+        states = {"ike": _snap(_WAITING, reason="plan")}
         with (
             _patch_states(states),
             patch(f"{_ESC}.TelegramService.send_notification", new_callable=AsyncMock) as tg,
@@ -210,7 +223,8 @@ class TestDeliverPendingIssues:
             result = await deliver_pending_issues(config, {"ike"}, db, gh)
 
         assert result["ike"] == "delivered_#7"
-        assert d.await_args.kwargs["queue_scope_issue_numbers"] == {7, 8}
+        assert d.await_args.kwargs["queue_scope"] == {(_REPO, 7), (_REPO, 8)}
+        assert d.await_args.kwargs["repo"] == _REPO
         assert d.await_args.kwargs["enforce_issue_queue"] is True
 
     async def test_defers_busy_agent(self, config, db):
@@ -224,7 +238,7 @@ class TestDeliverPendingIssues:
         d.assert_not_called()
 
     async def test_skips_acknowledged_issue(self, config, db):
-        await db.record_acknowledgment(7, "ike")
+        await db.record_acknowledgment(7, "ike", repo=_REPO)
         gh = AsyncMock()
         gh.list_open_issues = AsyncMock(return_value=[_issue(7), _issue(8)])
         gh.list_comments = AsyncMock(return_value=[])
@@ -251,10 +265,10 @@ class TestDeliverPendingIssues:
             result = await deliver_pending_issues(config, {"ike"}, db, gh)
         assert result["ike"] == "no_deliverable"
         d.assert_not_called()
-        assert await db.is_acknowledged(7, "ike")
+        assert await db.is_acknowledged(7, "ike", repo=_REPO)
 
     async def test_skips_recently_delivered(self, config, db):
-        await db.record_delivery(7, "ike", "ike", "delivered", "agent-monitor")
+        await db.record_delivery(7, "ike", "ike", "delivered", "agent-monitor", repo=_REPO)
         gh = AsyncMock()
         gh.list_open_issues = AsyncMock(return_value=[_issue(7)])
         gh.list_comments = AsyncMock(return_value=[])

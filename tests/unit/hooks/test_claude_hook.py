@@ -36,7 +36,8 @@ class TestDerive:
         record, _ = hook.derive(
             _payload("Notification", message="Claude needs your permission to use Bash"), None
         )
-        assert record["state"] == hook.STATE_PERMISSION_WAITING
+        assert record["state"] == hook.STATE_WAITING
+        assert record["reason"] == hook.REASON_PERMISSION
 
     def test_notification_idle_prompt(self):
         record, _ = hook.derive(
@@ -52,21 +53,29 @@ class TestDerive:
         record, _ = hook.derive(
             _payload("PreToolUse", tool_name="ExitPlanMode", tool_input={"plan": plan}), None
         )
-        assert record["state"] == hook.STATE_PLAN_WAITING
+        assert record["state"] == hook.STATE_WAITING
+        assert record["reason"] == hook.REASON_PLAN
         assert record["plan_title"] == "Add caching"
         assert record["plan_text"] == plan
 
         record, _ = hook.derive(_payload("PostToolUse", tool_name="ExitPlanMode"), record)
         assert record["state"] == hook.STATE_BUSY
+        assert record["reason"] is None
+
+    def test_ask_user_question_is_waiting_with_reason(self):
+        record, _ = hook.derive(_payload("PreToolUse", tool_name="AskUserQuestion"), None)
+        assert record["state"] == hook.STATE_WAITING
+        assert record["reason"] == hook.REASON_QUESTION
 
     def test_issue_number_captured_from_prompt(self):
         record, _ = hook.derive(
             _payload("UserPromptSubmit", prompt="New issue targeting you: acme/app#42 ..."), None
         )
         assert record["issue"] == 42
+        assert record["repo"] == "acme/app"
         # Preserved across later events
         later, _ = hook.derive(_payload("Stop"), record)
-        assert later["issue"] == 42
+        assert later["issue"] == 42 and later["repo"] == "acme/app"
 
     def test_started_at_is_stable(self):
         first, _ = hook.derive(_payload("SessionStart"), None)
@@ -78,6 +87,7 @@ class TestDerive:
         [
             ("Bash", {"command": "gh issue comment 17 --body 'done'"}, 17),
             ("Bash", {"command": "gh issue comment --repo a/b 9 -b x"}, 9),
+            ("Bash", {"command": "gh issue comment 12 -R acme/app -b x"}, 12),
             ("mcp__github__add_issue_comment", {"issue_number": 5}, 5),
             ("Bash", {"command": "ls"}, None),
             ("Edit", {"file_path": "x"}, None),
@@ -135,7 +145,8 @@ class TestMainWritesStateTheBackboneReads:
         payload = _payload("PreToolUse", tool_name="ExitPlanMode", tool_input={"plan": "# P\nbody"})
         assert self._run(tmp_path, payload) == 0
         snap = read_state_file(tmp_path, "reviewer")
-        assert snap.state == AgentState.PLAN_WAITING
+        assert snap.state == AgentState.WAITING_FOR_HUMAN
+        assert snap.reason == "plan"
         assert snap.plan_title == "P"
         assert open(snap.plan_file).read() == "# P\nbody"
 

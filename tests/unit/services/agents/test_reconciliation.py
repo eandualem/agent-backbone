@@ -71,11 +71,14 @@ class TestReconcileStartupStates:
             entity="ike",
             plan_file=None,
             plan_title=None,
+            reason=None,
+            current_repo=None,
         )
 
     async def test_plan_waiting_state_synced_with_fields(self, config, mock_db):
         plan_snap = StateSnapshot(
-            state=AgentState.PLAN_WAITING,
+            state=AgentState.WAITING_FOR_HUMAN,
+            reason="plan",
             source="push",
             plan_file="/tmp/plan.md",
             plan_title="Add feature X",
@@ -91,11 +94,13 @@ class TestReconcileStartupStates:
 
         mock_db.set_agent_state.assert_called_once_with(
             session_name="ike",
-            state="plan_waiting",
+            state="waiting_for_human",
             current_issue=99,
             entity="ike",
             plan_file="/tmp/plan.md",
             plan_title="Add feature X",
+            reason="plan",
+            current_repo=None,
         )
 
     async def test_check_plan_waiting_called(self, config, mock_db):

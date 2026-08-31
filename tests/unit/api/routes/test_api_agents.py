@@ -45,10 +45,17 @@ def tmux_svc():
 def _override(api_app, state_svc, tmux_svc):
     api_app.dependency_overrides[get_state_service] = lambda: state_svc
     api_app.dependency_overrides[get_tmux_service] = lambda: tmux_svc
-    with patch(
-        "agent_backbone.api.session_updates.query_environment_var",
-        new_callable=AsyncMock,
-        return_value="claude",
+    with (
+        patch(
+            "agent_backbone.api.session_updates.query_environment_var",
+            new_callable=AsyncMock,
+            return_value="claude",
+        ),
+        patch(
+            f"{_ROUTE}.wait_until_ready",
+            new_callable=AsyncMock,
+            return_value=("ready", ["hook reported idle"]),
+        ),
     ):
         yield
     api_app.dependency_overrides.clear()
@@ -86,11 +93,12 @@ class TestListAgents:
 class TestGetAgentState:
     async def test_returns_state_detail(self, api_client, auth_headers, state_svc):
         state_svc.get_state.return_value = _snapshot(
-            AgentState.PLAN_WAITING, plan_file="/tmp/plan.md", plan_title="Plan"
+            AgentState.WAITING_FOR_HUMAN, reason="plan", plan_file="/tmp/plan.md", plan_title="Plan"
         )
         resp = await api_client.get("/api/agents/ike/state", headers=auth_headers)
         assert resp.status_code == 200
-        assert resp.json()["state"] == "plan_waiting"
+        assert resp.json()["state"] == "waiting_for_human"
+        assert resp.json()["reason"] == "plan"
         assert resp.json()["plan_title"] == "Plan"
 
 
@@ -115,6 +123,7 @@ class TestStartAgent:
         data = resp.json()
         assert data["ok"] is True and data["runtime"] == "claude"
         assert data["working_directory"].endswith("/ike")
+        assert data["ready"] == "ready" and data["evidence"] == ["hook reported idle"]
         tmux_svc.start_session.assert_awaited_once()
         kwargs = tmux_svc.start_session.await_args.kwargs
         assert kwargs["command"] == ["/usr/bin/claude"]
@@ -154,29 +163,82 @@ class TestStartAgent:
         assert resp.json()["already_existed"] is True
         tmux_svc.start_session.assert_not_awaited()
 
-    async def test_unconfigured_session_requires_working_directory(
-        self, api_client, auth_headers, tmux_svc
-    ):
+    async def test_unknown_agent_requires_dir(self, api_client, auth_headers, tmux_svc):
         with patch(f"{_ROUTE}.runtime_available", return_value=True):
             resp = await api_client.post("/api/agents/scratch/start", headers=auth_headers)
-        assert resp.status_code == 400
-        assert "not a configured agent" in resp.json()["detail"]
+        assert resp.status_code == 404
+        assert "not a known agent" in resp.json()["detail"]
 
-    async def test_unconfigured_session_with_working_directory(
-        self, api_client, auth_headers, tmux_svc
+    async def test_start_with_dir_discovers_and_registers(
+        self, api_client, auth_headers, tmux_svc, api_app, tmp_path
     ):
+        project = tmp_path / "scratch-app"
+        project.mkdir()
         with (
             patch(f"{_ROUTE}.runtime_available", return_value=True),
             patch(f"{_ROUTE}.build_command", return_value=None),
+            patch("agent_backbone.services.agent_store.detect_repo", return_value="acme/scratch"),
         ):
             resp = await api_client.post(
-                "/api/agents/scratch/start",
-                json={"runtime": "shell", "working_directory": "/tmp"},
+                "/api/agents/start",
+                json={"dir": str(project), "runtime": "shell", "watch": ["acme/other"]},
                 headers=auth_headers,
             )
-        assert resp.status_code == 200
-        assert resp.json()["model"] is None
-        assert tmux_svc.start_session.await_args.kwargs["working_dir"] == "/tmp"
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["name"] == "scratch-app" and data["repo"] == "acme/scratch"
+        assert data["model"] is None
+        assert tmux_svc.start_session.await_args.kwargs["working_dir"] == str(project.resolve())
+        spec = api_app.state.agent_store.agents.get("scratch-app")
+        assert spec is not None and spec.watches == ("acme/other",)
+        # ...and it is now visible via the API
+        listed = await api_client.get("/api/config/agents", headers=auth_headers)
+        assert "scratch-app" in [a["name"] for a in listed.json()]
+
+    async def test_inspect_reports_evidence(self, api_client, auth_headers, tmux_svc):
+        tmux_svc.session_exists.return_value = True
+        with patch(
+            f"{_ROUTE}.get_session_intelligence",
+            new_callable=AsyncMock,
+        ) as intel:
+            from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+            intel.return_value = SessionProfile(
+                "ike",
+                SessionIntelligence.AGENT_WORKING,
+                runtime="claude",
+                agent_state=AgentState.BUSY,
+                current_issue=4,
+                current_repo="example/ike",
+                evidence=["hook state 'busy' written 3s ago (fresh)"],
+            )
+            with patch(f"{_ROUTE}.capture_pane", new_callable=AsyncMock, return_value="❯ "):
+                resp = await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["state"] == "busy" and data["delivery"] == "agent_working"
+        assert data["current_issue"] == 4 and data["current_repo"] == "example/ike"
+        assert data["evidence"] == ["hook state 'busy' written 3s ago (fresh)"]
+        assert data["known"] is True and data["online"] is True
+
+    async def test_patch_watch_and_forget(self, api_client, auth_headers, tmux_svc):
+        resp = await api_client.patch(
+            "/api/agents/ike", json={"description": "Reviews", "model": "m"}, headers=auth_headers
+        )
+        assert resp.status_code == 200 and resp.json()["model"] == "m"
+        resp = await api_client.post(
+            "/api/agents/ike/watch", json={"repo": "acme/web"}, headers=auth_headers
+        )
+        assert "acme/web" in resp.json()["watches"]
+        resp = await api_client.post(
+            "/api/agents/ike/unwatch", json={"repo": "acme/web"}, headers=auth_headers
+        )
+        assert "acme/web" not in resp.json()["watches"]
+        tmux_svc.session_exists.return_value = True
+        assert (await api_client.delete("/api/agents/ike", headers=auth_headers)).status_code == 409
+        tmux_svc.session_exists.return_value = False
+        assert (await api_client.delete("/api/agents/ike", headers=auth_headers)).json()["ok"]
+        assert (await api_client.delete("/api/agents/ike", headers=auth_headers)).status_code == 404
 
 
 class TestStopAgent:

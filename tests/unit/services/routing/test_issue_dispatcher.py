@@ -144,7 +144,7 @@ class TestIssueDispatcher:
         )
         with _patch_safe_deliver("delivered") as mock_deliver:
             await issue_dispatcher(_issue_event(1, "leo", ["ike"]), config, mock_db, mock_gh)
-        assert mock_deliver.await_args.kwargs["queue_scope_issue_numbers"] == {1, 4}
+        assert mock_deliver.await_args.kwargs["queue_scope"] == {("", 1), ("", 4)}
         assert mock_deliver.await_args.kwargs["enforce_issue_queue"] is True
 
     async def test_repo_owner_receives_repo_local_issue(self, tmp_path, mock_db):
@@ -196,6 +196,56 @@ class TestIssueDispatcher:
         assert mock_deliver.await_args.kwargs["delivery_kind"] == "pull_request"
         assert mock_deliver.await_args.kwargs["enforce_issue_queue"] is False
 
+    async def test_watchers_are_informed_but_not_queued(self, tmp_path, mock_db):
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={
+                    "app": AgentSpec(name="app", dir="/x", repo="acme/app"),
+                    "orch": AgentSpec(
+                        name="orch", dir="/o", repo="acme/orch", watches=("acme/app",)
+                    ),
+                }
+            ),
+        )
+        issue = IssueData(
+            number=3, title="Bug", labels=ParsedLabels(sender="leo"), repo_full_name="acme/app"
+        )
+        event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
+        with _patch_safe_deliver("delivered") as mock_deliver:
+            result = await issue_dispatcher(event, config, mock_db)
+        kinds = {c.args[0]: c.kwargs["delivery_kind"] for c in mock_deliver.await_args_list}
+        assert kinds == {"app": "issue", "orch": "watch"}
+        assert sorted(result.delivered) == ["app", "orch"]
+
+    async def test_multi_owner_repo_announces_unassigned_issue(self, tmp_path, mock_db):
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={
+                    "a": AgentSpec(name="a", dir="/a", repo="acme/app"),
+                    "b": AgentSpec(name="b", dir="/b", repo="acme/app"),
+                }
+            ),
+        )
+        issue = IssueData(
+            number=3, title="Bug", labels=ParsedLabels(sender="leo"), repo_full_name="acme/app"
+        )
+        event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
+        with _patch_safe_deliver("delivered") as mock_deliver:
+            await issue_dispatcher(event, config, mock_db)
+        assert {c.kwargs["delivery_kind"] for c in mock_deliver.await_args_list} == {"watch"}
+        assert "comment on it to claim it" in mock_deliver.await_args.args[1]
+
+    async def test_labeled_event_without_for_is_ignored(self, config, mock_db):
+        issue = IssueData(
+            number=3, title="Edit", labels=ParsedLabels(sender="leo"), repo_full_name="example/ike"
+        )
+        event = IssueEvent(event_type=EventType.ISSUE_LABELED, issue=issue)
+        with _patch_safe_deliver("delivered") as mock_deliver:
+            await issue_dispatcher(event, config, mock_db)
+        mock_deliver.assert_not_called()
+
 
 class TestCommentRouting:
     async def test_unknown_commenter_notifies_everyone(self, config, mock_db):
@@ -214,14 +264,14 @@ class TestCommentRouting:
         event = _comment_event(42, "leo", ["ike"], "[from:ike] Ack")
         with _patch_safe_deliver("delivered"):
             await issue_dispatcher(event, config, mock_db)
-        mock_db.record_acknowledgment.assert_called_once_with(42, "ike")
+        mock_db.record_acknowledgment.assert_called_once_with(42, "ike", repo="")
 
     async def test_external_comment_clears_acknowledgment(self, config, mock_db):
         event = _comment_event(42, "leo", ["ike"], "[from:leo] New info")
         with _patch_safe_deliver("delivered"):
             result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == ["ike"]
-        mock_db.clear_acknowledgment.assert_called_with(42, "ike")
+        mock_db.clear_acknowledgment.assert_called_with(42, "ike", repo="")
 
     async def test_no_from_tag_falls_back_to_action_log(self, config, mock_db):
         event = _comment_event(12, "leo", ["ike"], "Just a plain comment.")

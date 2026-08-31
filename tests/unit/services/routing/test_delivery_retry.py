@@ -27,27 +27,42 @@ async def db():
 
 class TestRetryDeliveryAckCheck:
     async def test_retry_skips_acknowledged_target_entity(self, db, config):
-        await db.record_delivery(154, "feynman", "ike", "offline")
-        await db.record_acknowledgment(154, "feynman")
-        delivery = {"session_name": "ike", "issue_number": 154, "target_entity": "feynman"}
+        await db.record_delivery(154, "feynman", "ike", "offline", repo=TEST_REPO)
+        await db.record_acknowledgment(154, "feynman", repo=TEST_REPO)
+        delivery = {
+            "session_name": "ike",
+            "issue_number": 154,
+            "target_entity": "feynman",
+            "repo": TEST_REPO,
+        }
 
         assert await retry_delivery(config, delivery, db, AsyncMock()) == "acknowledged"
 
     async def test_retry_skips_when_session_acknowledged(self, db, config):
-        await db.record_delivery(154, "feynman", "ike", "offline")
-        await db.record_acknowledgment(154, "ike")
-        delivery = {"session_name": "ike", "issue_number": 154, "target_entity": "feynman"}
+        await db.record_delivery(154, "feynman", "ike", "offline", repo=TEST_REPO)
+        await db.record_acknowledgment(154, "ike", repo=TEST_REPO)
+        delivery = {
+            "session_name": "ike",
+            "issue_number": 154,
+            "target_entity": "feynman",
+            "repo": TEST_REPO,
+        }
 
         assert await retry_delivery(config, delivery, db, AsyncMock()) == "acknowledged"
 
     @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
     async def test_retry_proceeds_when_not_acknowledged(self, mock_deliver, db, config):
-        await db.record_delivery(154, "ike", "ike", "offline")
+        await db.record_delivery(154, "ike", "ike", "offline", repo=TEST_REPO)
         mock_issue = MagicMock(state="open", repo_full_name=TEST_REPO)
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
         mock_deliver.return_value = "delivered"
-        delivery = {"session_name": "ike", "issue_number": 154, "target_entity": "ike"}
+        delivery = {
+            "session_name": "ike",
+            "issue_number": 154,
+            "target_entity": "ike",
+            "repo": TEST_REPO,
+        }
 
         assert await retry_delivery(config, delivery, db, mock_gh) == "retried"
         mock_deliver.assert_called_once()
@@ -55,7 +70,12 @@ class TestRetryDeliveryAckCheck:
     async def test_retry_issue_closed(self, db, config):
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=MagicMock(state="closed"))
-        delivery = {"session_name": "ike", "issue_number": 1, "target_entity": "ike"}
+        delivery = {
+            "session_name": "ike",
+            "issue_number": 1,
+            "target_entity": "ike",
+            "repo": TEST_REPO,
+        }
 
         assert await retry_delivery(config, delivery, db, mock_gh) == "issue_closed"
 
@@ -68,14 +88,19 @@ class TestRetryDeliveryAckCheck:
                 specs={"backbone": AgentSpec(name="backbone", dir="/x", repo="acme/backbone")}
             ),
         )
-        await db.record_delivery(77, "backbone", "backbone", "offline")
+        await db.record_delivery(77, "backbone", "backbone", "offline", repo="acme/backbone")
         mock_issue = MagicMock(state="open", repo_full_name="acme/backbone")
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
         mock_gh.list_issues = AsyncMock(return_value=[MagicMock(number=77)])
         mock_gh.list_open_issues = AsyncMock(return_value=[])
         mock_deliver.return_value = "delivered"
-        delivery = {"session_name": "backbone", "issue_number": 77, "target_entity": "backbone"}
+        delivery = {
+            "session_name": "backbone",
+            "issue_number": 77,
+            "target_entity": "backbone",
+            "repo": "acme/backbone",
+        }
 
         assert await retry_delivery(config, delivery, db, mock_gh) == "retried"
         assert mock_gh.get_issue.await_args.kwargs["repo_full_name"] == "acme/backbone"
@@ -85,7 +110,12 @@ class TestRetryDeliveryAckCheck:
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=MagicMock(state="open", repo_full_name=""))
         mock_gh.list_open_issues = AsyncMock(return_value=[])
-        delivery = {"session_name": "ike", "issue_number": 88, "target_entity": "ike"}
+        delivery = {
+            "session_name": "ike",
+            "issue_number": 88,
+            "target_entity": "ike",
+            "repo": TEST_REPO,
+        }
 
         mock_deliver.return_value = "agent_working"
         assert await retry_delivery(config, delivery, db, mock_gh) == "still_busy"
@@ -197,7 +227,7 @@ class TestDeliveryRetryQueueDrain:
         self, mock_list_sessions, mock_deliver, db, config
     ):
         """No GitHub client → failed issue rows are left alone but the queue still drains."""
-        await db.record_delivery(5, "ike", "ike", "offline")
+        await db.record_delivery(5, "ike", "ike", "offline", repo=TEST_REPO)
         await db.enqueue_message("ike", "hi", delivery_kind="direct_message")
         mock_list_sessions.return_value = ["ike"]
         mock_deliver.return_value = "delivered"
@@ -229,9 +259,8 @@ class TestPurgePendingForIssue:
 
 
 class TestDeliveryDedupPrefixedOutcomes:
-    async def test_comment_delivered_suppresses_retry(self, db):
-        await db.record_delivery(100, "feynman", "feynman", "comment_offline")
-        await db.record_delivery(100, "feynman", "feynman", "comment_delivered")
+    async def test_comment_failures_are_not_retried_as_issues(self, db):
+        await db.record_delivery(100, "feynman", "feynman", "offline", kind="comment")
         assert 100 not in [r["issue_number"] for r in await db.get_failed_deliveries()]
 
     async def test_unprefixed_delivered_still_suppresses(self, db):
@@ -255,10 +284,10 @@ class TestDeliveryDedupPrefixedOutcomes:
         from agent_backbone.services.routing._delivery import safe_deliver
         from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 
-        await db.record_delivery(200, "feynman", "feynman", "comment_delivered")
+        await db.record_delivery(200, "feynman", "feynman", "delivered", kind="comment")
         mock_intel.return_value = SessionProfile(
             session_name="feynman",
-            intelligence=SessionIntelligence.IDLE_READY,
+            intelligence=SessionIntelligence.READY,
             agent_state="idle",
             runtime="shell",
         )

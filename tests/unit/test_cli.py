@@ -1,7 +1,8 @@
-"""Tests for the `backbone` CLI."""
+"""Tests for the `backbone` CLI (database-backed configuration)."""
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,46 +16,74 @@ def _run(argv: list[str]) -> int:
     return int(exc.value.code or 0)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("BACKBONE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("BACKBONE_API_KEY", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
+    # Never talk to a real backbone during tests
+    with patch("agent_backbone.cli._api_up", new_callable=AsyncMock, return_value=False):
+        yield tmp_path / "data"
+
+
 class TestInit:
-    def test_writes_config_and_env(self, tmp_path, capsys):
-        assert _run(["init", "--dir", str(tmp_path)]) == 0
-        toml = tmp_path / "backbone.toml"
-        env = tmp_path / ".env"
-        assert toml.is_file() and env.is_file()
-        assert "[agents.reviewer]" in toml.read_text()
+    def test_creates_data_dir_env_and_database(self, _isolated_data_dir, capsys):
+        data = _isolated_data_dir
+        assert _run(["init"]) == 0
+        env = data / ".env"
+        assert env.is_file() and (data / "backbone.db").is_file()
         assert "BACKBONE_API_KEY=" in env.read_text()
         assert len(env.read_text().split("BACKBONE_API_KEY=")[1].splitlines()[0]) >= 32
         assert oct(env.stat().st_mode)[-3:] == "600"
+        assert "backbone agent start" in capsys.readouterr().out
 
-    def test_refuses_to_overwrite_without_force(self, tmp_path):
-        (tmp_path / "backbone.toml").write_text("x")
-        assert _run(["init", "--dir", str(tmp_path)]) == 1
-        assert (tmp_path / "backbone.toml").read_text() == "x"
-        assert _run(["init", "--dir", str(tmp_path), "--force"]) == 0
+    def test_keeps_env_without_force(self, _isolated_data_dir):
+        data = _isolated_data_dir
+        data.mkdir(parents=True)
+        (data / ".env").write_text("BACKBONE_API_KEY=keep\n")
+        assert _run(["init"]) == 0
+        assert (data / ".env").read_text() == "BACKBONE_API_KEY=keep\n"
+        assert _run(["init", "--force"]) == 0
+        assert "keep" not in (data / ".env").read_text()
+
+
+class TestConfig:
+    def test_set_get_list_unset(self, capsys):
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        assert _run(["config", "set", "backbone.port", "7999"]) == 0
+        capsys.readouterr()
+        assert _run(["config", "get", "backbone.port"]) == 0
+        assert capsys.readouterr().out.splitlines()[0] == "7999"
+        assert _run(["config", "list"]) == 0
+        out = capsys.readouterr().out
+        assert "* backbone.port" in out and "timing.grace_period_seconds" in out
+        assert _run(["config", "unset", "backbone.port"]) == 0
+        capsys.readouterr()
+        assert _run(["config", "get", "backbone.port"]) == 0
+        assert capsys.readouterr().out.splitlines()[0] == "7120"
+
+    def test_rejects_bad_values(self, capsys):
+        assert _run(["init"]) == 0
+        assert _run(["config", "set", "backbone.port", "lots"]) == 1
+        assert _run(["config", "set", "nope.key", "1"]) == 1
 
 
 class TestDoctor:
-    def test_reports_missing_pieces(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setenv("BACKBONE_CONFIG", str(tmp_path / "backbone.toml"))
-        monkeypatch.delenv("BACKBONE_API_KEY", raising=False)
-        (tmp_path / "backbone.toml").write_text(
-            f'[backbone]\ndata_dir = "{tmp_path / "data"}"\n'
-            f'[agents.a]\ndir = "{tmp_path / "missing"}"\n'
-        )
-        code = _run(["doctor"])
+    def test_reports_missing_pieces(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        assert _run(["agent", "set", "ghost", "dir=/nope"]) == 1  # unknown agent
+        with patch("agent_backbone.cli.shutil.which", return_value=None):
+            code = _run(["doctor"])
         out = capsys.readouterr().out
         assert code == 1
-        assert "dir exists" in out and "✗" in out
-        assert "API key configured" in out
+        assert "tmux on PATH" in out and "✗" in out
 
     def test_passes_with_valid_setup(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setenv("BACKBONE_CONFIG", str(tmp_path / "backbone.toml"))
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
-        (tmp_path / "agent").mkdir()
-        (tmp_path / "backbone.toml").write_text(
-            f'[backbone]\ndata_dir = "{tmp_path / "data"}"\n'
-            f'[agents.a]\ndir = "{tmp_path / "agent"}"\nruntime = "shell"\n'
-        )
+        assert _run(["init"]) == 0
         with patch("agent_backbone.cli.shutil.which", return_value="/usr/bin/tmux"):
             code = _run(["doctor"])
         assert code == 0
@@ -62,37 +91,66 @@ class TestDoctor:
 
 
 class TestAgentCommands:
-    def test_list(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setenv("BACKBONE_CONFIG", str(tmp_path / "backbone.toml"))
-        (tmp_path / "backbone.toml").write_text('[agents.a]\ndir = "/x"\n[agents.b]\ndir = "/y"\n')
+    def test_start_discovers_agent_from_directory(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        project = tmp_path / "my-app"
+        project.mkdir()
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as start,
+            patch(
+                "agent_backbone.services.infrastructure._agents.wait_until_ready",
+                new_callable=AsyncMock,
+                return_value=("ready", ["terminal shows an empty prompt"]),
+            ),
+            patch("agent_backbone.services.agent_store.detect_repo", return_value="acme/my-app"),
+        ):
+            assert _run(["agent", "start", "--dir", str(project), "--runtime", "shell"]) == 0
+        out = capsys.readouterr().out
+        assert "my-app: ready" in out and "acme/my-app" in out
+        assert start.await_args.args[0].name == "my-app"
+        assert start.await_args.args[0].repo == "acme/my-app"
+
         assert _run(["agent", "list"]) == 0
         out = capsys.readouterr().out
-        assert "a" in out and "/y" in out
+        assert "my-app" in out and str(project) in out
 
-    def test_start_unknown_agent(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setenv("BACKBONE_CONFIG", str(tmp_path / "backbone.toml"))
-        (tmp_path / "backbone.toml").write_text('[agents.a]\ndir = "/x"\n')
+    def test_start_unknown_agent_without_dir(self, capsys):
+        assert _run(["init"]) == 0
         assert _run(["agent", "start", "zzz"]) == 1
         assert "unknown agent" in capsys.readouterr().out
 
-    def test_start_known_agent(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("BACKBONE_CONFIG", str(tmp_path / "backbone.toml"))
-        (tmp_path / "backbone.toml").write_text('[agents.a]\ndir = "/x"\n')
-        with patch(
-            "agent_backbone.services.infrastructure._agents.start_agent",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as start:
-            assert _run(["agent", "start", "a", "--model", "m"]) == 0
-        assert start.await_args.args[0].name == "a"
-        assert start.await_args.kwargs["model"] == "m"
+    def test_set_watch_forget(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        project = tmp_path / "orch"
+        project.mkdir()
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
+        assert _run(["agent", "watch", "orch", "acme/app", "acme/web"]) == 0
+        assert _run(["agent", "set", "orch", "description=Coordinates", "repo=acme/orch"]) == 0
+        capsys.readouterr()
+        assert _run(["agent", "list"]) == 0
+        assert "orch" in capsys.readouterr().out
+        assert _run(["agent", "unwatch", "orch", "acme/web"]) == 0
+        assert _run(["agent", "forget", "orch"]) == 0
+        assert _run(["agent", "forget", "orch"]) == 1
 
 
 class TestTell:
-    def test_posts_to_running_api(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setenv("BACKBONE_CONFIG", str(tmp_path / "backbone.toml"))
+    def test_posts_to_running_api(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
-        (tmp_path / "backbone.toml").write_text('[agents.a]\ndir = "/x"\n')
+        assert _run(["init"]) == 0
+        capsys.readouterr()
 
         class _Resp:
             status_code = 200
@@ -102,33 +160,30 @@ class TestTell:
                 return {"ok": True, "session": "a", "outcome": "delivered"}
 
         client = AsyncMock()
-        client.post = AsyncMock(return_value=_Resp())
+        client.request = AsyncMock(return_value=_Resp())
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
         with patch("httpx.AsyncClient", return_value=client):
             assert _run(["tell", "a", "hello", "world", "--from", "me"]) == 0
 
-        payload = client.post.await_args.kwargs["json"]
-        assert payload == {
+        kwargs = client.request.await_args.kwargs
+        assert kwargs["json"] == {
             "target_session": "a",
             "from_entity": "me",
             "message": "hello world",
             "priority": False,
         }
-        assert client.post.await_args.kwargs["headers"] == {"Authorization": "Bearer k"}
+        assert kwargs["headers"] == {"Authorization": "Bearer k"}
+        assert json.loads(capsys.readouterr().out)["ok"] is True
 
 
 class TestHooks:
-    def test_install_claude_into_project(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setenv("BACKBONE_CONFIG", str(tmp_path / "backbone.toml"))
-        (tmp_path / "backbone.toml").write_text(
-            f'[backbone]\ndata_dir = "{tmp_path / "data"}"\n[agents.a]\ndir = "/x"\n'
-        )
+    def test_install_claude_into_project(self, tmp_path, _isolated_data_dir, capsys):
         project = tmp_path / "proj"
         assert _run(["hooks", "install", "claude", "--dir", str(project)]) == 0
         out = capsys.readouterr().out
         assert "installed Claude Code hooks" in out
         settings = project / ".claude" / "settings.json"
         assert settings.is_file()
-        assert (tmp_path / "data" / "hooks" / "claude_hook.py").is_file()
+        assert (_isolated_data_dir / "hooks" / "claude_hook.py").is_file()
         assert _run(["hooks", "uninstall", "claude", "--dir", str(project)]) == 0

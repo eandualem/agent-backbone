@@ -21,7 +21,7 @@ def _make_issue(number: int, state: str = "closed", targets: list[str] | None = 
 class TestOnDependencyResolved:
     async def test_no_parents_noop(self, config):
         async with BackboneDB.connect() as db:
-            result = await on_dependency_resolved(99, config, db, AsyncMock())
+            result = await on_dependency_resolved(99, "", config, db, AsyncMock())
         assert result["parents_checked"] == "0"
 
     async def test_parent_found_all_resolved(self, config):
@@ -38,7 +38,7 @@ class TestOnDependencyResolved:
                     f"{_DEP}.safe_deliver", new_callable=AsyncMock, return_value="delivered"
                 ) as d,
             ):
-                result = await on_dependency_resolved(20, config, db, AsyncMock())
+                result = await on_dependency_resolved(20, "", config, db, AsyncMock())
 
         assert result["parent_10"] == "unblocked_delivered_to:feynman"
         assert d.await_args.args[0] == "feynman"
@@ -48,7 +48,7 @@ class TestOnDependencyResolved:
             await db.upsert_dependency(10, 20)
             await db.upsert_dependency(10, 21)
             with patch(f"{_DEP}.check_parent_resolved", new_callable=AsyncMock, return_value=None):
-                result = await on_dependency_resolved(20, config, db, AsyncMock())
+                result = await on_dependency_resolved(20, "", config, db, AsyncMock())
         assert result["parent_10"] == "still_blocked"
 
     async def test_unknown_target_not_delivered(self, config):
@@ -63,7 +63,7 @@ class TestOnDependencyResolved:
                 ),
                 patch(f"{_DEP}.safe_deliver", new_callable=AsyncMock) as d,
             ):
-                result = await on_dependency_resolved(20, config, db, AsyncMock())
+                result = await on_dependency_resolved(20, "", config, db, AsyncMock())
         assert result["parent_10"] == "unblocked_no_delivery"
         d.assert_not_called()
 
@@ -94,8 +94,8 @@ class TestLifecycleDependencyIntegration:
             new_callable=AsyncMock,
             return_value={"parents_checked": "0"},
         ) as mock_dep:
-            await _check_dependencies(42, config, db, gh)
-        mock_dep.assert_called_once_with(42, config, db, gh)
+            await _check_dependencies(42, "acme/app", config, db, gh)
+        mock_dep.assert_called_once_with(42, "acme/app", config, db, gh)
 
     async def test_lifecycle_dependency_error_isolated(self, config):
         with patch(
@@ -103,23 +103,19 @@ class TestLifecycleDependencyIntegration:
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):
-            await _check_dependencies(42, config, AsyncMock(), AsyncMock())
+            await _check_dependencies(42, "acme/app", config, AsyncMock(), AsyncMock())
 
     async def test_sync_dependencies_queries_each_agent(self, config):
         gh = AsyncMock()
         gh.list_open_issues = AsyncMock(return_value=[])
         await sync_dependencies(config, AsyncMock(), gh)
-        labels = [call.args[0] for call in gh.list_open_issues.await_args_list]
-        assert labels == [f"for:{name}" for name in config.agents.names]
+        labels = {call.args[0] for call in gh.list_open_issues.await_args_list}
+        assert labels == {f"for:{name}" for name in config.agents.names}
+        repos = {call.kwargs["repo_full_name"] for call in gh.list_open_issues.await_args_list}
+        assert repos == set(config.agents.repos)
 
     async def test_sync_dependencies_skipped_without_github(self, config, tmp_path):
-        from dataclasses import replace
-
-        from agent_backbone.config import GitHubConfig
-
-        gh = AsyncMock()
-        await sync_dependencies(replace(config, github=GitHubConfig()), AsyncMock(), gh)
-        gh.list_open_issues.assert_not_called()
+        await sync_dependencies(config, AsyncMock(), None)
 
 
 class TestPersistenceDependencies:

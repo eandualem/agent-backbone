@@ -16,7 +16,7 @@ class TestMerge:
         assert set(once["hooks"]) == {e for e, _ in install.CLAUDE_EVENTS}
         assert once == twice
         pre = once["hooks"]["PreToolUse"]
-        assert pre[0]["matcher"] == "ExitPlanMode"
+        assert pre[0]["matcher"] == "ExitPlanMode|AskUserQuestion"
         assert "matcher" not in once["hooks"]["Stop"][0]
         assert once["hooks"]["Stop"][0]["hooks"][0]["command"] == cmd
 

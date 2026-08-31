@@ -33,7 +33,7 @@ def _mock_tmux_svc(sessions: list[str] | None = None) -> MagicMock:
 
 class TestGetSystemStatus:
     async def test_returns_configured_agents_and_live_sessions(
-        self, api_client, auth_headers, api_app
+        self, api_client, auth_headers, api_app, config
     ):
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[object()] * 3)
@@ -48,8 +48,11 @@ class TestGetSystemStatus:
         data = resp.json()
         assert data["active_sessions"] == ["feynman", "ike"]
         assert data["agent_count"] == 9  # nine configured agents in the test config
-        assert data["pending_issues"] == 3
+        assert data["pending_issues"] == 3 * len(config.agents.repos)
         assert data["failed_deliveries"] == 0
+        assert {r["repo"] for r in data["repos"]} == set(config.agents.repos)
+        shared = next(r for r in data["repos"] if r["repo"] == "example/orchestration")
+        assert shared["owners"] == [] and "ike" in shared["watchers"]
         by_name = {a["name"]: a for a in data["agents"]}
         assert by_name["feynman"]["online"] is True
         assert by_name["feynman"]["configured"] is True
@@ -117,6 +120,7 @@ class TestGetAgentConfig:
         names = [a["name"] for a in resp.json()]
         assert names == config.agents.names
         assert resp.json()[0]["runtime"] == "claude"
+        assert resp.json()[0]["watches"] == ["example/orchestration"]
 
     async def test_requires_auth(self, api_client):
         resp = await api_client.get("/api/config/agents")

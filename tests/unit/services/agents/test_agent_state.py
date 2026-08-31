@@ -42,7 +42,7 @@ class TestReadStateFile:
             json.dumps({"state": "processing_issue", "issue": 42, "ts": time.time()})
         )
         result = read_state_file(tmp_path, "ike")
-        assert result.state == AgentState.PROCESSING_ISSUE
+        assert result.state == AgentState.BUSY  # legacy value maps to busy
         assert result.current_issue == 42
 
     def test_missing_file(self, tmp_path):
@@ -76,7 +76,9 @@ class TestReadStateFile:
         )
         result = read_state_file(tmp_path, "ike")
         assert result is not None
-        assert result.state == AgentState.PLAN_WAITING
+        assert result.state == AgentState.WAITING_FOR_HUMAN
+        assert result.reason == "plan"
+        assert result.is_plan_waiting
         assert result.plan_file == "/tmp/plan.md"
         assert result.plan_title == "Add caching layer"
 
@@ -93,30 +95,54 @@ class TestReadStateFile:
         )
         result = read_state_file(tmp_path, "ike")
         assert result is not None
-        assert result.state == AgentState.PERMISSION_WAITING
+        assert result.state == AgentState.WAITING_FOR_HUMAN
+        assert result.reason == "permission"
         assert result.current_issue == 42
 
+    def test_generic_waiting_state_with_reason_and_repo(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "state": "waiting_for_human",
+                    "reason": "question",
+                    "issue": 7,
+                    "repo": "acme/app",
+                    "ts": time.time(),
+                }
+            )
+        )
+        result = read_state_file(tmp_path, "ike")
+        assert result.state == AgentState.WAITING_FOR_HUMAN
+        assert result.reason == "question"
+        assert result.current_repo == "acme/app"
+        assert result.evidence
 
-class TestPlanWaiting:
-    def test_plan_waiting_enum_value(self):
-        assert AgentState.PLAN_WAITING == "plan_waiting"
-        assert AgentState("plan_waiting") == AgentState.PLAN_WAITING
 
-    def test_should_deliver_plan_waiting_default(self):
-        assert should_deliver(AgentState.PLAN_WAITING) is False
+class TestWaitingForHuman:
+    def test_enum_values_are_generic(self):
+        assert {s.value for s in AgentState} == {
+            "starting",
+            "idle",
+            "busy",
+            "waiting_for_human",
+            "unknown",
+        }
 
-    def test_should_deliver_plan_waiting_blocking(self):
-        assert should_deliver(AgentState.PLAN_WAITING, is_blocking=True) is False
+    def test_legacy_values_parse(self):
+        assert AgentState.parse("plan_waiting") == (AgentState.WAITING_FOR_HUMAN, "plan")
+        assert AgentState.parse("permission_waiting") == (
+            AgentState.WAITING_FOR_HUMAN,
+            "permission",
+        )
+        assert AgentState.parse("processing_issue") == (AgentState.BUSY, None)
+        assert AgentState.parse("sleeping") == (AgentState.UNKNOWN, None)
 
-    def test_should_deliver_plan_waiting_require_idle(self):
-        assert should_deliver(AgentState.PLAN_WAITING, require_idle=True) is False
+    def test_should_deliver_waiting_default(self):
+        assert should_deliver(AgentState.WAITING_FOR_HUMAN) is False
 
-    def test_permission_waiting_enum_value(self):
-        assert AgentState.PERMISSION_WAITING == "permission_waiting"
-        assert AgentState("permission_waiting") == AgentState.PERMISSION_WAITING
-
-    def test_should_deliver_permission_waiting_default(self):
-        assert should_deliver(AgentState.PERMISSION_WAITING) is False
+    def test_should_deliver_waiting_blocking(self):
+        assert should_deliver(AgentState.WAITING_FOR_HUMAN, is_blocking=True) is False
 
 
 class TestInferStateFromPane:
@@ -149,6 +175,21 @@ class TestInferStateFromPane:
     def test_unknown_content(self):
         result = infer_state_from_pane("random output with no indicators")
         assert result.state == AgentState.UNKNOWN
+        assert result.evidence
+
+    def test_claude_permission_prompt_is_waiting_for_human(self):
+        pane = (
+            "Bash command\n  rm -rf build\n\n"
+            "Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No"
+        )
+        result = infer_state_from_pane(pane, runtime_hint="claude")
+        assert result.state == AgentState.WAITING_FOR_HUMAN
+        assert result.reason == "permission"
+
+    def test_claude_busy_marker_wins_over_prompt(self):
+        pane = "❯ \n────\n  Thinking… (esc to interrupt)"
+        result = infer_state_from_pane(pane, runtime_hint="claude")
+        assert result.state == AgentState.BUSY
 
     def test_source_is_pull(self):
         result = infer_state_from_pane("user@host $")
@@ -295,8 +336,9 @@ class TestGetAgentState:
         )
         with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
             result = await get_agent_state(tmp_path, "ike")
-        assert result.state == AgentState.PROCESSING_ISSUE
+        assert result.state == AgentState.BUSY
         assert result.source == "push"
+        assert any("fresh" in line for line in result.evidence)
 
     async def test_fresh_busy_push_is_trusted_even_when_pane_shows_prompt(self, tmp_path):
         """Hooks win: modern CLIs keep the prompt visible while working."""
@@ -317,7 +359,7 @@ class TestGetAgentState:
         )
         with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="user@host $"):
             result = await get_agent_state(tmp_path, "ike")
-        assert result.state == AgentState.PROCESSING_ISSUE
+        assert result.state == AgentState.BUSY
         assert result.current_issue == 42
 
     async def test_fresh_busy_push_survives_unknown_pane(self, tmp_path):
@@ -437,7 +479,8 @@ class TestGetAgentState:
         )
         with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
             result = await get_agent_state(tmp_path, "feynman", stale_threshold=300)
-        assert result.state == AgentState.PLAN_WAITING
+        assert result.state == AgentState.WAITING_FOR_HUMAN
+        assert result.reason == "plan"
         assert result.source == "push"
 
     async def test_stale_permission_waiting_does_not_resurrect(self, tmp_path):
@@ -486,7 +529,7 @@ class TestRowToSnapshot:
             "plan_title": "DB migration",
         }
         snap = _row_to_snapshot(row)
-        assert snap.state == AgentState.PROCESSING_ISSUE
+        assert snap.state == AgentState.BUSY
         assert snap.current_issue == 571
         assert snap.started_at == 1709499000.0
         assert snap.plan_file == "/tmp/plan.md"
@@ -591,12 +634,6 @@ class TestShouldDeliver:
     def test_unknown_deferred(self):
         assert should_deliver(AgentState.UNKNOWN) is False
 
-    def test_processing_blocks_nonblocking(self):
-        assert should_deliver(AgentState.PROCESSING_ISSUE, is_blocking=False) is False
-
-    def test_processing_blocks_even_blocking(self):
-        assert should_deliver(AgentState.PROCESSING_ISSUE, is_blocking=True) is False
-
     def test_busy_never_delivers(self):
         assert should_deliver(AgentState.BUSY, is_blocking=False) is False
 
@@ -618,9 +655,6 @@ class TestRequireIdle:
 
     def test_unknown_skipped(self):
         assert should_deliver(AgentState.UNKNOWN, require_idle=True) is False
-
-    def test_processing_skipped(self):
-        assert should_deliver(AgentState.PROCESSING_ISSUE, require_idle=True) is False
 
     def test_blocking_ignored_in_monitor_mode(self):
         """Even blocking issues don't override require_idle."""

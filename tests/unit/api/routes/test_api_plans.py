@@ -14,7 +14,11 @@ from agent_backbone.services.agents import AgentState, StateSnapshot
 
 def _plan_snapshot(plan_file: str | None = None) -> StateSnapshot:
     return StateSnapshot(
-        state=AgentState.PLAN_WAITING, source="push", plan_file=plan_file, plan_title="Plan"
+        state=AgentState.WAITING_FOR_HUMAN,
+        reason="plan",
+        source="push",
+        plan_file=plan_file,
+        plan_title="Plan",
     )
 
 

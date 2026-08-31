@@ -42,6 +42,11 @@ def _patch_deliver(outcome: str = "delivered"):
     return patch(f"{_LC}.safe_deliver", new_callable=AsyncMock, return_value=outcome)
 
 
+def _issue_calls(mock):
+    """safe_deliver calls that delivered the next issue (not the opener notice)."""
+    return [c for c in mock.await_args_list if c.kwargs.get("delivery_kind", "issue") == "issue"]
+
+
 class TestOnIssueClosed:
     def setup_method(self):
         clear_dedup()
@@ -53,8 +58,10 @@ class TestOnIssueClosed:
             result = await on_issue_closed(make_close_event(["feynman"]), config, mock_gh)
 
         assert result["feynman"] == "delivered_#11"
-        d.assert_called_once()
-        assert d.await_args.kwargs["queue_scope_issue_numbers"] == {11}
+        assert len(_issue_calls(d)) == 1
+        assert _issue_calls(d)[0].kwargs["queue_scope"] == {(TEST_REPO, 11)}
+        # The opener (ike) is told the issue was closed
+        assert result["opener:ike"] == "delivered"
 
     async def test_queue_empty(self, config):
         with _patch_session_exists(True), _patch_find_next(None):
@@ -67,12 +74,14 @@ class TestOnIssueClosed:
         assert result["feynman"] == "offline"
 
     async def test_ignored_target_skipped(self, config):
-        result = await on_issue_closed(make_close_event(["elias"]), config, AsyncMock())
-        assert result["elias"] == "skipped"
+        with _patch_deliver():
+            result = await on_issue_closed(make_close_event(["elias"]), config, AsyncMock())
+        assert "elias" not in result
 
     async def test_unknown_target_has_no_session(self, config):
-        result = await on_issue_closed(make_close_event(["nobody"]), config, AsyncMock())
-        assert result["nobody"] == "no_session"
+        with _patch_deliver():
+            result = await on_issue_closed(make_close_event(["nobody"]), config, AsyncMock())
+        assert "nobody" not in result
 
     async def test_dedup_prevents_redelivery(self, config):
         mock_gh = AsyncMock()
@@ -83,12 +92,12 @@ class TestOnIssueClosed:
 
         assert first["feynman"] == "delivered_#6"
         assert second["feynman"] == "deduped_#6"
-        assert d.call_count == 1
+        assert len(_issue_calls(d)) == 1
 
     async def test_find_next_issue_excludes_closed_number(self, config):
         mock_gh = AsyncMock()
         mock_gh.list_open_issues = AsyncMock(return_value=[_next_issue(10), _next_issue(11)])
-        result = await find_next_issue(config, "feynman", mock_gh, exclude_number=10)
+        result = await find_next_issue(config, "feynman", mock_gh, exclude=(TEST_REPO, 10))
         assert result is not None and result.number == 11
 
     async def test_find_next_issue_none_when_empty(self, config):
@@ -96,7 +105,7 @@ class TestOnIssueClosed:
         mock_gh.list_open_issues = AsyncMock(return_value=[])
         assert await find_next_issue(config, "feynman", mock_gh) is None
 
-    async def test_non_default_repo_skips_dependency_hooks(self, config):
+    async def test_any_repo_runs_dependency_hooks(self, config):
         event = make_close_event(["feynman"], repo_full_name="acme/agent-shell")
         mock_gh = AsyncMock()
         mock_gh.list_open_issues = AsyncMock(return_value=[])
@@ -109,8 +118,10 @@ class TestOnIssueClosed:
             result = await on_issue_closed(event, config, mock_gh, db=AsyncMock())
 
         assert result["feynman"] == "delivered_#11"
-        assert mock_find.await_args.kwargs["repo_full_name"] == "acme/agent-shell"
-        mock_deps.assert_not_awaited()
+        assert mock_find.await_args.kwargs["exclude"] == ("acme/agent-shell", 10)
+        mock_deps.assert_awaited_once_with(
+            10, "acme/agent-shell", config, mock_deps.await_args.args[3], mock_gh
+        )
 
     async def test_default_repo_runs_dependency_hooks(self, config):
         mock_gh = AsyncMock()
@@ -157,5 +168,5 @@ class TestOnIssueClosed:
             result = await on_issue_closed(
                 make_close_event(["feynman"]), config, AsyncMock(), db=mock_db
             )
-        mock_db.purge_pending_for_issue.assert_awaited_once_with(10)
+        mock_db.purge_pending_for_issue.assert_awaited_once_with(10, repo=TEST_REPO)
         assert result["feynman"] == "queue_empty"

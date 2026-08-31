@@ -82,7 +82,9 @@ class TestTell:
         update = _update()
         with patch(f"{_CMD}.safe_deliver", new_callable=AsyncMock, return_value="agent_working"):
             await bot.cmd_tell(update, _context(["ike", "hi"]))
-        update.message.reply_text.assert_awaited_once_with("`ike` is busy.", parse_mode="Markdown")
+        update.message.reply_text.assert_awaited_once_with(
+            "`ike` is busy — queued.", parse_mode="Markdown"
+        )
 
     async def test_unauthorized_ignored(self, config):
         bot = _bot(config)
@@ -169,7 +171,9 @@ class TestPlans:
         )
         bot = TelegramService(cfg, db=AsyncMock())
         update = _update()
-        snapshot = StateSnapshot(state=AgentState.PLAN_WAITING, plan_file="/p.md")
+        snapshot = StateSnapshot(
+            state=AgentState.WAITING_FOR_HUMAN, reason="plan", plan_file="/p.md"
+        )
         with (
             patch(f"{_CMD}.read_state_file", return_value=snapshot),
             patch(f"{_CMD}.session_exists", new_callable=AsyncMock, return_value=True),
@@ -184,7 +188,10 @@ class TestPlans:
         plan = tmp_path / "plan.md"
         plan.write_text("# plan body")
         snapshot = StateSnapshot(
-            state=AgentState.PLAN_WAITING, plan_file=str(plan), plan_title="Big plan"
+            state=AgentState.WAITING_FOR_HUMAN,
+            reason="plan",
+            plan_file=str(plan),
+            plan_title="Big plan",
         )
         with patch(f"{_CMD}.read_state_file", return_value=snapshot):
             await bot.cmd_viewplan(update, _context(["ike"]))
@@ -218,8 +225,9 @@ class TestDeliveryReplyFallbacks:
         [
             ("delivered", "Sent to `ike`."),
             ("offline", "`ike` is offline."),
-            ("plan_waiting", "`ike` is awaiting plan approval."),
-            ("copy_mode", "Not delivered to `ike` (copy_mode)."),
+            ("waiting_for_human", "`ike` is waiting for a human — queued."),
+            ("human_typing", "`ike` has someone at the keyboard — queued."),
+            ("delivery_failed", "Not delivered to `ike` (delivery_failed)."),
         ],
     )
     def test_reply(self, status, expected):

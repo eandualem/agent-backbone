@@ -13,7 +13,6 @@ from agent_backbone.config import (
     AgentSpec,
     BackboneConfig,
     BackboneSection,
-    GitHubConfig,
     RoutingConfig,
 )
 from agent_backbone.models import (
@@ -34,10 +33,29 @@ TEST_REPO = "example/orchestration"
 AGENT_NAMES = ("feynman", "ike", "leo", "ada", "brunel", "hamilton", "curie", "bell", "gallup")
 
 
-def make_agents(tmp_path: Path | None = None, names=AGENT_NAMES) -> AgentsConfig:
+def make_agents(
+    tmp_path: Path | None = None, names=AGENT_NAMES, *, shared_repo: str = TEST_REPO
+) -> AgentsConfig:
+    """Agents that each own ``example/<name>`` and all watch the shared test repo.
+
+    ``for:<agent>`` labels in the shared repo therefore route to every agent,
+    while unlabelled issues in ``example/<name>`` belong to that agent alone.
+    """
     base = str(tmp_path) if tmp_path else "~/agents"
+    if tmp_path is not None:
+        for name in names:
+            (tmp_path / name).mkdir(parents=True, exist_ok=True)
     return AgentsConfig(
-        specs={name: AgentSpec(name=name, dir=f"{base}/{name}", runtime="claude") for name in names}
+        specs={
+            name: AgentSpec(
+                name=name,
+                dir=f"{base}/{name}",
+                runtime="claude",
+                repo=f"example/{name}",
+                watches=(shared_repo,) if shared_repo else (),
+            )
+            for name in names
+        }
     )
 
 
@@ -49,7 +67,6 @@ def make_config(tmp_path: Path, **overrides) -> BackboneConfig:
         github_token="ghp_test",
         backbone=BackboneSection(data_dir=str(tmp_path / "data"), port=7120),
         agents=make_agents(tmp_path),
-        github=GitHubConfig(repo=TEST_REPO),
         routing=RoutingConfig(ignore_targets=frozenset({"elias"})),
     )
     defaults.update(overrides)
@@ -189,6 +206,33 @@ async def api_app(config):
     await db.start()
     app.state.db = db
     app.state.github = None  # Tests override via dependency_overrides when needed
+    from dataclasses import replace
+
+    from agent_backbone.services.agent_store import AgentStore
+
+    # Seed the database with the test agents so store refreshes reproduce them,
+    # and keep the test config's secrets/sections when the store publishes.
+    for spec in config.agents:
+        await db.upsert_agent(
+            spec.name,
+            dir=spec.dir,
+            runtime=spec.runtime,
+            model=spec.model,
+            repo=spec.repo,
+            tags=list(spec.tags),
+            env=dict(spec.env),
+            description=spec.description,
+        )
+        for repo in spec.watches:
+            await db.add_watch(spec.name, repo)
+
+    def _publish(new_config):
+        app.state.config = replace(app.state.config, agents=new_config.agents)
+
+    store = AgentStore(db, config.data_dir, on_change=_publish)
+    store._agents = config.agents
+    store._config = config
+    app.state.agent_store = store
     app.state.state_service = StateService(config.state_dir, db=db)
     app.state.tmux_service = TmuxService()
     app.state.delivery_service = DeliveryService()
