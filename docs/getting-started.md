@@ -8,7 +8,7 @@ but tmux and SQLite.
 - macOS or Linux, Python 3.11+, `tmux`
 - [uv](https://docs.astral.sh/uv/) (or plain `pip`)
 - At least one agent CLI on your `PATH`: `claude`, `codex`, `gemini`,
-  `opencode`, `aider`. (`shell` works for trying things out.)
+  `opencode`, `aider`. (`shell` works for trying the plumbing.)
 
 ## 1. Install
 
@@ -20,143 +20,151 @@ uv sync
 Every command below is `uv run backbone …`; `uv tool install .` gives you a
 plain `backbone` on your PATH.
 
-## 2. Create a configuration
+## 2. Initialise
 
 ```bash
 uv run backbone init
 ```
 
-This writes two files in the current directory:
+Creates the data directory (`~/.local/share/agent-backbone`, or
+`$BACKBONE_DATA_DIR`) with:
 
-- `backbone.toml` — everything structural (agents, integrations, tuning)
-- `.env` — secrets, starting with a freshly generated `BACKBONE_API_KEY`
+- `.env` — secrets only, starting with a generated `BACKBONE_API_KEY`
+- `backbone.db` — settings, agents, events, deliveries (SQLite)
+- `state/` — where hooks report agent state
 
-The backbone finds `backbone.toml` by walking up from wherever you run it,
-or at `~/.config/agent-backbone/backbone.toml`, or via `BACKBONE_CONFIG=/path`.
-Put it wherever you keep project-level config; it does not need to live
-inside an agent's repository.
+There is no configuration file. Settings have defaults and are changed with
+`backbone config set` (see [Configuration](configuration.md)).
 
-Open `backbone.toml` and describe your agents:
-
-```toml
-[agents.reviewer]
-dir = "~/code/app"
-runtime = "claude"
-
-[agents.builder]
-dir = "~/code/app"
-runtime = "codex"
-```
-
-That is the whole required configuration.
-
-## 3. Check the environment
+## 3. Install the Claude Code hooks
 
 ```bash
-uv run backbone doctor
+uv run backbone hooks install claude              # global: ~/.claude/settings.json
+uv run backbone hooks install claude --dir ~/code/app   # or one project
 ```
 
-`doctor` verifies tmux, every agent's directory and runtime binary, the API
-key, and (if configured) GitHub and Telegram credentials. Fix anything marked
-`✗`.
+With hooks, Claude Code tells the backbone the moment it becomes busy, idle,
+or waits for a person (plan approval, permission prompt, question). Without
+them the backbone reads the terminal, which works but is less precise.
+Other runtimes are read from the terminal for now.
 
-## 4. Install the Claude Code hooks (recommended)
+## 4. Run the backbone
 
 ```bash
-uv run backbone hooks install claude          # global: ~/.claude/settings.json
-# or per project:
-uv run backbone hooks install claude --dir ~/code/app
+uv run backbone up --detach    # inside a tmux session named "backbone"
+uv run backbone doctor         # tmux, runtimes, credentials, API reachable
 ```
 
-With hooks, Claude Code tells the backbone when it is busy, idle, waiting for
-plan approval or waiting for a permission answer. Without them the backbone
-falls back to reading the terminal, which works but is less precise. Other
-runtimes use terminal reading only for now.
+`up` starts the HTTP/Socket.IO API on `127.0.0.1:7120`, the background
+jobs, the Telegram bot (if a token is set) and the GitHub intake (if a token
+is set). One process. `backbone down` stops it.
 
-## 5. Run the backbone
+## 5. Start an agent from its directory
 
 ```bash
-uv run backbone up            # foreground, Ctrl-C to stop
-uv run backbone up --detach   # or inside a tmux session named "backbone"
+cd ~/code/app
+uv run backbone agent start
 ```
 
-`up` starts the HTTP/Socket.IO API on `127.0.0.1:7120`, the background jobs,
-the Telegram bot (if a token is set) and the GitHub connector (if a repo and
-token are set). Everything is one process. Data lives in
-`~/.local/share/agent-backbone/` (`backbone.db`, `state/`, `pids/`).
+```
+app: ready — claude repo acme/app
+  dir: /Users/me/code/app
+  - hook reported idle 0s ago
+```
 
-## 6. Start an agent and talk to it
+The agent is named after the directory, its repository was read from
+`git remote origin`, and `start` returned when Claude was at its prompt.
 
-In another terminal:
+> **First launch in a new directory**: Claude Code asks whether you trust
+> the folder. `start` reports `started, waiting for you` with the question
+> shown; answer it with `tmux attach -t app` (choose *Yes, I trust this
+> folder*, then `Ctrl-b d`). Claude remembers the answer for that directory
+> and the next `start` is instant.
+
+Useful right away:
 
 ```bash
-uv run backbone agent start reviewer
-uv run backbone status
-uv run backbone tell reviewer "Summarise what this repository does in three sentences."
+uv run backbone status                 # agents, their state, repositories
+uv run backbone agent inspect app      # state + delivery readiness + evidence
+uv run backbone tell app "Summarise what this repository does in three sentences."
 ```
-
-> **First launch of Claude Code in a new directory** shows its workspace-trust
-> prompt, and its default answer is *No, exit*. Attach once with
-> `tmux attach -t reviewer`, choose *Yes, I trust this folder*, detach with
-> `Ctrl-b d`. Claude remembers the answer for that directory.
 
 `tell` returns the delivery outcome:
 
 ```json
-{"ok": true, "session": "reviewer", "outcome": "delivered"}
+{"ok": true, "session": "app", "outcome": "delivered"}
 ```
 
-If the agent was busy you get `"outcome": "agent_working"` and the message is
-queued; it is delivered automatically when the agent becomes idle (within a
-minute — see [How it works](how-it-works.md#3-sending-a-message)).
+If the agent is busy you get `"outcome": "agent_working"` and the message
+is queued; the monitor delivers it when the agent is idle (within a
+minute). Watch it happen: `tmux attach -t app`.
 
-Watch it happen: `tmux attach -t reviewer`.
+## 6. A second agent, and agents talking to each other
 
-## 7. Let agents talk to each other
+```bash
+cd ~/code/web && uv run backbone agent start --runtime codex
+```
 
-An agent sends a message by calling the API. With `curl` available in the
-agent's environment, this is a one-liner the agent can run itself:
+An agent sends a message by calling the API. With `curl` available, the
+agent can run this itself:
 
 ```bash
 curl -s -X POST http://127.0.0.1:7120/api/messages \
   -H "Authorization: Bearer $BACKBONE_API_KEY" -H "Content-Type: application/json" \
-  -d '{"target_session":"builder","from_entity":"reviewer","message":"Auth tests pass; please rebase your branch."}'
+  -d '{"target_session":"web","from_entity":"app","message":"Auth tests pass; please rebase your branch."}'
 ```
 
 Tell your agents about this in their instructions file (CLAUDE.md /
-AGENTS.md): who the other agents are, and that `[via:backbone from:X]` at the
-start of a message means X sent it.
+AGENTS.md): who the other agents are, and that `[via:backbone from:X]` at
+the start of a message means X sent it. The API key is not exported into
+agent sessions; give it to an agent deliberately:
+`backbone agent set app env='{"BACKBONE_API_KEY":"…"}'`.
 
-## 8. Optional: GitHub Issues as the task list
-
-```toml
-[github]
-repo = "acme/app"
-mode = "poll"          # no public URL needed
-```
+## 7. GitHub Issues as the task list
 
 ```bash
-echo 'GITHUB_TOKEN=ghp_…' >> .env    # or: GITHUB_TOKEN=$(gh auth token)
+echo "GITHUB_TOKEN=$(gh auth token)" >> ~/.local/share/agent-backbone/.env
+uv run backbone down && uv run backbone up --detach
+uv run backbone status        # github intake: poll
 ```
 
-Restart `backbone up`. Now an issue labelled `for:reviewer` is delivered to
-the reviewer agent within 30 seconds, comments are routed to the other
-participants, and closing an issue hands the agent its next one. Details and
-the agent-side protocol are in [GitHub integration](github.md).
+Now, in every repository an agent owns or watches:
+
+- an issue opened in `acme/app` is delivered to `app` (the owner);
+- an issue labelled `for:web` anywhere `web` owns or watches goes to `web`;
+- comments go to the other participants; closing an issue hands the agent
+  its next one.
+
+Latency is one poll interval (60 s). For instant delivery add a webhook
+(`GITHUB_WEBHOOK_SECRET` + `gh webhook forward` or a cloudflared tunnel);
+the backbone switches to webhook intake by itself. Details and the
+agent-side protocol: [GitHub integration](github.md).
+
+## 8. An orchestrator
+
+An orchestrator is an ordinary agent that watches the repositories it
+coordinates:
+
+```bash
+cd ~/code/orchestration && uv run backbone agent start --watch acme/app --watch acme/web
+```
+
+It hears about new issues in both repositories, can be addressed with
+`for:orchestration` in either, and opens issues for the others with
+`for:app` / `for:web` and `from:orchestration`.
 
 ## 9. Optional: Telegram
 
-Create a bot with @BotFather, put `TELEGRAM_TOKEN=…` in `.env`, and add your
-chat id to `allowed_chat_ids` (send `/identify` to the bot to learn it once you
-have added a placeholder id). See [Telegram](telegram.md).
+Create a bot with @BotFather, put `TELEGRAM_TOKEN=…` in `.env`, allow your
+chat id (`backbone config set telegram.allowed_chat_ids '[123456789]'`),
+restart. See [Telegram](telegram.md).
 
 ## Where things are
 
 | What | Where |
 |---|---|
-| Config | `backbone.toml` (structural), `.env` (secrets) |
-| Database | `<data_dir>/backbone.db` (SQLite) |
+| Secrets | `<data_dir>/.env` |
+| Settings, agents, events, deliveries | `<data_dir>/backbone.db` |
 | Agent state from hooks | `<data_dir>/state/<agent>.json`, `<data_dir>/state/actions.jsonl` |
 | Installed hook script | `<data_dir>/hooks/claude_hook.py` |
-| Poll checkpoint | `<data_dir>/github-poll.json` |
 | API docs | `http://127.0.0.1:7120/docs` while running |

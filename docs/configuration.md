@@ -1,144 +1,140 @@
 # Configuration
 
-One TOML file plus a handful of environment variables.
+There is no configuration file. The **data directory** is the configuration:
 
-## Where `backbone.toml` is found
+```
+~/.local/share/agent-backbone/      # $BACKBONE_DATA_DIR to move it
+├── .env            secrets only (API key, tokens) — never in the database
+├── backbone.db     settings, agents, watches, events, deliveries, queue, state
+├── state/          hook-written agent state, actions.jsonl, plans/
+├── hooks/          the installed hook script
+└── pids/
+```
 
-In order: `BACKBONE_CONFIG=/path/to/backbone.toml`; a `backbone.toml` in the
-current directory or any parent; `~/.config/agent-backbone/backbone.toml`;
-otherwise built-in defaults (no agents, no integrations, SQLite in the data
-dir). A `.env` next to the config file is loaded automatically.
+- **Settings** are keys with built-in defaults, stored in the database and
+  edited with `backbone config set KEY VALUE` (or `PUT /api/config/{key}`).
+  The running backbone applies a change immediately.
+- **Agents** are discovered by `backbone agent start` and edited with
+  `backbone agent set|watch|unwatch|forget`.
+- **Secrets** come from `<data_dir>/.env` (loaded at startup) or the
+  environment.
 
-`backbone init` writes a commented starter; [`backbone.example.toml`](../backbone.example.toml)
-lists every key.
+Only two knobs live outside the directory: `BACKBONE_DATA_DIR` (where it
+is) and `BACKBONE_DATABASE_URL` (PostgreSQL instead of the SQLite file).
 
-## `[backbone]`
+## Settings
 
-| Key | Default | Meaning |
-|---|---|---|
-| `data_dir` | `~/.local/share/agent-backbone` | SQLite database, hook state, pid files, poll checkpoint |
-| `host` | `127.0.0.1` | Bind address. Keep it local unless you put auth and TLS in front. |
-| `port` | `7120` | API port |
-| `session_name` | `backbone` | tmux session used by `backbone up --detach` |
-| `cors_origins` | `[]` | Browser origins allowed to call the API; empty disables CORS |
-| `max_delivery_ids` | `100` | Size of the in-memory webhook/poll dedup cache (the database keeps the full log) |
+`backbone config list` prints every key with its current value and marks
+the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
+`'{"42":"reviewer"}'`); plain strings need no quoting.
 
-## `[agents.<name>]`
-
-One table per agent. The name must be a valid tmux session name (letters,
-digits, `-`, `_`).
-
-| Key | Required | Meaning |
-|---|---|---|
-| `dir` | yes | Working directory the CLI is started in |
-| `runtime` | no (`claude`) | `claude`, `codex`, `gemini`, `opencode`, `aider`, `cursor`, `shell` |
-| `model` | no | Passed as `--model` to the runtime |
-| `repo` | no | `owner/name`. Issues and PRs in this repository route to this agent without labels; its open issues are part of the agent's queue |
-| `tags` | no | Free-form strings, returned by the API for dashboards |
-| `env` | no | Extra environment variables exported into the session |
-| `description` | no | Free text, returned by the API |
-
-## `[github]`
+### `backbone.*`
 
 | Key | Default | Meaning |
 |---|---|---|
-| `repo` | — | Coordination repository (`owner/name`) where `for:<agent>` issues live. Leave unset to disable GitHub entirely |
-| `mode` | `webhook` | `poll` or `webhook` |
-| `poll_interval_seconds` | `30` | Poll frequency |
+| `backbone.host` | `127.0.0.1` | Bind address. Keep it local unless you put auth and TLS in front |
+| `backbone.port` | `7120` | API port |
+| `backbone.session_name` | `backbone` | tmux session used by `backbone up --detach` |
+| `backbone.cors_origins` | `[]` | Browser origins allowed to call the API; empty disables CORS |
+| `backbone.max_delivery_ids` | `100` | In-memory webhook/poll dedup cache (the events table keeps the full log) |
 
-Credentials (environment): `GITHUB_TOKEN` **or** `GITHUB_APP_ID` +
-`GITHUB_APP_PRIVATE_KEY_PATH`. `GITHUB_WEBHOOK_SECRET` is required in webhook
-mode.
-
-## `[routing]`
+### `agents.*`
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ignore_targets` | `[]` | `for:`/`from:` label values that are people, not agents; never routed |
-| `notification_dedup_seconds` | `10` | Window in which the same issue → same agent notification is suppressed (webhook retries, double closes) |
+| `agents.default_runtime` | `claude` | Runtime used by `agent start` when none is given |
 
-## `[delivery]`
-
-| Key | Default | Meaning |
-|---|---|---|
-| `retention_days` | `30` | Delivery history retention (pruned every 6 h) |
-| `grace_period_seconds` | `5` | Settle time after an agent becomes idle before delivering |
-| `queue_retry_seconds` | `30` | Reserved for future use |
-
-## `[monitor]`
+### `github.*`
 
 | Key | Default | Meaning |
 |---|---|---|
-| `interval_seconds` | `60` | `agent-monitor` job period |
-| `retry_interval_seconds` | `300` | `delivery-retry` job period |
+| `github.intake` | `auto` | `auto` (webhook if `GITHUB_WEBHOOK_SECRET` is set, else poll), `webhook`, `poll`, `off` |
+| `github.poll_interval_seconds` | `60` | Poll frequency in poll intake |
+| `github.backfill_on_start` | `true` | Webhook intake: run one poll at startup to catch missed events |
+| `github.backfill_lookback_hours` | `24` | How far back the first poll looks for a repository with no stored events |
 
-## `[agent_state]`
-
-| Key | Default | Meaning |
-|---|---|---|
-| `state_dir` | `<data_dir>/state` | Where hooks write `<agent>.json` and `actions.jsonl` |
-| `stale_threshold_seconds` | `300` | Hook state older than this is verified against the terminal |
-
-## `[escalation]`
+### `routing.*`
 
 | Key | Default | Meaning |
 |---|---|---|
-| `target` | — | Agent that receives stall / offline / plan-waiting messages. Empty disables agent escalation (Telegram notifications still happen) |
-| `stall_threshold_seconds` | `5400` | Busy on one issue for longer than this counts as a stall |
-| `dedup_seconds` | `1800` | Do not repeat the same escalation within this window |
+| `routing.ignore_targets` | `[]` | `for:`/`from:` label values that are people, not agents; never routed |
+| `routing.notification_dedup_seconds` | `10` | Suppress the same issue → same agent notification within this window |
 
-## `[telegram]`
+### `timing.*` — every threshold
 
 | Key | Default | Meaning |
 |---|---|---|
-| `allowed_chat_ids` | `[]` | **Required to enable the bot.** Chat ids (users or groups) allowed to issue commands |
-| `notification_chat_id` | — | Where plan-waiting and copy-mode alerts are sent |
-| `group_chat_id` | — | Forum group used for topic routing (auto-discovered if omitted) |
-| `topic_routes` | `{}` | `thread_id = "agent"` mappings; `"agents"` is the catch-all topic |
-| `topic_discovery_file` | `<data_dir>/telegram-topics.json` | Auto-discovered topic mappings |
+| `timing.stale_threshold_seconds` | `300` | Hook state older than this is verified against the terminal |
+| `timing.grace_period_seconds` | `5` | Settle time after an agent becomes idle before delivering (`settling`) |
+| `timing.queue_expiry_minutes` | `30` | Queued messages older than this are expired |
+| `timing.stall_threshold_seconds` | `5400` | Busy on one issue for longer than this is a stall |
+| `timing.escalation_dedup_seconds` | `1800` | Do not repeat the same escalation within this window |
+| `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period |
+| `timing.retry_interval_seconds` | `300` | `delivery-retry` job period |
+| `timing.start_timeout_seconds` | `60` | How long `agent start` waits for the prompt |
+| `timing.delivery_retention_days` | `30` | Deliveries and events older than this are pruned (every 6 h) |
 
-Credential: `TELEGRAM_TOKEN`.
+### `telegram.*`
 
-## `[priority_scoring]`
+| Key | Default | Meaning |
+|---|---|---|
+| `telegram.allowed_chat_ids` | `[]` | **Required to enable the bot.** Chat ids (users or groups) allowed to issue commands |
+| `telegram.notification_chat_id` | — | Where plan-waiting, dead-session and copy-mode alerts go |
+| `telegram.group_chat_id` | — | Forum group used for topic routing (auto-discovered if omitted) |
+| `telegram.topic_routes` | `{}` | `{"thread_id": "agent"}` mappings; `"agents"` is the catch-all topic |
 
-Controls "which issue is next". Score = type weight + blocking bonus +
-dependents bonus + age tie-breaker.
+### `escalation.*`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `escalation.target` | — | Agent that receives stall / dead-session / plan-waiting messages. Empty disables agent escalation (Telegram alerts still happen) |
+
+### `priority.*` — "which issue is next"
+
+Score = type weight + blocking bonus + dependents bonus + age tie-breaker.
 
 | Key | Default |
 |---|---|
-| `blocking_weight` | `1000.0` |
-| `type_weights` | `{ spec-gap = 100, bug = 90, task = 50, question = 20, optimization = 10 }` |
-| `dependents_multiplier` | `1.5` |
-| `age_tiebreaker_weight` | `0.01` |
+| `priority.blocking_weight` | `1000.0` |
+| `priority.type_weights` | `{"spec-gap": 100, "bug": 90, "task": 50, "question": 20, "optimization": 10}` |
+| `priority.dependents_multiplier` | `1.5` |
+| `priority.age_tiebreaker_weight` | `0.01` |
 
-## `[security]`
-
-| Key | Default | Meaning |
-|---|---|---|
-| `allow_remote_plan_control` | `false` | Enable approve/reject/respond on plans via API and Telegram (injects keystrokes into the agent) |
-| `allow_unauthenticated` | `false` | Serve the API without an API key. Dev boxes only |
-
-## `[database]`
+### `security.*`
 
 | Key | Default | Meaning |
 |---|---|---|
-| `url` | SQLite in `data_dir` | Any SQLAlchemy async URL, e.g. `postgresql+asyncpg://user:pw@host/db` (install the `postgres` extra) |
-| `pool_size` / `pool_overflow` | `5` / `10` | Postgres pool sizing |
-| `echo` | `false` | Log SQL |
+| `security.allow_remote_plan_control` | `false` | Enable approve/reject/respond on plans via API and Telegram (injects keystrokes) |
+| `security.allow_unauthenticated` | `false` | Serve the API without an API key. Dev boxes only |
 
-## Environment variables
+## Agents
+
+Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
+
+| Field | Set by | Meaning |
+|---|---|---|
+| `name` | directory name, or `--name` | tmux session name, `for:`/`from:` identity |
+| `dir` | `agent start --dir` | Working directory the runtime is started in |
+| `runtime` | `--runtime` / `agent set` | `claude`, `codex`, `gemini`, `opencode`, `aider`, `cursor`, `shell` |
+| `model` | `--model` / `agent set` | Passed as `--model` to the runtime |
+| `repo` | `git remote origin` / `agent set` | `owner/name` the agent owns |
+| `watches` | `agent watch` | Repositories it also hears about |
+| `tags`, `description` | `agent set` | Free-form, returned by the API |
+| `env` | `agent set env='{"K":"V"}'` | Extra environment exported into the session (e.g. an API key) |
+
+Exported into every session the backbone starts: `BACKBONE_RUNTIME`,
+`BACKBONE_AGENT`, `BACKBONE_STATE_DIR`. The API key is **not** exported.
+
+## Secrets (`.env` / environment)
 
 | Variable | Purpose |
 |---|---|
 | `BACKBONE_API_KEY` | Bearer token for the API (generated by `backbone init`) |
-| `BACKBONE_CONFIG` | Explicit config path |
-| `BACKBONE_DATA_DIR`, `BACKBONE_PORT`, `BACKBONE_DATABASE_URL` | Override the corresponding config keys |
-| `BACKBONE_ALLOW_UNAUTHENTICATED` | Same as `[security] allow_unauthenticated` |
 | `GITHUB_TOKEN` | PAT with `repo` scope, or `gh auth token` |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | GitHub App alternative |
-| `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | GitHub App alternative to a token |
+| `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret; setting it switches intake to webhook |
 | `TELEGRAM_TOKEN` | Bot token |
+| `BACKBONE_DATA_DIR` | Data directory (default `~/.local/share/agent-backbone`) |
+| `BACKBONE_DATABASE_URL` | Any SQLAlchemy async URL, e.g. `postgresql+asyncpg://user:pw@host/db` (install the `postgres` extra) |
 
-Exported into every agent session the backbone starts: `BACKBONE_RUNTIME`,
-`BACKBONE_AGENT`, `BACKBONE_STATE_DIR`. The API key is **not** exported; give
-it to agents deliberately (e.g. in their `env`) if they should call the API.
+`backbone init` writes `.env` with mode 0600 and a fresh 32-byte API key.

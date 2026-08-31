@@ -2,17 +2,18 @@
 
 A local control plane for terminal AI agents — Claude Code, Codex, Gemini CLI, OpenCode, Aider.
 
-It starts and stops your agents, delivers messages to them **only when they're ready to receive one**, lets them talk to each other and to you, and coordinates multi-agent work through GitHub Issues. Reach it from the CLI, from Telegram, or from any HTTP/Socket.IO client.
+It starts your agents in tmux, delivers messages to them **only when they are ready to receive one**, lets them talk to each other and to you, and coordinates multi-agent work through GitHub Issues. Reach it from the CLI, from Telegram, or from any HTTP/Socket.IO client.
 
-> **Status:** v2 is a ground-up cleanup of an internal tool and is pre-release. The core (delivery engine, runtime adapters, GitHub routing, Telegram) is tested; the docs and packaging are still being finished.
+> **Status:** v2 is a ground-up rebuild and is pre-release. The core (delivery engine, state detection, GitHub routing, Telegram, API) is tested and has been exercised against live Claude Code sessions; packaging is still being finished.
 
 ## What it does
 
-- **Runs agents.** Each agent is a named tmux session running a CLI in a directory you choose. `backbone agent start reviewer`.
-- **Delivers safely.** A message is pasted into an agent's terminal only when the agent is idle — not while it is thinking, waiting for plan approval, waiting for a permission prompt, or while you are typing in that terminal. Otherwise it is queued durably and retried.
-- **Coordinates through GitHub Issues.** Label an issue `for:reviewer` and the reviewer agent gets it. When an agent closes an issue, it gets the next one in its queue. Comments are routed to the other participants. Agents acknowledge by commenting.
+- **Runs agents from any directory.** `cd ~/code/my-app && backbone agent start` — the agent is named after the directory, its GitHub repository is read from `git remote origin`, and the command returns when the agent is at its prompt.
+- **Knows the state of every agent** — `idle`, `busy`, `waiting_for_human` (plan approval, permission prompt, question), `starting`, `unknown` — from the runtime's own hooks first and the terminal second, and can show you the evidence: `backbone agent inspect reviewer`.
+- **Delivers safely.** Text is pasted into an agent only when it is idle: never while it is working, never while it waits for a human, never while you are typing in that terminal. Everything else is queued durably and delivered when the agent is free.
+- **Coordinates through GitHub Issues, per repository.** Every repository an agent lives in is tracked on its own. An issue opened in the agent's repository is its work; `for:<agent>` labels address issues explicitly; comments go back to the opener; closing an issue hands the agent its next one. An orchestrator is just an agent that *watches* other repositories.
 - **Talks to you on Telegram.** `/tell reviewer fix the flaky test`, `/status`, plan-approval alerts, forum topics that map to agents.
-- **Feeds dashboards.** A small REST API plus a Socket.IO stream of agent state changes and (read-only) terminal output. It does not ship a dashboard; build your own on top.
+- **Feeds dashboards.** REST plus a Socket.IO stream of agent state changes and (read-only) terminal output. It does not ship a UI.
 
 ## Quick start
 
@@ -20,121 +21,51 @@ Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/) (or pip), `tmux`, a
 
 ```bash
 git clone https://github.com/eandualem/agent-backbone && cd agent-backbone
-uv sync                     # or: pip install -e .
+uv sync                              # or: pip install -e .
 
-uv run backbone init        # writes backbone.toml + .env (with a generated API key)
-$EDITOR backbone.toml       # add your agents under [agents.<name>]
-uv run backbone doctor      # checks tmux, runtimes, config, credentials
-uv run backbone up          # runs the API + scheduler (+ Telegram/GitHub if configured)
+uv run backbone init                 # data dir + .env (generated API key) + database
+uv run backbone hooks install claude # Claude Code reports its state to the backbone
+uv run backbone up --detach          # API + scheduler (+ Telegram/GitHub when configured)
 ```
 
-In another terminal:
+Then, from a project:
 
 ```bash
-uv run backbone agent start reviewer
-uv run backbone tell reviewer "review PR #12 and summarize the risks"
+cd ~/code/my-app
+uv run backbone agent start          # → my-app: ready — claude repo me/my-app
+uv run backbone tell my-app "summarise this repository in three sentences"
+uv run backbone agent inspect my-app # state, delivery readiness, and why
 uv run backbone status
 ```
 
-No database server, no workflow engine, no tunnel: state lives in a SQLite file under `~/.local/share/agent-backbone/`.
+No config file to edit, no database server, no tunnel. Everything the backbone knows lives in `~/.local/share/agent-backbone/` (a SQLite file, hook state, `.env`); settings are changed with `backbone config set`.
 
-> First launch of Claude Code in a directory shows its **workspace trust** prompt (default: *No, exit*). Attach once (`tmux attach -t reviewer`), pick *Yes, I trust this folder*, and it will not ask again for that directory.
+## The model in one paragraph
 
-## Configuration
+An **agent** is a directory plus a runtime, discovered the first time you start it. If the directory is a GitHub checkout, the agent **owns** that repository: unlabelled issues opened there are its work. Any agent can also **watch** other repositories (`backbone agent watch orch me/app me/web`), which makes `for:orch` labels in those repositories route to it and gets it an informational note about new issues. `from:<agent>` on an issue means replies come back to the opener. GitHub and Telegram are configured **once**, with a token in `.env`; nothing is configured per repository.
 
-Everything structural lives in one `backbone.toml` (found by walking up from the current directory, or at `~/.config/agent-backbone/backbone.toml`). Secrets live in `.env` next to it. See [`backbone.example.toml`](backbone.example.toml) for every option.
-
-```toml
-[agents.reviewer]
-dir = "~/code/my-app"
-runtime = "claude"          # claude | codex | gemini | opencode | aider | cursor | shell
-model = "claude-opus-5"
-repo = "me/my-app"          # issues opened in this repo route here automatically
-
-[agents.builder]
-dir = "~/code/my-app"
-runtime = "codex"
-
-[github]                    # optional
-repo = "me/my-app"          # coordination repo for for:<agent> issues
-
-[telegram]                  # optional
-allowed_chat_ids = [123456789]
-```
-
-| Env var | Purpose |
-|---|---|
-| `BACKBONE_API_KEY` | Required. Bearer token for the API (generated by `backbone init`). |
-| `GITHUB_TOKEN` | A PAT (or `gh auth token`) for the GitHub connector. |
-| `GITHUB_WEBHOOK_SECRET` | Required only in webhook mode. |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | Optional alternative to a token. |
-| `TELEGRAM_TOKEN` | Bot token from @BotFather. |
-
-## GitHub integration
-
-Issues are the shared task ledger. Conventions:
-
-| Label | Meaning |
-|---|---|
-| `for:<agent>` | Deliver this issue to that agent's queue. |
-| `from:<agent>` | Who opened it (self-notifications are suppressed). |
-| `task` / `bug` / `question` / `spec-gap` / `optimization` | Type, used for queue ordering. |
-| `blocking` | Delivered even when the agent is mid-interaction. |
-
-Issues opened in a repository an agent owns (`repo = "owner/name"`) are routed to it without labels. Closing an issue delivers the next one in the agent's queue; a comment on an issue is delivered to the other participants.
-
-Getting events into the backbone, from simplest to most robust:
-
-1. **Polling** — `[github] mode = "poll"`. The backbone asks GitHub for new issues and comments every 30 seconds (configurable). Nothing to expose, no secret needed; a token with `repo` scope is enough. Start here.
-2. **Webhook via the GitHub CLI** — real-time, still no public URL: `gh webhook forward --repo=me/my-app --events=issues,issue_comment --url=http://localhost:7120/webhooks/github --secret=$GITHUB_WEBHOOK_SECRET`
-3. **Webhook via a tunnel** — a named [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) tunnel gives a stable hostname; point the repository webhook at `https://<host>/webhooks/github` with the same secret.
-
-Polling and webhooks can run at the same time; every event is deduplicated by id.
-
-## Agent readiness and hooks
-
-The backbone decides whether an agent can receive a message from two sources: state pushed by the agent's own hooks (idle / busy / plan-waiting / permission-waiting) and, as a fallback, what its terminal currently shows.
-
-Install the shipped hooks once per machine (or per project with `--dir`):
+## GitHub in two commands
 
 ```bash
-uv run backbone hooks install claude            # writes ~/.claude/settings.json
-uv run backbone hooks install claude --dir ~/code/my-app   # or the project's .claude/settings.json
+echo "GITHUB_TOKEN=$(gh auth token)" >> ~/.local/share/agent-backbone/.env
+uv run backbone down && uv run backbone up --detach
 ```
 
-The hook is a standard-library Python script copied into the data dir; it needs no API key. It learns which agent it belongs to from the `BACKBONE_AGENT` variable the backbone exports into every session it starts (falling back to the tmux session name), and writes `<data_dir>/state/<agent>.json` on `SessionStart`, `UserPromptSubmit`, `Stop`, `Notification` (permission prompts), and plan-mode enter/exit. It also logs `gh issue comment …` calls so acknowledgments are detected without a spoofable text tag.
+That is **poll intake**: the backbone asks GitHub for new issues and comments every 60 s in every repository an agent owns or watches. For instant delivery, set `GITHUB_WEBHOOK_SECRET` and point a webhook (through `gh webhook forward` or a named cloudflared tunnel) at `/webhooks/github`; the backbone switches to **webhook intake** automatically and still runs one poll at startup to catch anything it missed while it was down. See [docs/github.md](docs/github.md).
 
-The decision order is:
+## Documentation
 
-`offline → plan_waiting → permission_waiting → working → copy_mode → user_interacting → idle`
-
-Anything not deliverable is queued in SQLite and retried by the built-in scheduler (every 60s for the monitor, every 5 min for retries). Deliveries, acknowledgments and the queue are all inspectable via the API.
-
-## API
-
-All routes except `/health` and the webhook require `Authorization: Bearer <BACKBONE_API_KEY>`. Interactive docs at `http://127.0.0.1:7120/docs` while running.
-
-| Endpoint | Purpose |
+| | |
 |---|---|
-| `GET /api/agents` · `POST /api/agents/{name}/start` · `/stop` | Agents with live state; start/stop sessions |
-| `POST /api/agents/{name}/state` | State push from runtime hooks |
-| `POST /api/messages` | Deliver a message to an agent (state-aware) |
-| `GET /api/issues` · `POST /api/issues` · … | Issue proxy with routing enrichment |
-| `GET /api/deliveries` · `/failed` · `/stats` | Delivery history |
-| `GET /api/plans` · `POST /api/plans/{name}/approve` | Plan review (approval must be enabled in config) |
-| `GET /api/status` · `/status/services` · `/config/agents` | Digest, component health, configured agents |
-| `POST /webhooks/github` | GitHub webhook intake |
-| Socket.IO `/sessions` · `/terminal` | Live agent snapshots; read-only terminal streaming |
-
-## Security defaults
-
-- API key required; `[security] allow_unauthenticated` exists for isolated dev boxes only.
-- Binds `127.0.0.1`; CORS is off unless origins are listed.
-- Webhooks are rejected unless a secret is configured and the signature matches.
-- The Telegram bot refuses to start with an empty `allowed_chat_ids`.
-- Approving/rejecting plans remotely injects keystrokes into an agent's terminal, so it is off until `[security] allow_remote_plan_control = true`.
-- Terminal streaming is read-only; nothing typed in a browser reaches an agent.
-- Every message delivered to an agent carries a provenance envelope (`[via:github issue:42]`, `[via:telegram from:alice]`). Treat the content after it as untrusted input — the backbone cannot stop prompt injection in a GitHub comment, it only makes the source visible.
+| [Concepts](docs/concepts.md) | The vocabulary: agent, repository, state, delivery, event |
+| [Getting started](docs/getting-started.md) | Install, start two agents, send the first message, add GitHub |
+| [How it works](docs/how-it-works.md) | Every flow step by step, with the decisions the backbone makes |
+| [Configuration](docs/configuration.md) | Settings (`backbone config`), secrets, the data directory |
+| [CLI](docs/cli.md) · [API](docs/api.md) | Reference |
+| [GitHub](docs/github.md) · [Telegram](docs/telegram.md) | Integrations |
+| [Security](docs/security.md) | Defaults and what you opt into |
+| [Status and roadmap](docs/status-and-roadmap.md) | What works, what is missing, what is next |
+| [Design record](docs/design/) | Why v2 looks the way it does |
 
 ## Development
 
@@ -144,10 +75,6 @@ make test        # pytest — SQLite in memory, no services required
 make check       # lint + format check + tests
 make dev         # backbone up --reload
 ```
-
-Optional PostgreSQL: `make db-up` starts one via Docker; set `[database] url` or `BACKBONE_DATABASE_URL`.
-
-Full documentation lives in [`docs/`](docs/README.md): concepts, getting started, how every flow works, configuration, CLI, API, GitHub, Telegram, security, and the roadmap. The v2 decision record is in [`docs/design/`](docs/design/).
 
 ## License
 

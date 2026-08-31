@@ -10,9 +10,8 @@ build/
 .coverage
 coverage_html/
 
-# Local configuration and secrets (backbone.example.toml is the template)
+# Local secrets and data
 .env
-backbone.toml
 *.pem
 
 # Local data (SQLite db, state files, pids)

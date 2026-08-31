@@ -1,7 +1,7 @@
 """Alembic environment configuration for agent-backbone.
 
 Supports two modes:
-1. CLI: ``alembic upgrade head`` — resolves the database URL from backbone.toml
+1. CLI: ``alembic upgrade head`` — resolves the database URL from the data directory
    / ``BACKBONE_DATABASE_URL`` and creates an async engine.
 2. Programmatic: ``BackboneDB._run_migrations()`` injects a connection via
    ``config.attributes["connection"]``.

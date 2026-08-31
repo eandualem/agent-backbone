@@ -1,79 +1,100 @@
 # Concepts
 
-agent-backbone is a **control plane for terminal AI agents**. You run Claude
-Code, Codex, Gemini CLI, OpenCode or Aider in tmux sessions; the backbone
-starts and stops those sessions, knows whether each one is ready to receive
-input, delivers text to them safely, and connects them to GitHub Issues,
-Telegram, and each other.
+agent-backbone is a **control plane for terminal AI agents** on one machine.
+You run Claude Code, Codex, Gemini CLI, OpenCode or Aider in tmux sessions;
+the backbone starts those sessions, knows whether each one is ready to
+receive input, delivers text to them safely, and connects them to GitHub
+Issues, Telegram, and each other.
 
 It is *not* an agent framework (it does not call models), not a workflow
-engine (there are no DAGs), and not a dashboard (it feeds one). Its whole
-value is in a small number of well-defined objects.
+engine (there are no DAGs), and not a dashboard (it feeds one).
 
-## The vocabulary
+## Agent
 
-### Agent
+A directory plus a runtime. Agents are **discovered, not declared**: the
+first `backbone agent start` from a directory records it.
 
-A named, configured terminal agent. Declared once in `backbone.toml`:
-
-```toml
-[agents.reviewer]
-dir = "~/code/app"      # where the CLI runs
-runtime = "claude"      # which CLI
-model = "claude-opus-5" # optional
-repo = "acme/app"       # optional: issues in this repo belong to this agent
-tags = ["review"]       # optional, free-form
+```
+$ cd ~/code/app && backbone agent start
+app: ready — claude repo acme/app
 ```
 
-The name does three jobs at once: it is the **tmux session name**, the value
-of the **`for:<name>` label** that routes GitHub issues to it, and the
-**`from:` identity** in messages it sends. There are no roles, groups,
-organizations or hierarchies — an agent is a flat entry with a name.
+- **Name** — the directory name (`--name` to override). It is the tmux
+  session name, the value of `for:<name>` labels, and the `from:` identity
+  in messages the agent sends.
+- **Runtime** — `claude`, `codex`, `gemini`, `opencode`, `aider`, `cursor`
+  or `shell`; default `claude` (`agents.default_runtime`).
+- **Repository** — read from `git remote origin`. An agent whose directory is
+  a GitHub checkout **owns** that repository.
+- **Watches** — other repositories the agent wants to hear about
+  (`backbone agent watch orch acme/app acme/web`).
 
-### Session
+There are no roles, groups or hierarchies. An orchestrator is an ordinary
+agent whose directory is its own repository and which watches the others.
 
-A running instance of an agent: a detached tmux session running the agent's
-CLI in its directory. Sessions are started by the backbone (`backbone agent
-start reviewer`, the API, or Telegram) or by you (`tmux new -s reviewer`). A
-session the backbone did not start still shows up and can still receive
-messages; it just is not "configured".
+The database is the only record of agents; `backbone agent set|watch|forget`
+edit it and the running backbone picks the change up immediately.
 
-### Runtime
+## Repository
 
-The adapter for one CLI. It knows how to launch the binary, how to recognise
-the CLI's prompt on screen, how to paste and submit text so it becomes a
-single turn, and (for Claude Code today) how to install hooks that report
-state. Supported: `claude`, `codex`, `gemini`, `opencode`, `aider`, `cursor`,
-`shell`.
+Every repository an agent owns or watches is tracked **on its own**. There
+is no coordination repository and nothing to configure per repository:
+GitHub credentials are set once, and the backbone polls (or accepts
+webhooks for) every tracked repository.
 
-### Readiness
+Four relationships decide routing for an issue in repository R:
 
-The single most important idea. Before anything is pasted into a session,
-the backbone derives one of these states, in this priority order:
-
-| State | Meaning | Deliverable? |
+| Relationship | How it comes about | Effect |
 |---|---|---|
-| `offline` | No tmux session | no — queued |
-| `plan_waiting` | Agent is waiting for a human to approve a plan | no |
-| `permission_waiting` | Agent is waiting for a permission prompt answer | no |
-| `agent_working` | The model is thinking / running tools | no — queued |
-| `copy_mode` | tmux is in copy/scroll mode (someone is reading) | recovers first, then delivers |
-| `user_interacting` | A human has typed something into the prompt | no, unless `priority` |
-| `idle_grace` | Just became idle; short settle window | not yet |
-| `idle_ready` | At the prompt, nothing typed | **yes** |
-| `unknown` | No signal either way | yes (best effort) |
+| **owner** | the agent's directory is R | unlabelled issues are its work (sole owner) or are announced to all owners |
+| **`for:<agent>`** | a label on the issue | goes to that agent's queue |
+| **`from:<agent>`** | a label on the issue | comments and the close are reported back to the opener |
+| **watch** | `backbone agent watch` | informational notice about new issues; `for:` labels in R route to it |
 
-Where the signal comes from: **hooks first** (the agent's own CLI reports
-`busy`, `idle`, `plan_waiting`, `permission_waiting` into
-`<data_dir>/state/<agent>.json`), then **the terminal itself** (what the pane
-shows) when hook state is missing or stale. See
-[How it works → Readiness](how-it-works.md#2-readiness-how-the-backbone-knows-an-agent-is-free).
+## State
 
-### Message
+What an agent is doing, in a vocabulary shared by every runtime:
 
-The only thing that ever enters an agent's terminal. Every message carries a
-provenance envelope so the agent — and anyone reading the transcript — knows
-where it came from:
+| State | Meaning |
+|---|---|
+| `starting` | Session exists; runtime not at its prompt yet |
+| `idle` | At the prompt, nothing running |
+| `busy` | Working on a prompt |
+| `waiting_for_human` | Blocked on a person — `reason` is `plan` (plan approval), `permission` (tool permission prompt) or `question` |
+| `unknown` | No trustworthy signal |
+| `offline` | No tmux session (reported by the API; not a stored state) |
+
+Where it comes from, in order: **hooks** the runtime itself runs (Claude
+Code today) write `<data_dir>/state/<agent>.json` on every transition; a
+fresh hook state is authoritative. When there is no hook state or it is
+older than `timing.stale_threshold_seconds` (5 min), the backbone reads
+the **terminal** through the runtime's adapter (prompt visible, busy
+marker, permission prompt). Every reading keeps its **evidence**, shown by
+`backbone agent inspect`.
+
+## Delivery condition
+
+Derived from the state plus the terminal, right before anything is pasted:
+
+| Condition | Meaning | Deliverable? |
+|---|---|---|
+| `offline` | no session | no — queued |
+| `waiting_for_human` | agent is asking a person something | no — queued |
+| `agent_working` | starting or busy | no — queued (never bypassed) |
+| `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
+| `settling` | became idle less than `timing.grace_period_seconds` ago | not yet, unless `priority` |
+| `ready` | idle, empty prompt | **yes** |
+| `unknown` | no signal either way | yes, best effort |
+
+tmux **copy mode** (someone scrolled the pane) is not a condition: the
+backbone cancels it automatically before delivering and on every monitor
+tick.
+
+## Message
+
+The only thing that ever enters an agent's terminal. Every message carries
+a provenance envelope so the agent — and anyone reading the transcript —
+knows where it came from:
 
 ```
 [via:backbone from:elias] review PR 12 and summarise the risks
@@ -81,55 +102,47 @@ where it came from:
 [via:telegram from:alice] status?
 ```
 
-Messages have a **kind** (`direct_message`, `issue`, `comment`,
-`pull_request`), an optional **issue reference**, and a **priority** flag
-that lets it through even when a human is typing.
+## Delivery
 
-### Delivery
+One attempt to hand a message to a session, recorded with its **kind**
+(`issue`, `comment`, `pull_request`, `direct_message`, `watch`,
+`escalation`), repository, outcome and a preview — direct messages
+included. What cannot be delivered now is **queued** in the database and
+delivered by the background jobs; queued messages expire after
+`timing.queue_expiry_minutes` (30). Issue deliveries are additionally
+**claimed** so two jobs can never deliver the same issue twice.
 
-One attempt to hand a message to a session, with a recorded outcome
-(`delivered`, `agent_working`, `offline`, `awaiting_ack`, …). Deliveries that
-cannot happen now are **queued durably** in SQLite and retried by the
-background jobs. Issue deliveries are additionally **claimed** so two jobs
-can never deliver the same issue twice.
+## Event
 
-### Channel
+Every inbound GitHub event (webhook or poll) is stored before it is
+routed, with what the backbone did about it. That table is the activity
+feed (`GET /api/events`, `backbone status` shows the last event per
+repository) and the dedup record that makes restarts and overlapping
+polls safe.
 
-Where messages come from and go to:
+## Settings
 
-- **CLI** — `backbone tell reviewer "…"`
-- **HTTP API** — `POST /api/messages` (what agents use to talk to each other)
-- **GitHub Issues** — webhook or polling; issues and comments become messages
-- **Telegram** — commands and forum topics mapped to agents
+Everything tunable is a key in the database with a built-in default:
+`backbone config list`. Secrets (API key, tokens) are **never** in the
+database; they live in `<data_dir>/.env` or the environment.
 
-### Task ledger
+## Jobs
 
-GitHub Issues is the shared, durable, human-readable task list. An issue is
-addressed to an agent with a `for:<agent>` label; the agent acknowledges by
-commenting and finishes by closing; the backbone then delivers the next issue
-in that agent's queue. Nothing about a task lives only in the backbone's
-database — you can always see and change the state on GitHub.
-
-### Jobs
-
-Background loops that run inside the backbone process (no external
-scheduler):
+Background loops inside the backbone process:
 
 | Job | Every | Does |
 |---|---|---|
-| `agent-monitor` | 60 s | stall / offline / plan-waiting detection, copy-mode recovery, queue drain, deliver the next pending issue to idle agents, push live snapshots to Socket.IO |
-| `delivery-retry` | 5 min | retry failed issue deliveries, drain queued messages |
-| `github-poll` | 30 s | only in polling mode: fetch new issues/comments |
-| `prune` | 6 h | delete old delivery rows |
+| `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, stall and dead-session reports, plan-waiting alerts, copy-mode clear, queue drain, next pending issue to idle agents, Socket.IO snapshot |
+| `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
+| `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
+| `github-backfill` | once at startup | webhook intake only: catch up on what happened while the backbone was down |
+| `prune` | 6 h | delete old deliveries and events |
 
 ## What the backbone does not decide
 
-- **What agents do.** The backbone hands an agent text; the agent's own
-  instructions (CLAUDE.md, AGENTS.md, …) decide how it reacts. The
-  [GitHub page](github.md#what-an-agent-is-expected-to-do) describes the small
-  protocol agents should follow (acknowledge, close).
-- **Who is allowed to talk to whom.** Any agent can message any agent through
-  the API. If you need policy, put it in the agents' instructions or in front
-  of the API.
-- **How work is decomposed.** Multi-agent coordination happens through issues
-  and comments that humans can read; there is no planner inside the backbone.
+- **What agents do.** It hands an agent text; the agent's instructions
+  (CLAUDE.md, AGENTS.md, …) decide how it reacts. [GitHub → What an agent is
+  expected to do](github.md#what-an-agent-is-expected-to-do) is the whole
+  protocol.
+- **Who may talk to whom.** Any agent can message any agent through the API.
+- **Whether to restart a dead agent.** It reports; it never restarts.

@@ -1,42 +1,38 @@
 # Telegram
 
-A phone-sized control surface: see who is running, talk to an agent, approve
-a plan, get told when an agent is stuck.
+A phone-sized control surface: see who is running, talk to an agent,
+approve a plan, get told when an agent is stuck or died.
 
 ## Setup
 
 1. Create a bot with [@BotFather](https://t.me/BotFather); put the token in
-   `.env` as `TELEGRAM_TOKEN`.
-2. Find your chat id. Temporarily set `allowed_chat_ids = [0]` is *not*
-   enough — the bot refuses to talk to anyone not on the list. Instead:
-   message the bot, then read the id from
-   `https://api.telegram.org/bot<TOKEN>/getUpdates`, or add any id, start the
-   backbone, and use `/identify` (it prints the chat id even outside a topic).
-3. Configure:
+   `<data_dir>/.env` as `TELEGRAM_TOKEN`.
+2. Find your chat id: message the bot, then read the id from
+   `https://api.telegram.org/bot<TOKEN>/getUpdates`.
+3. Allow it and choose where alerts go:
 
-```toml
-[telegram]
-allowed_chat_ids = [123456789]          # you (and optionally a group id)
-notification_chat_id = 123456789        # where alerts go
+```bash
+backbone config set telegram.allowed_chat_ids '[123456789]'
+backbone config set telegram.notification_chat_id 123456789
 ```
 
-4. Restart `backbone up`. The bot runs inside the backbone process; there is
-   nothing else to start.
+4. Restart `backbone up`. The bot runs inside the backbone process and reads
+   the live configuration; there is nothing else to start.
 
-**The bot will not start with an empty `allowed_chat_ids`.** Every command
-and message from an unlisted chat is ignored silently.
+**The bot will not start with an empty `telegram.allowed_chat_ids`.** Every
+command and message from an unlisted chat is ignored silently.
 
 ## Commands
 
 | Command | Does |
 |---|---|
-| `/status` | Configured agents (🟢 running / ⚪ stopped) and other tmux sessions |
+| `/status` | Known agents (🟢 running / ⚪ stopped) and other tmux sessions |
 | `/tell <agent> <text>` | Deliver `[via:telegram from:<you>] <text>` through the normal readiness checks; replies with the outcome |
-| `/start <agent>` / `/stop <agent>` | Start / stop a configured agent |
+| `/start <agent>` / `/stop <agent>` | Start / stop a known agent |
 | `/queue` | Failed/pending and recent deliveries |
 | `/digest` | Sessions, pending deliveries, tracked agent states |
 | `/viewplan <agent>` | Show the plan an agent is waiting to have approved |
-| `/approve <agent>` | Approve it — only when `[security] allow_remote_plan_control = true` |
+| `/approve <agent>` | Approve it — only when `security.allow_remote_plan_control` is on |
 | `/identify` | Print this chat/topic id and its current mapping |
 | `/help` | Command list |
 
@@ -45,33 +41,31 @@ and message from an unlisted chat is ignored silently.
 In a Telegram group with **Topics** enabled, each topic can be an agent's
 inbox. Two ways to map them:
 
-- **Automatic**: name the topic exactly like the agent (`reviewer`,
-  `Builder`, `platform_api` → `platform-api`). The bot learns the mapping
-  from the topic's creation message and stores it in
-  `<data_dir>/telegram-topics.json`.
-- **Explicit**: `[telegram.topic_routes]` with `thread_id = "agent"`
+- **Automatic**: name the topic like the agent (`app`, `Web`,
+  `platform_api` → `platform-api`). The bot learns the mapping from the
+  topic's creation message and stores it in `<data_dir>/telegram-topics.json`.
+- **Explicit**: `backbone config set telegram.topic_routes '{"42": "app"}'`
   (`/identify` inside the topic shows the id). Explicit wins.
 
-Then writing `rebase onto main` in the *reviewer* topic is the same as
-`/tell reviewer rebase onto main`. A topic mapped to `"agents"` is a
-catch-all: `builder: run the tests` routes to `builder`.
+Then writing `rebase onto main` in the *app* topic is the same as
+`/tell app rebase onto main`. A topic mapped to `"agents"` is a catch-all:
+`web: run the tests` routes to `web`.
 
 Agents can answer into their topic:
 
 ```bash
 curl -s -X POST http://127.0.0.1:7120/api/telegram/reply \
   -H "Authorization: Bearer $BACKBONE_API_KEY" -H "Content-Type: application/json" \
-  -d '{"session": "reviewer", "text": "Done — PR #12 is green."}'
+  -d '{"session": "app", "text": "Done — PR #12 is green."}'
 ```
 
 ## Notifications you receive
 
-Sent to `notification_chat_id`:
+Sent to `telegram.notification_chat_id`:
 
-- **Plan waiting** — `📋 Plan waiting — reviewer / Title: … / /viewplan reviewer / /approve reviewer`, once per plan.
-- **Copy mode stuck** — a session has been sitting in tmux copy mode and the
-  automatic `q` did not clear it.
+- **Plan waiting** — `📋 Plan waiting — app / Title: … / /viewplan app / /approve app`, once per plan.
+- **Agent went offline unexpectedly** — a session died; it was not restarted.
+- **Copy mode stuck** — a pane sits in tmux copy mode and the automatic
+  cancel did not clear it.
 
-Stall and unexpected-offline escalations go to the `escalation.target`
-agent, not to Telegram (see the open question in
-[How it works → Background monitoring](how-it-works.md#5-background-monitoring)).
+Stall escalations go to the `escalation.target` agent.
