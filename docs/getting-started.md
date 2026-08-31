@@ -175,10 +175,14 @@ Agents and the backbone are tmux sessions, so a reboot ends them (a
 Cloudflare tunnel installed as a service comes back on its own):
 
 ```bash
-backbone up --detach          # the backbone itself
-backbone agent start-all      # every known agent
-backbone status               # confirm
+backbone up --detach              # the backbone itself
+backbone agent start app web      # the agents you want, by name
+backbone status                   # confirm
 ```
+
+There is deliberately no "start everything ever registered" — start the
+agents you need, or keep a one-liner for the group you usually run
+(e.g. `alias work-agents='ab agent start app web orch'`).
 
 To start the backbone automatically at login on macOS, install a
 LaunchAgent once (see [CLI → `up`](cli.md#backbone-up---detach---reload--backbone-down)).

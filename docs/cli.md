@@ -69,14 +69,13 @@ backbone config set escalation.target orch
 
 | Command | Effect |
 |---|---|
-| `agent start [NAME] [--dir D] [--name N] [--runtime R] [--model M] [--resume] [--watch REPO]… [--no-wait]` | Discover the agent from `--dir` (default: cwd when no name is given), record it, start its tmux session and **wait until it is at its prompt**. With a bare `NAME` the agent must already be known |
+| `agent start [NAME…] [--dir D] [--name N] [--runtime R] [--model M] [--resume] [--watch REPO]… [--no-wait]` | Discover the agent from `--dir` (default: cwd when no name is given), record it, start its tmux session and **wait until it is at its prompt**. Bare `NAME`s must already be known; several names start a group (`ab agent start app web orch`) |
 | `agent list` | Known agents with runtime, model and directory |
 | `agent inspect NAME [--json]` | State, reason, current issue, delivery condition, the evidence, the terminal tail, recent deliveries |
-| `agent stop NAME` | Kill the session |
+| `agent stop NAME…` | Kill the session(s) |
 | `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object) |
 | `agent watch NAME REPO…` / `agent unwatch NAME REPO…` | Add / remove watched repositories |
 | `agent forget NAME` | Remove a stopped agent from the backbone |
-| `agent start-all` / `agent stop-all` | Every known agent |
 
 `agent start` reports one of:
 

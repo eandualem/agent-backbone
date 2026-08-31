@@ -15,7 +15,6 @@ from agent_backbone.services.terminal import (
     STATE_DIR_ENV_KEY,
     capture_pane,
     get_terminal_adapter,
-    list_sessions,
     sanitize_pane_content,
     session_exists,
     start_session,
@@ -23,7 +22,7 @@ from agent_backbone.services.terminal import (
 )
 
 if TYPE_CHECKING:
-    from agent_backbone.config import AgentSpec, BackboneConfig
+    from agent_backbone.config import AgentSpec
 
 log = logging.getLogger(__name__)
 
@@ -206,26 +205,3 @@ async def stop_agent(name: str) -> bool:
     if ok:
         log.info("Agent '%s' stopped", name)
     return ok
-
-
-async def start_all(config: BackboneConfig, **overrides) -> int:
-    """Start every known agent that is not running. Returns the count started."""
-    overrides.setdefault("state_dir", config.state_dir)
-    started = 0
-    for spec in config.agents:
-        if not await session_exists(spec.name) and await start_agent(spec, **overrides):
-            started += 1
-    return started
-
-
-async def stop_all_agents(config: BackboneConfig) -> int:
-    """Stop every running session that belongs to a configured agent."""
-    sessions = await list_sessions()
-    stopped = 0
-    for session in sessions:
-        if session not in config.agents:
-            continue
-        if await stop_session(session):
-            stopped += 1
-    log.info("Stopped %d agent session(s)", stopped)
-    return stopped

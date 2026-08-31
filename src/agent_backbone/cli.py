@@ -7,7 +7,7 @@ backbone status                      agents, sessions, repositories and health
 backbone doctor                      check tmux, runtimes, credentials
 backbone config list|get|set|unset   settings (stored in the database)
 backbone agent start [--dir D]       discover + start an agent (waits for its prompt)
-backbone agent list|stop|inspect|set|watch|unwatch|forget|start-all|stop-all
+backbone agent list|stop|inspect|set|watch|unwatch|forget
 backbone tell <agent> <msg>          deliver a message to an agent
 backbone hooks install claude        install the state-reporting hooks
 
@@ -491,11 +491,22 @@ def _print_start_result(data: dict) -> None:
 
 async def _agent_start(args: argparse.Namespace) -> int:
     boot = bootstrap_config()
+    if len(args.names) > 1:
+        if args.dir or args.watch:
+            print("--dir/--watch apply to a single agent; start a group by name only")
+            return 1
+        # A group start: each name must already be a known agent.
+        worst = 0
+        for name in args.names:
+            single = argparse.Namespace(**{**vars(args), "names": [name]})
+            worst = max(worst, await _agent_start(single))
+        return worst
+    name = args.names[0] if args.names else None
     directory = args.dir
-    if directory is None and args.name is None:
+    if directory is None and name is None:
         directory = os.getcwd()
     body = {
-        "name": args.name,
+        "name": name,
         "dir": str(Path(directory).expanduser().resolve()) if directory else None,
         "runtime": args.runtime,
         "model": args.model,
@@ -523,9 +534,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
     async with _Direct(boot) as direct:
         store = direct.store
         if body["dir"]:
-            spec = store.discover(
-                body["dir"], name=args.name, runtime=args.runtime, model=args.model
-            )
+            spec = store.discover(body["dir"], name=name, runtime=args.runtime, model=args.model)
             if args.watch:
                 spec = AgentSpec(
                     **{
@@ -535,9 +544,9 @@ async def _agent_start(args: argparse.Namespace) -> int:
                 )
             spec = await store.register(spec)
         else:
-            spec = store.agents.get(args.name)
+            spec = store.agents.get(name)
             if spec is None:
-                print(f"unknown agent '{args.name}' — pass --dir to register it")
+                print(f"unknown agent '{name}' — pass --dir to register it")
                 return 1
         config = direct.config
         runtime = args.runtime or spec.runtime
@@ -599,13 +608,16 @@ async def _agent(args: argparse.Namespace) -> int:
         return 0
 
     if sub == "stop":
-        if api_up:
-            result = await _api(boot, "POST", f"/api/agents/{args.name}/stop", timeout=30.0)
-            ok = bool(result and result[0] == 200 and result[1].get("ok"))
-        else:
-            ok = await _agents.stop_agent(args.name)
-        print(f"{args.name}: {'stopped' if ok else 'not stopped'}")
-        return 0 if ok else 1
+        failed = False
+        for name in args.names:
+            if api_up:
+                result = await _api(boot, "POST", f"/api/agents/{name}/stop", timeout=30.0)
+                ok = bool(result and result[0] == 200 and result[1].get("ok"))
+            else:
+                ok = await _agents.stop_agent(name)
+            print(f"{name}: {'stopped' if ok else 'not stopped'}")
+            failed = failed or not ok
+        return 1 if failed else 0
 
     if sub == "inspect":
         if api_up:
@@ -731,16 +743,6 @@ async def _agent(args: argparse.Namespace) -> int:
         print(f"{args.name}: {'forgotten' if removed else 'unknown agent'}")
         return 0 if removed else 1
 
-    if sub == "start-all":
-        config = await _load_config()
-        started = await _agents.start_all(config)
-        print(f"started {started} agent(s)")
-        return 0
-    if sub == "stop-all":
-        config = await _load_config()
-        stopped = await _agents.stop_all_agents(config)
-        print(f"stopped {stopped} agent(s)")
-        return 0
     return 1
 
 
@@ -853,8 +855,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("agent", help="manage agents")
     asub = p.add_subparsers(dest="agent_command", required=True)
     asub.add_parser("list", help="list known agents")
-    ps = asub.add_parser("start", help="start an agent (discovers it from a directory)")
-    ps.add_argument("name", nargs="?", default=None, help="agent name (default: directory name)")
+    ps = asub.add_parser("start", help="start agents (discovers a new one from a directory)")
+    ps.add_argument(
+        "names",
+        nargs="*",
+        default=[],
+        metavar="NAME",
+        help="agent name(s); default: discover from the current directory",
+    )
     ps.add_argument(
         "--dir", default=None, help="project directory (default: cwd when no name is given)"
     )
@@ -877,8 +885,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="return immediately instead of waiting for the prompt",
     )
-    pst = asub.add_parser("stop", help="stop an agent session")
-    pst.add_argument("name")
+    pst = asub.add_parser("stop", help="stop agent sessions")
+    pst.add_argument("names", nargs="+", metavar="NAME")
     pi = asub.add_parser("inspect", help="show state, delivery readiness and the evidence")
     pi.add_argument("name")
     pi.add_argument("--json", action="store_true")
@@ -895,8 +903,6 @@ def build_parser() -> argparse.ArgumentParser:
     pu.add_argument("repos", nargs="+", metavar="OWNER/REPO")
     pf = asub.add_parser("forget", help="remove an agent from the backbone")
     pf.add_argument("name")
-    asub.add_parser("start-all", help="start every known agent")
-    asub.add_parser("stop-all", help="stop every known agent")
     p.set_defaults(func=cmd_agent)
 
     p = sub.add_parser("hooks", help="install runtime hooks that report agent state")
