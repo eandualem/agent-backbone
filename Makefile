@@ -1,178 +1,83 @@
-.PHONY: help install dev logs clean lint format format-check fix type-check \
-       test test-file test-unit test-integration cov cov-html check build \
-       run-gateway run-prefect setup-pool deploy run-worker \
-       db-up db-down db-upgrade db-migrate db-revision db-history db-current db-downgrade \
-       start-backbone stop-backbone restart-backbone status \
-       start-agent stop-agent start-orchestrators start-arclio start-loveble start-wf \
-       start-all stop-all stop-agents stop-everything list
+.PHONY: help install dev up down status doctor lint format format-check fix test test-file cov check build clean \
+        db-up db-down db-upgrade db-migrate db-history db-current db-downgrade
 
 .DEFAULT_GOAL := help
 
-# ─── Positional arg capture (allows: make start-agent bell) ───
-
-ifneq (,$(filter start-agent stop-agent,$(firstword $(MAKECMDGOALS))))
-  NAME := $(word 2,$(MAKECMDGOALS))
-  $(eval $(NAME):;@:)
-endif
-
-# ─── Config ──────────────────────────────────────────────
-
-PROJECT_NAME := agent-backbone
-SRC_DIRS     := src/
-ALL_DIRS     := src/ tests/
-PREFECT_API_URL ?= http://127.0.0.1:4200/api
-
-# ─── Colors ──────────────────────────────────────────────
-
-GREEN  := $(shell tput -Txterm setaf 2)
-YELLOW := $(shell tput -Txterm setaf 3)
-CYAN   := $(shell tput -Txterm setaf 6)
-RED    := $(shell tput -Txterm setaf 1)
-RESET  := $(shell tput -Txterm sgr0)
-
-# ─── Help ────────────────────────────────────────────────
+ALL_DIRS := src/ tests/
 
 help: ## Show available commands
-	@echo ""
-	@echo "$(CYAN)$(PROJECT_NAME)$(RESET) — Development Commands"
-	@echo ""
-	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage: make \033[36m<target>\033[0m\n\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 	@echo ""
 
 # ─── Setup ───────────────────────────────────────────────
 
 install: ## Install all dependencies
-	@echo "$(CYAN)Installing dependencies...$(RESET)"
-	uv sync
-	@echo "$(GREEN)Done.$(RESET)"
+	uv sync --all-extras
 
 clean: ## Remove generated artifacts
-	@echo "$(CYAN)Cleaning...$(RESET)"
 	rm -rf dist/ build/ *.egg-info .pytest_cache .coverage coverage_html .ruff_cache
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	@echo "$(GREEN)Done.$(RESET)"
 
-# ─── Development ─────────────────────────────────────────
+# ─── Run ─────────────────────────────────────────────────
 
-dev: ## Restart gateway with latest code (auto-reload enabled)
-	@if tmux has-session -t gateway 2>/dev/null; then \
-		echo "$(CYAN)Restarting gateway service...$(RESET)"; \
-		uv run python -m agent_backbone.services.infrastructure restart-gateway; \
-	else \
-		echo "$(CYAN)Starting gateway service...$(RESET)"; \
-		uv run python -m agent_backbone.services.infrastructure start-gateway; \
-	fi
-	@echo "$(GREEN)Gateway running in tmux session 'gateway' — attach with: tmux attach -t gateway$(RESET)"
+dev: ## Run the backbone with auto-reload
+	uv run backbone up --reload
 
-logs: ## Tail gateway logs (attach to tmux session)
-	@tmux attach -t gateway 2>/dev/null || echo "Gateway not running. Start with: make dev"
+up: ## Run the backbone detached in a tmux session
+	uv run backbone up --detach
+
+down: ## Stop the detached backbone
+	uv run backbone down
+
+status: ## Show agents, sessions and service health
+	uv run backbone status
+
+doctor: ## Check environment and configuration
+	uv run backbone doctor
 
 # ─── Code Quality ────────────────────────────────────────
 
 lint: ## Run linter
-	@echo "$(CYAN)Linting...$(RESET)"
 	uv run ruff check $(ALL_DIRS)
-	@echo "$(GREEN)Done.$(RESET)"
 
 format: ## Format code
-	@echo "$(CYAN)Formatting...$(RESET)"
 	uv run ruff format $(ALL_DIRS)
-	@echo "$(GREEN)Done.$(RESET)"
 
 format-check: ## Check formatting (no changes)
-	@echo "$(CYAN)Checking format...$(RESET)"
 	uv run ruff format --check $(ALL_DIRS)
-	@echo "$(GREEN)Done.$(RESET)"
 
 fix: ## Auto-fix lint issues + format
-	@echo "$(CYAN)Fixing...$(RESET)"
 	uv run ruff check --fix $(ALL_DIRS)
 	uv run ruff format $(ALL_DIRS)
-	@echo "$(GREEN)Done.$(RESET)"
-
-type-check: ## Run type checker
-	@echo "$(CYAN)Type checking...$(RESET)"
-	uv run pyright $(SRC_DIRS)
-	@echo "$(GREEN)Done.$(RESET)"
 
 # ─── Testing ─────────────────────────────────────────────
 
-test: ## Run all tests
-	@echo "$(CYAN)Running tests...$(RESET)"
+test: ## Run all tests (SQLite in-memory, no services needed)
 	uv run pytest
-	@echo "$(GREEN)Done.$(RESET)"
 
-test-file: ## Run a single test file (FILE=tests/test_foo.py)
+test-file: ## Run a single test file (FILE=tests/unit/test_foo.py)
 	uv run pytest $(FILE) -v
 
-test-unit: ## Run unit tests only
-	@echo "$(CYAN)Running unit tests...$(RESET)"
-	uv run pytest tests/unit/
-	@echo "$(GREEN)Done.$(RESET)"
-
-test-integration: ## Run integration tests only
-	@echo "$(CYAN)Running integration tests...$(RESET)"
-	uv run pytest tests/integration/
-	@echo "$(GREEN)Done.$(RESET)"
-
 cov: ## Run tests with coverage
-	@echo "$(CYAN)Running tests with coverage...$(RESET)"
 	uv run pytest --cov=src --cov-report=term-missing
-	@echo "$(GREEN)Done.$(RESET)"
-
-cov-html: ## Generate HTML coverage report
-	@echo "$(CYAN)Generating HTML coverage...$(RESET)"
-	uv run pytest --cov=src --cov-report=html:coverage_html
-	@echo "$(GREEN)Report at coverage_html/index.html$(RESET)"
-
-# ─── Quality Gate ────────────────────────────────────────
 
 check: lint format-check test ## Full quality check (CI equivalent)
-	@echo "$(GREEN)All checks passed.$(RESET)"
 
-# ─── Build ───────────────────────────────────────────────
-
-build: ## Production build
-	@echo "$(CYAN)Building...$(RESET)"
+build: ## Build wheel + sdist
 	uv build
-	@echo "$(GREEN)Done.$(RESET)"
 
-# ─── Services ────────────────────────────────────────────
+# ─── Database (optional PostgreSQL) ──────────────────────
 
-run-gateway: ## Start gateway server (prefer 'make dev' for auto-reload)
-	@uv run python -m agent_backbone.services.infrastructure start-gateway
-
-run-prefect: ## Start Prefect server (port 4200)
-	uv run python -m agent_backbone.services.infrastructure run-prefect-server
-
-setup-pool: ## Create agent-pool work pool (one-time)
-	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect work-pool create agent-pool --type process
-
-deploy: ## Deploy all scheduled flows
-	PREFECT_API_URL=$(PREFECT_API_URL) uv run prefect deploy --all
-
-run-worker: ## Start Prefect worker for agent-pool
-	PREFECT_API_URL=$(PREFECT_API_URL) uv run python -m agent_backbone.services.infrastructure run-prefect-worker
-
-# ─── Database ───────────────────────────────────────────
-
-db-up: ## Start PostgreSQL (docker-compose)
-	@echo "$(CYAN)Starting PostgreSQL...$(RESET)"
+db-up: ## Start PostgreSQL via docker compose (optional; SQLite is the default)
 	docker compose up -d
-	@echo "$(GREEN)PostgreSQL running on port 5435.$(RESET)"
 
-db-down: ## Stop PostgreSQL (docker-compose)
-	@echo "$(CYAN)Stopping PostgreSQL...$(RESET)"
+db-down: ## Stop PostgreSQL
 	docker compose down
-	@echo "$(GREEN)Done.$(RESET)"
 
 db-upgrade: ## Run Alembic migrations to head
 	uv run alembic upgrade head
 
 db-migrate: ## Create a new migration (MSG="description")
-	uv run alembic revision --autogenerate -m "$(MSG)"
-
-db-revision: ## Create a new migration (MSG="description") — alias for db-migrate
 	uv run alembic revision --autogenerate -m "$(MSG)"
 
 db-history: ## Show migration history
@@ -183,50 +88,3 @@ db-current: ## Show current migration version
 
 db-downgrade: ## Downgrade one migration step
 	uv run alembic downgrade -1
-
-# ─── Infrastructure Management ──────────────────────────
-
-start-backbone: ## Start all services (Prefect + Gateway + Worker + Telegram)
-	@uv run python -m agent_backbone.services.infrastructure start-backbone
-
-stop-backbone: ## Stop all services
-	@uv run python -m agent_backbone.services.infrastructure stop-backbone
-
-restart-backbone: ## Restart all services
-	@uv run python -m agent_backbone.services.infrastructure restart-backbone
-
-status: ## Show all services and agent sessions
-	@uv run python -m agent_backbone.services.infrastructure status
-
-# ─── Agent Management ──────────────────────────────────
-
-start-agent: ## Start an agent session (NAME=bell, CLI=claude, MODEL=)
-	@uv run python -m agent_backbone.services.infrastructure start-agent $(NAME) $(if $(CLI),--cli $(CLI)) $(if $(MODEL),--model $(MODEL))
-
-stop-agent: ## Stop an agent session (NAME=bell)
-	@uv run python -m agent_backbone.services.infrastructure stop-agent $(NAME)
-
-start-orchestrators: ## Start all orchestrator agents
-	@uv run python -m agent_backbone.services.infrastructure start-orchestrators
-
-start-arclio: ## Start Arclio coding agents
-	@uv run python -m agent_backbone.services.infrastructure start-arclio
-
-start-loveble: ## Start Loveble coding agents
-	@uv run python -m agent_backbone.services.infrastructure start-loveble
-
-start-wf: ## Start WF coding agents
-	@uv run python -m agent_backbone.services.infrastructure start-wf
-
-start-all: ## Start all agents (orchestrators + coding)
-	@uv run python -m agent_backbone.services.infrastructure start-all
-
-stop-agents: ## Stop all agent sessions (pauses scheduled startups)
-	@uv run python -m agent_backbone.services.infrastructure stop-agents
-
-stop-all: stop-agents ## Stop all agent sessions (alias for stop-agents)
-
-stop-everything: stop-agents stop-backbone ## Stop all agents + all backbone services
-
-list: ## List all known agents and directories
-	@uv run python -m agent_backbone.services.infrastructure list

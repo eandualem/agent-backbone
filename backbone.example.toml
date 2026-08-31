@@ -1,0 +1,75 @@
+# Example agent-backbone configuration. Copy to backbone.toml (or run `backbone init`).
+
+[backbone]
+# data_dir = "~/.local/share/agent-backbone"   # SQLite db, state files, pids
+# host = "127.0.0.1"
+# port = 7120
+# cors_origins = ["http://localhost:5173"]      # only if a browser dashboard talks to the API
+
+# ---- Agents -----------------------------------------------------------------
+# One table per agent. The name is the tmux session name and the value of the
+# `for:<name>` label that routes tracker issues to it.
+
+[agents.reviewer]
+dir = "~/code/my-app"
+runtime = "claude"          # claude | codex | gemini | opencode | aider | cursor | shell
+model = "claude-opus-5"
+repo = "me/my-app"          # issues opened in this repo (without for: labels) route here
+tags = ["review"]
+description = "Reviews pull requests and triages issues"
+
+[agents.builder]
+dir = "~/code/my-app"
+runtime = "codex"
+
+# ---- GitHub task tracker (optional) -----------------------------------------
+[github]
+repo = "me/my-app"          # coordination repo: issues labelled for:<agent> are delivered
+mode = "webhook"            # "webhook" (needs GITHUB_WEBHOOK_SECRET + public URL) or "poll"
+# poll_interval_seconds = 30
+
+# ---- Telegram (optional) ----------------------------------------------------
+[telegram]
+allowed_chat_ids = []       # REQUIRED to enable the bot — the bot ignores everyone else
+# notification_chat_id = 123456789     # where plan-waiting / copy-mode alerts go
+# group_chat_id = -100123456789        # forum group for topic routing
+# [telegram.topic_routes]
+# 42 = "reviewer"                      # forum topic thread id -> agent
+# 43 = "agents"                        # catch-all topic: "builder: do X"
+
+# ---- Routing / delivery -----------------------------------------------------
+[routing]
+ignore_targets = []         # for: label values that are humans, not agents
+# notification_dedup_seconds = 10
+
+[delivery]
+# retention_days = 30
+# grace_period_seconds = 5
+
+[monitor]
+# interval_seconds = 60          # agent monitor (pending issues, stalls, plan-waiting)
+# retry_interval_seconds = 300   # failed delivery retry + queue drain
+
+[agent_state]
+# state_dir = ""                 # hook-written state files; default <data_dir>/state
+# stale_threshold_seconds = 300
+
+# ---- Escalation --------------------------------------------------------------
+[escalation]
+# target = "reviewer"       # agent that hears about stalls / offline agents / plans
+# stall_threshold_seconds = 5400
+# dedup_seconds = 1800
+
+# ---- Priority scoring (issue queue ordering) --------------------------------
+[priority_scoring]
+# blocking_weight = 1000.0
+# type_weights = { spec-gap = 100.0, bug = 90.0, task = 50.0, question = 20.0, optimization = 10.0 }
+
+# ---- Security ------------------------------------------------------------------
+[security]
+allow_remote_plan_control = false   # approve/reject plans (keystroke injection) via API/Telegram
+allow_unauthenticated = false       # never in anything but an isolated dev box
+
+# ---- Database (optional; SQLite in data_dir is the default) ------------------
+[database]
+# url = "postgresql+asyncpg://backbone:backbone@localhost:5435/backbone"
