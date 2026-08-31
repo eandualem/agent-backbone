@@ -55,6 +55,17 @@ def _register_jobs(app: FastAPI, config: BackboneConfig):
     scheduler.add("agent-monitor", config.monitor.interval_seconds, _monitor)
     scheduler.add("delivery-retry", config.monitor.retry_interval_seconds, _retry)
     scheduler.add("prune", 6 * 3600, _prune)
+
+    if config.github.mode == "poll" and getattr(state, "github", None) is not None:
+        from agent_backbone.services.github._poller import GitHubPoller
+
+        poller = GitHubPoller(
+            config, state.db, state.github, state.delivery_service, state.dispatch_service
+        )
+        state.github_poller = poller
+        scheduler.add(
+            "github-poll", config.github.poll_interval_seconds, poller.run, run_immediately=True
+        )
     return scheduler
 
 

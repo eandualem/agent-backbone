@@ -270,6 +270,44 @@ class GitHubClient:
             repo_full_name=repo_full_name or self._default_repo_full_name(),
         )
 
+    # --- Raw listing (used by the poller) ---
+
+    async def list_issues_since(self, repo_full_name: str, since: str) -> list[dict[str, Any]]:
+        """Issues (open and closed, PRs excluded) updated since an ISO timestamp."""
+        owner, repo = self._resolve_repo(repo_full_name)
+        resp = await self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/issues",
+            repo_full_name=repo_full_name,
+            params={
+                "state": "all",
+                "since": since,
+                "sort": "updated",
+                "direction": "asc",
+                "per_page": 100,
+            },
+        )
+        return [item for item in resp.json() if "pull_request" not in item]
+
+    async def list_comments_since(self, repo_full_name: str, since: str) -> list[dict[str, Any]]:
+        """Issue comments created/updated since an ISO timestamp, oldest first."""
+        owner, repo = self._resolve_repo(repo_full_name)
+        resp = await self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/issues/comments",
+            repo_full_name=repo_full_name,
+            params={"since": since, "sort": "updated", "direction": "asc", "per_page": 100},
+        )
+        return list(resp.json())
+
+    async def get_issue_raw(self, issue_number: int, repo_full_name: str) -> dict[str, Any]:
+        """Raw issue JSON (webhook-shaped) for building polled events."""
+        owner, repo = self._resolve_repo(repo_full_name)
+        resp = await self._request(
+            "GET", f"/repos/{owner}/{repo}/issues/{issue_number}", repo_full_name=repo_full_name
+        )
+        return resp.json()
+
     # --- Issue operations ---
 
     async def list_open_issues(
