@@ -203,8 +203,13 @@ Estimated result: **~9–10K lines of `src/`** with the same kernel behaviour, ~
 - `backbone` CLI: `init`, `doctor`, `up [--detach|--reload]`, `down`, `status`, `agent list|start|stop|start-all|stop-all`, `tell`.
 - Security defaults from §4.5 are implemented (API key required, webhook secret required, Telegram allowlist required, remote plan control opt-in, read-only terminal streaming).
 
+### Phase 2 outcome
+
+- `backbone hooks install claude` ships a stdlib-only Claude Code hook (SessionStart/UserPromptSubmit/Stop/Notification/plan-mode) that writes `<data_dir>/state/<agent>.json` and an action log — file-based rather than HTTP so agents never hold the API key. Verified live against Claude Code.
+- `[github] mode = "poll"` polls issues and comments per repository through the same ingest path as the webhook, with id-based dedup and a JSON checkpoint.
+
 ### Still ahead
 
-- Phase 2: shipped hooks (`backbone hooks install claude`) that POST state to the API; GitHub polling mode; `Schedule → Message` cron feature.
+- Phase 2 leftover: `Schedule → Message` cron feature.
 - Phase 3: restructure `safe_deliver` into a decision table; runtime plugin registry; swarm redesign; recorded-pane fixtures per runtime.
 - Phase 4: docs site, examples, CI, PyPI release.

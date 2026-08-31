@@ -38,6 +38,8 @@ uv run backbone status
 
 No database server, no workflow engine, no tunnel: state lives in a SQLite file under `~/.local/share/agent-backbone/`.
 
+> First launch of Claude Code in a directory shows its **workspace trust** prompt (default: *No, exit*). Attach once (`tmux attach -t reviewer`), pick *Yes, I trust this folder*, and it will not ask again for that directory.
+
 ## Configuration
 
 Everything structural lives in one `backbone.toml` (found by walking up from the current directory, or at `~/.config/agent-backbone/backbone.toml`). Secrets live in `.env` next to it. See [`backbone.example.toml`](backbone.example.toml) for every option.
@@ -83,13 +85,26 @@ Issues opened in a repository an agent owns (`repo = "owner/name"`) are routed t
 
 Getting events into the backbone, from simplest to most robust:
 
-1. **Webhook via the GitHub CLI** — no public URL: `gh webhook forward --repo=me/my-app --events=issues,issue_comment --url=http://localhost:7120/webhooks/github --secret=$GITHUB_WEBHOOK_SECRET`
-2. **Webhook via a tunnel** — a named [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) tunnel gives a stable hostname; point the repository webhook at `https://<host>/webhooks/github` with the same secret.
-3. **Polling** (`[github] mode = "poll"`) — planned; no URL or secret needed.
+1. **Polling** — `[github] mode = "poll"`. The backbone asks GitHub for new issues and comments every 30 seconds (configurable). Nothing to expose, no secret needed; a token with `repo` scope is enough. Start here.
+2. **Webhook via the GitHub CLI** — real-time, still no public URL: `gh webhook forward --repo=me/my-app --events=issues,issue_comment --url=http://localhost:7120/webhooks/github --secret=$GITHUB_WEBHOOK_SECRET`
+3. **Webhook via a tunnel** — a named [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) tunnel gives a stable hostname; point the repository webhook at `https://<host>/webhooks/github` with the same secret.
 
-## Agent readiness
+Polling and webhooks can run at the same time; every event is deduplicated by id.
 
-The backbone decides whether an agent can receive a message from two sources: state pushed by the agent's own hooks (idle / busy / plan-waiting / permission-waiting) and, as a fallback, what its terminal currently shows. The decision order is:
+## Agent readiness and hooks
+
+The backbone decides whether an agent can receive a message from two sources: state pushed by the agent's own hooks (idle / busy / plan-waiting / permission-waiting) and, as a fallback, what its terminal currently shows.
+
+Install the shipped hooks once per machine (or per project with `--dir`):
+
+```bash
+uv run backbone hooks install claude            # writes ~/.claude/settings.json
+uv run backbone hooks install claude --dir ~/code/my-app   # or the project's .claude/settings.json
+```
+
+The hook is a standard-library Python script copied into the data dir; it needs no API key. It learns which agent it belongs to from the `BACKBONE_AGENT` variable the backbone exports into every session it starts (falling back to the tmux session name), and writes `<data_dir>/state/<agent>.json` on `SessionStart`, `UserPromptSubmit`, `Stop`, `Notification` (permission prompts), and plan-mode enter/exit. It also logs `gh issue comment …` calls so acknowledgments are detected without a spoofable text tag.
+
+The decision order is:
 
 `offline → plan_waiting → permission_waiting → working → copy_mode → user_interacting → idle`
 
