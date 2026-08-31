@@ -1,4 +1,4 @@
-"""Issue management endpoints — GitHub issue proxy with enrichment."""
+"""Issue endpoints — GitHub issue proxy with routing enrichment."""
 
 from __future__ import annotations
 
@@ -8,9 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from agent_backbone.api.deps import get_config, get_db, get_delivery_service, get_github
 from agent_backbone.api.models import (
+    IssueCommentRequest,
     IssueCommentResponse,
+    IssueCreateRequest,
     IssueDependencies,
     IssueResponse,
+    IssueUpdateRequest,
     ListEnvelope,
     ParsedLabelsResponse,
 )
@@ -29,13 +32,13 @@ router = APIRouter(prefix="/api", tags=["issues"])
 def _issue_to_response(
     issue, config: BackboneConfig, delivery_svc: DeliveryService, dependents: int = 0
 ) -> IssueResponse:
-    """Convert IssueData to IssueResponse with priority score."""
     score = delivery_svc.compute_priority_score(issue, config.priority_scoring, dependents)
     return IssueResponse(
         number=issue.number,
         title=issue.title,
         state=issue.state,
         html_url=issue.html_url,
+        repo_full_name=issue.repo_full_name,
         labels=ParsedLabelsResponse(
             sender=issue.labels.sender,
             targets=issue.labels.targets,
@@ -46,13 +49,23 @@ def _issue_to_response(
     )
 
 
+def _comment_to_response(comment) -> IssueCommentResponse:
+    return IssueCommentResponse(
+        id=comment.id,
+        body=comment.body,
+        user_login=comment.user_login,
+        from_entity=parse_from_tag(comment.body) if comment.body else None,
+    )
+
+
 @router.get("/issues", response_model=ListEnvelope[IssueResponse])
 async def list_issues(
     state: str = Query(default="open"),
-    for_entity: str | None = Query(default=None),
-    from_entity: str | None = Query(default=None),
+    for_entity: str | None = Query(default=None, alias="for"),
+    from_entity: str | None = Query(default=None, alias="from"),
     issue_type: str | None = Query(default=None, alias="type"),
     label: str | None = Query(default=None),
+    repo: str | None = Query(default=None),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
@@ -68,7 +81,7 @@ async def list_issues(
     if label:
         labels.append(label)
 
-    issues = await gh.list_issues(state=state, labels=labels)
+    issues = await gh.list_issues(state=state, labels=labels, repo_full_name=repo)
     items = [_issue_to_response(i, config, delivery_svc) for i in issues]
     return ListEnvelope(items=items, total=len(items))
 
@@ -76,13 +89,14 @@ async def list_issues(
 @router.get("/issues/{number}", response_model=IssueResponse)
 async def get_issue(
     number: int,
+    repo: str | None = Query(default=None),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Get a single issue by number with priority score."""
     try:
-        issue = await gh.get_issue(number)
+        issue = await gh.get_issue(number, repo_full_name=repo)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Issue #{number} not found") from e
     return _issue_to_response(issue, config, delivery_svc)
@@ -91,32 +105,26 @@ async def get_issue(
 @router.get("/issues/{number}/comments", response_model=ListEnvelope[IssueCommentResponse])
 async def list_issue_comments(
     number: int,
+    repo: str | None = Query(default=None),
     gh: GitHubClient = Depends(get_github),
 ):
     """List comments on an issue with parsed [from:X] tags."""
-    comments = await gh.list_comments(number)
-    items = [
-        IssueCommentResponse(
-            id=c.id,
-            body=c.body,
-            user_login=c.user_login,
-            from_entity=parse_from_tag(c.body) if c.body else None,
-        )
-        for c in comments
-    ]
+    comments = await gh.list_comments(number, repo_full_name=repo)
+    items = [_comment_to_response(c) for c in comments]
     return ListEnvelope(items=items, total=len(items))
 
 
 @router.get("/issues/{number}/dependencies", response_model=IssueDependencies)
 async def get_issue_dependencies(
     number: int,
+    repo: str | None = Query(default=None),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     db: BackboneDB = Depends(get_db),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Get sub-issues and parent issues for an issue."""
-    sub_issues = await gh.get_sub_issues(number)
+    sub_issues = await gh.get_sub_issues(number, repo_full_name=repo)
     parents = await db.get_parents(number)
     return IssueDependencies(
         sub_issues=[_issue_to_response(s, config, delivery_svc) for s in sub_issues],
@@ -124,67 +132,62 @@ async def get_issue_dependencies(
     )
 
 
-@router.post("/issues", response_model=IssueResponse)
+@router.post("/issues", response_model=IssueResponse, status_code=201)
 async def create_issue(
-    body: dict,
+    body: IssueCreateRequest,
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     db: BackboneDB = Depends(get_db),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
-    """Create a new issue in the orchestration repo."""
-    title = body.get("title", "")
-    issue_body = body.get("body", "")
-    labels = body.get("labels", [])
-    if not title:
+    """Create an issue and immediately notify its ``for:`` targets."""
+    if not body.title:
         raise HTTPException(status_code=400, detail="title is required")
-    targets = [label.removeprefix("for:") for label in labels if label.startswith("for:")]
+    targets = [label.removeprefix("for:") for label in body.labels if label.startswith("for:")]
     try:
         validate_issue_targets(targets, config)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    issue = await delivery_svc.create_and_notify(
-        gh,
-        title,
-        issue_body,
-        labels,
-        config,
-        db=db,
-        flow_name="api-create-issue",
-    )
+    if body.repo:
+        issue = await gh.create_issue(body.title, body.body, body.labels, repo_full_name=body.repo)
+    else:
+        issue = await delivery_svc.create_and_notify(
+            gh,
+            body.title,
+            body.body,
+            body.labels,
+            config,
+            db=db,
+            flow_name="api-create-issue",
+        )
     return _issue_to_response(issue, config, delivery_svc)
 
 
 @router.post("/issues/{number}/comment", response_model=IssueCommentResponse)
 async def add_issue_comment(
     number: int,
-    body: dict,
+    body: IssueCommentRequest,
+    repo: str | None = Query(default=None),
     gh: GitHubClient = Depends(get_github),
 ):
     """Add a comment to an issue."""
-    comment_body = body.get("body", "")
-    if not comment_body:
+    if not body.body:
         raise HTTPException(status_code=400, detail="body is required")
-    comment = await gh.add_comment(number, comment_body)
-    return IssueCommentResponse(
-        id=comment.id,
-        body=comment.body,
-        user_login=comment.user_login,
-        from_entity=parse_from_tag(comment.body) if comment.body else None,
-    )
+    comment = await gh.add_comment(number, body.body, repo_full_name=repo)
+    return _comment_to_response(comment)
 
 
 @router.patch("/issues/{number}", response_model=IssueResponse)
 async def update_issue(
     number: int,
-    body: dict,
+    body: IssueUpdateRequest,
+    repo: str | None = Query(default=None),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
     delivery_svc: DeliveryService = Depends(get_delivery_service),
 ):
     """Update an issue (e.g. close it)."""
-    state = body.get("state")
-    if not state:
-        raise HTTPException(status_code=400, detail="state is required")
-    issue = await gh.update_issue(number, state)
+    if body.state not in ("open", "closed"):
+        raise HTTPException(status_code=400, detail="state must be 'open' or 'closed'")
+    issue = await gh.update_issue(number, body.state, repo_full_name=repo)
     return _issue_to_response(issue, config, delivery_svc)

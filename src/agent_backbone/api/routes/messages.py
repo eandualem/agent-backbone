@@ -1,4 +1,8 @@
-"""Inter-agent messaging endpoint — direct message delivery via safe_deliver."""
+"""Messaging endpoint — deliver a message to an agent via safe_deliver.
+
+Used by agents (agent-to-agent), scripts and dashboards. The message is
+wrapped in a provenance envelope so the receiving agent knows who sent it.
+"""
 
 from __future__ import annotations
 
@@ -21,11 +25,7 @@ async def send_message(
     config=Depends(get_config),
     db=Depends(get_db),
 ):
-    """Send a coordination message to an agent session via safe_deliver.
-
-    Formats the message with a ``[via:backbone from:{from_entity}]`` envelope
-    and delivers using the state-aware safe_deliver pipeline.
-    """
+    """Send a message to an agent session using the state-aware delivery pipeline."""
     envelope = f"[via:backbone from:{body.from_entity}] {body.message}"
 
     outcome = await safe_deliver(
@@ -38,12 +38,5 @@ async def send_message(
         delivery_kind="direct_message",
     )
 
-    delivered = outcome == "delivered"
-    log.info(
-        "Message from %s → %s: %s",
-        body.from_entity,
-        body.target_session,
-        outcome,
-    )
-
-    return MessageResponse(ok=delivered, session=body.target_session, outcome=outcome)
+    log.info("Message from %s → %s: %s", body.from_entity, body.target_session, outcome)
+    return MessageResponse(ok=outcome == "delivered", session=body.target_session, outcome=outcome)

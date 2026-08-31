@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import shutil
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from agent_backbone.api.deps import get_config, get_db, get_state_service, get_tmux_service
 from agent_backbone.api.models import (
-    ActivityCreateRequest,
-    AgentActivityEvent,
     AgentStartRequest,
     AgentStartResponse,
     AgentStateDetail,
@@ -31,57 +26,28 @@ from agent_backbone.api.session_updates import (
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.terminal import (
-    RUNTIME_ENV_KEY,
-    TmuxService,
-    resolve_agent_dir,
+from agent_backbone.services.infrastructure._agents import (
+    RUNTIME_COMMANDS,
+    RUNTIME_DISPLAY_NAMES,
+    build_command,
+    runtime_available,
 )
+from agent_backbone.services.terminal import RUNTIME_ENV_KEY, TmuxService
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agents"])
 
-# Fallback directories for binaries not on system PATH
-_FALLBACK_DIRS = [
-    Path.home() / ".bun" / "bin",
-    Path.home() / ".local" / "bin",
-]
 
+async def _broadcast(request: Request, config: BackboneConfig, tmux_svc: TmuxService) -> None:
+    await invalidate_session_snapshot_caches()
+    await emit_sessions_update(
+        getattr(request.app.state, "sio", None),
+        config,
+        getattr(request.app.state, "state_service", None),
+        tmux_svc,
+    )
 
-def _resolve_command(name: str | None) -> str | None:
-    """Resolve a command name to an absolute path.
-
-    Tries shutil.which() first (system PATH), then checks fallback
-    directories. Returns the absolute path string, or None if unresolved.
-    """
-    if name is None:
-        return None
-    path = shutil.which(name)
-    if path:
-        return path
-    for directory in _FALLBACK_DIRS:
-        candidate = directory / name
-        if candidate.is_file():
-            return str(candidate)
-    return None
-
-
-# Runtime registry
-_RUNTIMES = {
-    "claude": {"display_name": "Claude Code", "command": "claude"},
-    "gemini": {"display_name": "Gemini CLI", "command": "gemini"},
-    "codex": {"display_name": "Codex", "command": "codex"},
-    "cursor": {"display_name": "Cursor Agent", "command": "cursor"},
-    "opencode": {"display_name": "OpenCode", "command": "opencode"},
-    "aider": {"display_name": "Aider", "command": "aider"},
-    "shell": {"display_name": "Plain Shell", "command": None},
-}
-
-# Resolve commands to absolute paths at load time
-for _rt_id, _rt_entry in _RUNTIMES.items():
-    _rt_entry["resolved_path"] = _resolve_command(_rt_entry["command"])
-    if _rt_entry["command"] and not _rt_entry["resolved_path"]:
-        log.warning("Runtime '%s': binary '%s' not found", _rt_id, _rt_entry["command"])
 
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
 async def list_agents(
@@ -89,7 +55,7 @@ async def list_agents(
     state_svc: StateService = Depends(get_state_service),
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
-    """List all agents (named entities + discovered coding agents) with live state."""
+    """List configured agents (plus other live tmux sessions) with live state."""
     agents = await get_cached_session_snapshot(
         lambda: build_session_snapshot(config, state_svc, tmux_svc)
     )
@@ -117,14 +83,10 @@ async def get_agent_state_endpoint(
 
 @router.get("/runtimes", response_model=list[RuntimeInfo])
 async def list_runtimes():
-    """List available runtimes for agent sessions."""
+    """List supported runtimes and whether their binary is installed."""
     return [
-        RuntimeInfo(
-            id=k,
-            display_name=v["display_name"],
-            available=v["command"] is None or v["resolved_path"] is not None,
-        )
-        for k, v in _RUNTIMES.items()
+        RuntimeInfo(id=k, display_name=RUNTIME_DISPLAY_NAMES[k], available=runtime_available(k))
+        for k in RUNTIME_COMMANDS
     ]
 
 
@@ -136,69 +98,57 @@ async def start_agent(
     config: BackboneConfig = Depends(get_config),
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
-    """Start an agent tmux session with a specified runtime."""
+    """Start an agent session.
+
+    Configured agents use their ``[agents.<name>]`` settings; request fields
+    override them. Unconfigured sessions require ``working_directory``.
+    """
     req = body or AgentStartRequest()
+    spec = config.agents.get(session)
 
-    # Validate runtime
-    rt = _RUNTIMES.get(req.runtime)
-    if rt is None:
-        raise HTTPException(status_code=400, detail=f"Unknown runtime: {req.runtime}")
+    runtime = req.runtime or (spec.runtime if spec else "claude")
+    model = req.model if req.model is not None else (spec.model if spec else None)
+    working_dir = req.working_directory or (str(spec.path) if spec else None)
 
-    # Check binary availability (shell has no binary)
-    if rt["command"] is not None and not rt["resolved_path"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Runtime '{req.runtime}' binary not found: {rt['command']}",
-        )
+    if runtime not in RUNTIME_COMMANDS:
+        raise HTTPException(status_code=400, detail=f"Unknown runtime: {runtime}")
+    if not runtime_available(runtime):
+        raise HTTPException(status_code=400, detail=f"Runtime '{runtime}' binary not found")
 
-    # Idempotent: if session already exists, return success
     if await tmux_svc.session_exists(session):
         return AgentStartResponse(
             ok=True,
             session=session,
-            runtime=req.runtime,
-            model=req.model,
+            runtime=runtime,
+            model=model,
             already_existed=True,
         )
 
-    # Resolve working directory
-    working_dir = req.working_directory or resolve_agent_dir(session, config.registry)
     if not working_dir:
         raise HTTPException(
             status_code=400,
-            detail="Cannot resolve working directory — provide working_directory explicitly",
+            detail=(
+                f"'{session}' is not a configured agent — provide working_directory "
+                "or add it to backbone.toml"
+            ),
         )
 
-    # Build command list
-    command: list[str] | None = None
-    if rt["command"] is not None:
-        resolved = rt["resolved_path"]
-        command = [resolved]
-        if req.model:
-            command.extend(["--model", req.model])
-        if req.resume:
-            command.append("--resume")
-
+    command = build_command(runtime, model=model, resume=req.resume)
+    environment = {RUNTIME_ENV_KEY: runtime, **(spec.env if spec else {})}
     ok = await tmux_svc.start_session(
         session,
         working_dir=working_dir,
         command=command,
-        environment={RUNTIME_ENV_KEY: req.runtime},
+        environment=environment,
     )
     if ok:
-        await invalidate_session_snapshot_caches()
-        await emit_sessions_update(
-            getattr(request.app.state, "sio", None),
-            config,
-            getattr(request.app.state, "state_service", None),
-            tmux_svc,
-        )
+        await _broadcast(request, config, tmux_svc)
     return AgentStartResponse(
         ok=ok,
         session=session,
         working_directory=working_dir,
-        runtime=req.runtime,
-        model=req.model if rt["command"] is not None else None,
+        runtime=runtime,
+        model=model if command is not None else None,
     )
 
 
@@ -210,15 +160,11 @@ async def stop_agent(
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Stop an agent tmux session."""
+    if session == config.backbone.session_name:
+        raise HTTPException(status_code=400, detail="Refusing to stop the backbone's own session")
     ok = await tmux_svc.stop_session(session)
     if ok:
-        await invalidate_session_snapshot_caches()
-        await emit_sessions_update(
-            getattr(request.app.state, "sio", None),
-            config,
-            getattr(request.app.state, "state_service", None),
-            tmux_svc,
-        )
+        await _broadcast(request, config, tmux_svc)
     return AgentStopResponse(ok=ok, session=session)
 
 
@@ -241,11 +187,6 @@ async def get_terminal_output(
     return {"session": name, "lines": lines, "content": output}
 
 
-# ---------------------------------------------------------------------------
-# POST /api/agents/{session}/state
-# ---------------------------------------------------------------------------
-
-
 @router.post("/agents/{session}/state")
 async def post_agent_state(
     request: Request,
@@ -254,7 +195,7 @@ async def post_agent_state(
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
 ):
-    """Update agent state in the database."""
+    """Update agent state (called by runtime hooks)."""
     await db.set_agent_state(
         session,
         body.state,
@@ -265,63 +206,5 @@ async def post_agent_state(
         plan_file=body.plan_file,
         plan_title=body.plan_title,
     )
-    await invalidate_session_snapshot_caches()
-    await emit_sessions_update(
-        getattr(request.app.state, "sio", None),
-        config,
-        getattr(request.app.state, "state_service", None),
-        getattr(request.app.state, "tmux_service", None),
-    )
+    await _broadcast(request, config, getattr(request.app.state, "tmux_service", None))
     return {"ok": True, "session": session}
-
-
-# ---------------------------------------------------------------------------
-# POST/GET /api/agents/{session}/activity
-# ---------------------------------------------------------------------------
-
-
-@router.post("/agents/{session}/activity")
-async def post_agent_activity(
-    session: str,
-    body: ActivityCreateRequest,
-    db: BackboneDB = Depends(get_db),
-):
-    """Record an agent activity event."""
-    # Extra fields beyond event/ts go into the data payload
-    data_dict = dict(body.model_extra or {})
-    data_json = json.dumps(data_dict) if data_dict else None
-    row_id = await db.record_activity(session, body.event, data_json, str(body.ts))
-    return {"ok": True, "id": row_id}
-
-
-@router.get("/agents/{session}/activity", response_model=ListEnvelope[AgentActivityEvent])
-async def get_agent_activity(
-    session: str,
-    limit: int = Query(default=50, ge=1, le=500),
-    since: float | None = Query(default=None),
-    db: BackboneDB = Depends(get_db),
-):
-    """Get activity events for an agent session."""
-    since_str = str(since) if since is not None else None
-    rows = await db.get_activity(session, limit, since=since_str)
-    items = []
-    for row in rows:
-        data_raw = row.get("data")
-        data_dict = None
-        if data_raw:
-            try:
-                data_dict = json.loads(data_raw)
-            except (json.JSONDecodeError, TypeError):
-                data_dict = {"raw": data_raw}
-        ts_val = row.get("ts", "0")
-        items.append(
-            AgentActivityEvent(
-                id=row["id"],
-                session=row["session"],
-                event=row["event"],
-                data=data_dict,
-                ts=float(ts_val),
-                received_at=row["received_at"],
-            )
-        )
-    return ListEnvelope(items=items, total=len(items))
