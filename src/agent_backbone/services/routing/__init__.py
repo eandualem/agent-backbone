@@ -21,40 +21,37 @@ from agent_backbone.services.routing._dependencies import (
 )
 from agent_backbone.services.routing._flows import (
     delivery_retry,
+    drain_message_queue,
     retry_delivery,
-    scheduled_delivery,
 )
 from agent_backbone.services.routing._format import (
     NotificationService,
     format_comment_notification,
-    format_digest,
     format_issue_notification,
     format_next_issue_notification,
     format_plan_notification,
+    format_pull_request_notification,
     format_stall_notification,
     format_unblock_notification,
     format_unexpected_offline_notification,
 )
-from agent_backbone.services.routing._intelligence import (
-    get_session_intelligence,
-    is_http_target,
-)
+from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing._lifecycle import (
-    _ONBOARDING_TITLE_PREFIX,
-    _check_onboarding_chain,
     deliver_next,
     find_next_issue,
     on_issue_closed,
 )
 from agent_backbone.services.routing._priority import compute_priority_score
 from agent_backbone.services.routing._resolution import (
+    is_valid_issue_target,
     resolve_entity_session,
     resolve_entity_sessions,
+    validate_issue_targets,
 )
-from agent_backbone.services.routing._router import (
-    DispatchResult,
-    issue_dispatcher,
-    resolve_session,
+from agent_backbone.services.routing._router import issue_dispatcher
+from agent_backbone.services.routing._targets import (
+    list_open_queue_for_target,
+    resolve_event_targets,
 )
 from agent_backbone.services.routing.exceptions import (
     DeliveryServiceError,
@@ -62,52 +59,50 @@ from agent_backbone.services.routing.exceptions import (
 )
 from agent_backbone.services.routing.interface import DeliveryService, DispatchService
 from agent_backbone.services.routing.models import (
+    DispatchResult,
     SessionIntelligence,
     SessionProfile,
 )
 
 __all__ = [
-    # Dispatch
-    "DispatchResult",
-    "DispatchService",
-    "_ONBOARDING_TITLE_PREFIX",
-    "_check_onboarding_chain",
-    "check_parent_resolved",
-    "deliver_next",
-    "find_next_issue",
-    "issue_dispatcher",
-    "on_dependency_resolved",
-    "on_issue_closed",
-    "resolve_session",
-    "sync_dependencies",
-    # Delivery
     "DEFAULT_DEDUP_SECONDS",
     "DeliveryService",
     "DeliveryServiceError",
+    "DispatchResult",
+    "DispatchService",
+    "NotificationError",
+    "NotificationService",
     "SessionIntelligence",
     "SessionProfile",
+    "check_parent_resolved",
     "clear",
     "compute_priority_score",
     "create_and_notify",
+    "deliver_next",
     "delivery_retry",
-    "get_session_intelligence",
-    "is_http_target",
-    "is_recent_notification",
-    "list_sessions_full",
-    "resolve_entity_session",
-    "resolve_entity_sessions",
-    "retry_delivery",
-    "safe_deliver",
-    "scheduled_delivery",
-    # Notifications
-    "NotificationError",
-    "NotificationService",
+    "drain_message_queue",
+    "find_next_issue",
     "format_comment_notification",
-    "format_digest",
     "format_issue_notification",
     "format_next_issue_notification",
     "format_plan_notification",
+    "format_pull_request_notification",
     "format_stall_notification",
-    "format_unexpected_offline_notification",
     "format_unblock_notification",
+    "format_unexpected_offline_notification",
+    "get_session_intelligence",
+    "is_recent_notification",
+    "is_valid_issue_target",
+    "issue_dispatcher",
+    "list_open_queue_for_target",
+    "list_sessions_full",
+    "on_dependency_resolved",
+    "on_issue_closed",
+    "resolve_entity_session",
+    "resolve_entity_sessions",
+    "resolve_event_targets",
+    "retry_delivery",
+    "safe_deliver",
+    "sync_dependencies",
+    "validate_issue_targets",
 ]

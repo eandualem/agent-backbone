@@ -39,11 +39,6 @@ def _profile_current_issue(agent_state: AgentState, current_issue: int | None) -
     return None
 
 
-def is_http_target(session_name: str, config: BackboneConfig) -> bool:
-    """Check if a session name represents an HTTP delivery target."""
-    return session_name == "jarvis" and config.jarvis.enabled
-
-
 async def get_session_intelligence(
     session_name: str,
     config: BackboneConfig,
@@ -107,7 +102,7 @@ async def get_session_intelligence(
 
     # Step 3: Get agent state via push/pull reconciliation
     state_snap = await get_agent_state(
-        config.agent_state.state_path,
+        config.state_dir,
         session_name,
         config.agent_state.stale_threshold_seconds,
     )
@@ -178,7 +173,7 @@ async def get_session_intelligence(
     if agent_state == AgentState.IDLE:
         if idle_since is not None:
             elapsed = time.monotonic() - idle_since
-            if elapsed < config.session_bridge.grace_period_seconds:
+            if elapsed < config.delivery.grace_period_seconds:
                 return SessionProfile(
                     session_name=session_name,
                     intelligence=SessionIntelligence.IDLE_GRACE,

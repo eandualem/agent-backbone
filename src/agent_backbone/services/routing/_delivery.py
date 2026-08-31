@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
     from agent_backbone.services.database import BackboneDB
 
-from agent_backbone.services.routing._intelligence import get_session_intelligence, is_http_target
+from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.terminal import get_terminal_adapter, send_message
 
@@ -253,45 +253,6 @@ async def safe_deliver(
             return "already_delivered"
         if isinstance(claim_result, int):
             delivery_claim_id = claim_result
-
-    # HTTP delivery targets bypass tmux intelligence entirely
-    if is_http_target(session_name, config):
-        from agent_backbone.jarvis import inject_message
-
-        if await inject_message(
-            config.jarvis.inject_url, message, sessions_url=config.jarvis.sessions_url
-        ):
-            await _persist_delivery_outcome(
-                db,
-                issue_number,
-                target_entity,
-                session_name,
-                "delivered",
-                flow_name,
-                delivery_kind,
-                delivery_claim_id,
-            )
-            return "delivered"
-        await _maybe_enqueue(
-            session_name,
-            message,
-            issue_number,
-            target_entity,
-            flow_name,
-            db,
-            delivery_kind=delivery_kind,
-        )
-        await _persist_delivery_outcome(
-            db,
-            issue_number,
-            target_entity,
-            session_name,
-            "delivery_failed",
-            flow_name,
-            delivery_kind,
-            delivery_claim_id,
-        )
-        return "delivery_failed"
 
     profile = await get_session_intelligence(session_name, config, idle_since=idle_since)
 

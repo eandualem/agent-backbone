@@ -17,12 +17,8 @@ from agent_backbone.services.routing._lifecycle import on_issue_closed as _on_is
 from agent_backbone.services.routing._priority import (
     compute_priority_score as _compute_priority_score,
 )
-from agent_backbone.services.routing._router import (
-    DispatchResult,
-)
-from agent_backbone.services.routing._router import (
-    issue_dispatcher as _issue_dispatcher,
-)
+from agent_backbone.services.routing._router import issue_dispatcher as _issue_dispatcher
+from agent_backbone.services.routing.models import DispatchResult
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig, PriorityScoringConfig
@@ -37,22 +33,17 @@ class DispatchService:
     """Dispatch coordination service implementing LifecycleAware."""
 
     async def start(self) -> None:
-        """Start dispatch service."""
         log.info("Dispatch service started")
 
     async def stop(self) -> None:
-        """Stop dispatch service."""
         pass
 
     async def health_check(self) -> dict:
-        """Check dispatch service health."""
         return {"healthy": True, "service": "dispatch"}
-
-    # --- DI surface for route handlers ---
 
     async def on_issue_closed(
         self, event: IssueEvent, config: BackboneConfig, gh: GitHubClient, db: BackboneDB
-    ) -> str:
+    ) -> dict:
         """Handle issue closed event — close-then-next lifecycle."""
         return await _on_issue_closed(event, config, gh, db)
 
@@ -71,18 +62,13 @@ class DeliveryService:
     """Delivery coordination service implementing LifecycleAware."""
 
     async def start(self) -> None:
-        """Start delivery service."""
         log.info("Delivery service started")
 
     async def stop(self) -> None:
-        """Stop delivery service."""
         pass
 
     async def health_check(self) -> dict:
-        """Check delivery service health."""
         return {"healthy": True, "service": "delivery"}
-
-    # --- DI surface for route handlers ---
 
     def is_recent_notification(self, issue_number: int, target: str) -> bool:
         """Check if issue+target was already notified recently."""

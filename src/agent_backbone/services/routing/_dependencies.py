@@ -1,25 +1,22 @@
 """Dependency tracking: sub-issue resolution detection and sync.
 
-Detects when all sub-issues of a parent are resolved, and syncs
-sub-issue relationships to SQLite for close-time lookups.
+Detects when all sub-issues of a parent are resolved, and syncs sub-issue
+relationships to the database for close-time lookups.
 """
 
 from __future__ import annotations
 
 import logging
 
-from prefect import flow, task
-
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_unblock_notification
+from agent_backbone.services.routing._resolution import resolve_entity_sessions
 
 log = logging.getLogger(__name__)
 
 
-@task
 async def check_parent_resolved(
     config: BackboneConfig, parent_number: int, gh: object
 ) -> dict | None:
@@ -31,32 +28,26 @@ async def check_parent_resolved(
     if not sub_issues:
         return None
 
-    all_resolved = all(si.state == "closed" for si in sub_issues)
-    if not all_resolved:
+    if not all(si.state == "closed" for si in sub_issues):
         return None
 
     parent = await gh.get_issue(parent_number)
-    return {
-        "parent": parent,
-        "targets": parent.labels.targets,
-    }
+    return {"parent": parent, "targets": parent.labels.targets}
 
 
-@flow(name="dependency-tracker")
-async def on_dependency_resolved(closed_issue_number: int) -> dict:
+async def on_dependency_resolved(
+    closed_issue_number: int,
+    config: BackboneConfig,
+    db: BackboneDB,
+    gh: object,
+) -> dict:
     """Check if closing this issue unblocks any parent issues.
 
     Returns a dict mapping parent_number -> outcome.
     """
-    await ensure_initialized()
-
-    config = get_config()
-    db = get_db()
-    gh = get_gh()
     result: dict[str, str] = {"parents_checked": "0"}
 
     parents = await db.get_parents(closed_issue_number)
-
     if not parents:
         return result
 
@@ -73,18 +64,8 @@ async def on_dependency_resolved(closed_issue_number: int) -> dict:
         delivered_to: list[str] = []
 
         for target in resolved["targets"]:
-            if target in config.entities.skip:
-                continue
-            session_names = config.registry.delivery_sessions_for(target)
-            if not session_names:
-                continue
-            for session_name in session_names:
-                outcome = await safe_deliver(
-                    session_name,
-                    message,
-                    config,
-                    db=db,
-                )
+            for session_name in resolve_entity_sessions(target, config):
+                outcome = await safe_deliver(session_name, message, config, db=db)
                 if outcome == "delivered":
                     delivered_to.append(session_name)
 
@@ -102,13 +83,12 @@ async def on_dependency_resolved(closed_issue_number: int) -> dict:
 
 
 async def sync_dependencies(config: BackboneConfig, db: BackboneDB, gh: object) -> None:
-    """Sync sub-issue relationships to SQLite for close-time lookups."""
+    """Sync sub-issue relationships to the database for close-time lookups."""
+    if not config.github.enabled:
+        return
     checked: set[int] = set()
-    for entity, entry in config.registry.entities.items():
-        if entry.entity_type == "role" or entry.session is None:
-            continue
-        label = f"for:{entity}"
-        issues = await gh.list_open_issues(label)
+    for name in config.agents.names:
+        issues = await gh.list_open_issues(f"for:{name}")
         for issue in issues:
             if issue.number in checked:
                 continue

@@ -1,8 +1,8 @@
-"""Delivery flows: retry failed deliveries and scheduled delivery.
+"""Delivery retry: re-attempt failed deliveries and drain the message queue.
 
-Runs on configurable intervals. Queries the persistence layer for
-failed/offline/deferred deliveries and retries them if the target
-agent is now online and not busy.
+Run periodically by the in-process scheduler. Queries the persistence layer
+for failed/offline/deferred deliveries and retries them if the target agent
+is now online and idle.
 """
 
 from __future__ import annotations
@@ -10,22 +10,32 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection
 
-from prefect import flow, task
-
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_next_issue_notification
-from agent_backbone.services.routing._targets import list_open_queue_for_target
+from agent_backbone.services.routing._targets import (
+    list_open_queue_for_target,
+    repo_full_name_for_target,
+)
 
 log = logging.getLogger(__name__)
+
+_BUSY_OUTCOMES = frozenset(
+    {
+        "agent_working",
+        "plan_waiting",
+        "permission_waiting",
+        "user_interacting",
+        "grace_period",
+    }
+)
 
 
 async def drain_message_queue(
     config: BackboneConfig,
     db: BackboneDB,
-    gh: object,
+    gh: object | None,
     *,
     active_sessions: Collection[str],
 ) -> dict[str, int]:
@@ -40,7 +50,6 @@ async def drain_message_queue(
     except Exception:
         log.exception("Failed to recover stale leases (non-fatal)")
 
-    # Auto-expire stale pending messages to prevent infinite retry loops
     try:
         expired = await db.expire_stale_pending(max_age_minutes=30)
         if expired:
@@ -52,31 +61,33 @@ async def drain_message_queue(
     queued_sessions = set(await db.get_sessions_with_pending())
     all_sessions = set(active_sessions) | queued_sessions
 
-    for session_name in all_sessions:
+    for session_name in sorted(all_sessions):
         queued = await db.dequeue_messages(session_name, limit=5)
         if not isinstance(queued, list) or not queued:
             continue
 
         for msg_record in queued:
+            target_entity = msg_record.get("target_entity")
+            queue_scope: set[int] | None = None
+            if target_entity and gh is not None:
+                try:
+                    queue_scope = {
+                        item.number
+                        for item in await list_open_queue_for_target(config, target_entity, gh)
+                    }
+                except Exception:
+                    log.exception("Failed to load queue scope for %s (non-fatal)", target_entity)
+
             q_outcome = await safe_deliver(
                 session_name,
                 msg_record["message"],
                 config,
                 db=db,
                 issue_number=msg_record.get("issue_number"),
-                target_entity=msg_record.get("target_entity"),
+                target_entity=target_entity,
                 flow_name="delivery-retry-queue",
                 enforce_issue_queue=True,
-                queue_scope_issue_numbers={
-                    item.number
-                    for item in await list_open_queue_for_target(
-                        config,
-                        msg_record["target_entity"],
-                        gh,
-                    )
-                }
-                if msg_record.get("target_entity")
-                else None,
+                queue_scope_issue_numbers=queue_scope,
                 delivery_kind=msg_record.get("delivery_kind", "issue"),
             )
             if q_outcome == "delivered":
@@ -92,41 +103,30 @@ async def drain_message_queue(
     return summary
 
 
-@task
 async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB, gh: object) -> str:
     """Attempt to retry a single failed delivery.
 
-    Returns outcome string: retried, still_offline, still_busy, issue_closed.
+    Returns outcome string: retried, still_offline, still_busy, issue_closed, ...
     """
     session_name = delivery["session_name"]
     issue_number = delivery["issue_number"]
     target_entity = delivery["target_entity"]
 
-    # Skip if already acknowledged (check both entity and session for fallback scenarios)
     if await db.is_acknowledged(issue_number, target_entity):
         return "acknowledged"
     if session_name != target_entity and await db.is_acknowledged(issue_number, session_name):
         return "acknowledged"
 
-    # Fetch current issue state from GitHub
+    repo_full_name = repo_full_name_for_target(target_entity, config)
     try:
-        issue = await gh.get_issue(
-            issue_number,
-            repo_full_name=(
-                f"{config.github.owner}/{target_entity}"
-                if target_entity in config.registry.repo_names
-                else None
-            ),
-        )
+        issue = await gh.get_issue(issue_number, repo_full_name=repo_full_name)
     except Exception:
         log.warning("Failed to fetch issue #%d for retry", issue_number)
         return "fetch_failed"
 
-    # Skip if issue is now closed
     if issue.state == "closed":
         return "issue_closed"
 
-    # Deliver via safe_deliver (handles state checks + enqueue on failure)
     message = format_next_issue_notification(issue)
     queue_scope_issue_numbers = {
         item.number
@@ -150,40 +150,19 @@ async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB,
     )
 
     if outcome == "delivered":
-        log.info(
-            "Retry delivered #%d to %s (%s)",
-            issue_number,
-            target_entity,
-            session_name,
-        )
+        log.info("Retry delivered #%d to %s (%s)", issue_number, target_entity, session_name)
         return "retried"
     if outcome == "offline":
         return "still_offline"
-    busy_states = (
-        "agent_working",
-        "plan_waiting",
-        "permission_waiting",
-        "user_interacting",
-        "grace_period",
-    )
-    if outcome in busy_states:
+    if outcome in _BUSY_OUTCOMES:
         return "still_busy"
     if outcome in ("already_delivered", "awaiting_ack", "unknown_state"):
         return outcome
     return "delivery_failed"
 
 
-@flow(name="delivery-retry")
-async def delivery_retry() -> dict:
-    """Retry failed deliveries for agents that are now online.
-
-    Returns summary of retry outcomes.
-    """
-    await ensure_initialized()
-
-    config = get_config()
-    db = get_db()
-    gh = get_gh()
+async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: object | None) -> dict:
+    """Retry failed deliveries for agents that are now online, then drain the queue."""
     summary: dict[str, int] = {}
 
     try:
@@ -194,100 +173,24 @@ async def delivery_retry() -> dict:
     except Exception:
         log.exception("Failed to reclaim stale attempts (non-fatal)")
 
-    failed = await db.get_failed_deliveries(limit=20)
+    if gh is not None:
+        failed = await db.get_failed_deliveries(limit=20)
+        if failed:
+            log.info("Found %d failed deliveries to retry", len(failed))
+            for delivery in failed:
+                outcome = await retry_delivery(config, delivery, db, gh)
+                summary[outcome] = summary.get(outcome, 0) + 1
 
-    if failed:
-        log.info("Found %d failed deliveries to retry", len(failed))
-        for delivery in failed:
-            outcome = await retry_delivery(config, delivery, db, gh)
-            summary[outcome] = summary.get(outcome, 0) + 1
-    else:
-        log.info("No failed deliveries to retry; draining queued messages only")
-
-    # Drain message queue: deliver pending queued messages
     try:
-        from agent_backbone.services.terminal import list_sessions as _list_sessions
+        from agent_backbone.services.terminal import list_sessions
 
-        active_sessions = set(await _list_sessions())
+        active_sessions = set(await list_sessions())
         drained = await drain_message_queue(config, db, gh, active_sessions=active_sessions)
         for key, value in drained.items():
             summary[key] = summary.get(key, 0) + value
     except Exception:
         log.exception("Queue drain failed (non-fatal)")
 
-    log.info("Retry complete: %s", summary)
+    if summary:
+        log.info("Retry complete: %s", summary)
     return summary
-
-
-@flow(name="scheduled-delivery")
-async def scheduled_delivery(
-    issue_number: int,
-    target_entity: str,
-    session_name: str,
-    is_blocking: bool = False,
-) -> str:
-    """Deliver a specific issue to a specific session.
-
-    Returns outcome string: delivered, offline, busy, issue_closed.
-    """
-    await ensure_initialized()
-
-    config = get_config()
-    db = get_db()
-    gh = get_gh()
-
-    # Fetch current issue state
-    issue = await gh.get_issue(
-        issue_number,
-        repo_full_name=(
-            f"{config.github.owner}/{target_entity}"
-            if target_entity in config.registry.repo_names
-            else None
-        ),
-    )
-
-    if issue.state == "closed":
-        return "issue_closed"
-
-    # Deliver via safe_deliver (handles state checks)
-    message = format_next_issue_notification(issue)
-    queue_scope_issue_numbers = {
-        item.number
-        for item in await list_open_queue_for_target(
-            config,
-            target_entity,
-            gh,
-            issue_repo_full_name=issue.repo_full_name,
-        )
-    }
-    outcome = await safe_deliver(
-        session_name,
-        message,
-        config,
-        db=db,
-        issue_number=issue_number,
-        target_entity=target_entity,
-        flow_name="scheduled-delivery",
-        priority=is_blocking,
-        enforce_issue_queue=True,
-        queue_scope_issue_numbers=queue_scope_issue_numbers,
-    )
-
-    if outcome == "delivered":
-        log.info("Scheduled delivery of #%d to %s", issue_number, session_name)
-        return "delivered"
-
-    if outcome == "offline":
-        return "offline"
-    busy_states = (
-        "agent_working",
-        "plan_waiting",
-        "permission_waiting",
-        "user_interacting",
-        "grace_period",
-    )
-    if outcome in busy_states:
-        return "busy"
-    if outcome in ("already_delivered", "awaiting_ack", "unknown_state"):
-        return outcome
-    return "delivery_failed"

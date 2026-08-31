@@ -1,4 +1,4 @@
-"""Create-and-notify — issue creation with direct tmux notification."""
+"""Create-and-notify — issue creation with direct terminal notification."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from agent_backbone.services.routing._resolution import (
     resolve_entity_sessions,
     validate_issue_targets,
 )
+from agent_backbone.services.routing._targets import list_open_queue_for_target
 
 log = logging.getLogger(__name__)
 
@@ -31,25 +32,12 @@ async def create_and_notify(
     db: BackboneDB | None = None,
     flow_name: str = "",
 ) -> IssueData:
-    """Create a GitHub issue and directly notify target entities.
+    """Create a GitHub issue and directly notify target agents.
 
-    Bypasses the webhook roundtrip by dispatching tmux notifications
-    immediately after issue creation. Uses the same notification format
-    as the webhook dispatcher (format_issue_notification).
-
-    Args:
-        gh: GitHub client (must already be started).
-        title: issue title.
-        body: issue body (markdown).
-        labels: label names (e.g. ["from:coding-agent", "for:brunel", "task"]).
-        config: backbone configuration.
-        db: optional persistence layer for delivery queuing.
-        flow_name: originating flow for logging/tracking.
-
-    Returns:
-        The created IssueData.
+    Bypasses the webhook roundtrip by dispatching terminal notifications
+    immediately after issue creation, using the same notification format as
+    the webhook dispatcher.
     """
-    # Extract target entities from for: labels
     targets = [label.removeprefix("for:") for label in labels if label.startswith("for:")]
     validate_issue_targets(targets, config)
 
@@ -62,20 +50,18 @@ async def create_and_notify(
     message = format_issue_notification(issue)
 
     for target in targets:
-        session_names = await resolve_entity_sessions(target, config, issue.title)
+        session_names = resolve_entity_sessions(target, config)
         if not session_names:
-            log.info(
-                "No session resolved for target '%s' on #%d — skipping",
-                target,
-                issue.number,
-            )
+            log.info("No session for target '%s' on #%d — skipping", target, issue.number)
             continue
 
         queue_scope_issue_numbers = {
             item.number
-            for item in await gh.list_open_issues(
-                f"for:{target}",
-                repo_full_name=issue.repo_full_name or None,
+            for item in await list_open_queue_for_target(
+                config,
+                target,
+                gh,
+                issue_repo_full_name=issue.repo_full_name,
             )
         }
         for session_name in session_names:
