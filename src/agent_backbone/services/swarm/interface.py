@@ -24,7 +24,12 @@ from agent_backbone.services.swarm._roster import (
     parse_roster,
 )
 from agent_backbone.services.swarm._templates import render_brief
-from agent_backbone.services.swarm._worktree import create_worktree, is_git_repo, remove_worktree
+from agent_backbone.services.swarm._worktree import (
+    create_worktree,
+    current_branch,
+    is_git_repo,
+    remove_worktree,
+)
 from agent_backbone.services.terminal import session_exists, stop_session
 
 if TYPE_CHECKING:
@@ -90,6 +95,7 @@ def _facts(
     branch: str,
     worktree: Path,
     members: list[str],
+    base_branch: str,
 ) -> dict[str, str]:
     return {
         "swarm_name": swarm,
@@ -101,6 +107,7 @@ def _facts(
         "issue_number": str(issue_number),
         "issue_url": _issue_url(repo, issue_number),
         "branch": branch,
+        "base_branch": base_branch,
         "worktree": str(worktree),
         "members": ", ".join(members),
     }
@@ -155,6 +162,7 @@ async def create_swarm(
         if config.agents.get(agent_name) is not None or await session_exists(agent_name):
             raise SwarmError(f"agent name '{agent_name}' is already in use")
 
+    base_branch = await current_branch(repo_dir)
     worktree, branch = await create_worktree(repo_dir, name)
 
     await db.create_swarm(
@@ -185,6 +193,7 @@ async def create_swarm(
                 branch=branch,
                 worktree=worktree,
                 members=all_names,
+                base_branch=base_branch,
             )
             brief_file = briefs_dir / f"{agent_name}.md"
             brief_file.write_text(render_brief(spec.role, facts, data_dir=config.data_dir))

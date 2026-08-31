@@ -29,6 +29,12 @@ async def is_git_repo(directory: Path) -> bool:
     return rc == 0
 
 
+async def current_branch(directory: Path) -> str:
+    """The checkout's current branch — the base a swarm's PR must target."""
+    rc, out, _ = await _git(directory, "rev-parse", "--abbrev-ref", "HEAD")
+    return out if rc == 0 and out != "HEAD" else "main"
+
+
 async def _exclude_swarm_dir(repo_dir: Path) -> None:
     """Keep `.backbone/` out of git status without touching tracked files."""
     rc, common, _ = await _git(repo_dir, "rev-parse", "--git-common-dir")

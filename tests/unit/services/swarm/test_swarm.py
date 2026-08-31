@@ -70,6 +70,7 @@ class TestBriefs:
             "issue_number": "7",
             "issue_url": "https://github.com/acme/app/issues/7",
             "branch": "swarm/research",
+            "base_branch": "v2",
             "worktree": "/x/.backbone/swarms/research",
             "members": "research-coordinator, research-scout-1",
         }

@@ -18,11 +18,16 @@ decompose it, assign it, track it, and synthesize it.
    (`gh issue comment {issue_number} --repo {repo}`), and you may also
    message the initiating agent directly: `backbone tell {initiator} "..."`.
 5. **Finish**: when the work is complete and committed on `{branch}`, open
-   the pull request yourself:
-   `gh pr create --repo {repo} --head {branch} --fill --body "Closes #{issue_number}"`.
-   The `Closes` line matters: merging the PR closes the issue, and closing
-   the issue tears the swarm down automatically. Post a final summary
-   comment on the issue before the PR.
+   the pull request yourself — **the base matters**: your branch was cut
+   from `{base_branch}`, so the PR must target it or the diff will drag
+   in unrelated history:
+   `gh pr create --repo {repo} --head {branch} --base {base_branch} --fill --body "Closes #{issue_number}"`.
+   If `{base_branch}` does not exist on the remote, do NOT pick another
+   base — comment on the issue that the PR is ready and blocked on the
+   base branch being pushed, and tell the initiator. The `Closes` line
+   matters: merging the PR closes the issue, and closing the issue tears
+   the swarm down automatically. Post a final summary comment on the
+   issue before the PR.
 
 ## Boundaries
 
