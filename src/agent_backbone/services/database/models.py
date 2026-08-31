@@ -53,6 +53,27 @@ class AgentWatchORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class SwarmORM(Base):
+    """A swarm: one coordinator plus members sharing a worktree, working one issue.
+
+    Members are ordinary agents (tagged ``swarm:<name>`` / ``role:<role>``);
+    this table records only the swarm's lifecycle.
+    """
+
+    __tablename__ = "swarms"
+
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    repo: Mapped[str] = mapped_column(Text, nullable=False)
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    initiator: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    coordinator: Mapped[str] = mapped_column(Text, nullable=False)
+    branch: Mapped[str] = mapped_column(Text, nullable=False)
+    worktree_dir: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class EventORM(Base):
     """Every inbound event (webhook, poll, telegram, api) before/after routing."""
 

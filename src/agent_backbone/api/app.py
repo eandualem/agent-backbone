@@ -140,6 +140,20 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = _register_jobs(app)
     lifecycle.register("scheduler", app.state.scheduler)
 
+    # A closed issue ends the swarm that was working it (PR merged -> issue
+    # closed via "Closes #N" -> teardown). Wired here so routing stays a leaf.
+    from agent_backbone.services.routing._ingest import register_issue_closed_listener
+    from agent_backbone.services.swarm import teardown_for_issue
+
+    async def _swarm_teardown(repo: str, issue_number: int) -> None:
+        name = await teardown_for_issue(
+            app.state.config, app.state.db, app.state.agent_store, repo, issue_number
+        )
+        if name:
+            log.info("Swarm '%s' completed with %s#%s", name, repo, issue_number)
+
+    register_issue_closed_listener(_swarm_teardown)
+
     try:
         await lifecycle.start_all()
         await reconcile_startup_states(config=config, db=app.state.db)
@@ -222,6 +236,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.plans import router as plans_router
     from agent_backbone.api.routes.status import router as status_router
+    from agent_backbone.api.routes.swarms import router as swarms_router
     from agent_backbone.api.routes.telegram import router as telegram_router
     from agent_backbone.api.routes.webhook import router as webhook_router
 
@@ -236,6 +251,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
         issues_router,
         messages_router,
         plans_router,
+        swarms_router,
         telegram_router,
     ):
         app.include_router(router, dependencies=[Depends(require_api_key)])

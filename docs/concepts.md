@@ -33,6 +33,9 @@ app: ready — claude repo acme/app
 
 There are no roles, groups or hierarchies. An orchestrator is an ordinary
 agent whose directory is its own repository and which watches the others.
+The one grouping that exists is a [swarm](swarms.md): a coordinator plus
+members sharing a worktree to complete a single issue — and its members
+are still ordinary agents.
 
 The database is the only record of agents; `backbone agent set|watch|forget`
 edit it and the running backbone picks the change up immediately.

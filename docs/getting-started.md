@@ -220,7 +220,18 @@ Sharper commands (`backbone down`, `config set`, `agent forget`,
 `hooks install`, raw `tmux send-keys`) are deliberately left out — those
 keep prompting.
 
-## 9. Optional: Telegram
+## 9. A swarm on an issue
+
+When one issue deserves parallel workers, put a [swarm](swarms.md) on
+it: a coordinator plus members sharing one worktree and branch,
+finishing in a single PR whose merge tears everything down.
+
+```bash
+backbone swarm create research --issue acme/app#42 --member scout*3@claude/sonnet
+backbone tell research "How is it going?"      # the swarm's name reaches its coordinator
+```
+
+## 10. Optional: Telegram
 
 Create a bot with @BotFather, put `TELEGRAM_TOKEN=…` in `.env`, allow your
 chat id (`backbone config set telegram.allowed_chat_ids '[123456789]'`),

@@ -138,8 +138,13 @@ def build_command(
     resume: bool = False,
     data_dir: Path | str | None = None,
     state_dir: Path | str | None = None,
+    system_prompt_file: Path | str | None = None,
 ) -> list[str] | None:
     """Build the launch command for a runtime, or None for a plain shell.
+
+    ``system_prompt_file`` injects role instructions at the system level for
+    runtimes that support it (Claude Code's ``--append-system-prompt-file``);
+    other runtimes ignore it and callers fall back to message injection.
 
     Raises ValueError for unknown runtimes and RuntimeError when the binary is missing.
     """
@@ -156,6 +161,8 @@ def build_command(
         command.extend(["--model", model])
     if resume:
         command.append("--resume")
+    if system_prompt_file is not None and runtime == "claude":
+        command.extend(["--append-system-prompt-file", str(system_prompt_file)])
     command.extend(hook_launch_args(runtime, data_dir, state_dir))
     return command
 
@@ -183,6 +190,7 @@ async def start_agent(
     state_dir: Path | str | None = None,
     data_dir: Path | str | None = None,
     pre_trust: bool = False,
+    system_prompt_file: Path | str | None = None,
 ) -> bool:
     """Start a configured agent in its tmux session (idempotent)."""
     if await session_exists(spec.name):
@@ -204,6 +212,7 @@ async def start_agent(
             resume=resume,
             data_dir=data_dir,
             state_dir=state_dir,
+            system_prompt_file=system_prompt_file,
         )
     except (ValueError, RuntimeError) as exc:
         log.error("Cannot start agent '%s': %s", spec.name, exc)

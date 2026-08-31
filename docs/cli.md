@@ -124,6 +124,15 @@ app: started but not at its prompt yet                 # timeout; the last termi
 app: already running
 ```
 
+## `backbone swarm create|list|status|disband`
+
+Run a coordinator+members swarm on one existing issue — see
+[Swarms](swarms.md). `create NAME --issue OWNER/REPO#N [--member SPEC]…`
+starts the roster in a shared worktree; `disband NAME` stops the members
+and removes the worktree (the branch is kept). The swarm's issue being
+closed (normally by merging the coordinator's PR) tears it down
+automatically. `backbone tell <swarm-name> …` reaches its coordinator.
+
 ## `backbone tell AGENT MESSAGE… [--from NAME] [--priority]`
 
 Delivers `[via:backbone from:NAME] MESSAGE` through the running backbone

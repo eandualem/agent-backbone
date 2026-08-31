@@ -24,6 +24,7 @@ from agent_backbone.services.database import (
     _queue_repo,
     _settings_repo,
     _state_repo,
+    _swarms_repo,
 )
 from agent_backbone.services.database.base import Base
 from agent_backbone.services.database.interface import build_engine
@@ -126,6 +127,7 @@ class BackboneDB:
         async with self._engine.begin() as async_conn:
 
             def _run_alembic(sync_conn):
+                from alembic.script import ScriptDirectory
                 from sqlalchemy import inspect
 
                 inspector = inspect(sync_conn)
@@ -135,6 +137,20 @@ class BackboneDB:
                 existing_app_tables = existing_tables & app_tables
 
                 alembic_cfg.attributes["connection"] = sync_conn
+                if has_alembic and existing_app_tables == app_tables:
+                    # Pre-1.0 policy: one squashed migration. A regenerated
+                    # squash changes the revision id, so a database stamped
+                    # with the old id must be re-stamped — its schema is
+                    # already complete (SQLite: create_all above; the stamp
+                    # is the entire migration history).
+                    stored = sync_conn.execute(
+                        text("SELECT version_num FROM alembic_version")
+                    ).scalar()
+                    script = ScriptDirectory.from_config(alembic_cfg)
+                    known = {rev.revision for rev in script.walk_revisions()}
+                    if stored not in known:
+                        command.stamp(alembic_cfg, "head", purge=True)
+                        return
                 if has_alembic or not existing_app_tables:
                     command.upgrade(alembic_cfg, "head")
                 elif existing_app_tables == app_tables:
@@ -302,6 +318,30 @@ class BackboneDB:
         """Get state records for all tracked agents."""
         async with self._engine.begin() as conn:
             return await _state_repo.get_all_agent_states(conn)
+
+    # --- Swarms (delegates to _swarms_repo) ---
+
+    async def create_swarm(self, name: str, **fields) -> None:
+        """Record a new active swarm."""
+        async with self._engine.begin() as conn:
+            await _swarms_repo.create_swarm(conn, name, **fields)
+
+    async def get_swarm(self, name: str) -> dict | None:
+        async with self._engine.begin() as conn:
+            return await _swarms_repo.get_swarm(conn, name)
+
+    async def list_swarms(self, *, active_only: bool = False) -> list[dict]:
+        async with self._engine.begin() as conn:
+            return await _swarms_repo.list_swarms(conn, active_only=active_only)
+
+    async def find_active_swarm_for_issue(self, repo: str, issue_number: int) -> dict | None:
+        """The active swarm working a given issue, if any."""
+        async with self._engine.begin() as conn:
+            return await _swarms_repo.find_active_swarm_for_issue(conn, repo, issue_number)
+
+    async def set_swarm_status(self, name: str, status: str) -> None:
+        async with self._engine.begin() as conn:
+            await _swarms_repo.set_swarm_status(conn, name, status)
 
     # --- Issue dependencies (delegates to _queue_repo) ---
 

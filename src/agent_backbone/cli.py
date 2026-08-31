@@ -8,7 +8,8 @@ backbone doctor                      check tmux, runtimes, credentials
 backbone config list|get|set|unset   settings (stored in the database)
 backbone agent start [--dir D]       discover + start an agent (waits for its prompt)
 backbone agent list|stop|inspect|set|watch|unwatch|forget
-backbone tell <agent> <msg>          deliver a message to an agent
+backbone swarm create|list|status|disband   coordinator+members on one issue
+backbone tell <agent> <msg>          deliver a message to an agent (or a swarm)
 backbone hooks install claude        install the state-reporting hooks
 
 Commands talk to the running backbone API when it is up and fall back to the
@@ -841,6 +842,81 @@ def cmd_hooks(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# swarm
+# ---------------------------------------------------------------------------
+
+
+async def _swarm(args: argparse.Namespace) -> int:
+    boot = bootstrap_config()
+    sub = args.swarm_command
+
+    if sub == "create":
+        initiator = args.initiator or os.environ.get("BACKBONE_AGENT", "").strip()
+        body = {
+            "name": args.name,
+            "issue": args.issue,
+            "members": args.member or [],
+            "initiator": initiator,
+        }
+        result = await _api(boot, "POST", "/api/swarms", json_body=body, timeout=300.0)
+        if result is None:
+            print("backbone API unreachable; `backbone up` must be running to create a swarm")
+            return 1
+        status, data = result
+        if status != 200:
+            print(f"error: {data.get('detail') if isinstance(data, dict) else data}")
+            return 1
+        print(f"swarm '{data['name']}' is live on {data['repo']}#{data['issue_number']}")
+        print(f"  coordinator: {data['coordinator']}")
+        print(f'  talk to it:  backbone tell {data["name"]} "..."')
+        print(f"  members:     {', '.join(data['members'])}")
+        print(f"  branch:      {data['branch']}")
+        print(f"  worktree:    {data['worktree']}")
+        return 0
+
+    if sub in ("list", "status"):
+        result = await _api(boot, "GET", "/api/swarms")
+        if result is None or result[0] != 200:
+            print("backbone API unreachable")
+            return 1
+        swarms = result[1].get("items", [])
+        if sub == "status" and getattr(args, "name", None):
+            swarms = [s for s in swarms if s["name"] == args.name]
+            if not swarms:
+                print(f"unknown swarm '{args.name}'")
+                return 1
+        if not swarms:
+            print("no swarms")
+            return 0
+        for swarm in swarms:
+            print(
+                f"{swarm['name']:<16s} {swarm['status']:<10s} "
+                f"{swarm['repo']}#{swarm['issue_number']}  branch {swarm['branch']}"
+            )
+            for member in swarm.get("members", []):
+                model = f" ({member['model']})" if member.get("model") else ""
+                print(f"    {member['name']:<28s} {member['role']:<12s} {member['runtime']}{model}")
+        return 0
+
+    if sub == "disband":
+        result = await _api(boot, "DELETE", f"/api/swarms/{args.name}", timeout=60.0)
+        if result is None:
+            print("backbone API unreachable")
+            return 1
+        status, data = result
+        if status != 200:
+            print(f"error: {data.get('detail') if isinstance(data, dict) else data}")
+            return 1
+        print(f"swarm '{args.name}': {data['status']}")
+        return 0
+    return 1
+
+
+def cmd_swarm(args: argparse.Namespace) -> int:
+    return asyncio.run(_swarm(args))
+
+
+# ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
 
@@ -958,6 +1034,30 @@ def build_parser() -> argparse.ArgumentParser:
             help="project directory (writes .claude/settings.json there); default: global",
         )
     p.set_defaults(func=cmd_hooks)
+
+    p = sub.add_parser("swarm", help="run a coordinator+members swarm on an issue")
+    ssub = p.add_subparsers(dest="swarm_command", required=True)
+    psc = ssub.add_parser("create", help="create and start a swarm on an existing issue")
+    psc.add_argument("name", help="swarm name (lowercase, digits, dashes)")
+    psc.add_argument("--issue", required=True, metavar="OWNER/REPO#N", help="the issue to work")
+    psc.add_argument(
+        "--member",
+        action="append",
+        metavar="ROLE[*N][@RUNTIME[/MODEL]]",
+        help="roster entry, repeatable (e.g. scout*3@claude/sonnet, coder@codex); "
+        "a coordinator@claude is added when none is given",
+    )
+    psc.add_argument(
+        "--initiator",
+        default=None,
+        help="agent initiating the swarm (default: $BACKBONE_AGENT)",
+    )
+    ssub.add_parser("list", help="all swarms with members")
+    pss = ssub.add_parser("status", help="one swarm's roster and state")
+    pss.add_argument("name", nargs="?", default=None)
+    psd = ssub.add_parser("disband", help="stop members, remove the worktree, keep the branch")
+    psd.add_argument("name")
+    p.set_defaults(func=cmd_swarm)
 
     p = sub.add_parser("tell", help="deliver a message to an agent (via the running API)")
     p.add_argument("agent")

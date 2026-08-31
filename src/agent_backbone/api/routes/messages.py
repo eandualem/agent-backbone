@@ -28,8 +28,16 @@ async def send_message(
     """Send a message to an agent session using the state-aware delivery pipeline."""
     envelope = f"[via:backbone from:{body.from_entity}] {body.message}"
 
+    # A swarm is addressed through its coordinator: telling the swarm's name
+    # delivers to the coordinator session.
+    target = body.target_session
+    if config.agents.get(target) is None:
+        swarm = await db.get_swarm(target)
+        if swarm is not None and swarm.get("status") == "active":
+            target = swarm["coordinator"]
+
     outcome = await safe_deliver(
-        session_name=body.target_session,
+        session_name=target,
         message=envelope,
         config=config,
         db=db,
@@ -38,10 +46,10 @@ async def send_message(
         delivery_kind="direct_message",
     )
 
-    log.info("Message from %s → %s: %s", body.from_entity, body.target_session, outcome)
+    log.info("Message from %s → %s: %s", body.from_entity, target, outcome)
     return MessageResponse(
         ok=outcome == "delivered",
-        session=body.target_session,
+        session=target,
         outcome=outcome,
         queued=outcome_queues(outcome, "direct_message"),
     )

@@ -18,6 +18,7 @@ _EXPECTED_TABLES = {
     "issue_dependencies",
     "message_queue",
     "settings",
+    "swarms",
 }
 
 _EXPECTED_INDEXES = {
@@ -110,3 +111,29 @@ def test_build_engine_creates_parent_directory(tmp_path):
     target = tmp_path / "nested" / "dir" / "backbone.db"
     build_engine(f"sqlite+aiosqlite:///{target}")
     assert Path(target).parent.is_dir()
+
+
+async def test_unknown_stamped_revision_is_restamped_after_squash(tmp_path):
+    """Pre-1.0 squash policy: a DB stamped with a revision that no longer
+    exists (the squash was regenerated) must re-stamp to head, not crash."""
+    from sqlalchemy import text
+
+    from agent_backbone.services.database import BackboneDB, build_engine
+
+    url = f"sqlite+aiosqlite:///{tmp_path}/old.db"
+    engine = build_engine(url)
+    db = BackboneDB(engine)
+    await db.start()  # creates schema and stamps head
+    async with engine.begin() as conn:
+        await conn.execute(text("UPDATE alembic_version SET version_num = 'deadbeef0000'"))
+    db._engine = None
+    await engine.dispose()
+
+    engine2 = build_engine(url)
+    db2 = BackboneDB(engine2)
+    await db2.start()  # must not raise
+    async with engine2.begin() as conn:
+        stored = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
+    assert stored != "deadbeef0000"
+    db2._engine = None
+    await engine2.dispose()

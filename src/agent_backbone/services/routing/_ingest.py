@@ -69,11 +69,27 @@ async def dispatch_event(
     return outcome
 
 
+# Called with (repo, issue_number) after an issue-closed event is processed.
+# Wired by the application layer (e.g. swarm teardown) to avoid routing
+# importing higher-level services.
+_issue_closed_listeners: list = []
+
+
+def register_issue_closed_listener(listener) -> None:
+    """Register an async ``(repo, issue_number)`` callback for closed issues."""
+    _issue_closed_listeners.append(listener)
+
+
 async def _route(event, config, db, gh, delivery_svc, dispatch_svc) -> str:
     if event.event_type == EventType.ISSUE_CLOSED:
         if gh is None:
             return "ignored: github client not configured"
         result = await dispatch_svc.on_issue_closed(event, config, gh, db)
+        for listener in _issue_closed_listeners:
+            try:
+                await listener(issue_repo(event.issue), event.issue.number)
+            except Exception:
+                log.exception("issue-closed listener failed (non-fatal)")
         return f"lifecycle: {result}"
 
     if event.event_type == EventType.COMMENT_CREATED and event.issue.state == "closed":
