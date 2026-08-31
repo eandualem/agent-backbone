@@ -207,6 +207,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print("  ! API authentication is disabled (security.allow_unauthenticated)")
 
         print("Integrations")
+        if config.github_app_ready and not config.github_token:
+            try:
+                import cryptography  # noqa: F401
+            except ModuleNotFoundError:
+                check(
+                    "GitHub App auth dependencies installed",
+                    False,
+                    "install the extra: uv tool install 'agent-backbone[github-app]'",
+                )
+            key_ok = Path(config.github_app_private_key_path).expanduser().is_file()
+            check(f"GitHub App private key: {config.github_app_private_key_path}", key_ok)
         if config.github_ready:
             print(f"  ✓ GitHub credentials found — intake: {config.github_intake}")
             if config.github_intake == "poll":

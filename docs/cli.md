@@ -1,6 +1,7 @@
 # CLI reference
 
-`backbone --help` lists everything; `-v` enables debug logging. Commands go
+`backbone --help` lists everything; `ab` is the same command under a short
+name; `-v` enables debug logging. Commands go
 through the running backbone's API when it is up and fall back to the
 database (and tmux) directly when it is not.
 
@@ -23,6 +24,27 @@ Runs the backbone: API, Socket.IO, background jobs, Telegram bot, GitHub
 intake — one process. `--detach` runs it inside a tmux session
 (`backbone.session_name`); `down` stops it gracefully. `--reload` restarts
 on code changes (development).
+
+Nothing starts at boot by itself — after a reboot, `backbone up --detach`.
+To start it at login on macOS, install a LaunchAgent once:
+
+```bash
+cat > ~/Library/LaunchAgents/dev.agent-backbone.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.agent-backbone</string>
+  <key>ProgramArguments</key><array>
+    <string>$HOME/.local/bin/backbone</string><string>up</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$HOME/.local/share/agent-backbone/backbone.log</string>
+  <key>StandardErrorPath</key><string>$HOME/.local/share/agent-backbone/backbone.log</string>
+</dict></plist>
+EOF
+launchctl load ~/Library/LaunchAgents/dev.agent-backbone.plist
+```
 
 ## `backbone status`
 

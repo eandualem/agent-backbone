@@ -17,25 +17,30 @@ It starts your agents in tmux, delivers messages to them **only when they are re
 
 ## Quick start
 
-Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/) (or pip), `tmux`, and at least one agent CLI on your PATH.
+Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/) (or pipx), `tmux`, and at least one agent CLI on your PATH.
 
 ```bash
-git clone https://github.com/eandualem/agent-backbone && cd agent-backbone
-uv sync                              # or: pip install -e .
+# Install the CLI on your PATH (`backbone`, plus the short alias `ab`):
+uv tool install "agent-backbone[github-app] @ git+https://github.com/eandualem/agent-backbone"
+uv tool update-shell                 # once, if ~/.local/bin isn't on your PATH yet
 
-uv run backbone init                 # data dir + .env (generated API key) + database
-uv run backbone hooks install claude # Claude Code reports its state to the backbone
-uv run backbone up --detach          # API + scheduler (+ Telegram/GitHub when configured)
+backbone init                        # data dir + .env (generated API key) + database
+backbone hooks install claude        # Claude Code reports its state to the backbone
+backbone up --detach                 # API + scheduler (+ Telegram/GitHub when configured)
 ```
+
+(Contributors: `git clone … && cd agent-backbone && uv sync`, then every command is `uv run backbone …`; `uv tool install --editable ".[github-app]"` gives you a global CLI that follows your checkout.)
+
+> `ab` is the same command as `backbone`. On macOS, `/usr/sbin/ab` (Apache Bench) shadows it when `/usr/sbin` comes first in your PATH — either put `~/.local/bin` earlier or add `alias ab=backbone` to your shell rc.
 
 Then, from a project:
 
 ```bash
 cd ~/code/my-app
-uv run backbone agent start          # → my-app: ready — claude repo me/my-app
-uv run backbone tell my-app "summarise this repository in three sentences"
-uv run backbone agent inspect my-app # state, delivery readiness, and why
-uv run backbone status
+ab agent start                       # → my-app: ready — claude repo me/my-app
+ab tell my-app "summarise this repository in three sentences"
+ab agent inspect my-app              # state, delivery readiness, and why
+ab status
 ```
 
 No config file to edit, no database server, no tunnel. Everything the backbone knows lives in `~/.local/share/agent-backbone/` (a SQLite file, hook state, `.env`); settings are changed with `backbone config set`.
@@ -48,7 +53,7 @@ An **agent** is a directory plus a runtime, discovered the first time you start 
 
 ```bash
 echo "GITHUB_TOKEN=$(gh auth token)" >> ~/.local/share/agent-backbone/.env
-uv run backbone down && uv run backbone up --detach
+backbone down && backbone up --detach
 ```
 
 That is **poll intake**: the backbone asks GitHub for new issues and comments every 60 s in every repository an agent owns or watches — zero setup, nothing exposed. For instant delivery and automatic coverage of every repository you ever create, do the one-time **GitHub App + webhook** setup (Cloudflare Tunnel if you have a domain, ngrok's free static domain if you don't): [docs/github-app-setup.md](docs/github-app-setup.md).

@@ -10,20 +10,30 @@ but tmux and SQLite.
 - At least one agent CLI on your `PATH`: `claude`, `codex`, `gemini`,
   `opencode`, `aider`. (`shell` works for trying the plumbing.)
 
-## 1. Install
+## 1. Install the CLI
 
 ```bash
-git clone https://github.com/eandualem/agent-backbone && cd agent-backbone
-uv sync
+uv tool install "agent-backbone[github-app] @ git+https://github.com/eandualem/agent-backbone"
+uv tool update-shell        # once, if ~/.local/bin isn't on your PATH yet
+backbone --help
 ```
 
-Every command below is `uv run backbone …`; `uv tool install .` gives you a
-plain `backbone` on your PATH.
+This puts two identical commands on your PATH: `backbone` and the short
+alias `ab`. The `github-app` extra is what the recommended GitHub setup
+needs; it costs nothing if you don't use it.
+
+- macOS note: `/usr/sbin/ab` (Apache Bench) shadows `ab` when `/usr/sbin`
+  comes earlier in your PATH — put `~/.local/bin` first, or add
+  `alias ab=backbone` to your shell rc.
+- Working on the code itself? `git clone … && cd agent-backbone && uv sync`,
+  run everything as `uv run backbone …`, and
+  `uv tool install --editable ".[github-app]"` makes the global CLI follow
+  your checkout.
 
 ## 2. Initialise
 
 ```bash
-uv run backbone init
+backbone init
 ```
 
 Creates the data directory (`~/.local/share/agent-backbone`, or
@@ -39,8 +49,8 @@ There is no configuration file. Settings have defaults and are changed with
 ## 3. Install the Claude Code hooks
 
 ```bash
-uv run backbone hooks install claude              # global: ~/.claude/settings.json
-uv run backbone hooks install claude --dir ~/code/app   # or one project
+backbone hooks install claude              # global: ~/.claude/settings.json
+backbone hooks install claude --dir ~/code/app   # or one project
 ```
 
 With hooks, Claude Code tells the backbone the moment it becomes busy, idle,
@@ -51,8 +61,8 @@ Other runtimes are read from the terminal for now.
 ## 4. Run the backbone
 
 ```bash
-uv run backbone up --detach    # inside a tmux session named "backbone"
-uv run backbone doctor         # tmux, runtimes, credentials, API reachable
+backbone up --detach    # inside a tmux session named "backbone"
+backbone doctor         # tmux, runtimes, credentials, API reachable
 ```
 
 `up` starts the HTTP/Socket.IO API on `127.0.0.1:7120`, the background
@@ -63,7 +73,7 @@ is set). One process. `backbone down` stops it.
 
 ```bash
 cd ~/code/app
-uv run backbone agent start
+backbone agent start
 ```
 
 ```
@@ -84,9 +94,9 @@ The agent is named after the directory, its repository was read from
 Useful right away:
 
 ```bash
-uv run backbone status                 # agents, their state, repositories
-uv run backbone agent inspect app      # state + delivery readiness + evidence
-uv run backbone tell app "Summarise what this repository does in three sentences."
+backbone status                 # agents, their state, repositories
+backbone agent inspect app      # state + delivery readiness + evidence
+backbone tell app "Summarise what this repository does in three sentences."
 ```
 
 `tell` returns the delivery outcome:
@@ -102,7 +112,7 @@ minute). Watch it happen: `tmux attach -t app`.
 ## 6. A second agent, and agents talking to each other
 
 ```bash
-cd ~/code/web && uv run backbone agent start --runtime codex
+cd ~/code/web && backbone agent start --runtime codex
 ```
 
 An agent sends a message by calling the API. With `curl` available, the
@@ -124,8 +134,8 @@ agent sessions; give it to an agent deliberately:
 
 ```bash
 echo "GITHUB_TOKEN=$(gh auth token)" >> ~/.local/share/agent-backbone/.env
-uv run backbone down && uv run backbone up --detach
-uv run backbone status        # github intake: poll
+backbone down && backbone up --detach
+backbone status               # github intake: poll
 ```
 
 Now, in every repository an agent owns or watches:
@@ -146,7 +156,7 @@ An orchestrator is an ordinary agent that watches the repositories it
 coordinates:
 
 ```bash
-cd ~/code/orchestration && uv run backbone agent start --watch acme/app --watch acme/web
+cd ~/code/orchestration && backbone agent start --watch acme/app --watch acme/web
 ```
 
 It hears about new issues in both repositories, can be addressed with
@@ -158,6 +168,20 @@ It hears about new issues in both repositories, can be addressed with
 Create a bot with @BotFather, put `TELEGRAM_TOKEN=…` in `.env`, allow your
 chat id (`backbone config set telegram.allowed_chat_ids '[123456789]'`),
 restart. See [Telegram](telegram.md).
+
+## After a reboot
+
+Agents and the backbone are tmux sessions, so a reboot ends them (a
+Cloudflare tunnel installed as a service comes back on its own):
+
+```bash
+backbone up --detach          # the backbone itself
+backbone agent start-all      # every known agent
+backbone status               # confirm
+```
+
+To start the backbone automatically at login on macOS, install a
+LaunchAgent once (see [CLI → `up`](cli.md#backbone-up---detach---reload--backbone-down)).
 
 ## Where things are
 

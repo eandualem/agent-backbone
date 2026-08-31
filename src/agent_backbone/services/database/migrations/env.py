@@ -1,10 +1,10 @@
-"""Alembic environment configuration for agent-backbone.
+"""Alembic environment for agent-backbone (ships inside the package).
 
-Supports two modes:
-1. CLI: ``alembic upgrade head`` — resolves the database URL from the data directory
-   / ``BACKBONE_DATABASE_URL`` and creates an async engine.
-2. Programmatic: ``BackboneDB._run_migrations()`` injects a connection via
-   ``config.attributes["connection"]``.
+Two modes:
+1. Dev CLI: ``uv run alembic …`` from the repo — resolves the database URL from
+   the data directory / ``BACKBONE_DATABASE_URL`` and creates an async engine.
+2. Runtime: ``BackboneDB._run_migrations()`` injects a connection via
+   ``config.attributes["connection"]`` and points script_location here.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def _do_run_migrations(connection) -> None:  # noqa: ANN001
+def _do_run_migrations(connection) -> None:
     """Configure context and run migrations within a connection."""
     context.configure(
         connection=connection,

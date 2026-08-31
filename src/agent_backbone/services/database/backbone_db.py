@@ -32,9 +32,8 @@ metadata = Base.metadata
 
 log = logging.getLogger(__name__)
 
-# Path to alembic.ini relative to this file:
-# src/agent_backbone/services/database/backbone_db.py → repo root
-_ALEMBIC_INI = Path(__file__).parents[4] / "alembic.ini"
+_MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+"""Migrations ship inside the package so installed CLIs migrate from anywhere."""
 
 
 class BackboneDB:
@@ -121,7 +120,8 @@ class BackboneDB:
 
         from alembic import command
 
-        alembic_cfg = Config(str(_ALEMBIC_INI))
+        alembic_cfg = Config()
+        alembic_cfg.set_main_option("script_location", str(_MIGRATIONS_DIR))
 
         async with self._engine.begin() as async_conn:
 

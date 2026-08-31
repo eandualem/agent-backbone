@@ -16,6 +16,10 @@ restart — that is poll intake, ≤60 s latency, zero exposure, done.)
 
 ## 0. Prerequisites
 
+- The CLI installed **with the `github-app` extra** (App auth needs it):
+  `uv tool install "agent-backbone[github-app] @ git+https://github.com/eandualem/agent-backbone"`.
+  Missing it fails at startup with a message naming the extra; `backbone
+  doctor` checks it too.
 - The backbone initialised and running: `backbone init && backbone up --detach`.
 - `backbone status` shows the API up on `127.0.0.1:7120`.
 - A GitHub account. A domain on Cloudflare is ideal but **not required** —

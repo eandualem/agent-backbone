@@ -156,7 +156,14 @@ class GitHubClient:
         if self._private_key is not None:
             return self._private_key
 
-        from cryptography.hazmat.primitives import serialization
+        try:
+            from cryptography.hazmat.primitives import serialization
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "GitHub App auth needs the 'github-app' extra: "
+                "uv tool install 'agent-backbone[github-app]' "
+                "(or pip install 'agent-backbone[github-app]')"
+            ) from exc
 
         key_path = Path(self._config.github_app_private_key_path).expanduser()
         try:

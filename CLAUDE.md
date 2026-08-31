@@ -42,7 +42,7 @@ Edit `services/database/models.py`, then regenerate the **single** initial
 migration (pre-1.0 policy — one squashed migration, no history):
 
 ```bash
-rm alembic/versions/*_initial_schema.py
+rm src/agent_backbone/services/database/migrations/versions/*_initial_schema.py
 BACKBONE_DATABASE_URL=sqlite+aiosqlite:////tmp/gen.db uv run alembic revision --autogenerate -m "initial schema"
 ```
 
