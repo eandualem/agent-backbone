@@ -191,9 +191,32 @@ backbone agent watch acme/api        # NAME defaults to $BACKBONE_AGENT
 The same goes for the rest of the lifecycle: an orchestrator with shell
 access can run `backbone agent start`, `stop`, `inspect` and `tell` itself
 — delegating "start the recruiter desk on an Opus model" is just
-`backbone agent start recruiter-desk --model opus`. (If your agent runner
-prompts for permission on these commands, allow the `backbone agent …`,
-`backbone status` and `backbone tell` command prefixes in its settings.)
+`backbone agent start recruiter-desk --model opus`.
+
+Agent runners usually gate shell commands behind permission prompts, which
+an unattended agent cannot answer. For Claude Code, allow the lifecycle
+commands once in `~/.claude/settings.json` (a human edit — agents cannot
+grant themselves permissions):
+
+```json
+"permissions": {
+  "allow": [
+    "Bash(backbone status)",
+    "Bash(backbone agent list)",
+    "Bash(backbone agent start)",
+    "Bash(backbone agent start *)",
+    "Bash(backbone agent stop *)",
+    "Bash(backbone agent inspect *)",
+    "Bash(backbone agent watch *)",
+    "Bash(backbone agent unwatch *)",
+    "Bash(backbone tell *)"
+  ]
+}
+```
+
+Sharper commands (`backbone down`, `config set`, `agent forget`,
+`hooks install`, raw `tmux send-keys`) are deliberately left out — those
+keep prompting.
 
 ## 9. Optional: Telegram
 

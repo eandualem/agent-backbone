@@ -256,6 +256,11 @@ class TestAgentCommands:
 
 
 class TestTell:
+    def test_sender_defaults_to_backbone_agent(self, monkeypatch):
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        args = cli.build_parser().parse_args(["tell", "x", "hi"])
+        assert args.sender == "orch"
+
     def test_posts_to_running_api(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
         assert _run(["init"]) == 0

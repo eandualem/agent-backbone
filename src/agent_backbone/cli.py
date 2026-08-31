@@ -961,7 +961,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("tell", help="deliver a message to an agent (via the running API)")
     p.add_argument("agent")
     p.add_argument("message", nargs="+")
-    p.add_argument("--from", dest="sender", default=os.environ.get("USER", "cli"))
+    p.add_argument(
+        "--from",
+        dest="sender",
+        # Inside an agent session the sender is the agent, not the human account.
+        default=os.environ.get("BACKBONE_AGENT") or os.environ.get("USER", "cli"),
+        help="sender label for the provenance envelope (default: $BACKBONE_AGENT, then $USER)",
+    )
     p.add_argument("--priority", action="store_true", help="deliver even while someone is typing")
     p.set_defaults(func=cmd_tell)
 

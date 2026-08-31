@@ -127,7 +127,10 @@ app: already running
 ## `backbone tell AGENT MESSAGE… [--from NAME] [--priority]`
 
 Delivers `[via:backbone from:NAME] MESSAGE` through the running backbone
-(`POST /api/messages`) and prints the outcome JSON. `--priority` lets the
+(`POST /api/messages`) and prints the outcome JSON. The sender defaults to
+`$BACKBONE_AGENT` (set in every backbone-started session), so an agent's
+messages are attributed to the agent, not the human account; `--from`
+overrides it. `--priority` lets the
 message through while a human is typing or the agent is settling; it never
 interrupts a busy agent — that is an invariant, not a gap. A message that
 cannot be delivered now (`agent_working`, `offline`, …) is **queued
