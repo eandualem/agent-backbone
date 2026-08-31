@@ -7,6 +7,10 @@ nothing to configure per repository**.
 
 ## Setup — once
 
+> **The complete step-by-step walkthrough with checkpoints and
+> troubleshooting is [github-app-setup.md](github-app-setup.md).** Below is
+> the short version.
+
 Two decisions, independent of each other:
 
 - **Intake** — how events reach the backbone: *poll* (zero setup, no public
@@ -26,80 +30,24 @@ the tracked repositories: every repository an agent owns (its directory's
 `origin`) or watches. Nothing is exposed and there is no URL to maintain —
 this is the right starting point when you do not have a domain.
 
-### Recommended long-term: GitHub App + webhook through a Cloudflare Tunnel
+### Recommended: GitHub App + webhook — [full walkthrough](github-app-setup.md)
 
-One-time setup, then *every* repository on your account is covered forever —
-no per-repository webhooks, and the backbone acts as its own bot identity.
-
-**1. A stable public URL for the webhook** (any tunnel works; a named
-[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-tunnel on a domain you have on Cloudflare is free and permanent):
-
-```bash
-brew install cloudflared
-cloudflared tunnel login                          # pick your zone
-cloudflared tunnel create backbone
-cloudflared tunnel route dns backbone hooks.example.com   # creates the DNS record
-```
-
-`~/.cloudflared/config.yml` — only the webhook path is exposed; the rest of
-the API stays on 127.0.0.1:
-
-```yaml
-tunnel: <TUNNEL-ID>
-credentials-file: /Users/you/.cloudflared/<TUNNEL-ID>.json
-ingress:
-  - hostname: hooks.example.com
-    path: ^/webhooks/github$
-    service: http://127.0.0.1:7120
-  - service: http_status:404
-```
-
-Run it (`cloudflared tunnel run backbone`) and make it survive reboots with
-`sudo cloudflared service install` — then copy the config where the daemon
-looks and give the launchd job its run command (the installer misses both on
-macOS):
+One-time setup (~15 min): a stable public URL (Cloudflare Tunnel with your
+domain, or ngrok's free static domain for testing), a GitHub App holding
+one app-level webhook, installed on **All repositories** — every repo you
+ever create is covered automatically, and the backbone acts as its own bot
+identity. In `.env`:
 
 ```bash
-sudo mkdir -p /etc/cloudflared
-sudo cp ~/.cloudflared/config.yml ~/.cloudflared/<TUNNEL-ID>.json /etc/cloudflared/
-sudo sed -i '' 's|/Users/you/.cloudflared/|/etc/cloudflared/|' /etc/cloudflared/config.yml
-sudo /usr/libexec/PlistBuddy -c "Add :ProgramArguments:1 string tunnel" \
-     -c "Add :ProgramArguments:2 string run" /Library/LaunchDaemons/com.cloudflare.cloudflared.plist
-sudo launchctl kickstart -k system/com.cloudflare.cloudflared
-cloudflared tunnel info backbone     # should list the daemon's connector
-```
-
-Sanity check: `curl -i -X POST https://hooks.example.com/webhooks/github`
-returns 403 from the backbone (signature check), and `/health` returns 404
-(path-filtered).
-
-**2. The GitHub App** (Settings → Developer settings → GitHub Apps → New):
-
-- Webhook: Active, URL `https://hooks.example.com/webhooks/github` — **the
-  path matters**, a bare hostname gets a 530/404 — secret: `openssl rand -hex 32`.
-- Repository permissions: *Issues: Read and write*, *Pull requests: Read and
-  write*. Subscribe to events: *Issues*, *Issue comment*, *Pull request*.
-- Generate a private key (downloads a `.pem`); note the **App ID**.
-- **Install App** on your account → **All repositories** — this is what makes
-  new repositories work with zero further setup. The backbone ignores events
-  from repositories no agent owns or watches.
-
-**3. Point the backbone at it:**
-
-```bash
-# <data_dir>/.env  (remove GITHUB_TOKEN — a token takes precedence over the App)
 GITHUB_APP_ID=12345
 GITHUB_APP_PRIVATE_KEY_PATH=~/.local/share/agent-backbone/github-app.pem
-GITHUB_WEBHOOK_SECRET=<the same secret>
+GITHUB_WEBHOOK_SECRET=<the app's webhook secret>
+# remove GITHUB_TOKEN — a token takes precedence over the App
 ```
 
-`chmod 600` the key, restart, and `backbone status` shows
-`github intake: webhook`. Verify with the app's *Advanced → Recent
-Deliveries* page: the ping and every event should show **200**. A 530 means
-the URL's hostname is wrong; a 403 means the secret in the app form differs
-from `.env` (both fixable under the app's Webhook settings, or via
-`PATCH /app/hook/config`).
+`backbone status` then shows `github intake: webhook`. The walkthrough has
+a checkpoint after every step and the troubleshooting table (530 = wrong
+hostname/path, 403 = secret mismatch, …).
 
 ### Token + webhook
 

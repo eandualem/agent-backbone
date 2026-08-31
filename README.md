@@ -51,7 +51,7 @@ echo "GITHUB_TOKEN=$(gh auth token)" >> ~/.local/share/agent-backbone/.env
 uv run backbone down && uv run backbone up --detach
 ```
 
-That is **poll intake**: the backbone asks GitHub for new issues and comments every 60 s in every repository an agent owns or watches. For instant delivery, set `GITHUB_WEBHOOK_SECRET` and point a webhook (through `gh webhook forward` or a named cloudflared tunnel) at `/webhooks/github`; the backbone switches to **webhook intake** automatically and still runs one poll at startup to catch anything it missed while it was down. See [docs/github.md](docs/github.md).
+That is **poll intake**: the backbone asks GitHub for new issues and comments every 60 s in every repository an agent owns or watches — zero setup, nothing exposed. For instant delivery and automatic coverage of every repository you ever create, do the one-time **GitHub App + webhook** setup (Cloudflare Tunnel if you have a domain, ngrok's free static domain if you don't): [docs/github-app-setup.md](docs/github-app-setup.md).
 
 ## Documentation
 
@@ -62,7 +62,7 @@ That is **poll intake**: the backbone asks GitHub for new issues and comments ev
 | [How it works](docs/how-it-works.md) | Every flow step by step, with the decisions the backbone makes |
 | [Configuration](docs/configuration.md) | Settings (`backbone config`), secrets, the data directory |
 | [CLI](docs/cli.md) · [API](docs/api.md) | Reference |
-| [GitHub](docs/github.md) · [Telegram](docs/telegram.md) | Integrations |
+| [GitHub](docs/github.md) · [App setup walkthrough](docs/github-app-setup.md) · [Telegram](docs/telegram.md) | Integrations |
 | [Security](docs/security.md) | Defaults and what you opt into |
 | [Status and roadmap](docs/status-and-roadmap.md) | What works, what is missing, what is next |
 
