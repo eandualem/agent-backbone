@@ -20,9 +20,10 @@ tmux; they differ mainly in whether sessions can talk to each other.
 
 - **claude-squad** ([smtg-ai/claude-squad](https://github.com/smtg-ai/claude-squad),
   8,405★, active, AGPL-3.0) — one tmux session + one git worktree per agent
-  (Claude Code, Codex, OpenCode, Amp, Aider); zero inter-agent messaging, a
-  human drives everything from a TUI. The closest architectural analog to
-  agent-backbone's own session mechanism.
+  ("Claude Code, Codex, Gemini (and other local agents including Aider)"
+  per the README); zero inter-agent messaging, a human drives everything
+  from a TUI. The closest architectural analog to agent-backbone's own
+  session mechanism.
 - **cli-agent-orchestrator / CAO** ([awslabs/cli-agent-orchestrator](https://github.com/awslabs/cli-agent-orchestrator),
   1,167★, active, AWS Labs, Apache-2.0) — a supervisor agent delegates to
   tmux-isolated worker CLIs (12 supported providers) via a local
@@ -100,7 +101,7 @@ shipping no UI (`README.md`, `docs/concepts.md`).
 | Delivery safety | `safe_deliver` + `get_agent_state`: fresh hook state authoritative, terminal fallback, every snapshot carries `evidence`; busy agents never interrupted. Documented mechanism. | Claims delivery "at turn boundaries" via an `AgentProtocol`; detection mechanism undocumented, README admits terminal-scraping is today's fallback. | Not documented at all. | Not applicable — human attaches directly, no background paste. | Stateless per-run; no mid-session delivery concept. |
 | GitHub issue intake | First-class: `(repo, issue_number)`-scoped, provenance-enveloped, into a persistent session. | None found. | None found. | None. | Yes — but into an ephemeral CI run, not a session. |
 | Durability | SQLite/Postgres, DB is sole config source. | SQLite-backed, comparable. | Undisclosed; state appears bound to the running server process. | Not documented beyond a settings file. | N/A — Actions manages the run. |
-| Runtime scope | Architectural layering (`terminal` leaf service), not a fixed CLI list. | Named list of 3 CLIs. | Named list of 12 CLIs (maintained allowlist, not an abstraction). | Named list of 4 CLIs. | Claude only / vendor-agnostic engine list (gh-aw). |
+| Runtime scope | Architectural layering (`terminal` leaf service), not a fixed CLI list. | Named list of 3 CLIs. | Named list of 12 CLIs (maintained allowlist, not an abstraction). | Named list: Claude Code, Codex, Gemini, "and other local agents including Aider" (README). | Claude only / vendor-agnostic engine list (gh-aw). |
 | License | MIT | MIT + Commons Clause (blocks commercial resale) | Apache-2.0 | AGPL-3.0 | N/A (Actions/CI tooling) |
 
 **The two claims worth stating plainly, precisely worded:**
@@ -126,9 +127,10 @@ shipping no UI (`README.md`, `docs/concepts.md`).
    documents the mechanism" — not "no competitor attempts this."
 
 **Secondary, real but smaller differentiators:** hook-pushed state with an
-inspectable `evidence` trail (six of the seven session managers surveyed
-scrape terminal text only; amux is the sole other project claiming
-otherwise, with an unstated mechanism); runtime-agnostic adapters spanning
+inspectable `evidence` trail (none of the five other tmux/terminal-session
+managers surveyed documents a busy/idle detection mechanism at all — amux
+is the only one that even states turn-boundary delivery as a goal, per §2
+above); runtime-agnostic adapters spanning
 six CLIs behind one interface, versus every peer's fixed named list; swarms
 implemented as ordinary agents sharing the exact same state/delivery/audit
 machinery as a solo agent, rather than a separate orchestration engine — no
