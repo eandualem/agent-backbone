@@ -77,6 +77,37 @@ backbone config set escalation.target orch
 | `agent watch [NAME] REPO…` / `agent unwatch [NAME] REPO…` | Add / remove watched repositories. Inside an agent session `NAME` defaults to the agent itself (`$BACKBONE_AGENT`), so an agent can subscribe on its own |
 | `agent forget NAME` | Remove a stopped agent from the backbone |
 
+### Every `agent start` parameter
+
+`agent start` is the whole declaration — there is no separate registration
+step, and everything is optional except a directory to discover (given, or
+the cwd). Anyone with a shell can drive it, **including another agent**:
+an orchestrator that should spin up workers runs these commands itself.
+
+| Parameter | Meaning | Recorded on the agent? |
+|---|---|---|
+| `NAME` (positional) | Agent name = tmux session = `for:` label. Known name: starts from its recorded directory. Unknown name: registers the cwd under it. Omitted: the folder name is the name — the usual case for single-repository agents | yes (the key) |
+| `--dir D` | Project directory to discover (name defaults from its folder name; repo from its `origin` remote) | yes |
+| `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `aider`, `cursor`, or `shell` | yes — later bare starts reuse it |
+| `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent | yes — later bare starts reuse it |
+| `--watch OWNER/REPO` | Also subscribe to a repository (repeatable) | yes |
+| `--resume` | Ask the runtime to resume its last conversation | no |
+| `--no-wait` | Return immediately instead of waiting for the prompt | no |
+
+Examples:
+
+```bash
+backbone agent start                                  # this repo, defaults
+backbone agent start --model opus                     # this repo, cheaper model
+backbone agent start orch --dir ~/ws/orch --watch acme/app
+backbone agent start --dir ~/ws/api --runtime codex --model gpt-5.2
+backbone agent start recruiter-desk                   # known agent, recorded settings
+```
+
+Recorded settings are changed later with `agent set NAME model=sonnet`
+(or `runtime=…`, `dir=…`), and a one-off override at start
+(`agent start NAME --model haiku`) also updates the record.
+
 Moving a project: registration is keyed by name (default: the folder name).
 Starting a known name from a new directory updates the record **if the old
 directory is gone** — the agent follows the move, keeping its watches and

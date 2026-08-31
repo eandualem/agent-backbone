@@ -554,6 +554,14 @@ async def _agent_start(args: argparse.Namespace) -> int:
             if spec is None:
                 print(f"unknown agent '{name}' — pass --dir to register it")
                 return 1
+            # An override at start becomes the recorded setting (matches the API).
+            changes: dict = {}
+            if args.runtime and args.runtime != spec.runtime:
+                changes["runtime"] = args.runtime
+            if args.model is not None and args.model != spec.model:
+                changes["model"] = args.model
+            if changes:
+                spec = await store.update(name, **changes)
         config = direct.config
         runtime = args.runtime or spec.runtime
         ok = await start_agent(
@@ -891,10 +899,16 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument(
         "--runtime",
         default=None,
-        help="claude | codex | gemini | opencode | aider | cursor | shell",
+        help="claude | codex | gemini | opencode | aider | cursor | shell "
+        "(default: agents.default_runtime, recorded on the agent afterwards)",
     )
-    ps.add_argument("--model", default=None)
-    ps.add_argument("--resume", action="store_true")
+    ps.add_argument(
+        "--model",
+        default=None,
+        help="model passed to the runtime CLI (e.g. opus, sonnet, or a full model id); "
+        "recorded on the agent and reused by later starts",
+    )
+    ps.add_argument("--resume", action="store_true", help="resume the runtime's last conversation")
     ps.add_argument(
         "--watch",
         action="append",

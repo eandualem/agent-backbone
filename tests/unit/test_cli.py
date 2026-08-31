@@ -138,6 +138,35 @@ class TestAgentCommands:
         assert start.await_args.args[0].name == "orch"
         assert start.await_args.args[0].path == project
 
+    def test_start_override_updates_recorded_runtime_and_model(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        project = tmp_path / "desk"
+        project.mkdir()
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as start,
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
+            assert _run(["agent", "start", "desk", "--model", "opus", "--no-wait"]) == 0
+        assert start.await_args.args[0].model == "opus"
+        capsys.readouterr()
+        assert _run(["agent", "list"]) == 0  # persisted, not a one-off
+        # A later bare start must reuse the recorded model.
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as start,
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "desk", "--no-wait"]) == 0
+        assert start.await_args.args[0].model == "opus"
+
     def test_group_start_requires_known_names(self, capsys):
         assert _run(["init"]) == 0
         assert _run(["agent", "start", "zzz", "yyy"]) == 1

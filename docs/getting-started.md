@@ -94,6 +94,14 @@ app: ready — claude repo acme/app
 The agent is named after the directory, its repository was read from
 `git remote origin`, and `start` returned when Claude was at its prompt.
 
+Pick the CLI and model per agent — both are recorded and reused by later
+starts (full reference: [CLI](cli.md)):
+
+```bash
+backbone agent start --model opus                  # cheaper model, same repo
+backbone agent start --runtime codex --model gpt-5.2
+```
+
 > **First launch in a new directory**: Claude Code asks whether you trust
 > the folder. `start` reports `started, waiting for you` with the question
 > shown; answer it with `tmux attach -t app` (choose *Yes, I trust this
@@ -179,6 +187,13 @@ it runs:
 ```bash
 backbone agent watch acme/api        # NAME defaults to $BACKBONE_AGENT
 ```
+
+The same goes for the rest of the lifecycle: an orchestrator with shell
+access can run `backbone agent start`, `stop`, `inspect` and `tell` itself
+— delegating "start the recruiter desk on an Opus model" is just
+`backbone agent start recruiter-desk --model opus`. (If your agent runner
+prompts for permission on these commands, allow the `backbone agent …`,
+`backbone status` and `backbone tell` command prefixes in its settings.)
 
 ## 9. Optional: Telegram
 

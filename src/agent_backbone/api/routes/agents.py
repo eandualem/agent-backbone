@@ -202,6 +202,16 @@ async def _start(
     runtime = req.runtime or spec.runtime
     model = req.model if req.model is not None else spec.model
 
+    # A runtime/model override at start becomes the agent's recorded setting,
+    # so the next bare `agent start NAME` reuses it.
+    changes: dict = {}
+    if req.runtime and req.runtime != spec.runtime:
+        changes["runtime"] = req.runtime
+    if req.model is not None and req.model != spec.model:
+        changes["model"] = req.model
+    if changes:
+        spec = await store.update(spec.name, **changes)
+
     if runtime not in RUNTIME_COMMANDS:
         raise HTTPException(status_code=400, detail=f"Unknown runtime: {runtime}")
     if not runtime_available(runtime):
