@@ -22,6 +22,12 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   sessions of the same user are refused with 404, even though the process
   could reach them. `GET /plans/{name}` reads plan text only from
   `<state_dir>/plans/`, whatever path the state record names.
+- **Approvals are typed for you, decided by you.** `agent approve` answers
+  a runtime's permission dialog with its affirmative key. It refuses when
+  no dialog is on screen and it records who approved what, but it does not
+  judge the command — whoever holds the key (a person or a coordinator
+  agent) does. Plan approval, which can run a whole plan unattended, stays
+  off by default (`security.allow_remote_plan_control`).
 - **Provenance is convention, not authentication.** `from_entity` in
   `POST /messages` and the resulting `[via:backbone from:X]` envelope are
   whatever the caller says; the `[from:<agent>]` prefix on GitHub is the
@@ -42,6 +48,7 @@ The backbone can type into your agents' terminals. Treat it accordingly.
 | Webhook | Rejected unless `GITHUB_WEBHOOK_SECRET` is set and the HMAC matches | — |
 | Telegram | Bot does not start without `telegram.allowed_chat_ids`; unlisted chats are ignored | — |
 | Remote plan approve/reject/respond | Off (they inject keystrokes) | `security.allow_remote_plan_control = true` |
+| Remote permission approval (`agent approve`) | On — bounded: the runtime's affirmative key only, only while its dialog is on screen, only to a registered agent, every approval recorded as an `approval` event with who asked | `security.allow_remote_approval = false` |
 | Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. **Exception:** per-agent `env` values are stored with the agent record and exported into that agent's session, so anything you put there needs the same care as `.env` | `backbone agent set app env='{"BACKBONE_API_KEY":"…"}'` for an agent that should call the API |
 | Hook script | Standard library only, runs as your user, writes only under `<data_dir>/state` | — |

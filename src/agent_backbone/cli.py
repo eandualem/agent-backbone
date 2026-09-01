@@ -652,6 +652,35 @@ async def _agent(args: argparse.Namespace) -> int:
             failed = failed or not ok
         return 1 if failed else 0
 
+    if sub == "approve":
+        if not api_up:
+            print("backbone API unreachable; is `backbone up` running?")
+            return 1
+        result = await _api(
+            boot,
+            "POST",
+            f"/api/agents/{args.name}/approve",
+            json_body={"from_entity": args.sender},
+            timeout=30.0,
+        )
+        if result is None:
+            print("backbone API unreachable; is `backbone up` running?")
+            return 1
+        status, data = result
+        detail = data.get("detail") if isinstance(data, dict) else None
+        if status != 200:
+            if isinstance(detail, dict):
+                print(f"{args.name}: {detail.get('outcome', 'error')}")
+                for line in detail.get("evidence", []):
+                    print(f"    | {line}")
+            else:
+                print(f"error {status}: {detail or data}")
+            return 1
+        print(f"{args.name}: approved (by {data.get('approved_by')})")
+        for line in data.get("evidence", []):
+            print(f"    | {line}")
+        return 0
+
     if sub == "inspect":
         if api_up:
             result = await _api(boot, "GET", f"/api/agents/{args.name}/inspect", timeout=30.0)
@@ -1053,6 +1082,16 @@ def build_parser() -> argparse.ArgumentParser:
     pi = asub.add_parser("inspect", help="show state, delivery readiness and the evidence")
     pi.add_argument("name")
     pi.add_argument("--json", action="store_true")
+    pa = asub.add_parser(
+        "approve", help="answer the permission prompt an agent's runtime is showing"
+    )
+    pa.add_argument("name")
+    pa.add_argument(
+        "--from",
+        dest="sender",
+        default=os.environ.get("BACKBONE_AGENT") or os.environ.get("USER", "cli"),
+        help="who is approving, for the audit trail (default: $BACKBONE_AGENT or $USER)",
+    )
     pse = asub.add_parser(
         "set", help="change agent fields: runtime=… model=… repo=… dir=… description=…"
     )

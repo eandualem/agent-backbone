@@ -145,6 +145,27 @@ class AgentStopResponse(BaseModel):
     session: str
 
 
+class AgentApproveRequest(BaseModel):
+    """Who is answering the agent's permission prompt (for the audit trail)."""
+
+    from_entity: str = ""
+
+
+class AgentApproveResponse(BaseModel):
+    """Result of answering a permission prompt.
+
+    ``outcome`` is ``approved`` (keys sent — the evidence says whether the
+    dialog cleared), ``not_waiting``, ``unsupported``, ``offline`` or
+    ``failed``. Nothing is typed unless the prompt is on screen.
+    """
+
+    ok: bool
+    session: str
+    outcome: str
+    evidence: list[str] = []
+    approved_by: str = ""
+
+
 class AgentStateDetail(BaseModel):
     """Detailed agent state snapshot."""
 

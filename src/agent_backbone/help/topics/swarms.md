@@ -45,3 +45,14 @@ The worktree and branch, member registration and startup, role briefs
 teardown. Everything a member does runs through the normal delivery and
 audit pipeline, so `backbone status` and `agent inspect` work on swarm
 members like any other agent.
+
+## When a member is stuck on a permission prompt
+
+Codex, OpenCode and Claude Code (outside auto mode) stop on approval
+dialogs. `backbone agent inspect <member>` shows it as
+`waiting_for_human (permission)` with the prompt in the evidence;
+`backbone agent approve <member>` answers it. The backbone sends the
+runtime's affirmative key only while the dialog is actually on screen and
+records who approved what (`GET /api/events`). Coordinators should check
+what is being approved (the evidence quotes the command) — approving is
+your decision, the backbone just types it.

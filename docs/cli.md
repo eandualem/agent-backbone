@@ -73,6 +73,7 @@ backbone config set escalation.target orch
 | `agent list` | Known agents with runtime, model and directory |
 | `agent inspect NAME [--json]` | State, reason, current issue, delivery condition, the evidence, the terminal tail, recent deliveries |
 | `agent stop NAME…` | Kill the session(s) |
+| `agent approve NAME [--from WHO]` | Answer the permission prompt the agent's runtime is showing (Claude Code, Codex, Gemini, OpenCode, Aider). Only types while the dialog is on screen — otherwise reports `not_waiting` with the terminal tail. Recorded as an `approval` event. Disable with `security.allow_remote_approval false` |
 | `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object) |
 | `agent watch [NAME] REPO…` / `agent unwatch [NAME] REPO…` | Add / remove watched repositories. Inside an agent session `NAME` defaults to the agent itself (`$BACKBONE_AGENT`), so an agent can subscribe on its own |
 | `agent forget NAME` | Remove a stopped agent from the backbone (refuses while its session is still running) |
