@@ -196,6 +196,17 @@ def _write_env_value(env_path: Path, key: str, value: str | None) -> str:
     (``backbone init`` writes those) is turned into the assignment; otherwise the
     line is appended. Returns ``replaced`` / ``added`` / ``removed`` / ``absent``.
     """
+    import fcntl
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    # One writer at a time for the whole read-modify-write: two concurrent
+    # `secrets set` calls must not lose each other's key.
+    with open(env_path.with_name(".env.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _write_env_value_locked(env_path, key, value)
+
+
+def _write_env_value_locked(env_path: Path, key: str, value: str | None) -> str:
     lines = env_path.read_text().splitlines() if env_path.is_file() else []
     out: list[str] = []
     action = "absent" if value is None else "added"

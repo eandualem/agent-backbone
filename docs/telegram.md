@@ -77,8 +77,9 @@ map a topic by hand — name a topic like the agent (`app`, `Web`,
 message, or pin one with `backbone config set telegram.topic_routes
 '{"42": "app"}'` (`/identify` shows the id; explicit wins and is never
 closed automatically). A topic mapped to `"agents"` is the old catch-all
-(`web: run the tests` routes to `web`). `telegram.auto_topics false` turns
-provisioning off if you prefer to manage topics yourself.
+(`web: run the tests` routes to `web`). `backbone config set
+telegram.auto_topics false` turns provisioning off if you prefer to manage
+topics yourself.
 
 Agents answer into their topic with `backbone reply "Done — PR #12 is
 green."` (inside the agent session; the agent name comes from

@@ -68,7 +68,7 @@ The backbone deliberately does **not** manage per-repository runtime configurati
 ## GitHub in two commands
 
 ```bash
-backbone secrets set GITHUB_TOKEN "$(gh auth token)"   # the backbone's own .env, never a repo's
+gh auth token | backbone secrets set GITHUB_TOKEN   # the backbone's own .env, never a repo's
 backbone down && backbone up --detach
 ```
 

@@ -167,7 +167,7 @@ agent sessions; give it to an agent deliberately:
 ## 7. GitHub Issues as the task list
 
 ```bash
-backbone secrets set GITHUB_TOKEN "$(gh auth token)"   # → ~/.local/share/agent-backbone/.env
+gh auth token | backbone secrets set GITHUB_TOKEN   # piped: never in a process argument list
 backbone down && backbone up --detach
 backbone status               # github intake: poll
 ```

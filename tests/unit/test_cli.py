@@ -353,3 +353,11 @@ class TestSecrets:
         assert _run(["init"]) == 0
         assert _run(["secrets", "set", "bad key", "x"]) == 1
         assert _run(["secrets", "set", "GITHUB_TOKEN", "   "]) == 1
+
+    def test_set_reads_the_value_from_stdin_when_piped(self, _isolated_data_dir, monkeypatch):
+        import io
+
+        assert _run(["init"]) == 0
+        monkeypatch.setattr("sys.stdin", io.StringIO("piped-token\n"))
+        assert _run(["secrets", "set", "GITHUB_TOKEN"]) == 0
+        assert "GITHUB_TOKEN=piped-token" in (_isolated_data_dir / ".env").read_text()

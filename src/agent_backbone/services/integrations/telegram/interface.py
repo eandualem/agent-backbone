@@ -104,6 +104,7 @@ class TelegramService(Integration):
         self._app: Application | None = None
         self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
         self._background: set[asyncio.Task] = set()
+        self._sync_lock = asyncio.Lock()
 
     @property
     def _config(self) -> BackboneConfig:
@@ -131,14 +132,22 @@ class TelegramService(Integration):
         """One forum topic per registered agent (see ``_topics``)."""
         from agent_backbone.services.integrations.telegram._topics import sync_topics
 
-        await sync_topics(self)
+        # Start, config publish, periodic job and first-group discovery can all
+        # fire close together; serialized so two syncs never both create a topic.
+        async with self._sync_lock:
+            await sync_topics(self)
 
     def _discover(self, update: Update) -> None:
         """Learn the group id / topic names from any message; sync topics on news.
 
         Every handler runs this first, so the first message in a fresh forum
-        group is enough for the bot to know where to create topics.
+        group is enough for the bot to know where to create topics. Only
+        allow-listed chats teach anything: a stranger's group must never
+        become "the" group and receive agent topics.
         """
+        chat = getattr(update, "effective_chat", None)
+        if chat is None or not self._is_authorized(chat.id):
+            return
         knew_group = self._effective_group_chat_id() is not None
         changed = process_message_for_discovery(
             update, self.config, self._discovery, self.config.telegram_topic_discovery_path
@@ -260,11 +269,12 @@ class TelegramService(Integration):
         it can be traced, and polling simply continues.
         """
         chat = getattr(getattr(update, "effective_chat", None), "id", None)
-        text = getattr(getattr(update, "message", None), "text", None)
+        text = getattr(getattr(update, "message", None), "text", None) or ""
+        # Never the text itself — it is a person's message and may hold secrets.
         log.warning(
-            "Telegram handler failed (chat=%s, text=%r): %s",
+            "Telegram handler failed (chat=%s, text_length=%d): %s",
             chat,
-            (text or "")[:60],
+            len(text),
             context.error,
         )
 

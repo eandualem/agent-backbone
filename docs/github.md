@@ -21,11 +21,11 @@ Two decisions, independent of each other:
 ### Simplest: token + poll
 
 ```bash
-backbone secrets set GITHUB_TOKEN "$(gh auth token)"   # → ~/.local/share/agent-backbone/.env
+gh auth token | backbone secrets set GITHUB_TOKEN   # → ~/.local/share/agent-backbone/.env
 ```
 
-(`.env` holds plain values — the token itself, or a PAT with `repo`
-scope; the shell expands `$(…)` before the value is written.)
+(Piped, so the token never appears in a process argument list. `.env`
+holds plain values — the token itself, or a PAT with `repo` scope.)
 
 Restart the backbone. `backbone status` now shows `github intake: poll` and
 the tracked repositories: every repository an agent owns (its directory's

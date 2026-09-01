@@ -297,3 +297,16 @@ class TestGeneralAndUnmapped:
         d.assert_not_called()
         update.message.reply_text.assert_awaited_once()
         assert "not an agent's" in update.message.reply_text.await_args.args[0]
+
+
+class TestDiscoveryAuthorization:
+    async def test_unauthorized_group_teaches_nothing_and_syncs_nothing(self, config):
+        # A stranger's supergroup must never become "the" group and get topics.
+        bot = _bot(config)
+        update = _update("hello", chat_id=-999, thread_id=None)
+        with patch.object(bot, "sync_agents", new_callable=AsyncMock) as sync:
+            await bot.handle_general_message(update, MagicMock())
+            await bot.cmd_status(update, _context([]))
+        assert bot._effective_group_chat_id() is None
+        sync.assert_not_called()
+        update.message.reply_text.assert_not_awaited()

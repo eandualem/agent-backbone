@@ -136,3 +136,24 @@ class TestSyncTopics:
         bot, fake = _running_bot(config, tmp_path)
         await bot.sync_agents()
         assert fake.created == sorted(config.agents.names)
+
+
+class TestSyncSerialized:
+    async def test_overlapping_syncs_create_each_topic_once(self, config, tmp_path):
+        import asyncio
+
+        bot, fake = _running_bot(config, tmp_path)
+        barrier = asyncio.Event()
+        original = fake.create_forum_topic
+
+        async def slow_create(chat_id, name):
+            await barrier.wait()  # hold every creation until both syncs are in flight
+            return await original(chat_id, name)
+
+        fake.create_forum_topic = slow_create
+        first = asyncio.create_task(bot.sync_agents())
+        second = asyncio.create_task(bot.sync_agents())
+        await asyncio.sleep(0)
+        barrier.set()
+        await asyncio.gather(first, second)
+        assert sorted(fake.created) == sorted(config.agents.names)  # each exactly once
