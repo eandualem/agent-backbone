@@ -55,11 +55,32 @@ def parse_roster(raw_specs: list[str]) -> list[MemberSpec]:
 
 
 def member_names(swarm: str, specs: list[MemberSpec]) -> list[tuple[str, MemberSpec]]:
-    """Agent names for the roster: ``<swarm>-<role>`` (numbered when count > 1)."""
+    """Agent names for the roster: ``<swarm>-<role>``, numbered when the role
+    appears more than once — across specs too, so ``scout@codex`` plus
+    ``scout@claude`` cannot collide on one name.
+
+    Raises ValueError when two roles still map to one name (``scout*2`` plus
+    a role literally called ``scout-1``): two members under one agent name
+    would silently merge into one corrupted agent.
+    """
+    role_total: dict[str, int] = {}
+    for spec in specs:
+        role_total[spec.role] = role_total.get(spec.role, 0) + spec.count
+    counter: dict[str, int] = {}
     names: list[tuple[str, MemberSpec]] = []
     for spec in specs:
-        if spec.count == 1:
-            names.append((f"{swarm}-{spec.role}", spec))
-        else:
-            names.extend((f"{swarm}-{spec.role}-{i}", spec) for i in range(1, spec.count + 1))
+        for _ in range(spec.count):
+            counter[spec.role] = counter.get(spec.role, 0) + 1
+            if role_total[spec.role] == 1:
+                names.append((f"{swarm}-{spec.role}", spec))
+            else:
+                names.append((f"{swarm}-{spec.role}-{counter[spec.role]}", spec))
+    seen: set[str] = set()
+    for label, _ in names:
+        if label in seen:
+            raise ValueError(
+                f"member specs map two members to the same agent name {label!r} — "
+                "rename one of the roles"
+            )
+        seen.add(label)
     return names

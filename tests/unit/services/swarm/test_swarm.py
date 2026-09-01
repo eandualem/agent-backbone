@@ -57,6 +57,30 @@ class TestRoster:
             "research-coder",
         ]
 
+    def test_same_role_across_specs_never_collides(self):
+        # scout@codex + scout@claude used to both become "research-scout",
+        # silently merging two members into one corrupted agent (found live).
+        names = member_names(
+            "research", parse_roster(["scout*2@codex", "scout@opencode", "scout@claude/sonnet"])
+        )
+        labels = [n for n, _ in names]
+        assert labels == [
+            "research-coordinator",
+            "research-scout-1",
+            "research-scout-2",
+            "research-scout-3",
+            "research-scout-4",
+        ]
+        assert len(set(labels)) == len(labels)
+        assert names[3][1].runtime == "opencode"
+        assert names[4][1].model == "sonnet"
+
+    def test_role_named_like_a_numbered_member_is_rejected(self):
+        # "scout*2" yields research-scout-1; a role literally called
+        # "scout-1" would land on the same agent name and merge two members.
+        with pytest.raises(ValueError, match="same agent name"):
+            member_names("research", parse_roster(["scout*2", "scout-1"]))
+
 
 class TestBriefs:
     def test_brief_renders_common_and_role_with_facts(self):
@@ -270,6 +294,72 @@ class TestCreateSwarm:
         mock_rm.assert_awaited_once()
         assert store.registered == []  # all rolled back
         assert (await db.get_swarm("research"))["status"] == "disbanded"
+
+    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
+    @patch(f"{_IFACE}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", []))
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
+    @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
+    @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
+    @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
+    async def test_shell_members_get_no_brief_pasted(
+        self, _git, _branch, mock_wt, _exists, _start, _ready, mock_deliver, db, tmp_path
+    ):
+        # aider gets the brief as its first message; a shell would run it as commands.
+        config, repo_dir = _swarm_config(tmp_path)
+        mock_wt.return_value = (repo_dir / ".backbone" / "swarms" / "research", "swarm/research")
+        gh = AsyncMock()
+        gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
+
+        await create_swarm(
+            config,
+            db,
+            _FakeStore(config),
+            gh,
+            name="research",
+            issue_ref="acme/app#7",
+            member_specs=["scout@aider", "probe@shell"],
+            initiator="simon",
+        )
+
+        calls = mock_deliver.await_args_list
+        briefed = [c.args[0] for c in calls if c.kwargs["flow_name"] == "swarm-brief"]
+        assert briefed == ["research-scout"]
+
+    @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
+    @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
+    @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
+    @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
+    async def test_lost_registration_race_removes_the_worktree(
+        self, _git, _branch, mock_wt, _exists, mock_start, mock_rm, db, tmp_path
+    ):
+        # A concurrent swarm can take the issue between the pre-check and the
+        # insert (uq_swarms_active_issue); the fresh worktree must not linger.
+        config, repo_dir = _swarm_config(tmp_path)
+        worktree = repo_dir / ".backbone" / "swarms" / "research"
+        mock_wt.return_value = (worktree, "swarm/research")
+        gh = AsyncMock()
+        gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
+
+        with (
+            patch.object(db, "create_swarm", AsyncMock(side_effect=RuntimeError("UNIQUE"))),
+            pytest.raises(SwarmError, match="could not register"),
+        ):
+            await create_swarm(
+                config,
+                db,
+                _FakeStore(config),
+                gh,
+                name="research",
+                issue_ref="acme/app#7",
+                member_specs=["scout"],
+                initiator="simon",
+            )
+
+        mock_rm.assert_awaited_once_with(repo_dir, worktree)
+        mock_start.assert_not_awaited()
 
 
 class TestTeardown:

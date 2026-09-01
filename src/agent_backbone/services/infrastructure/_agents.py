@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -54,6 +55,12 @@ RUNTIME_DISPLAY_NAMES: dict[str, str] = {
     "shell": "Plain shell",
 }
 
+# Runtimes that can take the agent brief at launch: Claude Code appends it to
+# the system prompt; Codex, Gemini and OpenCode take it as the session's
+# initial prompt (their closest equivalent). Other runtimes fall back to a
+# first delivered message where the caller supports it.
+BRIEF_INJECTION_RUNTIMES = frozenset({"claude", "codex", "gemini", "opencode"})
+
 
 def resolve_command(name: str | None) -> str | None:
     """Resolve a command name to an absolute path (PATH first, then fallbacks)."""
@@ -77,6 +84,11 @@ def runtime_available(runtime: str) -> bool:
     return command is None or resolve_command(command) is not None
 
 
+def _tmp_sibling(target: Path) -> Path:
+    """A unique temp path next to ``target`` (concurrent writers never share one)."""
+    return target.with_name(f".{target.name}.backbone-{os.getpid()}-{time.monotonic_ns()}.tmp")
+
+
 def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = None) -> bool:
     """Mark a directory as trusted in Claude Code's per-project state.
 
@@ -98,7 +110,7 @@ def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = N
         if entry.get("hasTrustDialogAccepted") is True:
             return True
         entry["hasTrustDialogAccepted"] = True
-        tmp = config_file.with_suffix(".json.backbone-tmp")
+        tmp = _tmp_sibling(config_file)
         tmp.write_text(json.dumps(data, indent=2))
         tmp.replace(config_file)
         log.info("Pre-trusted %s for Claude Code", path)
@@ -108,30 +120,92 @@ def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = N
         return False
 
 
+def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | None = None) -> bool:
+    """Mark a directory as trusted in Codex's ``~/.codex/config.toml``.
+
+    Writes the same record Codex's own trust dialog writes
+    (``[projects."<dir>"] trust_level = "trusted"``). A directory that already
+    has any ``projects`` entry is left untouched — the user decided. The write
+    is best-effort: on any error the dialog simply appears as before. The
+    read-modify-write is not locked against Codex itself (which has no writer
+    protocol to join); the window is a few milliseconds at agent start.
+    """
+    import tomllib
+
+    path = str(Path(directory).expanduser().resolve())
+    config_file = codex_config or (Path.home() / ".codex" / "config.toml")
+    try:
+        raw = config_file.read_text() if config_file.is_file() else ""
+        data = tomllib.loads(raw)
+        projects = data.get("projects")
+        existing = projects.get(path) if isinstance(projects, dict) else None
+        if existing is not None:
+            # Valid TOML with an unexpected shape is the user's; leave it alone.
+            return isinstance(existing, dict) and existing.get("trust_level") == "trusted"
+        entry = f'\n[projects."{path}"]\ntrust_level = "trusted"\n'
+        updated = raw.rstrip("\n") + "\n" + entry if raw else entry.lstrip("\n")
+        tomllib.loads(updated)  # never leave codex an unparseable config
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _tmp_sibling(config_file)
+        tmp.write_text(updated)
+        tmp.replace(config_file)
+        log.info("Pre-trusted %s for Codex", path)
+        return True
+    except (OSError, ValueError, tomllib.TOMLDecodeError):
+        log.warning("Could not pre-trust %s for Codex (the trust dialog will appear)", path)
+        return False
+
+
+def pre_trust_runtime(runtime: str, directory: Path | str) -> None:
+    """Answer the runtime's folder-trust dialog ahead of launch, where it has one.
+
+    Claude Code and Codex are pre-trusted through their config files; Gemini
+    takes ``--skip-trust`` on its command line (see ``build_command``); the
+    other runtimes have no trust dialog. Every start path (CLI/API and
+    swarms) goes through here so no runtime is left at its dialog.
+    """
+    if runtime == "claude":
+        pre_trust_directory(directory)
+    elif runtime == "codex":
+        pre_trust_codex_directory(directory)
+
+
+def agent_brief_text(name: str, repo: str, data_dir: Path | str) -> str | None:
+    """Render the common backbone brief for an agent (None when it cannot be read)."""
+    from agent_backbone.help import render_agent_brief
+
+    try:
+        return render_agent_brief(
+            {"agent_name": name, "repo": repo or "(no GitHub remote)"},
+            data_dir=Path(data_dir),
+        )
+    except OSError as exc:
+        log.warning("Could not render the agent brief for %s: %s", name, exc)
+        return None
+
+
 def agent_brief_file(
     name: str, repo: str, data_dir: Path | str, *, runtime: str = "claude"
 ) -> Path | None:
-    """Render the common backbone brief for a claude agent, return its path.
+    """Render the common backbone brief for an agent, return its path.
 
-    The brief is appended to Claude Code's system prompt at launch
-    (complementing the project's CLAUDE.md, never replacing it). Runtimes
-    without system-prompt injection get None. Best-effort: on any error the
-    agent simply starts without the brief.
+    Claude Code appends it to the system prompt at launch (complementing the
+    project's CLAUDE.md, never replacing it); Codex, Gemini and OpenCode
+    receive it as the session's initial prompt. Runtimes without launch
+    injection get None — callers deliver ``agent_brief_text`` as the first
+    message instead. Best-effort: on any error the agent simply starts
+    without the brief.
     """
-    if runtime != "claude":
+    if runtime not in BRIEF_INJECTION_RUNTIMES:
         return None
-    from agent_backbone.help import render_agent_brief
-
+    text = agent_brief_text(name, repo, data_dir)
+    if text is None:
+        return None
     try:
         briefs_dir = Path(data_dir) / "briefs"
         briefs_dir.mkdir(parents=True, exist_ok=True)
         brief = briefs_dir / f"{name}.md"
-        brief.write_text(
-            render_agent_brief(
-                {"agent_name": name, "repo": repo or "(no GitHub remote)"},
-                data_dir=Path(data_dir),
-            )
-        )
+        brief.write_text(text)
         return brief
     except OSError as exc:
         log.warning("Could not write the agent brief for %s: %s", name, exc)
@@ -161,6 +235,15 @@ def hook_launch_args(
     return ["--settings", str(settings)]
 
 
+def _read_brief(system_prompt_file: Path | str) -> str | None:
+    try:
+        text = Path(system_prompt_file).read_text().strip()
+    except OSError:
+        log.warning("Could not read the brief %s (starting without it)", system_prompt_file)
+        return None
+    return text or None
+
+
 def build_command(
     runtime: str,
     *,
@@ -169,12 +252,18 @@ def build_command(
     data_dir: Path | str | None = None,
     state_dir: Path | str | None = None,
     system_prompt_file: Path | str | None = None,
+    pre_trust: bool = False,
 ) -> list[str] | None:
     """Build the launch command for a runtime, or None for a plain shell.
 
-    ``system_prompt_file`` injects role instructions at the system level for
-    runtimes that support it (Claude Code's ``--append-system-prompt-file``);
-    other runtimes ignore it and callers fall back to message injection.
+    ``system_prompt_file`` injects role instructions at launch: Claude Code
+    appends it to the system prompt, Codex, Gemini and OpenCode take its
+    content as the session's initial prompt. Other runtimes ignore it and
+    callers fall back to message injection. A resumed session already
+    received its initial prompt, so the initial-prompt runtimes are not
+    re-briefed on ``resume`` (a system prompt is re-applied every launch).
+    ``pre_trust`` adds Gemini's ``--skip-trust`` (Claude Code and Codex are
+    pre-trusted via their config files instead).
 
     Raises ValueError for unknown runtimes and RuntimeError when the binary is missing.
     """
@@ -186,6 +275,42 @@ def build_command(
     resolved = resolve_command(binary)
     if resolved is None:
         raise RuntimeError(f"Runtime '{runtime}' binary not found: {binary}")
+
+    if runtime == "codex":
+        # `codex resume` is a subcommand; the resumed session keeps its model.
+        if resume:
+            return [resolved, "resume", "--last"]
+        command = [resolved]
+        if model:
+            command.extend(["--model", model])
+        if system_prompt_file is not None and (brief := _read_brief(system_prompt_file)):
+            command.append(brief)  # positional initial prompt
+        return command
+
+    if runtime == "gemini":
+        command = [resolved]
+        if model:
+            command.extend(["--model", model])
+        if resume:
+            command.extend(["--resume", "latest"])
+        if pre_trust:
+            command.append("--skip-trust")
+        brief = _read_brief(system_prompt_file) if system_prompt_file and not resume else None
+        if brief:
+            command.extend(["--prompt-interactive", brief])
+        return command
+
+    if runtime == "opencode":
+        command = [resolved]
+        if model:
+            command.extend(["--model", model])
+        if resume:
+            command.append("--continue")  # opencode's resume flag
+        brief = _read_brief(system_prompt_file) if system_prompt_file and not resume else None
+        if brief:
+            command.extend(["--prompt", brief])
+        return command
+
     command = [resolved]
     if model:
         command.extend(["--model", model])
@@ -239,8 +364,8 @@ async def start_agent(
 
     effective_runtime = runtime or spec.runtime
     effective_model = model if model is not None else spec.model
-    if pre_trust and effective_runtime == "claude":
-        pre_trust_directory(spec.path)
+    if pre_trust:
+        pre_trust_runtime(effective_runtime, spec.path)
     if system_prompt_file is None and inject_brief and data_dir is not None:
         system_prompt_file = agent_brief_file(
             spec.name, spec.repo, data_dir, runtime=effective_runtime
@@ -253,6 +378,7 @@ async def start_agent(
             data_dir=data_dir,
             state_dir=state_dir,
             system_prompt_file=system_prompt_file,
+            pre_trust=pre_trust,
         )
     except (ValueError, RuntimeError) as exc:
         log.error("Cannot start agent '%s': %s", spec.name, exc)

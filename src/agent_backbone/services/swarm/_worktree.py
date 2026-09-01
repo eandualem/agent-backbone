@@ -73,6 +73,10 @@ async def create_worktree(repo_dir: Path, swarm: str) -> tuple[Path, str]:
     await _exclude_swarm_dir(repo_dir)
     worktree.parent.mkdir(parents=True, exist_ok=True)
     rc, _, err = await _git(repo_dir, "worktree", "add", str(worktree), "-b", branch)
+    if rc != 0 and "already exists" in err:
+        # A previous swarm with this name left its branch behind (branches
+        # survive teardown by design) — continue on the existing branch.
+        rc, _, err = await _git(repo_dir, "worktree", "add", str(worktree), branch)
     if rc != 0:
         raise RuntimeError(f"git worktree add failed: {err}")
     log.info("Created swarm worktree %s (branch %s)", worktree, branch)

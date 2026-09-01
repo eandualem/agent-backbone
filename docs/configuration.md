@@ -43,8 +43,8 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | Key | Default | Meaning |
 |---|---|---|
 | `agents.default_runtime` | `claude` | Runtime used by `agent start` when none is given |
-| `agents.pre_trust` | `true` | Mark an agent's directory as trusted in Claude Code before starting it, so the folder-trust dialog never blocks an unattended start. Starting an agent in a directory is treated as the trust decision; set `false` to answer the dialog yourself |
-| `agents.inject_brief` | `true` | Append the backbone's common brief to each Claude Code agent's system prompt at start — who it is, how to message other agents, and where to get details (`backbone help`). Complements the project's CLAUDE.md; override the text with `<data_dir>/agent-brief.md` |
+| `agents.pre_trust` | `true` | Answer the runtime's folder-trust dialog before starting, so it never blocks an unattended start: Claude Code and Codex get the same trust record their own dialog writes; Gemini is launched with `--skip-trust`. Starting an agent in a directory is treated as the trust decision; set `false` to answer the dialog yourself |
+| `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Codex, Gemini and OpenCode receive it as the session's initial prompt (not re-sent on `--resume`); `aider` and `cursor` receive it as their first delivered message; plain shells get none. Override the text with `<data_dir>/agent-brief.md` |
 
 ### `github.*`
 

@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import AgentSpec
-from agent_backbone.services.infrastructure._agents import start_agent, wait_until_ready
+from agent_backbone.services.infrastructure._agents import (
+    BRIEF_INJECTION_RUNTIMES,
+    start_agent,
+    wait_until_ready,
+)
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
@@ -135,7 +139,8 @@ async def create_swarm(
     """
     if not _NAME_RE.match(name):
         raise SwarmError(f"invalid swarm name {name!r} (lowercase, digits, dashes)")
-    if await db.get_swarm(name) is not None:
+    prior = await db.get_swarm(name)
+    if prior is not None and prior.get("status") == "active":
         raise SwarmError(f"swarm '{name}' already exists")
     if config.agents.get(name) is not None or await session_exists(name):
         # `backbone tell <swarm>` resolves agents first, so a swarm sharing an
@@ -186,15 +191,22 @@ async def create_swarm(
         raise SwarmError(str(exc)) from exc
     worktree, branch = await create_worktree(repo_dir, name)
 
-    await db.create_swarm(
-        name,
-        repo=repo,
-        issue_number=issue_number,
-        initiator=initiator,
-        coordinator=coordinator,
-        branch=branch,
-        worktree_dir=str(worktree),
-    )
+    try:
+        await db.create_swarm(
+            name,
+            repo=repo,
+            issue_number=issue_number,
+            initiator=initiator,
+            coordinator=coordinator,
+            branch=branch,
+            worktree_dir=str(worktree),
+        )
+    except Exception as exc:
+        # Lost a race past the pre-checks (another swarm took the issue or
+        # the name meanwhile): don't leave an unregistered worktree behind,
+        # it would block the next attempt under this name.
+        await remove_worktree(repo_dir, worktree)
+        raise SwarmError(f"could not register swarm '{name}': {exc}") from exc
 
     briefs_dir = config.data_dir / "swarms" / name
     briefs_dir.mkdir(parents=True, exist_ok=True)
@@ -233,7 +245,7 @@ async def create_swarm(
                 state_dir=config.state_dir,
                 data_dir=config.data_dir,
                 pre_trust=config.agents_section.pre_trust,
-                system_prompt_file=brief_file if runtime == "claude" else None,
+                system_prompt_file=(brief_file if runtime in BRIEF_INJECTION_RUNTIMES else None),
             )
             if not ok:
                 raise SwarmError(f"failed to start member '{agent_name}'")
@@ -247,9 +259,10 @@ async def create_swarm(
             )
             if outcome == "exited":
                 raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
-            if runtime != "claude":
-                # No system-prompt injection for this runtime: the brief is
-                # the first delivered message instead.
+            if runtime not in BRIEF_INJECTION_RUNTIMES and runtime != "shell":
+                # No launch injection for this runtime: the brief is the
+                # first delivered message instead. A plain shell has nobody
+                # to brief — pasting it would run the brief as commands.
                 await safe_deliver(
                     agent_name,
                     f"[via:backbone swarm:{name}] {brief_file.read_text()}",

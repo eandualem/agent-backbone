@@ -40,15 +40,18 @@ from agent_backbone.services.agent_store import AgentStore
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.infrastructure._agents import (
+    BRIEF_INJECTION_RUNTIMES,
     RUNTIME_COMMANDS,
     RUNTIME_DISPLAY_NAMES,
     agent_brief_file,
+    agent_brief_text,
     build_command,
     launch_environment,
-    pre_trust_directory,
+    pre_trust_runtime,
     runtime_available,
     wait_until_ready,
 )
+from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.terminal import (
     SESSION_FORMAT_STR,
@@ -234,8 +237,8 @@ async def _start(
             ready="not_waited",
         )
 
-    if config.agents_section.pre_trust and runtime == "claude":
-        pre_trust_directory(spec.path)
+    if config.agents_section.pre_trust:
+        pre_trust_runtime(runtime, spec.path)
     system_prompt_file = None
     if config.agents_section.inject_brief:
         system_prompt_file = agent_brief_file(
@@ -248,6 +251,7 @@ async def _start(
         data_dir=config.data_dir,
         state_dir=config.state_dir,
         system_prompt_file=system_prompt_file,
+        pre_trust=config.agents_section.pre_trust,
     )
     environment = launch_environment(spec.name, runtime, config.state_dir, spec.env)
     ok = await tmux_svc.start_session(
@@ -273,6 +277,25 @@ async def _start(
             runtime=runtime,
             timeout=config.monitor.start_timeout_seconds,
         )
+    if (
+        config.agents_section.inject_brief
+        and runtime not in BRIEF_INJECTION_RUNTIMES
+        and runtime != "shell"  # nobody to brief
+        and not req.resume
+        and ready != "exited"
+    ):
+        # No launch-time injection for this runtime: the brief is the first
+        # delivered message instead (queued until the agent is at its prompt).
+        brief = agent_brief_text(spec.name, spec.repo, config.data_dir)
+        if brief:
+            await safe_deliver(
+                spec.name,
+                f"[via:backbone] {brief}",
+                config,
+                db=request.app.state.db,
+                flow_name="agent-brief",
+                delivery_kind="direct_message",
+            )
     await _broadcast(request, config, tmux_svc)
     return AgentStartResponse(
         ok=ready != "exited",

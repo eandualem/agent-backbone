@@ -23,13 +23,27 @@ async def create_swarm(
     branch: str,
     worktree_dir: str,
 ) -> None:
+    # A finished swarm's name may be reused: replace the completed record.
+    # The interface refuses reuse while the old swarm is still active, and
+    # the uq_swarms_active_issue index guards the issue either way.
     await conn.execute(
         text(
             """INSERT INTO swarms
                (name, repo, issue_number, initiator, coordinator, branch,
                 worktree_dir, status, created_at)
                VALUES (:name, :repo, :issue, :initiator, :coordinator, :branch,
-                       :worktree, 'active', :now)"""
+                       :worktree, 'active', :now)
+               ON CONFLICT (name) DO UPDATE SET
+                 repo = excluded.repo,
+                 issue_number = excluded.issue_number,
+                 initiator = excluded.initiator,
+                 coordinator = excluded.coordinator,
+                 branch = excluded.branch,
+                 worktree_dir = excluded.worktree_dir,
+                 status = 'active',
+                 created_at = excluded.created_at,
+                 completed_at = NULL
+               WHERE swarms.status != 'active'"""
         ),
         {
             "name": name,
