@@ -59,7 +59,7 @@ It does **not** get the backbone's secrets. `BACKBONE_API_KEY`,
 yourself in any agent's pane:
 
 ```bash
-env | grep -E 'GITHUB|BACKBONE_API|TELEGRAM'   # only BACKBONE_* contract vars, if any
+env | grep -E 'GITHUB|BACKBONE_|TELEGRAM'   # only BACKBONE_AGENT/RUNTIME/STATE_DIR
 ```
 
 Two mechanisms, because either alone leaves a hole:
