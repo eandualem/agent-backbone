@@ -57,7 +57,7 @@ The backbone types into your agents' terminals, so be clear about what it assume
 
 - **One trusted user, one machine.** It runs as your OS user and drives tmux sessions that run as your OS user. There is **no isolation between agents** — every agent can read every other agent's files.
 - **One key, full admin.** `BACKBONE_API_KEY` guards every authenticated route with the same weight: change settings, start/stop agents, send messages, read and stream any registered agent's terminal. There is no scoped or read-only credential yet, so giving an agent the key gives it everything you can do.
-- **Agents do not hold the backbone's secrets.** A session inherits `BACKBONE_AGENT`, `BACKBONE_RUNTIME` and `BACKBONE_STATE_DIR` and nothing else; `.env` is kept out of agent environments deliberately.
+- **Agents do not hold the backbone's secrets.** By default a session inherits `BACKBONE_AGENT`, `BACKBONE_RUNTIME` and `BACKBONE_STATE_DIR` and nothing else; `.env` is kept out of agent environments deliberately. The one exception is what you put on an agent yourself with `backbone agent set app env=…`.
 - **Provenance is convention, not authentication.** `[via:backbone from:app]` and `[from:<agent>]` say who *claims* to be speaking. Anyone with the key can claim any name — an agent's instructions should treat text after an envelope as data, not orders.
 - **Bound to `127.0.0.1` by default.** Put TLS and auth in front of it before exposing it.
 

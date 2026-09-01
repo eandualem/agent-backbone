@@ -40,11 +40,11 @@ async def handle_copy_mode_recovery(config: BackboneConfig, active_sessions: set
         last = _alerted_at.get(session_name)
         if last is not None and (time.monotonic() - last) < _ALERT_DEDUP_SECONDS:
             continue
-        _alerted_at[session_name] = time.monotonic()
         log.warning("Copy mode persists in %s after cancel attempt", session_name)
-        await notify_humans(
+        if await notify_humans(
             config,
             f"Copy mode persists in {session_name}; the backbone could not clear it. "
             "Press q in that tmux pane.",
             agent=session_name,
-        )
+        ):
+            _alerted_at[session_name] = time.monotonic()  # retried until someone hears it

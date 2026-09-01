@@ -64,9 +64,14 @@ async def detect_repo(directory: Path) -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
+    except OSError:
+        return ""
+    try:
         async with asyncio.timeout(5):
             stdout, _ = await proc.communicate()
-    except (OSError, TimeoutError):
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
         return ""
     if proc.returncode != 0:
         return ""

@@ -108,10 +108,14 @@ class TestLifecycleDependencyIntegration:
         gh.list_issues = AsyncMock(return_value=[])
         await sync_dependencies(config, AsyncMock(), gh)
         calls = gh.list_issues.await_args_list
-        labels = {call.kwargs["labels"][0] for call in calls if call.kwargs.get("labels")}
-        assert labels == {f"for:{name}" for name in config.agents.names}
-        repos = {call.kwargs["repo_full_name"] for call in calls}
-        assert repos == set(config.agents.repos)
+        queried = {
+            (call.kwargs["repo_full_name"], call.kwargs["labels"][0])
+            for call in calls
+            if call.kwargs.get("labels")
+        }
+        assert queried == {
+            (repo, f"for:{spec.name}") for spec in config.agents for repo in spec.repos
+        }
 
     async def test_sync_dependencies_skipped_without_github(self, config, tmp_path):
         await sync_dependencies(config, AsyncMock(), None)

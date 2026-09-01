@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import shutil
 import time
 from dataclasses import dataclass
@@ -13,7 +12,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import RUNTIMES, session_secret_keys
-from agent_backbone.services.agents._file_reader import read_state_file, write_state_file
+from agent_backbone.services.agents._file_reader import (
+    atomic_write_text,
+    read_state_file,
+    write_state_file,
+)
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.terminal import (
     AGENT_ENV_KEY,
@@ -84,11 +87,6 @@ def runtime_available(runtime: str) -> bool:
     return command is None or resolve_command(command) is not None
 
 
-def _tmp_sibling(target: Path) -> Path:
-    """A unique temp path next to ``target`` (concurrent writers never share one)."""
-    return target.with_name(f".{target.name}.backbone-{os.getpid()}-{time.monotonic_ns()}.tmp")
-
-
 def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = None) -> bool:
     """Mark a directory as trusted in Claude Code's per-project state.
 
@@ -110,9 +108,7 @@ def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = N
         if entry.get("hasTrustDialogAccepted") is True:
             return True
         entry["hasTrustDialogAccepted"] = True
-        tmp = _tmp_sibling(config_file)
-        tmp.write_text(json.dumps(data, indent=2))
-        tmp.replace(config_file)
+        atomic_write_text(config_file, json.dumps(data, indent=2))
         log.info("Pre-trusted %s for Claude Code", path)
         return True
     except (OSError, ValueError):
@@ -145,10 +141,7 @@ def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | Non
         entry = f'\n[projects."{path}"]\ntrust_level = "trusted"\n'
         updated = raw.rstrip("\n") + "\n" + entry if raw else entry.lstrip("\n")
         tomllib.loads(updated)  # never leave codex an unparseable config
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _tmp_sibling(config_file)
-        tmp.write_text(updated)
-        tmp.replace(config_file)
+        atomic_write_text(config_file, updated)
         log.info("Pre-trusted %s for Codex", path)
         return True
     except (OSError, ValueError, tomllib.TOMLDecodeError):
@@ -411,7 +404,16 @@ async def start_agent(
         return StartResult(ok=False, evidence=(str(exc),))
 
     environment = launch_environment(spec.name, effective_runtime, config.state_dir, spec.env)
+    # `starting` goes down *before* the launch so a fast hook can never be
+    # overwritten by it. The first hook write replaces the marker; for
+    # runtimes without hooks ``wait_until_ready`` clears it when the prompt
+    # shows, and ``get_agent_state`` stops trusting it after a short window.
     launched_at = time.time()
+    write_state_file(
+        config.state_dir,
+        spec.name,
+        {"state": AgentState.STARTING.value, "ts": launched_at, "started_at": launched_at},
+    )
     ok = await start_session(
         spec.name,
         working_dir=str(spec.path),
@@ -420,18 +422,10 @@ async def start_agent(
         scrub=session_secret_keys(config.data_dir),
     )
     if not ok:
+        _clear_starting(config.state_dir, spec.name, launched_at)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
     extra = f", model: {effective_model}" if effective_model else ""
     log.info("Agent '%s' started (runtime: %s%s)", spec.name, effective_runtime, extra)
-    # The session exists but the runtime is not at its prompt: `starting`.
-    # The first hook write replaces it; for runtimes without hooks
-    # ``wait_until_ready`` clears it when the prompt shows, and
-    # ``get_agent_state`` stops trusting it after a short window regardless.
-    write_state_file(
-        config.state_dir,
-        spec.name,
-        {"state": AgentState.STARTING.value, "ts": launched_at, "started_at": launched_at},
-    )
 
     ready, evidence = "not_waited", []
     if wait:
@@ -460,14 +454,22 @@ async def start_agent(
     return StartResult(ok=True, ready=ready, evidence=tuple(evidence))
 
 
-def _clear_starting(state_dir: Path, name: str) -> None:
+def _clear_starting(state_dir: Path, name: str, launched_at: float | None) -> None:
     """Drop the ``starting`` marker once the terminal itself shows the runtime is up.
 
     Runtimes without hooks never overwrite it, and a lingering ``starting``
-    would keep deliveries away from an agent that is at its prompt.
+    would keep deliveries away from an agent that is at its prompt. Only the
+    marker this launch wrote (its ``ts`` is ``launched_at``) is removed: a
+    hook write has its own timestamp and is left alone.
     """
+    if launched_at is None:
+        return
     snapshot = read_state_file(state_dir, name)
-    if snapshot is not None and snapshot.state == AgentState.STARTING:
+    if (
+        snapshot is not None
+        and snapshot.state == AgentState.STARTING
+        and snapshot.timestamp == launched_at
+    ):
         (state_dir / f"{name}.json").unlink(missing_ok=True)
 
 
@@ -487,7 +489,7 @@ async def wait_until_ready(
     or ``timeout``. Readiness is a hook-written ``idle`` state newer than
     ``since`` (the launch; default: now), or — for runtimes without hooks — a
     visible empty prompt in the terminal, which also clears the ``starting``
-    marker ``start_agent`` wrote.
+    marker ``start_agent`` wrote at ``since``.
     """
     started = time.monotonic()
     wall_started = since if since is not None else time.time()
@@ -496,7 +498,7 @@ async def wait_until_ready(
     last_pane = ""
     while True:
         if not await session_exists(name):
-            _clear_starting(state_path, name)
+            _clear_starting(state_path, name, since)
             return "exited", ["tmux session ended before the agent reached its prompt"]
 
         # Only trust hook state written by *this* start — a leftover idle file
@@ -513,11 +515,11 @@ async def wait_until_ready(
         if pane:
             last_pane = pane
             if adapter.detect_waiting_for_human(pane):
-                _clear_starting(state_path, name)
+                _clear_starting(state_path, name, since)
                 tail = [ln for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-6:]
                 return "waiting_for_human", ["terminal shows a question for the human:", *tail]
             if adapter.detect_idle(pane):
-                _clear_starting(state_path, name)
+                _clear_starting(state_path, name, since)
                 return "ready", ["terminal shows an empty prompt"]
 
         if time.monotonic() - started >= timeout:

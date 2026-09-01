@@ -194,7 +194,7 @@ def write_state(state_dir: Path, agent: str, record: dict) -> None:
         plan_path.write_text(plan_text)
         record["plan_file"] = str(plan_path)
     target = state_dir / f"{agent}.json"
-    tmp = target.with_suffix(".json.tmp")
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")  # never shared with another writer
     tmp.write_text(json.dumps(record))
     os.replace(tmp, target)
 
