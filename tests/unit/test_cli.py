@@ -301,3 +301,14 @@ class TestHooks:
         assert settings.is_file()
         assert (_isolated_data_dir / "hooks" / "claude_hook.py").is_file()
         assert _run(["hooks", "uninstall", "claude", "--dir", str(project)]) == 0
+
+
+class TestAgentApproveParser:
+    def test_parses_name_and_sender(self, monkeypatch):
+        from agent_backbone.cli import build_parser
+
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        ns = build_parser().parse_args(["agent", "approve", "scout"])
+        assert ns.agent_command == "approve" and ns.name == "scout" and ns.sender == "orch"
+        ns = build_parser().parse_args(["agent", "approve", "scout", "--from", "elias"])
+        assert ns.sender == "elias"

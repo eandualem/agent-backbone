@@ -13,6 +13,7 @@ from agent_backbone.services.terminal._core import (
     _send_submit_key,
     _write_message_buffer,
     capture_pane,
+    send_keys,
 )
 from agent_backbone.services.terminal._sessions import query_environment_var
 
@@ -193,6 +194,10 @@ class TerminalAdapter:
     """Fragments shown only while the runtime is working (e.g. a spinner line)."""
     prompt_markers: tuple[str, ...] = ()
     """Fragments shown when the runtime is asking the human a yes/no question."""
+    approve_keys: tuple[str, ...] = ()
+    """tmux key names that accept the runtime's permission prompt as shown
+    (verified against a live capture of that dialog). Empty: the backbone
+    does not know how to answer this runtime and refuses to guess."""
     auto_submit: bool = False
     submit_attempts: int = 1
     interrupt_queued_delivery: bool = False
@@ -276,6 +281,19 @@ class TerminalAdapter:
                 remainder = sanitized[len(prefix) :].lstrip()
                 break
         return not remainder.startswith(_BACKBONE_ENVELOPE_PREFIX)
+
+    async def approve_prompt(self, session_name: str) -> bool:
+        """Send the affirmative answer to the permission prompt on screen.
+
+        Callers verify with ``detect_waiting_for_human`` first: these keys
+        are only meaningful while the dialog is visible.
+        """
+        if not self.approve_keys:
+            return False
+        for key in self.approve_keys:
+            if not await send_keys(session_name, key):
+                return False
+        return True
 
     async def exit_copy_mode(self, session_name: str) -> bool:
         """Immediately attempt to leave copy mode."""
@@ -426,6 +444,8 @@ class ClaudeCodeAdapter(TerminalAdapter):
         "yes, and don't ask again",
         "would you like to proceed",
     )
+    # "❯ 1. Yes" is preselected in the permission dialog (live capture, 2.1.x).
+    approve_keys = ("Enter",)
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -456,6 +476,9 @@ class GeminiAdapter(TerminalAdapter):
         "failed to sign in",
         "waiting for auth",
     )
+    # "● 1. Yes, allow once" is preselected (from Gemini CLI's dialog; not
+    # re-verified live — see the README's Gemini note).
+    approve_keys = ("Enter",)
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -485,10 +508,14 @@ class CodexAdapter(TerminalAdapter):
     prompt_markers = (
         "approve this command",
         "allow command",
+        "would you like to run the following command",
         "yes, and don't ask again",
         "do you trust the contents of this directory",
         "press enter to continue",
+        "press enter to confirm",
     )
+    # "› 1. Yes, proceed (y)" is preselected; "Press enter to confirm" (0.152).
+    approve_keys = ("Enter",)
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     interrupt_queued_delivery = True
     paste_settle_seconds = 0.2
@@ -513,6 +540,10 @@ class OpenCodeAdapter(TerminalAdapter):
     placeholder_fragments = ("ask anything...", "ctrl+p commands")
     status_fragments = ("tab agents", "ctrl+p commands")
     busy_markers = ("esc interrupt",)
+    # "△ Permission required … Allow once  Allow always  Reject … enter confirm"
+    # with "Allow once" preselected (live capture, 1.18).
+    prompt_markers = ("permission required", "allow once", "allow always")
+    approve_keys = ("Enter",)
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -523,6 +554,7 @@ class AiderAdapter(TerminalAdapter):
     runtime_markers = ("aider", "aider v", "model:", "/help")
     status_fragments = ("tokens:", "cost:")
     prompt_markers = ("(y)es/(n)o", "[y/n]", "(y/n)")
+    approve_keys = ("y", "Enter")  # aider's (Y)es/(N)o line prompt; not verified live
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 

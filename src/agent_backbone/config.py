@@ -77,6 +77,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "priority.dependents_multiplier": 1.5,
     "priority.age_tiebreaker_weight": 0.01,
     "security.allow_remote_plan_control": False,
+    "security.allow_remote_approval": True,
     "security.allow_unauthenticated": False,
 }
 
@@ -113,6 +114,9 @@ SETTINGS_HELP: dict[str, str] = {
     "telegram.topic_routes": "JSON object thread_id -> agent name",
     "escalation.target": "Agent that receives stall/offline/plan escalations",
     "security.allow_remote_plan_control": "Allow approving plans via API/Telegram (sends keys)",
+    "security.allow_remote_approval": (
+        "Allow `agent approve` to answer a visible permission prompt via the API"
+    ),
     "security.allow_unauthenticated": "Serve the API without an API key (dev only)",
 }
 
@@ -392,6 +396,7 @@ class EscalationConfig:
 @dataclass(frozen=True)
 class SecurityConfig:
     allow_remote_plan_control: bool = False
+    allow_remote_approval: bool = True
     allow_unauthenticated: bool = False
 
 
@@ -610,6 +615,7 @@ def build_config(
         ),
         security=SecurityConfig(
             allow_remote_plan_control=bool(s["security.allow_remote_plan_control"]),
+            allow_remote_approval=bool(s["security.allow_remote_approval"]),
             allow_unauthenticated=(
                 env.get("BACKBONE_ALLOW_UNAUTHENTICATED", "").lower() in ("1", "true")
                 or bool(s["security.allow_unauthenticated"])

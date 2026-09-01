@@ -108,6 +108,7 @@ Score = type weight + blocking bonus + dependents bonus + age tie-breaker.
 | Key | Default | Meaning |
 |---|---|---|
 | `security.allow_remote_plan_control` | `false` | Enable approve/reject/respond on plans via API and Telegram (injects keystrokes) |
+| `security.allow_remote_approval` | `true` | Let `agent approve` / `POST /agents/{name}/approve` answer a permission prompt. On by default because the action is bounded — a fixed affirmative key, sent only while the runtime's dialog is on screen, to a registered agent, recorded as an event — and because swarm coordinators need it to unblock members. Set `false` to keep every approval on a keyboard |
 | `security.allow_unauthenticated` | `false` | Serve the API without an API key. Dev boxes only |
 
 ## Agents

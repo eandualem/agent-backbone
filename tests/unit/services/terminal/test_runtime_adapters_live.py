@@ -132,3 +132,71 @@ class TestGeminiAdapter:
         assert self.adapter.detect_waiting_for_human(GEMINI_AUTH_SCREEN)
         assert not self.adapter.detect_idle(GEMINI_AUTH_SCREEN)
         assert detect_runtime_from_pane(GEMINI_AUTH_SCREEN) == TerminalRuntime.GEMINI
+
+
+# Permission dialogs captured live on 2026-09-01: Claude Code 2.1.252
+# (--permission-mode default), codex-cli 0.152.0 (--sandbox read-only),
+# opencode 1.18.25 (permission.bash = "ask").
+CLAUDE_PERMISSION_DIALOG = (
+    " Bash command\n"
+    "   echo hi > hello.txt && cat hello.txt\n"
+    '   Create hello.txt containing "hi"\n'
+    " Do you want to proceed?\n"
+    " ❯ 1. Yes\n"
+    "   2. Yes, and always allow access to /tmp/perm/claude from this project\n"
+    "   3. Yes, and switch to auto mode · auto mode handles these prompts for you\n"
+    "   4. No\n"
+    " Esc to cancel · Tab to amend · ctrl+e to explain\n"
+)
+
+CODEX_PERMISSION_DIALOG = (
+    "• Running printf 'hi\\n' > hello.txt\n"
+    "  Would you like to run the following command?\n"
+    "  Environment: local\n"
+    "  Reason: Allow me to create hello.txt in the workspace using the requested shell command?\n"
+    "  $ printf 'hi\\n' > hello.txt\n"
+    "› 1. Yes, proceed (y)\n"
+    "  2. Yes, and don't ask again for commands that start with `printf 'hi\\n' > hello.txt` (p)\n"
+    "  3. No, and tell Codex what to do differently (esc)\n"
+    "  Press enter to confirm or esc to cancel\n"
+)
+
+OPENCODE_PERMISSION_DIALOG = (
+    '     $ echo "hi" > hello.txt\n'
+    "     ▣  Build · Big Pickle\n"
+    "  ┃\n"
+    "  ┃  △ Permission required\n"
+    "  ┃    # Shell command\n"
+    "  ┃\n"
+    '  ┃  $ echo "hi" > hello.txt\n'
+    "  ┃\n"
+    "  ┃   Allow once   Allow always   Reject          ctrl+f fullscreen  ⇆ select  enter confirm\n"
+    "  ┃\n"
+)
+
+
+class TestPermissionDialogs:
+    def test_claude_permission_dialog_is_waiting(self):
+        adapter = get_terminal_adapter("claude")
+        assert adapter.detect_waiting_for_human(CLAUDE_PERMISSION_DIALOG)
+        assert not adapter.detect_idle(CLAUDE_PERMISSION_DIALOG)
+        assert adapter.approve_keys == ("Enter",)
+
+    def test_codex_permission_dialog_is_waiting(self):
+        adapter = get_terminal_adapter("codex")
+        assert adapter.detect_waiting_for_human(CODEX_PERMISSION_DIALOG)
+        assert not adapter.detect_idle(CODEX_PERMISSION_DIALOG)
+        assert adapter.approve_keys == ("Enter",)
+
+    def test_opencode_permission_dialog_is_waiting(self):
+        # Before this fixture the OpenCode adapter had no prompt markers at
+        # all — a blocked member looked idle and deliveries were pasted into
+        # the dialog.
+        adapter = get_terminal_adapter("opencode")
+        assert adapter.detect_waiting_for_human(OPENCODE_PERMISSION_DIALOG)
+        assert not adapter.detect_idle(OPENCODE_PERMISSION_DIALOG)
+        assert not adapter.detect_waiting_for_human(OPENCODE_IDLE_AFTER_RESPONSE)
+        assert adapter.approve_keys == ("Enter",)
+
+    def test_shell_has_no_answer(self):
+        assert get_terminal_adapter("shell").approve_keys == ()
