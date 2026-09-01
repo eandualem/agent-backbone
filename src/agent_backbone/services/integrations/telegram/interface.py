@@ -32,11 +32,11 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.services.integrations.base import Integration
 from agent_backbone.services.integrations.telegram import _commands, _routing
 from agent_backbone.services.integrations.telegram._topic_discovery import (
-    CATCH_ALL_TOPIC,
-    TopicDiscovery,
+    agent_topic,
     effective_group_chat_id,
     effective_routes,
     load_discovery,
+    process_message_for_discovery,
 )
 
 if TYPE_CHECKING:
@@ -61,17 +61,6 @@ async def _send(token: str, chat_id: int, text: str, *, thread_id: int | None = 
     except httpx.HTTPError as e:
         log.warning("Telegram sendMessage error: %s", e)
         return False
-
-
-def agent_topic(config: BackboneConfig, discovery: TopicDiscovery, agent: str) -> int | None:
-    """The forum thread mapped to ``agent`` (explicit config wins over discovery), or None."""
-    if agent == CATCH_ALL_TOPIC:
-        return None
-    for routes in (config.telegram.topic_routes, discovery.topic_routes):
-        for thread_id, session in routes.items():
-            if session == agent:
-                return thread_id
-    return None
 
 
 async def notify_static(config: BackboneConfig, text: str, *, agent: str | None = None) -> bool:
@@ -114,6 +103,7 @@ class TelegramService(Integration):
         super().__init__(config, db=db)
         self._app: Application | None = None
         self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
+        self._background: set[asyncio.Task] = set()
 
     @property
     def _config(self) -> BackboneConfig:
@@ -136,6 +126,27 @@ class TelegramService(Integration):
 
     async def notify(self, text: str, *, agent: str | None = None) -> bool:
         return await notify_static(self.config, text, agent=agent)
+
+    async def sync_agents(self) -> None:
+        """One forum topic per registered agent (see ``_topics``)."""
+        from agent_backbone.services.integrations.telegram._topics import sync_topics
+
+        await sync_topics(self)
+
+    def _discover(self, update: Update) -> None:
+        """Learn the group id / topic names from any message; sync topics on news.
+
+        Every handler runs this first, so the first message in a fresh forum
+        group is enough for the bot to know where to create topics.
+        """
+        knew_group = self._effective_group_chat_id() is not None
+        changed = process_message_for_discovery(
+            update, self.config, self._discovery, self.config.telegram_topic_discovery_path
+        )
+        if changed and not knew_group and self._effective_group_chat_id() is not None:
+            task = asyncio.get_running_loop().create_task(self.sync_agents())
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
 
     def _effective_routes(self) -> dict[int, str]:
         """Merged routes: discovery + config (config wins)."""
@@ -165,9 +176,11 @@ class TelegramService(Integration):
     # -- Command handler thin wrappers (delegate to _commands module) --
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        self._discover(update)
         await _commands.cmd_help(self, update, context)
 
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        self._discover(update)
         await _commands.cmd_status(self, update, context)
 
     async def cmd_queue(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -186,6 +199,7 @@ class TelegramService(Integration):
         await _commands.cmd_digest(self, update, context)
 
     async def cmd_identify(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        self._discover(update)
         await _commands.cmd_identify(self, update, context)
 
     async def cmd_viewplan(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -197,7 +211,14 @@ class TelegramService(Integration):
     async def handle_topic_message(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
+        self._discover(update)
         await _routing.handle_topic_message(self, update, context)
+
+    async def handle_general_message(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        self._discover(update)
+        await _routing.handle_general_message(self, update, context)
 
     # -- Lifecycle --
 
@@ -217,6 +238,7 @@ class TelegramService(Integration):
         await app.updater.start_polling()
         self._running = True
         log.info("Telegram bot polling started")
+        await self.sync_agents()
 
     async def stop(self) -> None:
         if self._app is None or not self._running:
@@ -250,6 +272,17 @@ class TelegramService(Integration):
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND & filters.IS_TOPIC_MESSAGE,
                 self.handle_topic_message,
+            )
+        )
+        # Plain text in the group's General topic (no thread): learn the
+        # group, point at the per-agent topics — never guess an agent.
+        self._app.add_handler(
+            MessageHandler(
+                filters.TEXT
+                & ~filters.COMMAND
+                & ~filters.IS_TOPIC_MESSAGE
+                & filters.ChatType.GROUPS,
+                self.handle_general_message,
             )
         )
         return self._app

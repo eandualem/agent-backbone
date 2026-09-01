@@ -64,6 +64,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "telegram.allowed_chat_ids": [],
     "telegram.notification_chat_id": None,
     "telegram.group_chat_id": None,
+    "telegram.auto_topics": True,
     "telegram.topic_routes": {},
     "escalation.target": "",
     "priority.blocking_weight": 1000.0,
@@ -110,8 +111,9 @@ SETTINGS_HELP: dict[str, str] = {
     "timing.delivery_retention_days": "Delivery history retention",
     "telegram.allowed_chat_ids": "Chat ids allowed to control the backbone (JSON list) — required",
     "telegram.notification_chat_id": "Where alerts are sent",
-    "telegram.group_chat_id": "Forum group for topic routing",
-    "telegram.topic_routes": "JSON object thread_id -> agent name",
+    "telegram.group_chat_id": "Forum group where each agent gets a topic (learned if unset)",
+    "telegram.auto_topics": "Create/close a forum topic per registered agent automatically",
+    "telegram.topic_routes": "JSON object thread_id -> agent name (explicit, on top of automatic)",
     "escalation.target": "Agent that receives stall/offline/plan escalations",
     "security.allow_remote_plan_control": "Allow approving plans via API/Telegram (sends keys)",
     "security.allow_remote_approval": (
@@ -374,6 +376,7 @@ class TelegramConfig:
     topic_routes: dict[int, str] = field(default_factory=dict)
     group_chat_id: int | None = None
     notification_chat_id: int | None = None
+    auto_topics: bool = True
 
 
 @dataclass(frozen=True)
@@ -601,6 +604,7 @@ def build_config(
             topic_routes={int(k): str(v) for k, v in s["telegram.topic_routes"].items()},
             group_chat_id=_opt_int(s["telegram.group_chat_id"]),
             notification_chat_id=_opt_int(s["telegram.notification_chat_id"]),
+            auto_topics=bool(s["telegram.auto_topics"]),
         ),
         priority_scoring=PriorityScoringConfig(
             blocking_weight=float(s["priority.blocking_weight"]),

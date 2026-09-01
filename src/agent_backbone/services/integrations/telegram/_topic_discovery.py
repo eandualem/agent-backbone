@@ -30,6 +30,8 @@ class TopicDiscovery:
     group_chat_id: int | None = None
     topic_routes: dict[int, str] = field(default_factory=dict)
     topic_names: dict[int, str] = field(default_factory=dict)
+    closed_topics: set[int] = field(default_factory=set)
+    """Topics the bot closed because their agent was forgotten (route kept for reopening)."""
     updated_at: float = 0.0
 
 
@@ -50,6 +52,7 @@ def load_discovery(path: Path) -> TopicDiscovery:
             group_chat_id=raw.get("group_chat_id"),
             topic_routes={int(k): v for k, v in routes.items()},
             topic_names={int(k): v for k, v in names.items()},
+            closed_topics={int(k) for k in raw.get("closed_topics", [])},
             updated_at=raw.get("updated_at", 0.0),
         )
     except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
@@ -64,6 +67,7 @@ def save_discovery(discovery: TopicDiscovery, path: Path) -> None:
         "group_chat_id": discovery.group_chat_id,
         "topic_routes": {str(k): v for k, v in discovery.topic_routes.items()},
         "topic_names": {str(k): v for k, v in discovery.topic_names.items()},
+        "closed_topics": sorted(discovery.closed_topics),
         "updated_at": discovery.updated_at,
     }
     tmp = path.with_suffix(".tmp")
@@ -100,6 +104,17 @@ def effective_routes(config: BackboneConfig, discovery: TopicDiscovery) -> dict[
 def effective_group_chat_id(config: BackboneConfig, discovery: TopicDiscovery) -> int | None:
     """Return group_chat_id with config taking precedence over discovery."""
     return config.telegram.group_chat_id or discovery.group_chat_id
+
+
+def agent_topic(config: BackboneConfig, discovery: TopicDiscovery, agent: str) -> int | None:
+    """The forum thread mapped to ``agent`` (explicit config wins over discovery), or None."""
+    if agent == CATCH_ALL_TOPIC:
+        return None
+    for routes in (config.telegram.topic_routes, discovery.topic_routes):
+        for thread_id, session in routes.items():
+            if session == agent:
+                return thread_id
+    return None
 
 
 def process_message_for_discovery(

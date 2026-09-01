@@ -83,8 +83,9 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 |---|---|---|
 | `telegram.allowed_chat_ids` | `[]` | **Required to enable the bot.** Chat ids (users or groups) allowed to issue commands |
 | `telegram.notification_chat_id` | — | Where plan-waiting, dead-session and copy-mode alerts go |
-| `telegram.group_chat_id` | — | Forum group used for topic routing (auto-discovered if omitted) |
-| `telegram.topic_routes` | `{}` | `{"thread_id": "agent"}` mappings; `"agents"` is the catch-all topic |
+| `telegram.group_chat_id` | — | Forum group where each agent gets a topic (learned from the first message in the group if omitted) |
+| `telegram.auto_topics` | `true` | Create a forum topic per registered agent in that group, close it when the agent is forgotten, reopen it if it returns. Needs the bot as an administrator with *Manage Topics*. `false` to manage topics yourself |
+| `telegram.topic_routes` | `{}` | Explicit `{"thread_id": "agent"}` mappings on top of the automatic ones (never closed automatically); `"agents"` is the catch-all topic |
 
 ### `escalation.*`
 

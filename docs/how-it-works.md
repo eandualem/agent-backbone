@@ -241,9 +241,10 @@ from:<who>]` envelope, agents answer with `backbone reply` (→ `POST
 Telegram is the shipped integration. The bot runs inside the backbone
 process and reads the live configuration. Commands map to the same
 operations as the CLI (`/status`, `/tell`, `/start`, `/stop`, `/queue`,
-`/digest`, `/viewplan`, `/approve`). In a forum group each topic is one
-agent's surface: writing there talks to that agent, and the agent's
-`backbone reply` lands there. See [Telegram](telegram.md).
+`/digest`, `/viewplan`, `/approve`). In a forum group the bot creates one
+topic per registered agent (on start, when agents change, every five
+minutes): writing there talks to that agent, and the agent's `backbone
+reply` lands there. See [Telegram](telegram.md).
 
 ## 7. Dashboards and scripts
 
