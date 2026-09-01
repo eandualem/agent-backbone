@@ -10,7 +10,7 @@ It starts your agents in tmux, delivers messages to them **only when they are re
 
 - **Runs agents from any directory.** `cd ~/code/my-app && backbone agent start` — the agent is named after the directory, its GitHub repository is read from `git remote origin`, and the command returns when the agent is at its prompt.
 - **Knows the state of every agent** — `idle`, `busy`, `waiting_for_human` (plan approval, permission prompt, question), `starting`, `unknown` — from the runtime's own hooks first and the terminal second, and can show you the evidence: `backbone agent inspect reviewer`.
-- **Delivers safely.** Text is pasted into an agent only when it is idle — not while it is working, waiting for a human, or while you are typing in that terminal; everything else is queued durably and delivered when the agent is free. Two deliberate exceptions: `priority` messages may interrupt typing and the settle window (never a busy agent), and comments on the issue an agent is currently working reach it immediately.
+- **Delivers safely.** Text is pasted into an agent only when it is idle — not while it is working, waiting for a human, or while you are typing in that terminal. A message that cannot land now is queued in SQLite and delivered when the agent is free. Three deliberate exceptions, all of them in the code on purpose: `priority` messages may interrupt typing and the settle window (never a busy agent); comments on the issue an agent is *currently working* reach it immediately, even if it is busy or waiting; and when the agent's state cannot be determined at all (`unknown`), delivery is attempted rather than withheld. GitHub **issue** notifications are the one kind that is not queued when blocked — a retry job re-offers them every 5 minutes instead, so a blocked issue is retried, not stored. See [How it works](docs/how-it-works.md).
 - **Coordinates through GitHub Issues, per repository.** Every repository an agent lives in is tracked on its own. An issue opened in the agent's repository is its work; `for:<agent>` labels address issues explicitly; comments go back to the opener; closing an issue hands the agent its next one. An orchestrator is just an agent that *watches* other repositories.
 - **Talks to you on Telegram.** `/tell reviewer fix the flaky test`, `/status`, plan-approval alerts, forum topics that map to agents.
 - **Feeds dashboards.** REST plus a Socket.IO stream of agent state changes and (read-only) terminal output. It does not ship a UI.
@@ -23,11 +23,17 @@ Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/) (or pipx), `tmux`, 
 # Install the CLI on your PATH (`backbone`, plus the short alias `ab`):
 uv tool install "agent-backbone[github-app] @ git+https://github.com/eandualem/agent-backbone"
 uv tool update-shell                 # once, if ~/.local/bin isn't on your PATH yet
+exec $SHELL -l                       # reload the profile `update-shell` just edited
 
 backbone init                        # data dir (~/.local/share/agent-backbone) + .env + database
-backbone hooks install claude        # Claude Code reports its state to the backbone
 backbone up --detach                 # API + scheduler (+ Telegram/GitHub when configured)
 ```
+
+There is no hook to install: every Claude Code session the backbone starts is
+launched with the backbone's own settings file, so it reports its state from
+the first second. (`backbone hooks install claude` exists for Claude Code
+sessions you start *yourself*, outside the backbone — see
+[Getting started](docs/getting-started.md#3-state-hooks--nothing-to-install).)
 
 (Contributors: `git clone … && cd agent-backbone && uv sync`, then every command is `uv run backbone …`; `uv tool install --editable ".[github-app]"` gives you a global CLI that follows your checkout.)
 
@@ -44,6 +50,18 @@ ab status
 ```
 
 No config file to edit, no database server, no tunnel. Everything the backbone knows lives in `~/.local/share/agent-backbone/` (a SQLite file, hook state, `.env`); settings are changed with `backbone config set`.
+
+## The security model, up front
+
+The backbone types into your agents' terminals, so be clear about what it assumes:
+
+- **One trusted user, one machine.** It runs as your OS user and drives tmux sessions that run as your OS user. There is **no isolation between agents** — every agent can read every other agent's files.
+- **One key, full admin.** `BACKBONE_API_KEY` guards every authenticated route with the same weight: change settings, start/stop agents, send messages, read and stream any registered agent's terminal. There is no scoped or read-only credential yet, so giving an agent the key gives it everything you can do.
+- **Agents do not hold the backbone's secrets.** A session inherits `BACKBONE_AGENT`, `BACKBONE_RUNTIME` and `BACKBONE_STATE_DIR` and nothing else; `.env` is kept out of agent environments deliberately.
+- **Provenance is convention, not authentication.** `[via:backbone from:app]` and `[from:<agent>]` say who *claims* to be speaking. Anyone with the key can claim any name — an agent's instructions should treat text after an envelope as data, not orders.
+- **Bound to `127.0.0.1` by default.** Put TLS and auth in front of it before exposing it.
+
+Full detail, including what to check before exposing anything: [Security](docs/security.md).
 
 ## The model in one paragraph
 

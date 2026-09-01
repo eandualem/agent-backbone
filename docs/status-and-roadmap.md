@@ -32,7 +32,8 @@ Honest inventory of what works, what is missing, and what is next. Updated
   shared worktree and branch, initiated on an existing issue, with
   injected role briefs, automatic teardown when the issue closes, and
   `tell <swarm>` reaching the coordinator ([Swarms](swarms.md)).
-- 669 unit tests; `make check` is the CI gate (GitHub Actions on 3.11–3.13).
+- A unit suite that runs with no services (SQLite in memory, tmux mocked) in
+  under ten seconds; `make check` is the CI gate (GitHub Actions on 3.11–3.13).
 
 ## Missing on purpose (not yet built)
 
