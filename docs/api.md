@@ -92,7 +92,8 @@ Watch / stop watching a repository; forget a stopped agent (409 if running).
 ### `GET /api/runtimes`, `GET /api/sessions`, `GET /api/sessions/{name}/terminal?lines=50`
 
 Supported runtimes with availability; raw tmux session names; a one-shot
-capture of a session's screen.
+capture of a **registered agent's** screen (404 for any other tmux session —
+the API never reads or types into sessions that are not backbone agents).
 
 ## Messages
 
@@ -103,7 +104,9 @@ capture of a session's screen.
  "message": "Auth tests pass; please rebase.", "priority": false}
 ```
 
-Response: `{"ok": true, "session": "web", "outcome": "delivered"}`.
+Response: `{"ok": true, "session": "web", "outcome": "delivered"}`. The
+target must be a registered agent or an active swarm (404 otherwise — the
+backbone never types into a tmux session that is not one of its agents).
 Outcomes: `delivered`, `agent_working`, `waiting_for_human`, `offline`,
 `human_typing`, `settling`, `delivery_failed`. Every non-`delivered` outcome
 means the message was **queued** and will be delivered when the agent is
@@ -150,8 +153,10 @@ newest first, each with `source`, `event_type`, `issue_number`, `sender`,
 ## Plans
 
 `GET /api/plans` (agents waiting for plan approval), `GET /api/plans/{name}`
-(with the plan text), and — only when `security.allow_remote_plan_control`
-is on — `POST /api/plans/{name}/approve`, `/reject {"feedback"}`,
+(with the plan text — read only from `<state_dir>/plans/`, never from an
+arbitrary path the state record names), and — only when
+`security.allow_remote_plan_control` is on and `{name}` is a registered
+agent — `POST /api/plans/{name}/approve`, `/reject {"feedback"}`,
 `/respond {"input"}`.
 
 ## Status
@@ -188,7 +193,7 @@ emits nothing (the monitor job re-checks once a minute).
 
 | Client → server | Payload |
 |---|---|
-| `join` | `{session, cols?, rows?}` — start streaming that session |
+| `join` | `{session, cols?, rows?}` — start streaming that registered agent (`error` for any other session) |
 | `leave` | `{session}` |
 | `resize` | `{session, cols, rows}` |
 | `release_dims` | `{session}` — stop influencing tmux's window size |

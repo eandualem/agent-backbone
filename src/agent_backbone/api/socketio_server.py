@@ -4,7 +4,7 @@ Namespaces:
 
 * ``/sessions`` — receives ``sessions:update`` snapshots whenever agent state
   changes (emitted by the API and the monitor job).
-* ``/terminal`` — read-only stream of a tmux session's output. Each subscriber
+* ``/terminal`` — read-only stream of a registered agent's terminal. Each subscriber
   gets its own PTY running ``tmux attach-session`` so rendering is faithful,
   but input is never forwarded: the backbone streams terminals, it does not
   let remote clients type into them.
@@ -189,6 +189,14 @@ class TerminalNamespace(_AuthenticatedNamespace):
             await self.emit("error", {"message": "Missing session name"}, to=sid)
             return
 
+        # Only registered agents are streamed — never an arbitrary tmux
+        # session of the same user (same rule as GET /sessions/{name}/terminal).
+        config = self._config()
+        if config is None or config.agents.get(session_name) is None:
+            await self.emit(
+                "error", {"message": f"'{session_name}' is not a registered agent"}, to=sid
+            )
+            return
         if not await session_exists(session_name):
             await self.emit("error", {"message": f"Session '{session_name}' not found"}, to=sid)
             return
