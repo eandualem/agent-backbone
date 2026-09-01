@@ -1,9 +1,14 @@
-"""Telegram bot service.
+"""Telegram — the first integration (see ``services/integrations/base.py``).
 
-Runs inside the backbone process as a LifecycleAware component: ``start()``
+Runs inside the backbone process as a lifecycle component: ``start()``
 launches long-polling in the background when ``TELEGRAM_TOKEN`` is set,
 ``stop()`` shuts it down. Commands live in ``_commands.py``, topic routing in
 ``_routing.py``, topic discovery in ``_topic_discovery.py``.
+
+An agent's surface on Telegram is a forum topic mapped to it
+(``telegram.topic_routes`` or auto-discovered); ``reply_to_agent`` and
+``notify(agent=…)`` post there, alerts without a topic go to
+``telegram.notification_chat_id``.
 """
 
 from __future__ import annotations
@@ -24,8 +29,11 @@ from telegram.ext import (
 )
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.telegram import _commands, _routing
-from agent_backbone.services.telegram._topic_discovery import (
+from agent_backbone.services.integrations.base import Integration
+from agent_backbone.services.integrations.telegram import _commands, _routing
+from agent_backbone.services.integrations.telegram._topic_discovery import (
+    CATCH_ALL_TOPIC,
+    TopicDiscovery,
     effective_group_chat_id,
     effective_routes,
     load_discovery,
@@ -37,37 +45,97 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+async def _send(token: str, chat_id: int, text: str, *, thread_id: int | None = None) -> bool:
+    """One sendMessage through the HTTP API (no bot instance needed)."""
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload: dict = {"chat_id": chat_id, "text": text}
+    if thread_id is not None:
+        payload["message_thread_id"] = thread_id
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, timeout=10)
+            if resp.status_code == 200:
+                return True
+            log.warning("Telegram sendMessage failed: %s %s", resp.status_code, resp.text)
+            return False
+    except httpx.HTTPError as e:
+        log.warning("Telegram sendMessage error: %s", e)
+        return False
+
+
+def agent_topic(config: BackboneConfig, discovery: TopicDiscovery, agent: str) -> int | None:
+    """The forum thread mapped to ``agent`` (explicit config wins over discovery), or None."""
+    if agent == CATCH_ALL_TOPIC:
+        return None
+    for routes in (config.telegram.topic_routes, discovery.topic_routes):
+        for thread_id, session in routes.items():
+            if session == agent:
+                return thread_id
+    return None
+
+
+async def notify_static(config: BackboneConfig, text: str, *, agent: str | None = None) -> bool:
+    """Config-driven alert for callers without the bot instance (scheduler jobs).
+
+    Goes into the agent's topic when it has one and the group is known,
+    otherwise to ``telegram.notification_chat_id``. False when Telegram is
+    not configured for either.
+    """
+    token = config.telegram_token
+    if not token:
+        return False
+    discovery = load_discovery(config.telegram_topic_discovery_path)
+    if agent:
+        group = effective_group_chat_id(config, discovery)
+        thread_id = agent_topic(config, discovery, agent)
+        if group and thread_id is not None:
+            return await _send(token, group, text, thread_id=thread_id)
+    chat_id = config.telegram.notification_chat_id
+    if not chat_id:
+        return False
+    return await _send(token, chat_id, text)
+
+
 async def send_notification(token: str, chat_id: int, text: str) -> bool:
     """Send a proactive push notification via Telegram API."""
-    return await TelegramService.send_notification(token, chat_id, text)
+    return await _send(token, chat_id, text)
 
 
-class TelegramService:
+class TelegramService(Integration):
     """Telegram bot for agent backbone management."""
+
+    name = "telegram"
 
     def __init__(
         self,
         config: BackboneConfig | Callable[[], BackboneConfig],
         db: BackboneDB | None = None,
     ) -> None:
-        self._config_provider = config if callable(config) else (lambda: config)
-        self._db = db
+        super().__init__(config, db=db)
         self._app: Application | None = None
-        self._discovery = load_discovery(self._config.telegram_topic_discovery_path)
-        self._running = False
+        self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
 
     @property
     def _config(self) -> BackboneConfig:
-        """Always the latest published configuration snapshot."""
-        return self._config_provider()
+        """Alias kept for the command/routing modules."""
+        return self.config
 
     @property
     def enabled(self) -> bool:
-        return bool(self._config.telegram_token)
+        return bool(self.config.telegram_token)
 
-    @property
-    def running(self) -> bool:
-        return self._running
+    # -- Integration contract --
+
+    async def reply_to_agent(self, agent: str, text: str) -> bool:
+        """Post an agent's answer into its topic; False when it has none."""
+        group = self._effective_group_chat_id()
+        thread_id = agent_topic(self.config, self._discovery, agent)
+        if not group or thread_id is None:
+            return False
+        return await _send(self.config.telegram_token, group, text, thread_id=thread_id)
+
+    async def notify(self, text: str, *, agent: str | None = None) -> bool:
+        return await notify_static(self.config, text, agent=agent)
 
     def _effective_routes(self) -> dict[int, str]:
         """Merged routes: discovery + config (config wins)."""
@@ -92,18 +160,7 @@ class TelegramService:
     @staticmethod
     async def send_notification(token: str, chat_id: int, text: str) -> bool:
         """Send a proactive push notification via the Telegram HTTP API."""
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {"chat_id": chat_id, "text": text}
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(url, json=payload, timeout=10)
-                if resp.status_code == 200:
-                    return True
-                log.warning("Telegram sendMessage failed: %s %s", resp.status_code, resp.text)
-                return False
-        except httpx.HTTPError as e:
-            log.warning("Telegram sendMessage error: %s", e)
-            return False
+        return await _send(token, chat_id, text)
 
     # -- Command handler thin wrappers (delegate to _commands module) --
 
@@ -171,14 +228,6 @@ class TelegramService:
         finally:
             self._running = False
             self._app = None
-
-    async def health_check(self) -> dict:
-        return {
-            "healthy": self._running or not self.enabled,
-            "service": "telegram",
-            "enabled": self.enabled,
-            "running": self._running,
-        }
 
     def build_app(self) -> Application:
         """Build the Telegram bot application with all command handlers."""

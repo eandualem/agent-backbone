@@ -4,7 +4,8 @@ agent-backbone is a **control plane for terminal AI agents** on one machine.
 You run Claude Code, Codex, Gemini CLI, OpenCode or Aider in tmux sessions;
 the backbone starts those sessions, knows whether each one is ready to
 receive input, delivers text to them safely, and connects them to GitHub
-Issues, Telegram, and each other.
+Issues, to people through **integrations** (Telegram today), and to each
+other.
 
 It is *not* an agent framework (it does not call models), not a workflow
 engine (there are no DAGs), and not a dashboard (it feeds one).

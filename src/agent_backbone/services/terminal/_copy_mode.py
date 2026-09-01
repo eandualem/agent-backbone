@@ -23,14 +23,15 @@ _ALERT_DEDUP_SECONDS = 1800
 _alerted_at: dict[str, float] = {}
 
 
-class TelegramService:
-    """Lazy proxy to avoid importing telegram service during module import."""
+async def _notify_humans(config: BackboneConfig, text: str, *, agent: str | None = None) -> bool:
+    """Alert the humans on every configured integration.
 
-    @staticmethod
-    async def send_notification(*args, **kwargs):
-        from agent_backbone.services.telegram.interface import TelegramService as _TelegramService
+    Lazy import on purpose: ``terminal`` is a leaf package and must not
+    import ``integrations`` at module load (see tests/unit/test_imports.py).
+    """
+    from agent_backbone.services.integrations import notify_humans
 
-        return await _TelegramService.send_notification(*args, **kwargs)
+    return await notify_humans(config, text, agent=agent)
 
 
 async def in_copy_mode(session_name: str) -> bool:
@@ -70,10 +71,9 @@ async def handle_copy_mode_recovery(config: BackboneConfig, active_sessions: set
             continue
         _alerted_at[session_name] = time.monotonic()
         log.warning("Copy mode persists in %s after cancel attempt", session_name)
-        if config.telegram.notification_chat_id and config.telegram_token:
-            await TelegramService.send_notification(
-                config.telegram_token,
-                config.telegram.notification_chat_id,
-                f"Copy mode persists in {session_name}; the backbone could not clear it. "
-                "Press q in that tmux pane.",
-            )
+        await _notify_humans(
+            config,
+            f"Copy mode persists in {session_name}; the backbone could not clear it. "
+            "Press q in that tmux pane.",
+            agent=session_name,
+        )

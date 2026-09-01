@@ -1,8 +1,8 @@
 """FastAPI application factory.
 
 One process hosts everything: the REST API, the Socket.IO feed, the periodic
-scheduler (monitor, delivery retry, GitHub intake), the Telegram bot and the
-GitHub client. Configuration comes from the database: the lifespan opens the
+scheduler (monitor, delivery retry, GitHub intake), the integrations (the
+Telegram bot) and the GitHub client. Configuration comes from the database: the lifespan opens the
 data directory, starts the database, loads settings and agents, and only then
 wires the remaining services against that snapshot.
 """
@@ -90,8 +90,8 @@ async def lifespan(app: FastAPI):
     from agent_backbone.services.agents._reconciliation import reconcile_startup_states
     from agent_backbone.services.database import BackboneDB, DatabaseService
     from agent_backbone.services.github import GitHubClient
+    from agent_backbone.services.integrations import build_integrations
     from agent_backbone.services.routing import DeliveryService, DispatchService
-    from agent_backbone.services.telegram import TelegramService
     from agent_backbone.services.terminal import TmuxService
 
     boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
@@ -112,6 +112,11 @@ async def lifespan(app: FastAPI):
 
     def _publish(new_config: BackboneConfig) -> None:
         app.state.config = new_config
+        # The set of agents may have changed: integrations re-provision their
+        # per-agent surfaces (Telegram topics) against the new snapshot.
+        integrations = getattr(app.state, "integrations", None)
+        if integrations is not None:
+            integrations.schedule_sync()
 
     app.state.agent_store = AgentStore(app.state.db, data_dir, on_change=_publish)
     lifecycle.register("agents", app.state.agent_store)
@@ -141,8 +146,9 @@ async def lifespan(app: FastAPI):
     lifecycle.register("delivery", app.state.delivery_service)
     app.state.dispatch_service = DispatchService()
     lifecycle.register("dispatch", app.state.dispatch_service)
-    app.state.telegram_service = TelegramService(lambda: app.state.config, db=app.state.db)
-    lifecycle.register("telegram", app.state.telegram_service)
+    app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
+    for integration in app.state.integrations:
+        lifecycle.register(integration.name, integration)
     app.state.scheduler = _register_jobs(app)
     lifecycle.register("scheduler", app.state.scheduler)
 
@@ -164,14 +170,14 @@ async def lifespan(app: FastAPI):
         await lifecycle.start_all()
         await reconcile_startup_states(config=config, db=app.state.db)
         log.info(
-            "agent-backbone %s on http://%s:%d — data %s, %d agent(s), github=%s, telegram=%s",
+            "agent-backbone %s on http://%s:%d — data %s, %d agent(s), github=%s, integrations=%s",
             API_VERSION,
             config.backbone.host,
             config.backbone.port,
             data_dir,
             len(config.agents),
             config.github_intake,
-            "on" if app.state.telegram_service.enabled else "off",
+            ", ".join(i.name for i in app.state.integrations.enabled) or "none",
         )
         yield
     finally:
@@ -239,12 +245,12 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     from agent_backbone.api.routes.deliveries import router as deliveries_router
     from agent_backbone.api.routes.events import router as events_router
     from agent_backbone.api.routes.help import router as help_router
+    from agent_backbone.api.routes.integrations import router as integrations_router
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.plans import router as plans_router
     from agent_backbone.api.routes.status import router as status_router
     from agent_backbone.api.routes.swarms import router as swarms_router
-    from agent_backbone.api.routes.telegram import router as telegram_router
     from agent_backbone.api.routes.webhook import router as webhook_router
 
     app.include_router(webhook_router)
@@ -256,11 +262,11 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
         deliveries_router,
         events_router,
         help_router,
+        integrations_router,
         issues_router,
         messages_router,
         plans_router,
         swarms_router,
-        telegram_router,
     ):
         app.include_router(router, dependencies=[Depends(require_api_key)])
 

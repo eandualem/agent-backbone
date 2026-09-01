@@ -237,7 +237,9 @@ async def api_app(config):
     app.state.tmux_service = TmuxService()
     app.state.delivery_service = DeliveryService()
     app.state.dispatch_service = DispatchService()
-    app.state.telegram_service = None
+    from agent_backbone.services.integrations import build_integrations
+
+    app.state.integrations = build_integrations(lambda: app.state.config, db=db)
     app.state.scheduler = None
 
     yield app

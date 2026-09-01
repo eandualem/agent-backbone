@@ -9,12 +9,12 @@ import pytest
 
 from agent_backbone.config import SecurityConfig, TelegramConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.telegram import TelegramService
-from agent_backbone.services.telegram._routing import _delivery_reply
-from agent_backbone.services.telegram._topic_discovery import CATCH_ALL_TOPIC
+from agent_backbone.services.integrations.telegram import TelegramService
+from agent_backbone.services.integrations.telegram._routing import _delivery_reply
+from agent_backbone.services.integrations.telegram._topic_discovery import CATCH_ALL_TOPIC
 
-_CMD = "agent_backbone.services.telegram._commands"
-_ROUTING = "agent_backbone.services.telegram._routing"
+_CMD = "agent_backbone.services.integrations.telegram._commands"
+_ROUTING = "agent_backbone.services.integrations.telegram._routing"
 
 ALLOWED_CHAT = 111
 
@@ -243,7 +243,8 @@ class TestSendNotification:
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
         with patch(
-            "agent_backbone.services.telegram.interface.httpx.AsyncClient", return_value=client
+            "agent_backbone.services.integrations.telegram.interface.httpx.AsyncClient",
+            return_value=client,
         ):
             assert await TelegramService.send_notification("tok", 1, "hi") is True
 
@@ -253,6 +254,7 @@ class TestSendNotification:
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
         with patch(
-            "agent_backbone.services.telegram.interface.httpx.AsyncClient", return_value=client
+            "agent_backbone.services.integrations.telegram.interface.httpx.AsyncClient",
+            return_value=client,
         ):
             assert await TelegramService.send_notification("tok", 1, "hi") is False

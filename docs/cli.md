@@ -162,6 +162,15 @@ after `timing.queue_expiry_minutes` (default 30). Exit code 0 if
 delivered, 2 if queued, 1 on API errors. Multi-line messages are pasted
 with bracketed paste and arrive intact as a single message.
 
+## `backbone reply TEXT… [--agent NAME]`
+
+The other direction: an agent answers the humans on the channel they use.
+`POST /api/integrations/reply` posts the text into the agent's surface on
+every enabled integration — on Telegram, the forum topic mapped to that
+agent. Inside an agent session `--agent` defaults to `$BACKBONE_AGENT`.
+Exit 1 with the reason when no integration is configured or none has a
+surface for the agent yet. See [Integrations](integrations.md).
+
 ## `backbone hooks install|uninstall claude [--dir PROJECT]`
 
 Sessions started by `agent start` need no install: the backbone passes

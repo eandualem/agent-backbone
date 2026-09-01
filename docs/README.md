@@ -15,6 +15,7 @@ reference.
 | [HTTP & Socket.IO API](api.md) | Build a dashboard or script against the backbone |
 | [GitHub integration](github.md) | Repositories, labels, routing rules, intake modes, what an agent is expected to do |
 | [GitHub App setup](github-app-setup.md) | The step-by-step production setup: App + webhook via Cloudflare Tunnel or ngrok, with checkpoints |
+| [Integrations](integrations.md) | The contract every human-facing channel implements, and how to add one |
 | [Telegram](telegram.md) | Bot setup, allowlist, forum topics, commands |
 | [Security](security.md) | What is protected by default and what you opt into |
 | [Status and roadmap](status-and-roadmap.md) | What works today, what is deliberately missing, what is next |

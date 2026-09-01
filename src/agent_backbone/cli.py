@@ -10,6 +10,7 @@ backbone agent start [--dir D]       discover + start an agent (waits for its pr
 backbone agent list|stop|inspect|set|watch|unwatch|forget
 backbone swarm create|list|status|disband   coordinator+members on one issue
 backbone tell <agent> <msg>          deliver a message to an agent (or a swarm)
+backbone reply <text>                answer the humans on their channel (Telegram topic, …)
 backbone hooks install claude        install the state-reporting hooks
 
 Commands talk to the running backbone API when it is up and fall back to the
@@ -867,6 +868,31 @@ def cmd_tell(args: argparse.Namespace) -> int:
     return asyncio.run(_tell(args))
 
 
+async def _reply(args: argparse.Namespace) -> int:
+    boot = await _client_config()
+    agent = args.agent or os.environ.get("BACKBONE_AGENT", "").strip()
+    if not agent:
+        print("no agent: pass --agent NAME (inside an agent session $BACKBONE_AGENT is used)")
+        return 1
+    payload = {"session": agent, "text": " ".join(args.text)}
+    result = await _api(boot, "POST", "/api/integrations/reply", json_body=payload, timeout=30.0)
+    if result is None:
+        print("backbone API unreachable; is `backbone up` running?")
+        return 1
+    status, data = result
+    if status != 200:
+        detail = data.get("detail") if isinstance(data, dict) else data
+        print(f"not posted: {detail}")
+        return 1
+    posted = ", ".join(name for name, ok in data.get("posted", {}).items() if ok)
+    print(f"posted to {posted} as {agent}")
+    return 0
+
+
+def cmd_reply(args: argparse.Namespace) -> int:
+    return asyncio.run(_reply(args))
+
+
 def cmd_hooks(args: argparse.Namespace) -> int:
     from agent_backbone.hooks import install as hooks
 
@@ -1163,6 +1189,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--priority", action="store_true", help="deliver even while someone is typing")
     p.set_defaults(func=cmd_tell)
+
+    p = sub.add_parser(
+        "reply", help="answer the humans on their channel (e.g. the agent's Telegram topic)"
+    )
+    p.add_argument("text", nargs="+")
+    p.add_argument(
+        "--agent",
+        default=None,
+        help="which agent is answering (default: $BACKBONE_AGENT inside an agent session)",
+    )
+    p.set_defaults(func=cmd_reply)
 
     return parser
 

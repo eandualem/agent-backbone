@@ -51,17 +51,24 @@ Then writing `rebase onto main` in the *app* topic is the same as
 `/tell app rebase onto main`. A topic mapped to `"agents"` is a catch-all:
 `web: run the tests` routes to `web`.
 
-Agents can answer into their topic:
+Agents answer into their topic with `backbone reply "Done — PR #12 is
+green."` (inside the agent session; the agent name comes from
+`$BACKBONE_AGENT`), which is `POST /api/integrations/reply`:
 
 ```bash
-curl -s -X POST http://127.0.0.1:7120/api/telegram/reply \
+curl -s -X POST http://127.0.0.1:7120/api/integrations/reply \
   -H "Authorization: Bearer $BACKBONE_API_KEY" -H "Content-Type: application/json" \
   -d '{"session": "app", "text": "Done — PR #12 is green."}'
 ```
 
+Alerts about an agent (plan waiting, session died, copy mode stuck) are
+posted into its topic too when it has one; otherwise they go to
+`telegram.notification_chat_id`.
+
 ## Notifications you receive
 
-Sent to `telegram.notification_chat_id`:
+Posted into the agent's topic when it has one, otherwise to
+`telegram.notification_chat_id`:
 
 - **Plan waiting** — `📋 Plan waiting — app / Title: … / /viewplan app / /approve app`, once per plan.
 - **Agent went offline unexpectedly** — a session died; it was not restarted.

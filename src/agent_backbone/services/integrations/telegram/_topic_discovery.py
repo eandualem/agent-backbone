@@ -41,13 +41,19 @@ def load_discovery(path: Path) -> TopicDiscovery:
     """
     try:
         raw = json.loads(path.read_text())
+        if not isinstance(raw, dict):
+            raise TypeError("discovery root is not an object")
+        routes, names = raw.get("topic_routes", {}), raw.get("topic_names", {})
+        if not isinstance(routes, dict) or not isinstance(names, dict):
+            raise TypeError("topic_routes/topic_names are not objects")
         return TopicDiscovery(
             group_chat_id=raw.get("group_chat_id"),
-            topic_routes={int(k): v for k, v in raw.get("topic_routes", {}).items()},
-            topic_names={int(k): v for k, v in raw.get("topic_names", {}).items()},
+            topic_routes={int(k): v for k, v in routes.items()},
+            topic_names={int(k): v for k, v in names.items()},
             updated_at=raw.get("updated_at", 0.0),
         )
     except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
+        # A damaged file must never keep the bot (and the backbone) from starting.
         return TopicDiscovery()
 
 

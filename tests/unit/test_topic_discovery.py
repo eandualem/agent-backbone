@@ -6,7 +6,7 @@ import json
 from unittest.mock import MagicMock
 
 from agent_backbone.config import BackboneConfig, TelegramConfig
-from agent_backbone.services.telegram._topic_discovery import (
+from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     TopicDiscovery,
     effective_group_chat_id,
@@ -179,3 +179,12 @@ class TestProcessMessageForDiscovery:
         update = _make_update(chat_id=-100, thread_id=42)
         assert not process_message_for_discovery(update, _make_config(), d, tmp_path / "t.json")
         assert 42 not in d.topic_routes
+
+
+class TestLoadDiscoveryShapes:
+    def test_non_object_shapes_load_as_empty(self, tmp_path):
+        # A damaged file must never keep the bot from starting.
+        path = tmp_path / "t.json"
+        for raw in ("[1, 2]", '"str"', '{"topic_routes": [1]}', '{"topic_names": "x"}'):
+            path.write_text(raw)
+            assert load_discovery(path) == TopicDiscovery()
