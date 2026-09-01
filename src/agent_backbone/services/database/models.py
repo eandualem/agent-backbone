@@ -235,32 +235,17 @@ class MessageQueueORM(Base):
                 "AND issue_number IS NOT NULL"
             ),
         ),
+        # One pending copy of any other message per session: a blocked drain
+        # re-offers the same text through safe_deliver, which must not grow
+        # the queue (comments, direct messages, PR/watch/escalation notices).
         Index(
-            "uq_mq_comment_dedup",
-            "session_name",
-            "repo",
-            "issue_number",
-            "content_hash",
-            unique=True,
-            postgresql_where=text(
-                "delivery_kind = 'comment' AND status IN ('pending','in_progress') "
-                "AND issue_number IS NOT NULL"
-            ),
-            sqlite_where=text(
-                "delivery_kind = 'comment' AND status IN ('pending','in_progress') "
-                "AND issue_number IS NOT NULL"
-            ),
-        ),
-        Index(
-            "uq_mq_dm_dedup",
+            "uq_mq_message_dedup",
             "session_name",
             "content_hash",
             unique=True,
             postgresql_where=text(
-                "delivery_kind = 'direct_message' AND status IN ('pending','in_progress')"
+                "delivery_kind != 'issue' AND status IN ('pending','in_progress')"
             ),
-            sqlite_where=text(
-                "delivery_kind = 'direct_message' AND status IN ('pending','in_progress')"
-            ),
+            sqlite_where=text("delivery_kind != 'issue' AND status IN ('pending','in_progress')"),
         ),
     )

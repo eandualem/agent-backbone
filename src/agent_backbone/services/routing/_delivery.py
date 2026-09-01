@@ -163,7 +163,7 @@ async def _enqueue(
     if kind == "issue" and (issue_number is None or target_entity is None):
         return
     try:
-        await db.enqueue_message(
+        row_id = await db.enqueue_message(
             session_name=session_name,
             message=message,
             issue_number=issue_number,
@@ -172,7 +172,10 @@ async def _enqueue(
             flow_name=flow_name,
             repo=repo,
         )
-        log.info("Queued %s for %s (%s) via %s", kind, session_name, repo or "-", flow_name or "?")
+        if row_id != -1:
+            log.info(
+                "Queued %s for %s (%s) via %s", kind, session_name, repo or "-", flow_name or "?"
+            )
     except Exception:
         log.warning("Failed to enqueue message for %s (non-fatal)", session_name)
 

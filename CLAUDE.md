@@ -48,7 +48,10 @@ rm src/agent_backbone/services/database/migrations/versions/*_initial_schema.py
 BACKBONE_DATABASE_URL=sqlite+aiosqlite:////tmp/gen.db uv run alembic revision --autogenerate -m "initial schema"
 ```
 
-Update `tests/unit/services/database/test_alembic.py` expectations.
+Update `tests/unit/services/database/test_alembic.py` expectations. An
+existing database meets the new revision id at its next start and is
+re-stamped; that path also rebuilds every index from the model
+(`_repair_schema`), so index changes reach installed databases.
 
 ## Conventions
 

@@ -37,6 +37,42 @@ _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 """Migrations ship inside the package so installed CLIs migrate from anywhere."""
 
 
+def _repair_schema(sync_conn) -> None:
+    """Bring an existing database's indexes up to the model on a re-stamp.
+
+    Tables are stable pre-1.0, but index *predicates* have changed (the
+    ``kind = 'issue'`` guard on the delivery owner index, the one queue
+    dedup rule for every non-issue kind). A re-stamp is the only moment an
+    existing database meets a regenerated squash, so indexes are rebuilt
+    from the model here. Duplicate pending queue rows — the reason the
+    dedup index exists — are expired first so the unique index can be
+    created.
+    """
+    sync_conn.execute(
+        text(
+            """UPDATE message_queue SET status = 'expired'
+               WHERE delivery_kind != 'issue' AND status IN ('pending','in_progress')
+                 AND id NOT IN (
+                   SELECT MIN(id) FROM message_queue
+                   WHERE delivery_kind != 'issue' AND status IN ('pending','in_progress')
+                   GROUP BY session_name, content_hash
+                 )"""
+        )
+    )
+    from sqlalchemy import inspect
+
+    inspector = inspect(sync_conn)
+    for table in metadata.sorted_tables:
+        wanted = {index.name: index for index in table.indexes}
+        for existing in inspector.get_indexes(table.name):
+            name = existing.get("name")
+            if name and (name in wanted or name.startswith(("uq_", "idx_"))):
+                sync_conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
+        for index in wanted.values():
+            index.create(sync_conn)
+    log.info("Rebuilt indexes from the model (re-stamped database)")
+
+
 class BackboneDB:
     """Async database for backbone persistence.
 
@@ -148,6 +184,7 @@ class BackboneDB:
                     script = ScriptDirectory.from_config(alembic_cfg)
                     known = {rev.revision for rev in script.walk_revisions()}
                     if stored not in known:
+                        _repair_schema(sync_conn)
                         command.stamp(alembic_cfg, "head", purge=True)
                         return
                 if has_alembic or not existing_app_tables:

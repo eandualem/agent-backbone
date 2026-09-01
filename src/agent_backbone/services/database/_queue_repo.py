@@ -143,18 +143,12 @@ async def enqueue_message(
                  AND status IN ('pending','in_progress')
                  AND issue_number IS NOT NULL
                DO NOTHING"""
-    elif delivery_kind == "comment" and issue_number is not None:
-        conflict = """ON CONFLICT (session_name, repo, issue_number, content_hash)
-               WHERE delivery_kind = 'comment'
-                 AND status IN ('pending','in_progress')
-                 AND issue_number IS NOT NULL
-               DO NOTHING"""
-    elif delivery_kind == "direct_message":
-        conflict = """ON CONFLICT (session_name, content_hash)
-               WHERE delivery_kind = 'direct_message' AND status IN ('pending','in_progress')
-               DO NOTHING"""
-    else:
+    elif delivery_kind == "issue":
         conflict = ""
+    else:
+        conflict = """ON CONFLICT (session_name, content_hash)
+               WHERE delivery_kind != 'issue' AND status IN ('pending','in_progress')
+               DO NOTHING"""
 
     sql = f"INSERT INTO message_queue {_INSERT_COLUMNS} {conflict} RETURNING id"
     result = await conn.execute(text(sql), params)

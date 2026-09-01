@@ -378,6 +378,14 @@ class TestMessageQueue:
         assert len(messages) == 2
         assert {message["message"] for message in messages} == {"same comment", "different comment"}
 
+    async def test_enqueue_dedup_covers_every_non_issue_kind(self, db):
+        # A blocked drain re-offers a queued notice through safe_deliver;
+        # the queue must not grow a copy per attempt (seen live with PR notices).
+        for kind in ("pull_request", "watch", "escalation"):
+            first = await db.enqueue_message("ike", f"notice {kind}", delivery_kind=kind)
+            assert first > 0
+            assert await db.enqueue_message("ike", f"notice {kind}", delivery_kind=kind) == -1
+
     async def test_enqueue_dedup_dm_constraint(self, db):
         first = await db.enqueue_message(
             "ike",

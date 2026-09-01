@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 5844fa78a13f
+Revision ID: 387112cb1193
 Revises:
-Create Date: 2026-09-01 11:01:58.457658
+Create Date: 2026-09-01 22:31:06.163929
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "5844fa78a13f"
+revision: str = "387112cb1193"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -158,28 +158,6 @@ def upgrade() -> None:
         batch_op.create_index("idx_mq_session", ["session_name"], unique=False)
         batch_op.create_index("idx_mq_status", ["status"], unique=False)
         batch_op.create_index(
-            "uq_mq_comment_dedup",
-            ["session_name", "repo", "issue_number", "content_hash"],
-            unique=True,
-            postgresql_where=sa.text(
-                "delivery_kind = 'comment' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
-            ),
-            sqlite_where=sa.text(
-                "delivery_kind = 'comment' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
-            ),
-        )
-        batch_op.create_index(
-            "uq_mq_dm_dedup",
-            ["session_name", "content_hash"],
-            unique=True,
-            postgresql_where=sa.text(
-                "delivery_kind = 'direct_message' AND status IN ('pending','in_progress')"
-            ),
-            sqlite_where=sa.text(
-                "delivery_kind = 'direct_message' AND status IN ('pending','in_progress')"
-            ),
-        )
-        batch_op.create_index(
             "uq_mq_issue_dedup",
             ["session_name", "repo", "issue_number"],
             unique=True,
@@ -188,6 +166,17 @@ def upgrade() -> None:
             ),
             sqlite_where=sa.text(
                 "delivery_kind = 'issue' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
+            ),
+        )
+        batch_op.create_index(
+            "uq_mq_message_dedup",
+            ["session_name", "content_hash"],
+            unique=True,
+            postgresql_where=sa.text(
+                "delivery_kind != 'issue' AND status IN ('pending','in_progress')"
+            ),
+            sqlite_where=sa.text(
+                "delivery_kind != 'issue' AND status IN ('pending','in_progress')"
             ),
         )
 
@@ -237,30 +226,21 @@ def downgrade() -> None:
     op.drop_table("settings")
     with op.batch_alter_table("message_queue", schema=None) as batch_op:
         batch_op.drop_index(
+            "uq_mq_message_dedup",
+            postgresql_where=sa.text(
+                "delivery_kind != 'issue' AND status IN ('pending','in_progress')"
+            ),
+            sqlite_where=sa.text(
+                "delivery_kind != 'issue' AND status IN ('pending','in_progress')"
+            ),
+        )
+        batch_op.drop_index(
             "uq_mq_issue_dedup",
             postgresql_where=sa.text(
                 "delivery_kind = 'issue' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
             ),
             sqlite_where=sa.text(
                 "delivery_kind = 'issue' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
-            ),
-        )
-        batch_op.drop_index(
-            "uq_mq_dm_dedup",
-            postgresql_where=sa.text(
-                "delivery_kind = 'direct_message' AND status IN ('pending','in_progress')"
-            ),
-            sqlite_where=sa.text(
-                "delivery_kind = 'direct_message' AND status IN ('pending','in_progress')"
-            ),
-        )
-        batch_op.drop_index(
-            "uq_mq_comment_dedup",
-            postgresql_where=sa.text(
-                "delivery_kind = 'comment' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
-            ),
-            sqlite_where=sa.text(
-                "delivery_kind = 'comment' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
             ),
         )
         batch_op.drop_index("idx_mq_status")
