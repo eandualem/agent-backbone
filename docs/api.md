@@ -91,7 +91,9 @@ terminal, `db`) and `evidence`.
 Push state from outside (same shape the hook writes): `{"state": "busy",
 "reason": null, "issue": 42, "repo": "acme/app", "ts": 1788177600.0,
 "plan_file": "…", "plan_title": "…"}`. Use it for runtimes the backbone does
-not ship hooks for.
+not ship hooks for. It writes `<data_dir>/state/<name>.json` exactly as a
+hook would, so delivery decisions, the monitor and `agent inspect` all see
+it (`ts` defaults to now). Only registered agents have a state file.
 
 ### `PATCH /api/agents/{name}`
 

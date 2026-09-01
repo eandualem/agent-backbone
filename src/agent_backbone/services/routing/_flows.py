@@ -6,6 +6,7 @@ import logging
 from collections.abc import Collection
 
 from agent_backbone.config import BackboneConfig
+from agent_backbone.models import BLOCKED_OUTCOMES, DeliveryOutcome
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_next_issue_notification
@@ -13,7 +14,7 @@ from agent_backbone.services.routing._targets import list_open_queue_for_target,
 
 log = logging.getLogger(__name__)
 
-_BUSY_OUTCOMES = frozenset({"agent_working", "waiting_for_human", "human_typing", "settling"})
+_BUSY_OUTCOMES = BLOCKED_OUTCOMES - {DeliveryOutcome.OFFLINE}
 
 
 async def drain_message_queue(

@@ -36,6 +36,7 @@ _PLAN_ISSUE_42_SNAP = StateSnapshot(
 
 _INTEL = "agent_backbone.services.routing._intelligence"
 _DELIV = "agent_backbone.services.routing._delivery"
+_COPY = "agent_backbone.services.terminal._copy_mode"
 
 
 @pytest.fixture(autouse=True)
@@ -98,9 +99,13 @@ class TestGetSessionIntelligence:
         assert profile.evidence
 
     async def test_copy_mode_is_cleared_not_reported(self, config):
+        # tmux reports copy mode until the cancel lands, then a clean pane.
+        in_mode = [{"pane_in_mode": "1"}, {"pane_in_mode": "0"}]
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
+            patch(f"{_COPY}.query_format_vars", new_callable=AsyncMock, side_effect=in_mode),
+            patch(f"{_COPY}.asyncio.sleep", new_callable=AsyncMock),
             _patch_get_agent_state(_IDLE_SNAP),
             patch(
                 "agent_backbone.services.terminal._adapters.TerminalAdapter.exit_copy_mode",
@@ -112,6 +117,26 @@ class TestGetSessionIntelligence:
         exit_copy.assert_awaited_once_with("ike")
         assert profile.intelligence == SessionIntelligence.READY
         assert any("copy mode" in line for line in profile.evidence)
+
+    async def test_copy_mode_that_will_not_clear_reads_as_human_typing(self, config):
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
+            patch(
+                f"{_COPY}.query_format_vars",
+                new_callable=AsyncMock,
+                return_value={"pane_in_mode": "1"},
+            ),
+            patch(f"{_COPY}.asyncio.sleep", new_callable=AsyncMock),
+            _patch_get_agent_state(_IDLE_SNAP),
+            patch(
+                "agent_backbone.services.terminal._adapters.TerminalAdapter.exit_copy_mode",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.HUMAN_TYPING
 
     async def test_human_typing_when_prompt_has_buffered_input(self, config):
         with _online(), _patch_capture_pane("› Review the routing fallback logic"):

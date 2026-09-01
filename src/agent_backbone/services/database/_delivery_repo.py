@@ -10,16 +10,8 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from agent_backbone.models import RETRYABLE_OUTCOMES
 from agent_backbone.services.database._time import cutoff_iso, now_iso
-
-RETRYABLE_OUTCOMES = (
-    "offline",
-    "delivery_failed",
-    "agent_working",
-    "waiting_for_human",
-    "human_typing",
-    "settling",
-)
 
 
 async def record_delivery(
@@ -176,7 +168,7 @@ async def get_failed_deliveries(
     limit: int = 50,
 ) -> list[dict]:
     """Issue deliveries whose latest outcome is retryable (no later success)."""
-    placeholders = ",".join(f"'{o}'" for o in RETRYABLE_OUTCOMES)
+    placeholders = ",".join(f"'{o.value}'" for o in sorted(RETRYABLE_OUTCOMES))
     result = await conn.execute(
         text(
             f"""SELECT d.* FROM deliveries d

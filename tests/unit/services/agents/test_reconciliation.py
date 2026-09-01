@@ -66,13 +66,7 @@ class TestReconcileStartupStates:
             await reconcile_startup_states(config, mock_db)
 
         mock_db.set_agent_state.assert_called_once_with(
-            session_name="ike",
-            state="idle",
-            current_issue=None,
-            plan_file=None,
-            plan_title=None,
-            reason=None,
-            current_repo=None,
+            session_name="ike", **StateSnapshot(state=AgentState.IDLE).db_fields()
         )
 
     async def test_plan_waiting_state_synced_with_fields(self, config, mock_db):
@@ -92,15 +86,7 @@ class TestReconcileStartupStates:
         ):
             await reconcile_startup_states(config, mock_db)
 
-        mock_db.set_agent_state.assert_called_once_with(
-            session_name="ike",
-            state="waiting_for_human",
-            current_issue=99,
-            plan_file="/tmp/plan.md",
-            plan_title="Add feature X",
-            reason="plan",
-            current_repo=None,
-        )
+        mock_db.set_agent_state.assert_called_once_with(session_name="ike", **plan_snap.db_fields())
 
     async def test_check_plan_waiting_called(self, config, mock_db):
         mock_check = AsyncMock()

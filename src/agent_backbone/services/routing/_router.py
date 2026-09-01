@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.models import EventType, IssueEvent, parse_from_tag
+from agent_backbone.models import DeliveryOutcome, EventType, IssueEvent, parse_from_tag
 from agent_backbone.services.agents._delivery_check import find_outgoing_comment
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
@@ -41,11 +41,11 @@ def _resolve_commenter_entity(event: IssueEvent, config: BackboneConfig) -> str 
 
 
 def _record(result: DispatchResult, session: str, outcome: str) -> None:
-    if outcome == "delivered":
+    if outcome == DeliveryOutcome.DELIVERED:
         result.delivered.append(session)
-    elif outcome == "already_delivered":
+    elif outcome == DeliveryOutcome.ALREADY_DELIVERED:
         result.skipped.append(session)
-    elif outcome in ("offline", "delivery_failed"):
+    elif outcome in (DeliveryOutcome.OFFLINE, DeliveryOutcome.DELIVERY_FAILED):
         result.offline.append(session)
     else:
         result.deferred.append(session)

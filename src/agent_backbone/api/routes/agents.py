@@ -39,24 +39,17 @@ from agent_backbone.api.session_updates import (
     get_cached_session_snapshot,
     invalidate_session_snapshot_caches,
 )
-from agent_backbone.config import AgentSpec, BackboneConfig, session_secret_keys
+from agent_backbone.config import AgentSpec, BackboneConfig
 from agent_backbone.services.agent_store import AgentStore
-from agent_backbone.services.agents import StateService, read_state_file
+from agent_backbone.services.agents import StateService, read_state_file, write_state_file
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.infrastructure._agents import (
-    BRIEF_INJECTION_RUNTIMES,
+from agent_backbone.services.infrastructure import (
     RUNTIME_COMMANDS,
     RUNTIME_DISPLAY_NAMES,
-    agent_brief_file,
-    agent_brief_text,
     approve_agent,
-    build_command,
-    launch_environment,
-    pre_trust_runtime,
     runtime_available,
-    wait_until_ready,
+    start_agent,
 )
-from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.terminal import (
     SESSION_FORMAT_STR,
@@ -211,94 +204,31 @@ async def _start(
     if not spec.path.is_dir():
         raise HTTPException(status_code=400, detail=f"Directory does not exist: {spec.path}")
 
-    if await tmux_svc.session_exists(spec.name):
-        return AgentStartResponse(
-            ok=True,
-            session=spec.name,
-            name=spec.name,
-            working_directory=str(spec.path),
-            runtime=runtime,
-            model=model,
-            repo=spec.repo,
-            already_existed=True,
-            ready="not_waited",
-        )
-
-    if config.agents_section.pre_trust:
-        pre_trust_runtime(runtime, spec.path)
-    system_prompt_file = None
-    if config.agents_section.inject_brief:
-        system_prompt_file = agent_brief_file(
-            spec.name, spec.repo, config.data_dir, runtime=runtime
-        )
-    command = build_command(
-        runtime,
+    result = await start_agent(
+        spec,
+        config,
+        runtime=runtime,
         model=model,
         resume=req.resume,
-        data_dir=config.data_dir,
-        state_dir=config.state_dir,
-        system_prompt_file=system_prompt_file,
-        pre_trust=config.agents_section.pre_trust,
+        db=request.app.state.db,
+        wait=req.wait,
     )
-    environment = launch_environment(spec.name, runtime, config.state_dir, spec.env)
-    ok = await tmux_svc.start_session(
-        spec.name,
-        working_dir=str(spec.path),
-        command=command,
-        environment=environment,
-        scrub=session_secret_keys(config.data_dir),
-    )
-    if not ok:
-        return AgentStartResponse(
-            ok=False,
-            session=spec.name,
-            name=spec.name,
-            runtime=runtime,
-            model=model,
-            repo=spec.repo,
-        )
-    await store.touch_started(spec.name)
-
-    ready = "not_waited"
-    evidence: list[str] = []
-    if req.wait:
-        ready, evidence = await wait_until_ready(
-            spec.name,
-            state_dir=config.state_dir,
-            runtime=runtime,
-            timeout=config.monitor.start_timeout_seconds,
-        )
-    if (
-        config.agents_section.inject_brief
-        and runtime not in BRIEF_INJECTION_RUNTIMES
-        and runtime != "shell"  # nobody to brief
-        and not req.resume
-        and ready != "exited"
-    ):
-        # No launch-time injection for this runtime: the brief is the first
-        # delivered message instead (queued until the agent is at its prompt).
-        brief = agent_brief_text(spec.name, spec.repo, config.data_dir)
-        if brief:
-            await safe_deliver(
-                spec.name,
-                f"[via:backbone] {brief}",
-                config,
-                db=request.app.state.db,
-                flow_name="agent-brief",
-                delivery_kind="direct_message",
-            )
-    await _broadcast(request, config, tmux_svc)
-    return AgentStartResponse(
-        ok=ready != "exited",
+    response = AgentStartResponse(
+        ok=result.ok and result.ready != "exited",
         session=spec.name,
         name=spec.name,
         working_directory=str(spec.path),
         runtime=runtime,
-        model=model if command is not None else None,
+        model=model,
         repo=spec.repo,
-        ready=ready,
-        evidence=evidence,
+        already_existed=result.already_running,
+        ready=result.ready,
+        evidence=list(result.evidence),
     )
+    if result.ok and not result.already_running:
+        await store.touch_started(spec.name)
+        await _broadcast(request, config, tmux_svc)
+    return response
 
 
 @router.post("/agents/start", response_model=AgentStartResponse)
@@ -330,7 +260,7 @@ async def start_agent_discover(
 
 
 @router.post("/agents/{session}/start", response_model=AgentStartResponse)
-async def start_agent(
+async def start_known_agent(
     request: Request,
     session: str,
     body: AgentStartRequest | None = None,
@@ -499,18 +429,23 @@ async def post_agent_state(
     session: str,
     body: StateUpdateRequest,
     config: BackboneConfig = Depends(get_config),
-    db: BackboneDB = Depends(get_db),
 ):
-    """Update agent state (for hooks that prefer HTTP over the state file)."""
-    await db.set_agent_state(
-        session,
-        body.state,
-        current_issue=body.issue,
-        ts=str(body.ts) if body.ts else None,
-        plan_file=body.plan_file,
-        plan_title=body.plan_title,
-        reason=body.reason,
-        current_repo=body.repo,
-    )
+    """Push an agent's state from outside — for runtimes the backbone ships no hook for.
+
+    Writes the same state file the hooks write, so routing, the monitor and
+    ``agent inspect`` all see it (the database mirror follows on the next
+    read). Only registered agents have a state file.
+    """
+    registered_agent_or_404(config, session)
+    record = {
+        "state": body.state,
+        "reason": body.reason,
+        "issue": body.issue,
+        "repo": body.repo,
+        "ts": body.ts or time.time(),
+        "plan_file": body.plan_file,
+        "plan_title": body.plan_title,
+    }
+    write_state_file(config.state_dir, session, record)
     await _broadcast(request, config, getattr(request.app.state, "tmux_service", None))
     return {"ok": True, "session": session}

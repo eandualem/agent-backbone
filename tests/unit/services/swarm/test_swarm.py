@@ -9,6 +9,7 @@ import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.services.database import BackboneDB, build_engine
+from agent_backbone.services.infrastructure import StartResult
 from agent_backbone.services.swarm import (
     SwarmError,
     create_swarm,
@@ -22,6 +23,8 @@ from agent_backbone.services.swarm._roster import MemberSpec, member_names
 from tests.conftest import make_config
 
 _IFACE = "agent_backbone.services.swarm.interface"
+_STARTED = StartResult(ok=True, ready="ready")
+_FAILED = StartResult(ok=False)
 
 
 class TestRoster:
@@ -184,14 +187,13 @@ def _swarm_config(tmp_path):
 
 class TestCreateSwarm:
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
-    @patch(f"{_IFACE}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", []))
-    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
     @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
     async def test_create_full_flow(
-        self, _git, _branch, mock_wt, _exists, mock_start, _ready, mock_deliver, db, tmp_path
+        self, _git, _branch, mock_wt, _exists, mock_start, mock_deliver, db, tmp_path
     ):
         config, repo_dir = _swarm_config(tmp_path)
         worktree = repo_dir / ".backbone" / "swarms" / "research"
@@ -220,10 +222,10 @@ class TestCreateSwarm:
         # Members registered in the shared worktree with swarm tags.
         assert all(s.dir == str(worktree) for s in store.registered)
         assert "swarm:research" in store.registered[0].tags
-        # Claude members get their brief as a system prompt file.
+        # Every member is started with its role brief.
         launch = mock_start.await_args_list[0].kwargs
-        assert launch["system_prompt_file"] is not None
-        brief = Path(launch["system_prompt_file"]).read_text()
+        assert launch["brief_file"] is not None
+        brief = Path(launch["brief_file"]).read_text()
         assert "research-coordinator" in brief and "acme/app" in brief
         # Kickoff went to the coordinator.
         assert mock_deliver.await_args.args[0] == "research-coordinator"
@@ -251,8 +253,7 @@ class TestCreateSwarm:
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
-    @patch(f"{_IFACE}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", []))
-    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, side_effect=[True, False])
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, side_effect=[_STARTED, _FAILED])
     @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
@@ -266,7 +267,6 @@ class TestCreateSwarm:
         _exists,
         mock_stop,
         _start,
-        _ready,
         _deliver,
         mock_rm,
         db,
@@ -296,16 +296,16 @@ class TestCreateSwarm:
         assert (await db.get_swarm("research"))["status"] == "disbanded"
 
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
-    @patch(f"{_IFACE}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", []))
-    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
     @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
-    async def test_shell_members_get_no_brief_pasted(
-        self, _git, _branch, mock_wt, _exists, _start, _ready, mock_deliver, db, tmp_path
+    async def test_each_member_gets_its_own_role_brief(
+        self, _git, _branch, mock_wt, _exists, mock_start, mock_deliver, db, tmp_path
     ):
-        # aider gets the brief as its first message; a shell would run it as commands.
+        # start_agent decides launch injection vs first message per runtime;
+        # the swarm only hands every member its role brief.
         config, repo_dir = _swarm_config(tmp_path)
         mock_wt.return_value = (repo_dir / ".backbone" / "swarms" / "research", "swarm/research")
         gh = AsyncMock()
@@ -322,12 +322,19 @@ class TestCreateSwarm:
             initiator="simon",
         )
 
-        calls = mock_deliver.await_args_list
-        briefed = [c.args[0] for c in calls if c.kwargs["flow_name"] == "swarm-brief"]
-        assert briefed == ["research-scout"]
+        briefs = {
+            c.args[0].name: Path(c.kwargs["brief_file"]).name for c in mock_start.await_args_list
+        }
+        assert briefs == {
+            "research-coordinator": "research-coordinator.md",
+            "research-scout": "research-scout.md",
+            "research-probe": "research-probe.md",
+        }
+        # Only the kickoff goes through delivery here.
+        assert [c.kwargs["flow_name"] for c in mock_deliver.await_args_list] == ["swarm-kickoff"]
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
-    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
     @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")

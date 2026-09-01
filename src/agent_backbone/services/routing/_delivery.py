@@ -20,6 +20,7 @@ import logging
 from collections.abc import Collection
 from typing import TYPE_CHECKING
 
+from agent_backbone.models import BLOCKED_OUTCOMES, SUCCESS_OUTCOMES, DeliveryOutcome
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence
 from agent_backbone.services.terminal import send_message
@@ -30,16 +31,14 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_SUCCESS_OUTCOMES = ("delivered", "retried")
-
 # Conditions that block delivery, in priority order, with the outcome they produce
 # and whether ``priority`` may bypass them.
-_BLOCKING: dict[SessionIntelligence, tuple[str, bool]] = {
-    SessionIntelligence.OFFLINE: ("offline", False),
-    SessionIntelligence.WAITING_FOR_HUMAN: ("waiting_for_human", False),
-    SessionIntelligence.AGENT_WORKING: ("agent_working", False),
-    SessionIntelligence.HUMAN_TYPING: ("human_typing", True),
-    SessionIntelligence.SETTLING: ("settling", True),
+_BLOCKING: dict[SessionIntelligence, tuple[DeliveryOutcome, bool]] = {
+    SessionIntelligence.OFFLINE: (DeliveryOutcome.OFFLINE, False),
+    SessionIntelligence.WAITING_FOR_HUMAN: (DeliveryOutcome.WAITING_FOR_HUMAN, False),
+    SessionIntelligence.AGENT_WORKING: (DeliveryOutcome.AGENT_WORKING, False),
+    SessionIntelligence.HUMAN_TYPING: (DeliveryOutcome.HUMAN_TYPING, True),
+    SessionIntelligence.SETTLING: (DeliveryOutcome.SETTLING, True),
 }
 
 
@@ -50,12 +49,12 @@ def outcome_queues(outcome: str, kind: str) -> bool:
     queued durably on every blocking condition and on paste failure; issue
     deliveries rely on the retry job except when the agent is offline.
     """
-    if outcome == "delivery_failed":
+    if outcome == DeliveryOutcome.DELIVERY_FAILED:
         return True
-    if outcome not in {o for o, _ in _BLOCKING.values()}:
+    if outcome not in BLOCKED_OUTCOMES:
         return False
     if kind == "issue":
-        return outcome == "offline"
+        return outcome == DeliveryOutcome.OFFLINE
     return True
 
 
@@ -83,7 +82,7 @@ async def _has_successful_issue_delivery(
     rows = await db.query_deliveries(
         issue_number=issue_number, session_name=session_name, limit=25, repo=repo, kind="issue"
     )
-    return any((row.get("outcome") or "") in _SUCCESS_OUTCOMES for row in rows)
+    return any((row.get("outcome") or "") in SUCCESS_OUTCOMES for row in rows)
 
 
 async def _get_unacknowledged_gate_issue(
@@ -106,7 +105,7 @@ async def _get_unacknowledged_gate_issue(
             continue
         if issue_number == current_issue and row_repo.casefold() == repo.casefold():
             continue
-        if (row.get("outcome") or "") not in _SUCCESS_OUTCOMES:
+        if (row.get("outcome") or "") not in SUCCESS_OUTCOMES:
             continue
         if await _is_acknowledged_for_session(
             db, row_repo, issue_number, target_entity, session_name
@@ -211,7 +210,7 @@ async def safe_deliver(
             log.info(
                 "Suppressed duplicate issue delivery %s#%s -> %s", repo, issue_number, session_name
             )
-            return "already_delivered"
+            return DeliveryOutcome.ALREADY_DELIVERED.value
         if enforce_issue_queue:
             blocking = await _get_unacknowledged_gate_issue(
                 db, session_name, repo, issue_number, queue_scope
@@ -224,7 +223,7 @@ async def safe_deliver(
                     session_name,
                     *blocking,
                 )
-                return "awaiting_ack"
+                return DeliveryOutcome.AWAITING_ACK.value
 
     # 2. Claim
     claim_id: int | None = None
@@ -238,7 +237,7 @@ async def safe_deliver(
             preview=preview,
         )
         if claim is None:
-            return "already_delivered"
+            return DeliveryOutcome.ALREADY_DELIVERED.value
         claim_id = claim
 
     async def finish(outcome: str, *, queue: bool) -> str:
@@ -286,9 +285,9 @@ async def safe_deliver(
             queue = kind != "issue" or intel == SessionIntelligence.OFFLINE
             if intel == SessionIntelligence.SETTLING and kind == "issue":
                 queue = False
-            return await finish(outcome, queue=queue)
+            return await finish(outcome.value, queue=queue)
 
     # 4. Paste + submit
     if await send_message(session_name, message, runtime_hint=profile.runtime):
-        return await finish("delivered", queue=False)
-    return await finish("delivery_failed", queue=True)
+        return await finish(DeliveryOutcome.DELIVERED.value, queue=False)
+    return await finish(DeliveryOutcome.DELIVERY_FAILED.value, queue=True)

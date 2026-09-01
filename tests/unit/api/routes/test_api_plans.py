@@ -12,6 +12,8 @@ from agent_backbone.api.deps import get_state_service, get_tmux_service
 from agent_backbone.config import SecurityConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
 
+_PLANS = "agent_backbone.api.routes.plans"
+
 
 def _plan_snapshot(plan_file: str | None = None) -> StateSnapshot:
     return StateSnapshot(
@@ -107,10 +109,11 @@ class TestGetPlan:
 
 
 class TestPlanControl:
-    async def test_approve_disabled_by_default(self, api_client, auth_headers, tmux_svc):
-        resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
+    async def test_approve_disabled_by_default(self, api_client, auth_headers):
+        with patch(f"{_PLANS}.approve_plan", new_callable=AsyncMock) as approve:
+            resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
         assert resp.status_code == 403
-        tmux_svc.send_keys.assert_not_awaited()
+        approve.assert_not_awaited()
 
     async def test_plan_control_only_targets_registered_agents(
         self, api_client, auth_headers, api_app, tmux_svc
@@ -126,13 +129,12 @@ class TestPlanControl:
         assert resp.status_code == 404
         tmux_svc.send_keys.assert_not_awaited()
 
-    async def test_approve_sends_shift_tab_when_enabled(
-        self, api_client, auth_headers, api_app, tmux_svc
-    ):
+    async def test_approve_sends_shift_tab_when_enabled(self, api_client, auth_headers, api_app):
         _enable_plan_control(api_app)
-        resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
+        with patch(f"{_PLANS}.approve_plan", new_callable=AsyncMock, return_value=True) as approve:
+            resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
         assert resp.json()["action"] == "plan_approved"
-        assert [c.args[1] for c in tmux_svc.send_keys.await_args_list] == ["Escape", "[Z"]
+        approve.assert_awaited_once_with("ike")
 
     async def test_reject_delivers_feedback(self, api_client, auth_headers, api_app, state_svc):
         _enable_plan_control(api_app)

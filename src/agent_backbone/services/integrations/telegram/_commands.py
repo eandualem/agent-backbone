@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from telegram import Update
@@ -12,14 +11,14 @@ from telegram.ext import ContextTypes
 if TYPE_CHECKING:
     from agent_backbone.services.integrations.telegram.interface import TelegramService
 
-from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.infrastructure._agents import start_agent, stop_agent
+from agent_backbone.services.agents import read_plan, read_state_file
+from agent_backbone.services.infrastructure import approve_plan, start_agent, stop_agent
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     process_message_for_discovery,
 )
 from agent_backbone.services.routing import safe_deliver
-from agent_backbone.services.terminal import list_sessions, send_keys, session_exists
+from agent_backbone.services.terminal import list_sessions, session_exists
 
 log = logging.getLogger(__name__)
 
@@ -124,15 +123,8 @@ async def cmd_start_agent(
         await update.message.reply_text(f"Unknown agent `{name}`", parse_mode="Markdown")
         return
 
-    agents_section = bot.config.agents_section
-    ok = await start_agent(
-        spec,
-        state_dir=bot.config.state_dir,
-        data_dir=bot.config.data_dir,
-        pre_trust=agents_section.pre_trust,
-        inject_brief=agents_section.inject_brief,
-    )
-    status = "Started" if ok else "Failed to start"
+    result = await start_agent(spec, bot.config, db=bot._db, wait=False)
+    status = "Started" if result.ok else "Failed to start"
     await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
 
 
@@ -271,14 +263,11 @@ async def cmd_viewplan(
         )
         return
 
-    if not snapshot.plan_file:
-        await update.message.reply_text(f"Agent `{agent}` has no plan file path in state.")
-        return
-
-    try:
-        plan_content = Path(snapshot.plan_file).expanduser().read_text()
-    except OSError as e:
-        await update.message.reply_text(f"Cannot read plan file: {e}")
+    plan_content = read_plan(bot.config.state_dir, snapshot)
+    if plan_content is None:
+        await update.message.reply_text(
+            f"Agent `{agent}` has no readable plan file (plans live under the state directory)."
+        )
         return
 
     header = f"Plan: {snapshot.plan_title or 'Untitled'}\nAgent: {agent}\n\n"
@@ -323,10 +312,7 @@ async def cmd_approve(
         await update.message.reply_text(f"Session `{agent}` is offline.", parse_mode="Markdown")
         return
 
-    ok1 = await send_keys(agent, "Escape")
-    ok2 = await send_keys(agent, "[Z")
-
-    if ok1 and ok2:
+    if await approve_plan(agent):
         await update.message.reply_text(
             f"Plan approved for `{agent}`. Sending approval signal.",
             parse_mode="Markdown",

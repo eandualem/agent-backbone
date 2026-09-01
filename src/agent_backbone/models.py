@@ -31,6 +31,37 @@ def parse_from_tag(comment_body: str) -> str | None:
     return None
 
 
+class DeliveryOutcome(StrEnum):
+    """What happened to one delivery attempt — the ``outcome`` of every ``deliveries`` row."""
+
+    DELIVERED = "delivered"
+    RETRIED = "retried"
+    ALREADY_DELIVERED = "already_delivered"
+    AWAITING_ACK = "awaiting_ack"
+    OFFLINE = "offline"
+    WAITING_FOR_HUMAN = "waiting_for_human"
+    AGENT_WORKING = "agent_working"
+    HUMAN_TYPING = "human_typing"
+    SETTLING = "settling"
+    DELIVERY_FAILED = "delivery_failed"
+
+
+SUCCESS_OUTCOMES = frozenset({DeliveryOutcome.DELIVERED, DeliveryOutcome.RETRIED})
+"""The message reached the agent."""
+BLOCKED_OUTCOMES = frozenset(
+    {
+        DeliveryOutcome.OFFLINE,
+        DeliveryOutcome.WAITING_FOR_HUMAN,
+        DeliveryOutcome.AGENT_WORKING,
+        DeliveryOutcome.HUMAN_TYPING,
+        DeliveryOutcome.SETTLING,
+    }
+)
+"""The agent could not take the message — one per blocking delivery condition."""
+RETRYABLE_OUTCOMES = BLOCKED_OUTCOMES | {DeliveryOutcome.DELIVERY_FAILED}
+"""Outcomes the retry job re-attempts."""
+
+
 class EventType(StrEnum):
     """Normalized event types from GitHub webhooks."""
 

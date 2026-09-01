@@ -8,7 +8,6 @@ setting is on (``backbone config set security.allow_remote_plan_control true``).
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -26,7 +25,8 @@ from agent_backbone.api.models import (
 )
 from agent_backbone.api.session_updates import listable_sessions
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents import StateService
+from agent_backbone.services.agents import StateService, read_plan
+from agent_backbone.services.infrastructure import approve_plan
 from agent_backbone.services.terminal import TmuxService, send_message
 
 log = logging.getLogger(__name__)
@@ -70,21 +70,6 @@ async def list_pending_plans(
     return ListEnvelope(items=plans, total=len(plans))
 
 
-def _confined_plan_path(config: BackboneConfig, plan_file: str) -> Path | None:
-    """Resolve ``plan_file`` only if it lives under ``<state_dir>/plans``.
-
-    The hook writes plans there; the recorded path is still data from a
-    state file (or a ``POST /agents/{session}/state`` body), so it is never
-    trusted to point anywhere else on the machine.
-    """
-    plans_dir = (config.state_dir / "plans").resolve()
-    path = Path(plan_file).expanduser().resolve()
-    if not path.is_relative_to(plans_dir):
-        log.warning("Refusing to read plan outside %s: %s", plans_dir, plan_file)
-        return None
-    return path
-
-
 @router.get("/plans/{session}", response_model=PlanDetail)
 async def get_plan_detail(
     session: str,
@@ -96,25 +81,17 @@ async def get_plan_detail(
     if not snapshot or not snapshot.is_plan_waiting:
         raise HTTPException(status_code=404, detail=f"No pending plan for session '{session}'")
 
-    content = None
-    plan_path = _confined_plan_path(config, snapshot.plan_file) if snapshot.plan_file else None
-    if plan_path is not None and plan_path.is_file():
-        try:
-            content = plan_path.read_text()
-        except OSError:
-            content = None
-
     return PlanDetail(
         session=session,
         state=snapshot.state.value,
         plan_file=snapshot.plan_file,
         plan_title=snapshot.plan_title,
-        content=content,
+        content=read_plan(config.state_dir, snapshot),
     )
 
 
 @router.post("/plans/{session}/approve")
-async def approve_plan(
+async def approve_pending_plan(
     session: str,
     config: BackboneConfig = Depends(get_config),
     tmux_svc: TmuxService = Depends(get_tmux_service),
@@ -125,9 +102,7 @@ async def approve_plan(
     if not await tmux_svc.session_exists(session):
         raise HTTPException(status_code=404, detail=f"Session '{session}' not found")
 
-    await tmux_svc.send_keys(session, "Escape")
-    ok = await tmux_svc.send_keys(session, "[Z")
-    if not ok:
+    if not await approve_plan(session):
         raise HTTPException(status_code=500, detail="Failed to send approval keys")
     return {"ok": True, "session": session, "action": "plan_approved"}
 

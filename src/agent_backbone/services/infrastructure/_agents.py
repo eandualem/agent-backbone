@@ -8,10 +8,11 @@ import logging
 import os
 import shutil
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agent_backbone.config import session_secret_keys
+from agent_backbone.config import RUNTIMES, session_secret_keys
 from agent_backbone.services.terminal import (
     AGENT_ENV_KEY,
     RUNTIME_ENV_KEY,
@@ -19,13 +20,15 @@ from agent_backbone.services.terminal import (
     capture_pane,
     get_terminal_adapter,
     sanitize_pane_content,
+    send_keys,
     session_exists,
     start_session,
     stop_session,
 )
 
 if TYPE_CHECKING:
-    from agent_backbone.config import AgentSpec
+    from agent_backbone.config import AgentSpec, BackboneConfig
+    from agent_backbone.services.database import BackboneDB
 
 log = logging.getLogger(__name__)
 
@@ -37,14 +40,9 @@ _FALLBACK_DIRS = (
 )
 
 RUNTIME_COMMANDS: dict[str, str | None] = {
-    "claude": "claude",
-    "gemini": "gemini",
-    "codex": "codex",
-    "cursor": "cursor",
-    "opencode": "opencode",
-    "aider": "aider",
-    "shell": None,
+    runtime: (None if runtime == "shell" else runtime) for runtime in RUNTIMES
 }
+"""Binary per runtime; ``None`` starts the login shell instead."""
 
 RUNTIME_DISPLAY_NAMES: dict[str, str] = {
     "claude": "Claude Code",
@@ -185,20 +183,13 @@ def agent_brief_text(name: str, repo: str, data_dir: Path | str) -> str | None:
         return None
 
 
-def agent_brief_file(
-    name: str, repo: str, data_dir: Path | str, *, runtime: str = "claude"
-) -> Path | None:
-    """Render the common backbone brief for an agent, return its path.
+def agent_brief_file(name: str, repo: str, data_dir: Path | str) -> Path | None:
+    """Render the common backbone brief for an agent under ``<data_dir>/briefs``.
 
-    Claude Code appends it to the system prompt at launch (complementing the
-    project's CLAUDE.md, never replacing it); Codex, Gemini and OpenCode
-    receive it as the session's initial prompt. Runtimes without launch
-    injection get None — callers deliver ``agent_brief_text`` as the first
-    message instead. Best-effort: on any error the agent simply starts
+    ``start_agent`` hands it to the runtime at launch or as the first
+    delivered message. Best-effort: on any error the agent simply starts
     without the brief.
     """
-    if runtime not in BRIEF_INJECTION_RUNTIMES:
-        return None
     text = agent_brief_text(name, repo, data_dir)
     if text is None:
         return None
@@ -348,61 +339,113 @@ def launch_environment(
     return env
 
 
+@dataclass(frozen=True)
+class StartResult:
+    """What ``start_agent`` did.
+
+    ``ok`` means the session is up — started now, or ``already_running``.
+    ``ready`` is ``wait_until_ready``'s outcome (``ready``, ``waiting_for_human``,
+    ``timeout``, ``exited``) or ``not_waited``; ``evidence`` says why.
+    """
+
+    ok: bool
+    already_running: bool = False
+    ready: str = "not_waited"
+    evidence: tuple[str, ...] = ()
+
+
 async def start_agent(
     spec: AgentSpec,
+    config: BackboneConfig,
     *,
     runtime: str | None = None,
     model: str | None = None,
     resume: bool = False,
-    state_dir: Path | str | None = None,
-    data_dir: Path | str | None = None,
-    pre_trust: bool = False,
-    system_prompt_file: Path | str | None = None,
-    inject_brief: bool = False,
-) -> bool:
-    """Start a configured agent in its tmux session (idempotent)."""
+    brief_file: Path | str | None = None,
+    db: BackboneDB | None = None,
+    wait: bool = True,
+) -> StartResult:
+    """Start an agent in its tmux session — the one launch path for the API,
+    the CLI, Telegram and swarms.
+
+    The runtime's folder-trust dialog is answered ahead of launch
+    (``agents.pre_trust``). The agent's brief — the common backbone brief
+    (``agents.inject_brief``), or ``brief_file`` when the caller has its own,
+    such as a swarm role brief — reaches the runtime at launch where it
+    supports that (Claude Code, Codex, Gemini, OpenCode) and otherwise as the
+    first delivered message once the agent is up. A resumed session already
+    has its brief, and a plain shell has nobody to brief (pasting it would
+    run it as commands).
+    """
     if await session_exists(spec.name):
         log.info("Agent '%s' already running", spec.name)
-        return True
+        return StartResult(ok=True, already_running=True)
 
     if not spec.path.is_dir():
         log.error("Directory '%s' does not exist for agent '%s'", spec.path, spec.name)
-        return False
+        return StartResult(ok=False, evidence=(f"directory does not exist: {spec.path}",))
 
     effective_runtime = runtime or spec.runtime
     effective_model = model if model is not None else spec.model
-    if pre_trust:
+    section = config.agents_section
+    if section.pre_trust:
         pre_trust_runtime(effective_runtime, spec.path)
-    if system_prompt_file is None and inject_brief and data_dir is not None:
-        system_prompt_file = agent_brief_file(
-            spec.name, spec.repo, data_dir, runtime=effective_runtime
-        )
+
+    brief = Path(brief_file) if brief_file else None
+    if brief is None and section.inject_brief and effective_runtime != "shell":
+        brief = agent_brief_file(spec.name, spec.repo, config.data_dir)
+    at_launch = brief is not None and effective_runtime in BRIEF_INJECTION_RUNTIMES
     try:
         command = build_command(
             effective_runtime,
             model=effective_model,
             resume=resume,
-            data_dir=data_dir,
-            state_dir=state_dir,
-            system_prompt_file=system_prompt_file,
-            pre_trust=pre_trust,
+            data_dir=config.data_dir,
+            state_dir=config.state_dir,
+            system_prompt_file=brief if at_launch else None,
+            pre_trust=section.pre_trust,
         )
     except (ValueError, RuntimeError) as exc:
         log.error("Cannot start agent '%s': %s", spec.name, exc)
-        return False
+        return StartResult(ok=False, evidence=(str(exc),))
 
-    environment = launch_environment(spec.name, effective_runtime, state_dir, spec.env)
+    environment = launch_environment(spec.name, effective_runtime, config.state_dir, spec.env)
     ok = await start_session(
         spec.name,
         working_dir=str(spec.path),
         command=command,
         environment=environment,
-        scrub=session_secret_keys(data_dir),
+        scrub=session_secret_keys(config.data_dir),
     )
-    if ok:
-        extra = f", model: {effective_model}" if effective_model else ""
-        log.info("Agent '%s' started (runtime: %s%s)", spec.name, effective_runtime, extra)
-    return ok
+    if not ok:
+        return StartResult(ok=False, evidence=("tmux could not create the session",))
+    extra = f", model: {effective_model}" if effective_model else ""
+    log.info("Agent '%s' started (runtime: %s%s)", spec.name, effective_runtime, extra)
+
+    ready, evidence = "not_waited", []
+    if wait:
+        ready, evidence = await wait_until_ready(
+            spec.name,
+            state_dir=config.state_dir,
+            runtime=effective_runtime,
+            timeout=config.monitor.start_timeout_seconds,
+        )
+
+    # No launch-time injection for this runtime: the brief is the first
+    # delivered message instead (queued until the agent is at its prompt).
+    as_message = brief is not None and not at_launch and effective_runtime != "shell"
+    if as_message and not resume and ready != "exited" and (text := _read_brief(brief)):
+        from agent_backbone.services.routing import safe_deliver
+
+        await safe_deliver(
+            spec.name,
+            f"[via:backbone] {text}",
+            config,
+            db=db,
+            flow_name="agent-brief",
+            delivery_kind="direct_message",
+        )
+    return StartResult(ok=True, ready=ready, evidence=tuple(evidence))
 
 
 async def wait_until_ready(
@@ -504,6 +547,15 @@ async def approve_agent(
     verdict = "prompt cleared" if cleared else "prompt still visible after answering"
     log.info("Approved a %s permission prompt on '%s' (%s)", adapter.runtime.value, name, verdict)
     return "approved", [f"answered with {' '.join(adapter.approve_keys)}; {verdict}", *tail]
+
+
+async def approve_plan(name: str) -> bool:
+    """Accept the plan Claude Code is showing: Shift+Tab (``Escape`` + ``[Z``).
+
+    This is the one surface that types into a waiting agent without the
+    delivery pipeline; callers gate it on ``security.allow_remote_plan_control``.
+    """
+    return await send_keys(name, "Escape") and await send_keys(name, "[Z")
 
 
 async def stop_agent(name: str) -> bool:

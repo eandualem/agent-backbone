@@ -121,16 +121,7 @@ class StateService:
         live_snapshot = await _get_agent_state(self._state_dir, session, self._stale_threshold)
         if self._db is not None and _should_sync_db_snapshot(db_snapshot, live_snapshot):
             try:
-                await self._db.set_agent_state(
-                    session,
-                    live_snapshot.state.value,
-                    current_issue=live_snapshot.current_issue,
-                    ts=str(live_snapshot.timestamp) if live_snapshot.timestamp else None,
-                    plan_file=live_snapshot.plan_file,
-                    plan_title=live_snapshot.plan_title,
-                    reason=live_snapshot.reason,
-                    current_repo=live_snapshot.current_repo,
-                )
+                await self._db.set_agent_state(session, **live_snapshot.db_fields())
             except Exception:
                 log.warning("DB state refresh failed for %s after live reconciliation", session)
         return live_snapshot

@@ -36,15 +36,7 @@ async def reconcile_startup_states(config: BackboneConfig, db: BackboneDB) -> No
             continue
         try:
             snapshot = await get_agent_state(state_path, name, stale_threshold)
-            await db.set_agent_state(
-                session_name=name,
-                state=snapshot.state.value,
-                current_issue=snapshot.current_issue,
-                plan_file=snapshot.plan_file,
-                plan_title=snapshot.plan_title,
-                reason=snapshot.reason,
-                current_repo=snapshot.current_repo,
-            )
+            await db.set_agent_state(session_name=name, **snapshot.db_fields())
         except Exception:
             log.exception("Startup reconciliation: failed to sync state for %s", name)
 
