@@ -44,7 +44,7 @@ class TestSendMessage:
             )
         assert resp.status_code == 404
         assert "not a registered agent" in resp.json()["detail"]
-        deliver.assert_not_awaited()
+        deliver.assert_not_called()
 
     async def test_send_message_agent_working(self, api_client, auth_headers, api_app):
         """Returns ok=False when agent is busy (outcome != 'delivered')."""

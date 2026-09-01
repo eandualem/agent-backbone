@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -92,8 +93,10 @@ class TestGetPlan:
     ):
         plans_dir = api_app.state.config.state_dir / "plans"
         plans_dir.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "outside.md").write_text("nope")
         sneaky = str(plans_dir / ".." / ".." / ".." / "outside.md")
+        outside = Path(sneaky).resolve()
+        outside.write_text("nope")  # the traversal target really exists...
+        assert not outside.is_relative_to(plans_dir.resolve())  # ...and is outside
         state_svc.read_state.return_value = _plan_snapshot(sneaky)
         resp = await api_client.get("/api/plans/ike", headers=auth_headers)
         assert resp.json()["content"] is None

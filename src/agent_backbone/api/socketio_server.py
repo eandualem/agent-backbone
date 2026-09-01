@@ -184,8 +184,8 @@ class TerminalNamespace(_AuthenticatedNamespace):
         sid_subs[session_name] = None
 
     async def on_join(self, sid: str, data: dict) -> None:
-        session_name = data.get("session", "")
-        if not session_name:
+        session_name = data.get("session", "") if isinstance(data, dict) else ""
+        if not isinstance(session_name, str) or not session_name:
             await self.emit("error", {"message": "Missing session name"}, to=sid)
             return
 

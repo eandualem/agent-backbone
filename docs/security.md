@@ -8,7 +8,8 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   drives tmux sessions that run as your OS user. There is no isolation
   between agents: every agent can read every other agent's files, and any
   agent can call the API if you give it the key.
-- **One key, full admin.** `BACKBONE_API_KEY` guards every route with the
+- **One key, full admin.** `BACKBONE_API_KEY` guards every authenticated
+  route (everything except `/health` and the HMAC-checked webhook) with the
   same weight: change settings, register/start/stop/forget agents, send
   messages, read and stream every registered agent's terminal. There is no
   scoped or read-only credential yet. When `docs/getting-started.md` says

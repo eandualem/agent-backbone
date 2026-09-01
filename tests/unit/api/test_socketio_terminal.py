@@ -29,6 +29,16 @@ class TestTerminalJoin:
         ns._attach_subscription_client.assert_not_awaited()
         ex.assert_not_awaited()  # refused before touching tmux
 
+    async def test_non_string_session_is_rejected_cleanly(self, config):
+        # A JSON array/object as "session" must not reach the registry lookup
+        # (unhashable → TypeError); it is a malformed request, nothing more.
+        ns = _namespace(config)
+        for bad in (["ike"], {"name": "ike"}, 7):
+            await ns.on_join("sid1", {"session": bad})
+        assert ns.emit.await_count == 3
+        assert all("Missing session name" in c.args[1]["message"] for c in ns.emit.await_args_list)
+        ns._attach_subscription_client.assert_not_called()
+
     async def test_registered_agent_is_streamed(self, config):
         ns = _namespace(config)
         with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True):
