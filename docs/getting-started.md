@@ -39,7 +39,11 @@ backbone init
 Creates the data directory (`~/.local/share/agent-backbone`, or
 `$BACKBONE_DATA_DIR`) with:
 
-- `.env` — secrets only, starting with a generated `BACKBONE_API_KEY`
+- `.env` — secrets only (tokens), starting with a generated
+  `BACKBONE_API_KEY`. This is the **one** secrets file the backbone reads;
+  add to it with `backbone secrets set GITHUB_TOKEN` (there is no `.env`
+  in a repository — the backbone runs inside your projects, which have
+  their own)
 - `backbone.db` — settings, agents, events, deliveries (SQLite)
 - `state/` — where hooks report agent state
 
@@ -163,7 +167,7 @@ agent sessions; give it to an agent deliberately:
 ## 7. GitHub Issues as the task list
 
 ```bash
-echo "GITHUB_TOKEN=$(gh auth token)" >> ~/.local/share/agent-backbone/.env
+backbone secrets set GITHUB_TOKEN "$(gh auth token)"   # → ~/.local/share/agent-backbone/.env
 backbone down && backbone up --detach
 backbone status               # github intake: poll
 ```
@@ -252,9 +256,10 @@ backbone tell research "How is it going?"      # the swarm's name reaches its co
 
 ## 10. Optional: Telegram
 
-Create a bot with @BotFather, put `TELEGRAM_TOKEN=…` in `.env`, allow your
-chat id (`backbone config set telegram.allowed_chat_ids '[123456789]'`),
-restart. See [Telegram](telegram.md).
+Create a bot with @BotFather, `backbone secrets set TELEGRAM_TOKEN`, allow
+your chat id (`backbone config set telegram.allowed_chat_ids '[123456789]'`),
+restart. In a group with Topics the bot gives every agent its own topic —
+see [Telegram](telegram.md).
 
 ## After a reboot
 
@@ -278,7 +283,7 @@ LaunchAgent once (see [CLI → `up`](cli.md#backbone-up---detach---reload--backb
 
 | What | Where |
 |---|---|
-| Secrets | `<data_dir>/.env` |
+| Secrets | `<data_dir>/.env` — `backbone secrets path` prints it, `backbone secrets set KEY` edits it |
 | Settings, agents, events, deliveries | `<data_dir>/backbone.db` |
 | Agent state from hooks | `<data_dir>/state/<agent>.json`, `<data_dir>/state/actions.jsonl` |
 | Installed hook script | `<data_dir>/hooks/claude_hook.py` |

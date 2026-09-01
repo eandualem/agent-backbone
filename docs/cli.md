@@ -13,6 +13,18 @@ Creates the data directory with `.env` (generated `BACKBONE_API_KEY`, mode
 0600), the SQLite database (migrated), and `state/`. Keeps an existing
 `.env` unless `--force`.
 
+## `backbone secrets set KEY [VALUE] | unset KEY | list | path`
+
+The one `.env` the backbone reads lives in the data directory
+(`~/.local/share/agent-backbone/.env` by default), not in any repository:
+the backbone runs `agent start` *inside* your projects, which have `.env`
+files of their own, so it deliberately reads only its own. `set` writes a
+value (prompted when omitted, so it never enters shell history; a `# KEY=`
+placeholder from `init` is filled in place; mode stays 0600), `unset`
+removes one, `list` shows which known secrets are present (names only),
+`path` prints the file. The running backbone reads it at startup —
+`backbone down && backbone up --detach` after a change.
+
 ## `backbone doctor`
 
 Checks and prints ✓/✗ for: data dir and `.env`, database reachable, each

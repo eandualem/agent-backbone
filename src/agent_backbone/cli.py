@@ -1,7 +1,8 @@
 """``backbone`` command-line interface.
 
 backbone init                        create the data directory, .env and database
-backbone up [--detach]               run the backbone (API + scheduler + Telegram)
+backbone secrets set|list|path       tokens in <data_dir>/.env (the only secrets file read)
+backbone up [--detach]               run the backbone (API + scheduler + integrations)
 backbone down                        stop a detached backbone
 backbone status                      agents, sessions, repositories and health
 backbone doctor                      check tmux, runtimes, credentials
@@ -21,9 +22,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -155,6 +158,115 @@ def cmd_init(args: argparse.Namespace) -> int:
     print("  1. backbone doctor")
     print("  2. backbone up --detach")
     print("  3. cd ~/code/my-app && backbone agent start")
+    print(f"\nTokens (GitHub, Telegram) go in {env_path} — `backbone secrets set TELEGRAM_TOKEN`.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# secrets — the one .env the backbone reads
+# ---------------------------------------------------------------------------
+
+_KNOWN_SECRETS = (
+    "BACKBONE_API_KEY",
+    "GITHUB_TOKEN",
+    "GITHUB_WEBHOOK_SECRET",
+    "GITHUB_APP_ID",
+    "GITHUB_APP_PRIVATE_KEY_PATH",
+    "TELEGRAM_TOKEN",
+)
+_SECRET_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _env_keys(env_path: Path) -> set[str]:
+    """Keys with a live (uncommented) assignment in ``.env``."""
+    if not env_path.is_file():
+        return set()
+    keys = set()
+    for line in env_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            keys.add(stripped.split("=", 1)[0].strip())
+    return keys
+
+
+def _write_env_value(env_path: Path, key: str, value: str | None) -> str:
+    """Set (or, with ``value=None``, remove) ``KEY`` in ``.env`` atomically, mode 0600.
+
+    A live ``KEY=…`` line is replaced in place; a commented ``# KEY=`` placeholder
+    (``backbone init`` writes those) is turned into the assignment; otherwise the
+    line is appended. Returns ``replaced`` / ``added`` / ``removed`` / ``absent``.
+    """
+    lines = env_path.read_text().splitlines() if env_path.is_file() else []
+    out: list[str] = []
+    action = "absent" if value is None else "added"
+    for line in lines:
+        stripped = line.strip()
+        bare = stripped.lstrip("#").strip()
+        if bare.startswith(f"{key}=") and action in ("added", "absent"):
+            if value is None:
+                if not stripped.startswith("#"):
+                    action = "removed"
+                    continue
+            else:
+                action = "replaced" if not stripped.startswith("#") else "added"
+                out.append(f"{key}={value}")
+                continue
+        out.append(line)
+    if value is not None and action == "added" and not any(ln.startswith(f"{key}=") for ln in out):
+        out.append(f"{key}={value}")
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = env_path.with_name(f".env.{os.getpid()}.tmp")
+    tmp.write_text("\n".join(out) + ("\n" if out else ""))
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, env_path)
+    os.chmod(env_path, 0o600)
+    return action
+
+
+def cmd_secrets(args: argparse.Namespace) -> int:
+    """Manage ``<data_dir>/.env`` — the only secrets file the backbone reads.
+
+    Tokens never live in a project directory: the backbone runs `agent start`
+    *inside* your repositories, which have their own `.env` files, so it
+    reads exactly one file of its own. This command makes that file easy to
+    find and safe to edit (values prompted, not typed into shell history).
+    """
+    env_path = bootstrap_config().env_path
+    sub = args.secrets_command
+    if sub == "path":
+        print(env_path)
+        return 0
+    if sub == "list":
+        present = _env_keys(env_path)
+        for key in _KNOWN_SECRETS:
+            print(f"  {'✓' if key in present else '-'} {key}")
+        for key in sorted(present - set(_KNOWN_SECRETS)):
+            print(f"  ✓ {key}")
+        print(f"\n{env_path}" if env_path.is_file() else f"\n{env_path} (not created yet)")
+        return 0
+
+    key = args.key.strip().upper()
+    if not _SECRET_KEY_RE.match(key):
+        print(f"invalid key {args.key!r} (use UPPER_SNAKE_CASE, e.g. TELEGRAM_TOKEN)")
+        return 1
+    if sub == "unset":
+        action = _write_env_value(env_path, key, None)
+        print(f"{action} {key} in {env_path}" if action == "removed" else f"{key} was not set")
+        return 0
+
+    value = args.value
+    if value is None:
+        if sys.stdin.isatty():
+            value = getpass.getpass(f"{key}: ")
+        else:
+            value = sys.stdin.readline().rstrip("\n")
+    value = value.strip()
+    if not value:
+        print("empty value — nothing written")
+        return 1
+    action = _write_env_value(env_path, key, value)
+    print(f"{action} {key} in {env_path} (mode 0600)")
+    print("The running backbone reads .env at startup: `backbone down && backbone up --detach`.")
     return 0
 
 
@@ -227,7 +339,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                     "    (set GITHUB_WEBHOOK_SECRET + expose /webhooks/github for instant delivery)"
                 )
         else:
-            print("  - GitHub not configured (optional): set GITHUB_TOKEN in .env")
+            print(
+                "  - GitHub not configured (optional): `backbone secrets set GITHUB_TOKEN` "
+                f"(writes {config.env_path})"
+            )
         if config.telegram_ready:
             check(
                 "Telegram allowed_chat_ids set",
@@ -235,7 +350,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 "backbone config set telegram.allowed_chat_ids '[<chat id>]'",
             )
         else:
-            print("  - Telegram not configured (optional): set TELEGRAM_TOKEN in .env")
+            print(
+                "  - Telegram not configured (optional): `backbone secrets set TELEGRAM_TOKEN` "
+                f"(writes {config.env_path})"
+            )
 
         print("Backbone")
         print(f"  - API: {'up' if await _api_up(config) else 'down'} ({_api_url(config, '')})")
@@ -1040,6 +1158,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("doctor", help="check the environment and configuration")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser(
+        "secrets", help="tokens in <data_dir>/.env — the only secrets file the backbone reads"
+    )
+    ssec = p.add_subparsers(dest="secrets_command", required=True)
+    pset = ssec.add_parser(
+        "set", help="set a value (prompted when omitted, so it stays out of history)"
+    )
+    pset.add_argument("key", metavar="KEY", help="e.g. TELEGRAM_TOKEN, GITHUB_TOKEN")
+    pset.add_argument("value", nargs="?", default=None, metavar="VALUE")
+    punset = ssec.add_parser("unset", help="remove a value")
+    punset.add_argument("key", metavar="KEY")
+    ssec.add_parser("list", help="which secrets are set (names only)")
+    ssec.add_parser("path", help="print the .env path")
+    p.set_defaults(func=cmd_secrets)
 
     p = sub.add_parser("up", help="run the backbone")
     p.add_argument("--detach", "-d", action="store_true", help="run inside a tmux session")

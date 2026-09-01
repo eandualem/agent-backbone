@@ -143,4 +143,10 @@ these reserved keys). The API key is **not** exported.
 | `BACKBONE_DATA_DIR` | Data directory (default `~/.local/share/agent-backbone`) |
 | `BACKBONE_DATABASE_URL` | Any SQLAlchemy async URL, e.g. `postgresql+asyncpg://user:pw@host/db` (install the `postgres` extra) |
 
-`backbone init` writes `.env` with mode 0600 and a fresh 32-byte API key.
+`backbone init` writes `.env` with mode 0600 and a fresh 32-byte API key;
+`backbone secrets set KEY` adds to it (prompted, or `set KEY VALUE`),
+`backbone secrets path` prints where it is. **Why not a `.env` in the
+repository?** The backbone is installed once and runs `agent start` inside
+many repositories, each with its own `.env` for its own app — reading
+those would leak unrelated secrets into agent sessions. So exactly one
+file is read, and it is the data directory's.

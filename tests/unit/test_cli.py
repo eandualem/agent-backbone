@@ -312,3 +312,44 @@ class TestAgentApproveParser:
         assert ns.agent_command == "approve" and ns.name == "scout" and ns.sender == "orch"
         ns = build_parser().parse_args(["agent", "approve", "scout", "--from", "elias"])
         assert ns.sender == "elias"
+
+
+class TestSecrets:
+    def test_set_fills_the_init_placeholder_and_keeps_0600(self, _isolated_data_dir, capsys):
+        assert _run(["init"]) == 0
+        env_path = _isolated_data_dir / ".env"
+        assert "# TELEGRAM_TOKEN=" in env_path.read_text()
+        assert _run(["secrets", "set", "telegram_token", "123:abc"]) == 0
+        text = env_path.read_text()
+        assert "TELEGRAM_TOKEN=123:abc" in text and "# TELEGRAM_TOKEN=" not in text
+        assert text.count("TELEGRAM_TOKEN=") == 1
+        assert oct(env_path.stat().st_mode & 0o777) == "0o600"
+        assert "added TELEGRAM_TOKEN" in capsys.readouterr().out
+        # replacing keeps a single line
+        assert _run(["secrets", "set", "TELEGRAM_TOKEN", "999:zzz"]) == 0
+        assert env_path.read_text().count("TELEGRAM_TOKEN=") == 1
+        assert "999:zzz" in env_path.read_text()
+
+    def test_set_prompts_when_value_omitted(self, _isolated_data_dir, monkeypatch):
+        assert _run(["init"]) == 0
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "secret-from-prompt")
+        assert _run(["secrets", "set", "GITHUB_TOKEN"]) == 0
+        assert "GITHUB_TOKEN=secret-from-prompt" in (_isolated_data_dir / ".env").read_text()
+
+    def test_list_unset_and_path(self, _isolated_data_dir, capsys):
+        assert _run(["init"]) == 0
+        _run(["secrets", "set", "GITHUB_TOKEN", "x"])
+        capsys.readouterr()
+        assert _run(["secrets", "list"]) == 0
+        out = capsys.readouterr().out
+        assert "✓ BACKBONE_API_KEY" in out and "✓ GITHUB_TOKEN" in out and "- TELEGRAM_TOKEN" in out
+        assert _run(["secrets", "unset", "GITHUB_TOKEN"]) == 0
+        assert "GITHUB_TOKEN=" not in (_isolated_data_dir / ".env").read_text()
+        assert _run(["secrets", "path"]) == 0
+        assert capsys.readouterr().out.strip().endswith(str(_isolated_data_dir / ".env"))
+
+    def test_rejects_bad_key_and_empty_value(self, _isolated_data_dir, capsys):
+        assert _run(["init"]) == 0
+        assert _run(["secrets", "set", "bad key", "x"]) == 1
+        assert _run(["secrets", "set", "GITHUB_TOKEN", "   "]) == 1

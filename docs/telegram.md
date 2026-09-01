@@ -5,8 +5,16 @@ approve a plan, get told when an agent is stuck or died.
 
 ## Setup
 
-1. Create a bot with [@BotFather](https://t.me/BotFather); put the token in
-   `<data_dir>/.env` as `TELEGRAM_TOKEN`.
+1. Create a bot with [@BotFather](https://t.me/BotFather) and store its token:
+
+   ```bash
+   backbone secrets set TELEGRAM_TOKEN      # prompts; writes ~/.local/share/agent-backbone/.env
+   ```
+
+   That file is the **only** secrets file the backbone reads — never a
+   `.env` in a project directory, because `agent start` runs inside your
+   repositories and they have `.env` files of their own. `backbone secrets
+   path` prints it; `backbone secrets list` shows what is set.
 2. Find your chat id: message the bot, then read the id from
    `https://api.telegram.org/bot<TOKEN>/getUpdates`.
 3. Allow it and choose where alerts go:
