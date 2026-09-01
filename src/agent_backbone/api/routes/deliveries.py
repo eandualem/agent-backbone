@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 
 from agent_backbone.api.deps import get_db
 from agent_backbone.api.models import DeliveryRecord, DeliveryStats, ListEnvelope
+from agent_backbone.models import BLOCKED_OUTCOMES, SUCCESS_OUTCOMES, DeliveryOutcome
 from agent_backbone.services.database import BackboneDB
 
 router = APIRouter(prefix="/api", tags=["deliveries"])
@@ -57,18 +58,12 @@ async def get_delivery_stats(db: BackboneDB = Depends(get_db)):
         outcome = row["outcome"]
         count = row["cnt"]
         stats.total += count
-        if outcome == "delivered":
+        if outcome in SUCCESS_OUTCOMES:
             stats.delivered += count
-        elif outcome == "offline":
+        elif outcome == DeliveryOutcome.OFFLINE:
             stats.offline += count
-        elif outcome in ("delivery_failed", "failed"):
+        elif outcome == DeliveryOutcome.DELIVERY_FAILED:
             stats.failed += count
-        elif outcome in (
-            "agent_working",
-            "waiting_for_human",
-            "human_typing",
-            "settling",
-            "deferred",
-        ):
+        elif outcome in BLOCKED_OUTCOMES:
             stats.deferred += count
     return stats

@@ -85,11 +85,6 @@ async def notify_static(config: BackboneConfig, text: str, *, agent: str | None 
     return await _send(token, chat_id, text)
 
 
-async def send_notification(token: str, chat_id: int, text: str) -> bool:
-    """Send a proactive push notification via Telegram API."""
-    return await _send(token, chat_id, text)
-
-
 class TelegramService(Integration):
     """Telegram bot for agent backbone management."""
 
@@ -105,11 +100,6 @@ class TelegramService(Integration):
         self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
         self._background: set[asyncio.Task] = set()
         self._sync_lock = asyncio.Lock()
-
-    @property
-    def _config(self) -> BackboneConfig:
-        """Alias kept for the command/routing modules."""
-        return self.config
 
     @property
     def enabled(self) -> bool:
@@ -159,11 +149,11 @@ class TelegramService(Integration):
 
     def _effective_routes(self) -> dict[int, str]:
         """Merged routes: discovery + config (config wins)."""
-        return effective_routes(self._config, self._discovery)
+        return effective_routes(self.config, self._discovery)
 
     def _effective_group_chat_id(self) -> int | None:
         """Group chat ID: config wins over discovery."""
-        return effective_group_chat_id(self._config, self._discovery)
+        return effective_group_chat_id(self.config, self._discovery)
 
     @staticmethod
     def _sender_tag(update: Update) -> str:
@@ -175,12 +165,7 @@ class TelegramService(Integration):
 
     def _is_authorized(self, chat_id: int) -> bool:
         """Only chats on the allowlist may control the backbone."""
-        return chat_id in self._config.telegram.allowed_chat_ids
-
-    @staticmethod
-    async def send_notification(token: str, chat_id: int, text: str) -> bool:
-        """Send a proactive push notification via the Telegram HTTP API."""
-        return await _send(token, chat_id, text)
+        return chat_id in self.config.telegram.allowed_chat_ids
 
     # -- Command handler thin wrappers (delegate to _commands module) --
 
@@ -235,7 +220,7 @@ class TelegramService(Integration):
         if not self.enabled:
             log.info("Telegram bot disabled (TELEGRAM_TOKEN not set)")
             return
-        if not self._config.telegram.allowed_chat_ids:
+        if not self.config.telegram.allowed_chat_ids:
             log.error(
                 "Telegram bot NOT started: telegram.allowed_chat_ids is empty. "
                 "Run `backbone config set telegram.allowed_chat_ids '[<your chat id>]'`."
@@ -280,7 +265,7 @@ class TelegramService(Integration):
 
     def build_app(self) -> Application:
         """Build the Telegram bot application with all command handlers."""
-        token = self._config.telegram_token
+        token = self.config.telegram_token
         if not token:
             raise ValueError("TELEGRAM_TOKEN environment variable not set")
 
@@ -323,16 +308,3 @@ class TelegramService(Integration):
             )
         )
         return self._app
-
-    async def run(self) -> None:
-        """Run the bot in the foreground until cancelled (standalone use)."""
-        await self.start()
-        if not self._running:
-            return
-        try:
-            while True:
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await self.stop()

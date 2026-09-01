@@ -155,15 +155,6 @@ async def invalidate_session_snapshot_caches() -> None:
         _invalidate_session_snapshot_caches_unlocked()
 
 
-def reset_sessions_update_state() -> None:
-    """Reset module-level update dedup state for test isolation."""
-    global _last_sessions_update_signature, _sessions_update_lock, _snapshot_cache_lock
-    _snapshot_cache_lock = asyncio.Lock()
-    _invalidate_session_snapshot_caches_unlocked()
-    _last_sessions_update_signature = None
-    _sessions_update_lock = asyncio.Lock()
-
-
 def _serialize_snapshot(snapshot: list[EnrichedAgent]) -> list[dict]:
     return [agent.model_dump(mode="json") for agent in snapshot]
 

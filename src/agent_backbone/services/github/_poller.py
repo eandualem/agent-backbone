@@ -43,11 +43,6 @@ def _parse(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
 
-def polled_repos(config: BackboneConfig) -> list[str]:
-    """Every repository an agent owns or watches, deduplicated."""
-    return list(config.agents.repos)
-
-
 def issue_event_from_api(
     item: dict[str, Any], repo_full_name: str, since: str
 ) -> IssueEvent | None:
@@ -125,7 +120,7 @@ class GitHubPoller:
         return _iso(datetime.now(UTC) - lookback)
 
     async def run(self) -> dict[str, int]:
-        from agent_backbone.services.routing._ingest import dispatch_event
+        from agent_backbone.services.routing import dispatch_event
 
         config = self._config
         summary: dict[str, int] = {}
@@ -135,7 +130,7 @@ class GitHubPoller:
             log.exception("Could not read last event times (using lookback)")
             last_events = {}
 
-        for repo in polled_repos(config):
+        for repo in config.agents.repos:
             since = await self._since_for(repo, last_events)
             newest = since
             try:

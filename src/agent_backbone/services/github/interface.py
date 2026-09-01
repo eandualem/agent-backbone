@@ -40,13 +40,6 @@ class _CachedInstallationToken:
     expires_at: datetime
 
 
-def _issue_sort_key(issue: IssueData, config: BackboneConfig) -> tuple[float, int]:
-    """Compute the delivery sort key without importing routing at module load."""
-    from agent_backbone.services.routing._priority import compute_priority_score
-
-    return (-compute_priority_score(issue, config.priority_scoring), issue.number)
-
-
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -66,9 +59,12 @@ class GitHubClient:
 
     Every call names its repository: there is no default repository.
 
+    Results come back in GitHub's order (oldest first); routing sorts an
+    agent's queue by priority.
+
     Usage:
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:reviewer", repo_full_name="me/app")
+            issues = await gh.list_issues(labels=["for:reviewer"], repo_full_name="me/app")
     """
 
     def __init__(self, config: BackboneConfig) -> None:
@@ -312,32 +308,6 @@ class GitHubClient:
 
     # --- Issue operations ---
 
-    async def list_open_issues(
-        self, label: str, repo_full_name: str | None = None
-    ) -> list[IssueData]:
-        """List open issues with a specific label, sorted for delivery."""
-        owner, repo = self._resolve_repo(repo_full_name)
-        resp = await self._request(
-            "GET",
-            f"/repos/{owner}/{repo}/issues",
-            repo_full_name=repo_full_name,
-            params={
-                "state": "open",
-                "labels": label,
-                "sort": "created",
-                "direction": "asc",
-                "per_page": 50,
-            },
-        )
-
-        issues = [
-            self._build_issue(item, repo_full_name=repo_full_name)
-            for item in resp.json()
-            if "pull_request" not in item
-        ]
-        issues.sort(key=lambda i: _issue_sort_key(i, self._config))
-        return issues
-
     async def get_sub_issues(
         self, issue_number: int, repo_full_name: str | None = None
     ) -> list[IssueData]:
@@ -355,13 +325,6 @@ class GitHubClient:
 
         return [self._build_issue(item, repo_full_name=repo_full_name) for item in resp.json()]
 
-    async def count_open_sub_issues(
-        self, issue_number: int, repo_full_name: str | None = None
-    ) -> int:
-        """Count open sub-issues of a parent. Returns 0 on error."""
-        subs = await self.get_sub_issues(issue_number, repo_full_name=repo_full_name)
-        return sum(1 for sub in subs if sub.state == "open")
-
     async def get_issue(self, issue_number: int, repo_full_name: str | None = None) -> IssueData:
         """Get a single issue by number."""
         owner, repo = self._resolve_repo(repo_full_name)
@@ -377,7 +340,7 @@ class GitHubClient:
         per_page: int = 50,
         repo_full_name: str | None = None,
     ) -> list[IssueData]:
-        """List issues with flexible filtering by state and labels."""
+        """Issues (PRs excluded) filtered by state and labels, in GitHub's order."""
         owner, repo = self._resolve_repo(repo_full_name)
         params: dict[str, str | int] = {
             "state": state,
@@ -391,14 +354,11 @@ class GitHubClient:
         resp = await self._request(
             "GET", f"/repos/{owner}/{repo}/issues", repo_full_name=repo_full_name, params=params
         )
-
-        issues = [
+        return [
             self._build_issue(item, repo_full_name=repo_full_name)
             for item in resp.json()
             if "pull_request" not in item
         ]
-        issues.sort(key=lambda issue: _issue_sort_key(issue, self._config))
-        return issues
 
     async def list_comments(
         self, issue_number: int, repo_full_name: str | None = None

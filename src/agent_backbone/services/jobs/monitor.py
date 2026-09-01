@@ -1,35 +1,31 @@
-"""Periodic agent monitor — orchestrates escalation, delivery, and sync.
+"""The agent monitor — one tick of everything the backbone keeps an eye on.
 
-Runs on the scheduler interval (default 60s). Delegates to:
-- agents._escalation: stall detection, offline detection, plan-waiting notification
-- agents._pending: state-aware delivery loop
-- routing._dependencies: sub-issue relationship sync
+Runs on ``timing.monitor_interval_seconds`` (60 s) and immediately at
+startup. Each step is isolated: a failing step is logged and the next one
+still runs.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from agent_backbone.api.session_updates import emit_sessions_update
-from agent_backbone.services.agents._escalation import (
+from agent_backbone.services.jobs.copy_mode import handle_copy_mode_recovery
+from agent_backbone.services.jobs.escalation import (
     check_plan_waiting,
     handle_offline,
     handle_stalls,
 )
-from agent_backbone.services.agents._pending import deliver_pending_issues
-from agent_backbone.services.routing._dependencies import sync_dependencies
-from agent_backbone.services.routing._flows import drain_message_queue
-from agent_backbone.services.terminal import handle_copy_mode_recovery, list_sessions
+from agent_backbone.services.jobs.pending import deliver_pending_issues
+from agent_backbone.services.jobs.retry import drain_message_queue
+from agent_backbone.services.routing import sync_dependencies
+from agent_backbone.services.terminal import list_sessions
 
 if TYPE_CHECKING:
-    import socketio
-
     from agent_backbone.config import BackboneConfig
-    from agent_backbone.services.agents.interface import StateService
     from agent_backbone.services.database import BackboneDB
-    from agent_backbone.services.terminal import TmuxService
 
 log = logging.getLogger(__name__)
 
@@ -42,13 +38,13 @@ async def monitor_agents(
     db: BackboneDB,
     gh: object | None,
     *,
-    state_svc: StateService | None = None,
-    tmux_svc: TmuxService | None = None,
-    sio: socketio.AsyncServer | None = None,
+    on_change: Callable[[], Awaitable[object]] | None = None,
 ) -> dict:
     """Check all configured agents; escalate problems and deliver pending issues.
 
-    Returns a dict mapping agent → action taken.
+    ``on_change`` is awaited once per tick so the API can push a fresh
+    session snapshot to its subscribers. Returns a dict mapping agent →
+    action taken.
     """
     if _monitor_lock.locked():
         log.info("Monitor already running — skipping concurrent run")
@@ -86,11 +82,11 @@ async def monitor_agents(
         except Exception:
             log.exception("Copy-mode recovery failed (non-fatal)")
 
-        # Reconcile out-of-band session churn to live Socket.IO subscribers.
-        try:
-            await emit_sessions_update(sio, config, state_svc, tmux_svc, only_if_changed=True)
-        except Exception:
-            log.exception("Session subscription reconciliation failed (non-fatal)")
+        if on_change is not None:
+            try:
+                await on_change()
+            except Exception:
+                log.exception("Session snapshot broadcast failed (non-fatal)")
 
         # Drain deferred comments/messages for sessions that are now idle.
         try:

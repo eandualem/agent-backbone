@@ -85,6 +85,6 @@ def has_commented_on_issue(
     return False
 
 
-def should_deliver(state: AgentState, **_ignored) -> bool:
+def should_deliver(state: AgentState) -> bool:
     """Only a confirmed idle agent should receive a new issue."""
     return state == AgentState.IDLE

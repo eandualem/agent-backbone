@@ -29,24 +29,27 @@ API_VERSION = "2.0.0"
 def _register_jobs(app: FastAPI):
     """Wire the periodic jobs. Each job reads ``app.state.config`` at run time so
     setting changes and newly discovered agents are picked up without a restart."""
-    from agent_backbone.services.agents._monitor import monitor_agents
-    from agent_backbone.services.routing._flows import delivery_retry
+    from agent_backbone.api.session_updates import emit_sessions_update
+    from agent_backbone.services.jobs import delivery_retry, monitor_agents
     from agent_backbone.services.scheduler import PeriodicScheduler
 
     scheduler = PeriodicScheduler()
     state = app.state
     config: BackboneConfig = state.config
 
+    async def _broadcast():
+        # Reconcile out-of-band session churn to live Socket.IO subscribers.
+        await emit_sessions_update(
+            getattr(state, "sio", None),
+            state.config,
+            state.state_service,
+            state.tmux_service,
+            only_if_changed=True,
+        )
+
     async def _monitor():
         await state.agent_store.refresh()
-        return await monitor_agents(
-            state.config,
-            state.db,
-            state.github,
-            state_svc=state.state_service,
-            tmux_svc=state.tmux_service,
-            sio=getattr(state, "sio", None),
-        )
+        return await monitor_agents(state.config, state.db, state.github, on_change=_broadcast)
 
     async def _retry():
         return await delivery_retry(state.config, state.db, state.github)
@@ -58,7 +61,8 @@ def _register_jobs(app: FastAPI):
             "events": await state.db.prune_events(days),
         }
 
-    scheduler.add("agent-monitor", config.monitor.interval_seconds, _monitor)
+    # Immediately at startup: this is what syncs agent state after a restart.
+    scheduler.add("agent-monitor", config.monitor.interval_seconds, _monitor, run_immediately=True)
     scheduler.add("delivery-retry", config.monitor.retry_interval_seconds, _retry)
     scheduler.add("prune", 6 * 3600, _prune)
     # Integrations re-provision their per-agent surfaces (Telegram topics):
@@ -91,7 +95,6 @@ async def lifespan(app: FastAPI):
     from agent_backbone.api.socketio_server import configure_pty_manager, get_pty_manager
     from agent_backbone.services.agent_store import AgentStore
     from agent_backbone.services.agents import StateService
-    from agent_backbone.services.agents._reconciliation import reconcile_startup_states
     from agent_backbone.services.database import BackboneDB, DatabaseService
     from agent_backbone.services.github import GitHubClient
     from agent_backbone.services.integrations import build_integrations
@@ -140,10 +143,7 @@ async def lifespan(app: FastAPI):
     app.state.tmux_service = TmuxService()
     lifecycle.register("tmux", app.state.tmux_service)
     app.state.state_service = StateService(
-        config.state_dir,
-        config.agent_state.stale_threshold_seconds,
-        db=app.state.db,
-        snapshot_trust=config.agent_state.snapshot_trust_seconds,
+        config.state_dir, config.agent_state.stale_threshold_seconds
     )
     lifecycle.register("state", app.state.state_service)
     app.state.delivery_service = DeliveryService()
@@ -158,7 +158,7 @@ async def lifespan(app: FastAPI):
 
     # A closed issue ends the swarm that was working it (PR merged -> issue
     # closed via "Closes #N" -> teardown). Wired here so routing stays a leaf.
-    from agent_backbone.services.routing._ingest import register_issue_closed_listener
+    from agent_backbone.services.routing import register_issue_closed_listener
     from agent_backbone.services.swarm import teardown_for_issue
 
     async def _swarm_teardown(repo: str, issue_number: int) -> None:
@@ -172,7 +172,6 @@ async def lifespan(app: FastAPI):
 
     try:
         await lifecycle.start_all()
-        await reconcile_startup_states(config=config, db=app.state.db)
         log.info(
             "agent-backbone %s on http://%s:%d — data %s, %d agent(s), github=%s, integrations=%s",
             API_VERSION,

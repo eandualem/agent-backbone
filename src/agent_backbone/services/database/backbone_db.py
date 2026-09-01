@@ -37,6 +37,42 @@ _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 """Migrations ship inside the package so installed CLIs migrate from anywhere."""
 
 
+_SUPERSEDED_INDEXES = ("uq_mq_comment_dedup", "uq_mq_dm_dedup")
+"""Indexes earlier releases created that the model no longer has. Only these
+and the model's own are ever dropped — an index an operator added is theirs."""
+
+
+def _repair_schema(sync_conn) -> None:
+    """Bring an existing database's indexes up to the model on a re-stamp.
+
+    Tables are stable pre-1.0, but index *predicates* have changed (the
+    ``kind = 'issue'`` guard on the delivery owner index, the one queue
+    dedup rule for every non-issue kind). A re-stamp is the only moment an
+    existing database meets a regenerated squash, so indexes are rebuilt
+    from the model here. Duplicate pending queue rows — the reason the
+    dedup index exists — are expired first so the unique index can be
+    created.
+    """
+    sync_conn.execute(
+        text(
+            """UPDATE message_queue SET status = 'expired'
+               WHERE delivery_kind != 'issue' AND status IN ('pending','in_progress')
+                 AND id NOT IN (
+                   SELECT MIN(id) FROM message_queue
+                   WHERE delivery_kind != 'issue' AND status IN ('pending','in_progress')
+                   GROUP BY session_name, content_hash
+                 )"""
+        )
+    )
+    for table in metadata.sorted_tables:
+        for index in table.indexes:
+            sync_conn.execute(text(f"DROP INDEX IF EXISTS {index.name}"))
+            index.create(sync_conn)
+    for name in _SUPERSEDED_INDEXES:
+        sync_conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
+    log.info("Rebuilt indexes from the model (re-stamped database)")
+
+
 class BackboneDB:
     """Async database for backbone persistence.
 
@@ -148,6 +184,7 @@ class BackboneDB:
                     script = ScriptDirectory.from_config(alembic_cfg)
                     known = {rev.revision for rev in script.walk_revisions()}
                     if stored not in known:
+                        _repair_schema(sync_conn)
                         command.stamp(alembic_cfg, "head", purge=True)
                         return
                 if has_alembic or not existing_app_tables:
@@ -447,16 +484,6 @@ class BackboneDB:
         """Expire pending queue messages older than max_age_minutes."""
         async with self._engine.begin() as conn:
             return await _queue_repo.expire_stale_pending(conn, max_age_minutes)
-
-    async def get_message_by_id(self, message_id: int) -> dict | None:
-        """Get a single message by ID (for verification)."""
-        async with self._engine.begin() as conn:
-            result = await conn.execute(
-                text("SELECT * FROM message_queue WHERE id = :id"),
-                {"id": message_id},
-            )
-            row = result.fetchone()
-            return dict(row._mapping) if row else None
 
     # --- Settings (delegates to _settings_repo) ---
 

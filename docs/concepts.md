@@ -23,7 +23,7 @@ app: ready — claude repo acme/app
 - **Name** — the directory name (`--name` to override). It is the tmux
   session name, the value of `for:<name>` labels, and the `from:` identity
   in messages the agent sends.
-- **Runtime** — `claude`, `codex`, `gemini`, `opencode`, `aider`, `cursor`
+- **Runtime** — `claude`, `codex`, `gemini`, `opencode`, `aider`
   or `shell`; default `claude` (`agents.default_runtime`).
 - **Repository** — read from `git remote origin`. An agent whose directory is
   a GitHub checkout **owns** that repository.
@@ -70,9 +70,11 @@ What an agent is doing, in a vocabulary shared by every runtime:
 | `unknown` | No trustworthy signal |
 | `offline` | No tmux session (reported by the API; not a stored state) |
 
-Where it comes from, in order: **hooks** the runtime itself runs (Claude
-Code today) write `<data_dir>/state/<agent>.json` on every transition; a
-fresh hook state is authoritative. When there is no hook state or it is
+Where it comes from, in order: `agent start` writes `starting` when the
+session is created (trusted for two minutes at most; the first hook write
+replaces it, and a visible prompt clears it). **Hooks** the runtime itself
+runs (Claude Code today) write `<data_dir>/state/<agent>.json` on every
+transition; a fresh hook state is authoritative. When there is no hook state or it is
 older than `timing.stale_threshold_seconds` (5 min), the backbone reads
 the **terminal** through the runtime's adapter (prompt visible, busy
 marker, permission prompt). Every reading keeps its **evidence**, shown by

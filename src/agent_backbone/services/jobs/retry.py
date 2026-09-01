@@ -6,14 +6,20 @@ import logging
 from collections.abc import Collection
 
 from agent_backbone.config import BackboneConfig
+from agent_backbone.models import BLOCKED_OUTCOMES, DeliveryOutcome
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing._delivery import safe_deliver
-from agent_backbone.services.routing._format import format_next_issue_notification
-from agent_backbone.services.routing._targets import list_open_queue_for_target, queue_scope
+from agent_backbone.services.routing import (
+    format_next_issue_notification,
+    is_acknowledged,
+    list_open_queue_for_target,
+    queue_scope,
+    safe_deliver,
+)
+from agent_backbone.services.terminal import list_sessions
 
 log = logging.getLogger(__name__)
 
-_BUSY_OUTCOMES = frozenset({"agent_working", "waiting_for_human", "human_typing", "settling"})
+_BUSY_OUTCOMES = BLOCKED_OUTCOMES - {DeliveryOutcome.OFFLINE}
 
 
 async def drain_message_queue(
@@ -95,9 +101,7 @@ async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB,
     target = delivery["target_entity"]
     repo = delivery.get("repo") or ""
 
-    if await db.is_acknowledged(issue_number, target, repo=repo):
-        return "acknowledged"
-    if session_name != target and await db.is_acknowledged(issue_number, session_name, repo=repo):
+    if await is_acknowledged(db, repo, issue_number, target, session_name):
         return "acknowledged"
     if not repo:
         return "no_repo"
@@ -150,8 +154,6 @@ async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: object | No
             summary[outcome] = summary.get(outcome, 0) + 1
 
     try:
-        from agent_backbone.services.terminal import list_sessions
-
         drained = await drain_message_queue(
             config, db, gh, active_sessions=set(await list_sessions())
         )

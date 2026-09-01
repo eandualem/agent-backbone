@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from agent_backbone.services.database import build_engine
 from agent_backbone.services.database.backbone_db import BackboneDB, metadata
 from agent_backbone.services.database.interface import sqlite_url
+from tests.support import queue_row
 
 _EXPECTED_TABLES = {
     "acknowledgments",
@@ -34,9 +36,8 @@ _EXPECTED_INDEXES = {
     "idx_mq_leased",
     "idx_mq_status",
     "idx_mq_session",
-    "uq_mq_comment_dedup",
-    "uq_mq_dm_dedup",
     "uq_mq_issue_dedup",
+    "uq_mq_message_dedup",
     "uq_swarms_active_issue",
 }
 
@@ -79,7 +80,7 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
         await db._run_migrations()
         assert await db.record_delivery(7, "ike", "ike", "delivered") > 0
         await db.enqueue_message("ike", "hello", delivery_kind="direct_message")
-        assert (await db.get_message_by_id(1))["status"] == "pending"
+        assert (await queue_row(db, 1))["status"] == "pending"
     finally:
         db._engine = None
         await engine.dispose()
@@ -138,3 +139,49 @@ async def test_unknown_stamped_revision_is_restamped_after_squash(tmp_path):
     assert stored != "deadbeef0000"
     db2._engine = None
     await engine2.dispose()
+
+
+async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_path):
+    """A database whose indexes predate the model is repaired when it is re-stamped."""
+    from sqlalchemy import text
+
+    from agent_backbone.services.database.backbone_db import _repair_schema
+
+    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
+    db = BackboneDB(engine)
+    await db.start()
+    try:
+        async with engine.begin() as conn:
+            # An older install: no dedup rule for PR notices, so the queue grew copies.
+            await conn.execute(text("DROP INDEX uq_mq_message_dedup"))
+            digest = hashlib.sha256(b"same notice").hexdigest()
+            for _ in range(3):
+                await conn.execute(
+                    text(
+                        "INSERT INTO message_queue (session_name, message, delivery_kind, "
+                        "enqueued_at, status, content_hash) VALUES "
+                        "('ike', 'same notice', 'pull_request', '2026-09-01T00:00:00.000000Z', "
+                        "'pending', :digest)"
+                    ),
+                    {"digest": digest},
+                )
+        async with engine.begin() as conn:
+            await conn.run_sync(_repair_schema)
+            statuses = (
+                (await conn.execute(text("SELECT status FROM message_queue ORDER BY id")))
+                .scalars()
+                .all()
+            )
+            names = {
+                row[0]
+                for row in (
+                    await conn.execute(text("SELECT name FROM sqlite_master WHERE type='index'"))
+                ).fetchall()
+            }
+        assert statuses == ["pending", "expired", "expired"]
+        assert "uq_mq_message_dedup" in names
+        # ...and the rule now holds for new rows.
+        assert await db.enqueue_message("ike", "same notice", delivery_kind="pull_request") == -1
+    finally:
+        db._engine = None
+        await engine.dispose()

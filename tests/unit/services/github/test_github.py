@@ -39,7 +39,7 @@ def mock_installation_token(monkeypatch):
     monkeypatch.setattr(GitHubClient, "_get_installation_token", _fake_installation_token)
 
 
-class TestListOpenIssues:
+class TestListIssues:
     async def test_start_requires_github_app_credentials(self):
         config = BackboneConfig(github_app_id=None, github_app_private_key_path="")
 
@@ -67,7 +67,7 @@ class TestListOpenIssues:
         issues_route = respx.get(issues_url).respond(json=[])
 
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:ike", repo_full_name=REPO)
+            issues = await gh.list_issues(labels=["for:ike"], repo_full_name=REPO)
 
         assert issues == []
         assert install_route.called
@@ -75,7 +75,8 @@ class TestListOpenIssues:
         assert issues_route.called
 
     @respx.mock
-    async def test_returns_sorted_issues(self, config, issues_url):
+    async def test_returns_issues_in_github_order(self, config, issues_url):
+        # Priority ordering is routing's job (list_open_queue_for_target).
         respx.get(issues_url).respond(
             json=[
                 {
@@ -99,20 +100,17 @@ class TestListOpenIssues:
         )
 
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:ike", repo_full_name=REPO)
+            issues = await gh.list_issues(labels=["for:ike"], repo_full_name=REPO)
 
-        # Blocking issue should come first
-        assert len(issues) == 2
-        assert issues[0].number == 8
-        assert issues[0].labels.priority == "blocking"
-        assert issues[1].number == 5
+        assert [i.number for i in issues] == [5, 8]
+        assert issues[1].labels.priority == "blocking"
 
     @respx.mock
     async def test_empty_response(self, config, issues_url):
         respx.get(issues_url).respond(json=[])
 
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:ike", repo_full_name=REPO)
+            issues = await gh.list_issues(labels=["for:ike"], repo_full_name=REPO)
 
         assert issues == []
 
@@ -137,7 +135,7 @@ class TestListOpenIssues:
         )
 
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:ike", repo_full_name=REPO)
+            issues = await gh.list_issues(labels=["for:ike"], repo_full_name=REPO)
 
         assert len(issues) == 1
         assert issues[0].number == 1
@@ -148,7 +146,7 @@ class TestListOpenIssues:
 
         async with GitHubClient(config) as gh:
             with pytest.raises(httpx.HTTPStatusError):
-                await gh.list_open_issues("for:ike", repo_full_name=REPO)
+                await gh.list_issues(labels=["for:ike"], repo_full_name=REPO)
 
     @respx.mock
     async def test_uses_requested_repo_for_multi_repo_queries(self, config):
@@ -166,7 +164,7 @@ class TestListOpenIssues:
         )
 
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:ike", repo_full_name="WF/agent-shell")
+            issues = await gh.list_issues(labels=["for:ike"], repo_full_name="WF/agent-shell")
 
         assert len(issues) == 1
         assert issues[0].repo_full_name == "WF/agent-shell"
@@ -242,31 +240,3 @@ class TestGetSubIssues:
             subs = await gh.get_sub_issues(10, repo_full_name=REPO)
 
         assert subs == []
-
-
-class TestCountOpenSubIssues:
-    @respx.mock
-    async def test_counts_open_only(self, config):
-        url = f"{API_BASE}/repos/eandualem/orchestration/issues/10/sub_issues"
-        respx.get(url).respond(
-            json=[
-                {"number": 20, "title": "Sub 1", "state": "closed", "labels": []},
-                {"number": 21, "title": "Sub 2", "state": "open", "labels": []},
-                {"number": 22, "title": "Sub 3", "state": "open", "labels": []},
-            ]
-        )
-
-        async with GitHubClient(config) as gh:
-            count = await gh.count_open_sub_issues(10, repo_full_name=REPO)
-
-        assert count == 2
-
-    @respx.mock
-    async def test_error_returns_zero(self, config):
-        url = f"{API_BASE}/repos/eandualem/orchestration/issues/99/sub_issues"
-        respx.get(url).respond(status_code=500)
-
-        async with GitHubClient(config) as gh:
-            count = await gh.count_open_sub_issues(99, repo_full_name=REPO)
-
-        assert count == 0

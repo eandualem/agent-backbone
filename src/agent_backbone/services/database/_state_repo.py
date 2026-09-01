@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+from agent_backbone.services.database._time import now_iso
 
 
 async def get_agent_state(conn: AsyncConnection, session_name: str) -> dict | None:
@@ -59,7 +55,7 @@ async def set_agent_state(
             "current_issue": current_issue,
             "current_repo": current_repo,
             "started_at": started_at,
-            "updated_at": _now_iso(),
+            "updated_at": now_iso(),
             "ts": ts,
             "plan_file": plan_file,
             "plan_title": plan_title,

@@ -9,7 +9,7 @@ from agent_backbone.models import IssueData
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_issue_notification
 from agent_backbone.services.routing._resolution import (
-    resolve_entity_sessions,
+    resolve_entity_session,
     validate_issue_targets,
 )
 from agent_backbone.services.routing._targets import list_open_queue_for_target, queue_scope
@@ -43,24 +43,21 @@ async def create_and_notify(
 
     message = format_issue_notification(issue)
     for target in targets:
-        sessions = resolve_entity_sessions(target, config)
-        if not sessions:
+        session_name = resolve_entity_session(target, config)
+        if session_name is None:
             continue
         scope = queue_scope(await list_open_queue_for_target(config, target, gh))
-        for session_name in sessions:
-            outcome = await safe_deliver(
-                session_name,
-                message,
-                config,
-                db=db,
-                repo=repo,
-                issue_number=issue.number,
-                target_entity=target,
-                flow_name=flow_name,
-                enforce_issue_queue=True,
-                queue_scope=scope,
-            )
-            log.info(
-                "Direct notification %s#%d → %s: %s", repo, issue.number, session_name, outcome
-            )
+        outcome = await safe_deliver(
+            session_name,
+            message,
+            config,
+            db=db,
+            repo=repo,
+            issue_number=issue.number,
+            target_entity=target,
+            flow_name=flow_name,
+            enforce_issue_queue=True,
+            queue_scope=scope,
+        )
+        log.info("Direct notification %s#%d → %s: %s", repo, issue.number, session_name, outcome)
     return issue

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import EventType, IssueData, IssueEvent, ParsedLabels
-from agent_backbone.services.routing import clear as clear_dedup
-from agent_backbone.services.routing import find_next_issue, on_issue_closed
+from agent_backbone.services.routing._dedup import clear as clear_dedup
+from agent_backbone.services.routing._lifecycle import find_next_issue, on_issue_closed
 from tests.conftest import TEST_REPO, make_config
 
 _LC = "agent_backbone.services.routing._lifecycle"
@@ -53,7 +53,7 @@ class TestOnIssueClosed:
 
     async def test_delivers_next_issue(self, config):
         mock_gh = AsyncMock()
-        mock_gh.list_open_issues = AsyncMock(return_value=[_next_issue()])
+        mock_gh.list_issues = AsyncMock(return_value=[_next_issue()])
         with _patch_session_exists(True), _patch_find_next(_next_issue()), _patch_deliver() as d:
             result = await on_issue_closed(make_close_event(["feynman"]), config, mock_gh)
 
@@ -85,7 +85,7 @@ class TestOnIssueClosed:
 
     async def test_dedup_prevents_redelivery(self, config):
         mock_gh = AsyncMock()
-        mock_gh.list_open_issues = AsyncMock(return_value=[_next_issue(6)])
+        mock_gh.list_issues = AsyncMock(return_value=[_next_issue(6)])
         with _patch_session_exists(True), _patch_find_next(_next_issue(6)), _patch_deliver() as d:
             first = await on_issue_closed(make_close_event(["feynman"]), config, mock_gh)
             second = await on_issue_closed(make_close_event(["feynman"]), config, mock_gh)
@@ -96,19 +96,19 @@ class TestOnIssueClosed:
 
     async def test_find_next_issue_excludes_closed_number(self, config):
         mock_gh = AsyncMock()
-        mock_gh.list_open_issues = AsyncMock(return_value=[_next_issue(10), _next_issue(11)])
+        mock_gh.list_issues = AsyncMock(return_value=[_next_issue(10), _next_issue(11)])
         result = await find_next_issue(config, "feynman", mock_gh, exclude=(TEST_REPO, 10))
         assert result is not None and result.number == 11
 
     async def test_find_next_issue_none_when_empty(self, config):
         mock_gh = AsyncMock()
-        mock_gh.list_open_issues = AsyncMock(return_value=[])
+        mock_gh.list_issues = AsyncMock(return_value=[])
         assert await find_next_issue(config, "feynman", mock_gh) is None
 
     async def test_any_repo_runs_dependency_hooks(self, config):
         event = make_close_event(["feynman"], repo_full_name="acme/agent-shell")
         mock_gh = AsyncMock()
-        mock_gh.list_open_issues = AsyncMock(return_value=[])
+        mock_gh.list_issues = AsyncMock(return_value=[])
         with (
             _patch_session_exists(True),
             _patch_find_next(_next_issue()) as mock_find,
@@ -153,7 +153,6 @@ class TestOnIssueClosed:
         )
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[next_issue])
-        mock_gh.list_open_issues = AsyncMock(return_value=[])
 
         with _patch_session_exists(True), _patch_deliver() as d:
             result = await on_issue_closed(event, config, mock_gh)

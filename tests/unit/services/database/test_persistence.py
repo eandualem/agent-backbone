@@ -4,28 +4,16 @@ from __future__ import annotations
 
 import hashlib
 
-import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.database import BackboneDB
+from tests.support import queue_row
 
 
 def _make_db() -> BackboneDB:
     """Create a BackboneDB with a lightweight engine for hot-cache-only tests."""
     return BackboneDB(create_async_engine("sqlite+aiosqlite:///:memory:"))
-
-
-@pytest.fixture
-async def db():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    db = BackboneDB(engine)
-    await db.start()
-    try:
-        yield db
-    finally:
-        db._engine = None
-        await engine.dispose()
 
 
 class TestDeliveryTracking:
@@ -323,7 +311,7 @@ class TestMessageQueue:
         await db.mark_message_delivered(row_id)
 
         # Use BackboneDB method to verify
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
         assert row["status"] == "delivered"
         assert row["delivered_at"] is not None
 
@@ -390,6 +378,14 @@ class TestMessageQueue:
         assert len(messages) == 2
         assert {message["message"] for message in messages} == {"same comment", "different comment"}
 
+    async def test_enqueue_dedup_covers_every_non_issue_kind(self, db):
+        # A blocked drain re-offers a queued notice through safe_deliver;
+        # the queue must not grow a copy per attempt (seen live with PR notices).
+        for kind in ("pull_request", "watch", "escalation"):
+            first = await db.enqueue_message("ike", f"notice {kind}", delivery_kind=kind)
+            assert first > 0
+            assert await db.enqueue_message("ike", f"notice {kind}", delivery_kind=kind) == -1
+
     async def test_enqueue_dedup_dm_constraint(self, db):
         first = await db.enqueue_message(
             "ike",
@@ -428,7 +424,7 @@ class TestMessageQueue:
             delivery_kind="comment",
         )
 
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
 
         assert row["content_hash"] == hashlib.sha256(message.encode()).hexdigest()
 
@@ -449,7 +445,7 @@ class TestMessageQueue:
         assert messages[0]["id"] == row_id
         assert messages[0]["status"] == "in_progress"
         assert messages[0]["leased_at"] is not None
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
         assert row["status"] == "in_progress"
         assert row["leased_at"] is not None
 
@@ -468,7 +464,7 @@ class TestMessageQueue:
 
         await db.release_lease(row_id)
 
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
         assert row["status"] == "pending"
         assert row["leased_at"] is None
 
@@ -487,7 +483,7 @@ class TestMessageQueue:
         expired = await db.expire_stale_leases(max_age_minutes=5)
 
         assert expired == 1
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
         assert row["status"] == "pending"
         assert row["leased_at"] is None
 
@@ -504,8 +500,8 @@ class TestMessageQueue:
         purged = await db.purge_pending_for_issue(775)
 
         assert purged == 2
-        assert (await db.get_message_by_id(first))["status"] == "delivered"
-        assert (await db.get_message_by_id(second))["status"] == "delivered"
+        assert (await queue_row(db, first))["status"] == "delivered"
+        assert (await queue_row(db, second))["status"] == "delivered"
 
     async def test_mark_delivered_requires_in_progress(self, db):
         row_id = await db.enqueue_message(
@@ -514,7 +510,7 @@ class TestMessageQueue:
 
         await db.mark_message_delivered(row_id)
 
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
         assert row["status"] == "pending"
         assert row["delivered_at"] is None
 

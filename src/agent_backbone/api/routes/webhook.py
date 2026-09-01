@@ -1,9 +1,9 @@
 """GitHub webhook intake.
 
-``POST /webhooks/github`` (``POST /`` is kept as an alias) receives GitHub
-webhook events, verifies the HMAC signature, deduplicates by delivery id, and
-dispatches to the routing layer. Configure the webhook for **Issues**,
-**Issue comments** and optionally **Pull requests**.
+``POST /webhooks/github`` receives GitHub webhook events, verifies the HMAC
+signature, deduplicates by delivery id, and dispatches to the routing layer.
+Configure the webhook for **Issues**, **Issue comments** and optionally
+**Pull requests**.
 """
 
 from __future__ import annotations
@@ -26,8 +26,7 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.models import IssueEvent
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
-from agent_backbone.services.routing import DeliveryService, DispatchService
-from agent_backbone.services.routing._ingest import dispatch_event as dispatch_event_async
+from agent_backbone.services.routing import DeliveryService, DispatchService, dispatch_event
 
 log = logging.getLogger(__name__)
 
@@ -40,13 +39,6 @@ def verify_signature(payload_body: bytes, signature_header: str | None, secret: 
         return False
     expected = "sha256=" + hmac.new(secret.encode(), payload_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature_header)
-
-
-def normalize_event(
-    event_type_str: str, action: str, payload: dict, delivery_id: str
-) -> IssueEvent:
-    """Normalize a raw GitHub webhook into an IssueEvent."""
-    return IssueEvent.from_webhook(event_type_str, action, payload, delivery_id)
 
 
 async def _handle(
@@ -87,7 +79,7 @@ async def _handle(
     # If anything past this point fails, drop the delivery id from the hot
     # cache so GitHub's retry of the same delivery is processed, not skipped.
     try:
-        event = normalize_event(event_type_str, action, payload, delivery_id)
+        event = IssueEvent.from_webhook(event_type_str, action, payload, delivery_id)
         log.info(
             "Received: delivery=%s event=%s action=%s #%d targets=%s",
             delivery_id,
@@ -96,7 +88,7 @@ async def _handle(
             event.issue.number,
             event.issue.labels.targets,
         )
-        outcome = await dispatch_event_async(event, config, db, gh, delivery_svc, dispatch_svc)
+        outcome = await dispatch_event(event, config, db, gh, delivery_svc, dispatch_svc)
     except Exception:
         db.forget_delivery(delivery_id)
         raise
@@ -104,7 +96,6 @@ async def _handle(
 
 
 @router.post("/webhooks/github")
-@router.post("/", include_in_schema=False)
 async def handle_webhook(
     request: Request,
     config: BackboneConfig = Depends(get_config),

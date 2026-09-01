@@ -52,15 +52,10 @@ class TestBriefInjection:
         assert path is not None and path.read_text().startswith("# agent-backbone environment")
         assert "**orch**" in path.read_text()
 
-    def test_brief_written_for_codex_and_gemini(self, tmp_path):
+    def test_brief_is_written_for_every_runtime(self, tmp_path):
+        # start_agent decides whether it goes in at launch or as the first
+        # message; the file itself does not depend on the runtime.
         from agent_backbone.services.infrastructure._agents import agent_brief_file
 
-        for runtime in ("codex", "gemini"):
-            path = agent_brief_file("orch", "acme/app", tmp_path, runtime=runtime)
-            assert path is not None and "**orch**" in path.read_text()
-
-    def test_no_brief_for_runtimes_without_launch_injection(self, tmp_path):
-        from agent_backbone.services.infrastructure._agents import agent_brief_file
-
-        assert agent_brief_file("orch", "acme/app", tmp_path, runtime="shell") is None
-        assert agent_brief_file("orch", "acme/app", tmp_path, runtime="aider") is None
+        path = agent_brief_file("orch", "acme/app", tmp_path)
+        assert path == tmp_path / "briefs" / "orch.md"

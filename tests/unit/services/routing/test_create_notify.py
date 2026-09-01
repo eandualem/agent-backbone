@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent_backbone.models import IssueData, ParsedLabels
-from agent_backbone.services.routing import create_and_notify, format_issue_notification
+from agent_backbone.services.routing._create_notify import create_and_notify
+from agent_backbone.services.routing._format import format_issue_notification
 from tests.conftest import TEST_REPO
 
 _CN = "agent_backbone.services.routing._create_notify"

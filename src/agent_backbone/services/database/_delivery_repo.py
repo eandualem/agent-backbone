@@ -7,23 +7,11 @@ the repository so several repositories may share issue numbers.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-RETRYABLE_OUTCOMES = (
-    "offline",
-    "delivery_failed",
-    "agent_working",
-    "waiting_for_human",
-    "human_typing",
-    "settling",
-)
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+from agent_backbone.models import RETRYABLE_OUTCOMES
+from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 
 async def record_delivery(
@@ -59,7 +47,7 @@ async def record_delivery(
             "flow_name": flow_name,
             "flow_run_id": flow_run_id,
             "preview": preview[:200],
-            "created_at": _now_iso(),
+            "created_at": now_iso(),
         },
     )
     return result.scalar_one()
@@ -97,7 +85,7 @@ async def claim_delivery_attempt(
             "session_name": session_name,
             "flow_name": flow_name,
             "preview": preview[:200],
-            "now": _now_iso(),
+            "now": now_iso(),
         },
     )
     row = result.fetchone()
@@ -124,15 +112,12 @@ async def reclaim_stale_attempts(
     max_age_minutes: int = 5,
 ) -> int:
     """Delete stale attempting rows so new delivery claims can proceed."""
-    cutoff = (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
     result = await conn.execute(
         text(
             """DELETE FROM deliveries
                WHERE outcome = 'attempting' AND created_at < :cutoff"""
         ),
-        {"cutoff": cutoff},
+        {"cutoff": cutoff_iso(minutes=max_age_minutes)},
     )
     return result.rowcount
 
@@ -183,7 +168,7 @@ async def get_failed_deliveries(
     limit: int = 50,
 ) -> list[dict]:
     """Issue deliveries whose latest outcome is retryable (no later success)."""
-    placeholders = ",".join(f"'{o}'" for o in RETRYABLE_OUTCOMES)
+    placeholders = ",".join(f"'{o.value}'" for o in sorted(RETRYABLE_OUTCOMES))
     result = await conn.execute(
         text(
             f"""SELECT d.* FROM deliveries d
@@ -211,10 +196,9 @@ async def prune_old_deliveries(
     retention_days: int = 30,
 ) -> int:
     """Delete delivery records older than retention period. Returns count deleted."""
-    cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
     result = await conn.execute(
         text("DELETE FROM deliveries WHERE created_at < :cutoff"),
-        {"cutoff": cutoff},
+        {"cutoff": cutoff_iso(days=retention_days)},
     )
     return result.rowcount
 

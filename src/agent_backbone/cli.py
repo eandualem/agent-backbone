@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_backbone.config import (
+    RUNTIMES,
     SECRET_ENV_KEYS,
     SETTINGS_DEFAULTS,
     SETTINGS_HELP,
@@ -168,9 +169,6 @@ def cmd_init(args: argparse.Namespace) -> int:
 # secrets — the one .env the backbone reads
 # ---------------------------------------------------------------------------
 
-# `WEBHOOK_SECRET` is only a legacy alias for `GITHUB_WEBHOOK_SECRET`: still
-# read, still scrubbed from agent sessions, but not offered as a name to set.
-_KNOWN_SECRETS = tuple(k for k in SECRET_ENV_KEYS if k != "WEBHOOK_SECRET")
 _SECRET_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -239,9 +237,9 @@ def cmd_secrets(args: argparse.Namespace) -> int:
         return 0
     if sub == "list":
         present = _env_keys(env_path)
-        for key in _KNOWN_SECRETS:
+        for key in SECRET_ENV_KEYS:
             print(f"  {'✓' if key in present else '-'} {key}")
-        for key in sorted(present - set(_KNOWN_SECRETS)):
+        for key in sorted(present - set(SECRET_ENV_KEYS)):
             print(f"  ✓ {key}")
         print(f"\n{env_path}" if env_path.is_file() else f"\n{env_path} (not created yet)")
         return 0
@@ -272,7 +270,7 @@ def cmd_secrets(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    from agent_backbone.services.infrastructure._agents import RUNTIME_COMMANDS, runtime_available
+    from agent_backbone.services.infrastructure import RUNTIME_COMMANDS, runtime_available
 
     ok = True
 
@@ -404,12 +402,10 @@ async def _client_config() -> BackboneConfig:
     bootstrap defaults alone could point at the wrong address. Falls back to
     the bootstrap snapshot when the database cannot be read.
     """
-    boot = bootstrap_config()
     try:
-        async with _Direct(boot) as direct:
-            return direct.config
+        return await _load_config()
     except Exception:
-        return boot
+        return bootstrap_config()
 
 
 async def _up_detached(config: BackboneConfig) -> int:
@@ -671,12 +667,14 @@ async def _agent_start(args: argparse.Namespace) -> int:
 
     # Backbone not running: register + start directly.
     from agent_backbone.config import AgentSpec
-    from agent_backbone.services.infrastructure._agents import start_agent, wait_until_ready
+    from agent_backbone.services.infrastructure import start_agent
 
     async with _Direct(boot) as direct:
         store = direct.store
         if body["dir"]:
-            spec = store.discover(body["dir"], name=name, runtime=args.runtime, model=args.model)
+            spec = await store.discover(
+                body["dir"], name=name, runtime=args.runtime, model=args.model
+            )
             if args.watch:
                 spec = AgentSpec(
                     **{
@@ -699,48 +697,41 @@ async def _agent_start(args: argparse.Namespace) -> int:
             if changes:
                 spec = await store.update(name, **changes)
         config = direct.config
-        runtime = args.runtime or spec.runtime
-        ok = await start_agent(
+        result = await start_agent(
             spec,
+            config,
             runtime=args.runtime,
             model=args.model,
             resume=args.resume,
-            state_dir=config.state_dir,
-            data_dir=config.data_dir,
-            pre_trust=config.agents_section.pre_trust,
-            inject_brief=config.agents_section.inject_brief,
+            wait=not args.no_wait,
         )
-        if not ok:
+        if not result.ok:
             print(f"{spec.name}: failed to start")
+            for line in result.evidence:
+                print(f"  - {line}")
             return 1
-        await store.touch_started(spec.name)
-        ready, evidence = "not_waited", []
-        if not args.no_wait:
-            ready, evidence = await wait_until_ready(
-                spec.name,
-                state_dir=config.state_dir,
-                runtime=runtime,
-                timeout=config.monitor.start_timeout_seconds,
-            )
+        if not result.already_running:
+            await store.touch_started(spec.name)
         _print_start_result(
             {
-                "ok": ready != "exited",
+                "ok": result.ready != "exited",
                 "name": spec.name,
-                "runtime": runtime,
+                "runtime": args.runtime or spec.runtime,
                 "repo": spec.repo,
                 "working_directory": str(spec.path),
-                "ready": ready,
-                "evidence": evidence,
+                "already_existed": result.already_running,
+                "ready": result.ready,
+                "evidence": list(result.evidence),
             }
         )
         print(
             "note: the backbone is not running — start it with `backbone up --detach` for routing"
         )
-        return 0 if ready != "exited" else 1
+        return 0 if result.ready != "exited" else 1
 
 
 async def _agent(args: argparse.Namespace) -> int:
-    from agent_backbone.services.infrastructure import _agents
+    from agent_backbone.services.infrastructure import stop_agent
 
     sub = args.agent_command
     if sub == "start":
@@ -750,7 +741,7 @@ async def _agent(args: argparse.Namespace) -> int:
     api_up = await _api_up(boot)
 
     if sub == "list":
-        config = await _load_config()
+        config = boot
         if not config.agents:
             print("No agents known yet. Run `backbone agent start` from a project directory.")
             return 0
@@ -767,7 +758,7 @@ async def _agent(args: argparse.Namespace) -> int:
                 result = await _api(boot, "POST", f"/api/agents/{name}/stop", timeout=30.0)
                 ok = bool(result and result[0] == 200 and result[1].get("ok"))
             else:
-                ok = await _agents.stop_agent(name)
+                ok = await stop_agent(name)
             print(f"{name}: {'stopped' if ok else 'not stopped'}")
             failed = failed or not ok
         return 1 if failed else 0
@@ -1215,7 +1206,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument(
         "--runtime",
         default=None,
-        help="claude | codex | gemini | opencode | aider | cursor | shell "
+        help=f"{' | '.join(RUNTIMES)} "
         "(default: agents.default_runtime, recorded on the agent afterwards)",
     )
     ps.add_argument(

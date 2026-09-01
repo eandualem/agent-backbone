@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from telegram import Update
@@ -12,14 +11,14 @@ from telegram.ext import ContextTypes
 if TYPE_CHECKING:
     from agent_backbone.services.integrations.telegram.interface import TelegramService
 
-from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.infrastructure._agents import start_agent, stop_agent
+from agent_backbone.services.agents import read_plan, read_state_file
+from agent_backbone.services.infrastructure import approve_plan, start_agent, stop_agent
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     process_message_for_discovery,
 )
 from agent_backbone.services.routing import safe_deliver
-from agent_backbone.services.terminal import list_sessions, send_keys, session_exists
+from agent_backbone.services.terminal import list_sessions, session_exists
 
 log = logging.getLogger(__name__)
 
@@ -67,10 +66,10 @@ async def cmd_status(
 
     sessions = set(await list_sessions())
     lines = ["*Agents:*"]
-    for spec in bot._config.agents:
+    for spec in bot.config.agents:
         mark = "\U0001f7e2" if spec.name in sessions else "⚪"
         lines.append(f"  {mark} `{spec.name}` ({spec.runtime})")
-    others = sorted(s for s in sessions if s not in bot._config.agents)
+    others = sorted(s for s in sessions if s not in bot.config.agents)
     if others:
         lines.append("\n*Other tmux sessions:*")
         lines.extend(f"  • `{s}`" for s in others)
@@ -119,20 +118,13 @@ async def cmd_start_agent(
         return
 
     name = context.args[0]
-    spec = bot._config.agents.get(name)
+    spec = bot.config.agents.get(name)
     if spec is None:
         await update.message.reply_text(f"Unknown agent `{name}`", parse_mode="Markdown")
         return
 
-    agents_section = bot._config.agents_section
-    ok = await start_agent(
-        spec,
-        state_dir=bot._config.state_dir,
-        data_dir=bot._config.data_dir,
-        pre_trust=agents_section.pre_trust,
-        inject_brief=agents_section.inject_brief,
-    )
-    status = "Started" if ok else "Failed to start"
+    result = await start_agent(spec, bot.config, db=bot._db, wait=False)
+    status = "Started" if result.ok else "Failed to start"
     await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
 
 
@@ -169,7 +161,7 @@ async def cmd_tell(
     sender = bot._sender_tag(update)
     message = f"[via:telegram from:{sender}] {raw_message}"
     result = await safe_deliver(
-        agent, message, bot._config, db=bot._db, delivery_kind="direct_message"
+        agent, message, bot.config, db=bot._db, delivery_kind="direct_message"
     )
 
     await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")
@@ -221,12 +213,12 @@ async def cmd_identify(
 
     process_message_for_discovery(
         update,
-        bot._config,
+        bot.config,
         bot._discovery,
-        bot._config.telegram_topic_discovery_path,
+        bot.config.telegram_topic_discovery_path,
     )
 
-    config_routes = bot._config.telegram.topic_routes
+    config_routes = bot.config.telegram.topic_routes
     merged = bot._effective_routes()
     mapping = merged.get(thread_id)
 
@@ -261,7 +253,7 @@ async def cmd_viewplan(
         return
 
     agent = context.args[0]
-    snapshot = read_state_file(bot._config.state_dir, agent)
+    snapshot = read_state_file(bot.config.state_dir, agent)
 
     if not snapshot or not snapshot.is_plan_waiting:
         state_str = snapshot.state.value if snapshot else "unknown"
@@ -271,14 +263,11 @@ async def cmd_viewplan(
         )
         return
 
-    if not snapshot.plan_file:
-        await update.message.reply_text(f"Agent `{agent}` has no plan file path in state.")
-        return
-
-    try:
-        plan_content = Path(snapshot.plan_file).expanduser().read_text()
-    except OSError as e:
-        await update.message.reply_text(f"Cannot read plan file: {e}")
+    plan_content = read_plan(bot.config.state_dir, snapshot)
+    if plan_content is None:
+        await update.message.reply_text(
+            f"Agent `{agent}` has no readable plan file (plans live under the state directory)."
+        )
         return
 
     header = f"Plan: {snapshot.plan_title or 'Untitled'}\nAgent: {agent}\n\n"
@@ -296,7 +285,7 @@ async def cmd_approve(
     if not _authorized(bot, update):
         return
 
-    if not bot._config.security.allow_remote_plan_control:
+    if not bot.config.security.allow_remote_plan_control:
         await update.message.reply_text(
             "Remote plan approval is disabled. Enable with "
             "`backbone config set security.allow_remote_plan_control true`.",
@@ -309,7 +298,7 @@ async def cmd_approve(
         return
 
     agent = context.args[0]
-    snapshot = read_state_file(bot._config.state_dir, agent)
+    snapshot = read_state_file(bot.config.state_dir, agent)
 
     if not snapshot or not snapshot.is_plan_waiting:
         state_str = snapshot.state.value if snapshot else "unknown"
@@ -323,10 +312,7 @@ async def cmd_approve(
         await update.message.reply_text(f"Session `{agent}` is offline.", parse_mode="Markdown")
         return
 
-    ok1 = await send_keys(agent, "Escape")
-    ok2 = await send_keys(agent, "[Z")
-
-    if ok1 and ok2:
+    if await approve_plan(agent):
         await update.message.reply_text(
             f"Plan approved for `{agent}`. Sending approval signal.",
             parse_mode="Markdown",

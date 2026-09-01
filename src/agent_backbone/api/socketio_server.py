@@ -144,7 +144,6 @@ class TerminalNamespace(_AuthenticatedNamespace):
         super().__init__(namespace)
         # sid -> {session_name: forwarding_task or None when collapsed/detached}
         self._subscriptions: dict[str, dict[str, asyncio.Task | None]] = {}
-        self._active_sessions: dict[str, set[str]] = {}
         self._background: set[asyncio.Task] = set()
 
     async def _attach_subscription_client(
@@ -163,7 +162,6 @@ class TerminalNamespace(_AuthenticatedNamespace):
             name=f"sio-pty-{sid}-{session_name}",
         )
         self._subscriptions.setdefault(sid, {})[session_name] = task
-        self._active_sessions.setdefault(session_name, set()).add(sid)
 
     async def _detach_subscription_client(self, sid: str, session_name: str) -> None:
         sid_subs = self._subscriptions.get(sid, {})
@@ -259,10 +257,6 @@ class TerminalNamespace(_AuthenticatedNamespace):
         if not session_name or session_name not in self._subscriptions.get(sid, {}):
             return
         await self._detach_subscription_client(sid, session_name)
-        active_sids = self._active_sessions.get(session_name, set())
-        active_sids.discard(sid)
-        if not active_sids:
-            self._active_sessions.pop(session_name, None)
 
     async def on_pause(self, sid: str, data: dict) -> None:
         pty_session = get_pty_manager().get(sid, data.get("session", ""))
@@ -290,11 +284,6 @@ class TerminalNamespace(_AuthenticatedNamespace):
         sid_subs.pop(session_name, None)
         if not sid_subs:
             self._subscriptions.pop(sid, None)
-
-        active_sids = self._active_sessions.get(session_name, set())
-        active_sids.discard(sid)
-        if not active_sids:
-            self._active_sessions.pop(session_name, None)
 
         await self.leave_room(sid, f"session:{session_name}")
 

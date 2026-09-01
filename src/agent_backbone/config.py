@@ -29,16 +29,19 @@ from typing import Any
 
 from dotenv import dotenv_values
 
+from agent_backbone.models import ISSUE_TYPE_WEIGHTS
 from agent_backbone.services.database.interface import sqlite_url
 
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
 DEFAULT_PORT = 7120
 
+RUNTIMES: tuple[str, ...] = ("claude", "codex", "gemini", "opencode", "aider", "shell")
+"""Every runtime an agent can be started with (``shell`` is a plain login shell)."""
+
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "BACKBONE_API_KEY",
     "GITHUB_TOKEN",
     "GITHUB_WEBHOOK_SECRET",
-    "WEBHOOK_SECRET",
     "GITHUB_APP_ID",
     "GITHUB_APP_PRIVATE_KEY_PATH",
     "TELEGRAM_TOKEN",
@@ -68,7 +71,6 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "routing.ignore_targets": [],
     "routing.notification_dedup_seconds": 10,
     "timing.stale_threshold_seconds": 300,
-    "timing.snapshot_trust_seconds": 20,
     "timing.grace_period_seconds": 5,
     "timing.queue_expiry_minutes": 30,
     "timing.stall_threshold_seconds": 5400,
@@ -84,13 +86,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "telegram.topic_routes": {},
     "escalation.target": "",
     "priority.blocking_weight": 1000.0,
-    "priority.type_weights": {
-        "spec-gap": 100.0,
-        "bug": 90.0,
-        "task": 50.0,
-        "question": 20.0,
-        "optimization": 10.0,
-    },
+    "priority.type_weights": dict(ISSUE_TYPE_WEIGHTS),
     "priority.dependents_multiplier": 1.5,
     "priority.age_tiebreaker_weight": 0.01,
     "security.allow_remote_plan_control": False,
@@ -103,6 +99,7 @@ SETTINGS_HELP: dict[str, str] = {
     "backbone.port": "API port",
     "backbone.session_name": "tmux session used by `backbone up --detach`",
     "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",
+    "backbone.max_delivery_ids": "Webhook delivery ids remembered for duplicate detection",
     "agents.default_runtime": "Runtime used by `agent start` when none is given",
     "agents.pre_trust": (
         "Answer the runtime's folder-trust dialog before starting (claude, codex, gemini)"
@@ -115,8 +112,10 @@ SETTINGS_HELP: dict[str, str] = {
     "github.backfill_on_start": "Fetch events missed while the backbone was down",
     "github.backfill_lookback_hours": "How far back a first-ever backfill looks",
     "routing.ignore_targets": "for:/from: values that are people, not agents (JSON list)",
+    "routing.notification_dedup_seconds": (
+        "Do not announce the same issue to the same agent twice within this window"
+    ),
     "timing.stale_threshold_seconds": "Hook state older than this is verified against the terminal",
-    "timing.snapshot_trust_seconds": "A stored state snapshot older than this is re-verified live",
     "timing.grace_period_seconds": "Settle time after an agent becomes idle before delivering",
     "timing.queue_expiry_minutes": "Queued messages older than this are dropped",
     "timing.stall_threshold_seconds": "Busy on one issue longer than this is a stall",
@@ -131,6 +130,10 @@ SETTINGS_HELP: dict[str, str] = {
     "telegram.auto_topics": "Create/close a forum topic per registered agent automatically",
     "telegram.topic_routes": "JSON object thread_id -> agent name (explicit, on top of automatic)",
     "escalation.target": "Agent that receives stall/offline/plan escalations",
+    "priority.blocking_weight": "Score added to issues labelled `blocking`",
+    "priority.type_weights": "Base score per issue type label (JSON object)",
+    "priority.dependents_multiplier": "Score multiplier per open sub-issue that depends on it",
+    "priority.age_tiebreaker_weight": "Small bonus for lower issue numbers (older first)",
     "security.allow_remote_plan_control": "Allow approving plans via API/Telegram (sends keys)",
     "security.allow_remote_approval": (
         "Allow `agent approve` to answer a visible permission prompt via the API"
@@ -141,7 +144,7 @@ SETTINGS_HELP: dict[str, str] = {
 
 _SETTING_CHOICES: dict[str, tuple[str, ...]] = {
     "github.intake": ("auto", "webhook", "poll", "off"),
-    "agents.default_runtime": ("claude", "codex", "gemini", "opencode", "aider", "cursor", "shell"),
+    "agents.default_runtime": RUNTIMES,
 }
 _INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids"})
 # Scheduler job periods: a zero or negative value would make Scheduler.add()
@@ -288,10 +291,6 @@ class AgentsConfig:
     def names(self) -> list[str]:
         return list(self.specs)
 
-    def for_repo(self, repo_full_name: str) -> list[AgentSpec]:
-        """Every agent that owns or watches a repository (owners first)."""
-        return self.owners(repo_full_name) + self.watchers(repo_full_name)
-
     def owners(self, repo_full_name: str) -> list[AgentSpec]:
         """Agents whose directory *is* the repository."""
         key = repo_full_name.casefold()
@@ -307,9 +306,6 @@ class AgentsConfig:
             for spec in self.specs.values()
             if spec.repo.casefold() != key and any(w.casefold() == key for w in spec.watches)
         ]
-
-    def with_tag(self, tag: str) -> list[AgentSpec]:
-        return [spec for spec in self.specs.values() if tag in spec.tags]
 
     @property
     def repos(self) -> list[str]:
@@ -369,7 +365,6 @@ class RoutingConfig:
 @dataclass(frozen=True)
 class AgentStateConfig:
     stale_threshold_seconds: int = 300
-    snapshot_trust_seconds: int = 20
 
 
 @dataclass(frozen=True)
@@ -603,7 +598,7 @@ def build_config(
 
     return BackboneConfig(
         api_key=env.get("BACKBONE_API_KEY", ""),
-        webhook_secret=env.get("GITHUB_WEBHOOK_SECRET", env.get("WEBHOOK_SECRET", "")),
+        webhook_secret=env.get("GITHUB_WEBHOOK_SECRET", ""),
         github_token=env.get("GITHUB_TOKEN", ""),
         github_app_id=_opt_int(env.get("GITHUB_APP_ID", "")),
         github_app_private_key_path=env.get("GITHUB_APP_PRIVATE_KEY_PATH", ""),
@@ -634,7 +629,6 @@ def build_config(
         ),
         agent_state=AgentStateConfig(
             stale_threshold_seconds=s["timing.stale_threshold_seconds"],
-            snapshot_trust_seconds=s["timing.snapshot_trust_seconds"],
         ),
         monitor=MonitorConfig(
             interval_seconds=s["timing.monitor_interval_seconds"],

@@ -103,7 +103,7 @@ an orchestrator that should spin up workers runs these commands itself.
 |---|---|---|
 | `NAME` (positional) | Agent name = tmux session = `for:` label. Known name: starts from its recorded directory. Unknown name: registers the cwd under it. Omitted: the folder name is the name — the usual case for single-repository agents | yes (the key) |
 | `--dir D` | Project directory to discover (name defaults from its folder name; repo from its `origin` remote) | yes |
-| `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `aider`, `cursor`, or `shell` | yes — later bare starts reuse it |
+| `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `aider`, or `shell` | yes — later bare starts reuse it |
 | `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent | yes — later bare starts reuse it |
 | `--watch OWNER/REPO` | Also subscribe to a repository (repeatable) | yes |
 | `--resume` | Ask the runtime to resume its last conversation | no |

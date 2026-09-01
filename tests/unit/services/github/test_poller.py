@@ -8,12 +8,10 @@ import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import EventType
-from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github._poller import (
     GitHubPoller,
     comment_event_from_api,
     issue_event_from_api,
-    polled_repos,
 )
 from tests.conftest import TEST_REPO, make_agents, make_config
 
@@ -84,13 +82,7 @@ class TestPolledRepos:
                 }
             ),
         )
-        assert polled_repos(config) == ["acme/app", TEST_REPO]
-
-
-@pytest.fixture
-async def db():
-    async with BackboneDB.connect() as db:
-        yield db
+        assert config.agents.repos == ["acme/app", TEST_REPO]
 
 
 @pytest.fixture

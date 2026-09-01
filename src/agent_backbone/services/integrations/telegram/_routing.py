@@ -88,9 +88,9 @@ async def handle_topic_message(
 
     process_message_for_discovery(
         update,
-        bot._config,
+        bot.config,
         bot._discovery,
-        bot._config.telegram_topic_discovery_path,
+        bot.config.telegram_topic_discovery_path,
     )
 
     routes = bot._effective_routes()
@@ -123,6 +123,6 @@ async def handle_topic_message(
         message = f"{tag} {text}"
 
     result = await safe_deliver(
-        agent, message, bot._config, db=bot._db, delivery_kind="direct_message"
+        agent, message, bot.config, db=bot._db, delivery_kind="direct_message"
     )
     await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")

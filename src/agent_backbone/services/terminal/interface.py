@@ -64,9 +64,9 @@ class TmuxService:
         """Check if a tmux session exists."""
         return await _session_exists(session)
 
-    async def send_keys(self, session: str, keys: str, literal: bool = False) -> bool:
-        """Send keys to a tmux session."""
-        return await _send_keys(session, keys, literal=literal)
+    async def send_keys(self, session: str, keys: str) -> bool:
+        """Send a key name or escape sequence to a tmux session."""
+        return await _send_keys(session, keys)
 
     async def start_session(
         self,

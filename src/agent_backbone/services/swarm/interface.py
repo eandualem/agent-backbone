@@ -16,11 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import AgentSpec
-from agent_backbone.services.infrastructure._agents import (
-    BRIEF_INJECTION_RUNTIMES,
-    start_agent,
-    wait_until_ready,
-)
+from agent_backbone.services.infrastructure import start_agent
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
@@ -240,37 +236,15 @@ async def create_swarm(
                 tags=(f"swarm:{name}", f"role:{spec.role}"),
             )
             await store.register(agent)
-            ok = await start_agent(
-                agent,
-                state_dir=config.state_dir,
-                data_dir=config.data_dir,
-                pre_trust=config.agents_section.pre_trust,
-                system_prompt_file=(brief_file if runtime in BRIEF_INJECTION_RUNTIMES else None),
-            )
-            if not ok:
+            # The role brief replaces the common backbone brief: at launch
+            # where the runtime takes one, else as the first delivered message.
+            result = await start_agent(agent, config, brief_file=brief_file, db=db)
+            if not result.ok:
                 raise SwarmError(f"failed to start member '{agent_name}'")
             started.append(agent_name)
             await store.touch_started(agent_name)
-            outcome, _ = await wait_until_ready(
-                agent_name,
-                state_dir=config.state_dir,
-                runtime=runtime,
-                timeout=config.monitor.start_timeout_seconds,
-            )
-            if outcome == "exited":
+            if result.ready == "exited":
                 raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
-            if runtime not in BRIEF_INJECTION_RUNTIMES and runtime != "shell":
-                # No launch injection for this runtime: the brief is the
-                # first delivered message instead. A plain shell has nobody
-                # to brief — pasting it would run the brief as commands.
-                await safe_deliver(
-                    agent_name,
-                    f"[via:backbone swarm:{name}] {brief_file.read_text()}",
-                    config,
-                    db=db,
-                    flow_name="swarm-brief",
-                    delivery_kind="direct_message",
-                )
     except Exception:
         # Best-effort rollback so a half-started swarm doesn't linger.
         for agent_name in started:

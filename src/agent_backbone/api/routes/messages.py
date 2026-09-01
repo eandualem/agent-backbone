@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 
 from agent_backbone.api.deps import get_config, get_db, registered_agent_or_404
 from agent_backbone.api.models import MessageRequest, MessageResponse
-from agent_backbone.services.routing._delivery import outcome_queues, safe_deliver
+from agent_backbone.services.routing import outcome_queues, safe_deliver
 
 log = logging.getLogger(__name__)
 

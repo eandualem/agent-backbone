@@ -9,9 +9,11 @@ import pytest
 
 from agent_backbone.config import SecurityConfig, TelegramConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
+from agent_backbone.services.infrastructure import StartResult
 from agent_backbone.services.integrations.telegram import TelegramService
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import CATCH_ALL_TOPIC
+from agent_backbone.services.integrations.telegram.interface import _send
 
 _CMD = "agent_backbone.services.integrations.telegram._commands"
 _ROUTING = "agent_backbone.services.integrations.telegram._routing"
@@ -135,7 +137,9 @@ class TestStartStop:
     async def test_start_configured_agent(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.start_agent", new_callable=AsyncMock, return_value=True) as start:
+        with patch(
+            f"{_CMD}.start_agent", new_callable=AsyncMock, return_value=StartResult(ok=True)
+        ) as start:
             await bot.cmd_start_agent(update, _context(["ike"]))
         assert start.await_args.args[0].name == "ike"
         update.message.reply_text.assert_awaited_once_with("Started `ike`", parse_mode="Markdown")
@@ -160,9 +164,9 @@ class TestPlans:
     async def test_approve_disabled_by_default(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.send_keys", new_callable=AsyncMock) as keys:
+        with patch(f"{_CMD}.approve_plan", new_callable=AsyncMock) as approve:
             await bot.cmd_approve(update, _context(["ike"]))
-        keys.assert_not_called()
+        approve.assert_not_called()
         assert "disabled" in update.message.reply_text.await_args.args[0]
 
     async def test_approve_sends_keys_when_enabled(self, config):
@@ -178,15 +182,17 @@ class TestPlans:
         with (
             patch(f"{_CMD}.read_state_file", return_value=snapshot),
             patch(f"{_CMD}.session_exists", new_callable=AsyncMock, return_value=True),
-            patch(f"{_CMD}.send_keys", new_callable=AsyncMock, return_value=True) as keys,
+            patch(f"{_CMD}.approve_plan", new_callable=AsyncMock, return_value=True) as approve,
         ):
             await bot.cmd_approve(update, _context(["ike"]))
-        assert [c.args[1] for c in keys.await_args_list] == ["Escape", "[Z"]
+        approve.assert_awaited_once_with("ike")
 
-    async def test_viewplan_shows_content(self, config, tmp_path):
+    async def test_viewplan_shows_content(self, config):
         bot = _bot(config)
         update = _update()
-        plan = tmp_path / "plan.md"
+        plans_dir = config.state_dir / "plans"
+        plans_dir.mkdir(parents=True, exist_ok=True)
+        plan = plans_dir / "ike.md"
         plan.write_text("# plan body")
         snapshot = StateSnapshot(
             state=AgentState.WAITING_FOR_HUMAN,
@@ -198,6 +204,20 @@ class TestPlans:
             await bot.cmd_viewplan(update, _context(["ike"]))
         text = update.message.reply_text.await_args.args[0]
         assert "Big plan" in text and "# plan body" in text
+
+    async def test_viewplan_refuses_a_plan_outside_the_state_dir(self, config, tmp_path):
+        # The path comes from the agent-writable state file: never read elsewhere.
+        bot = _bot(config)
+        update = _update()
+        secret = tmp_path / "secret.txt"
+        secret.write_text("hunter2")
+        snapshot = StateSnapshot(
+            state=AgentState.WAITING_FOR_HUMAN, reason="plan", plan_file=str(secret)
+        )
+        with patch(f"{_CMD}.read_state_file", return_value=snapshot):
+            await bot.cmd_viewplan(update, _context(["ike"]))
+        text = update.message.reply_text.await_args.args[0]
+        assert "hunter2" not in text and "no readable plan" in text
 
 
 class TestStatusAndQueue:
@@ -235,8 +255,8 @@ class TestDeliveryReplyFallbacks:
         assert _delivery_reply("ike", status) == expected
 
 
-class TestSendNotification:
-    async def test_send_notification_success(self):
+class TestSend:
+    async def test_send_success(self):
         response = MagicMock(status_code=200)
         client = AsyncMock()
         client.post = AsyncMock(return_value=response)
@@ -246,9 +266,9 @@ class TestSendNotification:
             "agent_backbone.services.integrations.telegram.interface.httpx.AsyncClient",
             return_value=client,
         ):
-            assert await TelegramService.send_notification("tok", 1, "hi") is True
+            assert await _send("tok", 1, "hi") is True
 
-    async def test_send_notification_failure(self):
+    async def test_send_failure(self):
         client = AsyncMock()
         client.post = AsyncMock(return_value=MagicMock(status_code=400, text="bad"))
         client.__aenter__ = AsyncMock(return_value=client)
@@ -257,7 +277,7 @@ class TestSendNotification:
             "agent_backbone.services.integrations.telegram.interface.httpx.AsyncClient",
             return_value=client,
         ):
-            assert await TelegramService.send_notification("tok", 1, "hi") is False
+            assert await _send("tok", 1, "hi") is False
 
 
 class TestGeneralAndUnmapped:

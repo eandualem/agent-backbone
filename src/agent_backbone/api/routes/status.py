@@ -138,16 +138,4 @@ async def get_service_health(
 @router.get("/config/agents", response_model=list[AgentConfigResponse])
 async def get_agent_config(config: BackboneConfig = Depends(get_config)):
     """Return the configured agents (non-secret)."""
-    return [
-        AgentConfigResponse(
-            name=spec.name,
-            dir=str(spec.path),
-            runtime=spec.runtime,
-            model=spec.model,
-            repo=spec.repo,
-            watches=list(spec.watches),
-            tags=list(spec.tags),
-            description=spec.description,
-        )
-        for spec in config.agents
-    ]
+    return [AgentConfigResponse.from_spec(spec) for spec in config.agents]

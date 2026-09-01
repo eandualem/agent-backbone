@@ -11,6 +11,9 @@ from agent_backbone.api.deps import get_state_service, get_tmux_service
 from agent_backbone.services.agents import AgentState, StateSnapshot
 
 _ROUTE = "agent_backbone.api.routes.agents"
+_LAUNCH = "agent_backbone.services.infrastructure._agents"
+
+_DETECT_REPO = "agent_backbone.services.agent_store.detect_repo"
 
 
 def _snapshot(state: AgentState = AgentState.IDLE, **kwargs) -> StateSnapshot:
@@ -52,13 +55,34 @@ def _override(api_app, state_svc, tmux_svc):
             return_value="claude",
         ),
         patch(
-            f"{_ROUTE}.wait_until_ready",
+            f"{_LAUNCH}.wait_until_ready",
             new_callable=AsyncMock,
             return_value=("ready", ["hook reported idle"]),
         ),
     ):
         yield
     api_app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def launch():
+    """The launch seams under ``start_agent``: no real tmux, no real binaries."""
+    with (
+        patch(f"{_ROUTE}.runtime_available", return_value=True),
+        patch(f"{_LAUNCH}.session_exists", new_callable=AsyncMock, return_value=False) as exists,
+        patch(f"{_LAUNCH}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        patch(f"{_LAUNCH}.build_command", return_value=["/usr/bin/claude"]) as build,
+        patch(f"{_LAUNCH}.pre_trust_runtime") as trust,
+        patch("agent_backbone.services.routing.safe_deliver", new_callable=AsyncMock) as deliver,
+    ):
+        deliver.return_value = "delivered"
+        yield MagicMock(
+            session_exists=exists,
+            start_session=start,
+            build_command=build,
+            trust=trust,
+            deliver=deliver,
+        )
 
 
 class TestListAgents:
@@ -112,91 +136,68 @@ class TestRuntimes:
 
 
 class TestStartAgent:
-    async def test_start_configured_agent(self, api_client, auth_headers, tmux_svc):
-        with (
-            patch(f"{_ROUTE}.runtime_available", return_value=True),
-            patch(f"{_ROUTE}.build_command", return_value=["/usr/bin/claude"]),
-        ):
-            resp = await api_client.post("/api/agents/ike/start", headers=auth_headers)
+    async def test_start_configured_agent(self, api_client, auth_headers, launch):
+        resp = await api_client.post("/api/agents/ike/start", headers=auth_headers)
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True and data["runtime"] == "claude"
         assert data["working_directory"].endswith("/ike")
         assert data["ready"] == "ready" and data["evidence"] == ["hook reported idle"]
-        tmux_svc.start_session.assert_awaited_once()
-        kwargs = tmux_svc.start_session.await_args.kwargs
+        launch.start_session.assert_awaited_once()
+        kwargs = launch.start_session.await_args.kwargs
         assert kwargs["command"] == ["/usr/bin/claude"]
         assert kwargs["environment"]["BACKBONE_RUNTIME"] == "claude"
 
-    async def test_request_overrides_config(self, api_client, auth_headers):
-        with (
-            patch(f"{_ROUTE}.runtime_available", return_value=True),
-            patch(
-                f"{_ROUTE}.build_command", return_value=["/usr/bin/codex", "--model", "x"]
-            ) as build,
-        ):
-            resp = await api_client.post(
-                "/api/agents/ike/start",
-                json={"runtime": "codex", "model": "x", "resume": True},
-                headers=auth_headers,
-            )
+    async def test_request_overrides_config(self, api_client, auth_headers, launch):
+        launch.build_command.return_value = ["/usr/bin/codex", "--model", "x"]
+        resp = await api_client.post(
+            "/api/agents/ike/start",
+            json={"runtime": "codex", "model": "x", "resume": True},
+            headers=auth_headers,
+        )
         assert resp.json()["runtime"] == "codex"
-        assert build.call_args.args == ("codex",)
-        assert build.call_args.kwargs["model"] == "x"
-        assert build.call_args.kwargs["resume"] is True
+        assert launch.build_command.call_args.args == ("codex",)
+        assert launch.build_command.call_args.kwargs["model"] == "x"
+        assert launch.build_command.call_args.kwargs["resume"] is True
 
-    async def test_every_runtime_gets_the_trust_setting(self, api_client, auth_headers):
+    async def test_every_runtime_gets_the_trust_setting(self, api_client, auth_headers, launch):
         # `agent start` for codex must pre-trust like the swarm path does, and
         # build_command needs the flag for gemini's --skip-trust.
-        with (
-            patch(f"{_ROUTE}.runtime_available", return_value=True),
-            patch(f"{_ROUTE}.build_command", return_value=["/usr/bin/codex"]) as build,
-            patch(f"{_ROUTE}.pre_trust_runtime") as trust,
-        ):
-            resp = await api_client.post(
-                "/api/agents/ike/start", json={"runtime": "codex"}, headers=auth_headers
-            )
+        resp = await api_client.post(
+            "/api/agents/ike/start", json={"runtime": "codex"}, headers=auth_headers
+        )
         assert resp.status_code == 200
-        trust.assert_called_once()
-        assert trust.call_args.args[0] == "codex"
-        assert build.call_args.kwargs["pre_trust"] is True
+        launch.trust.assert_called_once()
+        assert launch.trust.call_args.args[0] == "codex"
+        assert launch.build_command.call_args.kwargs["pre_trust"] is True
 
     async def test_runtime_without_launch_injection_gets_brief_as_first_message(
-        self, api_client, auth_headers
+        self, api_client, auth_headers, launch
     ):
-        with (
-            patch(f"{_ROUTE}.runtime_available", return_value=True),
-            patch(f"{_ROUTE}.build_command", return_value=["/usr/bin/aider"]),
-            patch(f"{_ROUTE}.safe_deliver", new_callable=AsyncMock, return_value="delivered") as d,
-        ):
-            resp = await api_client.post(
-                "/api/agents/ike/start", json={"runtime": "aider"}, headers=auth_headers
-            )
+        launch.build_command.return_value = ["/usr/bin/aider"]
+        resp = await api_client.post(
+            "/api/agents/ike/start", json={"runtime": "aider"}, headers=auth_headers
+        )
         assert resp.status_code == 200
-        d.assert_awaited_once()
-        assert d.await_args.args[0] == "ike"
-        assert d.await_args.args[1].startswith("[via:backbone] ")
-        assert d.await_args.kwargs["delivery_kind"] == "direct_message"
+        launch.deliver.assert_awaited_once()
+        assert launch.deliver.await_args.args[0] == "ike"
+        assert launch.deliver.await_args.args[1].startswith("[via:backbone] ")
+        assert launch.deliver.await_args.kwargs["delivery_kind"] == "direct_message"
 
     async def test_launch_injected_and_resumed_runtimes_are_not_rebriefed(
-        self, api_client, auth_headers
+        self, api_client, auth_headers, launch
     ):
-        with (
-            patch(f"{_ROUTE}.runtime_available", return_value=True),
-            patch(f"{_ROUTE}.build_command", return_value=["/usr/bin/x"]),
-            patch(f"{_ROUTE}.safe_deliver", new_callable=AsyncMock) as d,
-        ):
-            await api_client.post("/api/agents/ike/start", headers=auth_headers)  # claude
-            await api_client.post(
-                "/api/agents/ike/start", json={"runtime": "shell"}, headers=auth_headers
-            )
-            await api_client.post(
-                "/api/agents/ike/start",
-                json={"runtime": "aider", "resume": True},
-                headers=auth_headers,
-            )
-        d.assert_not_awaited()
+        await api_client.post("/api/agents/ike/start", headers=auth_headers)  # claude
+        await api_client.post(
+            "/api/agents/ike/start", json={"runtime": "shell"}, headers=auth_headers
+        )
+        await api_client.post(
+            "/api/agents/ike/start",
+            json={"runtime": "aider", "resume": True},
+            headers=auth_headers,
+        )
+        launch.deliver.assert_not_awaited()
 
     async def test_unknown_runtime_400(self, api_client, auth_headers):
         resp = await api_client.post(
@@ -210,28 +211,27 @@ class TestStartAgent:
         assert resp.status_code == 400
         assert "binary not found" in resp.json()["detail"]
 
-    async def test_idempotent_when_session_exists(self, api_client, auth_headers, tmux_svc):
-        tmux_svc.session_exists.return_value = True
-        with patch(f"{_ROUTE}.runtime_available", return_value=True):
-            resp = await api_client.post("/api/agents/ike/start", headers=auth_headers)
+    async def test_idempotent_when_session_exists(self, api_client, auth_headers, launch):
+        launch.session_exists.return_value = True
+        resp = await api_client.post("/api/agents/ike/start", headers=auth_headers)
         assert resp.json()["already_existed"] is True
-        tmux_svc.start_session.assert_not_awaited()
+        launch.start_session.assert_not_awaited()
 
-    async def test_unknown_agent_requires_dir(self, api_client, auth_headers, tmux_svc):
-        with patch(f"{_ROUTE}.runtime_available", return_value=True):
-            resp = await api_client.post("/api/agents/scratch/start", headers=auth_headers)
+    async def test_unknown_agent_requires_dir(self, api_client, auth_headers, launch):
+        resp = await api_client.post("/api/agents/scratch/start", headers=auth_headers)
         assert resp.status_code == 404
         assert "not a known agent" in resp.json()["detail"]
 
     async def test_start_with_dir_discovers_and_registers(
-        self, api_client, auth_headers, tmux_svc, api_app, tmp_path
+        self, api_client, auth_headers, launch, api_app, tmp_path
     ):
         project = tmp_path / "scratch-app"
         project.mkdir()
-        with (
-            patch(f"{_ROUTE}.runtime_available", return_value=True),
-            patch(f"{_ROUTE}.build_command", return_value=None),
-            patch("agent_backbone.services.agent_store.detect_repo", return_value="acme/scratch"),
+        launch.build_command.return_value = None
+        with patch(
+            "agent_backbone.services.agent_store.detect_repo",
+            new_callable=AsyncMock,
+            return_value="acme/scratch",
         ):
             resp = await api_client.post(
                 "/api/agents/start",
@@ -242,7 +242,7 @@ class TestStartAgent:
         data = resp.json()
         assert data["name"] == "scratch-app" and data["repo"] == "acme/scratch"
         assert data["model"] is None
-        assert tmux_svc.start_session.await_args.kwargs["working_dir"] == str(project.resolve())
+        assert launch.start_session.await_args.kwargs["working_dir"] == str(project.resolve())
         spec = api_app.state.agent_store.agents.get("scratch-app")
         assert spec is not None and spec.watches == ("acme/other",)
         # ...and it is now visible via the API
@@ -382,21 +382,40 @@ class TestApproveAgent:
 
 
 class TestPostAgentState:
-    async def test_stores_state(self, api_client, auth_headers, api_app):
+    async def test_writes_the_hook_state_file(self, api_client, auth_headers, api_app):
+        from agent_backbone.services.agents import get_agent_state, read_state_file
+
         resp = await api_client.post(
             "/api/agents/ike/state",
-            json={"state": "busy", "issue": 7, "ts": 123.0},
+            json={"state": "busy", "issue": 7, "ts": time.time()},
             headers=auth_headers,
         )
         assert resp.json() == {"ok": True, "session": "ike"}
-        row = await api_app.state.db.get_agent_state("ike")
-        assert row["state"] == "busy" and row["current_issue"] == 7
+        state_dir = api_app.state.config.state_dir
+        push = read_state_file(state_dir, "ike")
+        assert push.state == AgentState.BUSY and push.current_issue == 7
+        # ...which is exactly what delivery decisions read.
+        snapshot = await get_agent_state(state_dir, "ike", stale_threshold=300)
+        assert snapshot.state == AgentState.BUSY and snapshot.source == "push"
 
     async def test_plan_fields_stored(self, api_client, auth_headers, api_app):
+        from agent_backbone.services.agents import read_state_file
+
         await api_client.post(
             "/api/agents/ike/state",
-            json={"state": "plan_waiting", "plan_file": "/p.md", "plan_title": "T"},
+            json={
+                "state": "waiting_for_human",
+                "reason": "plan",
+                "plan_file": "/p.md",
+                "plan_title": "T",
+            },
             headers=auth_headers,
         )
-        row = await api_app.state.db.get_agent_state("ike")
-        assert row["plan_file"] == "/p.md" and row["plan_title"] == "T"
+        push = read_state_file(api_app.state.config.state_dir, "ike")
+        assert push.is_plan_waiting and push.plan_file == "/p.md" and push.plan_title == "T"
+
+    async def test_only_registered_agents(self, api_client, auth_headers):
+        resp = await api_client.post(
+            "/api/agents/stray/state", json={"state": "busy"}, headers=auth_headers
+        )
+        assert resp.status_code == 404

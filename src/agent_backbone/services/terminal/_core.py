@@ -121,22 +121,13 @@ async def send_message(
     return await adapter.deliver_message(session_name, message)
 
 
-async def send_keys(session_name: str, keys: str, *, literal: bool = False) -> bool:
-    """Send raw tmux keys to a session.
-
-    When ``literal`` is False, tmux interprets ``keys`` as key names or
-    escape sequences (for example ``Enter`` or ``Escape``). When True, the
-    characters are sent literally with ``send-keys -l``.
-    """
+async def send_keys(session_name: str, keys: str) -> bool:
+    """Send a tmux key name or escape sequence (``Enter``, ``Escape``, ``[Z``) to a session."""
     if not await session_exists(session_name):
         log.warning("tmux session '%s' not found — key send dropped", session_name)
         return False
 
-    args = ["send-keys", "-t", session_name]
-    if literal:
-        args.append("-l")
-    args.append(keys)
-    rc, _, stderr = await _run_tmux(*args)
+    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, keys)
     if rc != 0:
         log.error("tmux send-keys failed for '%s': %s", session_name, stderr.decode())
         return False

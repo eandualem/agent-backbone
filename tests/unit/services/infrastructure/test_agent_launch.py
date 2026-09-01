@@ -331,7 +331,7 @@ class TestStartAgentScrubsSecrets:
     async def test_secrets_are_scrubbed_from_the_session(self, tmp_path):
         from unittest.mock import AsyncMock
 
-        from agent_backbone.config import AgentSpec
+        from agent_backbone.config import AgentSpec, bootstrap_config
         from agent_backbone.services.infrastructure._agents import start_agent
 
         data_dir = tmp_path / "data"
@@ -341,11 +341,12 @@ class TestStartAgentScrubsSecrets:
         project.mkdir()
         spec = AgentSpec(name="ike", dir=str(project), runtime="shell")
 
+        config = bootstrap_config(data_dir)
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
             patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
         ):
-            assert await start_agent(spec, data_dir=data_dir, state_dir=tmp_path / "state") is True
+            assert (await start_agent(spec, config, wait=False)).ok is True
 
         scrub = start.await_args.kwargs["scrub"]
         assert "BACKBONE_API_KEY" in scrub
@@ -353,3 +354,130 @@ class TestStartAgentScrubsSecrets:
         assert "MY_OWN_SECRET" in scrub  # whatever the user put in .env
         # The launch contract itself is untouched.
         assert start.await_args.kwargs["environment"]["BACKBONE_AGENT"] == "ike"
+
+
+class TestStartAgentBrief:
+    """One launch path: the brief reaches every runtime, at launch or as a message."""
+
+    @staticmethod
+    def _spec(tmp_path, runtime):
+        from agent_backbone.config import AgentSpec
+
+        project = tmp_path / "project"
+        project.mkdir(exist_ok=True)
+        return AgentSpec(name="ike", dir=str(project), runtime=runtime, repo="acme/app")
+
+    @staticmethod
+    def _launch(tmp_path):
+        from unittest.mock import AsyncMock
+
+        return (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.resolve_command", return_value="/bin/x"),
+            patch(f"{_MOD}.pre_trust_runtime"),
+            patch(f"{_MOD}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", [])),
+            patch("agent_backbone.services.routing.safe_deliver", new_callable=AsyncMock),
+        )
+
+    async def test_claude_gets_the_brief_at_launch(self, tmp_path):
+        from agent_backbone.config import bootstrap_config
+        from agent_backbone.services.infrastructure._agents import start_agent
+
+        config = bootstrap_config(tmp_path / "data")
+        exists, start, _cmd, _trust, _wait, deliver = self._launch(tmp_path)
+        with exists, start as started, _cmd, _trust, _wait, deliver as delivered:
+            result = await start_agent(self._spec(tmp_path, "claude"), config)
+        assert result.ok and result.ready == "ready"
+        command = started.await_args.kwargs["command"]
+        assert "--append-system-prompt-file" in command
+        delivered.assert_not_awaited()
+
+    async def test_aider_gets_the_brief_as_its_first_message(self, tmp_path):
+        from agent_backbone.config import bootstrap_config
+        from agent_backbone.services.infrastructure._agents import start_agent
+
+        config = bootstrap_config(tmp_path / "data")
+        exists, start, _cmd, _trust, _wait, deliver = self._launch(tmp_path)
+        with exists, start as started, _cmd, _trust, _wait, deliver as delivered:
+            result = await start_agent(self._spec(tmp_path, "aider"), config)
+        assert result.ok
+        assert "--append-system-prompt-file" not in started.await_args.kwargs["command"]
+        delivered.assert_awaited_once()
+        assert delivered.await_args.args[0] == "ike"
+        assert delivered.await_args.args[1].startswith("[via:backbone] ")
+        assert delivered.await_args.kwargs["flow_name"] == "agent-brief"
+
+    async def test_a_swarm_role_brief_replaces_the_common_brief(self, tmp_path):
+        from agent_backbone.config import bootstrap_config
+        from agent_backbone.services.infrastructure._agents import start_agent
+
+        config = bootstrap_config(tmp_path / "data")
+        role = tmp_path / "role.md"
+        role.write_text("You are the scout.")
+        exists, start, _cmd, _trust, _wait, deliver = self._launch(tmp_path)
+        with exists, start, _cmd, _trust, _wait, deliver as delivered:
+            await start_agent(self._spec(tmp_path, "aider"), config, brief_file=role)
+        assert delivered.await_args.args[1] == "[via:backbone] You are the scout."
+
+    async def test_shell_and_resume_get_no_brief(self, tmp_path):
+        from agent_backbone.config import bootstrap_config
+        from agent_backbone.services.infrastructure._agents import start_agent
+
+        config = bootstrap_config(tmp_path / "data")
+        exists, start, _cmd, _trust, _wait, deliver = self._launch(tmp_path)
+        with exists, start, _cmd, _trust, _wait, deliver as delivered:
+            await start_agent(self._spec(tmp_path, "shell"), config)
+            await start_agent(self._spec(tmp_path, "aider"), config, resume=True)
+        delivered.assert_not_awaited()
+
+
+class TestStartingState:
+    """`starting` is written at launch and gives way to the real state."""
+
+    async def test_start_agent_writes_starting_then_wait_clears_it(self, tmp_path):
+        from unittest.mock import AsyncMock
+
+        from agent_backbone.config import AgentSpec, bootstrap_config
+        from agent_backbone.services.agents import read_state_file
+        from agent_backbone.services.agents.models import AgentState
+        from agent_backbone.services.infrastructure._agents import start_agent
+
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime="shell")
+        seen: list[str] = []
+
+        async def _capture(name, lines=60):
+            # By the time the terminal is read, the marker must be on disk.
+            seen.append(read_state_file(config.state_dir, name).state.value)
+            return "$ "
+
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=_capture),
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, side_effect=[False, True]),
+        ):
+            result = await start_agent(spec, config)
+
+        assert result.ready == "ready"
+        assert seen == [AgentState.STARTING.value]
+        # The prompt showed: the marker is gone and the terminal decides again.
+        assert read_state_file(config.state_dir, "ike") is None
+
+    async def test_hook_state_newer_than_the_launch_wins(self, tmp_path):
+        from unittest.mock import AsyncMock
+
+        from agent_backbone.services.agents import write_state_file
+        from agent_backbone.services.infrastructure._agents import wait_until_ready
+
+        state_dir = tmp_path / "state"
+        launched = 1_000.0
+        write_state_file(state_dir, "ike", {"state": "idle", "ts": launched + 2})
+        with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True):
+            outcome, evidence = await wait_until_ready(
+                "ike", state_dir=state_dir, runtime="claude", timeout=1, since=launched
+            )
+        assert outcome == "ready" and evidence[0].startswith("hook reported idle")

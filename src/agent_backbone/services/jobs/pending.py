@@ -7,15 +7,15 @@ from datetime import UTC, datetime
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import parse_from_tag
-from agent_backbone.services.agents._delivery_check import has_commented_on_issue, should_deliver
-from agent_backbone.services.agents._inference import get_agent_state
+from agent_backbone.services.agents import get_agent_state, has_commented_on_issue, should_deliver
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing._delivery import safe_deliver
-from agent_backbone.services.routing._format import format_next_issue_notification
-from agent_backbone.services.routing._targets import (
+from agent_backbone.services.routing import (
+    format_next_issue_notification,
+    is_acknowledged,
     issue_repo,
     list_open_queue_for_target,
     queue_scope,
+    safe_deliver,
 )
 
 log = logging.getLogger(__name__)
@@ -31,15 +31,16 @@ async def deliver_pending_issues(
     result: dict[str, str] = {}
     comment_ack_cache: dict[tuple[str, int], set[str]] = {}
 
-    async def is_acknowledged(repo: str, issue_number: int, target: str, session_name: str) -> bool:
-        """DB record, then local action log, then GitHub comments."""
+    async def acknowledged(repo: str, issue_number: int, name: str) -> bool:
+        """DB record, then local action log, then GitHub comments.
+
+        ``name`` is the agent: its ``for:`` target label and its tmux session.
+        """
         try:
-            if await db.is_acknowledged(issue_number, target, repo=repo):
+            if await is_acknowledged(db, repo, issue_number, name, name):
                 return True
-            if has_commented_on_issue(
-                issue_number, session_name, config.action_log_path, repo=repo
-            ):
-                await db.record_acknowledgment(issue_number, target, repo=repo)
+            if has_commented_on_issue(issue_number, name, config.action_log_path, repo=repo):
+                await db.record_acknowledgment(issue_number, name, repo=repo)
                 return True
             key = (repo, issue_number)
             acknowledged = comment_ack_cache.get(key)
@@ -53,8 +54,8 @@ async def deliver_pending_issues(
                     if entity
                 }
                 comment_ack_cache[key] = acknowledged
-            if target in acknowledged:
-                await db.record_acknowledgment(issue_number, target, repo=repo)
+            if name in acknowledged:
+                await db.record_acknowledgment(issue_number, name, repo=repo)
                 return True
         except Exception:
             log.exception(
@@ -109,7 +110,7 @@ async def deliver_pending_issues(
 
         for candidate in pending_issues:
             repo = issue_repo(candidate)
-            if await is_acknowledged(repo, candidate.number, name, name):
+            if await acknowledged(repo, candidate.number, name):
                 continue
             if await was_recently_delivered(repo, candidate.number, name, name):
                 result[name] = "recently_delivered"

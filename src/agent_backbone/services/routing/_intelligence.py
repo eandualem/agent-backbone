@@ -27,6 +27,7 @@ from agent_backbone.services.routing.models import SessionIntelligence, SessionP
 from agent_backbone.services.terminal import (
     SESSION_FORMAT_STR,
     capture_pane,
+    clear_copy_mode,
     get_terminal_adapter,
     list_sessions,
     query_format_vars,
@@ -109,7 +110,7 @@ async def get_session_intelligence(
 
     # Copy mode is a defect, not a state: clear it and re-read the pane.
     if tmux_vars.get("pane_in_mode") == "1":
-        cleared = await adapter.exit_copy_mode(session_name)
+        cleared = await clear_copy_mode(session_name)
         evidence.append(f"tmux copy mode detected — {'cleared' if cleared else 'could not clear'}")
         if not cleared:
             # A frozen pane swallows pastes; report the session as occupied by

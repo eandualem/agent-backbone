@@ -11,16 +11,12 @@ import pytest
 
 from agent_backbone.config import DeliveryConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.routing import (
-    SessionIntelligence,
-    SessionProfile,
-    get_session_intelligence,
-    list_sessions_full,
+from agent_backbone.services.routing import get_session_intelligence, safe_deliver
+from agent_backbone.services.routing._resolution import (
     resolve_entity_session,
-    resolve_entity_sessions,
-    safe_deliver,
+    validate_issue_targets,
 )
-from agent_backbone.services.routing._resolution import validate_issue_targets
+from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 
 _IDLE_SNAP = StateSnapshot(state=AgentState.IDLE, source="push")
 _BUSY_SNAP = StateSnapshot(state=AgentState.BUSY, source="push")
@@ -38,6 +34,7 @@ _PLAN_ISSUE_42_SNAP = StateSnapshot(
 
 _INTEL = "agent_backbone.services.routing._intelligence"
 _DELIV = "agent_backbone.services.routing._delivery"
+_COPY = "agent_backbone.services.terminal._copy_mode"
 
 
 @pytest.fixture(autouse=True)
@@ -100,9 +97,13 @@ class TestGetSessionIntelligence:
         assert profile.evidence
 
     async def test_copy_mode_is_cleared_not_reported(self, config):
+        # tmux reports copy mode until the cancel lands, then a clean pane.
+        in_mode = [{"pane_in_mode": "1"}, {"pane_in_mode": "0"}]
         with (
             _patch_list_sessions(["ike"]),
             _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
+            patch(f"{_COPY}.query_format_vars", new_callable=AsyncMock, side_effect=in_mode),
+            patch(f"{_COPY}.asyncio.sleep", new_callable=AsyncMock),
             _patch_get_agent_state(_IDLE_SNAP),
             patch(
                 "agent_backbone.services.terminal._adapters.TerminalAdapter.exit_copy_mode",
@@ -114,6 +115,26 @@ class TestGetSessionIntelligence:
         exit_copy.assert_awaited_once_with("ike")
         assert profile.intelligence == SessionIntelligence.READY
         assert any("copy mode" in line for line in profile.evidence)
+
+    async def test_copy_mode_that_will_not_clear_reads_as_human_typing(self, config):
+        with (
+            _patch_list_sessions(["ike"]),
+            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
+            patch(
+                f"{_COPY}.query_format_vars",
+                new_callable=AsyncMock,
+                return_value={"pane_in_mode": "1"},
+            ),
+            patch(f"{_COPY}.asyncio.sleep", new_callable=AsyncMock),
+            _patch_get_agent_state(_IDLE_SNAP),
+            patch(
+                "agent_backbone.services.terminal._adapters.TerminalAdapter.exit_copy_mode",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.HUMAN_TYPING
 
     async def test_human_typing_when_prompt_has_buffered_input(self, config):
         with _online(), _patch_capture_pane("› Review the routing fallback logic"):
@@ -198,11 +219,9 @@ class TestGetSessionIntelligence:
 class TestResolveEntitySession:
     def test_configured_agent(self, config):
         assert resolve_entity_session("ike", config) == "ike"
-        assert resolve_entity_sessions("ike", config) == ["ike"]
 
     def test_ignored_target(self, config):
         assert resolve_entity_session("elias", config) is None
-        assert resolve_entity_sessions("elias", config) == []
 
     def test_unknown_target(self, config):
         assert resolve_entity_session("nobody", config) is None
@@ -506,35 +525,3 @@ class TestSafeDeliver:
             issue = await safe_deliver("ike", "Issue", config, db=mock_db, **_issue_kwargs())
             mock_db.enqueue_message.assert_not_called()
         assert comment == "settling" and issue == "settling"
-
-
-class TestListSessionsFull:
-    async def test_enriches_sessions(self, config):
-        mock_sessions = [
-            {"name": "ike", "windows": 1, "created": 1000, "attached": True},
-            {"name": "leo", "windows": 2, "created": 2000, "attached": False},
-        ]
-        with (
-            patch(
-                "agent_backbone.services.terminal.list_sessions_rich",
-                new_callable=AsyncMock,
-                return_value=mock_sessions,
-            ),
-            _patch_list_sessions(["ike", "leo"]),
-            _patch_query_format_vars({"pane_in_mode": "0", "client_activity": "0"}),
-            _patch_get_agent_state(_IDLE_SNAP),
-        ):
-            result = await list_sessions_full(config)
-
-        assert [r["name"] for r in result] == ["ike", "leo"]
-        assert result[0]["intelligence"] == "ready"
-        assert result[0]["agent_state"] == "idle"
-        assert result[0]["windows"] == 1 and result[0]["attached"] is True
-
-    async def test_empty_list(self, config):
-        with patch(
-            "agent_backbone.services.terminal.list_sessions_rich",
-            new_callable=AsyncMock,
-            return_value=[],
-        ):
-            assert await list_sessions_full(config) == []

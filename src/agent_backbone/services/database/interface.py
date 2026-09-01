@@ -90,17 +90,9 @@ class DatabaseService:
             self._engine = None
 
     async def health_check(self) -> dict:
-        healthy = False
-        if self._engine:
-            try:
-                async with self._engine.connect() as conn:
-                    await conn.execute(text("SELECT 1"))
-                healthy = True
-            except Exception:
-                healthy = False
+        """Engine present or not; ``BackboneDB`` (the persistence component) does the ping."""
         return {
-            "healthy": healthy,
+            "healthy": self._engine is not None,
             "service": "database",
-            "connected": self._engine is not None,
             "url": redact_url(self._url),
         }

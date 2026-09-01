@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
+from unittest.mock import AsyncMock, patch
 
 from agent_backbone.services.agents import (
     AgentState,
-    StateSnapshot,
     find_outgoing_comment,
     get_agent_state,
     has_commented_on_issue,
@@ -19,9 +15,7 @@ from agent_backbone.services.agents import (
     read_state_file,
     should_deliver,
 )
-from agent_backbone.services.agents.interface import StateService, _row_to_snapshot
-from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.terminal import prompt_has_pending_input
+from agent_backbone.services.agents.interface import StateService
 
 _INF = "agent_backbone.services.agents._inference"
 _IFACE = "agent_backbone.services.agents.interface"
@@ -135,11 +129,8 @@ class TestWaitingForHuman:
         assert AgentState.parse("sleeping") == AgentState.UNKNOWN
         assert AgentState.parse(None) == AgentState.UNKNOWN
 
-    def test_should_deliver_waiting_default(self):
+    def test_should_deliver_waiting(self):
         assert should_deliver(AgentState.WAITING_FOR_HUMAN) is False
-
-    def test_should_deliver_waiting_blocking(self):
-        assert should_deliver(AgentState.WAITING_FOR_HUMAN, is_blocking=True) is False
 
 
 class TestInferStateFromPane:
@@ -247,70 +238,6 @@ class TestInferStateFromPane:
         )
         result = infer_state_from_pane(pane)
         assert result.state == AgentState.IDLE
-
-    def test_codex_placeholder_is_not_pending_input(self):
-        """Codex's dim placeholder suggestion should not count as typed input."""
-        pane = "\x1b[1m\u203a\x1b[0m \x1b[2mImprove documentation in @filename\x1b[0m"
-        assert prompt_has_pending_input(pane) is False
-
-    def test_codex_typed_input_is_pending_input(self):
-        """Actual typed Codex input should still block delivery."""
-        pane = "\u203a Review the delivery retry logic"
-        assert prompt_has_pending_input(pane) is True
-
-    def test_codex_queued_input_footer_is_ignored_for_prompt_detection(self):
-        """Codex's queue footer below the prompt should not hide pending input."""
-        pane = (
-            "\u203a Second live inbound delivery test.\n\n"
-            "  tab to queue message                                        98% context left"
-        )
-        assert prompt_has_pending_input(pane) is True
-
-    def test_stuck_backbone_envelope_not_pending_input(self):
-        """A stuck backbone delivery in the prompt buffer is not user input (#766)."""
-        pane = "\u276f [via:backbone from:ike] Can you check the status?"
-        assert prompt_has_pending_input(pane) is False
-
-    def test_stuck_github_envelope_not_pending_input(self):
-        """Stuck github notification envelope is not user input."""
-        pane = "\u276f [via:github issue:51] [task] agent-backbone: Add topic routing"
-        assert prompt_has_pending_input(pane) is False
-
-    def test_stuck_telegram_envelope_not_pending_input(self):
-        """Stuck telegram envelope is not user input."""
-        pane = "\u276f [via:telegram from:elias] What's the status?"
-        assert prompt_has_pending_input(pane) is False
-
-    def test_stuck_heartbeat_envelope_not_pending_input(self):
-        """Stuck heartbeat envelope is not user input."""
-        pane = "\u276f [via:heartbeat] periodic check"
-        assert prompt_has_pending_input(pane) is False
-
-    def test_real_user_input_still_detected(self):
-        """Regression guard: actual user text after prompt is still pending input."""
-        pane = "\u276f hello"
-        assert prompt_has_pending_input(pane) is True
-
-    def test_prefix_guard_suffix_matched_output_not_pending(self):
-        """A suffix-matched output line (no prompt prefix) is not pending input."""
-        from agent_backbone.services.terminal._adapters import TerminalRuntime, get_terminal_adapter
-
-        # Claude adapter has prefix ❯ and suffix $. A line ending with $
-        # but not starting with ❯ matched via suffix only — prefix guard
-        # should reject it as not real user input.
-        claude = get_terminal_adapter(TerminalRuntime.CLAUDE)
-        assert claude.prompt_has_pending_input("some output line $") is False
-
-    def test_codex_queued_message_banner_is_ignored_for_prompt_detection(self):
-        """Queued-message instructional chrome should not hide the live prompt."""
-        pane = (
-            "\u2022 Messages to be submitted after next tool call "
-            "(press esc to interrupt and send immediately)\n"
-            "  \u21b3 [via:backbone from:bell] delivery check only.\n\n"
-            "\u203a Summarize recent commits\n\n"
-            "  gpt-5.4 xhigh \u00b7 59% left \u00b7 ~/ws/core/code/WF/agent-backbone"
-        )
-        assert prompt_has_pending_input(pane) is True
 
     def test_idle_standard_prompt_with_trailing_lines(self):
         """Non-prompt trailing content returns UNKNOWN."""
@@ -495,151 +422,21 @@ class TestGetAgentState:
         assert result.source == "pull"
 
 
-class TestRowToSnapshot:
-    def test_converts_idle_row(self):
-        row = {
-            "session_name": "ike",
-            "state": "idle",
-            "current_issue": None,
-            "ts": "1709500000.0",
-            "started_at": None,
-            "plan_file": None,
-            "plan_title": None,
-        }
-        snap = _row_to_snapshot(row)
-        assert snap.state == AgentState.IDLE
-        assert snap.timestamp == 1709500000.0
-        assert snap.source == "db"
-        assert snap.current_issue is None
-
-    def test_converts_processing_row(self):
-        row = {
-            "session_name": "feynman",
-            "state": "busy",
-            "current_issue": 571,
-            "ts": "1709500000.0",
-            "started_at": "1709499000.0",
-            "plan_file": "/tmp/plan.md",
-            "plan_title": "DB migration",
-        }
-        snap = _row_to_snapshot(row)
-        assert snap.state == AgentState.BUSY
-        assert snap.current_issue == 571
-        assert snap.started_at == 1709499000.0
-        assert snap.plan_file == "/tmp/plan.md"
-        assert snap.plan_title == "DB migration"
-
-    def test_unknown_state_value_maps_to_unknown(self):
-        row = {"state": "sleeping", "ts": None}
-        snap = _row_to_snapshot(row)
-        assert snap.state == AgentState.UNKNOWN
-
-    def test_missing_ts_defaults_to_zero(self):
-        row = {"state": "idle", "ts": None}
-        snap = _row_to_snapshot(row)
-        assert snap.timestamp == 0.0
-
-
-class TestStateServiceDBFirst:
-    @pytest.fixture
-    async def db(self):
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-        db = BackboneDB(engine)
-        await db.start()
-        try:
-            yield db
-        finally:
-            db._engine = None
-            await engine.dispose()
-
-    async def test_db_first_returns_recent_idle_db_state(self, db, tmp_path):
-        """Recent stable idle snapshots are served from DB without live reconciliation."""
-        await db.set_agent_state("ike", "idle", current_issue=None, ts=str(time.time()))
-        svc = StateService(state_dir=str(tmp_path), db=db)
-        snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.current_issue is None
-        assert snap.source == "db"
-
-    async def test_old_idle_db_state_is_reverified_live(self, db, tmp_path):
-        """A stored snapshot older than the trust window is re-verified live."""
-        await db.set_agent_state("ike", "idle", current_issue=None, ts=str(time.time() - 120))
-        svc = StateService(state_dir=str(tmp_path), db=db, snapshot_trust=20)
-        live_snapshot = StateSnapshot(state=AgentState.BUSY, source="pull", timestamp=time.time())
-        with patch(
-            f"{_IFACE}._get_agent_state",
-            new_callable=AsyncMock,
-            return_value=live_snapshot,
-        ):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.BUSY
-        row = await db.get_agent_state("ike")
-        assert row["state"] == "busy"
-
-    async def test_fresh_hook_state_overrides_recent_db_snapshot(self, db, tmp_path):
-        """A hook state file newer than the stored snapshot wins over the DB shortcut."""
-        await db.set_agent_state("ike", "idle", current_issue=None, ts=str(time.time() - 5))
-        (tmp_path / "ike.json").write_text(json.dumps({"state": "busy", "ts": time.time()}))
-        svc = StateService(state_dir=str(tmp_path), db=db, snapshot_trust=20)
-        snap = await svc.get_state("ike")
-        assert snap.state == AgentState.BUSY
-        assert snap.source == "push"
-
-    async def test_db_working_state_uses_live_reconciliation(self, db, tmp_path):
-        """Cached working states are refreshed from the live reconciler."""
-        await db.set_agent_state("ike", "busy", current_issue=42, ts="1709500000.0")
-        svc = StateService(state_dir=str(tmp_path), db=db)
-        live_snapshot = StateSnapshot(
-            state=AgentState.IDLE,
-            source="pull",
-            timestamp=1709500100.0,
-        )
-        with patch(
-            f"{_IFACE}._get_agent_state",
-            new_callable=AsyncMock,
-            return_value=live_snapshot,
-        ):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.source == "pull"
-
-        row = await db.get_agent_state("ike")
-        assert row is not None
-        assert row["state"] == "idle"
-        assert row["current_issue"] is None
-        assert row["ts"] == "1709500100.0"
-
-    async def test_fallback_to_file_when_no_db_row(self, db, tmp_path):
-        """When DB has no row, falls back to file+tmux."""
-        state_file = tmp_path / "ike.json"
-        state_file.write_text(json.dumps({"state": "idle", "issue": None, "ts": time.time()}))
-        svc = StateService(state_dir=str(tmp_path), db=db)
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.source == "push"
-
-    async def test_fallback_when_no_db(self, tmp_path):
-        """When StateService has no db, uses file+tmux."""
+class TestStateService:
+    async def test_get_state_is_the_reconciled_reading(self, tmp_path):
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
-        svc = StateService(state_dir=str(tmp_path), db=None)
+        svc = StateService(state_dir=str(tmp_path))
         with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
             snap = await svc.get_state("ike")
         assert snap.state == AgentState.BUSY
         assert snap.source == "push"
 
-    async def test_db_error_falls_back_to_file(self, tmp_path):
-        """When DB raises an error, falls back to file."""
-        state_file = tmp_path / "ike.json"
-        state_file.write_text(json.dumps({"state": "idle", "ts": time.time()}))
-        mock_db = MagicMock()
-        mock_db.get_agent_state = AsyncMock(side_effect=RuntimeError("DB down"))
-        svc = StateService(state_dir=str(tmp_path), db=mock_db)
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.source == "push"
+    def test_read_state_is_the_hook_file_alone(self, tmp_path):
+        svc = StateService(state_dir=str(tmp_path))
+        assert svc.read_state("ike") is None
+        (tmp_path / "ike.json").write_text(json.dumps({"state": "idle", "ts": 1.0}))
+        assert svc.read_state("ike").state == AgentState.IDLE
 
 
 class TestShouldDeliver:
@@ -653,78 +450,10 @@ class TestShouldDeliver:
         assert should_deliver(AgentState.UNKNOWN) is False
 
     def test_busy_never_delivers(self):
-        assert should_deliver(AgentState.BUSY, is_blocking=False) is False
-
-    def test_busy_blocks_even_blocking(self):
-        assert should_deliver(AgentState.BUSY, is_blocking=True) is False
+        assert should_deliver(AgentState.BUSY) is False
 
 
-class TestRequireIdle:
-    """Monitor mode: only idle agents should receive deliveries."""
-
-    def test_idle_delivers(self):
-        assert should_deliver(AgentState.IDLE, require_idle=True) is True
-
-    def test_busy_skipped(self):
-        assert should_deliver(AgentState.BUSY, require_idle=True) is False
-
-    def test_starting_skipped(self):
-        assert should_deliver(AgentState.STARTING, require_idle=True) is False
-
-    def test_unknown_skipped(self):
-        assert should_deliver(AgentState.UNKNOWN, require_idle=True) is False
-
-    def test_blocking_ignored_in_monitor_mode(self):
-        """Even blocking issues don't override require_idle."""
-        assert should_deliver(AgentState.BUSY, is_blocking=True, require_idle=True) is False
-
-
-class TestCapacityRouting:
-    def test_busy_short_nonblocking_defer(self):
-        """Busy <30min + non-blocking → defer."""
-        assert (
-            should_deliver(
-                AgentState.BUSY, is_blocking=False, busy_duration=600.0, busy_threshold=1800.0
-            )
-            is False
-        )
-
-    def test_busy_short_blocking_defer(self):
-        """Busy <30min + blocking → defer (unchanged)."""
-        assert (
-            should_deliver(
-                AgentState.BUSY, is_blocking=True, busy_duration=600.0, busy_threshold=1800.0
-            )
-            is False
-        )
-
-    def test_busy_long_blocking_still_defer(self):
-        """Strict delivery gating ignores capacity-routing overrides."""
-        assert (
-            should_deliver(
-                AgentState.BUSY, is_blocking=True, busy_duration=1800.0, busy_threshold=1800.0
-            )
-            is False
-        )
-
-    def test_busy_long_nonblocking_defer(self):
-        """Busy >=30min + non-blocking → defer."""
-        assert (
-            should_deliver(
-                AgentState.BUSY, is_blocking=False, busy_duration=3600.0, busy_threshold=1800.0
-            )
-            is False
-        )
-
-    def test_no_duration_fallback(self):
-        """busy_duration=None → defers (no capacity routing without duration)."""
-        assert (
-            should_deliver(
-                AgentState.BUSY, is_blocking=True, busy_duration=None, busy_threshold=1800.0
-            )
-            is False
-        )
-
+class TestStartedAt:
     def test_started_at_parsed_from_state_file(self, tmp_path):
         """State file with started_at field is parsed correctly."""
         state_file = tmp_path / "ike.json"
@@ -814,3 +543,56 @@ class TestHasCommentedOnIssue:
             has_commented_on_issue(42, "ike", action_log=str(tmp_path / "nonexistent.jsonl"))
             is False
         )
+
+
+class TestStartingMarker:
+    async def test_fresh_starting_marker_is_trusted(self, tmp_path):
+        import time
+
+        from agent_backbone.services.agents import get_agent_state, write_starting_marker
+
+        write_starting_marker(tmp_path, "ike", time.time())
+        snap = await get_agent_state(tmp_path, "ike", 300, pane_content="$ ")
+        assert snap.state == AgentState.STARTING and snap.source == "push"
+
+    async def test_old_starting_marker_yields_to_the_terminal(self, tmp_path):
+        import time
+
+        from agent_backbone.services.agents import get_agent_state, write_starting_marker
+
+        write_starting_marker(tmp_path, "ike", time.time() - 200)
+        snap = await get_agent_state(tmp_path, "ike", 300, pane_content="$ ")
+        assert snap.state == AgentState.IDLE and snap.source == "pull"
+
+    async def test_old_starting_marker_is_not_trusted_when_the_pane_says_nothing(self, tmp_path):
+        import time
+
+        from agent_backbone.services.agents import get_agent_state, write_starting_marker
+
+        write_starting_marker(tmp_path, "ike", time.time() - 200)
+        snap = await get_agent_state(tmp_path, "ike", 300, pane_content="")
+        assert snap.state == AgentState.UNKNOWN
+
+    def test_hook_state_newer_than_the_marker_wins_and_retires_it(self, tmp_path):
+        import json
+        import time
+
+        from agent_backbone.services.agents import read_state_file, write_starting_marker
+
+        launched = time.time() - 5
+        write_starting_marker(tmp_path, "ike", launched)
+        (tmp_path / "ike.json").write_text(json.dumps({"state": "idle", "ts": launched + 2}))
+        snap = read_state_file(tmp_path, "ike")
+        assert snap.state == AgentState.IDLE
+        assert not (tmp_path / "ike.starting").exists()
+
+    def test_marker_outranks_older_hook_state(self, tmp_path):
+        import json
+        import time
+
+        from agent_backbone.services.agents import read_state_file, write_starting_marker
+
+        # A leftover idle file from the previous run of this agent.
+        (tmp_path / "ike.json").write_text(json.dumps({"state": "idle", "ts": time.time() - 900}))
+        write_starting_marker(tmp_path, "ike", time.time())
+        assert read_state_file(tmp_path, "ike").state == AgentState.STARTING

@@ -6,6 +6,8 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
+from agent_backbone.config import AgentSpec
+
 T = TypeVar("T")
 
 
@@ -63,8 +65,6 @@ class AgentStartRequest(BaseModel):
     watch: list[str] = Field(default_factory=list)
     wait: bool = True
     """Block until the agent is at its prompt (or the start timeout passes)."""
-    working_directory: str | None = None
-    """Alias of ``dir`` kept for older clients."""
 
 
 class AgentStartResponse(BaseModel):
@@ -404,3 +404,16 @@ class AgentConfigResponse(BaseModel):
     watches: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     description: str = ""
+
+    @classmethod
+    def from_spec(cls, spec: AgentSpec) -> AgentConfigResponse:
+        return cls(
+            name=spec.name,
+            dir=str(spec.path),
+            runtime=spec.runtime,
+            model=spec.model,
+            repo=spec.repo,
+            watches=list(spec.watches),
+            tags=list(spec.tags),
+            description=spec.description,
+        )

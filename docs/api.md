@@ -83,15 +83,18 @@ Everything the backbone knows about one agent, with the evidence:
 
 ### `GET /api/agents/{name}/state`
 
-The reconciled state snapshot with `source` (`push` = hook, `pull` =
-terminal, `db`) and `evidence`.
+The reconciled state snapshot with `source` (`push` = the state file, written
+by a hook or by `POST /api/agents/{name}/state`; `pull` = terminal) and
+`evidence`.
 
 ### `POST /api/agents/{name}/state`
 
 Push state from outside (same shape the hook writes): `{"state": "busy",
 "reason": null, "issue": 42, "repo": "acme/app", "ts": 1788177600.0,
 "plan_file": "…", "plan_title": "…"}`. Use it for runtimes the backbone does
-not ship hooks for.
+not ship hooks for. It writes `<data_dir>/state/<name>.json` exactly as a
+hook would, so delivery decisions, the monitor and `agent inspect` all see
+it (`ts` defaults to now). Only registered agents have a state file.
 
 ### `PATCH /api/agents/{name}`
 
