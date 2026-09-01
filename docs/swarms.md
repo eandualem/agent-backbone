@@ -95,3 +95,13 @@ Parallel, breadth-first work: research fan-outs, competing-hypothesis
 debugging, features whose pieces can be owned separately. A swarm costs
 a multiple of a single agent's tokens — for sequential or tightly
 coupled work, one agent is faster and cheaper. Start with 3–5 members.
+
+## Members stuck on permission prompts
+
+Codex and OpenCode members (and Claude Code outside auto mode) stop on
+approval dialogs. The backbone shows this as `waiting_for_human
+(permission)` in `backbone agent inspect <member>` with the prompt quoted
+in the evidence, and `backbone agent approve <member>` answers it — the
+runtime's affirmative key, sent only while the dialog is on screen, and
+recorded as an `approval` event. The coordinator's brief tells it to do
+this instead of reaching into tmux directly.

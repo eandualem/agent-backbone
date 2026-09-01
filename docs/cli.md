@@ -3,7 +3,9 @@
 `backbone --help` lists everything; `ab` is the same command under a short
 name; `-v` enables debug logging. Commands go
 through the running backbone's API when it is up and fall back to the
-database (and tmux) directly when it is not.
+database (and tmux) directly when it is not — except `agent approve` and
+`tell`, which only work through the API so that every keystroke into an
+agent is audited.
 
 ## `backbone init [--data-dir DIR] [--force]`
 
@@ -73,6 +75,7 @@ backbone config set escalation.target orch
 | `agent list` | Known agents with runtime, model and directory |
 | `agent inspect NAME [--json]` | State, reason, current issue, delivery condition, the evidence, the terminal tail, recent deliveries |
 | `agent stop NAME…` | Kill the session(s) |
+| `agent approve NAME [--from WHO]` | Answer the permission prompt the agent's runtime is showing (Claude Code, Codex, OpenCode — each verified against a live dialog; other runtimes report `unsupported`). Checks the terminal at the moment of the call and types only if the dialog is on screen *then* — otherwise reports `not_waiting` with the terminal tail. (tmux has no check-and-send: a dialog a human answers in that same instant can receive one extra key at an empty prompt; the response says whether the dialog actually cleared.) Needs the backbone running (`backbone up`): there is no direct-tmux fallback, so every approval goes through the API and is recorded as an `approval` event. Disable with `security.allow_remote_approval false` |
 | `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object) |
 | `agent watch [NAME] REPO…` / `agent unwatch [NAME] REPO…` | Add / remove watched repositories. Inside an agent session `NAME` defaults to the agent itself (`$BACKBONE_AGENT`), so an agent can subscribe on its own |
 | `agent forget NAME` | Remove a stopped agent from the backbone (refuses while its session is still running) |

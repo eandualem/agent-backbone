@@ -13,6 +13,7 @@ from agent_backbone.services.terminal._core import (
     _send_submit_key,
     _write_message_buffer,
     capture_pane,
+    send_keys,
 )
 from agent_backbone.services.terminal._sessions import query_environment_var
 
@@ -130,6 +131,10 @@ def _runtime_from_prompt_line(pane_content: str) -> TerminalRuntime:
     return TerminalRuntime.UNKNOWN
 
 
+# A dialog's own option lines: "❯ 1. Yes", "› 1. Yes, proceed (y)", "● 1. Yes", "  2. No".
+_DIALOG_OPTION_RE = re.compile(r"^\S{0,2}\s*\d{1,2}\.\s")
+
+
 def _runtime_analysis_line_pairs(pane_content: str) -> list[tuple[str, str]]:
     """Narrow runtime matching to the active prompt region near the pane tail."""
     pairs = _prompt_tail_line_pairs(pane_content)
@@ -193,6 +198,10 @@ class TerminalAdapter:
     """Fragments shown only while the runtime is working (e.g. a spinner line)."""
     prompt_markers: tuple[str, ...] = ()
     """Fragments shown when the runtime is asking the human a yes/no question."""
+    approve_keys: tuple[str, ...] = ()
+    """tmux key names that accept the runtime's permission prompt as shown
+    (verified against a live capture of that dialog). Empty: the backbone
+    does not know how to answer this runtime and refuses to guess."""
     auto_submit: bool = False
     submit_attempts: int = 1
     interrupt_queued_delivery: bool = False
@@ -232,6 +241,39 @@ class TerminalAdapter:
         tail = sanitize_pane_content(pane_content).strip().splitlines()[-15:]
         lowered = "\n".join(line.lower() for line in tail)
         return any(marker in lowered for marker in self.prompt_markers)
+
+    def detect_active_dialog(self, pane_content: str) -> bool:
+        """Whether a permission dialog is on screen *right now*.
+
+        The stricter gate used before answering one (``approve_prompt``).
+        ``detect_waiting_for_human`` is a state reading — a marker anywhere
+        in the tail is enough. Answering needs more, because ``Enter`` on an
+        idle prompt submits whatever is typed there. So the last marker must
+        be the runtime's most recent surface: nothing after it may look like
+        an input prompt (empty or with typed text), a placeholder or status
+        chrome — only the dialog's own numbered options and hints.
+        """
+        if not self.prompt_markers:
+            return False
+        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).strip().splitlines()]
+        lines = lines[-15:]
+        last_marker = None
+        for i, line in enumerate(lines):
+            if any(marker in line.lower() for marker in self.prompt_markers):
+                last_marker = i
+        if last_marker is None:
+            return False
+        for line in lines[last_marker + 1 :]:
+            if not line or all(ch in _BOX_CHARS for ch in line):
+                continue
+            if _DIALOG_OPTION_RE.match(line):
+                continue  # the dialog's own "❯ 1. Yes" / "› 1. Yes, proceed" cursor line
+            lowered = line.lower()
+            if self._matches_prompt_line(line) or self._is_status_chrome_line(line):
+                return False  # the runtime is back at its input; the dialog is history
+            if any(fragment in lowered for fragment in self.placeholder_fragments):
+                return False
+        return True
 
     def detect_idle(self, pane_content: str) -> bool:
         """Whether the pane currently shows an interactive prompt surface."""
@@ -276,6 +318,19 @@ class TerminalAdapter:
                 remainder = sanitized[len(prefix) :].lstrip()
                 break
         return not remainder.startswith(_BACKBONE_ENVELOPE_PREFIX)
+
+    async def approve_prompt(self, session_name: str) -> bool:
+        """Send the affirmative answer to the permission prompt on screen.
+
+        Callers verify with ``detect_waiting_for_human`` first: these keys
+        are only meaningful while the dialog is visible.
+        """
+        if not self.approve_keys:
+            return False
+        for key in self.approve_keys:
+            if not await send_keys(session_name, key):
+                return False
+        return True
 
     async def exit_copy_mode(self, session_name: str) -> bool:
         """Immediately attempt to leave copy mode."""
@@ -426,6 +481,8 @@ class ClaudeCodeAdapter(TerminalAdapter):
         "yes, and don't ask again",
         "would you like to proceed",
     )
+    # "❯ 1. Yes" is preselected in the permission dialog (live capture, 2.1.x).
+    approve_keys = ("Enter",)
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -456,6 +513,8 @@ class GeminiAdapter(TerminalAdapter):
         "failed to sign in",
         "waiting for auth",
     )
+    # approve_keys stays empty until the dialog is captured live (README's
+    # Gemini note): the backbone answers only what it has seen.
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -485,10 +544,14 @@ class CodexAdapter(TerminalAdapter):
     prompt_markers = (
         "approve this command",
         "allow command",
+        "would you like to run the following command",
         "yes, and don't ask again",
         "do you trust the contents of this directory",
         "press enter to continue",
+        "press enter to confirm",
     )
+    # "› 1. Yes, proceed (y)" is preselected; "Press enter to confirm" (0.152).
+    approve_keys = ("Enter",)
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     interrupt_queued_delivery = True
     paste_settle_seconds = 0.2
@@ -513,6 +576,10 @@ class OpenCodeAdapter(TerminalAdapter):
     placeholder_fragments = ("ask anything...", "ctrl+p commands")
     status_fragments = ("tab agents", "ctrl+p commands")
     busy_markers = ("esc interrupt",)
+    # "△ Permission required … Allow once  Allow always  Reject … enter confirm"
+    # with "Allow once" preselected (live capture, 1.18).
+    prompt_markers = ("permission required", "allow once", "allow always")
+    approve_keys = ("Enter",)
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -523,6 +590,7 @@ class AiderAdapter(TerminalAdapter):
     runtime_markers = ("aider", "aider v", "model:", "/help")
     status_fragments = ("tokens:", "cost:")
     prompt_markers = ("(y)es/(n)o", "[y/n]", "(y/n)")
+    # approve_keys stays empty until aider's prompt is captured live.
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 

@@ -52,6 +52,18 @@ Same body; starts a known agent (`dir` in the body registers it first).
 
 ### `POST /api/agents/{name}/stop`
 
+### `POST /api/agents/{name}/approve`
+
+Body (optional): `{"from_entity": "orch"}`. Answers the permission prompt
+the registered agent's runtime is showing — the runtime's affirmative key,
+sent only while the dialog is visible. Response
+`{"ok": true, "session": "app", "outcome": "approved", "evidence": ["..."], "approved_by": "orch"}`;
+the evidence quotes the dialog and whether it cleared. Errors carry
+`{"outcome", "evidence"}`: `409 not_waiting` (no prompt on screen — nothing
+typed), `400 unsupported` (no verified answer for that runtime),
+`404 offline`, `403` when `security.allow_remote_approval` is off. Every
+approval is an `approval` event in `GET /api/events`.
+
 ### `GET /api/agents/{name}/inspect`
 
 Everything the backbone knows about one agent, with the evidence:

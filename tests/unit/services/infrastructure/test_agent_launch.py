@@ -256,3 +256,70 @@ class TestPreTrustCodex:
         config.write_text("model = [broken")
         assert pre_trust_codex_directory(tmp_path / "p", codex_config=config) is False
         assert config.read_text() == "model = [broken"
+
+
+class TestApproveAgent:
+    DIALOG = " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n"
+    IDLE = "❯ \n  ? for shortcuts\n"
+
+    async def test_answers_only_a_visible_prompt(self):
+        from agent_backbone.services.infrastructure._agents import approve_agent
+
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[self.DIALOG, self.IDLE]),
+            patch(
+                "agent_backbone.services.terminal._adapters.send_keys", return_value=True
+            ) as keys,
+        ):
+            outcome, evidence = await approve_agent("ike", runtime="claude", settle_seconds=0)
+        assert outcome == "approved"
+        assert keys.await_args.args == ("ike", "Enter")
+        assert evidence[0] == "answered with Enter; prompt cleared"
+        assert "Do you want to proceed?" in evidence  # the dialog is quoted for the audit
+
+    async def test_idle_prompt_is_never_typed_into(self):
+        from agent_backbone.services.infrastructure._agents import approve_agent
+
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value=self.IDLE),
+            patch("agent_backbone.services.terminal._adapters.send_keys") as keys,
+        ):
+            outcome, evidence = await approve_agent("ike", runtime="claude", settle_seconds=0)
+        assert outcome == "not_waiting"
+        assert evidence[0].startswith("terminal shows no active permission prompt")
+        keys.assert_not_called()
+
+    async def test_unknown_answer_sequence_is_refused(self):
+        from agent_backbone.services.infrastructure._agents import approve_agent
+
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value="$ "),
+            patch("agent_backbone.services.terminal._adapters.send_keys") as keys,
+        ):
+            outcome, _ = await approve_agent("ike", runtime="shell", settle_seconds=0)
+        assert outcome == "unsupported"
+        keys.assert_not_awaited()
+
+    async def test_offline(self):
+        from agent_backbone.services.infrastructure._agents import approve_agent
+
+        with patch(f"{_MOD}.session_exists", return_value=False):
+            assert (await approve_agent("ike", runtime="claude"))[0] == "offline"
+
+    async def test_stale_dialog_above_an_idle_prompt_is_not_answered(self):
+        # The dialog text is still on screen but the runtime is back at its
+        # prompt with typed text — Enter would submit that text.
+        from agent_backbone.services.infrastructure._agents import approve_agent
+
+        stale = self.DIALOG + "❯ rm -rf build\n  ? for shortcuts\n"
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value=stale),
+            patch("agent_backbone.services.terminal._adapters.send_keys") as keys,
+        ):
+            outcome, _ = await approve_agent("ike", runtime="claude", settle_seconds=0)
+        assert outcome == "not_waiting"
+        keys.assert_not_called()

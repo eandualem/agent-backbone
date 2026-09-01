@@ -333,6 +333,54 @@ class TestSessions:
         assert resp.status_code == 404
 
 
+class TestApproveAgent:
+    async def test_approves_and_records_an_event(self, api_client, auth_headers, api_app):
+        with patch(
+            f"{_ROUTE}.approve_agent",
+            new_callable=AsyncMock,
+            return_value=("approved", ["answered with Enter; prompt cleared", "Bash command"]),
+        ) as approve:
+            resp = await api_client.post(
+                "/api/agents/ike/approve", json={"from_entity": "orch"}, headers=auth_headers
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["ok"] and data["outcome"] == "approved" and data["approved_by"] == "orch"
+        assert approve.await_args.kwargs["runtime"] == "claude"
+        events = await api_app.state.db.query_events(limit=5)
+        assert events and events[0]["event_type"] == "approval"
+        assert "orch approved a claude permission prompt on ike" in events[0]["summary"]
+
+    async def test_not_waiting_is_409_and_nothing_is_typed(self, api_client, auth_headers):
+        with patch(
+            f"{_ROUTE}.approve_agent",
+            new_callable=AsyncMock,
+            return_value=("not_waiting", ["terminal shows no permission prompt:", "❯"]),
+        ):
+            resp = await api_client.post("/api/agents/ike/approve", headers=auth_headers)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["outcome"] == "not_waiting"
+
+    async def test_unregistered_agent_404(self, api_client, auth_headers):
+        with patch(f"{_ROUTE}.approve_agent", new_callable=AsyncMock) as approve:
+            resp = await api_client.post("/api/agents/stray/approve", headers=auth_headers)
+        assert resp.status_code == 404
+        approve.assert_not_awaited()
+
+    async def test_disabled_by_setting(self, api_client, auth_headers, api_app):
+        from dataclasses import replace
+
+        from agent_backbone.config import SecurityConfig
+
+        api_app.state.config = replace(
+            api_app.state.config, security=SecurityConfig(allow_remote_approval=False)
+        )
+        with patch(f"{_ROUTE}.approve_agent", new_callable=AsyncMock) as approve:
+            resp = await api_client.post("/api/agents/ike/approve", headers=auth_headers)
+        assert resp.status_code == 403
+        approve.assert_not_awaited()
+
+
 class TestPostAgentState:
     async def test_stores_state(self, api_client, auth_headers, api_app):
         resp = await api_client.post(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -16,6 +17,8 @@ from agent_backbone.api.deps import (
     registered_agent_or_404,
 )
 from agent_backbone.api.models import (
+    AgentApproveRequest,
+    AgentApproveResponse,
     AgentConfigResponse,
     AgentInspectResponse,
     AgentStartRequest,
@@ -46,6 +49,7 @@ from agent_backbone.services.infrastructure._agents import (
     RUNTIME_DISPLAY_NAMES,
     agent_brief_file,
     agent_brief_text,
+    approve_agent,
     build_command,
     launch_environment,
     pre_trust_runtime,
@@ -378,6 +382,57 @@ async def stop_agent(
     if ok:
         await _broadcast(request, config, tmux_svc)
     return AgentStopResponse(ok=ok, session=session)
+
+
+_APPROVE_STATUS = {"not_waiting": 409, "unsupported": 400, "offline": 404, "failed": 502}
+
+
+@router.post("/agents/{name}/approve", response_model=AgentApproveResponse)
+async def approve_agent_prompt(
+    request: Request,
+    name: str,
+    body: AgentApproveRequest | None = None,
+    config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
+    tmux_svc: TmuxService = Depends(get_tmux_service),
+):
+    """Answer the permission prompt a registered agent's runtime is showing.
+
+    Sends the runtime's affirmative key(s) only while the dialog is on
+    screen — a stale ``waiting_for_human`` state or an idle prompt is a 409,
+    never a keystroke. Every approval is recorded as an ``approval`` event.
+    """
+    if not config.security.allow_remote_approval:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Remote approval is disabled. Run "
+                "`backbone config set security.allow_remote_approval true` to enable."
+            ),
+        )
+    spec = registered_agent_or_404(config, name)
+    approved_by = (body.from_entity if body else "") or "api"
+    outcome, evidence = await approve_agent(name, runtime=spec.runtime)
+    if outcome != "approved":
+        raise HTTPException(
+            status_code=_APPROVE_STATUS.get(outcome, 500),
+            detail={"outcome": outcome, "evidence": evidence},
+        )
+    dialog = next((ln for ln in evidence[1:] if ln), "")
+    event_id = await db.record_event(
+        delivery_id=f"approval:{uuid.uuid4().hex}",
+        source="backbone",
+        event_type="approval",
+        sender=approved_by,
+        summary=f"{approved_by} approved a {spec.runtime} permission prompt on {name}: {dialog}",
+    )
+    if event_id is not None:
+        await db.mark_event_processed(event_id, "approved")
+    log.info("Permission prompt on '%s' approved by %s", name, approved_by)
+    await _broadcast(request, config, tmux_svc)
+    return AgentApproveResponse(
+        ok=True, session=name, outcome=outcome, evidence=evidence, approved_by=approved_by
+    )
 
 
 @router.patch("/agents/{name}", response_model=AgentConfigResponse)
