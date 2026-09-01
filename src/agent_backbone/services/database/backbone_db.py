@@ -117,9 +117,8 @@ class BackboneDB:
 
     async def _run_migrations(self) -> None:
         """Run Alembic migrations for persistent databases."""
-        from alembic.config import Config
-
         from alembic import command
+        from alembic.config import Config
 
         alembic_cfg = Config()
         alembic_cfg.set_main_option("script_location", str(_MIGRATIONS_DIR))
