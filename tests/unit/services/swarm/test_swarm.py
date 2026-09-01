@@ -295,6 +295,37 @@ class TestCreateSwarm:
         assert store.registered == []  # all rolled back
         assert (await db.get_swarm("research"))["status"] == "disbanded"
 
+    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
+    @patch(f"{_IFACE}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", []))
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
+    @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
+    @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
+    @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
+    async def test_shell_members_get_no_brief_pasted(
+        self, _git, _branch, mock_wt, _exists, _start, _ready, mock_deliver, db, tmp_path
+    ):
+        # aider gets the brief as its first message; a shell would run it as commands.
+        config, repo_dir = _swarm_config(tmp_path)
+        mock_wt.return_value = (repo_dir / ".backbone" / "swarms" / "research", "swarm/research")
+        gh = AsyncMock()
+        gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
+
+        await create_swarm(
+            config,
+            db,
+            _FakeStore(config),
+            gh,
+            name="research",
+            issue_ref="acme/app#7",
+            member_specs=["scout@aider", "probe@shell"],
+            initiator="simon",
+        )
+
+        calls = mock_deliver.await_args_list
+        briefed = [c.args[0] for c in calls if c.kwargs["flow_name"] == "swarm-brief"]
+        assert briefed == ["research-scout"]
+
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)

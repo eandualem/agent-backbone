@@ -259,9 +259,10 @@ async def create_swarm(
             )
             if outcome == "exited":
                 raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
-            if runtime not in BRIEF_INJECTION_RUNTIMES:
+            if runtime not in BRIEF_INJECTION_RUNTIMES and runtime != "shell":
                 # No launch injection for this runtime: the brief is the
-                # first delivered message instead.
+                # first delivered message instead. A plain shell has nobody
+                # to brief — pasting it would run the brief as commands.
                 await safe_deliver(
                     agent_name,
                     f"[via:backbone swarm:{name}] {brief_file.read_text()}",
