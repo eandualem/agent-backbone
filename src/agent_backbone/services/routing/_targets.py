@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import EventType, IssueData, IssueEvent
+from agent_backbone.services.routing._priority import compute_priority_score
 
 if TYPE_CHECKING:
     from agent_backbone.config import AgentSpec, BackboneConfig
@@ -103,7 +104,7 @@ async def list_open_queue_for_target(
     """An agent's open queue across every repository it owns or watches.
 
     ``for:<target>`` issues everywhere it looks, plus every unlabelled open
-    issue in a repository it is the *sole* owner of.
+    issue in a repository it is the *sole* owner of — highest priority first.
     """
     spec = config.agents.get(target)
     if spec is None or gh is None:
@@ -120,7 +121,7 @@ async def list_open_queue_for_target(
                 issues.append(item)
 
     for repo in spec.repos:
-        _add(await gh.list_open_issues(f"for:{target}", repo_full_name=repo))
+        _add(await gh.list_issues(state="open", labels=[f"for:{target}"], repo_full_name=repo))
 
     if spec.repo and len(config.agents.owners(spec.repo)) == 1:
         unlabelled = [
@@ -130,6 +131,8 @@ async def list_open_queue_for_target(
         ]
         _add(unlabelled)
 
+    scoring = config.priority_scoring
+    issues.sort(key=lambda issue: (-compute_priority_score(issue, scoring), issue.number))
     return issues
 
 

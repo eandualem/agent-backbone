@@ -26,8 +26,7 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.models import IssueEvent
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
-from agent_backbone.services.routing import DeliveryService, DispatchService
-from agent_backbone.services.routing._ingest import dispatch_event as dispatch_event_async
+from agent_backbone.services.routing import DeliveryService, DispatchService, dispatch_event
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +88,7 @@ async def _handle(
             event.issue.number,
             event.issue.labels.targets,
         )
-        outcome = await dispatch_event_async(event, config, db, gh, delivery_svc, dispatch_svc)
+        outcome = await dispatch_event(event, config, db, gh, delivery_svc, dispatch_svc)
     except Exception:
         db.forget_delivery(delivery_id)
         raise

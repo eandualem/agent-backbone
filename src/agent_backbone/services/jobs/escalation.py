@@ -10,42 +10,23 @@ import logging
 import time
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents._inference import get_agent_state
-from agent_backbone.services.agents.models import AgentState
+from agent_backbone.services.agents import AgentState, get_agent_state
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing._format import (
+from agent_backbone.services.integrations import notify_humans
+from agent_backbone.services.routing import (
     format_plan_notification,
     format_stall_notification,
     format_unexpected_offline_notification,
+    list_open_queue_for_target,
+    outcome_queues,
+    safe_deliver,
 )
-from agent_backbone.services.routing._targets import list_open_queue_for_target
 
 log = logging.getLogger(__name__)
 
 _escalation_dedup: dict[tuple[str, str], float] = {}
 _plan_notify_dedup: dict[tuple[str, str], float] = {}
 _PLAN_NOTIFY_DEDUP_SECONDS = 1800
-
-
-async def safe_deliver(*args, **kwargs):
-    """Lazy proxy to avoid importing routing delivery during module import."""
-    from agent_backbone.services.routing._delivery import safe_deliver as _safe_deliver
-
-    return await _safe_deliver(*args, **kwargs)
-
-
-def outcome_queues(outcome: str, kind: str) -> bool:
-    """Lazy proxy to avoid importing routing delivery during module import."""
-    from agent_backbone.services.routing._delivery import outcome_queues as _outcome_queues
-
-    return _outcome_queues(outcome, kind)
-
-
-async def _notify_humans(config: BackboneConfig, text: str, *, agent: str | None = None) -> bool:
-    """Alert the humans on every configured integration (lazy: integrations sit above agents)."""
-    from agent_backbone.services.integrations import notify_humans
-
-    return await notify_humans(config, text, agent=agent)
 
 
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
@@ -199,7 +180,7 @@ async def handle_offline(
                     priority=True,
                     delivery_kind="escalation",
                 )
-            await _notify_humans(
+            await notify_humans(
                 config,
                 f"Agent {agent['entity']} went offline unexpectedly "
                 f"({agent['pending_count']} pending). It was not restarted.",
@@ -246,7 +227,7 @@ async def check_plan_waiting(
                 f"\U0001f4cb Plan waiting — {name}\nTitle: {plan_title}\n\n"
                 f"/viewplan {name}\n/approve {name}"
             )
-            if await _notify_humans(config, msg, agent=name):
+            if await notify_humans(config, msg, agent=name):
                 _record_plan_notification(name, human_ref)
                 log.info("Sent plan-waiting notification for %s", name)
 

@@ -12,7 +12,7 @@ from agent_backbone.services.terminal._adapters import (
     resolve_terminal_runtime,
     sanitize_pane_content,
 )
-from agent_backbone.services.terminal._copy_mode import clear_copy_mode, handle_copy_mode_recovery
+from agent_backbone.services.terminal._copy_mode import clear_copy_mode
 from agent_backbone.services.terminal._core import (
     active_pane_size,
     capture_pane,
@@ -51,7 +51,6 @@ __all__ = [
     "get_terminal_adapter",
     "get_terminal_adapter_for_session",
     "graceful_close",
-    "handle_copy_mode_recovery",
     "list_sessions",
     "list_sessions_rich",
     "normalize_runtime",

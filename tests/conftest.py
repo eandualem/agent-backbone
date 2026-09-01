@@ -233,7 +233,7 @@ async def api_app(config):
     store._agents = config.agents
     store._config = config
     app.state.agent_store = store
-    app.state.state_service = StateService(config.state_dir, db=db)
+    app.state.state_service = StateService(config.state_dir)
     app.state.tmux_service = TmuxService()
     app.state.delivery_service = DeliveryService()
     app.state.dispatch_service = DispatchService()

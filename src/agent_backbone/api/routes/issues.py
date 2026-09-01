@@ -21,8 +21,7 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.models import parse_from_tag
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
-from agent_backbone.services.routing import DeliveryService
-from agent_backbone.services.routing._resolution import validate_issue_targets
+from agent_backbone.services.routing import DeliveryService, validate_issue_targets
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +82,7 @@ async def list_issues(
 
     issues = await gh.list_issues(state=state, labels=labels, repo_full_name=repo)
     items = [_issue_to_response(i, config, delivery_svc) for i in issues]
+    items.sort(key=lambda item: (-item.priority_score, item.number))
     return ListEnvelope(items=items, total=len(items))
 
 

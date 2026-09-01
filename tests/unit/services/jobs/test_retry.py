@@ -1,4 +1,4 @@
-"""Tests for routing/_flows.py — retry, queue drain, and dedup semantics."""
+"""Tests for jobs/retry.py — retry, queue drain, and dedup semantics."""
 
 from __future__ import annotations
 
@@ -8,8 +8,7 @@ import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.services.database import BackboneDB, build_engine
-from agent_backbone.services.routing import delivery_retry, retry_delivery
-from agent_backbone.services.routing._flows import drain_message_queue
+from agent_backbone.services.jobs.retry import delivery_retry, drain_message_queue, retry_delivery
 from tests.conftest import TEST_REPO, make_config
 from tests.support import queue_row
 
@@ -51,7 +50,7 @@ class TestRetryDeliveryAckCheck:
 
         assert await retry_delivery(config, delivery, db, AsyncMock()) == "acknowledged"
 
-    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_retry_proceeds_when_not_acknowledged(self, mock_deliver, db, config):
         await db.record_delivery(154, "ike", "ike", "offline", repo=TEST_REPO)
         mock_issue = MagicMock(state="open", repo_full_name=TEST_REPO)
@@ -80,7 +79,7 @@ class TestRetryDeliveryAckCheck:
 
         assert await retry_delivery(config, delivery, db, mock_gh) == "issue_closed"
 
-    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_retry_repo_owner_issue_fetches_from_owned_repo(self, mock_deliver, db, tmp_path):
         """An agent that owns a repo has its issues fetched from that repo."""
         config = make_config(
@@ -94,7 +93,6 @@ class TestRetryDeliveryAckCheck:
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
         mock_gh.list_issues = AsyncMock(return_value=[MagicMock(number=77)])
-        mock_gh.list_open_issues = AsyncMock(return_value=[])
         mock_deliver.return_value = "delivered"
         delivery = {
             "session_name": "backbone",
@@ -106,11 +104,10 @@ class TestRetryDeliveryAckCheck:
         assert await retry_delivery(config, delivery, db, mock_gh) == "retried"
         assert mock_gh.get_issue.await_args.kwargs["repo_full_name"] == "acme/backbone"
 
-    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_retry_maps_busy_outcomes(self, mock_deliver, db, config):
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=MagicMock(state="open", repo_full_name=""))
-        mock_gh.list_open_issues = AsyncMock(return_value=[])
         delivery = {
             "session_name": "ike",
             "issue_number": 88,
@@ -125,7 +122,7 @@ class TestRetryDeliveryAckCheck:
 
 
 class TestDeliveryRetryQueueDrain:
-    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_drain_includes_queued_sessions(self, mock_deliver, db, config):
         await db.enqueue_message(
             session_name="scratch",
@@ -141,7 +138,7 @@ class TestDeliveryRetryQueueDrain:
         assert mock_deliver.await_args.args[0] == "scratch"
         assert (await queue_row(db, 1))["status"] == "delivered"
 
-    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_drain_releases_lease_on_failure(self, mock_deliver, db, config):
         await db.enqueue_message(
             session_name="ike",
@@ -160,7 +157,7 @@ class TestDeliveryRetryQueueDrain:
         assert row["status"] == "pending"
         assert row["leased_at"] is None
 
-    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_drain_releases_every_leased_row_on_block(self, mock_deliver, db, config):
         """A blocked head must not strand the rest of the batch in_progress."""
         for i in range(3):
@@ -189,9 +186,9 @@ class TestDeliveryRetryQueueDrain:
         db.expire_stale_leases.assert_awaited_once_with(max_age_minutes=5)
         db.expire_stale_pending.assert_awaited_once_with(max_age_minutes=30)
 
-    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     @patch(
-        "agent_backbone.services.routing._flows.list_open_queue_for_target",
+        "agent_backbone.services.jobs.retry.list_open_queue_for_target",
         new_callable=AsyncMock,
     )
     @patch("agent_backbone.services.terminal.list_sessions", new_callable=AsyncMock)
@@ -216,9 +213,9 @@ class TestDeliveryRetryQueueDrain:
         assert mock_deliver.await_args.kwargs["delivery_kind"] == "comment"
         assert (await queue_row(db, 1))["status"] == "delivered"
 
-    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     @patch(
-        "agent_backbone.services.routing._flows.list_open_queue_for_target",
+        "agent_backbone.services.jobs.retry.list_open_queue_for_target",
         new_callable=AsyncMock,
     )
     @patch("agent_backbone.services.terminal.list_sessions", new_callable=AsyncMock)
@@ -242,7 +239,7 @@ class TestDeliveryRetryQueueDrain:
         assert mock_deliver.await_args.kwargs["delivery_kind"] == "direct_message"
         mock_queue.assert_not_called()
 
-    @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     @patch("agent_backbone.services.terminal.list_sessions", new_callable=AsyncMock)
     async def test_delivery_retry_without_github_only_drains_queue(
         self, mock_list_sessions, mock_deliver, db, config

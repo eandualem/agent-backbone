@@ -1,10 +1,10 @@
-"""Tests for agent_backbone/priority.py."""
+"""Tests for routing/_priority.py and the queue order it produces."""
 
 from __future__ import annotations
 
 from agent_backbone.config import PriorityScoringConfig
 from agent_backbone.models import IssueData, ParsedLabels
-from agent_backbone.services.routing import compute_priority_score
+from agent_backbone.services.routing import compute_priority_score, list_open_queue_for_target
 
 
 def _make_issue(
@@ -99,3 +99,19 @@ class TestComputePriorityScore:
         score = compute_priority_score(issue, config, dependents_count=0)
 
         assert abs(score - 50.0) < 0.001
+
+
+class TestQueueOrder:
+    async def test_queue_is_sorted_by_priority_then_number(self, config):
+        from unittest.mock import AsyncMock
+
+        older = _make_issue(number=5, issue_type="task")
+        blocking = _make_issue(number=8, issue_type="bug", priority="blocking")
+        for issue in (older, blocking):
+            issue.repo_full_name = "example/ike"
+        gh = AsyncMock()
+        gh.list_issues = AsyncMock(return_value=[older, blocking])  # GitHub's order
+
+        queue = await list_open_queue_for_target(config, "ike", gh)
+
+        assert [i.number for i in queue] == [8, 5]

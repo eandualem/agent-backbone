@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
+from unittest.mock import AsyncMock, patch
 
 from agent_backbone.services.agents import (
     AgentState,
-    StateSnapshot,
     find_outgoing_comment,
     get_agent_state,
     has_commented_on_issue,
@@ -19,8 +15,7 @@ from agent_backbone.services.agents import (
     read_state_file,
     should_deliver,
 )
-from agent_backbone.services.agents.interface import StateService, _row_to_snapshot
-from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.agents.interface import StateService
 from agent_backbone.services.terminal import detect_runtime_from_pane, get_terminal_adapter
 
 _INF = "agent_backbone.services.agents._inference"
@@ -497,151 +492,21 @@ class TestGetAgentState:
         assert result.source == "pull"
 
 
-class TestRowToSnapshot:
-    def test_converts_idle_row(self):
-        row = {
-            "session_name": "ike",
-            "state": "idle",
-            "current_issue": None,
-            "ts": "1709500000.0",
-            "started_at": None,
-            "plan_file": None,
-            "plan_title": None,
-        }
-        snap = _row_to_snapshot(row)
-        assert snap.state == AgentState.IDLE
-        assert snap.timestamp == 1709500000.0
-        assert snap.source == "db"
-        assert snap.current_issue is None
-
-    def test_converts_processing_row(self):
-        row = {
-            "session_name": "feynman",
-            "state": "busy",
-            "current_issue": 571,
-            "ts": "1709500000.0",
-            "started_at": "1709499000.0",
-            "plan_file": "/tmp/plan.md",
-            "plan_title": "DB migration",
-        }
-        snap = _row_to_snapshot(row)
-        assert snap.state == AgentState.BUSY
-        assert snap.current_issue == 571
-        assert snap.started_at == 1709499000.0
-        assert snap.plan_file == "/tmp/plan.md"
-        assert snap.plan_title == "DB migration"
-
-    def test_unknown_state_value_maps_to_unknown(self):
-        row = {"state": "sleeping", "ts": None}
-        snap = _row_to_snapshot(row)
-        assert snap.state == AgentState.UNKNOWN
-
-    def test_missing_ts_defaults_to_zero(self):
-        row = {"state": "idle", "ts": None}
-        snap = _row_to_snapshot(row)
-        assert snap.timestamp == 0.0
-
-
-class TestStateServiceDBFirst:
-    @pytest.fixture
-    async def db(self):
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-        db = BackboneDB(engine)
-        await db.start()
-        try:
-            yield db
-        finally:
-            db._engine = None
-            await engine.dispose()
-
-    async def test_db_first_returns_recent_idle_db_state(self, db, tmp_path):
-        """Recent stable idle snapshots are served from DB without live reconciliation."""
-        await db.set_agent_state("ike", "idle", current_issue=None, ts=str(time.time()))
-        svc = StateService(state_dir=str(tmp_path), db=db)
-        snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.current_issue is None
-        assert snap.source == "db"
-
-    async def test_old_idle_db_state_is_reverified_live(self, db, tmp_path):
-        """A stored snapshot older than the trust window is re-verified live."""
-        await db.set_agent_state("ike", "idle", current_issue=None, ts=str(time.time() - 120))
-        svc = StateService(state_dir=str(tmp_path), db=db, snapshot_trust=20)
-        live_snapshot = StateSnapshot(state=AgentState.BUSY, source="pull", timestamp=time.time())
-        with patch(
-            f"{_IFACE}._get_agent_state",
-            new_callable=AsyncMock,
-            return_value=live_snapshot,
-        ):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.BUSY
-        row = await db.get_agent_state("ike")
-        assert row["state"] == "busy"
-
-    async def test_fresh_hook_state_overrides_recent_db_snapshot(self, db, tmp_path):
-        """A hook state file newer than the stored snapshot wins over the DB shortcut."""
-        await db.set_agent_state("ike", "idle", current_issue=None, ts=str(time.time() - 5))
-        (tmp_path / "ike.json").write_text(json.dumps({"state": "busy", "ts": time.time()}))
-        svc = StateService(state_dir=str(tmp_path), db=db, snapshot_trust=20)
-        snap = await svc.get_state("ike")
-        assert snap.state == AgentState.BUSY
-        assert snap.source == "push"
-
-    async def test_db_working_state_uses_live_reconciliation(self, db, tmp_path):
-        """Cached working states are refreshed from the live reconciler."""
-        await db.set_agent_state("ike", "busy", current_issue=42, ts="1709500000.0")
-        svc = StateService(state_dir=str(tmp_path), db=db)
-        live_snapshot = StateSnapshot(
-            state=AgentState.IDLE,
-            source="pull",
-            timestamp=1709500100.0,
-        )
-        with patch(
-            f"{_IFACE}._get_agent_state",
-            new_callable=AsyncMock,
-            return_value=live_snapshot,
-        ):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.source == "pull"
-
-        row = await db.get_agent_state("ike")
-        assert row is not None
-        assert row["state"] == "idle"
-        assert row["current_issue"] is None
-        assert row["ts"] == "1709500100.0"
-
-    async def test_fallback_to_file_when_no_db_row(self, db, tmp_path):
-        """When DB has no row, falls back to file+tmux."""
-        state_file = tmp_path / "ike.json"
-        state_file.write_text(json.dumps({"state": "idle", "issue": None, "ts": time.time()}))
-        svc = StateService(state_dir=str(tmp_path), db=db)
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.source == "push"
-
-    async def test_fallback_when_no_db(self, tmp_path):
-        """When StateService has no db, uses file+tmux."""
+class TestStateService:
+    async def test_get_state_is_the_reconciled_reading(self, tmp_path):
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
-        svc = StateService(state_dir=str(tmp_path), db=None)
+        svc = StateService(state_dir=str(tmp_path))
         with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
             snap = await svc.get_state("ike")
         assert snap.state == AgentState.BUSY
         assert snap.source == "push"
 
-    async def test_db_error_falls_back_to_file(self, tmp_path):
-        """When DB raises an error, falls back to file."""
-        state_file = tmp_path / "ike.json"
-        state_file.write_text(json.dumps({"state": "idle", "ts": time.time()}))
-        mock_db = MagicMock()
-        mock_db.get_agent_state = AsyncMock(side_effect=RuntimeError("DB down"))
-        svc = StateService(state_dir=str(tmp_path), db=mock_db)
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.IDLE
-        assert snap.source == "push"
+    def test_read_state_is_the_hook_file_alone(self, tmp_path):
+        svc = StateService(state_dir=str(tmp_path))
+        assert svc.read_state("ike") is None
+        (tmp_path / "ike.json").write_text(json.dumps({"state": "idle", "ts": 1.0}))
+        assert svc.read_state("ike").state == AgentState.IDLE
 
 
 class TestShouldDeliver:

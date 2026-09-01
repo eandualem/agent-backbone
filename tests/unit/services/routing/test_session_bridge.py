@@ -11,14 +11,12 @@ import pytest
 
 from agent_backbone.config import DeliveryConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.routing import (
-    SessionIntelligence,
-    SessionProfile,
-    get_session_intelligence,
+from agent_backbone.services.routing import get_session_intelligence, safe_deliver
+from agent_backbone.services.routing._resolution import (
     resolve_entity_session,
-    safe_deliver,
+    validate_issue_targets,
 )
-from agent_backbone.services.routing._resolution import validate_issue_targets
+from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 
 _IDLE_SNAP = StateSnapshot(state=AgentState.IDLE, source="push")
 _BUSY_SNAP = StateSnapshot(state=AgentState.BUSY, source="push")

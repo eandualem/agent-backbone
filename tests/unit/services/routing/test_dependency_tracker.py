@@ -6,8 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from agent_backbone.models import IssueData, ParsedLabels
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.routing import on_dependency_resolved
-from agent_backbone.services.routing._dependencies import sync_dependencies
+from agent_backbone.services.routing._dependencies import on_dependency_resolved, sync_dependencies
 from agent_backbone.services.routing._lifecycle import _check_dependencies
 
 _DEP = "agent_backbone.services.routing._dependencies"
@@ -106,11 +105,12 @@ class TestLifecycleDependencyIntegration:
 
     async def test_sync_dependencies_queries_each_agent(self, config):
         gh = AsyncMock()
-        gh.list_open_issues = AsyncMock(return_value=[])
+        gh.list_issues = AsyncMock(return_value=[])
         await sync_dependencies(config, AsyncMock(), gh)
-        labels = {call.args[0] for call in gh.list_open_issues.await_args_list}
+        calls = gh.list_issues.await_args_list
+        labels = {call.kwargs["labels"][0] for call in calls if call.kwargs.get("labels")}
         assert labels == {f"for:{name}" for name in config.agents.names}
-        repos = {call.kwargs["repo_full_name"] for call in gh.list_open_issues.await_args_list}
+        repos = {call.kwargs["repo_full_name"] for call in calls}
         assert repos == set(config.agents.repos)
 
     async def test_sync_dependencies_skipped_without_github(self, config, tmp_path):

@@ -23,10 +23,12 @@ Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way
 - **Every state decision goes through `get_agent_state`**
   (`services/agents/_inference.py`): fresh hook state is authoritative, the
   terminal is the fallback, and every snapshot carries `evidence`.
-- **Layering**: `terminal` is a leaf (never imports other services);
-  `agents` may import `terminal`; `routing` may import both. A new
-  cross-package import must pass `tests/unit/test_imports.py` (fresh
-  interpreter per entry module).
+- **Layering**, bottom up: `terminal` is a leaf (never imports other
+  services); `agents` may import `terminal`; `routing` may import both;
+  `jobs` (the scheduler's periodic work) may import everything below and
+  never the API — the API hands it callbacks. A new cross-package import
+  must pass `tests/unit/test_imports.py` (fresh interpreter per entry
+  module).
 - The database is the only source of configuration. New settings go in
   `SETTINGS_DEFAULTS` in `config.py` (with `SETTINGS_HELP` text) and in
   `docs/configuration.md`. Secrets never go in the database — `.env` only.

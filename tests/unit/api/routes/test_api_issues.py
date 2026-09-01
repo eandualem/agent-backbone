@@ -52,8 +52,9 @@ class TestListIssues:
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 2
-        blocking = next(i for i in data["items"] if i["number"] == 2)
-        assert blocking["priority_score"] > data["items"][0]["priority_score"]
+        # Highest priority first: the blocking issue leads.
+        assert [i["number"] for i in data["items"]] == [2, 1]
+        assert data["items"][0]["priority_score"] > data["items"][1]["priority_score"]
         assert gh.list_issues.await_args.kwargs["labels"] == ["for:ike", "task"]
         assert gh.list_issues.await_args.kwargs["repo_full_name"] == TEST_REPO
 

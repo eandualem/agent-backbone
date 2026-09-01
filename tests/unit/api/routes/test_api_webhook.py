@@ -196,7 +196,7 @@ class TestWebhookDispatch:
         headers = _webhook_headers(payload_bytes, delivery_id="dispatch-test-1")
 
         with patch(
-            "agent_backbone.api.routes.webhook.dispatch_event_async", new_callable=AsyncMock
+            "agent_backbone.api.routes.webhook.dispatch_event", new_callable=AsyncMock
         ) as mock_dispatch:
             mock_dispatch.return_value = "dispatch: 1 delivered, 0 offline, 0 deferred"
             resp = await api_client.post(WEBHOOK_PATH, content=payload_bytes, headers=headers)

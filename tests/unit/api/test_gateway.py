@@ -8,8 +8,8 @@ import hmac
 from agent_backbone.api.routes.webhook import verify_signature
 from agent_backbone.models import EventType, IssueEvent
 from agent_backbone.services.database import BackboneDB, build_engine
-from agent_backbone.services.routing import clear as clear_dedup
-from agent_backbone.services.routing import is_recent_notification
+from agent_backbone.services.routing._dedup import clear as clear_dedup
+from agent_backbone.services.routing._dedup import is_recent_notification
 
 
 def _make_db() -> BackboneDB:

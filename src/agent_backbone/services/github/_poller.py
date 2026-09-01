@@ -120,7 +120,7 @@ class GitHubPoller:
         return _iso(datetime.now(UTC) - lookback)
 
     async def run(self) -> dict[str, int]:
-        from agent_backbone.services.routing._ingest import dispatch_event
+        from agent_backbone.services.routing import dispatch_event
 
         config = self._config
         summary: dict[str, int] = {}

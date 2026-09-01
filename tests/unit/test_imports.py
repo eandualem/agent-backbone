@@ -19,6 +19,7 @@ _ENTRY_MODULES = [
     "agent_backbone.services.terminal",
     "agent_backbone.services.agents",
     "agent_backbone.services.routing",
+    "agent_backbone.services.jobs",
     "agent_backbone.services.infrastructure",
     "agent_backbone.services.github",
     "agent_backbone.services.integrations",

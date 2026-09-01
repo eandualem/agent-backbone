@@ -50,7 +50,7 @@ from agent_backbone.services.infrastructure import (
     runtime_available,
     start_agent,
 )
-from agent_backbone.services.routing._intelligence import get_session_intelligence
+from agent_backbone.services.routing import get_session_intelligence
 from agent_backbone.services.terminal import (
     SESSION_FORMAT_STR,
     TmuxService,

@@ -71,7 +71,6 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "routing.ignore_targets": [],
     "routing.notification_dedup_seconds": 10,
     "timing.stale_threshold_seconds": 300,
-    "timing.snapshot_trust_seconds": 20,
     "timing.grace_period_seconds": 5,
     "timing.queue_expiry_minutes": 30,
     "timing.stall_threshold_seconds": 5400,
@@ -117,7 +116,6 @@ SETTINGS_HELP: dict[str, str] = {
         "Do not announce the same issue to the same agent twice within this window"
     ),
     "timing.stale_threshold_seconds": "Hook state older than this is verified against the terminal",
-    "timing.snapshot_trust_seconds": "A stored state snapshot older than this is re-verified live",
     "timing.grace_period_seconds": "Settle time after an agent becomes idle before delivering",
     "timing.queue_expiry_minutes": "Queued messages older than this are dropped",
     "timing.stall_threshold_seconds": "Busy on one issue longer than this is a stall",
@@ -367,7 +365,6 @@ class RoutingConfig:
 @dataclass(frozen=True)
 class AgentStateConfig:
     stale_threshold_seconds: int = 300
-    snapshot_trust_seconds: int = 20
 
 
 @dataclass(frozen=True)
@@ -632,7 +629,6 @@ def build_config(
         ),
         agent_state=AgentStateConfig(
             stale_threshold_seconds=s["timing.stale_threshold_seconds"],
-            snapshot_trust_seconds=s["timing.snapshot_trust_seconds"],
         ),
         monitor=MonitorConfig(
             interval_seconds=s["timing.monitor_interval_seconds"],

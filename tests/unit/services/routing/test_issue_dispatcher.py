@@ -15,7 +15,7 @@ from agent_backbone.models import (
     ParsedLabels,
     parse_from_tag,
 )
-from agent_backbone.services.routing import issue_dispatcher
+from agent_backbone.services.routing._router import issue_dispatcher
 from tests.conftest import make_config
 
 
@@ -139,9 +139,7 @@ class TestIssueDispatcher:
 
     async def test_queue_scope_loaded_from_github(self, config, mock_db):
         mock_gh = AsyncMock()
-        mock_gh.list_open_issues = AsyncMock(
-            return_value=[IssueData(number=1), IssueData(number=4)]
-        )
+        mock_gh.list_issues = AsyncMock(return_value=[IssueData(number=1), IssueData(number=4)])
         with _patch_safe_deliver("delivered") as mock_deliver:
             await issue_dispatcher(_issue_event(1, "leo", ["ike"]), config, mock_db, mock_gh)
         assert mock_deliver.await_args.kwargs["queue_scope"] == {("", 1), ("", 4)}
@@ -163,7 +161,6 @@ class TestIssueDispatcher:
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[issue])
-        mock_gh.list_open_issues = AsyncMock(return_value=[])
 
         with _patch_safe_deliver("delivered") as mock_deliver:
             result = await issue_dispatcher(event, config, mock_db, mock_gh)

@@ -66,9 +66,10 @@ def _comment_matches_active_issue(
     return not repo or not current_repo or repo.casefold() == current_repo.casefold()
 
 
-async def _is_acknowledged_for_session(
+async def is_acknowledged(
     db: BackboneDB, repo: str, issue_number: int, target_entity: str, session_name: str
 ) -> bool:
+    """Whether the target (or the session delivering for it) acknowledged the issue."""
     if await db.is_acknowledged(issue_number, target_entity, repo=repo):
         return True
     return session_name != target_entity and await db.is_acknowledged(
@@ -107,9 +108,7 @@ async def _get_unacknowledged_gate_issue(
             continue
         if (row.get("outcome") or "") not in SUCCESS_OUTCOMES:
             continue
-        if await _is_acknowledged_for_session(
-            db, row_repo, issue_number, target_entity, session_name
-        ):
+        if await is_acknowledged(db, row_repo, issue_number, target_entity, session_name):
             continue
         return row_repo, issue_number
     return None

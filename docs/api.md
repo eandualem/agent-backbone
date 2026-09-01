@@ -84,7 +84,7 @@ Everything the backbone knows about one agent, with the evidence:
 ### `GET /api/agents/{name}/state`
 
 The reconciled state snapshot with `source` (`push` = hook, `pull` =
-terminal, `db`) and `evidence`.
+terminal) and `evidence`.
 
 ### `POST /api/agents/{name}/state`
 

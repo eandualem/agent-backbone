@@ -11,14 +11,14 @@ import pytest
 from agent_backbone.config import EscalationConfig, TelegramConfig
 from agent_backbone.models import IssueData, ParsedLabels
 from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.agents import _escalation as esc
-from agent_backbone.services.agents._monitor import monitor_agents
-from agent_backbone.services.agents._pending import deliver_pending_issues
 from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.jobs import escalation as esc
+from agent_backbone.services.jobs.monitor import monitor_agents
+from agent_backbone.services.jobs.pending import deliver_pending_issues
 
-_ESC = "agent_backbone.services.agents._escalation"
-_PEND = "agent_backbone.services.agents._pending"
-_MON = "agent_backbone.services.agents._monitor"
+_ESC = "agent_backbone.services.jobs.escalation"
+_PEND = "agent_backbone.services.jobs.pending"
+_MON = "agent_backbone.services.jobs.monitor"
 
 
 @pytest.fixture(autouse=True)
@@ -143,7 +143,7 @@ class TestOffline:
         config = replace(config, escalation=EscalationConfig(target="leo"))
         await db.set_agent_state("ike", "busy", current_issue=3)
         gh = AsyncMock()
-        gh.list_open_issues = AsyncMock(return_value=[_issue(3)])
+        gh.list_issues = AsyncMock(return_value=[_issue(3)])
         with patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d:
             await esc.handle_offline(config, {"leo"}, db, gh)
         d.assert_awaited_once()
@@ -168,7 +168,7 @@ class TestPlanWaiting:
         states = {"ike": _snap(_WAITING, reason="plan", plan_file="/p.md", plan_title="T")}
         with (
             _patch_states(states),
-            patch(f"{_ESC}._notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
             patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock, return_value="delivered") as d,
         ):
             await esc.check_plan_waiting(config, {"ike", "leo"}, db=db)
@@ -187,7 +187,7 @@ class TestPlanWaiting:
         )
         first = _snap(_WAITING, reason="plan", plan_file="/p.md", plan_title="T")
         second = replace(first, timestamp=first.timestamp + 10)
-        with patch(f"{_ESC}._notify_humans", new_callable=AsyncMock, return_value=True) as tg:
+        with patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg:
             with _patch_states({"ike": first}):
                 await esc.check_plan_waiting(config, {"ike"}, db=db)
             with _patch_states({"ike": second}):
@@ -200,7 +200,7 @@ class TestPlanWaiting:
         states = {"ike": _snap(_WAITING, reason="plan")}
         with (
             _patch_states(states),
-            patch(f"{_ESC}._notify_humans", new_callable=AsyncMock, return_value=False) as tg,
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=False) as tg,
             patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
         ):
             await esc.check_plan_waiting(config, {"ike"}, db=db)
@@ -223,7 +223,7 @@ class TestPlanWaiting:
 class TestDeliverPendingIssues:
     async def test_delivers_first_pending_to_idle_agent(self, config, db):
         gh = AsyncMock()
-        gh.list_open_issues = AsyncMock(return_value=[_issue(7), _issue(8)])
+        gh.list_issues = AsyncMock(return_value=[_issue(7), _issue(8)])
         gh.list_comments = AsyncMock(return_value=[])
         with (
             _patch_states({"ike": _snap(AgentState.IDLE)}, _PEND),
@@ -249,7 +249,7 @@ class TestDeliverPendingIssues:
     async def test_skips_acknowledged_issue(self, config, db):
         await db.record_acknowledgment(7, "ike", repo=_REPO)
         gh = AsyncMock()
-        gh.list_open_issues = AsyncMock(return_value=[_issue(7), _issue(8)])
+        gh.list_issues = AsyncMock(return_value=[_issue(7), _issue(8)])
         gh.list_comments = AsyncMock(return_value=[])
         with (
             _patch_states({"ike": _snap(AgentState.IDLE)}, _PEND),
@@ -263,7 +263,7 @@ class TestDeliverPendingIssues:
         from agent_backbone.models import CommentData
 
         gh = AsyncMock()
-        gh.list_open_issues = AsyncMock(return_value=[_issue(7)])
+        gh.list_issues = AsyncMock(return_value=[_issue(7)])
         gh.list_comments = AsyncMock(
             return_value=[CommentData(body="[from:ike] on it", user_login="bot")]
         )
@@ -279,7 +279,7 @@ class TestDeliverPendingIssues:
     async def test_skips_recently_delivered(self, config, db):
         await db.record_delivery(7, "ike", "ike", "delivered", "agent-monitor", repo=_REPO)
         gh = AsyncMock()
-        gh.list_open_issues = AsyncMock(return_value=[_issue(7)])
+        gh.list_issues = AsyncMock(return_value=[_issue(7)])
         gh.list_comments = AsyncMock(return_value=[])
         with (
             _patch_states({"ike": _snap(AgentState.IDLE)}, _PEND),
@@ -291,7 +291,7 @@ class TestDeliverPendingIssues:
 
     async def test_no_pending(self, config, db):
         gh = AsyncMock()
-        gh.list_open_issues = AsyncMock(return_value=[])
+        gh.list_issues = AsyncMock(return_value=[])
         with _patch_states({"ike": _snap(AgentState.IDLE)}, _PEND):
             result = await deliver_pending_issues(config, {"ike"}, db, gh)
         assert result["ike"] == "no_pending"
@@ -307,7 +307,6 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock) as offline,
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock) as plans,
             patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock) as copy,
-            patch(f"{_MON}.emit_sessions_update", new_callable=AsyncMock) as emit,
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}) as drain,
             patch(
                 f"{_MON}.deliver_pending_issues",
@@ -315,10 +314,11 @@ class TestMonitorAgents:
                 return_value={"ike": "no_pending"},
             ) as pend,
         ):
-            result = await monitor_agents(config, db, gh)
+            on_change = AsyncMock()
+            result = await monitor_agents(config, db, gh, on_change=on_change)
 
         assert result == {"ike": "no_pending"}
-        for mock in (sync, stalls, offline, plans, copy, emit, drain, pend):
+        for mock in (sync, stalls, offline, plans, copy, on_change, drain, pend):
             mock.assert_awaited_once()
 
     async def test_step_failure_is_isolated(self, config, db):
@@ -331,13 +331,14 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
             patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock),
-            patch(f"{_MON}.emit_sessions_update", new_callable=AsyncMock),
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}),
             patch(
                 f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}
             ) as pend,
         ):
-            await monitor_agents(config, db, AsyncMock())
+            await monitor_agents(
+                config, db, AsyncMock(), on_change=AsyncMock(side_effect=RuntimeError("x"))
+            )
         pend.assert_awaited_once()
 
     async def test_without_github_skips_issue_delivery(self, config, db):
@@ -347,7 +348,6 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
             patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock),
-            patch(f"{_MON}.emit_sessions_update", new_callable=AsyncMock),
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}) as drain,
             patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock) as pend,
         ):
