@@ -264,6 +264,6 @@ See [API](api.md).
 Agents keep running — they are tmux sessions. API calls fail. Messages
 sent by other agents are lost (they should retry). GitHub events are
 caught up on restart: poll intake resumes from the last stored event;
-webhook intake runs its startup backfill. On restart the backbone also
-re-reads hook state for every running session and fires plan-waiting
-notifications it may have missed.
+webhook intake runs its startup backfill. The `agent-monitor` job runs
+its first tick immediately, so hook state for every running session is
+re-read and missed plan-waiting notifications fire right after a restart.
