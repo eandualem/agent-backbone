@@ -21,7 +21,7 @@ from agent_backbone.services.agents import (
 )
 from agent_backbone.services.agents.interface import StateService, _row_to_snapshot
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.terminal import prompt_has_pending_input
+from agent_backbone.services.terminal import detect_runtime_from_pane, get_terminal_adapter
 
 _INF = "agent_backbone.services.agents._inference"
 _IFACE = "agent_backbone.services.agents.interface"
@@ -135,11 +135,13 @@ class TestWaitingForHuman:
         assert AgentState.parse("sleeping") == AgentState.UNKNOWN
         assert AgentState.parse(None) == AgentState.UNKNOWN
 
-    def test_should_deliver_waiting_default(self):
+    def test_should_deliver_waiting(self):
         assert should_deliver(AgentState.WAITING_FOR_HUMAN) is False
 
-    def test_should_deliver_waiting_blocking(self):
-        assert should_deliver(AgentState.WAITING_FOR_HUMAN, is_blocking=True) is False
+
+def prompt_has_pending_input(pane: str) -> bool:
+    """The adapter for whatever runtime the pane shows, asked about typed input."""
+    return get_terminal_adapter(detect_runtime_from_pane(pane)).prompt_has_pending_input(pane)
 
 
 class TestInferStateFromPane:
@@ -653,78 +655,10 @@ class TestShouldDeliver:
         assert should_deliver(AgentState.UNKNOWN) is False
 
     def test_busy_never_delivers(self):
-        assert should_deliver(AgentState.BUSY, is_blocking=False) is False
-
-    def test_busy_blocks_even_blocking(self):
-        assert should_deliver(AgentState.BUSY, is_blocking=True) is False
+        assert should_deliver(AgentState.BUSY) is False
 
 
-class TestRequireIdle:
-    """Monitor mode: only idle agents should receive deliveries."""
-
-    def test_idle_delivers(self):
-        assert should_deliver(AgentState.IDLE, require_idle=True) is True
-
-    def test_busy_skipped(self):
-        assert should_deliver(AgentState.BUSY, require_idle=True) is False
-
-    def test_starting_skipped(self):
-        assert should_deliver(AgentState.STARTING, require_idle=True) is False
-
-    def test_unknown_skipped(self):
-        assert should_deliver(AgentState.UNKNOWN, require_idle=True) is False
-
-    def test_blocking_ignored_in_monitor_mode(self):
-        """Even blocking issues don't override require_idle."""
-        assert should_deliver(AgentState.BUSY, is_blocking=True, require_idle=True) is False
-
-
-class TestCapacityRouting:
-    def test_busy_short_nonblocking_defer(self):
-        """Busy <30min + non-blocking → defer."""
-        assert (
-            should_deliver(
-                AgentState.BUSY, is_blocking=False, busy_duration=600.0, busy_threshold=1800.0
-            )
-            is False
-        )
-
-    def test_busy_short_blocking_defer(self):
-        """Busy <30min + blocking → defer (unchanged)."""
-        assert (
-            should_deliver(
-                AgentState.BUSY, is_blocking=True, busy_duration=600.0, busy_threshold=1800.0
-            )
-            is False
-        )
-
-    def test_busy_long_blocking_still_defer(self):
-        """Strict delivery gating ignores capacity-routing overrides."""
-        assert (
-            should_deliver(
-                AgentState.BUSY, is_blocking=True, busy_duration=1800.0, busy_threshold=1800.0
-            )
-            is False
-        )
-
-    def test_busy_long_nonblocking_defer(self):
-        """Busy >=30min + non-blocking → defer."""
-        assert (
-            should_deliver(
-                AgentState.BUSY, is_blocking=False, busy_duration=3600.0, busy_threshold=1800.0
-            )
-            is False
-        )
-
-    def test_no_duration_fallback(self):
-        """busy_duration=None → defers (no capacity routing without duration)."""
-        assert (
-            should_deliver(
-                AgentState.BUSY, is_blocking=True, busy_duration=None, busy_threshold=1800.0
-            )
-            is False
-        )
-
+class TestStartedAt:
     def test_started_at_parsed_from_state_file(self, tmp_path):
         """State file with started_at field is parsed correctly."""
         state_file = tmp_path / "ike.json"

@@ -35,7 +35,6 @@ from pathlib import Path
 STATE_IDLE = "idle"
 STATE_BUSY = "busy"
 STATE_WAITING = "waiting_for_human"
-STATE_STARTING = "starting"
 STATE_UNKNOWN = "unknown"
 
 REASON_PLAN = "plan"

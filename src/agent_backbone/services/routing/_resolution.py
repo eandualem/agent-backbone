@@ -37,9 +37,3 @@ def resolve_entity_session(target: str, config: BackboneConfig) -> str | None:
     if target in config.agents:
         return target
     return None
-
-
-def resolve_entity_sessions(target: str, config: BackboneConfig) -> list[str]:
-    """Resolve a target to its delivery sessions (zero or one)."""
-    session = resolve_entity_session(target, config)
-    return [session] if session else []

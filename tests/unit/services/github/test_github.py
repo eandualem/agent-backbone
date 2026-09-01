@@ -242,31 +242,3 @@ class TestGetSubIssues:
             subs = await gh.get_sub_issues(10, repo_full_name=REPO)
 
         assert subs == []
-
-
-class TestCountOpenSubIssues:
-    @respx.mock
-    async def test_counts_open_only(self, config):
-        url = f"{API_BASE}/repos/eandualem/orchestration/issues/10/sub_issues"
-        respx.get(url).respond(
-            json=[
-                {"number": 20, "title": "Sub 1", "state": "closed", "labels": []},
-                {"number": 21, "title": "Sub 2", "state": "open", "labels": []},
-                {"number": 22, "title": "Sub 3", "state": "open", "labels": []},
-            ]
-        )
-
-        async with GitHubClient(config) as gh:
-            count = await gh.count_open_sub_issues(10, repo_full_name=REPO)
-
-        assert count == 2
-
-    @respx.mock
-    async def test_error_returns_zero(self, config):
-        url = f"{API_BASE}/repos/eandualem/orchestration/issues/99/sub_issues"
-        respx.get(url).respond(status_code=500)
-
-        async with GitHubClient(config) as gh:
-            count = await gh.count_open_sub_issues(99, repo_full_name=REPO)
-
-        assert count == 0

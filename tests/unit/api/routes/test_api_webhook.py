@@ -81,13 +81,6 @@ class TestWebhookSignatureValidation:
         assert resp.status_code == 200
         assert resp.text == "dispatch: 1 delivered, 0 offline, 0 deferred"
 
-    async def test_root_path_alias(self, api_client, webhook_payload):
-        payload_bytes = json.dumps(webhook_payload).encode()
-        resp = await api_client.post(
-            "/", content=payload_bytes, headers=_webhook_headers(payload_bytes, delivery_id="root")
-        )
-        assert resp.status_code == 200
-
     async def test_invalid_signature_returns_403(self, api_client, webhook_payload):
         payload_bytes = json.dumps(webhook_payload).encode()
         headers = _webhook_headers(payload_bytes, signature="sha256=invalid")

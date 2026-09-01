@@ -355,13 +355,6 @@ class GitHubClient:
 
         return [self._build_issue(item, repo_full_name=repo_full_name) for item in resp.json()]
 
-    async def count_open_sub_issues(
-        self, issue_number: int, repo_full_name: str | None = None
-    ) -> int:
-        """Count open sub-issues of a parent. Returns 0 on error."""
-        subs = await self.get_sub_issues(issue_number, repo_full_name=repo_full_name)
-        return sum(1 for sub in subs if sub.state == "open")
-
     async def get_issue(self, issue_number: int, repo_full_name: str | None = None) -> IssueData:
         """Get a single issue by number."""
         owner, repo = self._resolve_repo(repo_full_name)

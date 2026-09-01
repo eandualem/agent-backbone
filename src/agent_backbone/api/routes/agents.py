@@ -41,7 +41,7 @@ from agent_backbone.api.session_updates import (
 )
 from agent_backbone.config import AgentSpec, BackboneConfig, session_secret_keys
 from agent_backbone.services.agent_store import AgentStore
-from agent_backbone.services.agents import StateService
+from agent_backbone.services.agents import StateService, read_state_file
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.infrastructure._agents import (
     BRIEF_INJECTION_RUNTIMES,
@@ -69,19 +69,6 @@ from agent_backbone.services.terminal import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agents"])
-
-
-def _spec_response(spec: AgentSpec) -> AgentConfigResponse:
-    return AgentConfigResponse(
-        name=spec.name,
-        dir=str(spec.path),
-        runtime=spec.runtime,
-        model=spec.model,
-        repo=spec.repo,
-        watches=list(spec.watches),
-        tags=list(spec.tags),
-        description=spec.description,
-    )
 
 
 async def _broadcast(request: Request, config: BackboneConfig, tmux_svc: TmuxService) -> None:
@@ -155,14 +142,9 @@ async def inspect_agent(
             log.debug("inspect: tmux read failed for %s", name)
 
     state_age: float | None = None
-    try:
-        from agent_backbone.services.agents._file_reader import read_state_file
-
-        push = read_state_file(config.state_dir, name)
-        if push and push.timestamp:
-            state_age = round(time.time() - push.timestamp, 1)
-    except Exception:
-        pass
+    push = read_state_file(config.state_dir, name)
+    if push and push.timestamp:
+        state_age = round(time.time() - push.timestamp, 1)
 
     try:
         recent = await db.query_deliveries(session_name=name, limit=10)
@@ -327,7 +309,7 @@ async def start_agent_discover(
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Start an agent from a directory (discovering it) or by name."""
-    directory = body.dir or body.working_directory
+    directory = body.dir
     if directory:
         spec = store.discover(directory, name=body.name, runtime=body.runtime, model=body.model)
         if body.watch:
@@ -357,7 +339,7 @@ async def start_agent(
 ):
     """Start a known agent by name (``dir`` in the body registers it first)."""
     req = body or AgentStartRequest()
-    directory = req.dir or req.working_directory
+    directory = req.dir
     if directory:
         spec = await store.register(
             store.discover(directory, name=session, runtime=req.runtime, model=req.model)
@@ -453,7 +435,7 @@ async def update_agent(
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _spec_response(spec)
+    return AgentConfigResponse.from_spec(spec)
 
 
 @router.post("/agents/{name}/watch", response_model=AgentConfigResponse)
@@ -463,7 +445,7 @@ async def watch_repo(name: str, body: WatchRequest, store: AgentStore = Depends(
         spec = await store.watch(name, body.repo)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'") from None
-    return _spec_response(spec)
+    return AgentConfigResponse.from_spec(spec)
 
 
 @router.post("/agents/{name}/unwatch", response_model=AgentConfigResponse)
@@ -472,7 +454,7 @@ async def unwatch_repo(name: str, body: WatchRequest, store: AgentStore = Depend
     spec = store.agents.get(name)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'")
-    return _spec_response(spec)
+    return AgentConfigResponse.from_spec(spec)
 
 
 @router.delete("/agents/{name}")

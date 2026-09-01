@@ -7,6 +7,7 @@ from pathlib import Path
 from agent_backbone.services.database import build_engine
 from agent_backbone.services.database.backbone_db import BackboneDB, metadata
 from agent_backbone.services.database.interface import sqlite_url
+from tests.support import queue_row
 
 _EXPECTED_TABLES = {
     "acknowledgments",
@@ -79,7 +80,7 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
         await db._run_migrations()
         assert await db.record_delivery(7, "ike", "ike", "delivered") > 0
         await db.enqueue_message("ike", "hello", delivery_kind="direct_message")
-        assert (await db.get_message_by_id(1))["status"] == "pending"
+        assert (await queue_row(db, 1))["status"] == "pending"
     finally:
         db._engine = None
         await engine.dispose()

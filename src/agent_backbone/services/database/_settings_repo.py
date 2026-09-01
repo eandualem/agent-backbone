@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+from agent_backbone.services.database._time import now_iso
 
 
 async def get_all_settings(conn: AsyncConnection) -> dict[str, object]:
@@ -33,7 +30,7 @@ async def set_setting(conn: AsyncConnection, key: str, value: object) -> None:
                ON CONFLICT(key) DO UPDATE SET value = excluded.value,
                                               updated_at = excluded.updated_at"""
         ),
-        {"key": key, "value": json.dumps(value), "now": _now_iso()},
+        {"key": key, "value": json.dumps(value), "now": now_iso()},
     )
 
 

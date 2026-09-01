@@ -9,6 +9,16 @@ from pydantic import BaseModel, Field
 
 _FROM_TAG_PATTERN = re.compile(r"^\[from:([a-z][a-z0-9-]*)\]", re.IGNORECASE)
 
+ISSUE_TYPE_WEIGHTS: dict[str, float] = {
+    "spec-gap": 100.0,
+    "bug": 90.0,
+    "task": 50.0,
+    "question": 20.0,
+    "optimization": 10.0,
+}
+"""The issue-type labels the backbone recognises, with their default priority
+weight (the ``priority.type_weights`` setting overrides the weights)."""
+
 
 def parse_from_tag(comment_body: str) -> str | None:
     """Extract entity name from ``[from:X]`` tag at start of comment body.
@@ -75,7 +85,7 @@ class ParsedLabels(BaseModel):
                 sender = name[5:]
             elif name.startswith("for:"):
                 targets.append(name[4:])
-            elif name in ("spec-gap", "task", "question", "bug", "optimization"):
+            elif name in ISSUE_TYPE_WEIGHTS:
                 issue_type = name
             elif name in ("blocking", "non-blocking"):
                 priority = name

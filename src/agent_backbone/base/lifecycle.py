@@ -47,10 +47,10 @@ class LifecycleManager:
                 self._started.append(name)
             except Exception:
                 _log.exception("Failed to start component: %s — rolling back", name)
-                await self._rollback()
+                await self.stop_all(reason="Rolling back")
                 raise
 
-    async def stop_all(self) -> None:
+    async def stop_all(self, *, reason: str = "Stopping") -> None:
         """Stop all started components in reverse order.
 
         Logs errors but continues stopping remaining components.
@@ -58,7 +58,7 @@ class LifecycleManager:
         for name in reversed(self._started):
             component = self._components[name]
             try:
-                _log.info("Stopping component: %s", name)
+                _log.info("%s component: %s", reason, name)
                 await component.stop()
             except Exception:
                 _log.exception("Error stopping component: %s", name)
@@ -81,14 +81,3 @@ class LifecycleManager:
                 components[name] = {"healthy": False, "error": str(exc)}
                 all_healthy = False
         return {"healthy": all_healthy, "components": components}
-
-    async def _rollback(self) -> None:
-        """Stop already-started components in reverse order during failed startup."""
-        for name in reversed(self._started):
-            component = self._components[name]
-            try:
-                _log.info("Rolling back component: %s", name)
-                await component.stop()
-            except Exception:
-                _log.exception("Error rolling back component: %s", name)
-        self._started.clear()

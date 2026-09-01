@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.services.database import BackboneDB
+from tests.support import queue_row
 
 
 def _make_db() -> BackboneDB:
@@ -323,7 +324,7 @@ class TestMessageQueue:
         await db.mark_message_delivered(row_id)
 
         # Use BackboneDB method to verify
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
         assert row["status"] == "delivered"
         assert row["delivered_at"] is not None
 
@@ -428,7 +429,7 @@ class TestMessageQueue:
             delivery_kind="comment",
         )
 
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
 
         assert row["content_hash"] == hashlib.sha256(message.encode()).hexdigest()
 
@@ -449,7 +450,7 @@ class TestMessageQueue:
         assert messages[0]["id"] == row_id
         assert messages[0]["status"] == "in_progress"
         assert messages[0]["leased_at"] is not None
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
         assert row["status"] == "in_progress"
         assert row["leased_at"] is not None
 
@@ -468,7 +469,7 @@ class TestMessageQueue:
 
         await db.release_lease(row_id)
 
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
         assert row["status"] == "pending"
         assert row["leased_at"] is None
 
@@ -487,7 +488,7 @@ class TestMessageQueue:
         expired = await db.expire_stale_leases(max_age_minutes=5)
 
         assert expired == 1
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
         assert row["status"] == "pending"
         assert row["leased_at"] is None
 
@@ -504,8 +505,8 @@ class TestMessageQueue:
         purged = await db.purge_pending_for_issue(775)
 
         assert purged == 2
-        assert (await db.get_message_by_id(first))["status"] == "delivered"
-        assert (await db.get_message_by_id(second))["status"] == "delivered"
+        assert (await queue_row(db, first))["status"] == "delivered"
+        assert (await queue_row(db, second))["status"] == "delivered"
 
     async def test_mark_delivered_requires_in_progress(self, db):
         row_id = await db.enqueue_message(
@@ -514,7 +515,7 @@ class TestMessageQueue:
 
         await db.mark_message_delivered(row_id)
 
-        row = await db.get_message_by_id(row_id)
+        row = await queue_row(db, row_id)
         assert row["status"] == "pending"
         assert row["delivered_at"] is None
 

@@ -13,7 +13,6 @@ from agent_backbone.services.github._poller import (
     GitHubPoller,
     comment_event_from_api,
     issue_event_from_api,
-    polled_repos,
 )
 from tests.conftest import TEST_REPO, make_agents, make_config
 
@@ -84,7 +83,7 @@ class TestPolledRepos:
                 }
             ),
         )
-        assert polled_repos(config) == ["acme/app", TEST_REPO]
+        assert config.agents.repos == ["acme/app", TEST_REPO]
 
 
 @pytest.fixture

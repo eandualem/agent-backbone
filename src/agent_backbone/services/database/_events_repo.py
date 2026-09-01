@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 
 async def record_event(
@@ -41,7 +37,7 @@ async def record_event(
             "issue_number": issue_number,
             "sender": sender,
             "summary": summary[:500],
-            "received_at": _now_iso(),
+            "received_at": now_iso(),
         },
     )
     row = result.fetchone()
@@ -63,7 +59,7 @@ async def record_event(
 async def mark_event_processed(conn: AsyncConnection, event_id: int, outcome: str) -> None:
     await conn.execute(
         text("UPDATE events SET processed_at = :now, outcome = :outcome WHERE id = :id"),
-        {"now": _now_iso(), "outcome": outcome[:500], "id": event_id},
+        {"now": now_iso(), "outcome": outcome[:500], "id": event_id},
     )
 
 
@@ -95,8 +91,8 @@ async def last_event_time_by_repo(conn: AsyncConnection) -> dict[str, str]:
 
 
 async def prune_events(conn: AsyncConnection, retention_days: int = 30) -> int:
-    cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
     result = await conn.execute(
-        text("DELETE FROM events WHERE received_at < :cutoff"), {"cutoff": cutoff}
+        text("DELETE FROM events WHERE received_at < :cutoff"),
+        {"cutoff": cutoff_iso(days=retention_days)},
     )
     return result.rowcount

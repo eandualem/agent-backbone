@@ -78,11 +78,6 @@ def route_issue_event(event: IssueEvent, config: BackboneConfig) -> EventRouting
     return routing
 
 
-def resolve_event_targets(event: IssueEvent, config: BackboneConfig) -> list[str]:
-    """Queue targets for an event (compat helper)."""
-    return route_issue_event(event, config).queue
-
-
 def comment_audience(event: IssueEvent, commenter: str | None, config: BackboneConfig) -> list[str]:
     """Agents notified about a comment: opener ∪ targets ∪ sole owner, minus the commenter."""
     routing = route_issue_event(
@@ -103,7 +98,7 @@ def _has_for_label(issue: IssueData) -> bool:
 
 
 async def list_open_queue_for_target(
-    config: BackboneConfig, target: str, gh: object, **_ignored
+    config: BackboneConfig, target: str, gh: object
 ) -> list[IssueData]:
     """An agent's open queue across every repository it owns or watches.
 

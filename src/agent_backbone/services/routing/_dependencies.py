@@ -8,7 +8,7 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_unblock_notification
-from agent_backbone.services.routing._resolution import resolve_entity_sessions
+from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import list_open_queue_for_target
 
 log = logging.getLogger(__name__)
@@ -47,20 +47,22 @@ async def on_dependency_resolved(
         message = format_unblock_notification(resolved["parent"])
         delivered_to: list[str] = []
         for target in resolved["targets"]:
-            for session_name in resolve_entity_sessions(target, config):
-                outcome = await safe_deliver(
-                    session_name,
-                    message,
-                    config,
-                    db=db,
-                    repo=repo,
-                    issue_number=parent_num,
-                    target_entity=target,
-                    flow_name="dependency-tracker",
-                    delivery_kind="watch",
-                )
-                if outcome == "delivered":
-                    delivered_to.append(session_name)
+            session_name = resolve_entity_session(target, config)
+            if session_name is None:
+                continue
+            outcome = await safe_deliver(
+                session_name,
+                message,
+                config,
+                db=db,
+                repo=repo,
+                issue_number=parent_num,
+                target_entity=target,
+                flow_name="dependency-tracker",
+                delivery_kind="watch",
+            )
+            if outcome == "delivered":
+                delivered_to.append(session_name)
         result[f"parent_{parent_num}"] = (
             f"unblocked_delivered_to:{','.join(delivered_to)}"
             if delivered_to

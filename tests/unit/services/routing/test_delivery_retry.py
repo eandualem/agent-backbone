@@ -11,6 +11,7 @@ from agent_backbone.services.database import BackboneDB, build_engine
 from agent_backbone.services.routing import delivery_retry, retry_delivery
 from agent_backbone.services.routing._flows import drain_message_queue
 from tests.conftest import TEST_REPO, make_config
+from tests.support import queue_row
 
 
 @pytest.fixture
@@ -138,7 +139,7 @@ class TestDeliveryRetryQueueDrain:
 
         assert summary["queue_delivered"] == 1
         assert mock_deliver.await_args.args[0] == "scratch"
-        assert (await db.get_message_by_id(1))["status"] == "delivered"
+        assert (await queue_row(db, 1))["status"] == "delivered"
 
     @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
     async def test_drain_releases_lease_on_failure(self, mock_deliver, db, config):
@@ -155,7 +156,7 @@ class TestDeliveryRetryQueueDrain:
 
         assert summary == {}
         db.release_lease.assert_awaited_once_with(1)
-        row = await db.get_message_by_id(1)
+        row = await queue_row(db, 1)
         assert row["status"] == "pending"
         assert row["leased_at"] is None
 
@@ -175,7 +176,7 @@ class TestDeliveryRetryQueueDrain:
 
         mock_deliver.assert_awaited_once()  # stops at the head, order preserved
         for message_id in (1, 2, 3):
-            row = await db.get_message_by_id(message_id)
+            row = await queue_row(db, message_id)
             assert row["status"] == "pending"
             assert row["leased_at"] is None
 
@@ -213,7 +214,7 @@ class TestDeliveryRetryQueueDrain:
 
         assert summary["queue_delivered"] == 1
         assert mock_deliver.await_args.kwargs["delivery_kind"] == "comment"
-        assert (await db.get_message_by_id(1))["status"] == "delivered"
+        assert (await queue_row(db, 1))["status"] == "delivered"
 
     @patch("agent_backbone.services.routing._flows.safe_deliver", new_callable=AsyncMock)
     @patch(
@@ -270,9 +271,9 @@ class TestPurgePendingForIssue:
             )
 
         assert await db.purge_pending_for_issue(775) == 2
-        assert (await db.get_message_by_id(1))["status"] == "delivered"
-        assert (await db.get_message_by_id(2))["status"] == "delivered"
-        assert (await db.get_message_by_id(3))["status"] == "pending"
+        assert (await queue_row(db, 1))["status"] == "delivered"
+        assert (await queue_row(db, 2))["status"] == "delivered"
+        assert (await queue_row(db, 3))["status"] == "pending"
 
     async def test_purge_returns_zero_when_no_pending(self, db):
         assert await db.purge_pending_for_issue(999) == 0

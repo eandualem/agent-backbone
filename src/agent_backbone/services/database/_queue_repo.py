@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
+from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 # --- Issue dependencies ---
 
@@ -30,7 +26,7 @@ async def get_parents(conn: AsyncConnection, sub_issue_number: int, *, repo: str
 async def sync_dependencies(
     conn: AsyncConnection, parent: int, sub_issues: list[int], *, repo: str = ""
 ) -> None:
-    now = _now_iso()
+    now = now_iso()
     for sub in sub_issues:
         await conn.execute(
             text(
@@ -78,7 +74,7 @@ async def record_acknowledgment(
             "repo": repo,
             "issue_number": issue_number,
             "target_entity": target_entity,
-            "acknowledged_at": _now_iso(),
+            "acknowledged_at": now_iso(),
         },
     )
 
@@ -137,7 +133,7 @@ async def enqueue_message(
         "target_entity": target_entity,
         "delivery_kind": delivery_kind,
         "flow_name": flow_name,
-        "enqueued_at": _now_iso(),
+        "enqueued_at": now_iso(),
         "content_hash": content_hash,
     }
 
@@ -175,7 +171,7 @@ async def get_sessions_with_pending(conn: AsyncConnection) -> list[str]:
 
 async def dequeue_messages(conn: AsyncConnection, session_name: str, limit: int = 10) -> list[dict]:
     """Atomically claim pending messages for a session, oldest first."""
-    now = _now_iso()
+    now = now_iso()
     lock = "FOR UPDATE SKIP LOCKED" if conn.dialect.name == "postgresql" else ""
     sql = f"""UPDATE message_queue SET status='in_progress', leased_at=:now
              WHERE id IN (
@@ -201,15 +197,13 @@ async def release_lease(conn: AsyncConnection, message_id: int) -> None:
 
 
 async def expire_stale_leases(conn: AsyncConnection, max_age_minutes: int = 5) -> int:
-    cutoff = (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
+    """Return leases older than the cutoff to ``pending`` (the deliverer died mid-batch)."""
     result = await conn.execute(
         text(
             """UPDATE message_queue SET status='pending', leased_at=NULL
                WHERE status = 'in_progress' AND leased_at < :cutoff"""
         ),
-        {"cutoff": cutoff},
+        {"cutoff": cutoff_iso(minutes=max_age_minutes)},
     )
     return result.rowcount
 
@@ -221,31 +215,24 @@ async def mark_message_delivered(conn: AsyncConnection, message_id: int) -> None
                SET status = 'delivered', delivered_at = :delivered_at
                WHERE id = :id AND status = 'in_progress'"""
         ),
-        {"delivered_at": _now_iso(), "id": message_id},
+        {"delivered_at": now_iso(), "id": message_id},
     )
 
 
 async def expire_stale_pending(conn: AsyncConnection, max_age_minutes: int = 30) -> int:
-    """Expire pending/leased messages older than the cutoff. Returns the count."""
-    now = _now_iso()
-    cutoff = (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
-    pending = await conn.execute(
+    """Expire pending messages older than the cutoff. Returns the count.
+
+    Leased rows are not considered: ``expire_stale_leases`` returns them to
+    ``pending`` long before this cutoff, so they expire on the next sweep.
+    """
+    result = await conn.execute(
         text(
             """UPDATE message_queue SET status = 'expired', delivered_at = :now
                WHERE status = 'pending' AND enqueued_at < :cutoff"""
         ),
-        {"now": now, "cutoff": cutoff},
+        {"now": now_iso(), "cutoff": cutoff_iso(minutes=max_age_minutes)},
     )
-    leased = await conn.execute(
-        text(
-            """UPDATE message_queue SET status='expired', delivered_at=:now
-               WHERE status='in_progress' AND leased_at < :cutoff"""
-        ),
-        {"now": now, "cutoff": cutoff},
-    )
-    return (pending.rowcount or 0) + (leased.rowcount or 0)
+    return result.rowcount or 0
 
 
 async def purge_pending_for_issue(
@@ -259,6 +246,6 @@ async def purge_pending_for_issue(
                WHERE repo = :repo AND issue_number = :issue_number
                  AND status IN ('pending', 'in_progress')"""
         ),
-        {"delivered_at": _now_iso(), "repo": repo, "issue_number": issue_number},
+        {"delivered_at": now_iso(), "repo": repo, "issue_number": issue_number},
     )
     return result.rowcount

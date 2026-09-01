@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_backbone.config import (
+    RUNTIMES,
     SECRET_ENV_KEYS,
     SETTINGS_DEFAULTS,
     SETTINGS_HELP,
@@ -168,9 +169,6 @@ def cmd_init(args: argparse.Namespace) -> int:
 # secrets — the one .env the backbone reads
 # ---------------------------------------------------------------------------
 
-# `WEBHOOK_SECRET` is only a legacy alias for `GITHUB_WEBHOOK_SECRET`: still
-# read, still scrubbed from agent sessions, but not offered as a name to set.
-_KNOWN_SECRETS = tuple(k for k in SECRET_ENV_KEYS if k != "WEBHOOK_SECRET")
 _SECRET_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -239,9 +237,9 @@ def cmd_secrets(args: argparse.Namespace) -> int:
         return 0
     if sub == "list":
         present = _env_keys(env_path)
-        for key in _KNOWN_SECRETS:
+        for key in SECRET_ENV_KEYS:
             print(f"  {'✓' if key in present else '-'} {key}")
-        for key in sorted(present - set(_KNOWN_SECRETS)):
+        for key in sorted(present - set(SECRET_ENV_KEYS)):
             print(f"  ✓ {key}")
         print(f"\n{env_path}" if env_path.is_file() else f"\n{env_path} (not created yet)")
         return 0
@@ -404,12 +402,10 @@ async def _client_config() -> BackboneConfig:
     bootstrap defaults alone could point at the wrong address. Falls back to
     the bootstrap snapshot when the database cannot be read.
     """
-    boot = bootstrap_config()
     try:
-        async with _Direct(boot) as direct:
-            return direct.config
+        return await _load_config()
     except Exception:
-        return boot
+        return bootstrap_config()
 
 
 async def _up_detached(config: BackboneConfig) -> int:
@@ -750,7 +746,7 @@ async def _agent(args: argparse.Namespace) -> int:
     api_up = await _api_up(boot)
 
     if sub == "list":
-        config = await _load_config()
+        config = boot
         if not config.agents:
             print("No agents known yet. Run `backbone agent start` from a project directory.")
             return 0
@@ -1215,7 +1211,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument(
         "--runtime",
         default=None,
-        help="claude | codex | gemini | opencode | aider | cursor | shell "
+        help=f"{' | '.join(RUNTIMES)} "
         "(default: agents.default_runtime, recorded on the agent afterwards)",
     )
     ps.add_argument(

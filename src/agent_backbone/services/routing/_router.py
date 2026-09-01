@@ -16,7 +16,7 @@ from agent_backbone.services.routing._format import (
     format_unassigned_notification,
     format_watch_notification,
 )
-from agent_backbone.services.routing._resolution import resolve_entity_sessions
+from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import (
     comment_audience,
     issue_repo,
@@ -63,37 +63,35 @@ async def _deliver(
     priority: bool = False,
     enforce_issue_queue: bool = False,
     scope: set[tuple[str, int]] | None = None,
-    sessions: list[str] | None = None,
 ) -> None:
-    sessions = sessions if sessions is not None else resolve_entity_sessions(target, config)
-    if not sessions:
+    session = resolve_entity_session(target, config)
+    if session is None:
         log.warning("No session for target '%s'", target)
         result.skipped.append(target)
         return
-    for session in sessions:
-        outcome = await safe_deliver(
-            session,
-            message,
-            config,
-            db=db,
-            repo=issue_repo(event.issue),
-            issue_number=event.issue.number,
-            target_entity=target,
-            flow_name="issue-dispatcher",
-            priority=priority,
-            enforce_issue_queue=enforce_issue_queue,
-            queue_scope=scope,
-            delivery_kind=kind,
-        )
-        _record(result, session, outcome)
-        log.info(
-            "Decision: %s#%d → %s (%s) = %s",
-            issue_repo(event.issue),
-            event.issue.number,
-            target,
-            kind,
-            outcome,
-        )
+    outcome = await safe_deliver(
+        session,
+        message,
+        config,
+        db=db,
+        repo=issue_repo(event.issue),
+        issue_number=event.issue.number,
+        target_entity=target,
+        flow_name="issue-dispatcher",
+        priority=priority,
+        enforce_issue_queue=enforce_issue_queue,
+        queue_scope=scope,
+        delivery_kind=kind,
+    )
+    _record(result, session, outcome)
+    log.info(
+        "Decision: %s#%d → %s (%s) = %s",
+        issue_repo(event.issue),
+        event.issue.number,
+        target,
+        kind,
+        outcome,
+    )
 
 
 async def issue_dispatcher(
@@ -115,19 +113,17 @@ async def issue_dispatcher(
             event.issue, event.comment, commenter_entity=commenter
         )
 
-        commenter_sessions: set[str] = set()
+        commenter_session: str | None = None
         if commenter:
-            commenter_sessions = set(resolve_entity_sessions(commenter, config))
+            commenter_session = resolve_entity_session(commenter, config)
             try:
                 await db.record_acknowledgment(event.issue.number, commenter, repo=repo)
             except Exception:
                 log.exception("Failed to record acknowledgment (non-fatal)")
 
         for target in audience:
-            sessions = [
-                s for s in resolve_entity_sessions(target, config) if s not in commenter_sessions
-            ]
-            if not sessions:
+            session = resolve_entity_session(target, config)
+            if session is None or session == commenter_session:
                 result.skipped.append(target)
                 continue
             try:
@@ -135,15 +131,7 @@ async def issue_dispatcher(
             except Exception:
                 log.exception("Failed to clear acknowledgment (non-fatal)")
             await _deliver(
-                target,
-                message,
-                event,
-                config,
-                db,
-                result,
-                kind="comment",
-                priority=is_blocking,
-                sessions=sessions,
+                target, message, event, config, db, result, kind="comment", priority=is_blocking
             )
         return result
 

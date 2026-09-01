@@ -9,7 +9,6 @@ from agent_backbone.services.terminal._adapters import (
     get_terminal_adapter,
     get_terminal_adapter_for_session,
     normalize_runtime,
-    prompt_has_pending_input,
     resolve_terminal_runtime,
     sanitize_pane_content,
 )
@@ -56,7 +55,6 @@ __all__ = [
     "list_sessions",
     "list_sessions_rich",
     "normalize_runtime",
-    "prompt_has_pending_input",
     "query_environment_var",
     "query_format_vars",
     "resize_window",

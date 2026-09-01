@@ -11,7 +11,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import EventType, IssueEvent
-from agent_backbone.services.routing._targets import issue_repo, resolve_event_targets
+from agent_backbone.services.routing._targets import issue_repo, route_issue_event
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -113,10 +113,12 @@ async def _route(event, config, db, gh, delivery_svc, dispatch_svc) -> str:
         EventType.PULL_REQUEST_OPENED,
     ):
         if event.event_type in (EventType.ISSUE_OPENED, EventType.ISSUE_LABELED):
-            targets = resolve_event_targets(event, config)
+            targets = route_issue_event(event, config).queue
             repo = issue_repo(event.issue)
+            window = config.routing.notification_dedup_seconds
             if targets and all(
-                delivery_svc.is_recent_notification(repo, event.issue.number, t) for t in targets
+                delivery_svc.is_recent_notification(repo, event.issue.number, t, window)
+                for t in targets
             ):
                 return f"deduped: all targets already notified for #{event.issue.number}"
 

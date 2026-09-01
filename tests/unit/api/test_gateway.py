@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 
-from agent_backbone.api.routes.webhook import normalize_event, verify_signature
-from agent_backbone.models import EventType
+from agent_backbone.api.routes.webhook import verify_signature
+from agent_backbone.models import EventType, IssueEvent
 from agent_backbone.services.database import BackboneDB, build_engine
 from agent_backbone.services.routing import clear as clear_dedup
 from agent_backbone.services.routing import is_recent_notification
@@ -83,7 +83,7 @@ class TestNormalizeEvent:
                 "labels": [{"name": "from:leo"}, {"name": "for:ike"}, {"name": "task"}],
             },
         }
-        event = normalize_event("issues", "opened", payload, "delivery-1")
+        event = IssueEvent.from_webhook("issues", "opened", payload, "delivery-1")
         assert event.event_type == EventType.ISSUE_OPENED
         assert event.issue.number == 42
         assert event.issue.labels.sender == "leo"
@@ -96,7 +96,8 @@ class TestNormalizeEvent:
             "issue": {"number": 10, "title": "[task] Done", "state": "closed", "labels": []},
         }
         assert (
-            normalize_event("issues", "closed", payload, "d").event_type == EventType.ISSUE_CLOSED
+            IssueEvent.from_webhook("issues", "closed", payload, "d").event_type
+            == EventType.ISSUE_CLOSED
         )
 
     def test_comment_created(self):
@@ -105,14 +106,17 @@ class TestNormalizeEvent:
             "issue": {"number": 42, "title": "[task] Test", "labels": [{"name": "for:ike"}]},
             "comment": {"body": "Hello", "user": {"login": "someone"}},
         }
-        event = normalize_event("issue_comment", "created", payload, "d")
+        event = IssueEvent.from_webhook("issue_comment", "created", payload, "d")
         assert event.event_type == EventType.COMMENT_CREATED
         assert event.comment is not None
         assert event.comment.body == "Hello"
 
     def test_unknown_event(self):
         payload = {"action": "deleted", "issue": {"number": 1, "labels": []}}
-        assert normalize_event("issues", "deleted", payload, "d").event_type == EventType.UNKNOWN
+        assert (
+            IssueEvent.from_webhook("issues", "deleted", payload, "d").event_type
+            == EventType.UNKNOWN
+        )
 
     def test_pull_request_opened(self):
         payload = {
@@ -126,7 +130,7 @@ class TestNormalizeEvent:
                 "labels": [],
             },
         }
-        event = normalize_event("pull_request", "opened", payload, "d")
+        event = IssueEvent.from_webhook("pull_request", "opened", payload, "d")
         assert event.event_type == EventType.PULL_REQUEST_OPENED
         assert event.issue.number == 73
         assert event.issue.repo_full_name == "acme/agent-backbone"

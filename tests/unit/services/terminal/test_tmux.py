@@ -302,28 +302,6 @@ class TestSendKeys:
             assert "Enter" not in call_args
             assert "Escape" in call_args
 
-    async def test_send_keys_literal_uses_dash_l(self):
-        with (
-            patch(
-                "agent_backbone.services.terminal._core.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.services.terminal._core.asyncio.create_subprocess_exec",
-                new_callable=AsyncMock,
-            ) as mock_exec,
-        ):
-            proc = AsyncMock()
-            proc.returncode = 0
-            proc.communicate = AsyncMock(return_value=(b"", b""))
-            mock_exec.return_value = proc
-
-            assert await send_keys("ike", "hello", literal=True) is True
-            call_args = mock_exec.call_args[0]
-            assert "-l" in call_args
-            assert "hello" in call_args
-
     async def test_send_keys_session_offline(self):
         with patch(
             "agent_backbone.services.terminal._core.session_exists",

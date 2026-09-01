@@ -292,18 +292,3 @@ async def safe_deliver(
     if await send_message(session_name, message, runtime_hint=profile.runtime):
         return await finish("delivered", queue=False)
     return await finish("delivery_failed", queue=True)
-
-
-async def list_sessions_full(config: BackboneConfig) -> list[dict]:
-    """All tmux sessions enriched with intelligence and agent state."""
-    from agent_backbone.services.terminal import list_sessions_rich
-
-    sessions = await list_sessions_rich()
-    results: list[dict] = []
-    for session in sessions:
-        profile = await get_session_intelligence(session["name"], config)
-        enriched = dict(session)
-        enriched["intelligence"] = str(profile.intelligence)
-        enriched["agent_state"] = str(profile.agent_state)
-        results.append(enriched)
-    return results

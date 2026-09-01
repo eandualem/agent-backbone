@@ -685,11 +685,3 @@ async def get_terminal_adapter_for_session(
         pane_content=pane_content,
     )
     return get_terminal_adapter(runtime)
-
-
-def prompt_has_pending_input(pane_content: str, runtime_hint: str | None = None) -> bool:
-    """Whether the current runtime prompt holds buffered input."""
-    runtime = normalize_runtime(runtime_hint)
-    if runtime == TerminalRuntime.UNKNOWN:
-        runtime = detect_runtime_from_pane(pane_content)
-    return get_terminal_adapter(runtime).prompt_has_pending_input(pane_content)

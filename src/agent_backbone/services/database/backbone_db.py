@@ -448,16 +448,6 @@ class BackboneDB:
         async with self._engine.begin() as conn:
             return await _queue_repo.expire_stale_pending(conn, max_age_minutes)
 
-    async def get_message_by_id(self, message_id: int) -> dict | None:
-        """Get a single message by ID (for verification)."""
-        async with self._engine.begin() as conn:
-            result = await conn.execute(
-                text("SELECT * FROM message_queue WHERE id = :id"),
-                {"id": message_id},
-            )
-            row = result.fetchone()
-            return dict(row._mapping) if row else None
-
     # --- Settings (delegates to _settings_repo) ---
 
     async def get_all_settings(self) -> dict[str, object]:

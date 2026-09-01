@@ -12,6 +12,7 @@ from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.integrations.telegram import TelegramService
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import CATCH_ALL_TOPIC
+from agent_backbone.services.integrations.telegram.interface import _send
 
 _CMD = "agent_backbone.services.integrations.telegram._commands"
 _ROUTING = "agent_backbone.services.integrations.telegram._routing"
@@ -235,8 +236,8 @@ class TestDeliveryReplyFallbacks:
         assert _delivery_reply("ike", status) == expected
 
 
-class TestSendNotification:
-    async def test_send_notification_success(self):
+class TestSend:
+    async def test_send_success(self):
         response = MagicMock(status_code=200)
         client = AsyncMock()
         client.post = AsyncMock(return_value=response)
@@ -246,9 +247,9 @@ class TestSendNotification:
             "agent_backbone.services.integrations.telegram.interface.httpx.AsyncClient",
             return_value=client,
         ):
-            assert await TelegramService.send_notification("tok", 1, "hi") is True
+            assert await _send("tok", 1, "hi") is True
 
-    async def test_send_notification_failure(self):
+    async def test_send_failure(self):
         client = AsyncMock()
         client.post = AsyncMock(return_value=MagicMock(status_code=400, text="bad"))
         client.__aenter__ = AsyncMock(return_value=client)
@@ -257,7 +258,7 @@ class TestSendNotification:
             "agent_backbone.services.integrations.telegram.interface.httpx.AsyncClient",
             return_value=client,
         ):
-            assert await TelegramService.send_notification("tok", 1, "hi") is False
+            assert await _send("tok", 1, "hi") is False
 
 
 class TestGeneralAndUnmapped:

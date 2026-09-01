@@ -52,9 +52,18 @@ class StateSnapshot:
     evidence: list[str] = field(default_factory=list)
 
     @property
-    def is_working(self) -> bool:
-        return self.state in WORKING_STATES
-
-    @property
     def is_plan_waiting(self) -> bool:
         return self.state == AgentState.WAITING_FOR_HUMAN and self.reason == REASON_PLAN
+
+    def db_fields(self) -> dict:
+        """Keyword arguments for ``BackboneDB.set_agent_state`` — one spelling for every writer."""
+        return {
+            "state": self.state.value,
+            "reason": self.reason,
+            "current_issue": self.current_issue,
+            "current_repo": self.current_repo,
+            "ts": str(self.timestamp) if self.timestamp else None,
+            "started_at": str(self.started_at) if self.started_at else None,
+            "plan_file": self.plan_file,
+            "plan_title": self.plan_title,
+        }

@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+from agent_backbone.services.database._time import now_iso
 
 
 async def create_swarm(
@@ -53,7 +49,7 @@ async def create_swarm(
             "coordinator": coordinator,
             "branch": branch,
             "worktree": worktree_dir,
-            "now": _now_iso(),
+            "now": now_iso(),
         },
     )
 
@@ -87,7 +83,7 @@ async def find_active_swarm_for_issue(
 
 
 async def set_swarm_status(conn: AsyncConnection, name: str, status: str) -> None:
-    completed = _now_iso() if status in ("done", "disbanded") else None
+    completed = now_iso() if status in ("done", "disbanded") else None
     await conn.execute(
         text(
             """UPDATE swarms SET status = :status,

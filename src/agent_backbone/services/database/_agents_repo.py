@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+from agent_backbone.services.database._time import now_iso
 
 
 def _row_to_agent(row, watches: list[str]) -> dict:
@@ -34,18 +31,6 @@ async def list_agents(conn: AsyncConnection) -> list[dict]:
     return [_row_to_agent(row, watches.get(row._mapping["name"], [])) for row in result.fetchall()]
 
 
-async def get_agent(conn: AsyncConnection, name: str) -> dict | None:
-    result = await conn.execute(text("SELECT * FROM agents WHERE name = :name"), {"name": name})
-    row = result.fetchone()
-    if row is None:
-        return None
-    watch_rows = await conn.execute(
-        text("SELECT repo FROM agent_watches WHERE agent_name = :name ORDER BY repo"),
-        {"name": name},
-    )
-    return _row_to_agent(row, [r._mapping["repo"] for r in watch_rows.fetchall()])
-
-
 async def upsert_agent(
     conn: AsyncConnection,
     name: str,
@@ -58,7 +43,7 @@ async def upsert_agent(
     env: dict[str, str],
     description: str,
 ) -> None:
-    now = _now_iso()
+    now = now_iso()
     await conn.execute(
         text(
             """INSERT INTO agents
@@ -91,7 +76,7 @@ async def upsert_agent(
 async def touch_agent_started(conn: AsyncConnection, name: str) -> None:
     await conn.execute(
         text("UPDATE agents SET last_started_at = :now WHERE name = :name"),
-        {"now": _now_iso(), "name": name},
+        {"now": now_iso(), "name": name},
     )
 
 
@@ -108,7 +93,7 @@ async def add_watch(conn: AsyncConnection, name: str, repo: str) -> None:
                VALUES (:name, :repo, :now)
                ON CONFLICT(agent_name, repo) DO NOTHING"""
         ),
-        {"name": name, "repo": repo, "now": _now_iso()},
+        {"name": name, "repo": repo, "now": now_iso()},
     )
 
 

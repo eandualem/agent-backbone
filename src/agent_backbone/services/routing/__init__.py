@@ -10,10 +10,7 @@ from agent_backbone.services.routing._dedup import (
     clear,
     is_recent_notification,
 )
-from agent_backbone.services.routing._delivery import (
-    list_sessions_full,
-    safe_deliver,
-)
+from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._dependencies import (
     check_parent_resolved,
     on_dependency_resolved,
@@ -47,7 +44,6 @@ from agent_backbone.services.routing._priority import compute_priority_score
 from agent_backbone.services.routing._resolution import (
     is_valid_issue_target,
     resolve_entity_session,
-    resolve_entity_sessions,
     validate_issue_targets,
 )
 from agent_backbone.services.routing._router import issue_dispatcher
@@ -56,7 +52,6 @@ from agent_backbone.services.routing._targets import (
     comment_audience,
     list_open_queue_for_target,
     queue_scope,
-    resolve_event_targets,
     route_issue_event,
 )
 from agent_backbone.services.routing.interface import DeliveryService, DispatchService
@@ -99,13 +94,10 @@ __all__ = [
     "is_valid_issue_target",
     "issue_dispatcher",
     "list_open_queue_for_target",
-    "list_sessions_full",
     "on_dependency_resolved",
     "on_issue_closed",
     "queue_scope",
     "resolve_entity_session",
-    "resolve_entity_sessions",
-    "resolve_event_targets",
     "retry_delivery",
     "route_issue_event",
     "safe_deliver",
