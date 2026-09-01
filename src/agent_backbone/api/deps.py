@@ -1,63 +1,66 @@
-"""FastAPI dependency injection — service-based lookups from app.state."""
+"""FastAPI dependency injection — service lookups from app.state."""
 
 from __future__ import annotations
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents import MonitoringService, StateService
-from agent_backbone.services.automation import OnboardingService, WorkflowsService
+from agent_backbone.services.agent_store import AgentStore
+from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.routing import DeliveryService, DispatchService
+from agent_backbone.services.scheduler import PeriodicScheduler
+from agent_backbone.services.telegram import TelegramService
 from agent_backbone.services.terminal import TmuxService
 
 
 def get_config(request: Request) -> BackboneConfig:
-    """Retrieve BackboneConfig from app state (loaded at startup)."""
     return request.app.state.config
 
 
 def get_db(request: Request) -> BackboneDB:
-    """Retrieve the long-lived BackboneDB instance from app state."""
     return request.app.state.db
 
 
+def get_agent_store(request: Request) -> AgentStore:
+    return request.app.state.agent_store
+
+
 def get_github(request: Request) -> GitHubClient:
-    """Retrieve the long-lived GitHubClient instance from app state."""
-    return request.app.state.github
+    """The GitHub client, or 503 when GitHub is not configured."""
+    gh = getattr(request.app.state, "github", None)
+    if gh is None:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub is not configured — set GITHUB_TOKEN (or GitHub App credentials)",
+        )
+    return gh
+
+
+def get_optional_github(request: Request) -> GitHubClient | None:
+    return getattr(request.app.state, "github", None)
 
 
 def get_state_service(request: Request) -> StateService:
-    """Retrieve the StateService instance from app state."""
     return request.app.state.state_service
 
 
 def get_tmux_service(request: Request) -> TmuxService:
-    """Retrieve the TmuxService instance from app state."""
     return request.app.state.tmux_service
 
 
 def get_delivery_service(request: Request) -> DeliveryService:
-    """Retrieve the DeliveryService instance from app state."""
     return request.app.state.delivery_service
 
 
-def get_monitoring_service(request: Request) -> MonitoringService:
-    """Retrieve the MonitoringService instance from app state."""
-    return request.app.state.monitoring_service
-
-
 def get_dispatch_service(request: Request) -> DispatchService:
-    """Retrieve the DispatchService instance from app state."""
     return request.app.state.dispatch_service
 
 
-def get_onboarding_service(request: Request) -> OnboardingService:
-    """Retrieve the OnboardingService instance from app state."""
-    return request.app.state.onboarding_service
+def get_scheduler(request: Request) -> PeriodicScheduler | None:
+    return getattr(request.app.state, "scheduler", None)
 
 
-def get_workflows_service(request: Request) -> WorkflowsService:
-    """Retrieve the WorkflowsService instance from app state."""
-    return request.app.state.workflows_service
+def get_telegram_service(request: Request) -> TelegramService | None:
+    return getattr(request.app.state, "telegram_service", None)

@@ -1,0 +1,303 @@
+"""Tests for the `backbone` CLI (database-backed configuration)."""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from agent_backbone import cli
+
+
+def _run(argv: list[str]) -> int:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    return int(exc.value.code or 0)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("BACKBONE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("BACKBONE_API_KEY", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
+    monkeypatch.delenv("BACKBONE_AGENT", raising=False)
+    # Never talk to a real backbone during tests
+    with patch("agent_backbone.cli._api_up", new_callable=AsyncMock, return_value=False):
+        yield tmp_path / "data"
+
+
+class TestInit:
+    def test_creates_data_dir_env_and_database(self, _isolated_data_dir, capsys):
+        data = _isolated_data_dir
+        assert _run(["init"]) == 0
+        env = data / ".env"
+        assert env.is_file() and (data / "backbone.db").is_file()
+        assert "BACKBONE_API_KEY=" in env.read_text()
+        assert len(env.read_text().split("BACKBONE_API_KEY=")[1].splitlines()[0]) >= 32
+        assert oct(env.stat().st_mode)[-3:] == "600"
+        assert "backbone agent start" in capsys.readouterr().out
+
+    def test_keeps_env_without_force(self, _isolated_data_dir):
+        data = _isolated_data_dir
+        data.mkdir(parents=True)
+        (data / ".env").write_text("BACKBONE_API_KEY=keep\n")
+        assert _run(["init"]) == 0
+        assert (data / ".env").read_text() == "BACKBONE_API_KEY=keep\n"
+        assert _run(["init", "--force"]) == 0
+        assert "keep" not in (data / ".env").read_text()
+
+
+class TestConfig:
+    def test_set_get_list_unset(self, capsys):
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        assert _run(["config", "set", "backbone.port", "7999"]) == 0
+        capsys.readouterr()
+        assert _run(["config", "get", "backbone.port"]) == 0
+        assert capsys.readouterr().out.splitlines()[0] == "7999"
+        assert _run(["config", "list"]) == 0
+        out = capsys.readouterr().out
+        assert "* backbone.port" in out and "timing.grace_period_seconds" in out
+        assert _run(["config", "unset", "backbone.port"]) == 0
+        capsys.readouterr()
+        assert _run(["config", "get", "backbone.port"]) == 0
+        assert capsys.readouterr().out.splitlines()[0] == "7120"
+
+    def test_rejects_bad_values(self, capsys):
+        assert _run(["init"]) == 0
+        assert _run(["config", "set", "backbone.port", "lots"]) == 1
+        assert _run(["config", "set", "nope.key", "1"]) == 1
+
+
+class TestDoctor:
+    def test_reports_missing_pieces(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        assert _run(["agent", "set", "ghost", "dir=/nope"]) == 1  # unknown agent
+        with patch("agent_backbone.cli.shutil.which", return_value=None):
+            code = _run(["doctor"])
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "tmux on PATH" in out and "✗" in out
+
+    def test_passes_with_valid_setup(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        with patch("agent_backbone.cli.shutil.which", return_value="/usr/bin/tmux"):
+            code = _run(["doctor"])
+        assert code == 0
+        assert "All good" in capsys.readouterr().out
+
+
+class TestAgentCommands:
+    def test_start_discovers_agent_from_directory(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        project = tmp_path / "my-app"
+        project.mkdir()
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as start,
+            patch(
+                "agent_backbone.services.infrastructure._agents.wait_until_ready",
+                new_callable=AsyncMock,
+                return_value=("ready", ["terminal shows an empty prompt"]),
+            ),
+            patch("agent_backbone.services.agent_store.detect_repo", return_value="acme/my-app"),
+        ):
+            assert _run(["agent", "start", "--dir", str(project), "--runtime", "shell"]) == 0
+        out = capsys.readouterr().out
+        assert "my-app: ready" in out and "acme/my-app" in out
+        assert start.await_args.args[0].name == "my-app"
+        assert start.await_args.args[0].repo == "acme/my-app"
+
+        assert _run(["agent", "list"]) == 0
+        out = capsys.readouterr().out
+        assert "my-app" in out and str(project) in out
+
+    def test_start_unknown_name_registers_cwd(self, tmp_path, monkeypatch, capsys):
+        assert _run(["init"]) == 0
+        project = tmp_path / "some-project"
+        project.mkdir()
+        monkeypatch.chdir(project)
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as start,
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "orch", "--no-wait"]) == 0
+        out = capsys.readouterr().out
+        assert "'orch' is new" in out
+        assert start.await_args.args[0].name == "orch"
+        assert start.await_args.args[0].path == project
+
+    def test_start_override_updates_recorded_runtime_and_model(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        project = tmp_path / "desk"
+        project.mkdir()
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as start,
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
+            assert _run(["agent", "start", "desk", "--model", "opus", "--no-wait"]) == 0
+        assert start.await_args.args[0].model == "opus"
+        capsys.readouterr()
+        assert _run(["agent", "list"]) == 0  # persisted, not a one-off
+        # A later bare start must reuse the recorded model.
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as start,
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "desk", "--no-wait"]) == 0
+        assert start.await_args.args[0].model == "opus"
+
+    def test_group_start_requires_known_names(self, capsys):
+        assert _run(["init"]) == 0
+        assert _run(["agent", "start", "zzz", "yyy"]) == 1
+        assert "unknown agent" in capsys.readouterr().out
+
+    def test_moved_directory_follows_and_same_name_gets_suffix(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        old = tmp_path / "projects" / "app"
+        old.mkdir(parents=True)
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as start,
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "--dir", str(old), "--no-wait"]) == 0
+
+            # Same folder name while the old directory still exists: a
+            # different project, registered with a numbered name.
+            twin = tmp_path / "elsewhere" / "app"
+            twin.mkdir(parents=True)
+            assert _run(["agent", "start", "--dir", str(twin), "--no-wait"]) == 0
+            assert start.await_args.args[0].name == "app-2"
+
+            # The old directory is gone: the record follows the move.
+            moved = tmp_path / "moved-app"
+            old.rename(moved)
+            new_home = tmp_path / "workspace" / "app"
+            new_home.mkdir(parents=True)
+            assert _run(["agent", "start", "--dir", str(new_home), "--no-wait"]) == 0
+            assert start.await_args.args[0].name == "app"
+            assert start.await_args.args[0].path == new_home
+        capsys.readouterr()
+        assert _run(["agent", "list"]) == 0
+        out = capsys.readouterr().out
+        assert str(new_home) in out and str(twin) in out
+
+    def test_set_watch_forget(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        project = tmp_path / "orch"
+        project.mkdir()
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
+        assert _run(["agent", "watch", "orch", "acme/app", "acme/web"]) == 0
+        assert _run(["agent", "set", "orch", "description=Coordinates", "repo=acme/orch"]) == 0
+        capsys.readouterr()
+        assert _run(["agent", "list"]) == 0
+        assert "orch" in capsys.readouterr().out
+        assert _run(["agent", "unwatch", "orch", "acme/web"]) == 0
+        assert _run(["agent", "forget", "orch"]) == 0
+        assert _run(["agent", "forget", "orch"]) == 1
+
+    def test_watch_defaults_to_own_session(self, tmp_path, monkeypatch, capsys):
+        """Inside an agent session, the agent can watch repos without naming itself."""
+        assert _run(["init"]) == 0
+        project = tmp_path / "orch"
+        project.mkdir()
+        with (
+            patch(
+                "agent_backbone.services.infrastructure._agents.start_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+        ):
+            assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
+        capsys.readouterr()
+
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        assert _run(["agent", "watch", "acme/app", "acme/web"]) == 0
+        out = capsys.readouterr().out
+        assert "orch: now watching acme/app" in out and "acme/web" in out
+        assert _run(["agent", "unwatch", "acme/web"]) == 0
+
+        monkeypatch.delenv("BACKBONE_AGENT")
+        assert _run(["agent", "watch", "acme/app"]) == 1
+        assert "$BACKBONE_AGENT" in capsys.readouterr().out
+
+
+class TestTell:
+    def test_sender_defaults_to_backbone_agent(self, monkeypatch):
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        args = cli.build_parser().parse_args(["tell", "x", "hi"])
+        assert args.sender == "orch"
+
+    def test_posts_to_running_api(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+
+        class _Resp:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"ok": True, "session": "a", "outcome": "delivered"}
+
+        client = AsyncMock()
+        client.request = AsyncMock(return_value=_Resp())
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        with patch("httpx.AsyncClient", return_value=client):
+            assert _run(["tell", "a", "hello", "world", "--from", "me"]) == 0
+
+        kwargs = client.request.await_args.kwargs
+        assert kwargs["json"] == {
+            "target_session": "a",
+            "from_entity": "me",
+            "message": "hello world",
+            "priority": False,
+        }
+        assert kwargs["headers"] == {"Authorization": "Bearer k"}
+        assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+class TestHooks:
+    def test_install_claude_into_project(self, tmp_path, _isolated_data_dir, capsys):
+        project = tmp_path / "proj"
+        assert _run(["hooks", "install", "claude", "--dir", str(project)]) == 0
+        out = capsys.readouterr().out
+        assert "installed Claude Code hooks" in out
+        settings = project / ".claude" / "settings.json"
+        assert settings.is_file()
+        assert (_isolated_data_dir / "hooks" / "claude_hook.py").is_file()
+        assert _run(["hooks", "uninstall", "claude", "--dir", str(project)]) == 0

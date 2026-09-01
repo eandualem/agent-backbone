@@ -1,330 +1,159 @@
-"""Close-then-next flow: issue closed -> query GitHub -> deliver next.
-
-When an issue is closed, determines which entity was the target,
-queries GitHub for remaining open issues, and delivers the next one.
-"""
+"""Close-then-next: issue closed -> deliver the next issue to each target,
+tell the opener, and check whether a parent issue is now unblocked."""
 
 from __future__ import annotations
 
 import logging
 
-from prefect import flow, task
-
 from agent_backbone.config import BackboneConfig
-from agent_backbone.models import IssueData, IssueEvent
+from agent_backbone.models import EventType, IssueData, IssueEvent
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
-from agent_backbone.services.routing._create_notify import create_and_notify
 from agent_backbone.services.routing._dedup import is_recent_notification
 from agent_backbone.services.routing._delivery import safe_deliver
-from agent_backbone.services.routing._format import format_next_issue_notification
-from agent_backbone.services.routing._intelligence import is_http_target
+from agent_backbone.services.routing._format import (
+    format_closed_notification,
+    format_next_issue_notification,
+)
 from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import (
-    default_repo_full_name,
+    issue_repo,
     list_open_queue_for_target,
-    resolve_event_targets,
+    queue_scope,
+    route_issue_event,
 )
 from agent_backbone.services.terminal import session_exists
 
 log = logging.getLogger(__name__)
 
 
-def _default_repo_full_name(config: BackboneConfig) -> str:
-    """Return the configured default GitHub repository."""
-    return default_repo_full_name(config)
-
-
-def _issue_repo_full_name(issue: IssueData, config: BackboneConfig) -> str:
-    """Resolve the source repository for an issue, defaulting to the main repo."""
-    return issue.repo_full_name or _default_repo_full_name(config)
-
-
-def _is_default_repo_issue(issue: IssueData, config: BackboneConfig) -> bool:
-    """Whether the issue belongs to the backbone's default repository."""
-    return _issue_repo_full_name(issue, config) == _default_repo_full_name(config)
-
-
-async def _check_dependencies(issue_number: int) -> None:
-    """Call dependency tracker — errors must not block lifecycle."""
+async def _check_dependencies(
+    issue_number: int, repo: str, config: BackboneConfig, db: BackboneDB, gh: GitHubClient
+) -> None:
     try:
         from agent_backbone.services.routing._dependencies import on_dependency_resolved
 
-        await on_dependency_resolved(issue_number)
+        await on_dependency_resolved(issue_number, repo, config, db, gh)
     except Exception:
-        log.exception("Dependency tracker failed for #%d (non-fatal)", issue_number)
+        log.exception("Dependency tracker failed for %s#%d (non-fatal)", repo, issue_number)
 
 
-_ONBOARDING_TITLE_PREFIX = "[task] Verify onboarding infrastructure: "
-
-
-async def _check_onboarding_chain(
-    event: IssueEvent,
-    config: BackboneConfig,
-    gh: GitHubClient,
-    db: BackboneDB | None = None,
-) -> None:
-    """Sequential chain: when Brunel closes a verification issue, notify Leo.
-
-    Detects onboarding verification issues by title prefix + for:brunel label.
-    Extracts org/repo from the title and creates a follow-up issue for Leo.
-    Errors are logged but never block the lifecycle flow.
-    """
-    try:
-        title = event.issue.title
-        if not title.startswith(_ONBOARDING_TITLE_PREFIX):
-            return
-        if "brunel" not in event.issue.labels.targets:
-            return
-
-        # Extract org/repo from title
-        org_repo = title[len(_ONBOARDING_TITLE_PREFIX) :].strip()
-        if "/" not in org_repo:
-            log.warning("Cannot parse org/repo from title: %s", title)
-            return
-        org, repo = org_repo.split("/", 1)
-
-        await create_and_notify(
-            gh,
-            title=f"[task] Repository scaffolded and verified: {org}/{repo}",
-            body=(
-                f"## Context\n"
-                f"The `{org}/{repo}` repository has been scaffolded"
-                f" by the automated pipeline\n"
-                f"and Brunel has verified the infrastructure"
-                f" (symlinks, registry, SDD).\n\n"
-                f"## Request\n"
-                f"The repo is ready for Phase 3 of the"
-                f" project-bootstrap pattern:\n"
-                f"write a comprehensive `PROJECT.md`"
-                f" synthesizing the strategic discussion.\n\n"
-                f"After writing PROJECT.md, notify Feynman"
-                f" (Phase 4) to configure agents.\n"
-                f"See your `project-bootstrap` skill"
-                f" for the full sequential chain.\n\n"
-                f"## References\n"
-                f"- Repo path: `~/ws/core/code/{org}/{repo}/`\n"
-                f"- Orchestration config:"
-                f" `~/orchestration/core/code/{org}/{repo}/`\n"
-                f"- Brunel verification issue: #{event.issue.number}\n"
-                f"- Bootstrap pattern:"
-                f" `orchestration/leo/.claude/skills/"
-                f"project-bootstrap/SKILL.md`\n"
-            ),
-            labels=["from:backbone", "for:leo", "task"],
-            config=config,
-            db=db,
-            flow_name="issue-lifecycle",
-        )
-        log.info(
-            "Onboarding chain: created Leo issue for %s/%s (Brunel closed #%d)",
-            org,
-            repo,
-            event.issue.number,
-        )
-    except Exception:
-        log.exception(
-            "Onboarding chain handler failed for #%d (non-fatal)",
-            event.issue.number,
-        )
-
-
-@task
 async def find_next_issue(
     config: BackboneConfig,
     entity: str,
     gh: GitHubClient,
-    exclude_number: int | None = None,
-    repo_full_name: str | None = None,
+    exclude: tuple[str, int] | None = None,
 ) -> IssueData | None:
-    """Query GitHub for the next open issue targeting an entity.
-
-    Returns the highest-priority issue (blocking first, then oldest).
-    Optionally excludes a specific issue number (e.g. a just-closed issue
-    that may still appear as open due to GitHub eventual consistency).
-    """
-    issues = await list_open_queue_for_target(
-        config,
-        entity,
-        gh,
-        issue_repo_full_name=repo_full_name or "",
-    )
-
-    if exclude_number is not None:
-        pre_filter = len(issues)
-        issues = [i for i in issues if i.number != exclude_number]
-        if len(issues) < pre_filter:
-            log.info(
-                "Excluded just-closed #%d from next-issue query for %s",
-                exclude_number,
-                entity,
-            )
-
+    """Highest-priority open issue in an agent's queue, excluding the just-closed one."""
+    issues = await list_open_queue_for_target(config, entity, gh)
+    if exclude is not None:
+        issues = [
+            i
+            for i in issues
+            if not (i.number == exclude[1] and issue_repo(i).casefold() == exclude[0].casefold())
+        ]
     if not issues:
-        log.info("No remaining open issues for %s (exclude=%s)", entity, exclude_number)
         return None
-
-    log.info("Found %d open issue(s) for %s, next: #%d", len(issues), entity, issues[0].number)
     return issues[0]
 
 
-@task
 async def deliver_next(
     session_name: str,
     issue: IssueData,
     config: BackboneConfig,
     db: BackboneDB | None = None,
     target_entity: str = "",
-    queue_scope_issue_numbers: set[int] | None = None,
+    scope: set[tuple[str, int]] | None = None,
 ) -> str:
-    """Deliver a next-issue notification via safe_deliver."""
-    message = format_next_issue_notification(issue)
     return await safe_deliver(
         session_name,
-        message,
+        format_next_issue_notification(issue),
         config,
         db=db,
+        repo=issue_repo(issue),
         issue_number=issue.number,
         target_entity=target_entity,
         flow_name="issue-lifecycle",
         enforce_issue_queue=True,
-        queue_scope_issue_numbers=queue_scope_issue_numbers,
+        queue_scope=scope,
     )
 
 
-@flow(name="issue-lifecycle")
 async def on_issue_closed(
     event: IssueEvent,
     config: BackboneConfig,
     gh: GitHubClient,
     db: BackboneDB | None = None,
 ) -> dict:
-    """Handle an issue_closed event by delivering the next queued issue.
+    """Handle an issue_closed event."""
+    result: dict[str, str] = {}
+    repo = issue_repo(event.issue)
+    closed = (repo, event.issue.number)
 
-    For each entity that was a target of the closed issue:
-    1. Query GitHub for remaining open issues with that entity's for: label
-    2. If issues remain and entity session is online, deliver the next one
-    """
-    result: dict[str, str] = {}  # entity -> outcome
-
-    # Purge any pending queue messages for the closed issue so they don't
-    # loop in the retry cycle (#780).
     if db is not None:
         try:
-            purged = await db.purge_pending_for_issue(event.issue.number)
+            purged = await db.purge_pending_for_issue(event.issue.number, repo=repo)
             if purged:
                 log.info(
-                    "Purged %d queued messages for closed issue #%d",
-                    purged,
-                    event.issue.number,
+                    "Purged %d queued messages for closed %s#%d", purged, repo, event.issue.number
                 )
         except Exception:
-            log.exception("Failed to purge queue for issue #%d (non-fatal)", event.issue.number)
+            log.exception("Failed to purge queue for %s#%d (non-fatal)", repo, event.issue.number)
 
-    for target in resolve_event_targets(event, config):
-        if target in config.entities.skip:
-            result[target] = "skipped"
-            continue
+    routing = route_issue_event(
+        IssueEvent(event_type=EventType.ISSUE_OPENED, issue=event.issue), config
+    )
 
-        # Concrete role-instance entries resolve directly through the registry.
-        # Other special targets continue to use the standard resolution path.
-        session_names = config.registry.delivery_sessions_for(target)
-        if not session_names:
-            session_name = await resolve_entity_session(
-                target, config, event.issue.title, use_title_extraction=False
-            )
-            session_names = [session_name] if session_name else []
-
-        if not session_names:
+    for target in routing.queue:
+        session_name = resolve_entity_session(target, config)
+        if not session_name:
             result[target] = "no_session"
             continue
-
-        reachable_sessions: list[str] = []
-        all_http_targets = True
-        for session_name in session_names:
-            if is_http_target(session_name, config):
-                reachable_sessions.append(session_name)
-                continue
-            all_http_targets = False
-            if await session_exists(session_name):
-                reachable_sessions.append(session_name)
-
-        if not reachable_sessions and not all_http_targets:
+        if not await session_exists(session_name):
             result[target] = "offline"
             continue
 
-        # Find the next issue (exclude just-closed issue — GitHub eventual consistency)
-        next_issue = await find_next_issue(
-            config,
-            target,
-            gh,
-            exclude_number=event.issue.number,
-            repo_full_name=_issue_repo_full_name(event.issue, config),
-        )
+        next_issue = await find_next_issue(config, target, gh, exclude=closed)
         if not next_issue:
             result[target] = "queue_empty"
             continue
 
-        queue_scope_issue_numbers = {
-            issue.number
-            for issue in await list_open_queue_for_target(
-                config,
-                target,
-                gh,
-                issue_repo_full_name=_issue_repo_full_name(event.issue, config),
-            )
-            if issue.number != event.issue.number
-        }
-        session_results: list[str] = []
-        for session_name in session_names:
-            # Check if session is reachable (HTTP targets are always reachable)
-            if not is_http_target(session_name, config) and not await session_exists(session_name):
-                log.info("Session '%s' offline — next issue delivered when online", session_name)
-                session_results.append("offline")
-                continue
+        scope = queue_scope(await list_open_queue_for_target(config, target, gh))
+        scope.discard(closed)
+        if is_recent_notification(
+            issue_repo(next_issue),
+            next_issue.number,
+            session_name,
+            config.routing.notification_dedup_seconds,
+        ):
+            result[target] = f"deduped_#{next_issue.number}"
+            continue
 
-            # Dedup: don't re-deliver an issue the entity was already notified about recently
-            # This prevents duplicate "next issue" notifications when multiple closes happen
-            if is_recent_notification(next_issue.number, session_name):
-                log.info(
-                    "Suppressed duplicate next-issue notification for #%d -> %s",
-                    next_issue.number,
-                    session_name,
-                )
-                session_results.append(f"deduped_#{next_issue.number}")
-                continue
-
-            outcome = await deliver_next(
-                session_name,
-                next_issue,
-                config,
-                db,
-                target_entity=target,
-                queue_scope_issue_numbers=queue_scope_issue_numbers,
-            )
-            if outcome == "delivered":
-                session_results.append(f"delivered_#{next_issue.number}")
-            else:
-                session_results.append(outcome)
-
-        unique_outcomes = list(dict.fromkeys(session_results))
-        if len(unique_outcomes) == 1:
-            result[target] = unique_outcomes[0]
-        else:
-            result[target] = ",".join(session_results)
-
-    if _is_default_repo_issue(event.issue, config):
-        # Check if closing this issue unblocks any parent issues
-        await _check_dependencies(event.issue.number)
-
-        # Sequential onboarding chain: Brunel verification -> Leo PROJECT.md
-        await _check_onboarding_chain(event, config, gh, db)
-    else:
-        log.info(
-            "Skipping orchestration-specific lifecycle hooks for non-default repo issue #%d (%s)",
-            event.issue.number,
-            _issue_repo_full_name(event.issue, config),
+        outcome = await deliver_next(
+            session_name, next_issue, config, db, target_entity=target, scope=scope
         )
+        result[target] = f"delivered_#{next_issue.number}" if outcome == "delivered" else outcome
 
-    log.info("Lifecycle complete: %s", result)
+    # Tell the opener (from:) that their issue was closed, unless they were a target.
+    sender = event.issue.labels.sender
+    if sender and sender in config.agents and sender not in routing.queue:
+        session_name = resolve_entity_session(sender, config)
+        if session_name:
+            outcome = await safe_deliver(
+                session_name,
+                format_closed_notification(event.issue),
+                config,
+                db=db,
+                repo=repo,
+                issue_number=event.issue.number,
+                target_entity=sender,
+                flow_name="issue-lifecycle",
+                delivery_kind="watch",
+            )
+            result[f"opener:{sender}"] = outcome
+
+    if db is not None:
+        await _check_dependencies(event.issue.number, repo, config, db, gh)
+
+    log.info("Lifecycle %s#%d: %s", repo, event.issue.number, result)
     return result

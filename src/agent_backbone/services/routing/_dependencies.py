@@ -1,118 +1,87 @@
-"""Dependency tracking: sub-issue resolution detection and sync.
-
-Detects when all sub-issues of a parent are resolved, and syncs
-sub-issue relationships to SQLite for close-time lookups.
-"""
+"""Sub-issue dependency tracking (per repository)."""
 
 from __future__ import annotations
 
 import logging
 
-from prefect import flow, task
-
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services._locator import ensure_initialized, get_config, get_db, get_gh
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_unblock_notification
+from agent_backbone.services.routing._resolution import resolve_entity_sessions
+from agent_backbone.services.routing._targets import list_open_queue_for_target
 
 log = logging.getLogger(__name__)
 
 
-@task
 async def check_parent_resolved(
-    config: BackboneConfig, parent_number: int, gh: object
+    config: BackboneConfig, parent_number: int, gh: object, *, repo: str = ""
 ) -> dict | None:
-    """Check if all sub-issues of a parent are resolved.
-
-    Returns parent issue data + notification targets if unblocked, None otherwise.
-    """
-    sub_issues = await gh.get_sub_issues(parent_number)
-    if not sub_issues:
+    """Parent issue + targets if every sub-issue is closed, else None."""
+    sub_issues = await gh.get_sub_issues(parent_number, repo_full_name=repo)
+    if not sub_issues or not all(si.state == "closed" for si in sub_issues):
         return None
-
-    all_resolved = all(si.state == "closed" for si in sub_issues)
-    if not all_resolved:
-        return None
-
-    parent = await gh.get_issue(parent_number)
-    return {
-        "parent": parent,
-        "targets": parent.labels.targets,
-    }
+    parent = await gh.get_issue(parent_number, repo_full_name=repo)
+    return {"parent": parent, "targets": parent.labels.targets}
 
 
-@flow(name="dependency-tracker")
-async def on_dependency_resolved(closed_issue_number: int) -> dict:
-    """Check if closing this issue unblocks any parent issues.
-
-    Returns a dict mapping parent_number -> outcome.
-    """
-    await ensure_initialized()
-
-    config = get_config()
-    db = get_db()
-    gh = get_gh()
+async def on_dependency_resolved(
+    closed_issue_number: int,
+    repo: str,
+    config: BackboneConfig,
+    db: BackboneDB,
+    gh: object,
+) -> dict:
+    """If closing this issue unblocks a parent, tell the parent's targets."""
     result: dict[str, str] = {"parents_checked": "0"}
-
-    parents = await db.get_parents(closed_issue_number)
-
+    parents = await db.get_parents(closed_issue_number, repo=repo)
     if not parents:
         return result
-
     result["parents_checked"] = str(len(parents))
 
     for parent_num in parents:
-        resolved = await check_parent_resolved(config, parent_num, gh)
+        resolved = await check_parent_resolved(config, parent_num, gh, repo=repo)
         if not resolved:
             result[f"parent_{parent_num}"] = "still_blocked"
             continue
-
-        parent_issue = resolved["parent"]
-        message = format_unblock_notification(parent_issue)
+        message = format_unblock_notification(resolved["parent"])
         delivered_to: list[str] = []
-
         for target in resolved["targets"]:
-            if target in config.entities.skip:
-                continue
-            session_names = config.registry.delivery_sessions_for(target)
-            if not session_names:
-                continue
-            for session_name in session_names:
+            for session_name in resolve_entity_sessions(target, config):
                 outcome = await safe_deliver(
                     session_name,
                     message,
                     config,
                     db=db,
+                    repo=repo,
+                    issue_number=parent_num,
+                    target_entity=target,
+                    flow_name="dependency-tracker",
+                    delivery_kind="watch",
                 )
                 if outcome == "delivered":
                     delivered_to.append(session_name)
-
-        if delivered_to:
-            result[f"parent_{parent_num}"] = f"unblocked_delivered_to:{','.join(delivered_to)}"
-        else:
-            result[f"parent_{parent_num}"] = "unblocked_no_delivery"
-        log.info(
-            "Parent #%d unblocked — all sub-issues resolved. Notified: %s",
-            parent_num,
-            delivered_to,
+        result[f"parent_{parent_num}"] = (
+            f"unblocked_delivered_to:{','.join(delivered_to)}"
+            if delivered_to
+            else "unblocked_no_delivery"
         )
-
     return result
 
 
 async def sync_dependencies(config: BackboneConfig, db: BackboneDB, gh: object) -> None:
-    """Sync sub-issue relationships to SQLite for close-time lookups."""
-    checked: set[int] = set()
-    for entity, entry in config.registry.entities.items():
-        if entry.entity_type == "role" or entry.session is None:
-            continue
-        label = f"for:{entity}"
-        issues = await gh.list_open_issues(label)
-        for issue in issues:
-            if issue.number in checked:
+    """Record sub-issue relationships for every open issue in every agent queue."""
+    if gh is None:
+        return
+    checked: set[tuple[str, int]] = set()
+    for name in config.agents.names:
+        for issue in await list_open_queue_for_target(config, name, gh):
+            key = (issue.repo_full_name, issue.number)
+            if key in checked:
                 continue
-            checked.add(issue.number)
-            subs = await gh.get_sub_issues(issue.number)
+            checked.add(key)
+            subs = await gh.get_sub_issues(issue.number, repo_full_name=issue.repo_full_name)
             if subs:
-                await db.sync_dependencies(issue.number, [s.number for s in subs])
+                await db.sync_dependencies(
+                    issue.number, [s.number for s in subs], repo=issue.repo_full_name
+                )

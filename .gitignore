@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage_html/
+
+# Local secrets and data
+.env
+*.pem
+
+# Local data (SQLite db, state files, pids)
+*.db
+*.db-journal
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Test fixture key is intentionally committed
+!tests/fixtures/*.pem

@@ -7,47 +7,25 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.services.registry import EntityEntry, EntityRegistry, RepoInfo
 from agent_backbone.services.terminal import (
     TerminalRuntime,
-    close_pane,
-    close_window,
-    create_layout,
-    create_window,
     detect_runtime_from_pane,
     get_terminal_adapter,
     graceful_close,
-    list_panes,
     list_sessions,
-    list_windows,
     query_format_vars,
-    rename_window,
-    resize_pane,
-    resolve_agent_dir,
-    select_window,
     send_keys,
     send_message,
     session_exists,
-    set_layout,
-    split_pane,
-    start_pipe_pane,
     start_session,
-    stop_pipe_pane,
-    swap_panes,
 )
 
 
 @pytest.fixture
 def mock_subprocess():
-    """Mock asyncio.create_subprocess_exec across all tmux private modules."""
+    """Mock the single tmux subprocess entry point (`_run_tmux`)."""
     mock = AsyncMock()
-    with (
-        patch("agent_backbone.services.terminal._core.asyncio.create_subprocess_exec", mock),
-        patch("agent_backbone.services.terminal._sessions.asyncio.create_subprocess_exec", mock),
-        patch("agent_backbone.services.terminal._panes.asyncio.create_subprocess_exec", mock),
-        patch("agent_backbone.services.terminal._windows.asyncio.create_subprocess_exec", mock),
-        patch("agent_backbone.services.terminal._streaming.asyncio.create_subprocess_exec", mock),
-    ):
+    with patch("agent_backbone.services.terminal._core.asyncio.create_subprocess_exec", mock):
         yield mock
 
 
@@ -355,60 +333,6 @@ class TestSendKeys:
             assert await send_keys("offline", "Escape") is False
 
 
-class TestResolveAgentDir:
-    def _make_registry(self, entities=None, repos=None):
-        return EntityRegistry(
-            entities=entities or {},
-            repos=repos or [],
-        )
-
-    def test_named_entity_feynman(self):
-        registry = self._make_registry(
-            entities={
-                "feynman": EntityEntry(
-                    session="feynman",
-                    home="~/orchestration",
-                    groups=[],
-                    figure="",
-                    role="",
-                ),
-            }
-        )
-        result = resolve_agent_dir("feynman", registry)
-        assert result.endswith("orchestration")
-
-    def test_named_entity_ike(self):
-        registry = self._make_registry(
-            entities={
-                "ike": EntityEntry(
-                    session="ike", home="~/ws/core/ike", groups=[], figure="", role=""
-                ),
-            }
-        )
-        result = resolve_agent_dir("ike", registry)
-        assert "ws/core/ike" in result
-
-    def test_coding_repo_found(self, tmp_path):
-        repo_dir = tmp_path / "my-repo"
-        repo_dir.mkdir()
-        registry = self._make_registry(
-            repos=[
-                RepoInfo(org="WF", name="my-repo", path=str(repo_dir)),
-            ]
-        )
-        result = resolve_agent_dir("my-repo", registry)
-        assert result == str(repo_dir)
-
-    def test_unknown_returns_empty(self):
-        registry = self._make_registry()
-        result = resolve_agent_dir("nonexistent-xyz", registry)
-        assert result == ""
-
-    def test_no_registry_returns_empty(self):
-        result = resolve_agent_dir("feynman")
-        assert result == ""
-
-
 class TestStartSession:
     async def test_start_with_working_dir_and_command(self, mock_subprocess):
         with patch(
@@ -425,7 +349,6 @@ class TestStartSession:
                 "test",
                 working_dir="/tmp/wd",
                 command=["claude"],
-                apply_theme=False,
             )
             assert result is True
             call_args = mock_subprocess.call_args_list[0][0]  # first call positional args
@@ -439,7 +362,7 @@ class TestStartSession:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            result = await start_session("ike", apply_theme=False)
+            result = await start_session("ike")
             assert result is True
             mock_subprocess.assert_not_called()
 
@@ -454,7 +377,7 @@ class TestStartSession:
             proc.communicate = AsyncMock(return_value=(b"", b""))
             proc.wait = AsyncMock()
             mock_subprocess.return_value = proc
-            result = await start_session("test", apply_theme=False)
+            result = await start_session("test")
             assert result is True
             call_args = mock_subprocess.call_args_list[0][0]
             assert "-c" not in call_args
@@ -475,7 +398,6 @@ class TestStartSession:
                 "test",
                 working_dir="/tmp/wd",
                 command=["claude", "--model", "opus"],
-                apply_theme=False,
             )
             assert result is True
             call_args = mock_subprocess.call_args_list[0][0]
@@ -524,469 +446,6 @@ class TestQueryFormatVars:
         assert result == {}
 
 
-class TestPipePane:
-    async def test_start_pipe_pane_success(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await start_pipe_pane("ike", "/tmp/ike.log")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "pipe-pane" in call_args
-        assert "-t" in call_args
-        assert "ike" in call_args
-        assert "-o" in call_args
-        assert "cat >> /tmp/ike.log" in call_args
-
-    async def test_start_pipe_pane_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await start_pipe_pane("ike", "/tmp/ike.log")
-        assert result is False
-
-    async def test_stop_pipe_pane_success(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await stop_pipe_pane("ike")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "pipe-pane" in call_args
-        assert "-t" in call_args
-        assert "ike" in call_args
-        assert "-o" not in call_args
-
-    async def test_stop_pipe_pane_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await stop_pipe_pane("ike")
-        assert result is False
-
-
-class TestListPanes:
-    async def test_success(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"%1\t0\t120\t40\t1\n%2\t1\t120\t40\t0\n", b""))
-        mock_subprocess.return_value = proc
-
-        result = await list_panes("ike")
-        assert len(result) == 2
-        assert result[0]["pane_id"] == "%1"
-        assert result[0]["pane_index"] == "0"
-        assert result[0]["pane_width"] == "120"
-        assert result[0]["pane_height"] == "40"
-        assert result[0]["pane_active"] is True
-        assert result[1]["pane_active"] is False
-
-    async def test_empty_result(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await list_panes("ike")
-        assert result == []
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await list_panes("nonexistent")
-        assert result == []
-
-
-class TestSplitPane:
-    async def test_vertical(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await split_pane("ike", direction="vertical")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "-v" in call_args
-        assert "-h" not in call_args
-
-    async def test_horizontal(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await split_pane("ike", direction="horizontal")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "-h" in call_args
-        assert "-v" not in call_args
-
-    async def test_with_size(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await split_pane("ike", size="50%")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "-l" in call_args
-        assert "50%" in call_args
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await split_pane("ike")
-        assert result is False
-
-
-class TestResizePane:
-    async def test_width(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await resize_pane("ike", "0", width=80)
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "-x" in call_args
-        assert "80" in call_args
-
-    async def test_height(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await resize_pane("ike", "0", height=24)
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "-y" in call_args
-        assert "24" in call_args
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await resize_pane("ike", "0", width=80)
-        assert result is False
-
-
-class TestSwapPanes:
-    async def test_success(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await swap_panes("ike", "0", "1")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "-s" in call_args
-        assert "ike:0" in call_args
-        assert "-t" in call_args
-        assert "ike:1" in call_args
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await swap_panes("ike", "0", "1")
-        assert result is False
-
-
-class TestClosePane:
-    async def test_success(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await close_pane("ike", "1")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "kill-pane" in call_args
-        assert "ike:1" in call_args
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await close_pane("ike", "1")
-        assert result is False
-
-
-class TestSetLayout:
-    async def test_tiled(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await set_layout("ike", "tiled")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "select-layout" in call_args
-        assert "tiled" in call_args
-
-    async def test_even_horizontal(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await set_layout("ike", "even-horizontal")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "even-horizontal" in call_args
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await set_layout("ike", "tiled")
-        assert result is False
-
-
-class TestCreateLayout:
-    async def test_correct_split_count(self):
-        """3 panes = 2 splits."""
-        with (
-            patch(
-                "agent_backbone.services.terminal._windows.split_pane",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_split,
-            patch(
-                "agent_backbone.services.terminal._windows.set_layout",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.services.terminal._windows.list_panes",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "agent_backbone.services.terminal._windows.send_message",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            result = await create_layout("ike", {"panes": 3, "layout": "tiled"})
-            assert result is True
-            assert mock_split.call_count == 2
-
-    async def test_layout_applied(self):
-        with (
-            patch(
-                "agent_backbone.services.terminal._windows.split_pane",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.services.terminal._windows.set_layout",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_layout,
-            patch(
-                "agent_backbone.services.terminal._windows.list_panes",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
-                "agent_backbone.services.terminal._windows.send_message",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            result = await create_layout("ike", {"panes": 2, "layout": "even-horizontal"})
-            assert result is True
-            mock_layout.assert_called_once_with("ike", "even-horizontal")
-
-    async def test_split_failure_aborts(self):
-        with (
-            patch(
-                "agent_backbone.services.terminal._windows.split_pane",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
-                "agent_backbone.services.terminal._windows.set_layout",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_layout,
-        ):
-            result = await create_layout("ike", {"panes": 3, "layout": "tiled"})
-            assert result is False
-            mock_layout.assert_not_called()
-
-
-class TestCreateWindow:
-    async def test_minimal(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await create_window("ike")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "new-window" in call_args
-        assert "-n" not in call_args
-
-    async def test_with_name(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await create_window("ike", name="logs")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "-n" in call_args
-        assert "logs" in call_args
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await create_window("ike")
-        assert result is False
-
-
-class TestCloseWindow:
-    async def test_success(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await close_window("ike", "1")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "kill-window" in call_args
-        assert "ike:1" in call_args
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await close_window("ike", "1")
-        assert result is False
-
-
-class TestRenameWindow:
-    async def test_success(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await rename_window("ike", "0", "new-name")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "rename-window" in call_args
-        assert "ike:0" in call_args
-        assert "new-name" in call_args
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await rename_window("ike", "0", "new-name")
-        assert result is False
-
-
-class TestListWindows:
-    async def test_success(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"@0\t0\tbash\t1\t1\n@1\t1\tlogs\t0\t2\n", b""))
-        mock_subprocess.return_value = proc
-
-        result = await list_windows("ike")
-        assert len(result) == 2
-        assert result[0]["window_id"] == "@0"
-        assert result[0]["window_index"] == "0"
-        assert result[0]["window_name"] == "bash"
-        assert result[0]["window_active"] is True
-        assert result[0]["window_panes"] == 1
-        assert result[1]["window_active"] is False
-        assert result[1]["window_panes"] == 2
-
-    async def test_empty(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await list_windows("ike")
-        assert result == []
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await list_windows("nonexistent")
-        assert result == []
-
-
-class TestSelectWindow:
-    async def test_success(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_subprocess.return_value = proc
-
-        result = await select_window("ike", "1")
-        assert result is True
-        call_args = mock_subprocess.call_args[0]
-        assert "select-window" in call_args
-        assert "ike:1" in call_args
-
-    async def test_failure(self, mock_subprocess):
-        proc = AsyncMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_subprocess.return_value = proc
-
-        result = await select_window("ike", "1")
-        assert result is False
-
-
 class TestStartSessionEnvironment:
     async def test_initial_command_receives_env_vars(self, mock_subprocess):
         """The initial tmux command inherits env vars when a command is supplied."""
@@ -1003,17 +462,16 @@ class TestStartSessionEnvironment:
 
             result = await start_session(
                 "test",
-                command=["uv", "run", "prefect", "worker", "start"],
-                apply_theme=False,
-                environment={"PREFECT_API_URL": "http://127.0.0.1:4200/api"},
+                command=["claude", "--model", "opus"],
+                environment={"BACKBONE_AGENT": "app"},
             )
 
             assert result is True
             new_session_call = mock_subprocess.call_args_list[0][0]
             assert "new-session" in new_session_call
             assert "env" in new_session_call
-            assert "PREFECT_API_URL=http://127.0.0.1:4200/api" in new_session_call
-            assert "prefect" in new_session_call
+            assert "BACKBONE_AGENT=app" in new_session_call
+            assert "claude" in new_session_call
 
     async def test_env_vars_set(self, mock_subprocess):
         """Environment variables are set via tmux set-environment."""
@@ -1030,7 +488,6 @@ class TestStartSessionEnvironment:
 
             result = await start_session(
                 "test",
-                apply_theme=False,
                 environment={"MY_VAR": "hello", "OTHER": "world"},
             )
             assert result is True
@@ -1051,7 +508,7 @@ class TestStartSessionEnvironment:
             proc.wait = AsyncMock()
             mock_subprocess.return_value = proc
 
-            result = await start_session("test", apply_theme=False)
+            result = await start_session("test")
             assert result is True
             set_env_calls = [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
             assert len(set_env_calls) == 0
@@ -1078,7 +535,6 @@ class TestStartSessionEnvironment:
 
             result = await start_session(
                 "test",
-                apply_theme=False,
                 environment={"BAD_VAR": "value"},
             )
             # Session creation succeeded, env var failure is non-fatal
@@ -1200,3 +656,88 @@ class TestGracefulClose:
             result = await graceful_close("ike")
             assert result is True
             mock_stop.assert_called_once_with("ike")
+
+
+class TestLaunchEnvironment:
+    def test_includes_agent_runtime_and_state_dir(self):
+        from agent_backbone.services.infrastructure._agents import launch_environment
+
+        env = launch_environment("reviewer", "claude", "/data/state", {"FOO": "1"})
+        assert env == {
+            "BACKBONE_RUNTIME": "claude",
+            "BACKBONE_AGENT": "reviewer",
+            "BACKBONE_STATE_DIR": "/data/state",
+            "FOO": "1",
+        }
+
+
+class TestClaudeCodeUi:
+    """Regression fixtures captured from Claude Code (Aug 2026 UI)."""
+
+    _BUSY = (
+        "\u276f [via:backbone from:elias] Count slowly from 1 to 5.\n"
+        "\u2733 Brewing\u2026 (esc to interrupt \u00b7 2s)\n"
+        "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        "\u276f \n"
+        "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        "  \u23f5\u23f5 auto mode on (shift+tab to cycle) \u00b7 \u2190 for agents\n"
+    )
+    _IDLE = (
+        "\u23fa pong\n"
+        "\u2733 Churned for 2s \u00b7 done 3:00 PM\n"
+        "                                    \u25cf high \u00b7 /effort\n"
+        "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        "\u276f \n"
+        "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        "  \u23f5\u23f5 auto mode on (shift+tab to cycle) \u00b7 \u2190 for agents\n"
+    )
+
+    def test_detects_runtime_from_new_status_line(self):
+        assert detect_runtime_from_pane(self._IDLE) == TerminalRuntime.CLAUDE
+
+    def test_idle_prompt_is_idle(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        assert adapter.detect_idle(self._IDLE) is True
+        assert adapter.prompt_has_pending_input(self._IDLE) is False
+
+    def test_spinner_means_busy_even_with_prompt_visible(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        assert adapter.detect_busy(self._BUSY) is True
+        assert adapter.detect_idle(self._BUSY) is False
+
+    def test_dim_suggestion_is_not_pending_input(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        pane = self._IDLE.replace("\u276f \n", "\u276f \x1b[2mCount from 5 down to 1\x1b[0m\n")
+        assert adapter.prompt_has_pending_input(pane) is False
+
+    def test_typed_text_is_pending_input(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        pane = self._IDLE.replace("\u276f \n", "\u276f fix the flaky test\n")
+        assert adapter.prompt_has_pending_input(pane) is True
+
+    async def test_input_buffered_while_busy_counts_as_queued(self):
+        adapter = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        busy_with_input = self._BUSY.replace(
+            "\u276f \n", "\u276f [via:backbone from:elias] second message\n"
+        )
+        with (
+            patch(
+                "agent_backbone.services.terminal._adapters._write_message_buffer",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters._send_submit_key",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.capture_pane",
+                new_callable=AsyncMock,
+                return_value=busy_with_input.replace("[via:backbone from:elias] ", "typed "),
+            ),
+            patch(
+                "agent_backbone.services.terminal._adapters.asyncio.sleep", new_callable=AsyncMock
+            ),
+        ):
+            assert await adapter.deliver_message("s", "second message") is True

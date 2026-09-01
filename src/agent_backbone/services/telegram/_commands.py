@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from telegram import Update
@@ -11,43 +13,45 @@ if TYPE_CHECKING:
     from agent_backbone.services.telegram.interface import TelegramService
 
 from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.agents.models import AgentState
-from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.infrastructure._agents import start_agent, stop_agent
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.telegram._routing import _delivery_reply
 from agent_backbone.services.telegram._topic_discovery import process_message_for_discovery
-from agent_backbone.services.terminal import (
-    RUNTIME_ENV_KEY,
-    list_sessions,
-    resolve_agent_dir,
-    send_keys,
-    session_exists,
-    start_session,
-    stop_session,
-)
+from agent_backbone.services.terminal import list_sessions, send_keys, session_exists
+
+log = logging.getLogger(__name__)
+
+
+def _ref(row: dict) -> str:
+    """Short reference for a delivery row: ``repo#N`` or the kind."""
+    if row.get("issue_number"):
+        return f"{row.get('repo') or ''}#{row['issue_number']}"
+    return row.get("kind") or "message"
+
+
+def _authorized(bot: TelegramService, update: Update) -> bool:
+    return bool(update.effective_chat) and bot._is_authorized(update.effective_chat.id)
 
 
 async def cmd_help(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Show available commands."""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    if not _authorized(bot, update):
         return
 
     text = (
-        "*Lovely Universe \u2014 Commands*\n\n"
-        "/status \u2014 Show active agent sessions\n"
-        "/queue \u2014 Show pending & recent deliveries\n"
-        "/digest \u2014 Full system digest (sessions, agents, pending)\n"
-        "/tell `<agent>` `<message>` \u2014 Send a message to an agent\n"
-        "/start `<agent>` \u2014 Start an agent session\n"
-        "/stop `<agent>` \u2014 Stop an agent session\n"
-        "/workflow \u2014 List available workflows\n"
-        "/workflow `<name>` \u2014 Run a workflow\n"
-        "/viewplan `<agent>` \u2014 View an agent's pending plan\n"
-        "/approve `<agent>` \u2014 Approve an agent's plan (sends Shift+Tab)\n"
-        "/identify \u2014 Show this topic's thread ID for routing config\n"
-        "/help \u2014 This message"
+        "*agent-backbone — Commands*\n\n"
+        "/status — Show active agent sessions\n"
+        "/queue — Show pending & recent deliveries\n"
+        "/digest — Full system digest (sessions, agents, pending)\n"
+        "/tell `<agent>` `<message>` — Send a message to an agent\n"
+        "/start `<agent>` — Start a configured agent\n"
+        "/stop `<agent>` — Stop an agent session\n"
+        "/viewplan `<agent>` — View an agent's pending plan\n"
+        "/approve `<agent>` — Approve an agent's plan (if enabled)\n"
+        "/identify — Show this topic's thread ID for routing config\n"
+        "/help — This message"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -56,17 +60,20 @@ async def cmd_status(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Show status of all agent sessions."""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    if not _authorized(bot, update):
         return
 
-    sessions = await list_sessions()
-    if not sessions:
-        await update.message.reply_text("No active tmux sessions.")
-        return
-
-    lines = ["*Active Sessions:*"]
-    for s in sorted(sessions):
-        lines.append(f"  \u2022 `{s}`")
+    sessions = set(await list_sessions())
+    lines = ["*Agents:*"]
+    for spec in bot._config.agents:
+        mark = "\U0001f7e2" if spec.name in sessions else "⚪"
+        lines.append(f"  {mark} `{spec.name}` ({spec.runtime})")
+    others = sorted(s for s in sessions if s not in bot._config.agents)
+    if others:
+        lines.append("\n*Other tmux sessions:*")
+        lines.extend(f"  • `{s}`" for s in others)
+    if len(lines) == 1:
+        lines.append("  (none configured)")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
@@ -74,27 +81,25 @@ async def cmd_queue(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Show pending deliveries and recent delivery history."""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    if not _authorized(bot, update):
+        return
+    if bot._db is None:
+        await update.message.reply_text("Database not available.")
         return
 
-    async with BackboneDB.connect(bot._config.database.async_url) as db:
-        recent = await db.query_deliveries(limit=10)
-        failed = await db.get_failed_deliveries(limit=10)
+    recent = await bot._db.query_deliveries(limit=10)
+    failed = await bot._db.get_failed_deliveries(limit=10)
 
     lines = []
     if failed:
         lines.append(f"*Failed/Pending:* {len(failed)}")
         for d in failed[:5]:
-            lines.append(
-                f"  \u2022 #{d['issue_number']} \u2192 {d['target_entity']} ({d['outcome']})"
-            )
+            lines.append(f"  • {_ref(d)} → {d['target_entity']} ({d['outcome']})")
 
     if recent:
         lines.append(f"\n*Recent Deliveries:* {len(recent)}")
         for d in recent[:5]:
-            lines.append(
-                f"  \u2022 #{d['issue_number']} \u2192 {d['target_entity']} ({d['outcome']})"
-            )
+            lines.append(f"  • {_ref(d)} → {d['target_entity']} ({d['outcome']})")
 
     text = "\n".join(lines) if lines else "No delivery records."
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -103,52 +108,54 @@ async def cmd_queue(
 async def cmd_start_agent(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Start an agent session: /start <agent_name>"""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    """Start a configured agent: /start <agent_name>"""
+    if not _authorized(bot, update):
         return
 
     if not context.args:
         await update.message.reply_text("Usage: /start <agent_name>")
         return
 
-    agent = context.args[0]
-    working_dir = resolve_agent_dir(agent, bot._config.registry)
-    if not working_dir:
-        await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
+    name = context.args[0]
+    spec = bot._config.agents.get(name)
+    if spec is None:
+        await update.message.reply_text(f"Unknown agent `{name}`", parse_mode="Markdown")
         return
 
-    ok = await start_session(
-        agent,
-        working_dir=working_dir,
-        command=["claude"],
-        environment={RUNTIME_ENV_KEY: "claude"},
+    agents_section = bot._config.agents_section
+    ok = await start_agent(
+        spec,
+        state_dir=bot._config.state_dir,
+        data_dir=bot._config.data_dir,
+        pre_trust=agents_section.pre_trust,
+        inject_brief=agents_section.inject_brief,
     )
     status = "Started" if ok else "Failed to start"
-    await update.message.reply_text(f"{status} `{agent}`", parse_mode="Markdown")
+    await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
 
 
 async def cmd_stop_agent(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Stop an agent session: /stop <agent_name>"""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    if not _authorized(bot, update):
         return
 
     if not context.args:
         await update.message.reply_text("Usage: /stop <agent_name>")
         return
 
-    agent = context.args[0]
-    ok = await stop_session(agent)
+    name = context.args[0]
+    ok = await stop_agent(name)
     status = "Stopped" if ok else "Failed to stop"
-    await update.message.reply_text(f"{status} `{agent}`", parse_mode="Markdown")
+    await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
 
 
 async def cmd_tell(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Send a message to an agent: /tell <agent> <message>"""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    if not _authorized(bot, update):
         return
 
     if not context.args or len(context.args) < 2:
@@ -159,7 +166,9 @@ async def cmd_tell(
     raw_message = " ".join(context.args[1:])
     sender = bot._sender_tag(update)
     message = f"[via:telegram from:{sender}] {raw_message}"
-    result = await safe_deliver(agent, message, bot._config)
+    result = await safe_deliver(
+        agent, message, bot._config, db=bot._db, delivery_kind="direct_message"
+    )
 
     await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")
 
@@ -168,13 +177,15 @@ async def cmd_digest(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Show system digest -- sessions, pending issues, recent deliveries."""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    if not _authorized(bot, update):
         return
 
     sessions = await list_sessions()
-    async with BackboneDB.connect(bot._config.database.async_url) as db:
-        failed = await db.get_failed_deliveries(limit=50)
-        states = await db.get_all_agent_states()
+    failed: list = []
+    states: list = []
+    if bot._db is not None:
+        failed = await bot._db.get_failed_deliveries(limit=50)
+        states = await bot._db.get_all_agent_states()
 
     lines = [
         "*System Digest*",
@@ -187,67 +198,30 @@ async def cmd_digest(
         lines.append("\n*Agent States:*")
         for s in states:
             issue_str = f" (#{s['current_issue']})" if s.get("current_issue") else ""
-            lines.append(f"  \u2022 `{s['session_name']}`: {s['state']}{issue_str}")
+            lines.append(f"  • `{s['session_name']}`: {s['state']}{issue_str}")
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-
-async def cmd_workflow(
-    bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """List or run a workflow: /workflow [name]"""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
-        return
-
-    if not context.args:
-        text = bot._registry.format_list()
-        await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
-        return
-
-    name = context.args[0]
-    entry = bot._registry.get(name)
-    if not entry:
-        names = ", ".join(bot._registry.list_names())
-        await update.message.reply_text(
-            f"Unknown workflow `{name}`. Available: {names}",
-            parse_mode="Markdown",
-        )
-        return
-
-    await update.message.reply_text(f"Running workflow `{name}`...", parse_mode="Markdown")
-    try:
-        result = await entry.flow_fn()
-        summary = ", ".join(f"{k}: {v}" for k, v in result.items()) if result else "done"
-        await update.message.reply_text(
-            f"Workflow `{name}` complete:\n```\n{summary}\n```",
-            parse_mode="Markdown",
-        )
-    except Exception as exc:
-        import logging
-
-        log = logging.getLogger(__name__)
-        log.exception("Workflow '%s' failed", name)
-        await update.message.reply_text(f"Workflow `{name}` failed: {exc}", parse_mode="Markdown")
 
 
 async def cmd_identify(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Report the current topic's thread_id for routing configuration."""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    if not _authorized(bot, update):
         return
 
     thread_id = getattr(update.message, "message_thread_id", None)
     if thread_id is None:
-        await update.message.reply_text("Not in a topic.")
+        await update.message.reply_text(
+            f"Not in a topic. Chat ID: `{update.effective_chat.id}`", parse_mode="Markdown"
+        )
         return
 
-    # Run discovery on this message
     process_message_for_discovery(
         update,
         bot._config,
         bot._discovery,
-        bot._config.telegram.topic_discovery_path,
+        bot._config.telegram_topic_discovery_path,
     )
 
     config_routes = bot._config.telegram.topic_routes
@@ -255,10 +229,7 @@ async def cmd_identify(
     mapping = merged.get(thread_id)
 
     if mapping:
-        if thread_id in config_routes:
-            source = "config"
-        else:
-            source = "auto-discovered"
+        source = "config" if thread_id in config_routes else "auto-discovered"
         await update.message.reply_text(
             f"Thread ID: `{thread_id}`\nMapped to: `{mapping}` ({source})",
             parse_mode="Markdown",
@@ -269,8 +240,9 @@ async def cmd_identify(
         await update.message.reply_text(
             f"Thread ID: `{thread_id}`\n"
             f"Not yet mapped.{name_line}\n"
-            f"Add to `backbone.toml`:\n"
-            f'```\n[telegram.topic_routes]\n{thread_id} = "session-name"\n```',
+            f"Map it with:\n"
+            f"```\nbackbone config set telegram.topic_routes "
+            f'\'{{"{thread_id}": "agent-name"}}\'\n```',
             parse_mode="Markdown",
         )
 
@@ -279,7 +251,7 @@ async def cmd_viewplan(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """View an agent's pending plan: /viewplan <agent>"""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    if not _authorized(bot, update):
         return
 
     if not context.args:
@@ -287,10 +259,9 @@ async def cmd_viewplan(
         return
 
     agent = context.args[0]
-    state_path = bot._config.agent_state.state_path
-    snapshot = read_state_file(state_path, agent)
+    snapshot = read_state_file(bot._config.state_dir, agent)
 
-    if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
+    if not snapshot or not snapshot.is_plan_waiting:
         state_str = snapshot.state.value if snapshot else "unknown"
         await update.message.reply_text(
             f"Agent `{agent}` is not waiting for plan approval (state: {state_str})",
@@ -303,28 +274,32 @@ async def cmd_viewplan(
         return
 
     try:
-        from pathlib import Path
-
-        plan_content = Path(snapshot.plan_file).read_text()
-    except (OSError, FileNotFoundError) as e:
+        plan_content = Path(snapshot.plan_file).expanduser().read_text()
+    except OSError as e:
         await update.message.reply_text(f"Cannot read plan file: {e}")
         return
 
     header = f"Plan: {snapshot.plan_title or 'Untitled'}\nAgent: {agent}\n\n"
     full_text = header + plan_content
 
-    # Telegram message limit is 4096 chars -- split if needed
     max_len = 4096
     for i in range(0, len(full_text), max_len):
-        chunk = full_text[i : i + max_len]
-        await update.message.reply_text(chunk)
+        await update.message.reply_text(full_text[i : i + max_len])
 
 
 async def cmd_approve(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Approve an agent's plan by sending Shift+Tab: /approve <agent>"""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    if not _authorized(bot, update):
+        return
+
+    if not bot._config.security.allow_remote_plan_control:
+        await update.message.reply_text(
+            "Remote plan approval is disabled. Enable with "
+            "`backbone config set security.allow_remote_plan_control true`.",
+            parse_mode="Markdown",
+        )
         return
 
     if not context.args:
@@ -332,10 +307,9 @@ async def cmd_approve(
         return
 
     agent = context.args[0]
-    state_path = bot._config.agent_state.state_path
-    snapshot = read_state_file(state_path, agent)
+    snapshot = read_state_file(bot._config.state_dir, agent)
 
-    if not snapshot or snapshot.state != AgentState.PLAN_WAITING:
+    if not snapshot or not snapshot.is_plan_waiting:
         state_str = snapshot.state.value if snapshot else "unknown"
         await update.message.reply_text(
             f"Agent `{agent}` is not waiting for plan approval (state: {state_str})",
@@ -347,7 +321,6 @@ async def cmd_approve(
         await update.message.reply_text(f"Session `{agent}` is offline.", parse_mode="Markdown")
         return
 
-    # Send Shift+Tab: Escape then [Z (forms \e[Z)
     ok1 = await send_keys(agent, "Escape")
     ok2 = await send_keys(agent, "[Z")
 

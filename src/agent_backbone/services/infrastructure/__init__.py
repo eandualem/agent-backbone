@@ -1,20 +1,13 @@
-"""Infrastructure service — OS-level process orchestration and agent management."""
+"""Infrastructure — starting and stopping agent sessions."""
 
-from agent_backbone.services.infrastructure.exceptions import (
-    InfrastructureError,
-    PortInUseError,
-    ServiceStartError,
-    ServiceStopError,
+from agent_backbone.services.infrastructure._agents import (
+    start_agent,
+    stop_agent,
+    wait_until_ready,
 )
-from agent_backbone.services.infrastructure.interface import InfrastructureService
-from agent_backbone.services.infrastructure.models import ServiceName, ServiceStatus
 
 __all__ = [
-    "InfrastructureError",
-    "InfrastructureService",
-    "PortInUseError",
-    "ServiceName",
-    "ServiceStartError",
-    "ServiceStatus",
-    "ServiceStopError",
+    "start_agent",
+    "stop_agent",
+    "wait_until_ready",
 ]

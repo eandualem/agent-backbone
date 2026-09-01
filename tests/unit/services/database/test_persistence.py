@@ -71,34 +71,24 @@ class TestDeliveryTracking:
         await db.record_delivery(1, "ike", "ike", "delivered")
         await db.record_delivery(2, "feynman", "feynman", "offline")
         await db.record_delivery(3, "leo", "leo", "delivery_failed")
-        await db.record_delivery(4, "ada", "ada", "deferred")
+        await db.record_delivery(4, "ada", "ada", "agent_working")
 
         failed = await db.get_failed_deliveries()
         assert len(failed) == 3
         outcomes = {r["outcome"] for r in failed}
-        assert outcomes == {"offline", "delivery_failed", "deferred"}
+        assert outcomes == {"offline", "delivery_failed", "agent_working"}
 
     async def test_get_failed_deliveries_includes_transient(self, db):
-        """Transient outcomes, including busy-state deferrals, are retryable."""
+        """Every blocking delivery condition is retryable."""
         await db.record_delivery(1, "ike", "ike", "delivered")
-        await db.record_delivery(2, "feynman", "feynman", "copy_mode")
-        await db.record_delivery(3, "leo", "leo", "user_interacting")
+        await db.record_delivery(2, "feynman", "feynman", "human_typing")
+        await db.record_delivery(3, "leo", "leo", "settling")
         await db.record_delivery(4, "ada", "ada", "agent_working")
-        await db.record_delivery(5, "brunel", "brunel", "plan_waiting")
-        await db.record_delivery(6, "darwin", "darwin", "grace_period")
+        await db.record_delivery(5, "brunel", "brunel", "waiting_for_human")
 
         failed = await db.get_failed_deliveries()
-        assert len(failed) == 5
         outcomes = {r["outcome"] for r in failed}
-        assert outcomes == {
-            "agent_working",
-            "copy_mode",
-            "grace_period",
-            "plan_waiting",
-            "user_interacting",
-        }
-        # 'delivered' must not appear
-        assert "delivered" not in outcomes
+        assert outcomes == {"agent_working", "human_typing", "settling", "waiting_for_human"}
 
     async def test_get_failed_deliveries_excludes_superseded(self, db):
         """A failed delivery superseded by a later retried/delivered row is excluded."""
@@ -198,29 +188,6 @@ class TestDeliveryTracking:
         assert await db.query_deliveries(issue_number=42, session_name="ike") == []
 
 
-class TestDedupLog:
-    async def test_first_delivery_not_duplicate(self, db):
-        assert await db.is_duplicate_delivery_id("abc-123") is False
-
-    async def test_recorded_delivery_is_duplicate(self, db):
-        await db.record_delivery_id("abc-123")
-        assert await db.is_duplicate_delivery_id("abc-123") is True
-
-    async def test_empty_id_never_duplicate(self, db):
-        assert await db.is_duplicate_delivery_id("") is False
-
-    async def test_different_ids_not_duplicate(self, db):
-        await db.record_delivery_id("abc-123")
-        assert await db.is_duplicate_delivery_id("def-456") is False
-
-    async def test_prune_delivery_ids(self, db):
-        await db.record_delivery_id("old-1")
-        # Prune with 0 hours retention — removes everything
-        deleted = await db.prune_delivery_ids(max_age_hours=0)
-        assert deleted == 1
-        assert await db.is_duplicate_delivery_id("old-1") is False
-
-
 class TestAgentState:
     async def test_set_and_get(self, db):
         await db.set_agent_state("ike", "idle")
@@ -250,58 +217,25 @@ class TestAgentState:
         names = {s["session_name"] for s in states}
         assert names == {"feynman", "ike"}
 
-    async def test_preserves_last_activity_on_upsert(self, db):
-        await db.set_agent_state("ike", "idle", last_activity="2025-01-01T00:00:00Z")
-        # Update state without explicitly providing last_activity
-        await db.set_agent_state("ike", "processing_issue")
-
-        state = await db.get_agent_state("ike")
-        assert state["last_activity"] == "2025-01-01T00:00:00Z"
-
-    async def test_overrides_last_activity_when_provided(self, db):
-        await db.set_agent_state("ike", "idle", last_activity="2025-01-01T00:00:00Z")
-        await db.set_agent_state("ike", "idle", last_activity="2025-06-01T00:00:00Z")
-
-        state = await db.get_agent_state("ike")
-        assert state["last_activity"] == "2025-06-01T00:00:00Z"
-
-    async def test_set_with_extended_fields(self, db):
-        """New extended fields (entity, context, ts, plan_file, plan_title) are stored."""
-        await db.set_agent_state(
-            "feynman",
-            "processing_issue",
-            current_issue=571,
-            entity="feynman",
-            context="Phase 1 work",
-            ts="1709500000.0",
-            plan_file="/tmp/plan.md",
-            plan_title="DB state migration",
-        )
-        state = await db.get_agent_state("feynman")
-        assert state["entity"] == "feynman"
-        assert state["context"] == "Phase 1 work"
-        assert state["ts"] == "1709500000.0"
-        assert state["plan_file"] == "/tmp/plan.md"
-        assert state["plan_title"] == "DB state migration"
-
-    async def test_extended_fields_coalesce_on_upsert(self, db):
-        """Extended fields are preserved when not provided on upsert."""
-        await db.set_agent_state("ike", "idle", entity="ike", context="initial", ts="100.0")
-        await db.set_agent_state("ike", "busy")
+    async def test_started_at_and_ts_coalesce_on_upsert(self, db):
+        await db.set_agent_state("ike", "idle", ts="100.0", started_at="50.0")
+        await db.set_agent_state("ike", "busy", current_issue=7, reason=None)
 
         state = await db.get_agent_state("ike")
         assert state["state"] == "busy"
-        assert state["entity"] == "ike"
-        assert state["context"] == "initial"
+        assert state["current_issue"] == 7
         assert state["ts"] == "100.0"
+        assert state["started_at"] == "50.0"
 
-    async def test_extended_fields_override_when_provided(self, db):
-        """Extended fields are overridden when explicitly provided."""
-        await db.set_agent_state("ike", "idle", context="old context")
-        await db.set_agent_state("ike", "busy", context="new context")
+    async def test_reason_and_repo_are_replaced_not_coalesced(self, db):
+        await db.set_agent_state(
+            "ike", "waiting_for_human", reason="plan", current_repo="acme/app", plan_file="/p.md"
+        )
+        await db.set_agent_state("ike", "idle")
 
         state = await db.get_agent_state("ike")
-        assert state["context"] == "new context"
+        assert state["reason"] is None and state["current_repo"] is None
+        assert state["plan_file"] == "/p.md"
 
 
 class TestAcknowledgments:
@@ -605,308 +539,3 @@ class TestDedupHotCache:
             db.is_duplicate(f"delivery-{i}", max_ids=100)
         assert db.is_duplicate("delivery-0", max_ids=100) is False
         assert db.is_duplicate("delivery-149", max_ids=100) is True
-
-    async def test_load_dedup_cache(self, db):
-        """load_dedup_cache populates hot cache from database."""
-        await db.record_delivery_id("cached-1")
-        await db.record_delivery_id("cached-2")
-        # Clear the hot cache to simulate cold start
-        db._seen_deliveries.clear()
-        await db.load_dedup_cache()
-        assert db.is_duplicate("cached-1") is True
-        assert db.is_duplicate("cached-2") is True
-        assert db.is_duplicate("not-cached") is False
-
-
-class TestAgentActivity:
-    async def test_record_and_get(self, db):
-        row_id = await db.record_activity("ike", "tool_use", '{"tool":"Edit"}', "1709500001.0")
-        assert row_id > 0
-
-        events = await db.get_activity("ike")
-        assert len(events) == 1
-        assert events[0]["session"] == "ike"
-        assert events[0]["event"] == "tool_use"
-        assert events[0]["data"] == '{"tool":"Edit"}'
-        assert events[0]["ts"] == "1709500001.0"
-        assert events[0]["received_at"] != ""
-
-    async def test_get_empty(self, db):
-        events = await db.get_activity("nobody")
-        assert events == []
-
-    async def test_get_respects_limit(self, db):
-        for i in range(10):
-            await db.record_activity("ike", "tool_use", None, str(1709500000 + i))
-
-        events = await db.get_activity("ike", limit=3)
-        assert len(events) == 3
-
-    async def test_get_newest_first(self, db):
-        await db.record_activity("ike", "first", None, "100.0")
-        await db.record_activity("ike", "second", None, "200.0")
-
-        events = await db.get_activity("ike")
-        assert events[0]["event"] == "second"
-        assert events[1]["event"] == "first"
-
-    async def test_get_filters_by_session(self, db):
-        await db.record_activity("ike", "event_a", None, "100.0")
-        await db.record_activity("feynman", "event_b", None, "100.0")
-
-        events = await db.get_activity("ike")
-        assert len(events) == 1
-        assert events[0]["session"] == "ike"
-
-    async def test_get_since_filter(self, db):
-        await db.record_activity("ike", "old", None, "100.0")
-        await db.record_activity("ike", "new", None, "200.0")
-
-        events = await db.get_activity("ike", since="150.0")
-        assert len(events) == 1
-        assert events[0]["event"] == "new"
-
-    async def test_record_with_null_data(self, db):
-        row_id = await db.record_activity("ike", "session_start", None, "100.0")
-        assert row_id > 0
-
-        events = await db.get_activity("ike")
-        assert events[0]["data"] is None
-
-    async def test_record_with_telemetry_metadata(self, db):
-        row_id = await db.record_activity(
-            "ike",
-            "tool.started",
-            '{"name":"exec_command"}',
-            "1709500001.123456",
-            entity="coding-agent",
-            runtime="codex",
-            source_kind="jsonl",
-            source_ref="/tmp/codex.jsonl",
-            source_event_id="event-1",
-            trace_id="turn-123",
-            parent_trace_id="session-456",
-            model="gpt-5.4",
-        )
-        assert row_id > 0
-
-        events = await db.get_activity("ike")
-        assert events[0]["runtime"] == "codex"
-        assert events[0]["source_ref"] == "/tmp/codex.jsonl"
-        assert events[0]["trace_id"] == "turn-123"
-        assert events[0]["model"] == "gpt-5.4"
-
-    async def test_has_activity_event(self, db):
-        await db.record_activity(
-            "ike",
-            "plan_notification_delivered",
-            '{"channel":"tmux"}',
-            "1709500001.123456",
-            source_ref="tmux:ike:1709500001.123456:/tmp/plan.md",
-        )
-
-        assert (
-            await db.has_activity_event(
-                session="ike",
-                event="plan_notification_delivered",
-                source_ref="tmux:ike:1709500001.123456:/tmp/plan.md",
-                since=1709500000.0,
-            )
-            is True
-        )
-        assert (
-            await db.has_activity_event(
-                session="ike",
-                event="plan_notification_delivered",
-                source_ref="tmux:ike:1709500001.123456:/tmp/plan.md",
-                since=1709500002.0,
-            )
-            is False
-        )
-
-    async def test_record_batch(self, db):
-        count = await db.record_activity_batch(
-            [
-                {
-                    "session": "ike",
-                    "event": "message.user",
-                    "entity": "coding-agent",
-                    "runtime": "claude",
-                    "source_kind": "jsonl",
-                    "source_ref": "/tmp/claude.jsonl",
-                    "source_event_id": "event-1",
-                    "trace_id": "trace-1",
-                    "parent_trace_id": None,
-                    "model": None,
-                    "data": '{"content":"hello"}',
-                    "ts": "101.0",
-                    "received_at": "2026-03-13T00:00:00.000000Z",
-                },
-                {
-                    "session": "ike",
-                    "event": "message.assistant",
-                    "entity": "coding-agent",
-                    "runtime": "claude",
-                    "source_kind": "jsonl",
-                    "source_ref": "/tmp/claude.jsonl",
-                    "source_event_id": "event-2",
-                    "trace_id": "trace-1",
-                    "parent_trace_id": None,
-                    "model": "claude-opus-4-1",
-                    "data": '{"content":"world"}',
-                    "ts": "102.0",
-                    "received_at": "2026-03-13T00:00:01.000000Z",
-                },
-            ]
-        )
-        assert count == 2
-
-        events = await db.get_activity("ike")
-        assert [event["event"] for event in events] == ["message.assistant", "message.user"]
-
-
-class TestTelemetryCheckpoints:
-    async def test_upsert_and_get_checkpoint(self, db):
-        await db.upsert_telemetry_checkpoint(
-            session="ike",
-            source_ref="/tmp/claude.jsonl",
-            runtime="claude",
-            source_kind="jsonl",
-            checkpoint={"offset": 128},
-            entity="coding-agent",
-            last_event_ts="1709500001.0",
-        )
-
-        checkpoint = await db.get_telemetry_checkpoint("ike", "/tmp/claude.jsonl")
-        assert checkpoint is not None
-        assert checkpoint["runtime"] == "claude"
-        assert checkpoint["checkpoint"] == {"offset": 128}
-        assert checkpoint["last_event_ts"] == "1709500001.0"
-
-    async def test_upsert_checkpoint_overwrites_cursor(self, db):
-        await db.upsert_telemetry_checkpoint(
-            session="ike",
-            source_ref="/tmp/codex.jsonl",
-            runtime="codex",
-            source_kind="jsonl",
-            checkpoint={"offset": 10},
-        )
-        await db.upsert_telemetry_checkpoint(
-            session="ike",
-            source_ref="/tmp/codex.jsonl",
-            runtime="codex",
-            source_kind="jsonl",
-            checkpoint={"offset": 42},
-            last_event_ts="222.0",
-        )
-
-        checkpoint = await db.get_telemetry_checkpoint("ike", "/tmp/codex.jsonl")
-        assert checkpoint is not None
-        assert checkpoint["checkpoint"] == {"offset": 42}
-        assert checkpoint["last_event_ts"] == "222.0"
-
-    async def test_query_checkpoints_filters_by_runtime(self, db):
-        await db.upsert_telemetry_checkpoint(
-            session="ike",
-            source_ref="/tmp/claude.jsonl",
-            runtime="claude",
-            source_kind="jsonl",
-            checkpoint={"offset": 1},
-        )
-        await db.upsert_telemetry_checkpoint(
-            session="ike",
-            source_ref="/tmp/codex.jsonl",
-            runtime="codex",
-            source_kind="jsonl",
-            checkpoint={"offset": 2},
-        )
-
-        checkpoints = await db.query_telemetry_checkpoints(runtime="codex")
-        assert len(checkpoints) == 1
-        assert checkpoints[0]["source_ref"] == "/tmp/codex.jsonl"
-
-
-async def _create_swarm_with_worker(db: BackboneDB, *, status: str = "pending") -> tuple[str, str]:
-    """Create a minimal non-collaborative swarm and optionally set worker status."""
-    worker_name = "worker-1"
-    swarm_id = await db.create_swarm(
-        repo="agent-backbone",
-        task_id="24",
-        coding_agent_session="agent-backbone",
-        workers=[
-            {
-                "name": worker_name,
-                "role": "coder",
-                "branch": "swarm/24/worker-1",
-                "worktree_path": "/tmp/worker-1",
-                "session": "swarm-24-worker-1",
-            }
-        ],
-    )
-    if status in {"started", "working", "pr_created"}:
-        await db.update_swarm_worker_status(swarm_id, worker_name, status)
-    elif status in {"done", "failed"}:
-        await db.complete_swarm_worker(swarm_id, worker_name, status, f"{status} summary")
-    return swarm_id, worker_name
-
-
-def _worker_from_swarm(swarm: dict, worker_name: str) -> dict:
-    """Extract one worker row from a swarm detail payload."""
-    return next(worker for worker in swarm["workers"] if worker["name"] == worker_name)
-
-
-class TestSwarmWorkerSessionReconciliation:
-    async def test_reconcile_skips_pending_workers(self, db):
-        swarm_id, worker_name = await _create_swarm_with_worker(db, status="pending")
-
-        result = await db.reconcile_swarm_worker_sessions(set())
-        swarm = await db.get_swarm(swarm_id)
-        worker = _worker_from_swarm(swarm, worker_name)
-
-        assert result == 0
-        assert worker["status"] == "pending"
-        assert worker["failure_reason"] is None
-
-    async def test_reconcile_fails_started_worker_without_session(self, db):
-        swarm_id, worker_name = await _create_swarm_with_worker(db, status="started")
-
-        result = await db.reconcile_swarm_worker_sessions(set())
-        swarm = await db.get_swarm(swarm_id)
-        worker = _worker_from_swarm(swarm, worker_name)
-
-        assert result == 1
-        assert worker["status"] == "failed"
-        assert worker["failure_reason"] == "session_lost"
-
-    async def test_reconcile_fails_working_worker_without_session(self, db):
-        swarm_id, worker_name = await _create_swarm_with_worker(db, status="working")
-
-        result = await db.reconcile_swarm_worker_sessions(set())
-        swarm = await db.get_swarm(swarm_id)
-        worker = _worker_from_swarm(swarm, worker_name)
-
-        assert result == 1
-        assert worker["status"] == "failed"
-        assert worker["failure_reason"] == "session_lost"
-
-    async def test_reconcile_skips_done_workers(self, db):
-        swarm_id, worker_name = await _create_swarm_with_worker(db, status="done")
-
-        result = await db.reconcile_swarm_worker_sessions(set())
-        swarm = await db.get_swarm(swarm_id)
-        worker = _worker_from_swarm(swarm, worker_name)
-
-        assert result == 0
-        assert worker["status"] == "done"
-        assert worker["failure_reason"] is None
-
-    async def test_reconcile_skips_failed_workers(self, db):
-        swarm_id, worker_name = await _create_swarm_with_worker(db, status="failed")
-
-        result = await db.reconcile_swarm_worker_sessions(set())
-        swarm = await db.get_swarm(swarm_id)
-        worker = _worker_from_swarm(swarm, worker_name)
-
-        assert result == 0
-        assert worker["status"] == "failed"
-        assert worker["failure_reason"] is None

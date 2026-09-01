@@ -5,10 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from abc import ABC
 from enum import StrEnum
 
-from agent_backbone.services.agents.models import AgentState, StateSnapshot
 from agent_backbone.services.terminal._core import (
     _run_tmux,
     _send_escape_key,
@@ -21,13 +19,14 @@ from agent_backbone.services.terminal._sessions import query_environment_var
 log = logging.getLogger(__name__)
 
 RUNTIME_ENV_KEY = "BACKBONE_RUNTIME"
+AGENT_ENV_KEY = "BACKBONE_AGENT"
+STATE_DIR_ENV_KEY = "BACKBONE_STATE_DIR"
 _SUBMIT_RECHECK_DELAY_SECONDS = 0.1
 _MAX_SUBMIT_ATTEMPTS = 2
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
 _BOX_CHARS = "\u2500\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u253c\u2501"
 _PROMPT_START_CHARS = ">$\u276f\u203a%#"
-_WORKING_STATES = frozenset({AgentState.PROCESSING_ISSUE, AgentState.BUSY, AgentState.STARTING})
 _BACKBONE_ENVELOPE_PREFIX = "[via:"
 
 
@@ -161,7 +160,7 @@ def _runtime_analysis_text(pane_content: str) -> str:
     )
 
 
-def _normalize_runtime(value: str | None) -> TerminalRuntime:
+def normalize_runtime(value: str | None) -> TerminalRuntime:
     """Normalize a free-form runtime label to a known runtime."""
     if not value:
         return TerminalRuntime.UNKNOWN
@@ -180,7 +179,7 @@ def _normalize_runtime(value: str | None) -> TerminalRuntime:
         return aliases.get(normalized, TerminalRuntime.UNKNOWN)
 
 
-class TerminalAdapter(ABC):
+class TerminalAdapter:
     """Behavioral contract for a single interactive CLI."""
 
     runtime: TerminalRuntime = TerminalRuntime.UNKNOWN
@@ -190,6 +189,10 @@ class TerminalAdapter(ABC):
     placeholder_fragments: tuple[str, ...] = ()
     status_fragments: tuple[str, ...] = ()
     queue_markers: tuple[str, ...] = ()
+    busy_markers: tuple[str, ...] = ()
+    """Fragments shown only while the runtime is working (e.g. a spinner line)."""
+    prompt_markers: tuple[str, ...] = ()
+    """Fragments shown when the runtime is asking the human a yes/no question."""
     auto_submit: bool = False
     submit_attempts: int = 1
     interrupt_queued_delivery: bool = False
@@ -214,8 +217,26 @@ class TerminalAdapter(ABC):
             return fallback
         return None
 
+    def detect_busy(self, pane_content: str) -> bool:
+        """Whether the runtime is visibly working (spinner / interrupt hint)."""
+        if not self.busy_markers:
+            return False
+        tail = sanitize_pane_content(pane_content).strip().splitlines()[-12:]
+        lowered = "\n".join(line.lower() for line in tail)
+        return any(marker in lowered for marker in self.busy_markers)
+
+    def detect_waiting_for_human(self, pane_content: str) -> bool:
+        """Whether the runtime is visibly blocked on a question to the human."""
+        if not self.prompt_markers:
+            return False
+        tail = sanitize_pane_content(pane_content).strip().splitlines()[-15:]
+        lowered = "\n".join(line.lower() for line in tail)
+        return any(marker in lowered for marker in self.prompt_markers)
+
     def detect_idle(self, pane_content: str) -> bool:
         """Whether the pane currently shows an interactive prompt surface."""
+        if self.detect_busy(pane_content) or self.detect_waiting_for_human(pane_content):
+            return False
         return self.detect_prompt(pane_content) is not None
 
     def prompt_has_pending_input(self, pane_content: str) -> bool:
@@ -232,17 +253,19 @@ class TerminalAdapter(ABC):
             return False
         if any(fragment in lowered for fragment in self.placeholder_fragments):
             return False
-        if self.runtime == TerminalRuntime.CODEX and _prompt_line_is_dim_placeholder(prompt_line):
+        if _prompt_line_is_dim_placeholder(prompt_line):
+            # Dim text after the prompt is a suggestion/placeholder, not typed input.
             return False
 
-        # --- Stuck delivery guards (issue #766) ---
+        # --- Guards against mistaking leftover output for typed input ---
 
         # Prefix guard: if the adapter defines prompt_prefixes and the sanitized
         # line doesn't start with any of them, we matched via a suffix — the
         # "pending text" is just trailing output, not user input.
-        if self.prompt_prefixes:
-            if not any(sanitized.startswith(prefix) for prefix in self.prompt_prefixes):
-                return False
+        if self.prompt_prefixes and not any(
+            sanitized.startswith(prefix) for prefix in self.prompt_prefixes
+        ):
+            return False
 
         # Stuck envelope: text after the prompt char that begins with a backbone
         # message envelope tag is a prior delivery that wasn't consumed, not user
@@ -252,14 +275,7 @@ class TerminalAdapter(ABC):
             if sanitized.startswith(prefix):
                 remainder = sanitized[len(prefix) :].lstrip()
                 break
-        if remainder.startswith(_BACKBONE_ENVELOPE_PREFIX):
-            return False
-
-        return True
-
-    def detect_copy_mode(self, tmux_vars: dict[str, str], agent_state: AgentState) -> bool:
-        """Whether copy mode should block delivery for this adapter."""
-        return tmux_vars.get("pane_in_mode") == "1" and agent_state not in _WORKING_STATES
+        return not remainder.startswith(_BACKBONE_ENVELOPE_PREFIX)
 
     async def exit_copy_mode(self, session_name: str) -> bool:
         """Immediately attempt to leave copy mode."""
@@ -273,15 +289,6 @@ class TerminalAdapter(ABC):
 
         log.error("tmux copy-mode cancel failed for '%s': %s", session_name, stderr.decode())
         return False
-
-    def detect_plan_waiting(
-        self,
-        snapshot: StateSnapshot,
-        pane_content: str = "",
-    ) -> bool:
-        """Whether the session is in plan-approval state."""
-        del pane_content
-        return snapshot.state == AgentState.PLAN_WAITING
 
     async def deliver_message(self, session_name: str, message: str) -> bool:
         """Paste a message and submit it according to runtime-specific rules."""
@@ -329,6 +336,14 @@ class TerminalAdapter(ABC):
                 state = await self.delivery_submission_state(session_name)
                 break
 
+        if state == "queued" and not self.interrupt_queued_delivery:
+            log.info(
+                "Terminal delivery queued in '%s' via %s adapter (runtime will run it next)",
+                session_name,
+                self.runtime.value,
+            )
+            return True
+
         if state != "submitted":
             log.warning(
                 "Terminal delivery remained unsent in '%s' via %s adapter (state=%s)",
@@ -355,6 +370,10 @@ class TerminalAdapter(ABC):
         if any(marker in lowered for marker in self.queue_markers):
             return "queued"
         if self.prompt_has_pending_input(pane_content):
+            # Input left in the box while the runtime is working is queued by
+            # runtimes that support it; otherwise it is simply unsent.
+            if self.detect_busy(pane_content):
+                return "queued"
             return "prompt_buffered"
         return "submitted"
 
@@ -385,8 +404,28 @@ class ClaudeCodeAdapter(TerminalAdapter):
     runtime = TerminalRuntime.CLAUDE
     prompt_prefixes = ("\u276f",)
     prompt_suffixes = ("$", "%")
-    runtime_markers = ("claude code", "claude max", "opus 4.6")
-    status_fragments = ("for shortcuts", "medium · /effort", "accept edits on")
+    runtime_markers = ("claude code", "claude max", "/effort", "shift+tab to cycle")
+    status_fragments = (
+        "for shortcuts",
+        # Status-bar form only — a bare "/effort" would also match the command
+        # typed at the prompt and hide the human's pending input.
+        "· /effort",
+        "accept edits on",
+        "auto mode on",
+        "shift+tab to cycle",
+    )
+    busy_markers = ("esc to interrupt",)
+    prompt_markers = (
+        "do you want to proceed?",
+        "do you want to make this edit",
+        "do you trust the files in this folder",
+        "quick safety check",
+        "yes, i trust this folder",
+        "yes, proceed",
+        "yes, allow",
+        "yes, and don't ask again",
+        "would you like to proceed",
+    )
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -407,6 +446,8 @@ class GeminiAdapter(TerminalAdapter):
         "? for shortcuts",
         "gemini 3",
     )
+    busy_markers = ("esc to cancel",)
+    prompt_markers = ("allow execution", "yes, allow once", "yes, allow always")
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -427,6 +468,8 @@ class CodexAdapter(TerminalAdapter):
         "messages to be submitted after next tool call",
         "press esc to interrupt and send immediately",
     )
+    busy_markers = ("esc to interrupt",)
+    prompt_markers = ("approve this command", "allow command", "yes, and don't ask again")
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     interrupt_queued_delivery = True
     paste_settle_seconds = 0.2
@@ -455,13 +498,17 @@ class AiderAdapter(TerminalAdapter):
     prompt_prefixes = ("aider>", ">")
     runtime_markers = ("aider", "aider v", "model:", "/help")
     status_fragments = ("tokens:", "cost:")
+    prompt_markers = ("(y)es/(n)o", "[y/n]", "(y/n)")
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
 
 class ShellAdapter(TerminalAdapter):
+    """Plain shells: classic ``$``/``%`` prompts and modern ``❯``/``›`` themes."""
+
     runtime = TerminalRuntime.SHELL
-    prompt_suffixes = ("$", "%", ">", "#")
+    prompt_prefixes = ("\u276f", "\u203a", "$ ", "% ", "> ", "# ")
+    prompt_suffixes = ("$", "%", ">", "#", "\u276f", "\u203a")
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -480,7 +527,7 @@ _ADAPTERS: dict[TerminalRuntime, TerminalAdapter] = {
 
 def get_terminal_adapter(runtime: TerminalRuntime | str) -> TerminalAdapter:
     """Return the adapter for a known runtime."""
-    runtime_enum = runtime if isinstance(runtime, TerminalRuntime) else _normalize_runtime(runtime)
+    runtime_enum = runtime if isinstance(runtime, TerminalRuntime) else normalize_runtime(runtime)
     return _ADAPTERS.get(runtime_enum, _ADAPTERS[TerminalRuntime.SHELL])
 
 
@@ -519,11 +566,11 @@ async def resolve_terminal_runtime(
     pane_content: str | None = None,
 ) -> TerminalRuntime:
     """Resolve the runtime for a tmux session using hint, env, then prompt."""
-    hinted = _normalize_runtime(runtime_hint)
+    hinted = normalize_runtime(runtime_hint)
     if hinted != TerminalRuntime.UNKNOWN:
         return hinted
 
-    env_runtime = _normalize_runtime(await query_environment_var(session_name, RUNTIME_ENV_KEY))
+    env_runtime = normalize_runtime(await query_environment_var(session_name, RUNTIME_ENV_KEY))
     if env_runtime != TerminalRuntime.UNKNOWN:
         return env_runtime
 
@@ -550,47 +597,7 @@ async def get_terminal_adapter_for_session(
 
 def prompt_has_pending_input(pane_content: str, runtime_hint: str | None = None) -> bool:
     """Whether the current runtime prompt holds buffered input."""
-    runtime = _normalize_runtime(runtime_hint)
+    runtime = normalize_runtime(runtime_hint)
     if runtime == TerminalRuntime.UNKNOWN:
         runtime = detect_runtime_from_pane(pane_content)
     return get_terminal_adapter(runtime).prompt_has_pending_input(pane_content)
-
-
-def infer_state_from_pane(
-    pane_content: str,
-    runtime_hint: str | None = None,
-) -> StateSnapshot:
-    """Infer the agent state from visible terminal output."""
-    sanitized = sanitize_pane_content(pane_content)
-    lines = sanitized.strip().splitlines()
-    if not lines:
-        return StateSnapshot(state=AgentState.UNKNOWN, source="pull")
-
-    runtime = _normalize_runtime(runtime_hint)
-    if runtime == TerminalRuntime.UNKNOWN:
-        runtime = detect_runtime_from_pane(pane_content)
-    adapter = get_terminal_adapter(runtime)
-
-    if adapter.detect_idle(pane_content):
-        return StateSnapshot(state=AgentState.IDLE, source="pull")
-
-    non_empty = [ln.strip().lower() for ln in lines if ln.strip()]
-    recent_lines = [ln.strip().lower() for ln in non_empty[-20:]]
-    recent_content = "\n".join(recent_lines)
-
-    if "thinking..." in recent_content or "tool call" in recent_content:
-        return StateSnapshot(state=AgentState.BUSY, source="pull")
-
-    for stripped in reversed(recent_lines):
-        if "working on issue #" in stripped or "processing issue #" in stripped:
-            for word in stripped.split("#"):
-                if word and word.split()[0].isdigit():
-                    issue_num = int(word.split()[0])
-                    return StateSnapshot(
-                        state=AgentState.PROCESSING_ISSUE,
-                        current_issue=issue_num,
-                        source="pull",
-                    )
-            return StateSnapshot(state=AgentState.PROCESSING_ISSUE, source="pull")
-
-    return StateSnapshot(state=AgentState.UNKNOWN, source="pull")

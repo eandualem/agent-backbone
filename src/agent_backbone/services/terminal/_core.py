@@ -3,13 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 log = logging.getLogger(__name__)
 
 # Subprocess concurrency limiter — prevents storms from any caller
 _MAX_CONCURRENT = 5
-_semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+_semaphores: dict[int, asyncio.Semaphore] = {}
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    """Per-event-loop concurrency limiter for tmux subprocess calls.
+
+    asyncio primitives bind to the loop that first uses them, so a module-level
+    semaphore breaks when the process runs more than one loop (tests, reloads).
+    """
+    loop_id = id(asyncio.get_running_loop())
+    sem = _semaphores.get(loop_id)
+    if sem is None:
+        _semaphores.clear()
+        sem = _semaphores[loop_id] = asyncio.Semaphore(_MAX_CONCURRENT)
+    return sem
 
 
 async def _run_tmux(
@@ -23,7 +38,7 @@ async def _run_tmux(
     when capture_stdout=True; otherwise it's empty bytes.
     When stdin_data is provided, it is piped to the process's stdin.
     """
-    async with _semaphore:
+    async with _get_semaphore():
         kwargs: dict = {
             "stdout": asyncio.subprocess.PIPE if capture_stdout else asyncio.subprocess.DEVNULL,
             "stderr": asyncio.subprocess.PIPE,
@@ -35,10 +50,8 @@ async def _run_tmux(
             async with asyncio.timeout(10.0):
                 stdout, stderr = await proc.communicate(input=stdin_data)
         except TimeoutError:
-            try:
+            with contextlib.suppress(OSError):
                 proc.kill()
-            except OSError:
-                pass
             log.error("tmux command timed out: %s", " ".join(args))
             return -1, b"", b"tmux command timed out"
 
@@ -80,7 +93,10 @@ async def _write_message_buffer(session_name: str, message: str) -> bool:
         log.error("tmux load-buffer failed for '%s': %s", session_name, stderr.decode())
         return False
 
-    rc, _, stderr = await _run_tmux("paste-buffer", "-t", session_name, "-d")
+    # -p uses bracketed paste when the pane's program enabled it (Claude Code,
+    # zsh, …): a multi-line message then arrives as ONE paste instead of each
+    # newline acting as Enter and shredding the message line by line.
+    rc, _, stderr = await _run_tmux("paste-buffer", "-p", "-t", session_name, "-d")
     if rc != 0:
         log.error("tmux paste-buffer failed for '%s': %s", session_name, stderr.decode())
         return False
@@ -176,28 +192,22 @@ async def set_window_size_mode(session_name: str, mode: str) -> bool:
     return True
 
 
-async def get_window_size(session_name: str) -> tuple[int, int] | None:
-    """Query current tmux window dimensions (cols, rows).
-
-    Returns None if session doesn't exist or query fails.
-    """
+async def active_pane_size(session_name: str) -> tuple[int, int] | None:
+    """(cols, rows) of the session's active pane, or None if unavailable."""
     rc, stdout, _ = await _run_tmux(
         "display-message",
         "-t",
         session_name,
         "-p",
-        "#{window_width} #{window_height}",
+        "#{pane_width} #{pane_height}",
         capture_stdout=True,
     )
     if rc != 0:
         return None
-    parts = stdout.decode().strip().split()
-    if len(parts) != 2:
+    parts = stdout.decode().split()
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
         return None
-    try:
-        return int(parts[0]), int(parts[1])
-    except ValueError:
-        return None
+    return int(parts[0]), int(parts[1])
 
 
 async def capture_pane(session_name: str, lines: int = 50) -> str:

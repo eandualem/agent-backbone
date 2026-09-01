@@ -17,12 +17,8 @@ from agent_backbone.services.routing._lifecycle import on_issue_closed as _on_is
 from agent_backbone.services.routing._priority import (
     compute_priority_score as _compute_priority_score,
 )
-from agent_backbone.services.routing._router import (
-    DispatchResult,
-)
-from agent_backbone.services.routing._router import (
-    issue_dispatcher as _issue_dispatcher,
-)
+from agent_backbone.services.routing._router import issue_dispatcher as _issue_dispatcher
+from agent_backbone.services.routing.models import DispatchResult
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig, PriorityScoringConfig
@@ -37,22 +33,17 @@ class DispatchService:
     """Dispatch coordination service implementing LifecycleAware."""
 
     async def start(self) -> None:
-        """Start dispatch service."""
         log.info("Dispatch service started")
 
     async def stop(self) -> None:
-        """Stop dispatch service."""
         pass
 
     async def health_check(self) -> dict:
-        """Check dispatch service health."""
         return {"healthy": True, "service": "dispatch"}
-
-    # --- DI surface for route handlers ---
 
     async def on_issue_closed(
         self, event: IssueEvent, config: BackboneConfig, gh: GitHubClient, db: BackboneDB
-    ) -> str:
+    ) -> dict:
         """Handle issue closed event — close-then-next lifecycle."""
         return await _on_issue_closed(event, config, gh, db)
 
@@ -71,22 +62,17 @@ class DeliveryService:
     """Delivery coordination service implementing LifecycleAware."""
 
     async def start(self) -> None:
-        """Start delivery service."""
         log.info("Delivery service started")
 
     async def stop(self) -> None:
-        """Stop delivery service."""
         pass
 
     async def health_check(self) -> dict:
-        """Check delivery service health."""
         return {"healthy": True, "service": "delivery"}
 
-    # --- DI surface for route handlers ---
-
-    def is_recent_notification(self, issue_number: int, target: str) -> bool:
-        """Check if issue+target was already notified recently."""
-        return _is_recent_notification(issue_number, target)
+    def is_recent_notification(self, repo: str, issue_number: int, target: str) -> bool:
+        """Whether this issue was announced to this target within the dedup window."""
+        return _is_recent_notification(repo, issue_number, target)
 
     def compute_priority_score(
         self, issue: IssueData, scoring_config: PriorityScoringConfig, dependents: int = 0
@@ -101,13 +87,14 @@ class DeliveryService:
         config: BackboneConfig,
         *,
         db: BackboneDB | None = None,
+        repo: str = "",
         issue_number: int | None = None,
         target_entity: str | None = None,
         flow_name: str = "",
         priority: bool = False,
         idle_since: float | None = None,
         enforce_issue_queue: bool = False,
-        queue_scope_issue_numbers: Collection[int] | None = None,
+        queue_scope: Collection[tuple[str, int]] | None = None,
         delivery_kind: str = "issue",
     ) -> str:
         """Deliver a message with state pre-checks."""
@@ -116,13 +103,14 @@ class DeliveryService:
             message,
             config,
             db=db,
+            repo=repo,
             issue_number=issue_number,
             target_entity=target_entity,
             flow_name=flow_name,
             priority=priority,
             idle_since=idle_since,
             enforce_issue_queue=enforce_issue_queue,
-            queue_scope_issue_numbers=queue_scope_issue_numbers,
+            queue_scope=queue_scope,
             delivery_kind=delivery_kind,
         )
 
@@ -133,16 +121,12 @@ class DeliveryService:
         body: str,
         labels: list[str],
         config: BackboneConfig,
+        *,
+        repo: str,
         db: BackboneDB | None = None,
         flow_name: str = "",
     ) -> IssueData:
         """Create an issue and notify targets."""
         return await _create_and_notify(
-            gh,
-            title,
-            body,
-            labels,
-            config,
-            db=db,
-            flow_name=flow_name,
+            gh, title, body, labels, config, repo=repo, db=db, flow_name=flow_name
         )

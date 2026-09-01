@@ -8,7 +8,7 @@ import httpx
 import pytest
 import respx
 
-from agent_backbone.config import BackboneConfig, GitHubConfig
+from agent_backbone.config import BackboneConfig
 from agent_backbone.services.github import API_BASE, GitHubClient
 
 _TEST_GITHUB_APP_KEY = Path(__file__).parents[3] / "fixtures" / "github-app-test-key.pem"
@@ -20,8 +20,10 @@ def config():
     return BackboneConfig(
         github_app_id=3075015,
         github_app_private_key_path=str(_TEST_GITHUB_APP_KEY),
-        github=GitHubConfig(owner="eandualem", repo="orchestration"),
     )
+
+
+REPO = "eandualem/orchestration"
 
 
 @pytest.fixture
@@ -65,7 +67,7 @@ class TestListOpenIssues:
         issues_route = respx.get(issues_url).respond(json=[])
 
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:ike")
+            issues = await gh.list_open_issues("for:ike", repo_full_name=REPO)
 
         assert issues == []
         assert install_route.called
@@ -97,7 +99,7 @@ class TestListOpenIssues:
         )
 
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:ike")
+            issues = await gh.list_open_issues("for:ike", repo_full_name=REPO)
 
         # Blocking issue should come first
         assert len(issues) == 2
@@ -110,7 +112,7 @@ class TestListOpenIssues:
         respx.get(issues_url).respond(json=[])
 
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:ike")
+            issues = await gh.list_open_issues("for:ike", repo_full_name=REPO)
 
         assert issues == []
 
@@ -135,7 +137,7 @@ class TestListOpenIssues:
         )
 
         async with GitHubClient(config) as gh:
-            issues = await gh.list_open_issues("for:ike")
+            issues = await gh.list_open_issues("for:ike", repo_full_name=REPO)
 
         assert len(issues) == 1
         assert issues[0].number == 1
@@ -146,7 +148,7 @@ class TestListOpenIssues:
 
         async with GitHubClient(config) as gh:
             with pytest.raises(httpx.HTTPStatusError):
-                await gh.list_open_issues("for:ike")
+                await gh.list_open_issues("for:ike", repo_full_name=REPO)
 
     @respx.mock
     async def test_uses_requested_repo_for_multi_repo_queries(self, config):
@@ -184,7 +186,7 @@ class TestGetIssue:
         )
 
         async with GitHubClient(config) as gh:
-            issue = await gh.get_issue(42)
+            issue = await gh.get_issue(42, repo_full_name=REPO)
 
         assert issue.number == 42
         assert issue.labels.sender == "leo"
@@ -213,7 +215,7 @@ class TestGetSubIssues:
         )
 
         async with GitHubClient(config) as gh:
-            subs = await gh.get_sub_issues(10)
+            subs = await gh.get_sub_issues(10, repo_full_name=REPO)
 
         assert len(subs) == 2
         assert subs[0].number == 20
@@ -227,7 +229,7 @@ class TestGetSubIssues:
         respx.get(url).respond(status_code=404)
 
         async with GitHubClient(config) as gh:
-            subs = await gh.get_sub_issues(99)
+            subs = await gh.get_sub_issues(99, repo_full_name=REPO)
 
         assert subs == []
 
@@ -237,7 +239,7 @@ class TestGetSubIssues:
         respx.get(url).respond(json=[])
 
         async with GitHubClient(config) as gh:
-            subs = await gh.get_sub_issues(10)
+            subs = await gh.get_sub_issues(10, repo_full_name=REPO)
 
         assert subs == []
 
@@ -255,7 +257,7 @@ class TestCountOpenSubIssues:
         )
 
         async with GitHubClient(config) as gh:
-            count = await gh.count_open_sub_issues(10)
+            count = await gh.count_open_sub_issues(10, repo_full_name=REPO)
 
         assert count == 2
 
@@ -265,6 +267,6 @@ class TestCountOpenSubIssues:
         respx.get(url).respond(status_code=500)
 
         async with GitHubClient(config) as gh:
-            count = await gh.count_open_sub_issues(99)
+            count = await gh.count_open_sub_issues(99, repo_full_name=REPO)
 
         assert count == 0

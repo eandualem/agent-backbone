@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -37,33 +38,15 @@ _SNAPSHOT_CACHE_TTL = 5.0
 
 async def build_enriched_agent(
     session: str,
-    entity: str,
     config: BackboneConfig,
     active_sessions: set[str],
     state_svc: StateService,
     tmux_info: dict | None = None,
-    agent_type: str = "coding_agent",
 ) -> EnrichedAgent:
-    """Build an EnrichedAgent from session name and entity."""
+    """Build an EnrichedAgent for a session (configured agent or ad-hoc session)."""
     online = session in active_sessions
     snapshot = await state_svc.get_state(session)
-    reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(entity)
-    display_name = reg_entry.figure.split()[-1] if reg_entry else session
-    role = reg_entry.role if reg_entry else "Coding Agent"
-    figure = reg_entry.figure if reg_entry else ""
-    groups = list(reg_entry.groups) if reg_entry else []
-    home = reg_entry.home if reg_entry else ""
-    if not home and agent_type == "coding_agent":
-        home = config.registry.repo_path_by_name.get(session, "")
-
-    org = ""
-    if reg_entry and reg_entry.organization:
-        org = reg_entry.organization
-    elif agent_type == "coding_agent":
-        for repo in config.registry.repos:
-            if repo.name == session:
-                org = repo.org
-                break
+    spec = config.agents.get(session)
 
     tmux_created = None
     tmux_attached = False
@@ -79,39 +62,32 @@ async def build_enriched_agent(
         if activity_ts:
             last_activity = float(activity_ts)
 
-    state_value = snapshot.state.value
-    if not online:
-        state_value = "offline"
-    elif state_value == "unknown":
-        state_value = "idle"
+    state_value = snapshot.state.value if online else "offline"
 
-    entity_type = reg_entry.entity_type if reg_entry else "agent"
-
-    runtime: str | None = None
+    runtime: str | None = spec.runtime if spec else None
     if online:
-        try:
-            runtime = await query_environment_var(session, RUNTIME_ENV_KEY) or None
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            runtime = await query_environment_var(session, RUNTIME_ENV_KEY) or runtime
 
     return EnrichedAgent(
+        name=session,
         session=session,
-        entity=entity,
-        display_name=display_name,
-        role=role,
-        figure=figure,
-        org=org,
-        groups=groups,
-        home=home,
-        type=agent_type,
-        entity_type=entity_type,
+        configured=spec is not None,
+        runtime=runtime,
+        model=spec.model if spec else None,
+        dir=str(spec.path) if spec else "",
+        repo=spec.repo if spec else "",
+        tags=list(spec.tags) if spec else [],
+        description=spec.description if spec else "",
+        watches=list(spec.watches) if spec else [],
         state=state_value,
+        reason=snapshot.reason if online else None,
         current_issue=snapshot.current_issue,
+        current_repo=snapshot.current_repo,
         online=online,
         plan_file=snapshot.plan_file,
         plan_title=snapshot.plan_title,
         tmux_created=tmux_created,
-        runtime=runtime,
         tmux_attached=tmux_attached,
         tmux_windows=tmux_windows,
         last_activity=last_activity,
@@ -119,14 +95,12 @@ async def build_enriched_agent(
     )
 
 
-def listable_registry_sessions(config: BackboneConfig) -> dict[str, str]:
-    """Concrete registry-backed sessions that should appear as named agents."""
-    return config.registry.concrete_sessions_map
-
-
-def reserved_agent_sessions(config: BackboneConfig) -> set[str]:
-    """Sessions reserved by registry-backed agents."""
-    return set(listable_registry_sessions(config).values())
+def listable_sessions(config: BackboneConfig, active_sessions: set[str]) -> list[str]:
+    """Configured agents first, then any other active tmux session (minus the backbone's own)."""
+    names = list(config.agents.names)
+    hidden = {config.backbone.session_name}
+    names.extend(sorted(s for s in active_sessions if s not in config.agents and s not in hidden))
+    return names
 
 
 async def build_session_snapshot(
@@ -139,58 +113,10 @@ async def build_session_snapshot(
     tmux_lookup = {session["name"]: session for session in rich_sessions}
     active_sessions = set(tmux_lookup.keys())
 
-    coros: list = []
-
-    registry_sessions = listable_registry_sessions(config)
-    for entity, session in registry_sessions.items():
-        reg_entry = config.registry.entry_for_session(session) or config.registry.entities.get(
-            entity
-        )
-        if reg_entry and reg_entry.entity_type == "service":
-            continue
-        coros.append(
-            build_enriched_agent(
-                session,
-                entity,
-                config,
-                active_sessions,
-                state_svc,
-                tmux_lookup.get(session),
-                agent_type="named_entity",
-            )
-        )
-
-    named_sessions = reserved_agent_sessions(config)
-    service_sessions = config.entities.service_sessions
-    seen_coding: set[str] = set()
-    for session in active_sessions:
-        if session not in named_sessions and session not in service_sessions:
-            coros.append(
-                build_enriched_agent(
-                    session,
-                    session,
-                    config,
-                    active_sessions,
-                    state_svc,
-                    tmux_lookup.get(session),
-                    agent_type="coding_agent",
-                )
-            )
-            seen_coding.add(session)
-
-    for repo in config.registry.repos:
-        if repo.name not in seen_coding and repo.name not in named_sessions:
-            coros.append(
-                build_enriched_agent(
-                    repo.name,
-                    repo.name,
-                    config,
-                    active_sessions,
-                    state_svc,
-                    agent_type="coding_agent",
-                )
-            )
-
+    coros = [
+        build_enriched_agent(session, config, active_sessions, state_svc, tmux_lookup.get(session))
+        for session in listable_sessions(config, active_sessions)
+    ]
     return list(await asyncio.gather(*coros))
 
 
@@ -200,7 +126,7 @@ async def get_cached_session_snapshot(
     force_refresh: bool = False,
 ) -> list[Any]:
     """Return a cached session snapshot, rebuilding under a shared lock when needed."""
-    global _snapshot_cache, _snapshot_cache_ts  # noqa: PLW0603
+    global _snapshot_cache, _snapshot_cache_ts
 
     now = time.monotonic()
     if not force_refresh and now - _snapshot_cache_ts < ttl and _snapshot_cache:
@@ -217,11 +143,7 @@ async def get_cached_session_snapshot(
 
 
 def _invalidate_session_snapshot_caches_unlocked() -> None:
-    """Reset the shared cached agent snapshot.
-
-    Caller must already hold any required synchronization.
-    """
-    global _snapshot_cache, _snapshot_cache_ts  # noqa: PLW0603
+    global _snapshot_cache, _snapshot_cache_ts
 
     _snapshot_cache = []
     _snapshot_cache_ts = 0.0
@@ -235,7 +157,7 @@ async def invalidate_session_snapshot_caches() -> None:
 
 def reset_sessions_update_state() -> None:
     """Reset module-level update dedup state for test isolation."""
-    global _last_sessions_update_signature, _sessions_update_lock, _snapshot_cache_lock  # noqa: PLW0603
+    global _last_sessions_update_signature, _sessions_update_lock, _snapshot_cache_lock
     _snapshot_cache_lock = asyncio.Lock()
     _invalidate_session_snapshot_caches_unlocked()
     _last_sessions_update_signature = None
@@ -259,7 +181,7 @@ async def emit_sessions_update(
     only_if_changed: bool = False,
 ) -> bool:
     """Broadcast the current enriched session snapshot to `/sessions` subscribers."""
-    global _last_sessions_update_signature  # noqa: PLW0603
+    global _last_sessions_update_signature
     if sio is None or state_svc is None or tmux_svc is None:
         return False
 

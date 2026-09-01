@@ -1,127 +1,85 @@
-# Agent Backbone
+# agent-backbone
 
-Webhook processing pipeline and orchestration infrastructure for the multi-agent workspace. Receives GitHub webhook events from `eandualem/orchestration`, routes them to the right agent tmux sessions, manages delivery lifecycle (retry, dedup, close-then-next), and exposes a REST API with real-time streaming for a dashboard frontend.
+A local control plane for terminal AI agents — Claude Code, Codex, Gemini CLI, OpenCode, Aider.
 
-## Quick Start
+It starts your agents in tmux, delivers messages to them **only when they are ready to receive one**, lets them talk to each other and to you, and coordinates multi-agent work through GitHub Issues. Reach it from the CLI, from Telegram, or from any HTTP/Socket.IO client.
+
+> **Status:** v2 is a ground-up rebuild and is pre-release. The core (delivery engine, state detection, GitHub routing, Telegram, API) is tested and has been exercised against live Claude Code sessions; packaging is still being finished.
+
+## What it does
+
+- **Runs agents from any directory.** `cd ~/code/my-app && backbone agent start` — the agent is named after the directory, its GitHub repository is read from `git remote origin`, and the command returns when the agent is at its prompt.
+- **Knows the state of every agent** — `idle`, `busy`, `waiting_for_human` (plan approval, permission prompt, question), `starting`, `unknown` — from the runtime's own hooks first and the terminal second, and can show you the evidence: `backbone agent inspect reviewer`.
+- **Delivers safely.** Text is pasted into an agent only when it is idle — not while it is working, waiting for a human, or while you are typing in that terminal; everything else is queued durably and delivered when the agent is free. Two deliberate exceptions: `priority` messages may interrupt typing and the settle window (never a busy agent), and comments on the issue an agent is currently working reach it immediately.
+- **Coordinates through GitHub Issues, per repository.** Every repository an agent lives in is tracked on its own. An issue opened in the agent's repository is its work; `for:<agent>` labels address issues explicitly; comments go back to the opener; closing an issue hands the agent its next one. An orchestrator is just an agent that *watches* other repositories.
+- **Talks to you on Telegram.** `/tell reviewer fix the flaky test`, `/status`, plan-approval alerts, forum topics that map to agents.
+- **Feeds dashboards.** REST plus a Socket.IO stream of agent state changes and (read-only) terminal output. It does not ship a UI.
+
+## Quick start
+
+Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/) (or pipx), `tmux`, and at least one agent CLI on your PATH.
 
 ```bash
-# 1. Start PostgreSQL
-make db-up
+# Install the CLI on your PATH (`backbone`, plus the short alias `ab`):
+uv tool install "agent-backbone[github-app] @ git+https://github.com/eandualem/agent-backbone"
+uv tool update-shell                 # once, if ~/.local/bin isn't on your PATH yet
 
-# 2. Run database migrations
-make db-upgrade
-
-# 3. Configure environment
-cp .env.example .env
-# Edit .env: set GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY_PATH,
-# GITHUB_APP_WEBHOOK_SECRET, TELEGRAM_TOKEN
-
-# 4. Install dependencies
-make install
-
-# 5. Start the gateway
-make dev
+backbone init                        # data dir + .env (generated API key) + database
+backbone hooks install claude        # Claude Code reports its state to the backbone
+backbone up --detach                 # API + scheduler (+ Telegram/GitHub when configured)
 ```
 
-## Architecture
+(Contributors: `git clone … && cd agent-backbone && uv sync`, then every command is `uv run backbone …`; `uv tool install --editable ".[github-app]"` gives you a global CLI that follows your checkout.)
 
-```
-GitHub webhook --> FastAPI (api/app.py) --> Prefect flows --> tmux / Jarvis
-                        |                        |
-                  LifecycleManager         services/_locator.py
-                  (ordered start/stop)     (service locator)
-                        |                        |
-                  14 services on           scheduled flows use
-                  app.state                locator getters
-                        |
-                  REST API  <-- Socket.IO (PTY terminals)
-                  SSE streaming    WebSocket attach-session
-                        |
-                  Telegram bot -- mobile control
-                        |
-                  PostgreSQL (port 5435) -- persistent state
+> `ab` is the same command as `backbone`. On macOS, `/usr/sbin/ab` (Apache Bench) shadows it when `/usr/sbin` comes first in your PATH — either put `~/.local/bin` earlier or add `alias ab=backbone` to your shell rc.
+
+Then, from a project:
+
+```bash
+cd ~/code/my-app
+ab agent start                       # → my-app: ready — claude repo me/my-app
+ab tell my-app "summarise this repository in three sentences"
+ab agent inspect my-app              # state, delivery readiness, and why
+ab status
 ```
 
-## Services
+No config file to edit, no database server, no tunnel. Everything the backbone knows lives in `~/.local/share/agent-backbone/` (a SQLite file, hook state, `.env`); settings are changed with `backbone config set`.
 
-14 services under `src/agent_backbone/services/`, each following the pattern: `interface.py` + `factory.py` + `exceptions.py`.
+## The model in one paragraph
 
-| # | Service | Purpose |
-|---|---------|---------|
-| 1 | `database` | PostgreSQL engine lifecycle, connection pooling, ORM models, session factory |
-| 2 | `persistence` | Domain-specific query repositories (delivery, state, queue, dedup) |
-| 3 | `registry` | Entity/repo registry from JSON + filesystem discovery |
-| 4 | `github` | GitHub REST API client (httpx, async) |
-| 5 | `tmux` | Async tmux operations (sessions, panes, windows, key sending) |
-| 6 | `state` | Agent state tracking (push + pull), delivery decision matrix |
-| 7 | `notifications` | Message formatting templates |
-| 8 | `delivery` | Delivery orchestration, session intelligence, retry, dedup |
-| 9 | `dispatch` | GitHub event routing, issue/comment handling |
-| 10 | `monitoring` | Agent health monitoring, stall detection, escalation, heartbeats |
-| 11 | `telegram` | Bot with 12 commands, topic routing, workflow integration |
-| 12 | `onboarding` | Workspace repo discovery, status checks, automated setup |
-| 13 | `streaming` | Control mode, SSE broker, PTY management |
-| 14 | `workflows` | Workflow discovery and execution engine |
+An **agent** is a directory plus a runtime, discovered the first time you start it. If the directory is a GitHub checkout, the agent **owns** that repository: unlabelled issues opened there are its work. Any agent can also **watch** other repositories (`backbone agent watch orch me/app me/web`), which makes `for:orch` labels in those repositories route to it and gets it an informational note about new issues. `from:<agent>` on an issue means replies come back to the opener. GitHub and Telegram are configured **once**, with a token in `.env`; nothing is configured per repository.
 
-## Project Structure
+## GitHub in two commands
 
+```bash
+echo "GITHUB_TOKEN=$(gh auth token)" >> ~/.local/share/agent-backbone/.env
+backbone down && backbone up --detach
 ```
-src/agent_backbone/
-  base/              # LifecycleAware protocol, LifecycleManager, exceptions
-  services/          # 14 service packages (see table above)
-  config.py          # BackboneConfig from TOML + env vars
-  settings.py        # Pydantic BaseSettings entry point
-  models.py          # Pydantic domain models
-api/
-  app.py             # FastAPI application factory, lifespan
-  routes/            # 18 route modules (webhook, agents, issues, plans, ...)
-  deps.py            # FastAPI dependency injection
-  auth.py            # API key authentication
-gateway/
-  server.py          # Legacy standalone gateway
-alembic/             # Database migrations
-tests/               # 952 tests across 47 files
-docs/
-  specifications/    # SDD behavioral contracts (31 specs)
-  protocols/         # REST API protocol
-```
+
+That is **poll intake**: the backbone asks GitHub for new issues and comments every 60 s in every repository an agent owns or watches — zero setup, nothing exposed. For instant delivery and automatic coverage of every repository you ever create, do the one-time **GitHub App + webhook** setup (Cloudflare Tunnel if you have a domain, ngrok's free static domain if you don't): [docs/github-app-setup.md](docs/github-app-setup.md).
+
+## Documentation
+
+| | |
+|---|---|
+| [Concepts](docs/concepts.md) | The vocabulary: agent, repository, state, delivery, event |
+| [Getting started](docs/getting-started.md) | Install, start two agents, send the first message, add GitHub |
+| [How it works](docs/how-it-works.md) | Every flow step by step, with the decisions the backbone makes |
+| [Configuration](docs/configuration.md) | Settings (`backbone config`), secrets, the data directory |
+| [CLI](docs/cli.md) · [API](docs/api.md) | Reference |
+| [GitHub](docs/github.md) · [App setup walkthrough](docs/github-app-setup.md) · [Telegram](docs/telegram.md) | Integrations |
+| [Security](docs/security.md) | Defaults and what you opt into |
+| [Status and roadmap](docs/status-and-roadmap.md) | What works, what is missing, what is next |
 
 ## Development
 
 ```bash
-make install          # Install dependencies (uv sync)
-make test             # Run all tests
-make lint             # Ruff check
-make format           # Ruff format
-make fix              # Auto-fix lint + format
-make check            # lint + format-check + tests (CI gate)
-make cov              # Tests with coverage
-
-# Database
-make db-up            # Start PostgreSQL (Docker, port 5435)
-make db-down          # Stop PostgreSQL
-make db-upgrade       # Run Alembic migrations
-make db-migrate MSG="description"  # Create new migration
-
-# Services
-make dev              # Start gateway server
-make run-prefect      # Start Prefect server (port 4200)
-make setup-pool       # Create agent-pool work pool (one-time)
-make deploy           # Deploy all scheduled flows
-make run-worker       # Start Prefect worker
+make install     # uv sync --all-extras
+make test        # pytest — SQLite in memory, no services required
+make check       # lint + format check + tests
+make dev         # backbone up --reload
 ```
 
-## Configuration
+## License
 
-Two layers: `AppSettings` (Pydantic `BaseSettings`, `BACKBONE_` env prefix) for secrets, then `BackboneConfig.from_toml()` for structural config from `backbone.toml`.
-
-**Required env vars:** `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_APP_WEBHOOK_SECRET`
-**Optional:** `TELEGRAM_TOKEN`, `BACKBONE_API_KEY`, `JARVIS_INJECT_URL`, `BACKBONE_DATABASE_HOST/PORT/USER/PASSWORD/NAME`
-
-Tests use in-memory SQLite — no PostgreSQL required for `make test`.
-
-## Docs
-
-- **[USAGE.md](USAGE.md)** — Detailed operational guide
-- **[docs/specifications/SPEC_INDEX.md](docs/specifications/SPEC_INDEX.md)** — All behavioral contracts
-- **[docs/protocols/REST_API.md](docs/protocols/REST_API.md)** — HTTP endpoint contracts
+MIT — see [LICENSE](LICENSE).

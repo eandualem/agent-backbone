@@ -19,7 +19,7 @@ async def deliveries_app(api_app):
     # Seed test data: 3 deliveries across 2 issues and 3 outcomes
     await db.record_delivery(42, "ike", "ike", "delivered", "dispatcher")
     await db.record_delivery(42, "leo", "leo", "offline", "dispatcher")
-    await db.record_delivery(43, "ike", "ike", "deferred", "monitor")
+    await db.record_delivery(43, "ike", "ike", "agent_working", "monitor")
 
     api_app.dependency_overrides[get_db] = lambda: db
     yield api_app
@@ -74,16 +74,16 @@ class TestListDeliveries:
 
 
 class TestFailedDeliveries:
-    """GET /api/deliveries/failed — returns offline/deferred/failed only."""
+    """GET /api/deliveries/failed — retryable outcomes only."""
 
     async def test_returns_only_failed_outcomes(self, client, auth_headers):
         resp = await client.get("/api/deliveries/failed", headers=auth_headers)
         assert resp.status_code == 200
         body = resp.json()
-        # Seeded data has 1 offline + 1 deferred = 2 failed
+        # Seeded data has 1 offline + 1 agent_working = 2 retryable
         assert body["total"] == 2
         outcomes = {item["outcome"] for item in body["items"]}
-        assert outcomes == {"offline", "deferred"}
+        assert outcomes == {"offline", "agent_working"}
 
     async def test_excludes_delivered(self, client, auth_headers):
         resp = await client.get("/api/deliveries/failed", headers=auth_headers)

@@ -30,10 +30,9 @@ def _sample_snapshot() -> list[EnrichedAgent]:
     return [
         EnrichedAgent(
             session="agent-backbone",
-            entity="agent-backbone",
+            name="agent-backbone",
             state="idle",
             online=True,
-            type="coding_agent",
         )
     ]
 
@@ -46,10 +45,9 @@ class TestGetCachedSessionSnapshot:
         second_snapshot = [
             EnrichedAgent(
                 session="other-repo",
-                entity="other-repo",
+                name="other-repo",
                 state="busy",
                 online=True,
-                type="coding_agent",
             )
         ]
         build_fn = AsyncMock(side_effect=[first_snapshot, second_snapshot])
@@ -68,10 +66,9 @@ class TestGetCachedSessionSnapshot:
         second_snapshot = [
             EnrichedAgent(
                 session="other-repo",
-                entity="other-repo",
+                name="other-repo",
                 state="busy",
                 online=True,
-                type="coding_agent",
             )
         ]
         build_fn = AsyncMock(side_effect=[first_snapshot, second_snapshot])
@@ -90,10 +87,9 @@ class TestGetCachedSessionSnapshot:
         second_snapshot = [
             EnrichedAgent(
                 session="other-repo",
-                entity="other-repo",
+                name="other-repo",
                 state="busy",
                 online=True,
-                type="coding_agent",
             )
         ]
         build_fn = AsyncMock(side_effect=[first_snapshot, second_snapshot])

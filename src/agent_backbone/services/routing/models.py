@@ -1,4 +1,4 @@
-"""Routing data models — dispatch results, session intelligence, and profile."""
+"""Routing data models — dispatch results and delivery conditions."""
 
 from __future__ import annotations
 
@@ -19,26 +19,32 @@ class DispatchResult:
 
 
 class SessionIntelligence(StrEnum):
-    """Composite session state derived from tmux vars + agent state."""
+    """Why a session can or cannot receive a message right now.
 
-    IDLE_READY = "idle_ready"
-    IDLE_GRACE = "idle_grace"
-    COPY_MODE = "copy_mode"
-    USER_INTERACTING = "user_interacting"
+    Derived from the agent state plus terminal conditions. Copy mode is not
+    a value here: it is cleared automatically before the decision is made.
+    """
+
+    READY = "ready"
+    SETTLING = "settling"
+    HUMAN_TYPING = "human_typing"
     AGENT_WORKING = "agent_working"
-    PLAN_WAITING = "plan_waiting"
-    PERMISSION_WAITING = "permission_waiting"
+    WAITING_FOR_HUMAN = "waiting_for_human"
     OFFLINE = "offline"
     UNKNOWN = "unknown"
 
 
 @dataclass
 class SessionProfile:
-    """Point-in-time composite session state."""
+    """Point-in-time delivery readiness of a session, with evidence."""
 
     session_name: str
     intelligence: SessionIntelligence
     runtime: str = "unknown"
     agent_state: AgentState = AgentState.UNKNOWN
+    reason: str | None = None
     current_issue: int | None = None
+    current_repo: str | None = None
+    state_source: str = "default"
     tmux_vars: dict[str, str] = field(default_factory=dict)
+    evidence: list[str] = field(default_factory=list)

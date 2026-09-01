@@ -1,8 +1,8 @@
 """Telegram topic auto-discovery — learn thread_id -> session mappings from messages.
 
-The bot discovers topic names from forum_topic_created replies, normalizes them
-against known entity sessions and coding repos, and persists the mapping to JSON.
-Manual TOML config always overrides discovered routes.
+The bot discovers topic names from forum_topic_created replies, normalizes
+them against the known agents, and persists the mapping to JSON. Explicit
+``telegram.topic_routes`` always override discovered routes.
 """
 
 from __future__ import annotations
@@ -18,6 +18,9 @@ from pathlib import Path
 from agent_backbone.config import BackboneConfig
 
 log = logging.getLogger(__name__)
+
+CATCH_ALL_TOPIC = "agents"
+"""A topic named like this routes ``agent: message`` lines to any agent."""
 
 
 @dataclass
@@ -66,23 +69,17 @@ def resolve_topic_name(name: str, config: BackboneConfig) -> str | None:
     """Normalize a topic name and match against known sessions/repos.
 
     Normalization: lowercase, spaces and underscores -> hyphens.
-    Match order: (1) entity sessions, (2) coding repos, (3) literal "coding-agents".
-    Returns session name or None if no match.
+    Matches configured agent names, or the catch-all topic name.
+    Returns the agent name or None if no match.
     """
     normalized = re.sub(r"[\s_]+", "-", name.strip().lower())
 
-    # Match named entity sessions
-    for entity, session in config.registry.sessions_map.items():
-        if normalized == entity or normalized == session:
-            return session
+    for agent_name in config.agents.names:
+        if normalized == agent_name.lower():
+            return agent_name
 
-    # Match coding repos
-    if normalized in config.registry.repo_names:
-        return normalized
-
-    # Literal catch-all
-    if normalized == "coding-agents":
-        return "coding-agents"
+    if normalized == CATCH_ALL_TOPIC:
+        return CATCH_ALL_TOPIC
 
     return None
 
@@ -124,10 +121,9 @@ def process_message_for_discovery(
     if chat is not None:
         chat_type = getattr(chat, "type", None)
         chat_id = getattr(chat, "id", None)
-        if chat_type == "supergroup" and chat_id is not None:
-            if discovery.group_chat_id != chat_id:
-                discovery.group_chat_id = chat_id
-                changed = True
+        if chat_type == "supergroup" and chat_id is not None and discovery.group_chat_id != chat_id:
+            discovery.group_chat_id = chat_id
+            changed = True
 
     # Discover topic mapping from forum_topic_created
     thread_id = getattr(message, "message_thread_id", None)

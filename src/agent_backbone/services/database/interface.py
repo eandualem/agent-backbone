@@ -1,71 +1,95 @@
-"""Database service — engine lifecycle and session management."""
+"""Database engine lifecycle.
+
+SQLite (a file in the data directory) is the default and needs no setup.
+``BACKBONE_DATABASE_URL`` can point at PostgreSQL (``postgresql+asyncpg://``).
+Query logic lives in the repository modules, which receive connections from
+this engine through :class:`BackboneDB`.
+"""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from pathlib import Path
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from agent_backbone.services.database.config import DatabaseConfig
-from agent_backbone.services.database.exceptions import DatabaseError
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 log = logging.getLogger(__name__)
 
+SQLITE_FILENAME = "backbone.db"
+_POSTGRES_POOL_SIZE = 5
+_POSTGRES_POOL_OVERFLOW = 10
+
+
+def sqlite_url(data_dir: Path) -> str:
+    """The default database URL: a SQLite file in the data directory."""
+    return f"sqlite+aiosqlite:///{data_dir / SQLITE_FILENAME}"
+
+
+def is_sqlite(url: str) -> bool:
+    return url.startswith("sqlite")
+
+
+def is_memory(url: str) -> bool:
+    return ":memory:" in url
+
+
+def build_engine(url: str) -> AsyncEngine:
+    """Create an async engine with dialect-appropriate pool settings."""
+    if is_sqlite(url):
+        if not is_memory(url):
+            db_file = url.split("///", 1)[-1]
+            Path(db_file).expanduser().parent.mkdir(parents=True, exist_ok=True)
+        return create_async_engine(url)
+    return create_async_engine(
+        url,
+        pool_size=_POSTGRES_POOL_SIZE,
+        max_overflow=_POSTGRES_POOL_OVERFLOW,
+        pool_pre_ping=True,
+    )
+
+
+def redact_url(url: str) -> str:
+    """Hide credentials in a database URL for logging.
+
+    Drops the query string too — connection parameters can carry passwords
+    or tokens (``?password=…``) that must not reach logs or ``/health``.
+    """
+    base, _, query = url.partition("?")
+    if "@" in base and "://" in base:
+        scheme, rest = base.split("://", 1)
+        _creds, host = rest.rsplit("@", 1)
+        base = f"{scheme}://***@{host}"
+    return f"{base}?***" if query else base
+
 
 class DatabaseService:
-    """Database connection management — LifecycleAware.
+    """Owns the engine: connect on start, dispose on stop, ping for health."""
 
-    Owns engine lifecycle and session factory. Query logic lives in
-    repository modules which receive sessions from this service.
-    """
-
-    def __init__(self, config: DatabaseConfig) -> None:
-        self._config = config
+    def __init__(self, url: str) -> None:
+        self._url = url
         self._engine: AsyncEngine | None = None
-        self._session_factory: async_sessionmaker[AsyncSession] | None = None
+
+    @property
+    def url(self) -> str:
+        return self._url
 
     @property
     def engine(self) -> AsyncEngine | None:
-        """Expose engine for health checks and direct connection access."""
         return self._engine
 
     async def start(self) -> None:
-        """Create engine, verify connectivity, build session factory."""
-        url = self._config.async_url
-        self._engine = create_async_engine(
-            url,
-            pool_size=self._config.pool_size,
-            max_overflow=self._config.pool_overflow,
-            echo=self._config.echo,
-            pool_pre_ping=True,
-        )
+        self._engine = build_engine(self._url)
         async with self._engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        self._session_factory = async_sessionmaker(self._engine, expire_on_commit=False)
-        log.info(
-            "Database connected: %s:%d/%s",
-            self._config.host,
-            self._config.port,
-            self._config.name,
-        )
+        log.info("Database connected: %s", redact_url(self._url))
 
     async def stop(self) -> None:
-        """Dispose of the engine and session factory."""
         if self._engine:
             await self._engine.dispose()
             self._engine = None
-            self._session_factory = None
 
     async def health_check(self) -> dict:
-        """Check database connectivity."""
         healthy = False
         if self._engine:
             try:
@@ -73,24 +97,10 @@ class DatabaseService:
                     await conn.execute(text("SELECT 1"))
                 healthy = True
             except Exception:
-                pass
+                healthy = False
         return {
             "healthy": healthy,
             "service": "database",
             "connected": self._engine is not None,
+            "url": redact_url(self._url),
         }
-
-    async def get_session(self) -> AsyncIterator[AsyncSession]:
-        """Yield a session — for FastAPI Depends()."""
-        if not self._session_factory:
-            raise DatabaseError("Database not started")
-        async with self._session_factory() as session:
-            yield session
-
-    @asynccontextmanager
-    async def session_context(self) -> AsyncIterator[AsyncSession]:
-        """Session context manager — for background tasks and flows."""
-        if not self._session_factory:
-            raise DatabaseError("Database not started")
-        async with self._session_factory() as session:
-            yield session

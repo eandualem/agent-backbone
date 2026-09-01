@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, patch
 from agent_backbone.services.terminal._core import (
     _run_tmux,
     capture_pane,
-    get_window_size,
     resize_window,
     session_exists,
     set_window_size_mode,
@@ -40,9 +39,8 @@ class TestRunTmux:
         current_concurrent = 0
         lock = asyncio.Lock()
 
-        original_semaphore = core_mod._semaphore
-        # Use a semaphore with limit 5 (matching _MAX_CONCURRENT)
-        core_mod._semaphore = asyncio.Semaphore(5)
+        # Start from a clean per-loop semaphore (limit _MAX_CONCURRENT == 5)
+        core_mod._semaphores.clear()
 
         async def fake_exec(*args, **kwargs):
             nonlocal max_concurrent_seen, current_concurrent
@@ -69,7 +67,7 @@ class TestRunTmux:
                 coros = [_run_tmux("has-session", "-t", f"s{i}") for i in range(10)]
                 await asyncio.gather(*coros)
         finally:
-            core_mod._semaphore = original_semaphore
+            core_mod._semaphores.clear()
 
         assert max_concurrent_seen <= 5
 
@@ -136,40 +134,6 @@ class TestSetWindowSizeMode:
             assert "Unsupported tmux window-size mode" in str(exc)
         else:
             raise AssertionError("Expected ValueError for unsupported mode")
-
-
-class TestGetWindowSize:
-    async def test_get_window_size_success(self):
-        """Returns (cols, rows) tuple on successful tmux query."""
-        with patch(f"{_CORE}._run_tmux", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = (0, b"160 35\n", b"")
-            result = await get_window_size("ike")
-
-        assert result == (160, 35)
-        mock_run.assert_called_once_with(
-            "display-message",
-            "-t",
-            "ike",
-            "-p",
-            "#{window_width} #{window_height}",
-            capture_stdout=True,
-        )
-
-    async def test_get_window_size_failure(self):
-        """Returns None when tmux command fails."""
-        with patch(f"{_CORE}._run_tmux", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = (1, b"", b"error")
-            result = await get_window_size("ghost")
-
-        assert result is None
-
-    async def test_get_window_size_bad_output(self):
-        """Returns None when tmux output is unparseable."""
-        with patch(f"{_CORE}._run_tmux", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = (0, b"garbage", b"")
-            result = await get_window_size("ike")
-
-        assert result is None
 
 
 class TestCapturePaneDelegatesToRunTmux:
