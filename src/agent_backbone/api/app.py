@@ -61,6 +61,10 @@ def _register_jobs(app: FastAPI):
     scheduler.add("agent-monitor", config.monitor.interval_seconds, _monitor)
     scheduler.add("delivery-retry", config.monitor.retry_interval_seconds, _retry)
     scheduler.add("prune", 6 * 3600, _prune)
+    # Integrations re-provision their per-agent surfaces (Telegram topics):
+    # a config publish triggers it immediately, this catches everything else
+    # (a group discovered from a message, a transient Telegram error).
+    scheduler.add("integrations-sync", 300, state.integrations.sync_agents)
 
     if state.github is not None:
         from agent_backbone.services.github._poller import GitHubPoller

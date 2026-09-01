@@ -24,7 +24,7 @@ Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/) (or pipx), `tmux`, 
 uv tool install "agent-backbone[github-app] @ git+https://github.com/eandualem/agent-backbone"
 uv tool update-shell                 # once, if ~/.local/bin isn't on your PATH yet
 
-backbone init                        # data dir + .env (generated API key) + database
+backbone init                        # data dir (~/.local/share/agent-backbone) + .env + database
 backbone hooks install claude        # Claude Code reports its state to the backbone
 backbone up --detach                 # API + scheduler (+ Telegram/GitHub when configured)
 ```
@@ -68,7 +68,7 @@ The backbone deliberately does **not** manage per-repository runtime configurati
 ## GitHub in two commands
 
 ```bash
-echo "GITHUB_TOKEN=$(gh auth token)" >> ~/.local/share/agent-backbone/.env
+gh auth token | backbone secrets set GITHUB_TOKEN   # the backbone's own .env, never a repo's
 backbone down && backbone up --detach
 ```
 

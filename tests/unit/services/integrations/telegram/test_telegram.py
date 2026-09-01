@@ -258,3 +258,55 @@ class TestSendNotification:
             return_value=client,
         ):
             assert await TelegramService.send_notification("tok", 1, "hi") is False
+
+
+class TestGeneralAndUnmapped:
+    async def test_general_text_gets_a_pointer_not_a_guess(self, config):
+        from agent_backbone.services.integrations.telegram import _routing
+
+        _routing._hinted_at.clear()
+        bot = _bot(config)
+        update = _update("ike: run the tests", thread_id=None)
+        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
+            await bot.handle_general_message(update, MagicMock())
+            await bot.handle_general_message(update, MagicMock())  # deduped
+        d.assert_not_called()
+        update.message.reply_text.assert_awaited_once()
+        assert "own topic" in update.message.reply_text.await_args.args[0]
+
+    async def test_general_message_teaches_the_group_id_and_triggers_a_sync(self, config):
+        bot = _bot(config)
+        assert bot._effective_group_chat_id() is None
+        update = _update("hello", chat_id=ALLOWED_CHAT, thread_id=None)
+        with patch.object(bot, "sync_agents", new_callable=AsyncMock) as sync:
+            await bot.handle_general_message(update, MagicMock())
+            for task in list(bot._background):
+                await task
+        assert bot._effective_group_chat_id() == ALLOWED_CHAT
+        sync.assert_awaited_once()
+
+    async def test_unmapped_topic_gets_a_hint_once(self, config):
+        from agent_backbone.services.integrations.telegram import _routing
+
+        _routing._hinted_at.clear()
+        bot = _bot(config)
+        update = _update("x", thread_id=99)
+        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
+            await bot.handle_topic_message(update, MagicMock())
+            await bot.handle_topic_message(update, MagicMock())
+        d.assert_not_called()
+        update.message.reply_text.assert_awaited_once()
+        assert "not an agent's" in update.message.reply_text.await_args.args[0]
+
+
+class TestDiscoveryAuthorization:
+    async def test_unauthorized_group_teaches_nothing_and_syncs_nothing(self, config):
+        # A stranger's supergroup must never become "the" group and get topics.
+        bot = _bot(config)
+        update = _update("hello", chat_id=-999, thread_id=None)
+        with patch.object(bot, "sync_agents", new_callable=AsyncMock) as sync:
+            await bot.handle_general_message(update, MagicMock())
+            await bot.cmd_status(update, _context([]))
+        assert bot._effective_group_chat_id() is None
+        sync.assert_not_called()
+        update.message.reply_text.assert_not_awaited()

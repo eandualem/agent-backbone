@@ -188,3 +188,13 @@ class TestLoadDiscoveryShapes:
         for raw in ("[1, 2]", '"str"', '{"topic_routes": [1]}', '{"topic_names": "x"}'):
             path.write_text(raw)
             assert load_discovery(path) == TopicDiscovery()
+
+
+class TestClosedTopics:
+    def test_roundtrip_and_missing_key_is_empty(self, tmp_path):
+        path = tmp_path / "t.json"
+        save_discovery(TopicDiscovery(topic_routes={5: "gone"}, closed_topics={5}), path)
+        loaded = load_discovery(path)
+        assert loaded.closed_topics == {5} and loaded.topic_routes == {5: "gone"}
+        path.write_text(json.dumps({"topic_routes": {"5": "gone"}}))  # older file
+        assert load_discovery(path).closed_topics == set()

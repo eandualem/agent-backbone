@@ -5,8 +5,16 @@ approve a plan, get told when an agent is stuck or died.
 
 ## Setup
 
-1. Create a bot with [@BotFather](https://t.me/BotFather); put the token in
-   `<data_dir>/.env` as `TELEGRAM_TOKEN`.
+1. Create a bot with [@BotFather](https://t.me/BotFather) and store its token:
+
+   ```bash
+   backbone secrets set TELEGRAM_TOKEN      # prompts; writes ~/.local/share/agent-backbone/.env
+   ```
+
+   That file is the **only** secrets file the backbone reads — never a
+   `.env` in a project directory, because `agent start` runs inside your
+   repositories and they have `.env` files of their own. `backbone secrets
+   path` prints it; `backbone secrets list` shows what is set.
 2. Find your chat id: message the bot, then read the id from
    `https://api.telegram.org/bot<TOKEN>/getUpdates`.
 3. Allow it and choose where alerts go:
@@ -36,20 +44,42 @@ command and message from an unlisted chat is ignored silently.
 | `/identify` | Print this chat/topic id and its current mapping |
 | `/help` | Command list |
 
-## Forum topics → agents
+## One topic per agent
 
-In a Telegram group with **Topics** enabled, each topic can be an agent's
-inbox. Two ways to map them:
+The way to use the bot is a group with **Topics** enabled where **every
+agent has its own topic** — writing in the *app* topic talks to `app`,
+nothing to address. The bot creates and maintains those topics itself:
 
-- **Automatic**: name the topic like the agent (`app`, `Web`,
-  `platform_api` → `platform-api`). The bot learns the mapping from the
-  topic's creation message and stores it in `<data_dir>/telegram-topics.json`.
-- **Explicit**: `backbone config set telegram.topic_routes '{"42": "app"}'`
-  (`/identify` inside the topic shows the id). Explicit wins.
+1. Create a group, enable Topics, add the bot and make it an administrator
+   with **Manage Topics**. Add the group's chat id to
+   `telegram.allowed_chat_ids`.
+2. Send any message in the group (or `/identify`). The bot learns the
+   group's id from it — or set it yourself:
+   `backbone config set telegram.group_chat_id -1001234567890`.
+3. Within a moment there is a topic per registered agent. New agents get a
+   topic when they are registered (`backbone agent start` in a new
+   directory); a forgotten agent's topic is **closed**, not deleted, and is
+   reopened if the agent comes back under the same name.
 
-Then writing `rebase onto main` in the *app* topic is the same as
-`/tell app rebase onto main`. A topic mapped to `"agents"` is a catch-all:
-`web: run the tests` routes to `web`.
+In an agent's topic, plain text is delivered to that agent through the
+normal readiness checks (`[via:telegram from:<you>] …`), and the bot
+answers with the outcome (`Sent to app.` / `app is busy — queued.`). The
+agent replies into the same topic with `backbone reply "…"`, and alerts
+about it (plan waiting, session died) land there too.
+
+The **General** topic is for the whole system: `/status`, `/start
+<agent>`, `/tell <agent> <text>`, `/help`. Plain text there gets a pointer
+to the topics rather than a guess at which agent you meant.
+
+Mappings are stored in `<data_dir>/telegram-topics.json`. You can still
+map a topic by hand — name a topic like the agent (`app`, `Web`,
+`platform_api` → `platform-api`) and the bot learns it from the creation
+message, or pin one with `backbone config set telegram.topic_routes
+'{"42": "app"}'` (`/identify` shows the id; explicit wins and is never
+closed automatically). A topic mapped to `"agents"` is the old catch-all
+(`web: run the tests` routes to `web`). `backbone config set
+telegram.auto_topics false` turns provisioning off if you prefer to manage
+topics yourself.
 
 Agents answer into their topic with `backbone reply "Done — PR #12 is
 green."` (inside the agent session; the agent name comes from
