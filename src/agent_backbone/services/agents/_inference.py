@@ -19,10 +19,26 @@ from agent_backbone.services.terminal import (
 
 log = logging.getLogger(__name__)
 
+STARTING_TRUST_SECONDS = 120.0
+"""How long a ``starting`` marker counts as fresh.
+
+``start_agent`` writes it when the session is created; a hook overwrites it
+within seconds and ``wait_until_ready`` clears it when the prompt shows. If
+neither happened (a ``--no-wait`` start of a runtime without hooks) the
+terminal decides after this window — a runtime takes seconds to start, not
+the five minutes a hook state is trusted for.
+"""
+
+
+def _fresh_window(snapshot: StateSnapshot, stale_threshold: float) -> float:
+    if snapshot.state == AgentState.STARTING:
+        return min(stale_threshold, STARTING_TRUST_SECONDS)
+    return stale_threshold
+
 
 def _trust_stale_push(snapshot: StateSnapshot) -> bool:
     """Whether a stale hook snapshot is still worth using when the pane says nothing."""
-    if snapshot.state in (AgentState.IDLE, AgentState.STARTING, AgentState.BUSY):
+    if snapshot.state in (AgentState.IDLE, AgentState.BUSY):
         return True
     if snapshot.state == AgentState.WAITING_FOR_HUMAN and snapshot.reason == "plan":
         return bool(snapshot.plan_file and Path(snapshot.plan_file).exists())
@@ -91,6 +107,8 @@ async def get_agent_state(
     """
     push = read_state_file(state_dir, session)
     push_age = (time.time() - push.timestamp) if push else None
+    if push:
+        stale_threshold = _fresh_window(push, stale_threshold)
 
     if push and push_age is not None and push_age < stale_threshold:
         push.evidence = [f"hook state '{push.state.value}' written {push_age:.0f}s ago (fresh)"]

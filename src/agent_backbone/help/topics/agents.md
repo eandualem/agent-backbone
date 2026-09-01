@@ -13,7 +13,7 @@ backbone agent forget NAME                 # remove a stopped agent's record
 ```
 
 - Runtimes: `claude` (default), `codex`, `gemini`, `opencode`, `aider`,
-  `cursor`, `shell` — the binary must be installed.
+  `shell` — the binary must be installed.
 - `--model` is passed to the runtime CLI verbatim and recorded on the
   agent, so later bare starts reuse it. Change with
   `backbone agent set NAME model=…` (also `runtime=`, `dir=`).

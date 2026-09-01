@@ -241,7 +241,9 @@ async def start_agent_discover(
     """Start an agent from a directory (discovering it) or by name."""
     directory = body.dir
     if directory:
-        spec = store.discover(directory, name=body.name, runtime=body.runtime, model=body.model)
+        spec = await store.discover(
+            directory, name=body.name, runtime=body.runtime, model=body.model
+        )
         if body.watch:
             spec = AgentSpec(
                 **{**spec.__dict__, "watches": tuple(dict.fromkeys([*spec.watches, *body.watch]))}
@@ -272,7 +274,7 @@ async def start_known_agent(
     directory = req.dir
     if directory:
         spec = await store.register(
-            store.discover(directory, name=session, runtime=req.runtime, model=req.model)
+            await store.discover(directory, name=session, runtime=req.runtime, model=req.model)
         )
     else:
         spec = store.agents.get(session)

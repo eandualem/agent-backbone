@@ -13,6 +13,8 @@ from agent_backbone.services.agents import AgentState, StateSnapshot
 _ROUTE = "agent_backbone.api.routes.agents"
 _LAUNCH = "agent_backbone.services.infrastructure._agents"
 
+_DETECT_REPO = "agent_backbone.services.agent_store.detect_repo"
+
 
 def _snapshot(state: AgentState = AgentState.IDLE, **kwargs) -> StateSnapshot:
     return StateSnapshot(state=state, source="push", timestamp=time.time(), **kwargs)
@@ -226,7 +228,11 @@ class TestStartAgent:
         project = tmp_path / "scratch-app"
         project.mkdir()
         launch.build_command.return_value = None
-        with patch("agent_backbone.services.agent_store.detect_repo", return_value="acme/scratch"):
+        with patch(
+            "agent_backbone.services.agent_store.detect_repo",
+            new_callable=AsyncMock,
+            return_value="acme/scratch",
+        ):
             resp = await api_client.post(
                 "/api/agents/start",
                 json={"dir": str(project), "runtime": "shell", "watch": ["acme/other"]},

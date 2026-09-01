@@ -672,7 +672,9 @@ async def _agent_start(args: argparse.Namespace) -> int:
     async with _Direct(boot) as direct:
         store = direct.store
         if body["dir"]:
-            spec = store.discover(body["dir"], name=name, runtime=args.runtime, model=args.model)
+            spec = await store.discover(
+                body["dir"], name=name, runtime=args.runtime, model=args.model
+            )
             if args.watch:
                 spec = AgentSpec(
                     **{

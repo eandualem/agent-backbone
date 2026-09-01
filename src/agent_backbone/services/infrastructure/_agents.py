@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import RUNTIMES, session_secret_keys
+from agent_backbone.services.agents._file_reader import read_state_file, write_state_file
+from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.terminal import (
     AGENT_ENV_KEY,
     RUNTIME_ENV_KEY,
@@ -48,7 +50,6 @@ RUNTIME_DISPLAY_NAMES: dict[str, str] = {
     "claude": "Claude Code",
     "gemini": "Gemini CLI",
     "codex": "Codex",
-    "cursor": "Cursor Agent",
     "opencode": "OpenCode",
     "aider": "Aider",
     "shell": "Plain shell",
@@ -410,6 +411,7 @@ async def start_agent(
         return StartResult(ok=False, evidence=(str(exc),))
 
     environment = launch_environment(spec.name, effective_runtime, config.state_dir, spec.env)
+    launched_at = time.time()
     ok = await start_session(
         spec.name,
         working_dir=str(spec.path),
@@ -421,6 +423,15 @@ async def start_agent(
         return StartResult(ok=False, evidence=("tmux could not create the session",))
     extra = f", model: {effective_model}" if effective_model else ""
     log.info("Agent '%s' started (runtime: %s%s)", spec.name, effective_runtime, extra)
+    # The session exists but the runtime is not at its prompt: `starting`.
+    # The first hook write replaces it; for runtimes without hooks
+    # ``wait_until_ready`` clears it when the prompt shows, and
+    # ``get_agent_state`` stops trusting it after a short window regardless.
+    write_state_file(
+        config.state_dir,
+        spec.name,
+        {"state": AgentState.STARTING.value, "ts": launched_at, "started_at": launched_at},
+    )
 
     ready, evidence = "not_waited", []
     if wait:
@@ -429,6 +440,7 @@ async def start_agent(
             state_dir=config.state_dir,
             runtime=effective_runtime,
             timeout=config.monitor.start_timeout_seconds,
+            since=launched_at,
         )
 
     # No launch-time injection for this runtime: the brief is the first
@@ -448,6 +460,17 @@ async def start_agent(
     return StartResult(ok=True, ready=ready, evidence=tuple(evidence))
 
 
+def _clear_starting(state_dir: Path, name: str) -> None:
+    """Drop the ``starting`` marker once the terminal itself shows the runtime is up.
+
+    Runtimes without hooks never overwrite it, and a lingering ``starting``
+    would keep deliveries away from an agent that is at its prompt.
+    """
+    snapshot = read_state_file(state_dir, name)
+    if snapshot is not None and snapshot.state == AgentState.STARTING:
+        (state_dir / f"{name}.json").unlink(missing_ok=True)
+
+
 async def wait_until_ready(
     name: str,
     *,
@@ -455,24 +478,25 @@ async def wait_until_ready(
     runtime: str,
     timeout: float = 60.0,
     poll_interval: float = 0.5,
+    since: float | None = None,
 ) -> tuple[str, list[str]]:
     """Wait until the agent is at its prompt.
 
     Returns ``(outcome, evidence)`` with outcome ``ready``, ``waiting_for_human``
     (the runtime is asking something, e.g. a folder-trust prompt), ``exited``
-    or ``timeout``. Readiness is a fresh hook-written ``idle`` state, or — for
-    runtimes without hooks — a visible empty prompt in the terminal.
+    or ``timeout``. Readiness is a hook-written ``idle`` state newer than
+    ``since`` (the launch; default: now), or — for runtimes without hooks — a
+    visible empty prompt in the terminal, which also clears the ``starting``
+    marker ``start_agent`` wrote.
     """
-    from agent_backbone.services.agents._file_reader import read_state_file
-    from agent_backbone.services.agents.models import AgentState
-
     started = time.monotonic()
-    wall_started = time.time()
+    wall_started = since if since is not None else time.time()
     adapter = get_terminal_adapter(runtime)
     state_path = Path(state_dir).expanduser()
     last_pane = ""
     while True:
         if not await session_exists(name):
+            _clear_starting(state_path, name)
             return "exited", ["tmux session ended before the agent reached its prompt"]
 
         # Only trust hook state written by *this* start — a leftover idle file
@@ -489,9 +513,11 @@ async def wait_until_ready(
         if pane:
             last_pane = pane
             if adapter.detect_waiting_for_human(pane):
+                _clear_starting(state_path, name)
                 tail = [ln for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-6:]
                 return "waiting_for_human", ["terminal shows a question for the human:", *tail]
             if adapter.detect_idle(pane):
+                _clear_starting(state_path, name)
                 return "ready", ["terminal shows an empty prompt"]
 
         if time.monotonic() - started >= timeout:

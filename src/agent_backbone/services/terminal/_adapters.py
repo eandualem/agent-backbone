@@ -37,7 +37,6 @@ class TerminalRuntime(StrEnum):
     CLAUDE = "claude"
     GEMINI = "gemini"
     CODEX = "codex"
-    CURSOR = "cursor"
     OPENCODE = "opencode"
     AIDER = "aider"
     SHELL = "shell"
@@ -557,15 +556,6 @@ class CodexAdapter(TerminalAdapter):
     paste_settle_seconds = 0.2
 
 
-class CursorAdapter(TerminalAdapter):
-    runtime = TerminalRuntime.CURSOR
-    prompt_prefixes = ("\u276f", ">", "$", "%")
-    runtime_markers = ("cursor", "cursor agent", "cursor composer")
-    status_fragments = ("for shortcuts", "accept edits on")
-    submit_attempts = _MAX_SUBMIT_ATTEMPTS
-    paste_settle_seconds = 0.2
-
-
 class OpenCodeAdapter(TerminalAdapter):
     # Markers verified live against opencode 1.18. The "Ask anything..."
     # placeholder disappears after the first message, but the bottom bar
@@ -609,7 +599,6 @@ _ADAPTERS: dict[TerminalRuntime, TerminalAdapter] = {
     TerminalRuntime.CLAUDE: ClaudeCodeAdapter(),
     TerminalRuntime.GEMINI: GeminiAdapter(),
     TerminalRuntime.CODEX: CodexAdapter(),
-    TerminalRuntime.CURSOR: CursorAdapter(),
     TerminalRuntime.OPENCODE: OpenCodeAdapter(),
     TerminalRuntime.AIDER: AiderAdapter(),
     TerminalRuntime.SHELL: ShellAdapter(),
@@ -632,7 +621,6 @@ def detect_runtime_from_pane(pane_content: str) -> TerminalRuntime:
         TerminalRuntime.GEMINI,
         TerminalRuntime.OPENCODE,
         TerminalRuntime.AIDER,
-        TerminalRuntime.CURSOR,
         TerminalRuntime.CODEX,
         TerminalRuntime.CLAUDE,
     ):

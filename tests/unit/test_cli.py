@@ -10,6 +10,8 @@ import pytest
 from agent_backbone import cli
 from agent_backbone.services.infrastructure import StartResult
 
+_DETECT_REPO = "agent_backbone.services.agent_store.detect_repo"
+
 
 def _run(argv: list[str]) -> int:
     with pytest.raises(SystemExit) as exc:
@@ -105,7 +107,11 @@ class TestAgentCommands:
                     ok=True, ready="ready", evidence=("terminal shows an empty prompt",)
                 ),
             ) as start,
-            patch("agent_backbone.services.agent_store.detect_repo", return_value="acme/my-app"),
+            patch(
+                "agent_backbone.services.agent_store.detect_repo",
+                new_callable=AsyncMock,
+                return_value="acme/my-app",
+            ),
         ):
             assert _run(["agent", "start", "--dir", str(project), "--runtime", "shell"]) == 0
         out = capsys.readouterr().out
@@ -128,7 +134,11 @@ class TestAgentCommands:
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
-            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+            patch(
+                "agent_backbone.services.agent_store.detect_repo",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
         ):
             assert _run(["agent", "start", "orch", "--no-wait"]) == 0
         out = capsys.readouterr().out
@@ -146,7 +156,11 @@ class TestAgentCommands:
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
-            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+            patch(
+                "agent_backbone.services.agent_store.detect_repo",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
         ):
             assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
             assert _run(["agent", "start", "desk", "--model", "opus", "--no-wait"]) == 0
@@ -160,7 +174,11 @@ class TestAgentCommands:
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
-            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+            patch(
+                "agent_backbone.services.agent_store.detect_repo",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
         ):
             assert _run(["agent", "start", "desk", "--no-wait"]) == 0
         assert start.await_args.args[0].model == "opus"
@@ -180,7 +198,11 @@ class TestAgentCommands:
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
-            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+            patch(
+                "agent_backbone.services.agent_store.detect_repo",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
         ):
             assert _run(["agent", "start", "--dir", str(old), "--no-wait"]) == 0
 
@@ -214,7 +236,11 @@ class TestAgentCommands:
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ),
-            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+            patch(
+                "agent_backbone.services.agent_store.detect_repo",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
         ):
             assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
         assert _run(["agent", "watch", "orch", "acme/app", "acme/web"]) == 0
@@ -237,7 +263,11 @@ class TestAgentCommands:
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ),
-            patch("agent_backbone.services.agent_store.detect_repo", return_value=""),
+            patch(
+                "agent_backbone.services.agent_store.detect_repo",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
         ):
             assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
         capsys.readouterr()

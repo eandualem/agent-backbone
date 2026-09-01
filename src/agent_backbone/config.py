@@ -35,7 +35,7 @@ from agent_backbone.services.database.interface import sqlite_url
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
 DEFAULT_PORT = 7120
 
-RUNTIMES: tuple[str, ...] = ("claude", "codex", "gemini", "opencode", "aider", "cursor", "shell")
+RUNTIMES: tuple[str, ...] = ("claude", "codex", "gemini", "opencode", "aider", "shell")
 """Every runtime an agent can be started with (``shell`` is a plain login shell)."""
 
 SECRET_ENV_KEYS: tuple[str, ...] = (

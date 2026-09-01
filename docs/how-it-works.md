@@ -60,8 +60,9 @@ flowchart TD
     E -->|no| UNK[unknown]
 ```
 
-**Hook state** (`<data_dir>/state/<agent>.json`) is written by the shipped
-Claude Code hook:
+**Hook state** (`<data_dir>/state/<agent>.json`) is written first by the
+backbone itself — `agent start` records `starting` the moment the tmux
+session exists — and from then on by the shipped Claude Code hook:
 
 | Claude Code event | State written |
 |---|---|

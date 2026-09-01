@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import subprocess
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -48,21 +47,30 @@ def parse_github_remote(url: str) -> str:
     return f"{match.group('owner')}/{match.group('repo')}" if match else ""
 
 
-def detect_repo(directory: Path) -> str:
-    """The GitHub ``owner/name`` of a directory's ``origin`` remote, if any."""
+async def detect_repo(directory: Path) -> str:
+    """The GitHub ``owner/name`` of a directory's ``origin`` remote, if any.
+
+    Runs ``git`` as a subprocess without blocking the event loop (``discover``
+    is called from request handlers).
+    """
     try:
-        out = subprocess.run(
-            ["git", "-C", str(directory), "remote", "get-url", "origin"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "-C",
+            str(directory),
+            "remote",
+            "get-url",
+            "origin",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
-    except (OSError, subprocess.SubprocessError):
+        async with asyncio.timeout(5):
+            stdout, _ = await proc.communicate()
+    except (OSError, TimeoutError):
         return ""
-    if out.returncode != 0:
+    if proc.returncode != 0:
         return ""
-    return parse_github_remote(out.stdout)
+    return parse_github_remote(stdout.decode())
 
 
 class AgentStore:
@@ -122,7 +130,7 @@ class AgentStore:
 
     # --- Discovery / registration ---
 
-    def discover(
+    async def discover(
         self,
         directory: str | Path,
         *,
@@ -158,7 +166,8 @@ class AgentStore:
             # Keep the recorded repo only for a record that lived elsewhere (a
             # moved project); rediscovering the same checkout trusts what the
             # checkout says now, so a removed origin clears ownership.
-            repo=detect_repo(path) or (existing.repo if existing and existing.path != path else ""),
+            repo=await detect_repo(path)
+            or (existing.repo if existing and existing.path != path else ""),
             watches=existing.watches if existing else (),
             tags=existing.tags if existing else (),
             env=dict(existing.env) if existing else {},

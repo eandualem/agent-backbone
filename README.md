@@ -77,7 +77,7 @@ Any CLI that runs in a terminal can be an agent; how much the backbone can do fo
 | `codex` | ✅ config record | ✅ initial prompt | ✅ terminal | ✅ verified live |
 | `opencode` | — (no trust dialog) | ✅ initial prompt | ✅ terminal | ✅ verified live (works out of the box on its free models) |
 | `gemini` | ✅ `--skip-trust` | ✅ initial prompt | ✅ terminal | ⚠️ see note |
-| `aider`, `cursor`, `shell` | — | first message | terminal (best effort) | untested |
+| `aider`, `shell` | — | first message | terminal (best effort) | untested |
 
 > **Gemini note**: with Gemini CLI 0.46.0 (the version we tested) Google OAuth completes and the CLI then still refuses personal accounts ("no longer supported for Gemini Code Assist for individuals"), leaving it stuck on its auth picker. This is an upstream issue, not a backbone one — the backbone correctly reports such sessions as `waiting_for_human`. Start, trust and brief injection are verified; delivery to a signed-in Gemini session (e.g. via `GEMINI_API_KEY`) is **unverified** until we can test against one.
 

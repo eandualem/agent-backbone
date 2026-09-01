@@ -748,3 +748,39 @@ class TestHasCommentedOnIssue:
             has_commented_on_issue(42, "ike", action_log=str(tmp_path / "nonexistent.jsonl"))
             is False
         )
+
+
+class TestStartingMarker:
+    async def test_fresh_starting_marker_is_trusted(self, tmp_path):
+        import json
+        import time
+
+        from agent_backbone.services.agents import get_agent_state
+
+        (tmp_path / "ike.json").write_text(json.dumps({"state": "starting", "ts": time.time()}))
+        snap = await get_agent_state(tmp_path, "ike", 300, pane_content="$ ")
+        assert snap.state == AgentState.STARTING and snap.source == "push"
+
+    async def test_old_starting_marker_yields_to_the_terminal(self, tmp_path):
+        import json
+        import time
+
+        from agent_backbone.services.agents import get_agent_state
+
+        (tmp_path / "ike.json").write_text(
+            json.dumps({"state": "starting", "ts": time.time() - 200})
+        )
+        snap = await get_agent_state(tmp_path, "ike", 300, pane_content="$ ")
+        assert snap.state == AgentState.IDLE and snap.source == "pull"
+
+    async def test_old_starting_marker_is_not_trusted_when_the_pane_says_nothing(self, tmp_path):
+        import json
+        import time
+
+        from agent_backbone.services.agents import get_agent_state
+
+        (tmp_path / "ike.json").write_text(
+            json.dumps({"state": "starting", "ts": time.time() - 200})
+        )
+        snap = await get_agent_state(tmp_path, "ike", 300, pane_content="")
+        assert snap.state == AgentState.UNKNOWN

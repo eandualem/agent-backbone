@@ -430,3 +430,55 @@ class TestStartAgentBrief:
             await start_agent(self._spec(tmp_path, "shell"), config)
             await start_agent(self._spec(tmp_path, "aider"), config, resume=True)
         delivered.assert_not_awaited()
+
+
+class TestStartingState:
+    """`starting` is written at launch and gives way to the real state."""
+
+    async def test_start_agent_writes_starting_then_wait_clears_it(self, tmp_path):
+        from unittest.mock import AsyncMock
+
+        from agent_backbone.config import AgentSpec, bootstrap_config
+        from agent_backbone.services.agents import read_state_file
+        from agent_backbone.services.agents.models import AgentState
+        from agent_backbone.services.infrastructure._agents import start_agent
+
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime="shell")
+        seen: list[str] = []
+
+        async def _capture(name, lines=60):
+            # By the time the terminal is read, the marker must be on disk.
+            seen.append(read_state_file(config.state_dir, name).state.value)
+            return "$ "
+
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=_capture),
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, side_effect=[False, True]),
+        ):
+            result = await start_agent(spec, config)
+
+        assert result.ready == "ready"
+        assert seen == [AgentState.STARTING.value]
+        # The prompt showed: the marker is gone and the terminal decides again.
+        assert read_state_file(config.state_dir, "ike") is None
+
+    async def test_hook_state_newer_than_the_launch_wins(self, tmp_path):
+        from unittest.mock import AsyncMock
+
+        from agent_backbone.services.agents import write_state_file
+        from agent_backbone.services.infrastructure._agents import wait_until_ready
+
+        state_dir = tmp_path / "state"
+        launched = 1_000.0
+        write_state_file(state_dir, "ike", {"state": "starting", "ts": launched})
+        write_state_file(state_dir, "ike", {"state": "idle", "ts": launched + 2})
+        with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True):
+            outcome, evidence = await wait_until_ready(
+                "ike", state_dir=state_dir, runtime="claude", timeout=1, since=launched
+            )
+        assert outcome == "ready" and evidence[0].startswith("hook reported idle")
