@@ -67,7 +67,8 @@ posted into its topic too when it has one; otherwise they go to
 
 ## Notifications you receive
 
-Sent to `telegram.notification_chat_id`:
+Posted into the agent's topic when it has one, otherwise to
+`telegram.notification_chat_id`:
 
 - **Plan waiting** — `📋 Plan waiting — app / Title: … / /viewplan app / /approve app`, once per plan.
 - **Agent went offline unexpectedly** — a session died; it was not restarted.

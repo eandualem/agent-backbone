@@ -177,7 +177,7 @@ agent — `POST /api/plans/{name}/approve`, `/reject {"feedback"}`,
 |---|---|
 | `GET /health` (no auth) | Per-component health |
 | `GET /api/status` | Digest: sessions, agents with state, GitHub intake mode, tracked repositories (owners, watchers, last event), pending issues, failed deliveries |
-| `GET /api/status/services` | api/database/scheduler/github, `integrations: {telegram: up|down|disabled}`, plus per-job run counts and last errors |
+| `GET /api/status/services` | api/database/scheduler/github, `integrations: {telegram: up \| down \| disabled}`, plus per-job run counts and last errors |
 
 ## Integrations
 

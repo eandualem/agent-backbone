@@ -179,3 +179,12 @@ class TestProcessMessageForDiscovery:
         update = _make_update(chat_id=-100, thread_id=42)
         assert not process_message_for_discovery(update, _make_config(), d, tmp_path / "t.json")
         assert 42 not in d.topic_routes
+
+
+class TestLoadDiscoveryShapes:
+    def test_non_object_shapes_load_as_empty(self, tmp_path):
+        # A damaged file must never keep the bot from starting.
+        path = tmp_path / "t.json"
+        for raw in ("[1, 2]", '"str"', '{"topic_routes": [1]}', '{"topic_names": "x"}'):
+            path.write_text(raw)
+            assert load_discovery(path) == TopicDiscovery()

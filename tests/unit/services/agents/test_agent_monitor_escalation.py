@@ -210,9 +210,14 @@ class TestPlanWaiting:
 
     async def test_real_notify_humans_is_false_when_nothing_is_configured(self, config, db):
         states = {"ike": _snap(_WAITING, reason="plan")}
-        with _patch_states(states), patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d:
+        with (
+            _patch_states(states),
+            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}._record_plan_notification") as recorded,
+        ):
             await esc.check_plan_waiting(config, {"ike"}, db=db)
         d.assert_not_called()
+        recorded.assert_not_called()  # the real notify_humans returned False: nothing "sent"
 
 
 class TestDeliverPendingIssues:

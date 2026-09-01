@@ -325,7 +325,9 @@ class IntegrationReplyResponse(BaseModel):
     ok: bool
     session: str
     posted: dict[str, bool] = Field(default_factory=dict)
-    """Per integration: whether it had a surface for the agent and accepted the text."""
+    """Per integration: whether the text was posted."""
+    results: dict[str, str] = Field(default_factory=dict)
+    """Per integration: ``posted`` | ``no_surface`` (nothing maps to this agent) | ``failed``."""
 
 
 # --- Status ---

@@ -59,8 +59,16 @@ class TestRegistry:
         # names collide on purpose: results are keyed by name, last write wins
         without.name = "other"
         disabled.name = "off"
-        assert await integrations.reply_to_agent("ike", "done") == {"fake": True, "other": False}
+        assert await integrations.reply_to_agent("ike", "done") == {
+            "fake": "posted",
+            "other": "no_surface",
+        }
         assert with_surface.replies == [("ike", "done")]
+
+    async def test_a_raising_integration_is_failed_not_no_surface(self):
+        broken = _Fake(surfaces={"ike"})
+        broken.reply_to_agent = AsyncMock(side_effect=RuntimeError("api down"))
+        assert await Integrations([broken]).reply_to_agent("ike", "x") == {"fake": "failed"}
 
     async def test_sync_runs_every_enabled_integration_and_survives_errors(self):
         good = _Fake()

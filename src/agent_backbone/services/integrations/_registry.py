@@ -56,15 +56,21 @@ class Integrations:
             for i in self._items
         }
 
-    async def reply_to_agent(self, agent: str, text: str) -> dict[str, bool]:
-        """Post an agent's answer on every enabled integration; per-integration result."""
-        results: dict[str, bool] = {}
+    async def reply_to_agent(self, agent: str, text: str) -> dict[str, str]:
+        """Post an agent's answer on every enabled integration.
+
+        Per integration: ``posted``, ``no_surface`` (nothing there maps to
+        this agent, e.g. no topic yet) or ``failed`` (a surface exists but
+        posting raised) — callers must not confuse the last two.
+        """
+        results: dict[str, str] = {}
         for integration in self.enabled:
             try:
-                results[integration.name] = await integration.reply_to_agent(agent, text)
+                ok = await integration.reply_to_agent(agent, text)
+                results[integration.name] = "posted" if ok else "no_surface"
             except Exception:
                 log.exception("%s reply_to_agent failed", integration.name)
-                results[integration.name] = False
+                results[integration.name] = "failed"
         return results
 
     async def sync_agents(self) -> None:
