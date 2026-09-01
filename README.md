@@ -61,7 +61,7 @@ Any CLI that runs in a terminal can be an agent; how much the backbone can do fo
 | `gemini` | ✅ `--skip-trust` | ✅ initial prompt | ✅ terminal | ⚠️ see note |
 | `aider`, `cursor`, `shell` | — | first message | terminal (best effort) | untested |
 
-> **Gemini note**: current Gemini CLI builds can complete Google OAuth and then still refuse personal accounts ("no longer supported for Gemini Code Assist for individuals"), leaving the CLI stuck on its auth picker. This is an upstream issue, not a backbone one — the backbone correctly reports such sessions as `waiting_for_human`. Gemini agents work once the CLI itself is authenticated (e.g. with a `GEMINI_API_KEY`), but we could not fully verify delivery against a signed-in session.
+> **Gemini note**: with Gemini CLI 0.46.0 (the version we tested) Google OAuth completes and the CLI then still refuses personal accounts ("no longer supported for Gemini Code Assist for individuals"), leaving it stuck on its auth picker. This is an upstream issue, not a backbone one — the backbone correctly reports such sessions as `waiting_for_human`. Start, trust and brief injection are verified; delivery to a signed-in Gemini session (e.g. via `GEMINI_API_KEY`) is **unverified** until we can test against one.
 
 The backbone deliberately does **not** manage per-repository runtime configuration (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, MCP servers, …) — how a repository configures its tools is the repository's business. The backbone starts the runtime, injects the agent's identity brief, delivers messages safely, and reads its state.
 

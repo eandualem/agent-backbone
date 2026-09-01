@@ -74,22 +74,24 @@ class TestBuildCommand:
         brief.write_text("You are agent y.")
         with patch(f"{_MOD}.resolve_command", return_value="/bin/gemini"):
             command = build_command(
-                "gemini",
-                model="gemini-3-pro",
-                resume=True,
-                pre_trust=True,
-                system_prompt_file=brief,
+                "gemini", model="gemini-3-pro", pre_trust=True, system_prompt_file=brief
             )
         assert command == [
             "/bin/gemini",
             "--model",
             "gemini-3-pro",
-            "--resume",
-            "latest",
             "--skip-trust",
             "--prompt-interactive",
             "You are agent y.",
         ]
+
+    def test_gemini_resume_does_not_rebrief(self, tmp_path):
+        # The resumed session already received the brief as its initial prompt.
+        brief = tmp_path / "brief.md"
+        brief.write_text("You are agent y.")
+        with patch(f"{_MOD}.resolve_command", return_value="/bin/gemini"):
+            command = build_command("gemini", resume=True, system_prompt_file=brief)
+        assert command == ["/bin/gemini", "--resume", "latest"]
 
     def test_gemini_without_pre_trust_keeps_dialog(self):
         with patch(f"{_MOD}.resolve_command", return_value="/bin/gemini"):
@@ -100,16 +102,22 @@ class TestBuildCommand:
         brief.write_text("You are agent z.")
         with patch(f"{_MOD}.resolve_command", return_value="/bin/opencode"):
             command = build_command(
-                "opencode", model="opencode/big-pickle", resume=True, system_prompt_file=brief
+                "opencode", model="opencode/big-pickle", system_prompt_file=brief
             )
         assert command == [
             "/bin/opencode",
             "--model",
             "opencode/big-pickle",
-            "--continue",
             "--prompt",
             "You are agent z.",
         ]
+
+    def test_opencode_resume_does_not_rebrief(self, tmp_path):
+        brief = tmp_path / "brief.md"
+        brief.write_text("You are agent z.")
+        with patch(f"{_MOD}.resolve_command", return_value="/bin/opencode"):
+            command = build_command("opencode", resume=True, system_prompt_file=brief)
+        assert command == ["/bin/opencode", "--continue"]
 
 
 class TestPreTrust:
@@ -162,7 +170,48 @@ class TestPreTrust:
         assert config.read_text() == "{broken"
 
 
+class TestPreTrustRuntime:
+    def test_dispatches_per_runtime(self, tmp_path):
+        from agent_backbone.services.infrastructure._agents import pre_trust_runtime
+
+        with (
+            patch(f"{_MOD}.pre_trust_directory") as claude,
+            patch(f"{_MOD}.pre_trust_codex_directory") as codex,
+        ):
+            pre_trust_runtime("claude", tmp_path)
+            pre_trust_runtime("codex", tmp_path)
+            pre_trust_runtime("gemini", tmp_path)  # --skip-trust at launch instead
+            pre_trust_runtime("opencode", tmp_path)  # no trust dialog
+        claude.assert_called_once_with(tmp_path)
+        codex.assert_called_once_with(tmp_path)
+
+
 class TestPreTrustCodex:
+    def test_scalar_projects_value_fails_softly(self, tmp_path):
+        # Valid TOML, unexpected shape: never raise, never rewrite the user's file.
+        from agent_backbone.services.infrastructure._agents import pre_trust_codex_directory
+
+        config = tmp_path / "config.toml"
+        config.write_text("projects = 1\n")
+        assert pre_trust_codex_directory(tmp_path / "p", codex_config=config) is False
+        assert config.read_text() == "projects = 1\n"
+
+    def test_scalar_project_entry_is_left_alone(self, tmp_path):
+        from agent_backbone.services.infrastructure._agents import pre_trust_codex_directory
+
+        project = tmp_path / "p"
+        config = tmp_path / "config.toml"
+        config.write_text(f'[projects]\n"{project}" = "weird"\n')
+        assert pre_trust_codex_directory(project, codex_config=config) is False
+        assert "weird" in config.read_text()
+
+    def test_leaves_no_temp_file_behind(self, tmp_path):
+        from agent_backbone.services.infrastructure._agents import pre_trust_codex_directory
+
+        config = tmp_path / "config.toml"
+        assert pre_trust_codex_directory(tmp_path / "p", codex_config=config) is True
+        assert [p.name for p in tmp_path.iterdir() if p.name != "config.toml"] == []
+
     def test_appends_trust_record_preserving_config(self, tmp_path):
         import tomllib
 

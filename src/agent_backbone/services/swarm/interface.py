@@ -191,15 +191,22 @@ async def create_swarm(
         raise SwarmError(str(exc)) from exc
     worktree, branch = await create_worktree(repo_dir, name)
 
-    await db.create_swarm(
-        name,
-        repo=repo,
-        issue_number=issue_number,
-        initiator=initiator,
-        coordinator=coordinator,
-        branch=branch,
-        worktree_dir=str(worktree),
-    )
+    try:
+        await db.create_swarm(
+            name,
+            repo=repo,
+            issue_number=issue_number,
+            initiator=initiator,
+            coordinator=coordinator,
+            branch=branch,
+            worktree_dir=str(worktree),
+        )
+    except Exception as exc:
+        # Lost a race past the pre-checks (another swarm took the issue or
+        # the name meanwhile): don't leave an unregistered worktree behind,
+        # it would block the next attempt under this name.
+        await remove_worktree(repo_dir, worktree)
+        raise SwarmError(f"could not register swarm '{name}': {exc}") from exc
 
     briefs_dir = config.data_dir / "swarms" / name
     briefs_dir.mkdir(parents=True, exist_ok=True)

@@ -146,6 +146,58 @@ class TestStartAgent:
         assert build.call_args.kwargs["model"] == "x"
         assert build.call_args.kwargs["resume"] is True
 
+    async def test_every_runtime_gets_the_trust_setting(self, api_client, auth_headers):
+        # `agent start` for codex must pre-trust like the swarm path does, and
+        # build_command needs the flag for gemini's --skip-trust.
+        with (
+            patch(f"{_ROUTE}.runtime_available", return_value=True),
+            patch(f"{_ROUTE}.build_command", return_value=["/usr/bin/codex"]) as build,
+            patch(f"{_ROUTE}.pre_trust_runtime") as trust,
+        ):
+            resp = await api_client.post(
+                "/api/agents/ike/start", json={"runtime": "codex"}, headers=auth_headers
+            )
+        assert resp.status_code == 200
+        trust.assert_called_once()
+        assert trust.call_args.args[0] == "codex"
+        assert build.call_args.kwargs["pre_trust"] is True
+
+    async def test_runtime_without_launch_injection_gets_brief_as_first_message(
+        self, api_client, auth_headers
+    ):
+        with (
+            patch(f"{_ROUTE}.runtime_available", return_value=True),
+            patch(f"{_ROUTE}.build_command", return_value=["/usr/bin/aider"]),
+            patch(f"{_ROUTE}.safe_deliver", new_callable=AsyncMock, return_value="delivered") as d,
+        ):
+            resp = await api_client.post(
+                "/api/agents/ike/start", json={"runtime": "aider"}, headers=auth_headers
+            )
+        assert resp.status_code == 200
+        d.assert_awaited_once()
+        assert d.await_args.args[0] == "ike"
+        assert d.await_args.args[1].startswith("[via:backbone] ")
+        assert d.await_args.kwargs["delivery_kind"] == "direct_message"
+
+    async def test_launch_injected_and_resumed_runtimes_are_not_rebriefed(
+        self, api_client, auth_headers
+    ):
+        with (
+            patch(f"{_ROUTE}.runtime_available", return_value=True),
+            patch(f"{_ROUTE}.build_command", return_value=["/usr/bin/x"]),
+            patch(f"{_ROUTE}.safe_deliver", new_callable=AsyncMock) as d,
+        ):
+            await api_client.post("/api/agents/ike/start", headers=auth_headers)  # claude
+            await api_client.post(
+                "/api/agents/ike/start", json={"runtime": "shell"}, headers=auth_headers
+            )
+            await api_client.post(
+                "/api/agents/ike/start",
+                json={"runtime": "aider", "resume": True},
+                headers=auth_headers,
+            )
+        d.assert_not_awaited()
+
     async def test_unknown_runtime_400(self, api_client, auth_headers):
         resp = await api_client.post(
             "/api/agents/ike/start", json={"runtime": "nope"}, headers=auth_headers
