@@ -42,6 +42,7 @@ SECRET_ENV_KEYS: tuple[str, ...] = (
     "GITHUB_APP_ID",
     "GITHUB_APP_PRIVATE_KEY_PATH",
     "TELEGRAM_TOKEN",
+    "BACKBONE_DATABASE_URL",  # a PostgreSQL URL carries the database password
 )
 """Secrets the backbone reads. Listed in `backbone secrets list`, and stripped
 from every agent session's environment (see ``session_secret_keys``)."""

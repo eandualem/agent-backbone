@@ -774,6 +774,11 @@ class TestSessionSecretScrub:
             # `env -u` comes before the assignments and the command itself.
             assert new_session.index("env") < new_session.index("-uGITHUB_TOKEN")
             assert new_session.index("-uGITHUB_TOKEN") < new_session.index("claude")
+            # ...and the session environment shadows the server's from the start,
+            # so a pane opened before `set-environment -r` sees nothing either.
+            e_flags = [new_session[i + 1] for i, a in enumerate(new_session) if a == "-e"]
+            assert e_flags == ["BACKBONE_API_KEY=", "GITHUB_TOKEN="]
+            assert new_session.index("-e") < new_session.index("env")
 
     async def test_scrubbed_vars_are_removed_from_the_session_environment(self, mock_subprocess):
         with patch(
@@ -787,6 +792,28 @@ class TestSessionSecretScrub:
             removals = [c for c in calls if "set-environment" in c and "-r" in c]
             assert len(removals) == 1
             assert removals[0][-1] == "GITHUB_TOKEN"
+
+    async def test_session_is_killed_when_the_scrub_fails(self, mock_subprocess):
+        """A session that may still leak a secret is not handed back as started."""
+        calls: list[tuple[str, ...]] = []
+
+        async def _exec(*args, **kwargs):
+            calls.append(args)
+            proc = self._ok_proc()
+            if "set-environment" in args and "-r" in args:
+                proc.returncode = 1
+                proc.communicate = AsyncMock(return_value=(b"", b"no such option"))
+            return proc
+
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.side_effect = _exec
+            result = await start_session("test", command=["claude"], scrub=["GITHUB_TOKEN"])
+        assert result is False
+        assert any("kill-session" in c for c in calls)
 
     async def test_agent_env_wins_over_the_scrub(self, mock_subprocess):
         """An agent configured with its own GITHUB_TOKEN keeps it."""

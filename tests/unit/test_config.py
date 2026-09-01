@@ -122,6 +122,11 @@ class TestSessionSecretKeys:
     def test_without_a_data_dir_falls_back_to_the_known_names(self):
         assert session_secret_keys(None) == SECRET_ENV_KEYS
 
+    def test_database_url_is_a_secret(self, tmp_path):
+        # A PostgreSQL URL carries the password; it arrives via the process
+        # environment (not .env), so only the known-names list catches it.
+        assert "BACKBONE_DATABASE_URL" in session_secret_keys(tmp_path)
+
 
 class TestValidateSetting:
     def test_unknown_key(self):

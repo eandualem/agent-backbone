@@ -53,8 +53,9 @@ whatever you configured on the agent with `agent set env=`:
 
 It does **not** get the backbone's secrets. `BACKBONE_API_KEY`,
 `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`,
-`GITHUB_APP_PRIVATE_KEY_PATH`, `TELEGRAM_TOKEN` and **every other key
-assigned in `<data_dir>/.env`** are stripped from the session. Check it
+`GITHUB_APP_PRIVATE_KEY_PATH`, `TELEGRAM_TOKEN`, `BACKBONE_DATABASE_URL`
+(a PostgreSQL URL carries the password) and **every other key assigned in
+`<data_dir>/.env`** are stripped from the session. Check it
 yourself in any agent's pane:
 
 ```bash
@@ -67,11 +68,19 @@ Two mechanisms, because either alone leaves a hole:
    environment. The daemon is what spawns the tmux server, and every
    session on that server inherits the server's environment — so a secret
    in the daemon's environment is a secret in every agent's environment.
-2. Sessions are still started with those names explicitly removed (`env -u`
-   for the process, `set-environment -r` for later panes). This catches
-   what mechanism 1 cannot: variables *you* exported in the shell you ran
-   `backbone up` from, and a long-lived tmux server that was polluted by an
-   older backbone before you upgraded.
+2. Sessions are still started with those names explicitly removed: `env -u`
+   for the process, `new-session -e NAME=` so the session's own environment
+   shadows the server's from the first instant, and `set-environment -r`
+   for later panes. If that last step fails the session is killed rather
+   than handed back. This catches what mechanism 1 cannot: variables *you*
+   exported in the shell you ran `backbone up` from, and a long-lived tmux
+   server that was polluted by an older backbone before you upgraded.
+
+The strip is deliberately a list of names the backbone itself reads plus
+whatever is in its `.env` — not a pattern sweep of your shell. Anything
+else you exported (an `ANTHROPIC_API_KEY`, a `GITHUB_OAUTH_TOKEN` of your
+own) reaches the agent as it always did; that is your environment, not
+the backbone's.
 
 An agent that genuinely needs one of these names — a reviewer with its own
 `GITHUB_TOKEN`, or an agent you want to be able to call the API — gets it
