@@ -37,6 +37,11 @@ _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 """Migrations ship inside the package so installed CLIs migrate from anywhere."""
 
 
+_SUPERSEDED_INDEXES = ("uq_mq_comment_dedup", "uq_mq_dm_dedup")
+"""Indexes earlier releases created that the model no longer has. Only these
+and the model's own are ever dropped — an index an operator added is theirs."""
+
+
 def _repair_schema(sync_conn) -> None:
     """Bring an existing database's indexes up to the model on a re-stamp.
 
@@ -59,17 +64,12 @@ def _repair_schema(sync_conn) -> None:
                  )"""
         )
     )
-    from sqlalchemy import inspect
-
-    inspector = inspect(sync_conn)
     for table in metadata.sorted_tables:
-        wanted = {index.name: index for index in table.indexes}
-        for existing in inspector.get_indexes(table.name):
-            name = existing.get("name")
-            if name and (name in wanted or name.startswith(("uq_", "idx_"))):
-                sync_conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
-        for index in wanted.values():
+        for index in table.indexes:
+            sync_conn.execute(text(f"DROP INDEX IF EXISTS {index.name}"))
             index.create(sync_conn)
+    for name in _SUPERSEDED_INDEXES:
+        sync_conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
     log.info("Rebuilt indexes from the model (re-stamped database)")
 
 
