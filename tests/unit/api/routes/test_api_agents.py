@@ -315,6 +315,17 @@ class TestSessions:
         resp = await api_client.get("/api/sessions/ike/terminal?lines=10", headers=auth_headers)
         assert resp.json()["content"] == "prompt >"
 
+    async def test_terminal_output_unregistered_session_404(
+        self, api_client, auth_headers, tmux_svc
+    ):
+        # A tmux session that is not a backbone agent is out of the API's reach,
+        # even though the same user could capture it.
+        tmux_svc.session_exists.return_value = True
+        resp = await api_client.get("/api/sessions/stray/terminal", headers=auth_headers)
+        assert resp.status_code == 404
+        assert "not a registered agent" in resp.json()["detail"]
+        tmux_svc.capture_pane.assert_not_awaited()
+
     async def test_terminal_output_missing_session(self, api_client, auth_headers, tmux_svc):
         tmux_svc.capture_pane.return_value = ""
         tmux_svc.session_exists.return_value = False

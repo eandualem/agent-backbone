@@ -13,6 +13,7 @@ from agent_backbone.api.deps import (
     get_db,
     get_state_service,
     get_tmux_service,
+    registered_agent_or_404,
 )
 from agent_backbone.api.models import (
     AgentConfigResponse,
@@ -440,9 +441,11 @@ async def get_sessions(tmux_svc: TmuxService = Depends(get_tmux_service)):
 async def get_terminal_output(
     name: str,
     lines: int = Query(default=50, ge=1, le=500),
+    config: BackboneConfig = Depends(get_config),
     tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
-    """Recent terminal output from a tmux session."""
+    """Recent terminal output from a registered agent's session."""
+    registered_agent_or_404(config, name)
     output = await tmux_svc.capture_pane(name, lines=lines)
     if not output and not await tmux_svc.session_exists(name):
         raise HTTPException(status_code=404, detail=f"Session '{name}' not found")

@@ -155,6 +155,11 @@ the start of a message means X sent it. The API key is not exported into
 agent sessions; give it to an agent deliberately:
 `backbone agent set app env='{"BACKBONE_API_KEY":"…"}'`.
 
+> **What that delegates**: there is one key and it is full-admin — an
+> agent holding it can start, stop and reconfigure every agent, read every
+> registered agent's terminal, and send messages under any name. Give it to
+> agents whose instructions you control, and read `docs/security.md` first.
+
 ## 7. GitHub Issues as the task list
 
 ```bash

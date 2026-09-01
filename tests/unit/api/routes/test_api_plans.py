@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -65,12 +66,40 @@ class TestListPlans:
 
 
 class TestGetPlan:
-    async def test_returns_plan_content(self, api_client, auth_headers, state_svc, tmp_path):
-        plan = tmp_path / "plan.md"
+    async def test_returns_plan_content(self, api_client, auth_headers, api_app, state_svc):
+        plans_dir = api_app.state.config.state_dir / "plans"
+        plans_dir.mkdir(parents=True, exist_ok=True)
+        plan = plans_dir / "ike.md"
         plan.write_text("# The plan")
         state_svc.read_state.return_value = _plan_snapshot(str(plan))
         resp = await api_client.get("/api/plans/ike", headers=auth_headers)
         assert resp.json()["content"] == "# The plan"
+
+    async def test_plan_file_outside_plans_dir_is_not_read(
+        self, api_client, auth_headers, state_svc, tmp_path
+    ):
+        # The recorded path is data from a state file / POST body: a path
+        # anywhere else on the machine must not be served back.
+        secret = tmp_path / "secret.txt"
+        secret.write_text("hunter2")
+        state_svc.read_state.return_value = _plan_snapshot(str(secret))
+        resp = await api_client.get("/api/plans/ike", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["content"] is None
+        assert resp.json()["plan_file"] == str(secret)
+
+    async def test_plan_file_traversal_is_not_read(
+        self, api_client, auth_headers, api_app, state_svc, tmp_path
+    ):
+        plans_dir = api_app.state.config.state_dir / "plans"
+        plans_dir.mkdir(parents=True, exist_ok=True)
+        sneaky = str(plans_dir / ".." / ".." / ".." / "outside.md")
+        outside = Path(sneaky).resolve()
+        outside.write_text("nope")  # the traversal target really exists...
+        assert not outside.is_relative_to(plans_dir.resolve())  # ...and is outside
+        state_svc.read_state.return_value = _plan_snapshot(sneaky)
+        resp = await api_client.get("/api/plans/ike", headers=auth_headers)
+        assert resp.json()["content"] is None
 
     async def test_404_when_not_waiting(self, api_client, auth_headers):
         resp = await api_client.get("/api/plans/ike", headers=auth_headers)
@@ -81,6 +110,20 @@ class TestPlanControl:
     async def test_approve_disabled_by_default(self, api_client, auth_headers, tmux_svc):
         resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
         assert resp.status_code == 403
+        tmux_svc.send_keys.assert_not_awaited()
+
+    async def test_plan_control_only_targets_registered_agents(
+        self, api_client, auth_headers, api_app, tmux_svc
+    ):
+        # "stray" is a live tmux session but not a backbone agent: no keys.
+        _enable_plan_control(api_app)
+        resp = await api_client.post("/api/plans/stray/approve", headers=auth_headers)
+        assert resp.status_code == 404
+        assert "not a registered agent" in resp.json()["detail"]
+        resp = await api_client.post(
+            "/api/plans/stray/respond", json={"input": "1"}, headers=auth_headers
+        )
+        assert resp.status_code == 404
         tmux_svc.send_keys.assert_not_awaited()
 
     async def test_approve_sends_shift_tab_when_enabled(

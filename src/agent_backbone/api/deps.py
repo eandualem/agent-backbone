@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request
 
-from agent_backbone.config import BackboneConfig
+from agent_backbone.config import AgentSpec, BackboneConfig
 from agent_backbone.services.agent_store import AgentStore
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
@@ -21,6 +21,19 @@ def get_config(request: Request) -> BackboneConfig:
 
 def get_db(request: Request) -> BackboneDB:
     return request.app.state.db
+
+
+def registered_agent_or_404(config: BackboneConfig, name: str) -> AgentSpec:
+    """The backbone reads from and types into its *registered* agents only.
+
+    Other tmux sessions of the same OS user are out of the API's reach even
+    though the process could technically capture or type into them: the API
+    key is a backbone credential, not a shell on the machine.
+    """
+    spec = config.agents.get(name)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"'{name}' is not a registered agent")
+    return spec
 
 
 def get_agent_store(request: Request) -> AgentStore:

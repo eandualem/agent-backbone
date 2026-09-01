@@ -2,6 +2,36 @@
 
 The backbone can type into your agents' terminals. Treat it accordingly.
 
+## The model, honestly
+
+- **One trusted user, one machine.** The backbone runs as your OS user and
+  drives tmux sessions that run as your OS user. There is no isolation
+  between agents: every agent can read every other agent's files, and any
+  agent can call the API if you give it the key.
+- **One key, full admin.** `BACKBONE_API_KEY` guards every authenticated
+  route (everything except `/health` and the HMAC-checked webhook) with the
+  same weight: change settings, register/start/stop/forget agents, send
+  messages, read and stream every registered agent's terminal. There is no
+  scoped or read-only credential yet. When `docs/getting-started.md` says
+  "give the key to an agent so it can message others", that agent can then
+  do everything you can do through the API — hand it out deliberately, to
+  agents whose instructions you control.
+- **Reach is limited to registered agents.** The API captures, streams and
+  types into *registered* agents only (`GET /sessions/{name}/terminal`,
+  the `/terminal` namespace, `POST /messages`, plan control). Other tmux
+  sessions of the same user are refused with 404, even though the process
+  could reach them. `GET /plans/{name}` reads plan text only from
+  `<state_dir>/plans/`, whatever path the state record names.
+- **Provenance is convention, not authentication.** `from_entity` in
+  `POST /messages` and the resulting `[via:backbone from:X]` envelope are
+  whatever the caller says; the `[from:<agent>]` prefix on GitHub is the
+  same. They tell an agent who *claims* to be speaking. Anyone holding the
+  key can claim any name.
+- **Per-agent `env` lives in the database.** "Secrets only in `.env`" is
+  true for the backbone's own secrets; values you attach to an agent with
+  `agent set env=` are stored with the agent record so they can be
+  exported into its session. Treat them like `.env` contents.
+
 ## Defaults
 
 | Concern | Default | Override |
@@ -12,7 +42,7 @@ The backbone can type into your agents' terminals. Treat it accordingly.
 | Webhook | Rejected unless `GITHUB_WEBHOOK_SECRET` is set and the HMAC matches | — |
 | Telegram | Bot does not start without `telegram.allowed_chat_ids`; unlisted chats are ignored | — |
 | Remote plan approve/reject/respond | Off (they inject keystrokes) | `security.allow_remote_plan_control = true` |
-| Terminal streaming | Read-only; the Socket.IO `/terminal` namespace has no input event | — |
+| Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. **Exception:** per-agent `env` values are stored with the agent record and exported into that agent's session, so anything you put there needs the same care as `.env` | `backbone agent set app env='{"BACKBONE_API_KEY":"…"}'` for an agent that should call the API |
 | Hook script | Standard library only, runs as your user, writes only under `<data_dir>/state` | — |
 | Busy agents | Never interrupted: `priority` only bypasses "someone is typing" and the settle window | — |

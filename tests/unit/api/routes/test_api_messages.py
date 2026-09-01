@@ -33,6 +33,19 @@ class TestSendMessage:
         assert data["session"] == "ike"
         assert data["outcome"] == "delivered"
 
+    async def test_unregistered_target_is_never_typed_into(self, api_client, auth_headers):
+        with patch(
+            "agent_backbone.api.routes.messages.safe_deliver", new_callable=AsyncMock
+        ) as deliver:
+            resp = await api_client.post(
+                "/api/messages",
+                headers=auth_headers,
+                json={"target_session": "stray", "from_entity": "bell", "message": "hi"},
+            )
+        assert resp.status_code == 404
+        assert "not a registered agent" in resp.json()["detail"]
+        deliver.assert_not_called()
+
     async def test_send_message_agent_working(self, api_client, auth_headers, api_app):
         """Returns ok=False when agent is busy (outcome != 'delivered')."""
         with patch(

@@ -12,7 +12,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from agent_backbone.api.deps import get_config, get_state_service, get_tmux_service
+from agent_backbone.api.deps import (
+    get_config,
+    get_state_service,
+    get_tmux_service,
+    registered_agent_or_404,
+)
 from agent_backbone.api.models import (
     ListEnvelope,
     PlanDetail,
@@ -65,9 +70,25 @@ async def list_pending_plans(
     return ListEnvelope(items=plans, total=len(plans))
 
 
+def _confined_plan_path(config: BackboneConfig, plan_file: str) -> Path | None:
+    """Resolve ``plan_file`` only if it lives under ``<state_dir>/plans``.
+
+    The hook writes plans there; the recorded path is still data from a
+    state file (or a ``POST /agents/{session}/state`` body), so it is never
+    trusted to point anywhere else on the machine.
+    """
+    plans_dir = (config.state_dir / "plans").resolve()
+    path = Path(plan_file).expanduser().resolve()
+    if not path.is_relative_to(plans_dir):
+        log.warning("Refusing to read plan outside %s: %s", plans_dir, plan_file)
+        return None
+    return path
+
+
 @router.get("/plans/{session}", response_model=PlanDetail)
 async def get_plan_detail(
     session: str,
+    config: BackboneConfig = Depends(get_config),
     state_svc: StateService = Depends(get_state_service),
 ):
     """Get plan details including file content for a specific session."""
@@ -76,13 +97,12 @@ async def get_plan_detail(
         raise HTTPException(status_code=404, detail=f"No pending plan for session '{session}'")
 
     content = None
-    if snapshot.plan_file:
-        plan_path = Path(snapshot.plan_file).expanduser()
-        if plan_path.exists():
-            try:
-                content = plan_path.read_text()
-            except OSError:
-                content = None
+    plan_path = _confined_plan_path(config, snapshot.plan_file) if snapshot.plan_file else None
+    if plan_path is not None and plan_path.is_file():
+        try:
+            content = plan_path.read_text()
+        except OSError:
+            content = None
 
     return PlanDetail(
         session=session,
@@ -101,6 +121,7 @@ async def approve_plan(
 ):
     """Approve a pending plan by sending Shift+Tab (Escape + [Z) to the session."""
     _require_plan_control(config)
+    registered_agent_or_404(config, session)
     if not await tmux_svc.session_exists(session):
         raise HTTPException(status_code=404, detail=f"Session '{session}' not found")
 
@@ -121,6 +142,7 @@ async def reject_plan(
 ):
     """Reject a pending plan: exit plan mode and deliver the feedback."""
     _require_plan_control(config)
+    registered_agent_or_404(config, session)
     snapshot = state_svc.read_state(session)
     if not snapshot or not snapshot.is_plan_waiting:
         raise HTTPException(
@@ -147,6 +169,7 @@ async def respond_to_plan(
 ):
     """Send input to a plan-waiting session (option selection or free text)."""
     _require_plan_control(config)
+    registered_agent_or_404(config, session)
     snapshot = state_svc.read_state(session)
     if not snapshot or not snapshot.is_plan_waiting:
         raise HTTPException(
