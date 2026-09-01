@@ -473,8 +473,8 @@ class TestStartSessionEnvironment:
             assert "BACKBONE_AGENT=app" in new_session_call
             assert "claude" in new_session_call
 
-    async def test_env_vars_set(self, mock_subprocess):
-        """Environment variables are set via tmux set-environment."""
+    async def test_env_vars_are_session_environment_from_the_start(self, mock_subprocess):
+        """`new-session -e` sets the session environment atomically with the session."""
         with patch(
             "agent_backbone.services.terminal._sessions.session_exists",
             new_callable=AsyncMock,
@@ -491,9 +491,10 @@ class TestStartSessionEnvironment:
                 environment={"MY_VAR": "hello", "OTHER": "world"},
             )
             assert result is True
-            # First call: new-session, then 2 set-environment calls
-            set_env_calls = [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
-            assert len(set_env_calls) == 2
+            new_session = mock_subprocess.call_args_list[0][0]
+            e_flags = [new_session[i + 1] for i, a in enumerate(new_session) if a == "-e"]
+            assert e_flags == ["MY_VAR=hello", "OTHER=world"]
+            assert not [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
 
     async def test_no_env_no_calls(self, mock_subprocess):
         """No environment param means no set-environment calls."""
@@ -512,33 +513,6 @@ class TestStartSessionEnvironment:
             assert result is True
             set_env_calls = [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
             assert len(set_env_calls) == 0
-
-    async def test_partial_failure_logs_warning(self, mock_subprocess):
-        """If one env var fails, session still returns True."""
-        with patch(
-            "agent_backbone.services.terminal._sessions.session_exists",
-            new_callable=AsyncMock,
-            return_value=False,
-        ):
-            # First call (new-session) succeeds, subsequent calls alternate
-            success_proc = AsyncMock()
-            success_proc.returncode = 0
-            success_proc.communicate = AsyncMock(return_value=(b"", b""))
-            success_proc.wait = AsyncMock()
-
-            fail_proc = AsyncMock()
-            fail_proc.returncode = 1
-            fail_proc.communicate = AsyncMock(return_value=(b"", b"env error"))
-            fail_proc.wait = AsyncMock()
-
-            mock_subprocess.side_effect = [success_proc, fail_proc]
-
-            result = await start_session(
-                "test",
-                environment={"BAD_VAR": "value"},
-            )
-            # Session creation succeeded, env var failure is non-fatal
-            assert result is True
 
 
 class TestGracefulClose:
@@ -741,3 +715,130 @@ class TestClaudeCodeUi:
             ),
         ):
             assert await adapter.deliver_message("s", "second message") is True
+
+
+class TestSessionSecretScrub:
+    """Agent sessions must not inherit the backbone's secrets (issue #81)."""
+
+    @staticmethod
+    def _ok_proc():
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        proc.wait = AsyncMock()
+        return proc
+
+    async def test_scrubbed_vars_are_unset_for_the_launched_process(self, mock_subprocess):
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.return_value = self._ok_proc()
+            result = await start_session(
+                "test",
+                command=["claude"],
+                environment={"BACKBONE_AGENT": "app"},
+                scrub=["BACKBONE_API_KEY", "GITHUB_TOKEN"],
+            )
+            assert result is True
+            new_session = mock_subprocess.call_args_list[0][0]
+            assert "-uBACKBONE_API_KEY" in new_session
+            assert "-uGITHUB_TOKEN" in new_session
+            # `env -u` comes before the assignments and the command itself.
+            assert new_session.index("env") < new_session.index("-uGITHUB_TOKEN")
+            assert new_session.index("-uGITHUB_TOKEN") < new_session.index("claude")
+            # ...and the session environment shadows the server's from the start,
+            # so a pane opened before `set-environment -r` sees nothing either.
+            e_flags = [new_session[i + 1] for i, a in enumerate(new_session) if a == "-e"]
+            assert e_flags == ["BACKBONE_AGENT=app", "BACKBONE_API_KEY=", "GITHUB_TOKEN="]
+            assert new_session.index("-e") < new_session.index("env")
+
+    async def test_scrubbed_vars_are_removed_from_the_session_environment(self, mock_subprocess):
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.return_value = self._ok_proc()
+            await start_session("test", command=["claude"], scrub=["GITHUB_TOKEN"])
+            calls = [c[0] for c in mock_subprocess.call_args_list]
+            removals = [c for c in calls if "set-environment" in c and "-r" in c]
+            assert len(removals) == 1
+            assert removals[0][-1] == "GITHUB_TOKEN"
+
+    async def test_session_is_killed_when_the_scrub_fails(self, mock_subprocess):
+        """A session that may still leak a secret is not handed back as started."""
+        calls: list[tuple[str, ...]] = []
+
+        async def _exec(*args, **kwargs):
+            calls.append(args)
+            proc = self._ok_proc()
+            if "set-environment" in args and "-r" in args:
+                proc.returncode = 1
+                proc.communicate = AsyncMock(return_value=(b"", b"no such option"))
+            return proc
+
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.side_effect = _exec
+            result = await start_session("test", command=["claude"], scrub=["GITHUB_TOKEN"])
+        assert result is False
+        assert any("kill-session" in c for c in calls)
+
+    async def test_agent_env_wins_over_the_scrub(self, mock_subprocess):
+        """An agent configured with its own GITHUB_TOKEN keeps it."""
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.return_value = self._ok_proc()
+            await start_session(
+                "test",
+                command=["claude"],
+                environment={"GITHUB_TOKEN": "agent-own"},
+                scrub=["GITHUB_TOKEN", "BACKBONE_API_KEY"],
+            )
+            new_session = mock_subprocess.call_args_list[0][0]
+            assert "GITHUB_TOKEN=agent-own" in new_session
+            assert "-uGITHUB_TOKEN" not in new_session
+            assert "-uBACKBONE_API_KEY" in new_session
+            # The agent's value is session environment from the first instant,
+            # so a pane opened before the cleanup sees it, not the server's.
+            e_flags = [new_session[i + 1] for i, a in enumerate(new_session) if a == "-e"]
+            assert e_flags == ["GITHUB_TOKEN=agent-own", "BACKBONE_API_KEY="]
+
+    async def test_shell_session_is_scrubbed_too(self, mock_subprocess):
+        """A shell-runtime agent gets no command, but still no secrets."""
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.return_value = self._ok_proc()
+            await start_session(
+                "test",
+                environment={"BACKBONE_AGENT": "app"},
+                scrub=["BACKBONE_API_KEY"],
+            )
+            new_session = mock_subprocess.call_args_list[0][0]
+            assert "-uBACKBONE_API_KEY" in new_session
+            assert "BACKBONE_AGENT=app" in new_session
+            # A login shell, so the user's profile (and PATH) still applies.
+            assert new_session[-1] == "-l"
+
+    async def test_no_scrub_leaves_the_command_untouched(self, mock_subprocess):
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.return_value = self._ok_proc()
+            await start_session("test", command=["claude"])
+            new_session = mock_subprocess.call_args_list[0][0]
+            assert "env" not in new_session
+            assert new_session[-1] == "claude"

@@ -15,8 +15,10 @@ There is no configuration file. The **data directory** is the configuration:
   The running backbone applies a change immediately.
 - **Agents** are discovered by `backbone agent start` and edited with
   `backbone agent set|watch|unwatch|forget`.
-- **Secrets** come from `<data_dir>/.env` (loaded at startup) or the
-  environment. Only that one file is read — a `.env` in the current
+- **Secrets** come from `<data_dir>/.env` (read at startup into the config
+  snapshot, never into the process environment — otherwise the tmux server
+  the daemon spawns would hand them to every agent session) or the
+  environment, which wins. Only that one file is read — a `.env` in the current
   working directory is ignored.
 
 Only two knobs live outside the directory: `BACKBONE_DATA_DIR` (where it
@@ -129,7 +131,10 @@ Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
 
 Exported into every session the backbone starts: `BACKBONE_RUNTIME`,
 `BACKBONE_AGENT`, `BACKBONE_STATE_DIR` (an agent's `env` cannot override
-these reserved keys). The API key is **not** exported.
+these reserved keys). That is the whole contract — the backbone's own
+secrets are stripped from the session, including anything you added to
+`.env` yourself. See
+[What an agent session inherits](security.md#what-an-agent-session-inherits).
 
 ## Secrets (`.env` / environment)
 
@@ -149,4 +154,5 @@ these reserved keys). The API key is **not** exported.
 repository?** The backbone is installed once and runs `agent start` inside
 many repositories, each with its own `.env` for its own app — reading
 those would leak unrelated secrets into agent sessions. So exactly one
-file is read, and it is the data directory's.
+file is read, and it is the data directory's — and its contents are kept
+out of agent sessions rather than exported into them.

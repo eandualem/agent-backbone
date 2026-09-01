@@ -6,10 +6,23 @@ import asyncio
 import logging
 import os
 import signal
+from collections.abc import Sequence
 
 from agent_backbone.services.terminal._core import _run_tmux, session_exists
 
 log = logging.getLogger(__name__)
+
+
+def _default_shell() -> list[str]:
+    """The login shell tmux starts when given no command.
+
+    Spelled out explicitly because scrubbing and exporting variables needs an
+    ``env`` prefix, and ``env`` needs something to exec. ``-l`` keeps tmux's
+    own semantics: it runs ``default-shell`` as a login shell, so the user's
+    profile (and the PATH it sets) still applies.
+    """
+    return [os.environ.get("SHELL") or "/bin/sh", "-l"]
+
 
 SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}\nclient_activity=#{client_activity}"
 """Format variables the readiness check asks tmux for."""
@@ -34,24 +47,47 @@ async def start_session(
     working_dir: str | None = None,
     command: list[str] | None = None,
     environment: dict[str, str] | None = None,
+    scrub: Sequence[str] | None = None,
 ) -> bool:
     """Start a detached tmux session running ``command`` (or a shell).
 
-    ``environment`` is exported both into the initial command (via ``env``)
-    and into the tmux session environment, so hooks and later shells see it.
+    ``environment`` is exported into the initial command (via ``env``) and
+    into the tmux session environment (``new-session -e``), so hooks and
+    later shells see it from the session's first instant.
+
+    ``scrub`` names variables the session must **not** inherit from the tmux
+    server (the backbone's secrets — issue #81). They are removed three
+    ways: ``env -u`` for the process started here; ``new-session -e NAME=``
+    so the session's own environment shadows the server's from the first
+    instant (a pane opened before the cleanup below sees an empty value, not
+    the secret); and ``set-environment -r`` so later panes and shells start
+    without them at all. If that last step fails the session is killed and
+    False is returned — a session that may leak is worse than no session. A
+    name that ``environment`` sets explicitly is left alone: an agent's own
+    configured ``env`` wins over the scrub.
+
     Returns True when the session exists afterwards.
     """
     if await session_exists(session_name):
         log.info("Session '%s' already exists", session_name)
         return True
 
+    environment = environment or {}
+    removals = [key for key in dict.fromkeys(scrub or ()) if key not in environment]
+
     args = ["new-session", "-d", "-s", session_name]
     if working_dir:
         args.extend(["-c", working_dir])
-    if command:
-        if environment:
-            args.extend(["env", *(f"{key}={value}" for key, value in environment.items())])
-        args.extend(command)
+    for key, value in environment.items():
+        args.extend(["-e", f"{key}={value}"])
+    for key in removals:
+        args.extend(["-e", f"{key}="])
+    launch = list(command) if command else _default_shell()
+    if environment or removals:
+        args.append("env")
+        args.extend(f"-u{key}" for key in removals)
+        args.extend(f"{key}={value}" for key, value in environment.items())
+    args.extend(launch)
 
     rc, _, stderr = await _run_tmux(*args)
     if rc != 0:
@@ -59,15 +95,19 @@ async def start_session(
         return False
     log.info("Started tmux session '%s'", session_name)
 
-    for key, value in (environment or {}).items():
-        rc, _, stderr = await _run_tmux("set-environment", "-t", session_name, key, value)
+    for key in removals:
+        # -r: remove the variable from the environment before starting a
+        # process, so a new pane in this session never sees it either.
+        rc, _, stderr = await _run_tmux("set-environment", "-t", session_name, "-r", key)
         if rc != 0:
-            log.warning(
-                "Failed to set env var '%s' for session '%s': %s",
+            log.error(
+                "Could not scrub '%s' from session '%s' (%s); killing the session",
                 key,
                 session_name,
-                stderr.decode(),
+                stderr.decode().strip(),
             )
+            await _run_tmux("kill-session", "-t", session_name)
+            return False
     return True
 
 

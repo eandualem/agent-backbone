@@ -37,6 +37,62 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   true for the backbone's own secrets; values you attach to an agent with
   `agent set env=` are stored with the agent record so they can be
   exported into its session. Treat them like `.env` contents.
+- **Agents do not hold the backbone's keys.** An agent session gets the
+  launch contract and nothing else; see below.
+
+## What an agent session inherits
+
+A session the backbone starts gets exactly three variables of its own, plus
+whatever you configured on the agent with `agent set env=`:
+
+| Variable | Why |
+|---|---|
+| `BACKBONE_AGENT` | the agent's name — its `from:` identity for `backbone tell` |
+| `BACKBONE_RUNTIME` | which runtime is in the pane |
+| `BACKBONE_STATE_DIR` | where the shipped hooks write state |
+
+It does **not** get the backbone's secrets. `BACKBONE_API_KEY`,
+`GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`,
+`GITHUB_APP_PRIVATE_KEY_PATH`, `TELEGRAM_TOKEN`, `BACKBONE_DATABASE_URL`
+(a PostgreSQL URL carries the password) and **every other key assigned in
+`<data_dir>/.env`** are stripped from the session. Check it
+yourself in any agent's pane:
+
+```bash
+env | grep -E 'GITHUB|BACKBONE_|TELEGRAM'   # only BACKBONE_AGENT/RUNTIME/STATE_DIR
+```
+
+Two mechanisms, because either alone leaves a hole:
+
+1. The daemon reads `.env` into its config snapshot and never into its own
+   environment. The daemon is what spawns the tmux server, and every
+   session on that server inherits the server's environment — so a secret
+   in the daemon's environment is a secret in every agent's environment.
+2. Sessions are still started with those names explicitly removed: `env -u`
+   for the process, `new-session -e NAME=` so the session's own environment
+   shadows the server's from the first instant (an agent's own `env` values
+   are set the same way), and `set-environment -r` for later panes. If that last step fails the session is killed rather
+   than handed back. This catches what mechanism 1 cannot: variables *you*
+   exported in the shell you ran `backbone up` from, and a long-lived tmux
+   server that was polluted by an older backbone before you upgraded.
+
+The strip is deliberately a list of names the backbone itself reads plus
+whatever is in its `.env` — not a pattern sweep of your shell. Anything
+else you exported (an `ANTHROPIC_API_KEY`, a `GITHUB_OAUTH_TOKEN` of your
+own) reaches the agent as it always did; that is your environment, not
+the backbone's.
+
+An agent that genuinely needs one of these names — a reviewer with its own
+`GITHUB_TOKEN`, or an agent you want to be able to call the API — gets it
+through its own record, which wins over the strip:
+
+```bash
+backbone agent set app env='{"BACKBONE_API_KEY":"…"}'
+```
+
+That is the deliberate act described under "One key, full admin" above.
+Note that `BACKBONE_DATA_DIR` is *not* stripped: it is not a secret, and
+agents need it to find the same backbone you are running.
 
 ## Defaults
 
@@ -51,6 +107,7 @@ The backbone can type into your agents' terminals. Treat it accordingly.
 | Remote permission approval (`agent approve`) | On — bounded: the runtime's affirmative key only, only while its dialog is on screen, only to a registered agent, every approval recorded as an `approval` event with who asked | `security.allow_remote_approval = false` |
 | Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. **Exception:** per-agent `env` values are stored with the agent record and exported into that agent's session, so anything you put there needs the same care as `.env` | `backbone agent set app env='{"BACKBONE_API_KEY":"…"}'` for an agent that should call the API |
+| Secrets in agent sessions | Stripped: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | give the agent its own value with `agent set env=` |
 | Hook script | Standard library only, runs as your user, writes only under `<data_dir>/state` | — |
 | Busy agents | Never interrupted: `priority` only bypasses "someone is typing" and the settle window | — |
 

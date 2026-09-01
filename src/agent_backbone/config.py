@@ -4,8 +4,10 @@ The **data directory** is the configuration. Inside it:
 
 - ``backbone.db`` — settings (with built-in defaults), the known agents,
   events, deliveries, queue, state. The single source of truth.
-- ``.env`` — secrets only (API key, GitHub/Telegram tokens). Loaded into the
-  process environment; never stored in the database.
+- ``.env`` — secrets only (API key, GitHub/Telegram tokens). Read into the
+  config snapshot, never into ``os.environ`` and never into the database:
+  the daemon spawns the tmux server, so anything in its environment would be
+  inherited by every agent session it starts.
 - ``state/``, ``hooks/``, ``pids/`` — runtime files.
 
 The only knobs that live outside the directory are environment variables:
@@ -20,16 +22,30 @@ backbone picks it up on its next refresh.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 from agent_backbone.services.database.interface import sqlite_url
 
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
 DEFAULT_PORT = 7120
+
+SECRET_ENV_KEYS: tuple[str, ...] = (
+    "BACKBONE_API_KEY",
+    "GITHUB_TOKEN",
+    "GITHUB_WEBHOOK_SECRET",
+    "WEBHOOK_SECRET",
+    "GITHUB_APP_ID",
+    "GITHUB_APP_PRIVATE_KEY_PATH",
+    "TELEGRAM_TOKEN",
+    "BACKBONE_DATABASE_URL",  # a PostgreSQL URL carries the database password
+)
+"""Secrets the backbone reads. Listed in `backbone secrets list`, and stripped
+from every agent session's environment (see ``session_secret_keys``)."""
 
 
 # ---------------------------------------------------------------------------
@@ -507,20 +523,47 @@ def resolve_data_dir(explicit: str | Path | None = None) -> Path:
     return Path(raw).expanduser()
 
 
-def load_secrets(data_dir: Path) -> None:
-    """Load ``<data_dir>/.env`` into the environment (existing variables win).
+def env_file_keys(env_path: Path | str) -> tuple[str, ...]:
+    """Keys with a live (uncommented) assignment in an ``.env`` file."""
+    return tuple(dotenv_values(env_path).keys())
 
-    Only the data directory's ``.env`` is read — a stray ``.env`` in the
-    current working directory must not inject secrets or security flags.
+
+def load_secrets(data_dir: Path) -> dict[str, str]:
+    """``<data_dir>/.env`` merged **under** the process environment.
+
+    The file is deliberately *not* loaded into ``os.environ``. The daemon
+    spawns the tmux server, and every agent session created on that server
+    inherits the server's environment — exporting the secrets here handed
+    the API key, the webhook secret and the GitHub App key to every agent
+    (issue #81). Callers get a mapping instead and nothing is mutated.
+
+    A variable already in the environment wins, so ``GITHUB_TOKEN=… backbone
+    up`` still overrides the file. Only the data directory's ``.env`` is read
+    — a stray ``.env`` in the current working directory must not inject
+    secrets or security flags.
     """
-    load_dotenv(data_dir / ".env")
+    merged = {key: value for key, value in dotenv_values(data_dir / ".env").items() if value}
+    merged.update(os.environ)
+    return merged
+
+
+def session_secret_keys(data_dir: Path | str | None) -> tuple[str, ...]:
+    """Variables an agent session must never inherit.
+
+    The backbone's own secret names plus every key assigned in
+    ``<data_dir>/.env`` — whatever a user puts in that file stays out of
+    agent sessions, with no blocklist to keep in sync. Names only; the
+    values are never read here.
+    """
+    keys = dict.fromkeys(SECRET_ENV_KEYS)
+    if data_dir is not None:
+        keys.update(dict.fromkeys(env_file_keys(Path(data_dir) / ".env")))
+    return tuple(keys)
 
 
 def bootstrap_config(data_dir: str | Path | None = None) -> BackboneConfig:
     """Minimal config (paths + secrets + defaults) available before the database is open."""
-    path = resolve_data_dir(data_dir)
-    load_secrets(path)
-    return build_config(path, settings={}, agents=AgentsConfig())
+    return build_config(resolve_data_dir(data_dir), settings={}, agents=AgentsConfig())
 
 
 def effective_settings(stored: dict[str, Any]) -> dict[str, Any]:
@@ -540,9 +583,14 @@ def build_config(
     *,
     settings: dict[str, Any],
     agents: AgentsConfig,
+    env: Mapping[str, str] | None = None,
 ) -> BackboneConfig:
-    """Assemble a frozen snapshot from the data dir, environment and stored settings."""
-    env = os.environ
+    """Assemble a frozen snapshot from the data dir, environment and stored settings.
+
+    ``env`` defaults to ``load_secrets(data_dir)`` — the process environment
+    overlaid on ``<data_dir>/.env``, without touching ``os.environ``.
+    """
+    env = load_secrets(data_dir) if env is None else env
     s = effective_settings(settings)
 
     def _opt_int(value: Any) -> int | None:
