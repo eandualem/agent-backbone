@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 
 import pytest
 
 from agent_backbone.config import (
+    SECRET_ENV_KEYS,
     SETTINGS_DEFAULTS,
     AgentsConfig,
     AgentSpec,
@@ -14,6 +16,8 @@ from agent_backbone.config import (
     bootstrap_config,
     build_config,
     effective_settings,
+    load_secrets,
+    session_secret_keys,
     validate_setting,
 )
 
@@ -66,6 +70,57 @@ class TestDefaults:
         config = bootstrap_config(tmp_path)
         assert config.github_token == "from-file"
         assert config.github_intake == "poll"
+
+
+class TestSecretsStayOutOfTheEnvironment:
+    """Issue #81: the daemon spawns the tmux server, so anything in its own
+    environment reaches every agent session started on that server."""
+
+    def test_env_file_never_reaches_os_environ(self, monkeypatch, tmp_path):
+        for var in ("GITHUB_TOKEN", "TELEGRAM_TOKEN"):
+            monkeypatch.delenv(var, raising=False)
+        (tmp_path / ".env").write_text("GITHUB_TOKEN=from-file\nTELEGRAM_TOKEN=tg\n")
+
+        config = bootstrap_config(tmp_path)
+
+        assert config.github_token == "from-file"
+        assert config.telegram_token == "tg"
+        assert "GITHUB_TOKEN" not in os.environ
+        assert "TELEGRAM_TOKEN" not in os.environ
+
+    def test_load_secrets_returns_the_merged_mapping(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        (tmp_path / ".env").write_text("GITHUB_TOKEN=from-file\n")
+        assert load_secrets(tmp_path)["GITHUB_TOKEN"] == "from-file"
+
+    def test_process_environment_wins_over_the_file(self, monkeypatch, tmp_path):
+        (tmp_path / ".env").write_text("GITHUB_TOKEN=from-file\n")
+        monkeypatch.setenv("GITHUB_TOKEN", "from-shell")
+        assert bootstrap_config(tmp_path).github_token == "from-shell"
+
+    def test_missing_env_file_is_fine(self, tmp_path):
+        assert load_secrets(tmp_path).get("GITHUB_TOKEN", "") == os.environ.get("GITHUB_TOKEN", "")
+
+
+class TestSessionSecretKeys:
+    def test_covers_the_known_backbone_secrets(self, tmp_path):
+        keys = session_secret_keys(tmp_path)
+        for known in SECRET_ENV_KEYS:
+            assert known in keys
+
+    def test_covers_whatever_the_user_put_in_env(self, tmp_path):
+        (tmp_path / ".env").write_text("MY_PRIVATE_KEY=x\n# COMMENTED=y\n")
+        keys = session_secret_keys(tmp_path)
+        assert "MY_PRIVATE_KEY" in keys
+        assert "COMMENTED" not in keys
+
+    def test_no_duplicates(self, tmp_path):
+        (tmp_path / ".env").write_text("GITHUB_TOKEN=x\n")
+        keys = session_secret_keys(tmp_path)
+        assert len(keys) == len(set(keys))
+
+    def test_without_a_data_dir_falls_back_to_the_known_names(self):
+        assert session_secret_keys(None) == SECRET_ENV_KEYS
 
 
 class TestValidateSetting:

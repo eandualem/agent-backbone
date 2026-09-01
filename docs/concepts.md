@@ -131,7 +131,8 @@ polls safe.
 
 Everything tunable is a key in the database with a built-in default:
 `backbone config list`. Secrets (API key, tokens) are **never** in the
-database; they live in `<data_dir>/.env` or the environment.
+database; they live in `<data_dir>/.env` or the environment, and are
+kept out of the agent sessions the backbone starts.
 
 ## Jobs
 

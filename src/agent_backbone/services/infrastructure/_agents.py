@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agent_backbone.config import session_secret_keys
 from agent_backbone.services.terminal import (
     AGENT_ENV_KEY,
     RUNTIME_ENV_KEY,
@@ -328,7 +329,13 @@ def launch_environment(
     state_dir: Path | str | None = None,
     extra: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Environment exported into an agent session so shipped hooks can find the backbone."""
+    """Environment exported into an agent session so shipped hooks can find the backbone.
+
+    This is the whole contract: the runtime, the agent's name, the state
+    directory, and whatever the agent itself is configured with. The
+    backbone's secrets are not part of it and are stripped from the session
+    (see ``session_secret_keys`` and ``start_session``'s ``scrub``).
+    """
     env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name}
     if state_dir:
         env[STATE_DIR_ENV_KEY] = str(state_dir)
@@ -390,6 +397,7 @@ async def start_agent(
         working_dir=str(spec.path),
         command=command,
         environment=environment,
+        scrub=session_secret_keys(data_dir),
     )
     if ok:
         extra = f", model: {effective_model}" if effective_model else ""

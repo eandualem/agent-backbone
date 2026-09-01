@@ -34,10 +34,12 @@ from pathlib import Path
 from typing import Any
 
 from agent_backbone.config import (
+    SECRET_ENV_KEYS,
     SETTINGS_DEFAULTS,
     SETTINGS_HELP,
     BackboneConfig,
     bootstrap_config,
+    env_file_keys,
     validate_setting,
 )
 
@@ -166,27 +168,15 @@ def cmd_init(args: argparse.Namespace) -> int:
 # secrets — the one .env the backbone reads
 # ---------------------------------------------------------------------------
 
-_KNOWN_SECRETS = (
-    "BACKBONE_API_KEY",
-    "GITHUB_TOKEN",
-    "GITHUB_WEBHOOK_SECRET",
-    "GITHUB_APP_ID",
-    "GITHUB_APP_PRIVATE_KEY_PATH",
-    "TELEGRAM_TOKEN",
-)
+# `WEBHOOK_SECRET` is only a legacy alias for `GITHUB_WEBHOOK_SECRET`: still
+# read, still scrubbed from agent sessions, but not offered as a name to set.
+_KNOWN_SECRETS = tuple(k for k in SECRET_ENV_KEYS if k != "WEBHOOK_SECRET")
 _SECRET_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def _env_keys(env_path: Path) -> set[str]:
     """Keys with a live (uncommented) assignment in ``.env``."""
-    if not env_path.is_file():
-        return set()
-    keys = set()
-    for line in env_path.read_text().splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            keys.add(stripped.split("=", 1)[0].strip())
-    return keys
+    return set(env_file_keys(env_path))
 
 
 def _write_env_value(env_path: Path, key: str, value: str | None) -> str:

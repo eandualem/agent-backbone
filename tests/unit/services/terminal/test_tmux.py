@@ -741,3 +741,99 @@ class TestClaudeCodeUi:
             ),
         ):
             assert await adapter.deliver_message("s", "second message") is True
+
+
+class TestSessionSecretScrub:
+    """Agent sessions must not inherit the backbone's secrets (issue #81)."""
+
+    @staticmethod
+    def _ok_proc():
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        proc.wait = AsyncMock()
+        return proc
+
+    async def test_scrubbed_vars_are_unset_for_the_launched_process(self, mock_subprocess):
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.return_value = self._ok_proc()
+            result = await start_session(
+                "test",
+                command=["claude"],
+                environment={"BACKBONE_AGENT": "app"},
+                scrub=["BACKBONE_API_KEY", "GITHUB_TOKEN"],
+            )
+            assert result is True
+            new_session = mock_subprocess.call_args_list[0][0]
+            assert "-uBACKBONE_API_KEY" in new_session
+            assert "-uGITHUB_TOKEN" in new_session
+            # `env -u` comes before the assignments and the command itself.
+            assert new_session.index("env") < new_session.index("-uGITHUB_TOKEN")
+            assert new_session.index("-uGITHUB_TOKEN") < new_session.index("claude")
+
+    async def test_scrubbed_vars_are_removed_from_the_session_environment(self, mock_subprocess):
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.return_value = self._ok_proc()
+            await start_session("test", command=["claude"], scrub=["GITHUB_TOKEN"])
+            calls = [c[0] for c in mock_subprocess.call_args_list]
+            removals = [c for c in calls if "set-environment" in c and "-r" in c]
+            assert len(removals) == 1
+            assert removals[0][-1] == "GITHUB_TOKEN"
+
+    async def test_agent_env_wins_over_the_scrub(self, mock_subprocess):
+        """An agent configured with its own GITHUB_TOKEN keeps it."""
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.return_value = self._ok_proc()
+            await start_session(
+                "test",
+                command=["claude"],
+                environment={"GITHUB_TOKEN": "agent-own"},
+                scrub=["GITHUB_TOKEN", "BACKBONE_API_KEY"],
+            )
+            new_session = mock_subprocess.call_args_list[0][0]
+            assert "GITHUB_TOKEN=agent-own" in new_session
+            assert "-uGITHUB_TOKEN" not in new_session
+            assert "-uBACKBONE_API_KEY" in new_session
+
+    async def test_shell_session_is_scrubbed_too(self, mock_subprocess):
+        """A shell-runtime agent gets no command, but still no secrets."""
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.return_value = self._ok_proc()
+            await start_session(
+                "test",
+                environment={"BACKBONE_AGENT": "app"},
+                scrub=["BACKBONE_API_KEY"],
+            )
+            new_session = mock_subprocess.call_args_list[0][0]
+            assert "-uBACKBONE_API_KEY" in new_session
+            assert "BACKBONE_AGENT=app" in new_session
+            # A login shell, so the user's profile (and PATH) still applies.
+            assert new_session[-1] == "-l"
+
+    async def test_no_scrub_leaves_the_command_untouched(self, mock_subprocess):
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            mock_subprocess.return_value = self._ok_proc()
+            await start_session("test", command=["claude"])
+            new_session = mock_subprocess.call_args_list[0][0]
+            assert "env" not in new_session
+            assert new_session[-1] == "claude"

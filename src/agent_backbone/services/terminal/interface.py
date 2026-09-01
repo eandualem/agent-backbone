@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+from collections.abc import Sequence
 
 from agent_backbone.services.terminal._core import (
     capture_pane as _capture_pane,
@@ -73,13 +74,19 @@ class TmuxService:
         working_dir: str | None = None,
         command: list[str] | None = None,
         environment: dict[str, str] | None = None,
+        scrub: Sequence[str] | None = None,
     ) -> bool:
-        """Start a new detached tmux session."""
+        """Start a new detached tmux session.
+
+        ``scrub`` names variables the session must not inherit from the tmux
+        server (see ``_sessions.start_session``).
+        """
         return await _start_session(
             session_name,
             working_dir=working_dir,
             command=command,
             environment=environment,
+            scrub=scrub,
         )
 
     async def stop_session(self, session_name: str) -> bool:

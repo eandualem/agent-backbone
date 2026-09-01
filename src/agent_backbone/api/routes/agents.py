@@ -39,7 +39,7 @@ from agent_backbone.api.session_updates import (
     get_cached_session_snapshot,
     invalidate_session_snapshot_caches,
 )
-from agent_backbone.config import AgentSpec, BackboneConfig
+from agent_backbone.config import AgentSpec, BackboneConfig, session_secret_keys
 from agent_backbone.services.agent_store import AgentStore
 from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
@@ -260,7 +260,11 @@ async def _start(
     )
     environment = launch_environment(spec.name, runtime, config.state_dir, spec.env)
     ok = await tmux_svc.start_session(
-        spec.name, working_dir=str(spec.path), command=command, environment=environment
+        spec.name,
+        working_dir=str(spec.path),
+        command=command,
+        environment=environment,
+        scrub=session_secret_keys(config.data_dir),
     )
     if not ok:
         return AgentStartResponse(

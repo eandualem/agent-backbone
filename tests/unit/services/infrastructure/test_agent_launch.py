@@ -323,3 +323,33 @@ class TestApproveAgent:
             outcome, _ = await approve_agent("ike", runtime="claude", settle_seconds=0)
         assert outcome == "not_waiting"
         keys.assert_not_called()
+
+
+class TestStartAgentScrubsSecrets:
+    """A started agent inherits the launch contract and nothing else (issue #81)."""
+
+    async def test_secrets_are_scrubbed_from_the_session(self, tmp_path):
+        from unittest.mock import AsyncMock
+
+        from agent_backbone.config import AgentSpec
+        from agent_backbone.services.infrastructure._agents import start_agent
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / ".env").write_text("BACKBONE_API_KEY=k\nMY_OWN_SECRET=s\n")
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime="shell")
+
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        ):
+            assert await start_agent(spec, data_dir=data_dir, state_dir=tmp_path / "state") is True
+
+        scrub = start.await_args.kwargs["scrub"]
+        assert "BACKBONE_API_KEY" in scrub
+        assert "GITHUB_TOKEN" in scrub  # a known name, even absent from .env
+        assert "MY_OWN_SECRET" in scrub  # whatever the user put in .env
+        # The launch contract itself is untouched.
+        assert start.await_args.kwargs["environment"]["BACKBONE_AGENT"] == "ike"
