@@ -107,10 +107,11 @@ backbone agent start --model opus                  # cheaper model, same repo
 backbone agent start --runtime codex --model gpt-5.2
 ```
 
-> **Folder trust**: Claude Code normally asks once per new directory
-> whether you trust it. The backbone answers this for you: starting an
-> agent in a directory is a deliberate act, so `agent start` records the
-> directory as trusted (the same record the dialog writes) before
+> **Folder trust**: Claude Code, Codex and Gemini each ask once per new
+> directory whether you trust it. The backbone answers this for you:
+> starting an agent in a directory is a deliberate act, so `agent start`
+> records the directory as trusted (the same record the runtime's own
+> dialog writes; Gemini is launched with `--skip-trust`) before
 > launching. Set `backbone config set agents.pre_trust false` to keep the
 > interactive dialog — `start` then reports `started, waiting for you`
 > and you answer with `tmux attach -t <name>`.

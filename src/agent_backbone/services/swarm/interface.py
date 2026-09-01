@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import AgentSpec
-from agent_backbone.services.infrastructure._agents import start_agent, wait_until_ready
+from agent_backbone.services.infrastructure._agents import (
+    BRIEF_INJECTION_RUNTIMES,
+    start_agent,
+    wait_until_ready,
+)
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
@@ -233,7 +237,7 @@ async def create_swarm(
                 state_dir=config.state_dir,
                 data_dir=config.data_dir,
                 pre_trust=config.agents_section.pre_trust,
-                system_prompt_file=brief_file if runtime == "claude" else None,
+                system_prompt_file=(brief_file if runtime in BRIEF_INJECTION_RUNTIMES else None),
             )
             if not ok:
                 raise SwarmError(f"failed to start member '{agent_name}'")
@@ -247,9 +251,9 @@ async def create_swarm(
             )
             if outcome == "exited":
                 raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
-            if runtime != "claude":
-                # No system-prompt injection for this runtime: the brief is
-                # the first delivered message instead.
+            if runtime not in BRIEF_INJECTION_RUNTIMES:
+                # No launch injection for this runtime: the brief is the
+                # first delivered message instead.
                 await safe_deliver(
                     agent_name,
                     f"[via:backbone swarm:{name}] {brief_file.read_text()}",

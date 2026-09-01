@@ -86,8 +86,12 @@ SETTINGS_HELP: dict[str, str] = {
     "backbone.session_name": "tmux session used by `backbone up --detach`",
     "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",
     "agents.default_runtime": "Runtime used by `agent start` when none is given",
-    "agents.pre_trust": "Mark an agent's directory as trusted in Claude Code before starting it",
-    "agents.inject_brief": "Append the backbone's common brief to each agent's system prompt",
+    "agents.pre_trust": (
+        "Answer the runtime's folder-trust dialog before starting (claude, codex, gemini)"
+    ),
+    "agents.inject_brief": (
+        "Give each agent the backbone's brief at launch (system prompt or initial prompt)"
+    ),
     "github.intake": "auto | webhook | poll | off — how GitHub events arrive",
     "github.poll_interval_seconds": "Poll frequency when intake resolves to poll",
     "github.backfill_on_start": "Fetch events missed while the backbone was down",

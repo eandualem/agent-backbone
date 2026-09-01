@@ -53,6 +53,48 @@ class TestBuildCommand:
     def test_shell_stays_none(self, tmp_path):
         assert build_command("shell", data_dir=tmp_path, state_dir=tmp_path) is None
 
+    def test_codex_brief_becomes_initial_prompt(self, tmp_path):
+        brief = tmp_path / "brief.md"
+        brief.write_text("You are agent x.")
+        with patch(f"{_MOD}.resolve_command", return_value="/bin/codex"):
+            command = build_command("codex", model="gpt-5.2", system_prompt_file=brief)
+        assert command == ["/bin/codex", "--model", "gpt-5.2", "You are agent x."]
+
+    def test_codex_resume_is_a_subcommand(self):
+        with patch(f"{_MOD}.resolve_command", return_value="/bin/codex"):
+            assert build_command("codex", resume=True) == ["/bin/codex", "resume", "--last"]
+
+    def test_codex_unreadable_brief_degrades(self, tmp_path):
+        with patch(f"{_MOD}.resolve_command", return_value="/bin/codex"):
+            command = build_command("codex", system_prompt_file=tmp_path / "missing.md")
+        assert command == ["/bin/codex"]
+
+    def test_gemini_flags(self, tmp_path):
+        brief = tmp_path / "brief.md"
+        brief.write_text("You are agent y.")
+        with patch(f"{_MOD}.resolve_command", return_value="/bin/gemini"):
+            command = build_command(
+                "gemini",
+                model="gemini-3-pro",
+                resume=True,
+                pre_trust=True,
+                system_prompt_file=brief,
+            )
+        assert command == [
+            "/bin/gemini",
+            "--model",
+            "gemini-3-pro",
+            "--resume",
+            "latest",
+            "--skip-trust",
+            "--prompt-interactive",
+            "You are agent y.",
+        ]
+
+    def test_gemini_without_pre_trust_keeps_dialog(self):
+        with patch(f"{_MOD}.resolve_command", return_value="/bin/gemini"):
+            assert build_command("gemini") == ["/bin/gemini"]
+
 
 class TestPreTrust:
     def test_writes_trust_record_preserving_existing_state(self, tmp_path):
@@ -102,3 +144,50 @@ class TestPreTrust:
         config.write_text("{broken")
         assert pre_trust_directory(tmp_path / "p", claude_config=config) is False
         assert config.read_text() == "{broken"
+
+
+class TestPreTrustCodex:
+    def test_appends_trust_record_preserving_config(self, tmp_path):
+        import tomllib
+
+        from agent_backbone.services.infrastructure._agents import pre_trust_codex_directory
+
+        config = tmp_path / "config.toml"
+        config.write_text('model = "gpt-5.2"\n\n[projects."/existing"]\ntrust_level = "trusted"\n')
+        project = tmp_path / "proj"
+        project.mkdir()
+
+        assert pre_trust_codex_directory(project, codex_config=config) is True
+        saved = tomllib.loads(config.read_text())
+        assert saved["model"] == "gpt-5.2"
+        assert saved["projects"]["/existing"]["trust_level"] == "trusted"
+        assert saved["projects"][str(project)]["trust_level"] == "trusted"
+
+    def test_creates_config_when_missing(self, tmp_path):
+        import tomllib
+
+        from agent_backbone.services.infrastructure._agents import pre_trust_codex_directory
+
+        config = tmp_path / "config.toml"
+        assert pre_trust_codex_directory(tmp_path / "p", codex_config=config) is True
+        saved = tomllib.loads(config.read_text())
+        assert saved["projects"][str(tmp_path / "p")]["trust_level"] == "trusted"
+
+    def test_existing_user_decision_is_left_alone(self, tmp_path):
+        from agent_backbone.services.infrastructure._agents import pre_trust_codex_directory
+
+        project = tmp_path / "p"
+        project.mkdir()
+        config = tmp_path / "config.toml"
+        config.write_text(f'[projects."{project}"]\ntrust_level = "untrusted"\n')
+        before = config.read_text()
+        assert pre_trust_codex_directory(project, codex_config=config) is False
+        assert config.read_text() == before
+
+    def test_corrupt_config_fails_softly(self, tmp_path):
+        from agent_backbone.services.infrastructure._agents import pre_trust_codex_directory
+
+        config = tmp_path / "config.toml"
+        config.write_text("model = [broken")
+        assert pre_trust_codex_directory(tmp_path / "p", codex_config=config) is False
+        assert config.read_text() == "model = [broken"

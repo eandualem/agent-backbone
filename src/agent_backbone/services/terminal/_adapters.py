@@ -447,16 +447,29 @@ class GeminiAdapter(TerminalAdapter):
         "gemini 3",
     )
     busy_markers = ("esc to cancel",)
-    prompt_markers = ("allow execution", "yes, allow once", "yes, allow always")
+    prompt_markers = (
+        "allow execution",
+        "yes, allow once",
+        "yes, allow always",
+        "do you trust the files in this folder",
+        "how would you like to authenticate",
+        "failed to sign in",
+        "waiting for auth",
+    )
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
 
 class CodexAdapter(TerminalAdapter):
+    # Markers verified live against codex-cli 0.152.
     runtime = TerminalRuntime.CODEX
     prompt_prefixes = ("\u203a",)
     runtime_markers = ("openai codex", "gpt-5.", "context left")
-    placeholder_fragments = ("implement {feature}", "explain this codebase")
+    placeholder_fragments = (
+        "ask codex to do anything",
+        "implement {feature}",
+        "explain this codebase",
+    )
     status_fragments = (
         "gpt-5.",
         "context left",
@@ -469,7 +482,13 @@ class CodexAdapter(TerminalAdapter):
         "press esc to interrupt and send immediately",
     )
     busy_markers = ("esc to interrupt",)
-    prompt_markers = ("approve this command", "allow command", "yes, and don't ask again")
+    prompt_markers = (
+        "approve this command",
+        "allow command",
+        "yes, and don't ask again",
+        "do you trust the contents of this directory",
+        "press enter to continue",
+    )
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     interrupt_queued_delivery = True
     paste_settle_seconds = 0.2
