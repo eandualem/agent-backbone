@@ -57,6 +57,24 @@ class TestRoster:
             "research-coder",
         ]
 
+    def test_same_role_across_specs_never_collides(self):
+        # scout@codex + scout@claude used to both become "research-scout",
+        # silently merging two members into one corrupted agent (found live).
+        names = member_names(
+            "research", parse_roster(["scout*2@codex", "scout@opencode", "scout@claude/sonnet"])
+        )
+        labels = [n for n, _ in names]
+        assert labels == [
+            "research-coordinator",
+            "research-scout-1",
+            "research-scout-2",
+            "research-scout-3",
+            "research-scout-4",
+        ]
+        assert len(set(labels)) == len(labels)
+        assert names[3][1].runtime == "opencode"
+        assert names[4][1].model == "sonnet"
+
 
 class TestBriefs:
     def test_brief_renders_common_and_role_with_facts(self):

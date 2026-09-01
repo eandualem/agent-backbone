@@ -55,11 +55,19 @@ def parse_roster(raw_specs: list[str]) -> list[MemberSpec]:
 
 
 def member_names(swarm: str, specs: list[MemberSpec]) -> list[tuple[str, MemberSpec]]:
-    """Agent names for the roster: ``<swarm>-<role>`` (numbered when count > 1)."""
+    """Agent names for the roster: ``<swarm>-<role>``, numbered when the role
+    appears more than once — across specs too, so ``scout@codex`` plus
+    ``scout@claude`` cannot collide on one name."""
+    role_total: dict[str, int] = {}
+    for spec in specs:
+        role_total[spec.role] = role_total.get(spec.role, 0) + spec.count
+    counter: dict[str, int] = {}
     names: list[tuple[str, MemberSpec]] = []
     for spec in specs:
-        if spec.count == 1:
-            names.append((f"{swarm}-{spec.role}", spec))
-        else:
-            names.extend((f"{swarm}-{spec.role}-{i}", spec) for i in range(1, spec.count + 1))
+        for _ in range(spec.count):
+            counter[spec.role] = counter.get(spec.role, 0) + 1
+            if role_total[spec.role] == 1:
+                names.append((f"{swarm}-{spec.role}", spec))
+            else:
+                names.append((f"{swarm}-{spec.role}-{counter[spec.role]}", spec))
     return names

@@ -139,7 +139,8 @@ async def create_swarm(
     """
     if not _NAME_RE.match(name):
         raise SwarmError(f"invalid swarm name {name!r} (lowercase, digits, dashes)")
-    if await db.get_swarm(name) is not None:
+    prior = await db.get_swarm(name)
+    if prior is not None and prior.get("status") == "active":
         raise SwarmError(f"swarm '{name}' already exists")
     if config.agents.get(name) is not None or await session_exists(name):
         # `backbone tell <swarm>` resolves agents first, so a swarm sharing an
