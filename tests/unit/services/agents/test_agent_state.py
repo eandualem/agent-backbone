@@ -547,35 +547,52 @@ class TestHasCommentedOnIssue:
 
 class TestStartingMarker:
     async def test_fresh_starting_marker_is_trusted(self, tmp_path):
-        import json
         import time
 
-        from agent_backbone.services.agents import get_agent_state
+        from agent_backbone.services.agents import get_agent_state, write_starting_marker
 
-        (tmp_path / "ike.json").write_text(json.dumps({"state": "starting", "ts": time.time()}))
+        write_starting_marker(tmp_path, "ike", time.time())
         snap = await get_agent_state(tmp_path, "ike", 300, pane_content="$ ")
         assert snap.state == AgentState.STARTING and snap.source == "push"
 
     async def test_old_starting_marker_yields_to_the_terminal(self, tmp_path):
-        import json
         import time
 
-        from agent_backbone.services.agents import get_agent_state
+        from agent_backbone.services.agents import get_agent_state, write_starting_marker
 
-        (tmp_path / "ike.json").write_text(
-            json.dumps({"state": "starting", "ts": time.time() - 200})
-        )
+        write_starting_marker(tmp_path, "ike", time.time() - 200)
         snap = await get_agent_state(tmp_path, "ike", 300, pane_content="$ ")
         assert snap.state == AgentState.IDLE and snap.source == "pull"
 
     async def test_old_starting_marker_is_not_trusted_when_the_pane_says_nothing(self, tmp_path):
+        import time
+
+        from agent_backbone.services.agents import get_agent_state, write_starting_marker
+
+        write_starting_marker(tmp_path, "ike", time.time() - 200)
+        snap = await get_agent_state(tmp_path, "ike", 300, pane_content="")
+        assert snap.state == AgentState.UNKNOWN
+
+    def test_hook_state_newer_than_the_marker_wins_and_retires_it(self, tmp_path):
         import json
         import time
 
-        from agent_backbone.services.agents import get_agent_state
+        from agent_backbone.services.agents import read_state_file, write_starting_marker
 
-        (tmp_path / "ike.json").write_text(
-            json.dumps({"state": "starting", "ts": time.time() - 200})
-        )
-        snap = await get_agent_state(tmp_path, "ike", 300, pane_content="")
-        assert snap.state == AgentState.UNKNOWN
+        launched = time.time() - 5
+        write_starting_marker(tmp_path, "ike", launched)
+        (tmp_path / "ike.json").write_text(json.dumps({"state": "idle", "ts": launched + 2}))
+        snap = read_state_file(tmp_path, "ike")
+        assert snap.state == AgentState.IDLE
+        assert not (tmp_path / "ike.starting").exists()
+
+    def test_marker_outranks_older_hook_state(self, tmp_path):
+        import json
+        import time
+
+        from agent_backbone.services.agents import read_state_file, write_starting_marker
+
+        # A leftover idle file from the previous run of this agent.
+        (tmp_path / "ike.json").write_text(json.dumps({"state": "idle", "ts": time.time() - 900}))
+        write_starting_marker(tmp_path, "ike", time.time())
+        assert read_state_file(tmp_path, "ike").state == AgentState.STARTING

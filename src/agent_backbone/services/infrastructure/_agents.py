@@ -14,8 +14,9 @@ from typing import TYPE_CHECKING
 from agent_backbone.config import RUNTIMES, session_secret_keys
 from agent_backbone.services.agents._file_reader import (
     atomic_write_text,
+    clear_starting_marker,
     read_state_file,
-    write_state_file,
+    write_starting_marker,
 )
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.terminal import (
@@ -404,16 +405,12 @@ async def start_agent(
         return StartResult(ok=False, evidence=(str(exc),))
 
     environment = launch_environment(spec.name, effective_runtime, config.state_dir, spec.env)
-    # `starting` goes down *before* the launch so a fast hook can never be
-    # overwritten by it. The first hook write replaces the marker; for
-    # runtimes without hooks ``wait_until_ready`` clears it when the prompt
-    # shows, and ``get_agent_state`` stops trusting it after a short window.
+    # `starting` lives in its own marker file, written before the launch: a
+    # hook write newer than the marker outranks it, ``wait_until_ready``
+    # clears it when the prompt shows, and ``get_agent_state`` stops
+    # trusting it after a short window regardless.
     launched_at = time.time()
-    write_state_file(
-        config.state_dir,
-        spec.name,
-        {"state": AgentState.STARTING.value, "ts": launched_at, "started_at": launched_at},
-    )
+    write_starting_marker(config.state_dir, spec.name, launched_at)
     ok = await start_session(
         spec.name,
         working_dir=str(spec.path),
@@ -422,7 +419,7 @@ async def start_agent(
         scrub=session_secret_keys(config.data_dir),
     )
     if not ok:
-        _clear_starting(config.state_dir, spec.name, launched_at)
+        clear_starting_marker(config.state_dir, spec.name)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
     extra = f", model: {effective_model}" if effective_model else ""
     log.info("Agent '%s' started (runtime: %s%s)", spec.name, effective_runtime, extra)
@@ -454,25 +451,6 @@ async def start_agent(
     return StartResult(ok=True, ready=ready, evidence=tuple(evidence))
 
 
-def _clear_starting(state_dir: Path, name: str, launched_at: float | None) -> None:
-    """Drop the ``starting`` marker once the terminal itself shows the runtime is up.
-
-    Runtimes without hooks never overwrite it, and a lingering ``starting``
-    would keep deliveries away from an agent that is at its prompt. Only the
-    marker this launch wrote (its ``ts`` is ``launched_at``) is removed: a
-    hook write has its own timestamp and is left alone.
-    """
-    if launched_at is None:
-        return
-    snapshot = read_state_file(state_dir, name)
-    if (
-        snapshot is not None
-        and snapshot.state == AgentState.STARTING
-        and snapshot.timestamp == launched_at
-    ):
-        (state_dir / f"{name}.json").unlink(missing_ok=True)
-
-
 async def wait_until_ready(
     name: str,
     *,
@@ -489,7 +467,7 @@ async def wait_until_ready(
     or ``timeout``. Readiness is a hook-written ``idle`` state newer than
     ``since`` (the launch; default: now), or — for runtimes without hooks — a
     visible empty prompt in the terminal, which also clears the ``starting``
-    marker ``start_agent`` wrote at ``since``.
+    marker ``start_agent`` wrote (the hook state file itself is never touched).
     """
     started = time.monotonic()
     wall_started = since if since is not None else time.time()
@@ -498,7 +476,7 @@ async def wait_until_ready(
     last_pane = ""
     while True:
         if not await session_exists(name):
-            _clear_starting(state_path, name, since)
+            clear_starting_marker(state_path, name)
             return "exited", ["tmux session ended before the agent reached its prompt"]
 
         # Only trust hook state written by *this* start — a leftover idle file
@@ -515,11 +493,11 @@ async def wait_until_ready(
         if pane:
             last_pane = pane
             if adapter.detect_waiting_for_human(pane):
-                _clear_starting(state_path, name, since)
+                clear_starting_marker(state_path, name)
                 tail = [ln for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-6:]
                 return "waiting_for_human", ["terminal shows a question for the human:", *tail]
             if adapter.detect_idle(pane):
-                _clear_starting(state_path, name, since)
+                clear_starting_marker(state_path, name)
                 return "ready", ["terminal shows an empty prompt"]
 
         if time.monotonic() - started >= timeout:

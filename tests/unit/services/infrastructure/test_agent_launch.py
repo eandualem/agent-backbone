@@ -475,7 +475,6 @@ class TestStartingState:
 
         state_dir = tmp_path / "state"
         launched = 1_000.0
-        write_state_file(state_dir, "ike", {"state": "starting", "ts": launched})
         write_state_file(state_dir, "ike", {"state": "idle", "ts": launched + 2})
         with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True):
             outcome, evidence = await wait_until_ready(

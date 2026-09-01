@@ -1,7 +1,10 @@
 """The hook state files: ``<state_dir>/<agent>.json`` and ``<state_dir>/plans/``.
 
 Runtime hooks write them; the backbone reads them (and writes one on behalf
-of runtimes without hooks, through ``POST /api/agents/{name}/state``).
+of runtimes without hooks, through ``POST /api/agents/{name}/state``). The
+``starting`` state has its own file, ``<agent>.starting``, written by
+``start_agent`` and never by a hook, so launch bookkeeping and hook writes
+cannot race on one path.
 """
 
 from __future__ import annotations
@@ -36,6 +39,39 @@ def write_state_file(state_dir: Path, session: str, record: dict) -> Path:
     return target
 
 
+def _marker_path(state_dir: Path, session: str) -> Path:
+    return state_dir / f"{session}.starting"
+
+
+def write_starting_marker(state_dir: Path, session: str, launched_at: float) -> None:
+    """Record that ``session`` was launched at ``launched_at`` and is not at its prompt yet."""
+    atomic_write_text(_marker_path(state_dir, session), json.dumps({"ts": launched_at}))
+
+
+def clear_starting_marker(state_dir: Path, session: str) -> None:
+    """The launch is over (prompt seen, or the session died): forget the marker."""
+    _marker_path(state_dir, session).unlink(missing_ok=True)
+
+
+def _starting_snapshot(state_dir: Path, session: str, newer_than: float) -> StateSnapshot | None:
+    """``starting`` from the marker, unless hook state newer than the marker exists."""
+    marker = _marker_path(state_dir, session)
+    try:
+        launched_at = float(json.loads(marker.read_text())["ts"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if launched_at <= newer_than:
+        clear_starting_marker(state_dir, session)  # a hook has spoken since the launch
+        return None
+    return StateSnapshot(
+        state=AgentState.STARTING,
+        timestamp=launched_at,
+        source="push",
+        started_at=launched_at,
+        evidence=[f"launch marker {marker.name}: starting"],
+    )
+
+
 def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
     """Read hook-written state from ``<state_dir>/<session>.json``.
 
@@ -49,13 +85,17 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
     """
     state_file = state_dir / f"{session}.json"
     if not state_file.exists():
-        return None
+        return _starting_snapshot(state_dir, session, newer_than=0.0)
     try:
         data = json.loads(state_file.read_text())
     except (json.JSONDecodeError, OSError) as e:
         log.warning("Failed to read state file for %s: %s", session, e)
         return None
 
+    hook_ts = float(data.get("ts", 0))
+    starting = _starting_snapshot(state_dir, session, newer_than=hook_ts)
+    if starting is not None:
+        return starting
     state = AgentState.parse(data.get("state"))
     started_at_raw = data.get("started_at")
     return StateSnapshot(
@@ -63,7 +103,7 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         reason=data.get("reason") or None,
         current_issue=data.get("issue"),
         current_repo=data.get("repo") or None,
-        timestamp=float(data.get("ts", 0)),
+        timestamp=hook_ts,
         source="push",
         started_at=float(started_at_raw) if started_at_raw is not None else None,
         plan_file=data.get("plan_file"),
