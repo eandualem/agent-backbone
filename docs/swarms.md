@@ -89,6 +89,35 @@ communication commands. To customize, copy a template from the package
 — files there override the shipped ones, and you can add new roles the
 same way.
 
+## What a swarm is, and is not
+
+A swarm is **lifecycle scaffolding around ordinary agents**. The backbone
+does exactly six things: it validates the issue and the roster, registers
+the members, creates the worktree and branch, injects each role brief,
+delivers the kickoff, and tears everything down when the issue closes.
+
+Everything that looks like coordination is the **coordinator agent
+behaving as its brief tells it to** — a prompt, not a mechanism. In
+particular the backbone does not:
+
+- **assign tasks** — the coordinator does, by `backbone tell`;
+- **prevent file conflicts** — members share one worktree and one branch;
+  file ownership is a rule in the briefs, and nothing enforces it;
+- **track progress or verify completion** — there is no task state, no
+  per-member progress, and no check that a member did what it was asked;
+- **retry or reassign a member that stalls** — the backbone will *report*
+  it (`agent inspect`, dead-session and stall alerts), and you or the
+  coordinator decide what to do.
+
+This is a deliberate trade: members are ordinary agents, so every state,
+delivery and audit mechanism applies to them unchanged, and you can attach
+to any member's session and take over by hand.
+
+**Teardown is destructive to uncommitted work.** Disbanding runs
+`git worktree remove --force`, which deletes any edits members had not
+committed. The branch and its commits always survive. Make sure members
+have committed before you disband.
+
 ## When to use a swarm
 
 Parallel, breadth-first work: research fan-outs, competing-hypothesis

@@ -15,8 +15,12 @@ but tmux and SQLite.
 ```bash
 uv tool install "agent-backbone[github-app] @ git+https://github.com/eandualem/agent-backbone"
 uv tool update-shell        # once, if ~/.local/bin isn't on your PATH yet
+exec $SHELL -l              # `update-shell` edits your profile; reload it
 backbone --help
 ```
+
+If `backbone --help` still says "command not found", `~/.local/bin` is not
+on your PATH in this shell — open a new terminal, or add it by hand.
 
 This puts two identical commands on your PATH: `backbone` and the short
 alias `ab`. The `github-app` extra is what the recommended GitHub setup
@@ -137,6 +141,52 @@ backbone tell app "Summarise what this repository does in three sentences."
 If the agent is busy you get `"outcome": "agent_working"` and the message
 is queued; the monitor delivers it when the agent is idle (within a
 minute). Watch it happen: `tmux attach -t app`.
+
+### The thing worth trying first
+
+The queue is the whole point, so provoke it deliberately. Give the agent
+something slow, and while it is still working, message it:
+
+```bash
+backbone tell app "Read every file under src/ and list the modules."
+backbone agent inspect app      # repeat until it says state: busy (a few seconds)
+backbone tell app "…and then tell me which one is the largest."   # while it works
+```
+
+The second `tell` returns `"outcome": "agent_working"` — the text was **not**
+typed into a working terminal. (The first `tell` returns as soon as the text
+is submitted; the hook reports `busy` a moment later, which is what the
+`inspect` in between waits for.) Ask why:
+
+```bash
+backbone agent inspect app
+```
+
+```text
+app: online
+  dir:      /Users/me/code/app
+  runtime:  claude   model: -
+  repo:     acme/app   watches: -
+  state:    busy (hook state 4s old)
+  delivery: agent_working
+  evidence:
+    - runtime: claude
+    - hook state 'busy' written 4s ago (fresh)
+  terminal tail:
+    | ✽ Reading files… (24s)
+  recent deliveries:
+    2026-05-04T10:22:31  direct_message           agent_working
+    2026-05-04T10:21:07  direct_message           delivered
+```
+
+`delivery: agent_working` with the hook's own evidence underneath is the
+backbone refusing to type, and telling you exactly why.
+
+Now leave it alone. When the agent reaches its prompt, the monitor pastes
+the queued message and it lands as if you had been sitting there waiting —
+`agent inspect` then shows it as `delivered`. That is the guarantee the
+rest of this document builds on: **you can address a live terminal agent
+from outside it, at any moment, without corrupting what it is doing.**
 
 ## 6. A second agent, and agents talking to each other
 
