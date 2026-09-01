@@ -55,10 +55,10 @@ RUNTIME_DISPLAY_NAMES: dict[str, str] = {
 }
 
 # Runtimes that can take the agent brief at launch: Claude Code appends it to
-# the system prompt; Codex and Gemini take it as the session's initial prompt
-# (their closest equivalent). Other runtimes fall back to a first delivered
-# message where the caller supports it.
-BRIEF_INJECTION_RUNTIMES = frozenset({"claude", "codex", "gemini"})
+# the system prompt; Codex, Gemini and OpenCode take it as the session's
+# initial prompt (their closest equivalent). Other runtimes fall back to a
+# first delivered message where the caller supports it.
+BRIEF_INJECTION_RUNTIMES = frozenset({"claude", "codex", "gemini", "opencode"})
 
 
 def resolve_command(name: str | None) -> str | None:
@@ -257,6 +257,16 @@ def build_command(
             command.append("--skip-trust")
         if system_prompt_file is not None and (brief := _read_brief(system_prompt_file)):
             command.extend(["--prompt-interactive", brief])
+        return command
+
+    if runtime == "opencode":
+        command = [resolved]
+        if model:
+            command.extend(["--model", model])
+        if resume:
+            command.append("--continue")  # opencode's resume flag
+        if system_prompt_file is not None and (brief := _read_brief(system_prompt_file)):
+            command.extend(["--prompt", brief])
         return command
 
     command = [resolved]

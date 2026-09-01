@@ -95,6 +95,22 @@ class TestBuildCommand:
         with patch(f"{_MOD}.resolve_command", return_value="/bin/gemini"):
             assert build_command("gemini") == ["/bin/gemini"]
 
+    def test_opencode_flags(self, tmp_path):
+        brief = tmp_path / "brief.md"
+        brief.write_text("You are agent z.")
+        with patch(f"{_MOD}.resolve_command", return_value="/bin/opencode"):
+            command = build_command(
+                "opencode", model="opencode/big-pickle", resume=True, system_prompt_file=brief
+            )
+        assert command == [
+            "/bin/opencode",
+            "--model",
+            "opencode/big-pickle",
+            "--continue",
+            "--prompt",
+            "You are agent z.",
+        ]
+
 
 class TestPreTrust:
     def test_writes_trust_record_preserving_existing_state(self, tmp_path):

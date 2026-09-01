@@ -80,6 +80,47 @@ class TestCodexAdapter:
         assert self.adapter.prompt_has_pending_input(CODEX_TYPED_INPUT)
 
 
+OPENCODE_FRESH_IDLE = (
+    '┃  Ask anything... "Fix a TODO in the codebase"\n'
+    "┃\n"
+    "┃  Build · Big Pickle OpenCode Zen\n"
+    "tab agents  ctrl+p commands\n"
+    "/tmp/rt-test:main                              1.18.25\n"
+)
+
+OPENCODE_BUSY = (
+    "┃  Count slowly from 1 to 30\n"
+    "┃  Build · Big Pickle OpenCode Zen\n"
+    "   ⬝⬝⬝⬝⬝■■■  esc interrupt                8.6K (4%)  ctrl+p commands  • OpenCode 1.18.25\n"
+)
+
+OPENCODE_IDLE_AFTER_RESPONSE = (
+    "   DELIVERED\n"
+    "   ▣  Build · Big Pickle · 6.9s\n"
+    "┃\n"
+    "┃  Build · Big Pickle OpenCode Zen\n"
+    "   /tmp/rt-test                 8.7K (4%)  ctrl+p commands  • OpenCode 1.18.25\n"
+)
+
+
+class TestOpenCodeAdapter:
+    adapter = get_terminal_adapter("opencode")
+
+    def test_fresh_idle_detected(self):
+        assert self.adapter.detect_idle(OPENCODE_FRESH_IDLE)
+        assert detect_runtime_from_pane(OPENCODE_FRESH_IDLE) == TerminalRuntime.OPENCODE
+
+    def test_busy_detected(self):
+        assert self.adapter.detect_busy(OPENCODE_BUSY)
+        assert not self.adapter.detect_idle(OPENCODE_BUSY)
+
+    def test_idle_after_first_response_without_placeholder(self):
+        # The "Ask anything..." placeholder is gone after the first message;
+        # the persistent bottom bar without "esc interrupt" is the idle signal.
+        assert self.adapter.detect_idle(OPENCODE_IDLE_AFTER_RESPONSE)
+        assert not self.adapter.detect_busy(OPENCODE_IDLE_AFTER_RESPONSE)
+
+
 class TestGeminiAdapter:
     adapter = get_terminal_adapter("gemini")
 
