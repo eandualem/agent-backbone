@@ -51,8 +51,9 @@ async def start_session(
 ) -> bool:
     """Start a detached tmux session running ``command`` (or a shell).
 
-    ``environment`` is exported both into the initial command (via ``env``)
-    and into the tmux session environment, so hooks and later shells see it.
+    ``environment`` is exported into the initial command (via ``env``) and
+    into the tmux session environment (``new-session -e``), so hooks and
+    later shells see it from the session's first instant.
 
     ``scrub`` names variables the session must **not** inherit from the tmux
     server (the backbone's secrets — issue #81). They are removed three
@@ -77,6 +78,8 @@ async def start_session(
     args = ["new-session", "-d", "-s", session_name]
     if working_dir:
         args.extend(["-c", working_dir])
+    for key, value in environment.items():
+        args.extend(["-e", f"{key}={value}"])
     for key in removals:
         args.extend(["-e", f"{key}="])
     launch = list(command) if command else _default_shell()
@@ -92,15 +95,6 @@ async def start_session(
         return False
     log.info("Started tmux session '%s'", session_name)
 
-    for key, value in environment.items():
-        rc, _, stderr = await _run_tmux("set-environment", "-t", session_name, key, value)
-        if rc != 0:
-            log.warning(
-                "Failed to set env var '%s' for session '%s': %s",
-                key,
-                session_name,
-                stderr.decode(),
-            )
     for key in removals:
         # -r: remove the variable from the environment before starting a
         # process, so a new pane in this session never sees it either.

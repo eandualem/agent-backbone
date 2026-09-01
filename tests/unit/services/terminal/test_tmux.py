@@ -473,8 +473,8 @@ class TestStartSessionEnvironment:
             assert "BACKBONE_AGENT=app" in new_session_call
             assert "claude" in new_session_call
 
-    async def test_env_vars_set(self, mock_subprocess):
-        """Environment variables are set via tmux set-environment."""
+    async def test_env_vars_are_session_environment_from_the_start(self, mock_subprocess):
+        """`new-session -e` sets the session environment atomically with the session."""
         with patch(
             "agent_backbone.services.terminal._sessions.session_exists",
             new_callable=AsyncMock,
@@ -491,9 +491,10 @@ class TestStartSessionEnvironment:
                 environment={"MY_VAR": "hello", "OTHER": "world"},
             )
             assert result is True
-            # First call: new-session, then 2 set-environment calls
-            set_env_calls = [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
-            assert len(set_env_calls) == 2
+            new_session = mock_subprocess.call_args_list[0][0]
+            e_flags = [new_session[i + 1] for i, a in enumerate(new_session) if a == "-e"]
+            assert e_flags == ["MY_VAR=hello", "OTHER=world"]
+            assert not [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
 
     async def test_no_env_no_calls(self, mock_subprocess):
         """No environment param means no set-environment calls."""
@@ -512,33 +513,6 @@ class TestStartSessionEnvironment:
             assert result is True
             set_env_calls = [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
             assert len(set_env_calls) == 0
-
-    async def test_partial_failure_logs_warning(self, mock_subprocess):
-        """If one env var fails, session still returns True."""
-        with patch(
-            "agent_backbone.services.terminal._sessions.session_exists",
-            new_callable=AsyncMock,
-            return_value=False,
-        ):
-            # First call (new-session) succeeds, subsequent calls alternate
-            success_proc = AsyncMock()
-            success_proc.returncode = 0
-            success_proc.communicate = AsyncMock(return_value=(b"", b""))
-            success_proc.wait = AsyncMock()
-
-            fail_proc = AsyncMock()
-            fail_proc.returncode = 1
-            fail_proc.communicate = AsyncMock(return_value=(b"", b"env error"))
-            fail_proc.wait = AsyncMock()
-
-            mock_subprocess.side_effect = [success_proc, fail_proc]
-
-            result = await start_session(
-                "test",
-                environment={"BAD_VAR": "value"},
-            )
-            # Session creation succeeded, env var failure is non-fatal
-            assert result is True
 
 
 class TestGracefulClose:
@@ -777,7 +751,7 @@ class TestSessionSecretScrub:
             # ...and the session environment shadows the server's from the start,
             # so a pane opened before `set-environment -r` sees nothing either.
             e_flags = [new_session[i + 1] for i, a in enumerate(new_session) if a == "-e"]
-            assert e_flags == ["BACKBONE_API_KEY=", "GITHUB_TOKEN="]
+            assert e_flags == ["BACKBONE_AGENT=app", "BACKBONE_API_KEY=", "GITHUB_TOKEN="]
             assert new_session.index("-e") < new_session.index("env")
 
     async def test_scrubbed_vars_are_removed_from_the_session_environment(self, mock_subprocess):
@@ -833,6 +807,10 @@ class TestSessionSecretScrub:
             assert "GITHUB_TOKEN=agent-own" in new_session
             assert "-uGITHUB_TOKEN" not in new_session
             assert "-uBACKBONE_API_KEY" in new_session
+            # The agent's value is session environment from the first instant,
+            # so a pane opened before the cleanup sees it, not the server's.
+            e_flags = [new_session[i + 1] for i, a in enumerate(new_session) if a == "-e"]
+            assert e_flags == ["GITHUB_TOKEN=agent-own", "BACKBONE_API_KEY="]
 
     async def test_shell_session_is_scrubbed_too(self, mock_subprocess):
         """A shell-runtime agent gets no command, but still no secrets."""

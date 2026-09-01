@@ -70,8 +70,8 @@ Two mechanisms, because either alone leaves a hole:
    in the daemon's environment is a secret in every agent's environment.
 2. Sessions are still started with those names explicitly removed: `env -u`
    for the process, `new-session -e NAME=` so the session's own environment
-   shadows the server's from the first instant, and `set-environment -r`
-   for later panes. If that last step fails the session is killed rather
+   shadows the server's from the first instant (an agent's own `env` values
+   are set the same way), and `set-environment -r` for later panes. If that last step fails the session is killed rather
    than handed back. This catches what mechanism 1 cannot: variables *you*
    exported in the shell you ran `backbone up` from, and a long-lived tmux
    server that was polluted by an older backbone before you upgraded.
