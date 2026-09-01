@@ -251,13 +251,40 @@ class TelegramService(Integration):
             self._running = False
             self._app = None
 
+    @staticmethod
+    async def _on_handler_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """One warning line per failed handler instead of PTB's full traceback.
+
+        A timed-out reply or a Telegram API hiccup must not read like a
+        crash in the backbone's log; the update it belonged to is logged so
+        it can be traced, and polling simply continues.
+        """
+        chat = getattr(getattr(update, "effective_chat", None), "id", None)
+        text = getattr(getattr(update, "message", None), "text", None)
+        log.warning(
+            "Telegram handler failed (chat=%s, text=%r): %s",
+            chat,
+            (text or "")[:60],
+            context.error,
+        )
+
     def build_app(self) -> Application:
         """Build the Telegram bot application with all command handlers."""
         token = self._config.telegram_token
         if not token:
             raise ValueError("TELEGRAM_TOKEN environment variable not set")
 
-        self._app = Application.builder().token(token).build()
+        # Generous HTTP timeouts: startup answers pending commands while the
+        # topic sync is talking to the same API, and Telegram is sometimes slow.
+        self._app = (
+            Application.builder()
+            .token(token)
+            .connect_timeout(20)
+            .read_timeout(30)
+            .write_timeout(30)
+            .build()
+        )
+        self._app.add_error_handler(self._on_handler_error)
         self._app.add_handler(CommandHandler("help", self.cmd_help))
         self._app.add_handler(CommandHandler("status", self.cmd_status))
         self._app.add_handler(CommandHandler("queue", self.cmd_queue))
