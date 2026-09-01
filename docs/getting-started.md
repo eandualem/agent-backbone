@@ -149,17 +149,20 @@ something slow, and while it is still working, message it:
 
 ```bash
 backbone tell app "Read every file under src/ and list the modules."
+backbone agent inspect app      # repeat until it says state: busy (a few seconds)
 backbone tell app "…and then tell me which one is the largest."   # while it works
 ```
 
-The second call returns `"outcome": "agent_working"` — the text was **not**
-typed into a working terminal. Ask why:
+The second `tell` returns `"outcome": "agent_working"` — the text was **not**
+typed into a working terminal. (The first `tell` returns as soon as the text
+is submitted; the hook reports `busy` a moment later, which is what the
+`inspect` in between waits for.) Ask why:
 
 ```bash
 backbone agent inspect app
 ```
 
-```
+```text
 app: online
   dir:      /Users/me/code/app
   runtime:  claude   model: -
