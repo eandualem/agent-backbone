@@ -11,7 +11,6 @@ import pytest
 from agent_backbone.config import EscalationConfig, TelegramConfig
 from agent_backbone.models import IssueData, ParsedLabels
 from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.jobs import escalation as esc
 from agent_backbone.services.jobs.monitor import monitor_agents
 from agent_backbone.services.jobs.pending import deliver_pending_issues
@@ -28,12 +27,6 @@ def _clear_dedup():
     yield
     esc._escalation_dedup.clear()
     esc._plan_notify_dedup.clear()
-
-
-@pytest.fixture
-async def db():
-    async with BackboneDB.connect() as db:
-        yield db
 
 
 def _snap(state: AgentState, issue: int | None = None, age: float = 0.0, **kwargs):

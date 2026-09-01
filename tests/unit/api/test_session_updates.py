@@ -15,15 +15,15 @@ from agent_backbone.api.session_updates import (
     emit_sessions_update,
     get_cached_session_snapshot,
     invalidate_session_snapshot_caches,
-    reset_sessions_update_state,
 )
+from tests.support import reset_session_updates
 
 
 @pytest.fixture(autouse=True)
 def _reset_update_state():
-    reset_sessions_update_state()
+    reset_session_updates()
     yield
-    reset_sessions_update_state()
+    reset_session_updates()
 
 
 def _sample_snapshot() -> list[EnrichedAgent]:

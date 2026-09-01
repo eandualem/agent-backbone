@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 
-import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -15,18 +14,6 @@ from tests.support import queue_row
 def _make_db() -> BackboneDB:
     """Create a BackboneDB with a lightweight engine for hot-cache-only tests."""
     return BackboneDB(create_async_engine("sqlite+aiosqlite:///:memory:"))
-
-
-@pytest.fixture
-async def db():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    db = BackboneDB(engine)
-    await db.start()
-    try:
-        yield db
-    finally:
-        db._engine = None
-        await engine.dispose()
 
 
 class TestDeliveryTracking:

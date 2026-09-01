@@ -5,8 +5,16 @@ Gemini CLI 0.46.0 running under tmux. When a runtime's UI changes, update
 the fixture from a fresh capture, not from memory.
 """
 
+import pytest
+
 from agent_backbone.services.terminal import TerminalRuntime, detect_runtime_from_pane
 from agent_backbone.services.terminal._adapters import get_terminal_adapter
+
+
+def prompt_has_pending_input(pane: str) -> bool:
+    """The adapter for whatever runtime the pane shows, asked about typed input."""
+    return get_terminal_adapter(detect_runtime_from_pane(pane)).prompt_has_pending_input(pane)
+
 
 CODEX_TRUST_DIALOG = (
     "> You are in /tmp/rt-test\n"
@@ -244,3 +252,56 @@ class TestActiveDialogGate:
     def test_unverified_runtimes_have_no_answer(self):
         assert get_terminal_adapter("gemini").approve_keys == ()
         assert get_terminal_adapter("aider").approve_keys == ()
+
+
+class TestRuntimeDetection:
+    def test_prompt_wins_over_stale_claude_history(self):
+        pane = (
+            "Previous diagnostic output: Claude Code runtime mismatch\n"
+            "More history about opus 4.6 and delivery retries\n\n"
+            "\u203a Explain this codebase\n\n"
+            "  gpt-5.4 xhigh \u00b7 88% left \u00b7 ~/ws/core/code/WF/agent-backbone"
+        )
+        assert detect_runtime_from_pane(pane) == TerminalRuntime.CODEX
+
+
+class TestPendingInput:
+    """Typed text vs. everything else that can sit after the prompt character."""
+
+    def test_codex_queued_input_footer_is_ignored_for_prompt_detection(self):
+        pane = (
+            "\u203a Second live inbound delivery test.\n\n"
+            "  tab to queue message                                        98% context left"
+        )
+        assert prompt_has_pending_input(pane) is True
+
+    def test_codex_queued_message_banner_is_ignored_for_prompt_detection(self):
+        pane = (
+            "\u2022 Messages to be submitted after next tool call "
+            "(press esc to interrupt and send immediately)\n"
+            "  \u21b3 [via:backbone from:bell] delivery check only.\n\n"
+            "\u203a Summarize recent commits\n\n"
+            "  gpt-5.4 xhigh \u00b7 59% left \u00b7 ~/ws/core/code/WF/agent-backbone"
+        )
+        assert prompt_has_pending_input(pane) is True
+
+    @pytest.mark.parametrize(
+        "pane",
+        [
+            "\u276f [via:backbone from:ike] Can you check the status?",
+            "\u276f [via:github issue:51] [task] agent-backbone: Add topic routing",
+            "\u276f [via:telegram from:elias] What's the status?",
+        ],
+    )
+    def test_stuck_envelope_is_not_user_input(self, pane):
+        # A delivery that was pasted but never consumed is not the human typing.
+        assert prompt_has_pending_input(pane) is False
+
+    def test_real_user_input_still_detected(self):
+        assert prompt_has_pending_input("\u276f hello") is True
+
+    def test_prefix_guard_suffix_matched_output_not_pending(self):
+        # Claude's prompt is ❯ with suffix $: a line ending in $ without the
+        # prefix matched via the suffix only and is output, not typed input.
+        claude = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        assert claude.prompt_has_pending_input("some output line $") is False

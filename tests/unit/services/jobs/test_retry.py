@@ -4,25 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from agent_backbone.config import AgentsConfig, AgentSpec
-from agent_backbone.services.database import BackboneDB, build_engine
 from agent_backbone.services.jobs.retry import delivery_retry, drain_message_queue, retry_delivery
 from tests.conftest import TEST_REPO, make_config
 from tests.support import queue_row
-
-
-@pytest.fixture
-async def db():
-    engine = build_engine("sqlite+aiosqlite:///:memory:")
-    db = BackboneDB(engine)
-    await db.start()
-    try:
-        yield db
-    finally:
-        db._engine = None
-        await engine.dispose()
 
 
 class TestRetryDeliveryAckCheck:

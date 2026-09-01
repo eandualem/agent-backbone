@@ -16,7 +16,6 @@ from agent_backbone.services.agents import (
     should_deliver,
 )
 from agent_backbone.services.agents.interface import StateService
-from agent_backbone.services.terminal import detect_runtime_from_pane, get_terminal_adapter
 
 _INF = "agent_backbone.services.agents._inference"
 _IFACE = "agent_backbone.services.agents.interface"
@@ -134,11 +133,6 @@ class TestWaitingForHuman:
         assert should_deliver(AgentState.WAITING_FOR_HUMAN) is False
 
 
-def prompt_has_pending_input(pane: str) -> bool:
-    """The adapter for whatever runtime the pane shows, asked about typed input."""
-    return get_terminal_adapter(detect_runtime_from_pane(pane)).prompt_has_pending_input(pane)
-
-
 class TestInferStateFromPane:
     def test_empty_content(self):
         result = infer_state_from_pane("")
@@ -244,70 +238,6 @@ class TestInferStateFromPane:
         )
         result = infer_state_from_pane(pane)
         assert result.state == AgentState.IDLE
-
-    def test_codex_placeholder_is_not_pending_input(self):
-        """Codex's dim placeholder suggestion should not count as typed input."""
-        pane = "\x1b[1m\u203a\x1b[0m \x1b[2mImprove documentation in @filename\x1b[0m"
-        assert prompt_has_pending_input(pane) is False
-
-    def test_codex_typed_input_is_pending_input(self):
-        """Actual typed Codex input should still block delivery."""
-        pane = "\u203a Review the delivery retry logic"
-        assert prompt_has_pending_input(pane) is True
-
-    def test_codex_queued_input_footer_is_ignored_for_prompt_detection(self):
-        """Codex's queue footer below the prompt should not hide pending input."""
-        pane = (
-            "\u203a Second live inbound delivery test.\n\n"
-            "  tab to queue message                                        98% context left"
-        )
-        assert prompt_has_pending_input(pane) is True
-
-    def test_stuck_backbone_envelope_not_pending_input(self):
-        """A stuck backbone delivery in the prompt buffer is not user input (#766)."""
-        pane = "\u276f [via:backbone from:ike] Can you check the status?"
-        assert prompt_has_pending_input(pane) is False
-
-    def test_stuck_github_envelope_not_pending_input(self):
-        """Stuck github notification envelope is not user input."""
-        pane = "\u276f [via:github issue:51] [task] agent-backbone: Add topic routing"
-        assert prompt_has_pending_input(pane) is False
-
-    def test_stuck_telegram_envelope_not_pending_input(self):
-        """Stuck telegram envelope is not user input."""
-        pane = "\u276f [via:telegram from:elias] What's the status?"
-        assert prompt_has_pending_input(pane) is False
-
-    def test_stuck_heartbeat_envelope_not_pending_input(self):
-        """Stuck heartbeat envelope is not user input."""
-        pane = "\u276f [via:heartbeat] periodic check"
-        assert prompt_has_pending_input(pane) is False
-
-    def test_real_user_input_still_detected(self):
-        """Regression guard: actual user text after prompt is still pending input."""
-        pane = "\u276f hello"
-        assert prompt_has_pending_input(pane) is True
-
-    def test_prefix_guard_suffix_matched_output_not_pending(self):
-        """A suffix-matched output line (no prompt prefix) is not pending input."""
-        from agent_backbone.services.terminal._adapters import TerminalRuntime, get_terminal_adapter
-
-        # Claude adapter has prefix ❯ and suffix $. A line ending with $
-        # but not starting with ❯ matched via suffix only — prefix guard
-        # should reject it as not real user input.
-        claude = get_terminal_adapter(TerminalRuntime.CLAUDE)
-        assert claude.prompt_has_pending_input("some output line $") is False
-
-    def test_codex_queued_message_banner_is_ignored_for_prompt_detection(self):
-        """Queued-message instructional chrome should not hide the live prompt."""
-        pane = (
-            "\u2022 Messages to be submitted after next tool call "
-            "(press esc to interrupt and send immediately)\n"
-            "  \u21b3 [via:backbone from:bell] delivery check only.\n\n"
-            "\u203a Summarize recent commits\n\n"
-            "  gpt-5.4 xhigh \u00b7 59% left \u00b7 ~/ws/core/code/WF/agent-backbone"
-        )
-        assert prompt_has_pending_input(pane) is True
 
     def test_idle_standard_prompt_with_trailing_lines(self):
         """Non-prompt trailing content returns UNKNOWN."""

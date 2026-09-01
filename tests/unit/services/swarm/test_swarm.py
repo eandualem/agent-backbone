@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
-from agent_backbone.services.database import BackboneDB, build_engine
 from agent_backbone.services.infrastructure import StartResult
 from agent_backbone.services.swarm import (
     SwarmError,
@@ -127,18 +126,6 @@ class TestIssueRef:
     def test_rejects_bare_number(self):
         with pytest.raises(SwarmError):
             parse_issue_ref("#42")
-
-
-@pytest.fixture
-async def db():
-    engine = build_engine("sqlite+aiosqlite:///:memory:")
-    db = BackboneDB(engine)
-    await db.start()
-    try:
-        yield db
-    finally:
-        db._engine = None
-        await engine.dispose()
 
 
 class _FakeStore:

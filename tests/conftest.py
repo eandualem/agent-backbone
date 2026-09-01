@@ -79,12 +79,19 @@ def make_config(tmp_path: Path, **overrides) -> BackboneConfig:
 @pytest.fixture(autouse=True)
 def reset_module_state():
     """Reset module-level caches between tests."""
-    from agent_backbone.api.session_updates import reset_sessions_update_state
     from agent_backbone.services.routing import _dedup
+    from tests.support import reset_session_updates
 
     yield
     _dedup.clear()
-    reset_sessions_update_state()
+    reset_session_updates()
+
+
+@pytest.fixture
+async def db():
+    """An in-memory BackboneDB with the full schema, disposed after the test."""
+    async with BackboneDB.connect() as db:
+        yield db
 
 
 @pytest.fixture
