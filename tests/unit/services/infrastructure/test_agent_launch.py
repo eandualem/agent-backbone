@@ -288,8 +288,8 @@ class TestApproveAgent:
         ):
             outcome, evidence = await approve_agent("ike", runtime="claude", settle_seconds=0)
         assert outcome == "not_waiting"
-        assert evidence[0].startswith("terminal shows no permission prompt")
-        keys.assert_not_awaited()
+        assert evidence[0].startswith("terminal shows no active permission prompt")
+        keys.assert_not_called()
 
     async def test_unknown_answer_sequence_is_refused(self):
         from agent_backbone.services.infrastructure._agents import approve_agent
@@ -308,3 +308,18 @@ class TestApproveAgent:
 
         with patch(f"{_MOD}.session_exists", return_value=False):
             assert (await approve_agent("ike", runtime="claude"))[0] == "offline"
+
+    async def test_stale_dialog_above_an_idle_prompt_is_not_answered(self):
+        # The dialog text is still on screen but the runtime is back at its
+        # prompt with typed text — Enter would submit that text.
+        from agent_backbone.services.infrastructure._agents import approve_agent
+
+        stale = self.DIALOG + "❯ rm -rf build\n  ? for shortcuts\n"
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value=stale),
+            patch("agent_backbone.services.terminal._adapters.send_keys") as keys,
+        ):
+            outcome, _ = await approve_agent("ike", runtime="claude", settle_seconds=0)
+        assert outcome == "not_waiting"
+        keys.assert_not_called()

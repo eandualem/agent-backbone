@@ -200,3 +200,47 @@ class TestPermissionDialogs:
 
     def test_shell_has_no_answer(self):
         assert get_terminal_adapter("shell").approve_keys == ()
+
+
+# The same dialogs a moment after they were answered: the text is still in
+# the last 15 lines, but the runtime is back at its input. A state reading
+# may still call this "waiting"; answering must not.
+CODEX_DIALOG_ANSWERED = (
+    CODEX_PERMISSION_DIALOG + "• Ran printf 'hi\\n' > hello.txt\n"
+    "  └ (no output)\n"
+    "› Ask Codex to do anything\n"
+    "  gpt-5.6-sol default · /tmp/perm/codex\n"
+)
+
+CLAUDE_DIALOG_ANSWERED_WITH_TYPED_TEXT = (
+    CLAUDE_PERMISSION_DIALOG + "⏺ Created hello.txt\n❯ now delete it\n  ? for shortcuts\n"
+)
+
+OPENCODE_DIALOG_ANSWERED = (
+    OPENCODE_PERMISSION_DIALOG + "     hi\n"
+    "     ▣  Build · Big Pickle · 2.1s\n"
+    "┃  Build · Big Pickle OpenCode Zen\n"
+    "   /tmp/perm/opencode                 8.7K (4%)  ctrl+p commands  • OpenCode 1.18.25\n"
+)
+
+
+class TestActiveDialogGate:
+    def test_live_dialogs_are_active(self):
+        assert get_terminal_adapter("claude").detect_active_dialog(CLAUDE_PERMISSION_DIALOG)
+        assert get_terminal_adapter("codex").detect_active_dialog(CODEX_PERMISSION_DIALOG)
+        assert get_terminal_adapter("opencode").detect_active_dialog(OPENCODE_PERMISSION_DIALOG)
+
+    def test_answered_dialogs_are_not_active(self):
+        # Stale "Press enter to confirm" above an idle prompt: Enter here would
+        # submit whatever is typed at that prompt.
+        codex = get_terminal_adapter("codex")
+        assert codex.detect_waiting_for_human(CODEX_DIALOG_ANSWERED)  # loose state reading
+        assert not codex.detect_active_dialog(CODEX_DIALOG_ANSWERED)  # strict answer gate
+        claude = get_terminal_adapter("claude")
+        assert not claude.detect_active_dialog(CLAUDE_DIALOG_ANSWERED_WITH_TYPED_TEXT)
+        opencode = get_terminal_adapter("opencode")
+        assert not opencode.detect_active_dialog(OPENCODE_DIALOG_ANSWERED)
+
+    def test_unverified_runtimes_have_no_answer(self):
+        assert get_terminal_adapter("gemini").approve_keys == ()
+        assert get_terminal_adapter("aider").approve_keys == ()

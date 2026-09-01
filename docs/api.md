@@ -57,7 +57,7 @@ Same body; starts a known agent (`dir` in the body registers it first).
 Body (optional): `{"from_entity": "orch"}`. Answers the permission prompt
 the registered agent's runtime is showing — the runtime's affirmative key,
 sent only while the dialog is visible. Response
-`{"ok": true, "session", "outcome": "approved", "evidence": [...], "approved_by"}`;
+`{"ok": true, "session": "app", "outcome": "approved", "evidence": ["..."], "approved_by": "orch"}`;
 the evidence quotes the dialog and whether it cleared. Errors carry
 `{"outcome", "evidence"}`: `409 not_waiting` (no prompt on screen — nothing
 typed), `400 unsupported` (no verified answer for that runtime),

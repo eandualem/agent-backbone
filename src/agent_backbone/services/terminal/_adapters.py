@@ -131,6 +131,10 @@ def _runtime_from_prompt_line(pane_content: str) -> TerminalRuntime:
     return TerminalRuntime.UNKNOWN
 
 
+# A dialog's own option lines: "❯ 1. Yes", "› 1. Yes, proceed (y)", "● 1. Yes", "  2. No".
+_DIALOG_OPTION_RE = re.compile(r"^\S{0,2}\s*\d{1,2}\.\s")
+
+
 def _runtime_analysis_line_pairs(pane_content: str) -> list[tuple[str, str]]:
     """Narrow runtime matching to the active prompt region near the pane tail."""
     pairs = _prompt_tail_line_pairs(pane_content)
@@ -237,6 +241,39 @@ class TerminalAdapter:
         tail = sanitize_pane_content(pane_content).strip().splitlines()[-15:]
         lowered = "\n".join(line.lower() for line in tail)
         return any(marker in lowered for marker in self.prompt_markers)
+
+    def detect_active_dialog(self, pane_content: str) -> bool:
+        """Whether a permission dialog is on screen *right now*.
+
+        The stricter gate used before answering one (``approve_prompt``).
+        ``detect_waiting_for_human`` is a state reading — a marker anywhere
+        in the tail is enough. Answering needs more, because ``Enter`` on an
+        idle prompt submits whatever is typed there. So the last marker must
+        be the runtime's most recent surface: nothing after it may look like
+        an input prompt (empty or with typed text), a placeholder or status
+        chrome — only the dialog's own numbered options and hints.
+        """
+        if not self.prompt_markers:
+            return False
+        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).strip().splitlines()]
+        lines = lines[-15:]
+        last_marker = None
+        for i, line in enumerate(lines):
+            if any(marker in line.lower() for marker in self.prompt_markers):
+                last_marker = i
+        if last_marker is None:
+            return False
+        for line in lines[last_marker + 1 :]:
+            if not line or all(ch in _BOX_CHARS for ch in line):
+                continue
+            if _DIALOG_OPTION_RE.match(line):
+                continue  # the dialog's own "❯ 1. Yes" / "› 1. Yes, proceed" cursor line
+            lowered = line.lower()
+            if self._matches_prompt_line(line) or self._is_status_chrome_line(line):
+                return False  # the runtime is back at its input; the dialog is history
+            if any(fragment in lowered for fragment in self.placeholder_fragments):
+                return False
+        return True
 
     def detect_idle(self, pane_content: str) -> bool:
         """Whether the pane currently shows an interactive prompt surface."""
@@ -476,9 +513,8 @@ class GeminiAdapter(TerminalAdapter):
         "failed to sign in",
         "waiting for auth",
     )
-    # "● 1. Yes, allow once" is preselected (from Gemini CLI's dialog; not
-    # re-verified live — see the README's Gemini note).
-    approve_keys = ("Enter",)
+    # approve_keys stays empty until the dialog is captured live (README's
+    # Gemini note): the backbone answers only what it has seen.
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 
@@ -554,7 +590,7 @@ class AiderAdapter(TerminalAdapter):
     runtime_markers = ("aider", "aider v", "model:", "/help")
     status_fragments = ("tokens:", "cost:")
     prompt_markers = ("(y)es/(n)o", "[y/n]", "(y/n)")
-    approve_keys = ("y", "Enter")  # aider's (Y)es/(N)o line prompt; not verified live
+    # approve_keys stays empty until aider's prompt is captured live.
     submit_attempts = _MAX_SUBMIT_ATTEMPTS
     paste_settle_seconds = 0.2
 

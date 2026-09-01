@@ -460,6 +460,16 @@ async def approve_agent(
     prompt with typed text can never be "approved"), ``unsupported`` (no
     verified answer sequence for this runtime), ``offline`` or ``failed``.
     The backbone answers only what is on screen: it never guesses.
+
+    The gate is ``detect_active_dialog`` (the dialog must be the runtime's
+    most recent surface — no input prompt or placeholder below it), not the
+    looser ``detect_waiting_for_human`` state reading, so a stale
+    "press enter to confirm" line above an idle prompt is ``not_waiting``.
+    What remains is the window between the capture and the keystroke: tmux
+    has no check-and-send, so a dialog that the human answers in exactly
+    that instant would receive an extra ``Enter`` at an empty prompt. Only
+    runtime IPC (hook adapters, #88) closes that; the after-capture reports
+    what actually happened.
     """
     from agent_backbone.services.terminal._adapters import get_terminal_adapter_for_session
 
@@ -476,13 +486,13 @@ async def approve_agent(
             f"no verified way to answer a {adapter.runtime.value} permission prompt"
         ]
     tail = [ln.strip() for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-8:]
-    if not adapter.detect_waiting_for_human(pane):
-        return "not_waiting", ["terminal shows no permission prompt:", *tail]
+    if not adapter.detect_active_dialog(pane):
+        return "not_waiting", ["terminal shows no active permission prompt:", *tail]
     if not await adapter.approve_prompt(name):
         return "failed", ["tmux refused the keys", *tail]
     await asyncio.sleep(settle_seconds)
     after = await capture_pane(name, lines=60)
-    cleared = not adapter.detect_waiting_for_human(after)
+    cleared = not adapter.detect_active_dialog(after)
     verdict = "prompt cleared" if cleared else "prompt still visible after answering"
     log.info("Approved a %s permission prompt on '%s' (%s)", adapter.runtime.value, name, verdict)
     return "approved", [f"answered with {' '.join(adapter.approve_keys)}; {verdict}", *tail]
