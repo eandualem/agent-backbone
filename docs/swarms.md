@@ -13,10 +13,13 @@ backbone swarm create research --issue acme/app#42 \
 
 That single command:
 
-1. verifies `acme/app#42` exists and is open (the issue is a
+1. verifies `acme/app#42` exists and is open — GitHub must be
+   configured, one issue can have at most one active swarm, and the
+   swarm's name must not collide with an agent's (the issue is a
    prerequisite — an agent or human writes it first; the swarm never
    creates it, and an agent may only swarm on its **own** repository —
-   the swarm runs in the initiator's checkout),
+   the swarm runs in the initiator's checkout, which must be on a real
+   branch, not a detached `HEAD`),
 2. creates a worktree at `<checkout>/.backbone/swarms/research` on the
    branch `swarm/research`, inside the repository checkout of the
    initiating agent (`--initiator`, defaulting to `$BACKBONE_AGENT`, or
@@ -43,11 +46,16 @@ That single command:
 ## The lifecycle
 
 Work ends when the coordinator opens a pull request from the swarm
-branch with `Closes #N` in the body. Merging the PR closes the issue;
-the backbone sees the issue-closed event and tears the swarm down
-automatically: members stopped and forgotten, worktree removed, branch
-kept. `backbone swarm disband <name>` is the manual teardown (also
-keeps the branch, so no work is ever destroyed).
+branch with `Closes #N` in the body. When the PR's base is the
+repository's default branch, merging it closes the issue automatically;
+for any other base branch GitHub does not auto-close, so the
+coordinator (or you) closes the issue after the merge. Either way, the
+backbone sees the issue-closed event and tears the swarm down:
+members stopped and forgotten, worktree removed, branch kept.
+`backbone swarm disband <name>` is the manual teardown. The branch —
+and every commit on it — always survives teardown, but **uncommitted
+edits in the worktree are removed with it**, so make sure members have
+committed before disbanding.
 
 ```bash
 backbone swarm list              # every swarm with roster and status

@@ -50,12 +50,17 @@ def build_engine(url: str) -> AsyncEngine:
 
 
 def redact_url(url: str) -> str:
-    """Hide credentials in a database URL for logging."""
-    if "@" not in url or "://" not in url:
-        return url
-    scheme, rest = url.split("://", 1)
-    _creds, host = rest.rsplit("@", 1)
-    return f"{scheme}://***@{host}"
+    """Hide credentials in a database URL for logging.
+
+    Drops the query string too — connection parameters can carry passwords
+    or tokens (``?password=…``) that must not reach logs or ``/health``.
+    """
+    base, _, query = url.partition("?")
+    if "@" in base and "://" in base:
+        scheme, rest = base.split("://", 1)
+        _creds, host = rest.rsplit("@", 1)
+        base = f"{scheme}://***@{host}"
+    return f"{base}?***" if query else base
 
 
 class DatabaseService:

@@ -75,7 +75,7 @@ backbone config set escalation.target orch
 | `agent stop NAME…` | Kill the session(s) |
 | `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object) |
 | `agent watch [NAME] REPO…` / `agent unwatch [NAME] REPO…` | Add / remove watched repositories. Inside an agent session `NAME` defaults to the agent itself (`$BACKBONE_AGENT`), so an agent can subscribe on its own |
-| `agent forget NAME` | Remove a stopped agent from the backbone |
+| `agent forget NAME` | Remove a stopped agent from the backbone (refuses while its session is still running) |
 
 ### Every `agent start` parameter
 

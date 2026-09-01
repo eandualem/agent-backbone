@@ -155,7 +155,10 @@ class AgentStore:
             runtime=runtime
             or (existing.runtime if existing else self.config.agents_section.default_runtime),
             model=model if model is not None else (existing.model if existing else None),
-            repo=detect_repo(path) or (existing.repo if existing else ""),
+            # Keep the recorded repo only for a record that lived elsewhere (a
+            # moved project); rediscovering the same checkout trusts what the
+            # checkout says now, so a removed origin clears ownership.
+            repo=detect_repo(path) or (existing.repo if existing and existing.path != path else ""),
             watches=existing.watches if existing else (),
             tags=existing.tags if existing else (),
             env=dict(existing.env) if existing else {},

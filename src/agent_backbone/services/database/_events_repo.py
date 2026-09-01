@@ -45,7 +45,19 @@ async def record_event(
         },
     )
     row = result.fetchone()
-    return row._mapping["id"] if row else None
+    if row is not None:
+        return row._mapping["id"]
+    # The delivery id is already stored. If that earlier attempt never finished
+    # routing (no processed_at), hand back the existing row so the event is
+    # replayed instead of silently dropped.
+    existing = await conn.execute(
+        text("SELECT id, processed_at FROM events WHERE delivery_id = :delivery_id"),
+        {"delivery_id": delivery_id},
+    )
+    existing_row = existing.fetchone()
+    if existing_row is not None and existing_row._mapping["processed_at"] is None:
+        return existing_row._mapping["id"]
+    return None
 
 
 async def mark_event_processed(conn: AsyncConnection, event_id: int, outcome: str) -> None:

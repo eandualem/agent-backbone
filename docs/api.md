@@ -179,8 +179,10 @@ Connect with `auth: {api_key: "<BACKBONE_API_KEY>"}`.
 
 ### Namespace `/sessions`
 
-Server emits `sessions:update` with the same array as `GET /api/agents`
-whenever an agent starts/stops/changes state, and at least once a minute.
+Server emits `sessions:update` with the same array as `GET /api/agents`:
+a full snapshot on connect, then again whenever an agent
+starts/stops/changes state. Updates are change-only — an unchanged system
+emits nothing (the monitor job re-checks once a minute).
 
 ### Namespace `/terminal` (read-only)
 

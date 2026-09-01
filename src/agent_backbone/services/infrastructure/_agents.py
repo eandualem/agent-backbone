@@ -207,7 +207,12 @@ def launch_environment(
     env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name}
     if state_dir:
         env[STATE_DIR_ENV_KEY] = str(state_dir)
-    env.update(extra or {})
+    reserved = {RUNTIME_ENV_KEY, AGENT_ENV_KEY, STATE_DIR_ENV_KEY}
+    for key, value in (extra or {}).items():
+        if key in reserved:
+            log.warning("Ignoring reserved variable %s in agent env for '%s'", key, name)
+            continue
+        env[key] = value
     return env
 
 
@@ -285,6 +290,7 @@ async def wait_until_ready(
     from agent_backbone.services.agents.models import AgentState
 
     started = time.monotonic()
+    wall_started = time.time()
     adapter = get_terminal_adapter(runtime)
     state_path = Path(state_dir).expanduser()
     last_pane = ""
@@ -292,8 +298,11 @@ async def wait_until_ready(
         if not await session_exists(name):
             return "exited", ["tmux session ended before the agent reached its prompt"]
 
+        # Only trust hook state written by *this* start — a leftover idle file
+        # from a quickly-restarted session would otherwise report ready before
+        # the new runtime has emitted anything.
         snapshot = read_state_file(state_path, name)
-        if snapshot and snapshot.timestamp >= time.time() - (time.monotonic() - started) - 2:
+        if snapshot and snapshot.timestamp >= wall_started:
             if snapshot.state == AgentState.IDLE:
                 return "ready", [f"hook reported idle {time.time() - snapshot.timestamp:.0f}s ago"]
             if snapshot.state == AgentState.WAITING_FOR_HUMAN:

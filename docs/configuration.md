@@ -16,7 +16,8 @@ There is no configuration file. The **data directory** is the configuration:
 - **Agents** are discovered by `backbone agent start` and edited with
   `backbone agent set|watch|unwatch|forget`.
 - **Secrets** come from `<data_dir>/.env` (loaded at startup) or the
-  environment.
+  environment. Only that one file is read — a `.env` in the current
+  working directory is ignored.
 
 Only two knobs live outside the directory: `BACKBONE_DATA_DIR` (where it
 is) and `BACKBONE_DATABASE_URL` (PostgreSQL instead of the SQLite file).
@@ -49,8 +50,8 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 
 | Key | Default | Meaning |
 |---|---|---|
-| `github.intake` | `auto` | `auto` (webhook if `GITHUB_WEBHOOK_SECRET` is set, else poll), `webhook`, `poll`, `off` |
-| `github.poll_interval_seconds` | `60` | Poll frequency in poll intake |
+| `github.intake` | `auto` | `auto` (webhook if `GITHUB_WEBHOOK_SECRET` is set, else poll), `webhook` (falls back to poll, with a startup warning, when the secret is missing), `poll`, `off` |
+| `github.poll_interval_seconds` | `60` | Poll frequency in poll intake (must be positive) |
 | `github.backfill_on_start` | `true` | Webhook intake: run one poll at startup to catch missed events |
 | `github.backfill_lookback_hours` | `24` | How far back the first poll looks for a repository with no stored events |
 
@@ -71,8 +72,8 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | `timing.queue_expiry_minutes` | `30` | Queued messages older than this are expired |
 | `timing.stall_threshold_seconds` | `5400` | Busy on one issue for longer than this is a stall |
 | `timing.escalation_dedup_seconds` | `1800` | Do not repeat the same escalation within this window |
-| `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period |
-| `timing.retry_interval_seconds` | `300` | `delivery-retry` job period |
+| `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period (must be positive) |
+| `timing.retry_interval_seconds` | `300` | `delivery-retry` job period (must be positive) |
 | `timing.start_timeout_seconds` | `60` | How long `agent start` waits for the prompt |
 | `timing.delivery_retention_days` | `30` | Deliveries and events older than this are pruned (every 6 h) |
 
@@ -122,10 +123,11 @@ Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
 | `repo` | `git remote origin` / `agent set` | `owner/name` the agent owns |
 | `watches` | `agent watch` | Repositories it also hears about |
 | `tags`, `description` | `agent set` | Free-form, returned by the API |
-| `env` | `agent set env='{"K":"V"}'` | Extra environment exported into the session (e.g. an API key) |
+| `env` | `agent set env='{"K":"V"}'` | Extra environment exported into the session (e.g. an API key). Values are stored with the agent record — treat them like `.env` contents |
 
 Exported into every session the backbone starts: `BACKBONE_RUNTIME`,
-`BACKBONE_AGENT`, `BACKBONE_STATE_DIR`. The API key is **not** exported.
+`BACKBONE_AGENT`, `BACKBONE_STATE_DIR` (an agent's `env` cannot override
+these reserved keys). The API key is **not** exported.
 
 ## Secrets (`.env` / environment)
 

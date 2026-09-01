@@ -73,6 +73,19 @@ class SwarmORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     completed_at: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    __table_args__ = (
+        # One active swarm per issue — enforced by the database so concurrent
+        # creates cannot attach two swarms to the same issue.
+        Index(
+            "uq_swarms_active_issue",
+            "repo",
+            "issue_number",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
+
 
 class EventORM(Base):
     """Every inbound event (webhook, poll, telegram, api) before/after routing."""
@@ -127,10 +140,12 @@ class DeliveryORM(Base):
             "session_name",
             unique=True,
             postgresql_where=text(
-                "issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL"
+                " AND outcome IN ('attempting','delivered','retried')"
             ),
             sqlite_where=text(
-                "issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL"
+                " AND outcome IN ('attempting','delivered','retried')"
             ),
         ),
     )

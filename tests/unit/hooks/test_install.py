@@ -54,8 +54,8 @@ class TestInstallClaude:
         assert script.is_file()
         assert script.read_text() == install.hook_script_source().read_text()
         assert settings_path == project / ".claude" / "settings.json"
-        assert command.startswith('/usr/bin/python3 "')
-        assert f'--state-dir "{data_dir / "state"}"' in command
+        assert command.startswith("/usr/bin/python3 ")
+        assert f"--state-dir {data_dir / 'state'}" in command
         assert command.endswith("--tag agent-backbone")
         saved = json.loads(settings_path.read_text())
         assert saved["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] == command
@@ -98,7 +98,7 @@ class TestLaunchSettings:
         assert set(saved) == {"hooks"}
         assert set(saved["hooks"]) == {e for e, _ in install.CLAUDE_EVENTS}
         command = saved["hooks"]["Stop"][0]["hooks"][0]["command"]
-        assert f'--state-dir "{data_dir / "state"}"' in command
+        assert f"--state-dir {data_dir / 'state'}" in command
         assert command.endswith("--tag agent-backbone")
 
     def test_regeneration_is_idempotent(self, tmp_path):

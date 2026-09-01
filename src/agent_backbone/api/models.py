@@ -99,6 +99,21 @@ class WatchRequest(BaseModel):
     repo: str
 
 
+class DeliveryRecord(BaseModel):
+    """A single delivery attempt record."""
+
+    id: int
+    kind: str = "issue"
+    repo: str = ""
+    issue_number: int | None = None
+    target_entity: str
+    session_name: str
+    outcome: str
+    flow_name: str = ""
+    preview: str = ""
+    created_at: str = ""
+
+
 class AgentInspectResponse(BaseModel):
     """Everything the backbone knows about one agent, with the evidence."""
 
@@ -225,21 +240,6 @@ class IssueDependencies(BaseModel):
 
 
 # --- Deliveries ---
-
-
-class DeliveryRecord(BaseModel):
-    """A single delivery attempt record."""
-
-    id: int
-    kind: str = "issue"
-    repo: str = ""
-    issue_number: int | None = None
-    target_entity: str
-    session_name: str
-    outcome: str
-    flow_name: str = ""
-    preview: str = ""
-    created_at: str = ""
 
 
 class DeliveryStats(BaseModel):

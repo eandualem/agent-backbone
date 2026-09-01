@@ -31,8 +31,14 @@ def _read_tail(action_log: str | Path | None, max_lines: int) -> list[dict]:
 
 
 def _repo_matches(entry: dict, repo: str) -> bool:
+    """Scoped lookups require the entry to name the same repository.
+
+    An entry without repo metadata (e.g. ``gh issue comment`` run without
+    ``--repo``) matches only unscoped lookups — otherwise a comment on A#42
+    could be attributed to B#42.
+    """
     entry_repo = entry.get("repo") or ""
-    return not entry_repo or not repo or entry_repo.casefold() == repo.casefold()
+    return not repo or (bool(entry_repo) and entry_repo.casefold() == repo.casefold())
 
 
 def find_outgoing_comment(

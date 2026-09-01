@@ -167,7 +167,7 @@ def _comment_action(tool: str, tool_input: dict, now: float) -> dict | None:
             number = int(match.group(1))
             repo_match = _GH_REPO_RE.search(command)
             repo = repo_match.group(1) if repo_match else None
-    elif tool.startswith("mcp__github__") and "comment" in tool:
+    elif tool.startswith("mcp__") and tool.endswith("__add_issue_comment"):
         raw = tool_input.get("issue_number") or tool_input.get("issueNumber")
         try:
             number = int(raw) if raw is not None else None

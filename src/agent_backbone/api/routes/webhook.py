@@ -76,6 +76,7 @@ async def _handle(
     try:
         payload = json.loads(payload_body)
     except json.JSONDecodeError:
+        db.forget_delivery(delivery_id)
         return Response(content="Invalid JSON", status_code=400)
 
     event_type_str = request.headers.get("X-GitHub-Event", "")
@@ -83,17 +84,22 @@ async def _handle(
         return Response(content="pong", status_code=200)
     action = payload.get("action", "")
 
-    event = normalize_event(event_type_str, action, payload, delivery_id)
-    log.info(
-        "Received: delivery=%s event=%s action=%s #%d targets=%s",
-        delivery_id,
-        event_type_str,
-        action,
-        event.issue.number,
-        event.issue.labels.targets,
-    )
-
-    outcome = await dispatch_event_async(event, config, db, gh, delivery_svc, dispatch_svc)
+    # If anything past this point fails, drop the delivery id from the hot
+    # cache so GitHub's retry of the same delivery is processed, not skipped.
+    try:
+        event = normalize_event(event_type_str, action, payload, delivery_id)
+        log.info(
+            "Received: delivery=%s event=%s action=%s #%d targets=%s",
+            delivery_id,
+            event_type_str,
+            action,
+            event.issue.number,
+            event.issue.labels.targets,
+        )
+        outcome = await dispatch_event_async(event, config, db, gh, delivery_svc, dispatch_svc)
+    except Exception:
+        db.forget_delivery(delivery_id)
+        raise
     return Response(content=outcome, status_code=200)
 
 

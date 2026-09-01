@@ -168,6 +168,7 @@ class GitHubPoller:
                 events.append(comment_event_from_api(comment, issue, repo))
                 newest = max(newest, comment.get("updated_at", comment.get("created_at", "")))
 
+            had_errors = False
             for event in events:
                 if self._db.is_duplicate(event.delivery_id, config.backbone.max_delivery_ids):
                     summary["deduped"] = summary.get("deduped", 0) + 1
@@ -180,9 +181,13 @@ class GitHubPoller:
                     summary[key] = summary.get(key, 0) + 1
                 except Exception:
                     log.exception("Dispatch failed for polled event %s", event.delivery_id)
+                    self._db.forget_delivery(event.delivery_id)
+                    had_errors = True
                     summary["errors"] = summary.get("errors", 0) + 1
 
-            if newest > since:
+            # Only advance the cursor when every event dispatched; otherwise the
+            # next poll refetches the window and the events table dedups the rest.
+            if newest > since and not had_errors:
                 self._since[repo] = _iso(_parse(newest) + timedelta(seconds=1))
             else:
                 self._since[repo] = since

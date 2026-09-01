@@ -94,7 +94,37 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
 
 
 class SessionsNamespace(_AuthenticatedNamespace):
-    """Socket.IO namespace for enriched session state subscriptions."""
+    """Socket.IO namespace for enriched session state subscriptions.
+
+    Updates are change-driven; a full snapshot is sent to each client on
+    connect so subscribers never start blind.
+    """
+
+    async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
+        if not await super().on_connect(sid, environ, auth):
+            return False
+        from agent_backbone.api.session_updates import (
+            SESSIONS_UPDATE_EVENT,
+            build_session_snapshot,
+            get_cached_session_snapshot,
+        )
+
+        app = getattr(self.server, "fastapi_app", None)
+        state = getattr(app, "state", None)
+        config = getattr(state, "config", None)
+        state_svc = getattr(state, "state_service", None)
+        tmux_svc = getattr(state, "tmux_service", None)
+        if config is None or state_svc is None or tmux_svc is None:
+            return True
+        try:
+            snapshot = await get_cached_session_snapshot(
+                lambda: build_session_snapshot(config, state_svc, tmux_svc)
+            )
+            payload = [agent.model_dump(mode="json") for agent in snapshot]
+            await self.emit(SESSIONS_UPDATE_EVENT, payload, to=sid)
+        except Exception:
+            log.exception("Could not send the initial /sessions snapshot (non-fatal)")
+        return True
 
 
 class TerminalNamespace(_AuthenticatedNamespace):

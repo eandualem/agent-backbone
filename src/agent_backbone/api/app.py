@@ -115,8 +115,14 @@ async def lifespan(app: FastAPI):
 
     app.state.agent_store = AgentStore(app.state.db, data_dir, on_change=_publish)
     lifecycle.register("agents", app.state.agent_store)
-    await app.state.agent_store.start()
+    await lifecycle.start_all()
     config: BackboneConfig = app.state.config
+
+    if config.github.intake == "webhook" and not config.webhook_secret:
+        log.warning(
+            "github.intake=webhook but GITHUB_WEBHOOK_SECRET is not set — "
+            "webhooks would all be rejected, falling back to polling"
+        )
 
     # Stage 2: everything else, against the loaded snapshot.
     app.state.github = GitHubClient(config) if config.github_ready else None

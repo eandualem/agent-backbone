@@ -93,7 +93,8 @@ Derived from the state plus the terminal, right before anything is pasted:
 
 tmux **copy mode** (someone scrolled the pane) is not a condition: the
 backbone cancels it automatically before delivering and on every monitor
-tick.
+tick. If the cancel fails, the session is reported as `human_typing`
+(a frozen pane swallows pastes) and the message is queued.
 
 ## Message
 

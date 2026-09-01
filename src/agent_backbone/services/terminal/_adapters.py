@@ -407,7 +407,9 @@ class ClaudeCodeAdapter(TerminalAdapter):
     runtime_markers = ("claude code", "claude max", "/effort", "shift+tab to cycle")
     status_fragments = (
         "for shortcuts",
-        "/effort",
+        # Status-bar form only — a bare "/effort" would also match the command
+        # typed at the prompt and hide the human's pending input.
+        "· /effort",
         "accept edits on",
         "auto mode on",
         "shift+tab to cycle",

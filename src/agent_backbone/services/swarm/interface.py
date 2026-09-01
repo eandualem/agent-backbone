@@ -72,8 +72,10 @@ def _issue_url(repo: str, number: int) -> str:
 async def _verify_issue(gh, repo: str, number: int) -> str:
     """The issue's title. Raises SwarmError when it is missing or closed."""
     if gh is None:
-        log.warning("GitHub not configured — cannot verify %s#%s", repo, number)
-        return f"issue #{number}"
+        raise SwarmError(
+            "GitHub is not configured — a swarm needs its issue verified and is torn "
+            "down by the issue-closed event (set GITHUB_TOKEN and try again)"
+        )
     try:
         issue = await gh.get_issue(number, repo_full_name=repo)
     except Exception as exc:
@@ -135,8 +137,15 @@ async def create_swarm(
         raise SwarmError(f"invalid swarm name {name!r} (lowercase, digits, dashes)")
     if await db.get_swarm(name) is not None:
         raise SwarmError(f"swarm '{name}' already exists")
+    if config.agents.get(name) is not None or await session_exists(name):
+        # `backbone tell <swarm>` resolves agents first, so a swarm sharing an
+        # agent's name would be unreachable.
+        raise SwarmError(f"swarm name '{name}' is already used by an agent")
 
     repo, issue_number = parse_issue_ref(issue_ref)
+    existing = await db.find_active_swarm_for_issue(repo, issue_number)
+    if existing is not None:
+        raise SwarmError(f"swarm '{existing['name']}' is already working {repo}#{issue_number}")
     title = await _verify_issue(gh, repo, issue_number)
 
     # The worktree is created from the initiating agent's checkout of the repo.
@@ -171,7 +180,10 @@ async def create_swarm(
         if config.agents.get(agent_name) is not None or await session_exists(agent_name):
             raise SwarmError(f"agent name '{agent_name}' is already in use")
 
-    base_branch = await current_branch(repo_dir)
+    try:
+        base_branch = await current_branch(repo_dir)
+    except RuntimeError as exc:
+        raise SwarmError(str(exc)) from exc
     worktree, branch = await create_worktree(repo_dir, name)
 
     await db.create_swarm(
@@ -306,7 +318,13 @@ async def teardown_swarm(
     worktree = Path(swarm["worktree_dir"])
     # The worktree lives at <repo_dir>/.backbone/swarms/<name>.
     repo_dir = worktree.parent.parent.parent
-    await remove_worktree(repo_dir, worktree)
+    if worktree.exists() and not await remove_worktree(repo_dir, worktree):
+        # Stop here so the worktree is not silently orphaned: the members are
+        # stopped, nothing is forgotten, and teardown can be retried.
+        raise SwarmError(
+            f"could not remove worktree {worktree} — resolve the git error and "
+            f"disband '{name}' again"
+        )
     for member in members:
         try:
             await store.forget(member.name)

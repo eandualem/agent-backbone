@@ -277,6 +277,21 @@ async def _load_config() -> BackboneConfig:
         return direct.config
 
 
+async def _client_config() -> BackboneConfig:
+    """Configuration for talking to the running API.
+
+    ``backbone.host``/``backbone.port`` may be stored in the database, so the
+    bootstrap defaults alone could point at the wrong address. Falls back to
+    the bootstrap snapshot when the database cannot be read.
+    """
+    boot = bootstrap_config()
+    try:
+        async with _Direct(boot) as direct:
+            return direct.config
+    except Exception:
+        return boot
+
+
 async def _up_detached(config: BackboneConfig) -> int:
     from agent_backbone.services.terminal import session_exists, start_session
 
@@ -399,7 +414,7 @@ def _parse_value(raw: str) -> Any:
 
 async def _config_cmd(args: argparse.Namespace) -> int:
     sub = args.config_command
-    boot = bootstrap_config()
+    boot = await _client_config()
 
     if sub == "list":
         async with _Direct(boot) as direct:
@@ -491,7 +506,7 @@ def _print_start_result(data: dict) -> None:
 
 
 async def _agent_start(args: argparse.Namespace) -> int:
-    boot = bootstrap_config()
+    boot = await _client_config()
     if len(args.names) > 1:
         if args.dir or args.watch:
             print("--dir/--watch apply to a single agent; start a group by name only")
@@ -611,7 +626,7 @@ async def _agent(args: argparse.Namespace) -> int:
     if sub == "start":
         return await _agent_start(args)
 
-    boot = bootstrap_config()
+    boot = await _client_config()
     api_up = await _api_up(boot)
 
     if sub == "list":
@@ -771,6 +786,14 @@ async def _agent(args: argparse.Namespace) -> int:
                 return 0
             print(f"error: {result[1] if result else 'API unreachable'}")
             return 1
+        from agent_backbone.services.terminal import session_exists
+
+        if await session_exists(args.name):
+            print(
+                f"{args.name}: session is still running — "
+                f"stop it first (`backbone agent stop {args.name}`)"
+            )
+            return 1
         async with _Direct(boot) as direct:
             removed = await direct.store.forget(args.name)
         print(f"{args.name}: {'forgotten' if removed else 'unknown agent'}")
@@ -789,7 +812,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
 
 
 async def _tell(args: argparse.Namespace) -> int:
-    boot = bootstrap_config()
+    boot = await _client_config()
     text = " ".join(args.message)
     payload = {
         "target_session": args.agent,
@@ -848,7 +871,7 @@ def cmd_hooks(args: argparse.Namespace) -> int:
 
 
 async def _swarm(args: argparse.Namespace) -> int:
-    boot = bootstrap_config()
+    boot = await _client_config()
     sub = args.swarm_command
 
     if sub == "create":

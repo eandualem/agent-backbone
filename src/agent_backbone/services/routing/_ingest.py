@@ -26,6 +26,17 @@ def _source(delivery_id: str) -> str:
     return "poll" if delivery_id.startswith("poll:") else "webhook"
 
 
+def _dedup_id(event: IssueEvent) -> str:
+    """The events-table dedup key — source-independent where possible.
+
+    Webhook and poll synthesise different delivery ids for the same comment,
+    so comments dedup on repo + comment id instead of the transport's id.
+    """
+    if event.event_type == EventType.COMMENT_CREATED and event.comment and event.comment.id:
+        return f"comment:{issue_repo(event.issue)}:{event.comment.id}"
+    return event.delivery_id
+
+
 def _summary(event: IssueEvent) -> str:
     title = event.issue.title[:120]
     if event.event_type == EventType.COMMENT_CREATED and event.comment:
@@ -46,7 +57,7 @@ async def dispatch_event(
     if event.delivery_id:
         try:
             event_id = await db.record_event(
-                delivery_id=event.delivery_id,
+                delivery_id=_dedup_id(event),
                 source=_source(event.delivery_id),
                 repo=issue_repo(event.issue),
                 event_type=event.event_type.value,

@@ -37,6 +37,7 @@ _EXPECTED_INDEXES = {
     "uq_mq_comment_dedup",
     "uq_mq_dm_dedup",
     "uq_mq_issue_dedup",
+    "uq_swarms_active_issue",
 }
 
 

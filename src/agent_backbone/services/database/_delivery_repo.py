@@ -84,7 +84,8 @@ async def claim_delivery_attempt(
                VALUES ('issue', :repo, :issue_number, :target_entity, :session_name,
                        'attempting', :flow_name, :preview, :now)
                ON CONFLICT (repo, issue_number, session_name)
-               WHERE issue_number IS NOT NULL
+               WHERE kind = 'issue'
+                 AND issue_number IS NOT NULL
                  AND outcome IN ('attempting','delivered','retried')
                DO NOTHING
                RETURNING id"""

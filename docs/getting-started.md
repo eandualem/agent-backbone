@@ -94,6 +94,11 @@ app: ready — claude repo acme/app
 The agent is named after the directory, its repository was read from
 `git remote origin`, and `start` returned when Claude was at its prompt.
 
+A bare `agent start` launches the default runtime (Claude Code). If you
+use a different CLI, pass it explicitly the first time —
+`backbone agent start --runtime codex` — or change the default once with
+`backbone config set agents.default_runtime codex`.
+
 Pick the CLI and model per agent — both are recorded and reused by later
 starts (full reference: [CLI](cli.md)):
 

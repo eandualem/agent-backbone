@@ -30,9 +30,20 @@ async def is_git_repo(directory: Path) -> bool:
 
 
 async def current_branch(directory: Path) -> str:
-    """The checkout's current branch — the base a swarm's PR must target."""
+    """The checkout's current branch — the base a swarm's PR must target.
+
+    Raises RuntimeError for a detached HEAD or an unreadable checkout: a
+    silently guessed base would make the coordinator target the wrong branch.
+    """
     rc, out, _ = await _git(directory, "rev-parse", "--abbrev-ref", "HEAD")
-    return out if rc == 0 and out != "HEAD" else "main"
+    if rc != 0 or not out:
+        raise RuntimeError(f"could not determine the current branch of {directory}")
+    if out == "HEAD":
+        raise RuntimeError(
+            f"{directory} is on a detached HEAD — check out the branch the swarm's "
+            "PR should target, then create the swarm again"
+        )
+    return out
 
 
 async def _exclude_swarm_dir(repo_dir: Path) -> None:

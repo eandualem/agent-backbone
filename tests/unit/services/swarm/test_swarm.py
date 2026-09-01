@@ -164,9 +164,10 @@ class TestCreateSwarm:
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
+    @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
     async def test_create_full_flow(
-        self, _git, mock_wt, _exists, mock_start, _ready, mock_deliver, db, tmp_path
+        self, _git, _branch, mock_wt, _exists, mock_start, _ready, mock_deliver, db, tmp_path
     ):
         config, repo_dir = _swarm_config(tmp_path)
         worktree = repo_dir / ".backbone" / "swarms" / "research"
@@ -231,9 +232,21 @@ class TestCreateSwarm:
     @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
+    @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
     async def test_failed_member_start_rolls_back(
-        self, _git, mock_wt, _exists, mock_stop, _start, _ready, _deliver, mock_rm, db, tmp_path
+        self,
+        _git,
+        _branch,
+        mock_wt,
+        _exists,
+        mock_stop,
+        _start,
+        _ready,
+        _deliver,
+        mock_rm,
+        db,
+        tmp_path,
     ):
         config, repo_dir = _swarm_config(tmp_path)
         worktree = repo_dir / ".backbone" / "swarms" / "research"

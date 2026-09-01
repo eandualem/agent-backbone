@@ -111,6 +111,11 @@ async def get_session_intelligence(
     if tmux_vars.get("pane_in_mode") == "1":
         cleared = await adapter.exit_copy_mode(session_name)
         evidence.append(f"tmux copy mode detected — {'cleared' if cleared else 'could not clear'}")
+        if not cleared:
+            # A frozen pane swallows pastes; report the session as occupied by
+            # a human (copy mode is usually someone scrolling) so the message
+            # is queued instead of lost.
+            return profile(SessionIntelligence.HUMAN_TYPING, "pane stuck in copy mode")
         with contextlib.suppress(Exception):
             pane_content = await capture_pane(session_name)
 

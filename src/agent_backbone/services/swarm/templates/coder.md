@@ -12,5 +12,5 @@ vertical slice, including its tests.
   you do not own, ask the coordinator to arrange it.
 - Run the project's checks before reporting a task complete, and report
   honestly: what you built, what passes, what you skipped.
-- Report to the coordinator with `backbone tell {coordinator}` when done
-  or blocked; then wait for the next assignment.
+- Report to the coordinator with `backbone tell {coordinator} "<your report>"`
+  when done or blocked; then wait for the next assignment.

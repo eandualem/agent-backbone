@@ -280,6 +280,10 @@ class BackboneDB:
             self._seen_deliveries.popitem(last=False)
         return False
 
+    def forget_delivery(self, delivery_id: str) -> None:
+        """Drop a delivery id from the hot cache so a retry is not treated as a duplicate."""
+        self._seen_deliveries.pop(delivery_id, None)
+
     # --- Agent state (delegates to _state_repo) ---
 
     async def get_agent_state(self, session_name: str) -> dict | None:

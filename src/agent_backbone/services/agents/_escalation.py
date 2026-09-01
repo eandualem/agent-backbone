@@ -34,6 +34,13 @@ async def safe_deliver(*args, **kwargs):
     return await _safe_deliver(*args, **kwargs)
 
 
+def outcome_queues(outcome: str, kind: str) -> bool:
+    """Lazy proxy to avoid importing routing delivery during module import."""
+    from agent_backbone.services.routing._delivery import outcome_queues as _outcome_queues
+
+    return _outcome_queues(outcome, kind)
+
+
 class TelegramService:
     """Lazy proxy to avoid importing telegram service during module import."""
 
@@ -225,7 +232,6 @@ async def check_plan_waiting(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB | None = None
 ) -> None:
     """Tell Telegram and the escalation target about agents waiting on a plan."""
-    del db
     state_path = config.state_dir
     stale_threshold = config.agent_state.stale_threshold_seconds
     notification_chat_id = config.telegram.notification_chat_id
@@ -275,8 +281,17 @@ async def check_plan_waiting(
                     name, name, plan_file, plan_title, issue_number=snapshot.current_issue
                 )
                 outcome = await safe_deliver(
-                    escalation_session, orch_msg, config, priority=True, delivery_kind="escalation"
+                    escalation_session,
+                    orch_msg,
+                    config,
+                    db=db,
+                    priority=True,
+                    delivery_kind="escalation",
                 )
-                if outcome == "delivered":
+                # A queued notification will reach the target when it frees up,
+                # so record it either way and do not enqueue it again next run.
+                if outcome == "delivered" or outcome_queues(outcome, "escalation"):
                     _record_plan_notification(name, orch_ref)
-                    log.info("Sent plan notification to %s for %s", escalation_session, name)
+                    log.info(
+                        "Plan notification for %s -> %s (%s)", name, escalation_session, outcome
+                    )

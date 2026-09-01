@@ -10,6 +10,7 @@ are idempotent.
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -50,7 +51,8 @@ _TAG_ARG = f"--tag {HOOK_MARKER}"
 def hook_command(script: Path, state_dir: Path, python: str | None = None) -> str:
     """Shell command Claude Code runs for each event (tagged so we can find it again)."""
     interpreter = python or "python3"
-    return f'{interpreter} "{script}" --state-dir "{state_dir}" {_TAG_ARG}'
+    quoted = shlex.join([interpreter, str(script), "--state-dir", str(state_dir)])
+    return f"{quoted} {_TAG_ARG}"
 
 
 def _is_ours(entry: dict) -> bool:

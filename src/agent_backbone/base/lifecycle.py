@@ -32,12 +32,15 @@ class LifecycleManager:
         self._components[name] = component
 
     async def start_all(self) -> None:
-        """Start all components in registration order.
+        """Start all not-yet-started components in registration order.
 
-        On failure, rolls back already-started components in reverse order.
+        Safe to call repeatedly during staged startup: components already
+        started are left alone. On failure, rolls back every started
+        component in reverse order.
         """
-        self._started.clear()
         for name, component in self._components.items():
+            if name in self._started:
+                continue
             try:
                 _log.info("Starting component: %s", name)
                 await component.start()

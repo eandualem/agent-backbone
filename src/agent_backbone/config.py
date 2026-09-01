@@ -118,6 +118,15 @@ _SETTING_CHOICES: dict[str, tuple[str, ...]] = {
     "agents.default_runtime": ("claude", "codex", "gemini", "opencode", "aider", "cursor", "shell"),
 }
 _INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids"})
+# Scheduler job periods: a zero or negative value would make Scheduler.add()
+# raise on the next startup, so reject it at write time.
+_POSITIVE_SETTINGS = frozenset(
+    {
+        "github.poll_interval_seconds",
+        "timing.monitor_interval_seconds",
+        "timing.retry_interval_seconds",
+    }
+)
 
 
 def validate_setting(key: str, value: Any) -> Any:
@@ -150,9 +159,12 @@ def validate_setting(key: str, value: Any) -> Any:
         if isinstance(value, bool):
             raise ValueError(f"{key}: expected an integer")
         try:
-            return int(value)
+            coerced = int(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{key}: expected an integer") from exc
+        if key in _POSITIVE_SETTINGS and coerced <= 0:
+            raise ValueError(f"{key}: expected a positive integer")
+        return coerced
     if isinstance(default, float):
         try:
             return float(value)
@@ -169,6 +181,22 @@ def validate_setting(key: str, value: Any) -> Any:
     if isinstance(default, dict):
         if not isinstance(value, dict):
             raise ValueError(f"{key}: expected a JSON object")
+        # Validate the shapes build_config() will rely on, so one bad stored
+        # object cannot break refresh or the next startup.
+        if key == "telegram.topic_routes":
+            if not all(isinstance(v, str) for v in value.values()):
+                raise ValueError(f"{key}: expected integer thread-id keys and string agent values")
+            try:
+                return {str(int(k)): v for k, v in value.items()}
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{key}: expected integer thread-id keys and string agent values"
+                ) from exc
+        if key == "priority.type_weights":
+            try:
+                return {str(k): float(v) for k, v in value.items()}
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key}: expected numeric weight values") from exc
         return value
     return value
 
@@ -441,6 +469,10 @@ class BackboneConfig:
         mode = self.github.intake
         if mode == "auto":
             return "webhook" if self.webhook_secret else "poll"
+        if mode == "webhook" and not self.webhook_secret:
+            # Every webhook would be rejected without a secret; fall back to
+            # polling so events keep flowing (startup logs the mismatch).
+            return "poll"
         return mode
 
     @property
@@ -464,9 +496,12 @@ def resolve_data_dir(explicit: str | Path | None = None) -> Path:
 
 
 def load_secrets(data_dir: Path) -> None:
-    """Load ``<data_dir>/.env`` into the environment (existing variables win)."""
+    """Load ``<data_dir>/.env`` into the environment (existing variables win).
+
+    Only the data directory's ``.env`` is read — a stray ``.env`` in the
+    current working directory must not inject secrets or security flags.
+    """
     load_dotenv(data_dir / ".env")
-    load_dotenv()
 
 
 def bootstrap_config(data_dir: str | Path | None = None) -> BackboneConfig:
