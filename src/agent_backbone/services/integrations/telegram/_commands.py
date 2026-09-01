@@ -10,13 +10,15 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 if TYPE_CHECKING:
-    from agent_backbone.services.telegram.interface import TelegramService
+    from agent_backbone.services.integrations.telegram.interface import TelegramService
 
 from agent_backbone.services.agents._file_reader import read_state_file
 from agent_backbone.services.infrastructure._agents import start_agent, stop_agent
+from agent_backbone.services.integrations.telegram._routing import _delivery_reply
+from agent_backbone.services.integrations.telegram._topic_discovery import (
+    process_message_for_discovery,
+)
 from agent_backbone.services.routing import safe_deliver
-from agent_backbone.services.telegram._routing import _delivery_reply
-from agent_backbone.services.telegram._topic_discovery import process_message_for_discovery
 from agent_backbone.services.terminal import list_sessions, send_keys, session_exists
 
 log = logging.getLogger(__name__)

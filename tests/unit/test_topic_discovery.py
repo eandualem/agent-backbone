@@ -6,7 +6,7 @@ import json
 from unittest.mock import MagicMock
 
 from agent_backbone.config import BackboneConfig, TelegramConfig
-from agent_backbone.services.telegram._topic_discovery import (
+from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     TopicDiscovery,
     effective_group_chat_id,

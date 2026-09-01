@@ -272,13 +272,21 @@ class TestWebhookDispatch:
         assert event.issue.repo_full_name == "acme/backbone"
 
 
-class TestTelegramReply:
+class TestIntegrationReply:
     async def test_requires_auth(self, api_client):
-        resp = await api_client.post("/api/telegram/reply", json={"session": "ike", "text": "hi"})
+        resp = await api_client.post(
+            "/api/integrations/reply", json={"session": "ike", "text": "hi"}
+        )
         assert resp.status_code == 401
 
-    async def test_without_token_returns_503(self, api_client, auth_headers):
+    async def test_without_any_integration_returns_503(self, api_client, auth_headers):
         resp = await api_client.post(
-            "/api/telegram/reply", json={"session": "ike", "text": "hi"}, headers=auth_headers
+            "/api/integrations/reply", json={"session": "ike", "text": "hi"}, headers=auth_headers
         )
         assert resp.status_code == 503
+
+    async def test_unregistered_agent_404(self, api_client, auth_headers):
+        resp = await api_client.post(
+            "/api/integrations/reply", json={"session": "stray", "text": "hi"}, headers=auth_headers
+        )
+        assert resp.status_code == 404

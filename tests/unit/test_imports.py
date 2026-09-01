@@ -21,7 +21,8 @@ _ENTRY_MODULES = [
     "agent_backbone.services.routing",
     "agent_backbone.services.infrastructure",
     "agent_backbone.services.github",
-    "agent_backbone.services.telegram",
+    "agent_backbone.services.integrations",
+    "agent_backbone.services.integrations.telegram",
     "agent_backbone.services.database",
     "agent_backbone.hooks.claude_hook",
 ]

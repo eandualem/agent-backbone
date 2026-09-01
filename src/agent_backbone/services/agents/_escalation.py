@@ -41,14 +41,11 @@ def outcome_queues(outcome: str, kind: str) -> bool:
     return _outcome_queues(outcome, kind)
 
 
-class TelegramService:
-    """Lazy proxy to avoid importing telegram service during module import."""
+async def _notify_humans(config: BackboneConfig, text: str, *, agent: str | None = None) -> bool:
+    """Alert the humans on every configured integration (lazy: integrations sit above agents)."""
+    from agent_backbone.services.integrations import notify_humans
 
-    @staticmethod
-    async def send_notification(*args, **kwargs):
-        from agent_backbone.services.telegram.interface import TelegramService as _TelegramService
-
-        return await _TelegramService.send_notification(*args, **kwargs)
+    return await notify_humans(config, text, agent=agent)
 
 
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
@@ -210,13 +207,12 @@ async def handle_offline(
                     priority=True,
                     delivery_kind="escalation",
                 )
-            if config.telegram.notification_chat_id and config.telegram_token:
-                await TelegramService.send_notification(
-                    config.telegram_token,
-                    config.telegram.notification_chat_id,
-                    f"Agent {agent['entity']} went offline unexpectedly "
-                    f"({agent['pending_count']} pending). It was not restarted.",
-                )
+            await _notify_humans(
+                config,
+                f"Agent {agent['entity']} went offline unexpectedly "
+                f"({agent['pending_count']} pending). It was not restarted.",
+                agent=agent["session"],
+            )
             log.warning("Agent offline unexpectedly: %s", agent["entity"])
         try:
             await db.set_agent_state(
@@ -231,11 +227,9 @@ async def handle_offline(
 async def check_plan_waiting(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB | None = None
 ) -> None:
-    """Tell Telegram and the escalation target about agents waiting on a plan."""
+    """Tell the humans (every integration) and the escalation target about waiting plans."""
     state_path = config.state_dir
     stale_threshold = config.agent_state.stale_threshold_seconds
-    notification_chat_id = config.telegram.notification_chat_id
-    telegram_token = config.telegram_token
 
     for name in config.agents.names:
         if name not in active_sessions:
@@ -248,24 +242,21 @@ async def check_plan_waiting(
         plan_title = snapshot.plan_title or "Untitled plan"
         plan_timestamp = snapshot.timestamp or 0.0
 
-        if notification_chat_id and telegram_token:
-            tg_ref = _plan_notification_source_ref(
-                channel="telegram",
-                recipient=str(notification_chat_id),
-                plan_file=plan_file,
-                plan_title=plan_title,
-                plan_timestamp=plan_timestamp,
+        human_ref = _plan_notification_source_ref(
+            channel="integrations",
+            recipient="humans",
+            plan_file=plan_file,
+            plan_title=plan_title,
+            plan_timestamp=plan_timestamp,
+        )
+        if not _plan_notification_already_sent(name, human_ref):
+            msg = (
+                f"\U0001f4cb Plan waiting — {name}\nTitle: {plan_title}\n\n"
+                f"/viewplan {name}\n/approve {name}"
             )
-            if not _plan_notification_already_sent(name, tg_ref):
-                msg = (
-                    f"\U0001f4cb Plan waiting — {name}\nTitle: {plan_title}\n\n"
-                    f"/viewplan {name}\n/approve {name}"
-                )
-                if await TelegramService.send_notification(
-                    telegram_token, notification_chat_id, msg
-                ):
-                    _record_plan_notification(name, tg_ref)
-                    log.info("Sent plan-waiting Telegram notification for %s", name)
+            if await _notify_humans(config, msg, agent=name):
+                _record_plan_notification(name, human_ref)
+                log.info("Sent plan-waiting notification for %s", name)
 
         escalation_session = _escalation_session(config, name)
         if escalation_session and escalation_session in active_sessions:

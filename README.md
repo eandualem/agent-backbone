@@ -83,7 +83,7 @@ That is **poll intake**: the backbone asks GitHub for new issues and comments ev
 | [How it works](docs/how-it-works.md) | Every flow step by step, with the decisions the backbone makes |
 | [Configuration](docs/configuration.md) | Settings (`backbone config`), secrets, the data directory |
 | [CLI](docs/cli.md) · [API](docs/api.md) | Reference |
-| [GitHub](docs/github.md) · [App setup walkthrough](docs/github-app-setup.md) · [Telegram](docs/telegram.md) | Integrations |
+| [GitHub](docs/github.md) · [App setup walkthrough](docs/github-app-setup.md) · [Integrations](docs/integrations.md) · [Telegram](docs/telegram.md) | Integrations |
 | [Security](docs/security.md) | Defaults and what you opt into |
 | [Status and roadmap](docs/status-and-roadmap.md) | What works, what is missing, what is next |
 

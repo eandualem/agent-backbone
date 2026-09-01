@@ -177,12 +177,16 @@ agent — `POST /api/plans/{name}/approve`, `/reject {"feedback"}`,
 |---|---|
 | `GET /health` (no auth) | Per-component health |
 | `GET /api/status` | Digest: sessions, agents with state, GitHub intake mode, tracked repositories (owners, watchers, last event), pending issues, failed deliveries |
-| `GET /api/status/services` | api/database/scheduler/telegram/github plus per-job run counts and last errors |
+| `GET /api/status/services` | api/database/scheduler/github, `integrations: {telegram: up|down|disabled}`, plus per-job run counts and last errors |
 
-## Telegram
+## Integrations
 
-`POST /api/telegram/reply {"session": "app", "text": "…"}` posts text into
-the Telegram topic mapped to that agent (404 if none).
+`POST /api/integrations/reply {"session": "app", "text": "…"}` posts an
+agent's answer into its surface on every enabled integration (Telegram: the
+topic mapped to it). Response `{"ok": true, "session": "app", "posted":
+{"telegram": true}}`; 503 when no integration is configured, 404 when none
+has a surface for that agent yet. `backbone reply "…"` is the CLI form.
+See [Integrations](integrations.md).
 
 ## Webhook
 

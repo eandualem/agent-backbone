@@ -230,14 +230,20 @@ Every `timing.retry_interval_seconds` (5 min), `delivery-retry` re-attempts
 issue deliveries that ended `offline`/`delivery_failed`/`agent_working`
 and drains the queue again.
 
-## 6. Telegram
+## 6. Integrations (Telegram)
 
-The bot runs inside the backbone process and reads the live configuration.
-Commands map to the same operations as the CLI (`/status`, `/tell`,
-`/start`, `/stop`, `/queue`, `/digest`, `/viewplan`, `/approve`). In a forum
-group each topic can be mapped to an agent; a catch-all topic accepts
-`builder: rebase please`. Agents reply into their topic via
-`POST /api/telegram/reply`. See [Telegram](telegram.md).
+Human-facing channels implement one contract ([Integrations](integrations.md)):
+inbound text becomes a normal `safe_deliver` with a `[via:<integration>
+from:<who>]` envelope, agents answer with `backbone reply` (→ `POST
+/api/integrations/reply`), and alerts from the monitor go through
+`notify_humans` into the agent's surface when it has one.
+
+Telegram is the shipped integration. The bot runs inside the backbone
+process and reads the live configuration. Commands map to the same
+operations as the CLI (`/status`, `/tell`, `/start`, `/stop`, `/queue`,
+`/digest`, `/viewplan`, `/approve`). In a forum group each topic is one
+agent's surface: writing there talks to that agent, and the agent's
+`backbone reply` lands there. See [Telegram](telegram.md).
 
 ## 7. Dashboards and scripts
 

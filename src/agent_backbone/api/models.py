@@ -314,11 +314,18 @@ class MessageResponse(BaseModel):
     """Whether the message was queued for delivery when the agent is ready."""
 
 
-class TelegramReplyRequest(BaseModel):
-    """Request body for routing an agent reply to its Telegram topic."""
+class IntegrationReplyRequest(BaseModel):
+    """An agent's answer for the humans, posted into its surface on every integration."""
 
     session: str
     text: str
+
+
+class IntegrationReplyResponse(BaseModel):
+    ok: bool
+    session: str
+    posted: dict[str, bool] = Field(default_factory=dict)
+    """Per integration: whether it had a surface for the agent and accepted the text."""
 
 
 # --- Status ---
@@ -341,7 +348,8 @@ class ServiceHealth(BaseModel):
     api: str = "up"
     database: str = "unknown"
     scheduler: str = "unknown"
-    telegram: str = "disabled"
+    integrations: dict[str, str] = Field(default_factory=dict)
+    """Per integration (``telegram``, …): ``up`` | ``down`` | ``disabled``."""
     github: str = "disabled"
     jobs: list[JobStatusResponse] = Field(default_factory=list)
 

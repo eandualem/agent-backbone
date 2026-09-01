@@ -8,13 +8,13 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 if TYPE_CHECKING:
-    from agent_backbone.services.telegram.interface import TelegramService
+    from agent_backbone.services.integrations.telegram.interface import TelegramService
 
-from agent_backbone.services.routing import safe_deliver
-from agent_backbone.services.telegram._topic_discovery import (
+from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     process_message_for_discovery,
 )
+from agent_backbone.services.routing import safe_deliver
 
 
 def _delivery_reply(agent: str, status: str) -> str:

@@ -168,18 +168,15 @@ class TestPlanWaiting:
         states = {"ike": _snap(_WAITING, reason="plan", plan_file="/p.md", plan_title="T")}
         with (
             _patch_states(states),
-            patch(
-                f"{_ESC}.TelegramService.send_notification",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as tg,
+            patch(f"{_ESC}._notify_humans", new_callable=AsyncMock, return_value=True) as tg,
             patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock, return_value="delivered") as d,
         ):
             await esc.check_plan_waiting(config, {"ike", "leo"}, db=db)
             await esc.check_plan_waiting(config, {"ike", "leo"}, db=db)
 
         tg.assert_awaited_once()
-        assert "/approve ike" in tg.await_args.args[2]
+        assert "/approve ike" in tg.await_args.args[1]
+        assert tg.await_args.kwargs["agent"] == "ike"  # lands in the agent's own topic
         d.assert_awaited_once()
         assert d.await_args.args[0] == "leo"
         assert "created a plan" in d.await_args.args[1]
@@ -190,24 +187,31 @@ class TestPlanWaiting:
         )
         first = _snap(_WAITING, reason="plan", plan_file="/p.md", plan_title="T")
         second = replace(first, timestamp=first.timestamp + 10)
-        with patch(
-            f"{_ESC}.TelegramService.send_notification", new_callable=AsyncMock, return_value=True
-        ) as tg:
+        with patch(f"{_ESC}._notify_humans", new_callable=AsyncMock, return_value=True) as tg:
             with _patch_states({"ike": first}):
                 await esc.check_plan_waiting(config, {"ike"}, db=db)
             with _patch_states({"ike": second}):
                 await esc.check_plan_waiting(config, {"ike"}, db=db)
         assert tg.await_count == 2
 
-    async def test_nothing_without_telegram_or_target(self, config, db):
+    async def test_nothing_without_integration_or_target(self, config, db):
+        # No integration configured: notify_humans reports False (so the
+        # notification is not recorded as sent) and no escalation target exists.
         states = {"ike": _snap(_WAITING, reason="plan")}
         with (
             _patch_states(states),
-            patch(f"{_ESC}.TelegramService.send_notification", new_callable=AsyncMock) as tg,
+            patch(f"{_ESC}._notify_humans", new_callable=AsyncMock, return_value=False) as tg,
             patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
         ):
             await esc.check_plan_waiting(config, {"ike"}, db=db)
-        tg.assert_not_called()
+            await esc.check_plan_waiting(config, {"ike"}, db=db)
+        assert tg.await_count == 2  # not recorded as sent, so tried again next tick
+        d.assert_not_called()
+
+    async def test_real_notify_humans_is_false_when_nothing_is_configured(self, config, db):
+        states = {"ike": _snap(_WAITING, reason="plan")}
+        with _patch_states(states), patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d:
+            await esc.check_plan_waiting(config, {"ike"}, db=db)
         d.assert_not_called()
 
 

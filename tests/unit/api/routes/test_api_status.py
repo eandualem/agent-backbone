@@ -108,7 +108,7 @@ class TestGetServiceHealth:
         assert data["database"] == "up"
         assert data["scheduler"] in ("up", "degraded")
         assert [job["name"] for job in data["jobs"]] == ["agent-monitor"]
-        assert data["telegram"] == "disabled"
+        assert data["integrations"] == {"telegram": "disabled"}
         assert data["github"] == "unconfigured"  # repo set but no client wired in tests
 
 
