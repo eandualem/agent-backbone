@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from agent_backbone.templates import load_template, render
+
 _TOPICS_DIR = Path(__file__).with_name("topics")
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,40}$")
 
@@ -43,11 +45,7 @@ def get_topic(name: str, data_dir: Path | None = None) -> str | None:
     """A topic's markdown, or None. Data-dir files override shipped ones."""
     if not _NAME_RE.match(name):
         return None
-    override = _override_dir(data_dir)
-    if override is not None and (override / f"{name}.md").is_file():
-        return (override / f"{name}.md").read_text()
-    shipped = _TOPICS_DIR / f"{name}.md"
-    return shipped.read_text() if shipped.is_file() else None
+    return load_template(name, _TOPICS_DIR, _override_dir(data_dir))
 
 
 def render_agent_brief(facts: dict[str, str], data_dir: Path | None = None) -> str:
@@ -56,9 +54,5 @@ def render_agent_brief(facts: dict[str, str], data_dir: Path | None = None) -> s
     Complements the project's own instructions (CLAUDE.md still loads);
     ``<data_dir>/agent-brief.md`` overrides the shipped template.
     """
-    template = Path(__file__).with_name("agent-brief.md").read_text()
-    if data_dir is not None and (data_dir / "agent-brief.md").is_file():
-        template = (data_dir / "agent-brief.md").read_text()
-    for key, value in facts.items():
-        template = template.replace("{" + key + "}", str(value))
-    return template
+    template = load_template("agent-brief", Path(__file__).parent, data_dir)
+    return render(template or "", facts)

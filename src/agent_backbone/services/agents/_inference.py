@@ -160,4 +160,4 @@ async def get_agent_state(
 
 async def agent_state(config: BackboneConfig, name: str) -> StateSnapshot:
     """``get_agent_state`` with the paths and thresholds taken from the configuration."""
-    return await get_agent_state(config.state_dir, name, config.agent_state.stale_threshold_seconds)
+    return await get_agent_state(config.state_dir, name, config.timing.stale_threshold_seconds)

@@ -46,14 +46,12 @@ async def drain_message_queue(
         log.exception("Failed to recover stale leases (non-fatal)")
 
     try:
-        expired = await db.queue.expire_pending(
-            max_age_minutes=config.delivery.queue_expiry_minutes
-        )
+        expired = await db.queue.expire_pending(max_age_minutes=config.timing.queue_expiry_minutes)
         if expired:
             log.info(
                 "Expired %d queued messages (> %d min)",
                 expired,
-                config.delivery.queue_expiry_minutes,
+                config.timing.queue_expiry_minutes,
             )
             summary["queue_expired"] = expired
     except Exception:

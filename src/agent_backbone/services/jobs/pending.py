@@ -88,7 +88,7 @@ async def deliver_pending_issues(
                 if delivered_at.tzinfo is None:
                     delivered_at = delivered_at.replace(tzinfo=UTC)
                 age = (datetime.now(UTC) - delivered_at).total_seconds()
-                if age < config.monitor.interval_seconds * 2:
+                if age < config.timing.monitor_interval_seconds * 2:
                     return True
         except Exception:
             log.exception(

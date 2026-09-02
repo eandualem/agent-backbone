@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.config import DeliveryConfig
+from agent_backbone.config import TimingConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.routing import get_session_intelligence, safe_deliver
 from agent_backbone.services.routing._resolution import (
@@ -197,13 +197,13 @@ class TestGetSessionIntelligence:
         assert profile.current_issue == 42
 
     async def test_settling(self, config):
-        config = replace(config, delivery=DeliveryConfig(grace_period_seconds=5))
+        config = replace(config, timing=TimingConfig(grace_period_seconds=5))
         with _online():
             profile = await get_session_intelligence("ike", config, idle_since=time.monotonic() - 1)
         assert profile.intelligence == SessionIntelligence.SETTLING
 
     async def test_settling_elapsed(self, config):
-        config = replace(config, delivery=DeliveryConfig(grace_period_seconds=1))
+        config = replace(config, timing=TimingConfig(grace_period_seconds=1))
         with _online():
             profile = await get_session_intelligence(
                 "ike", config, idle_since=time.monotonic() - 10

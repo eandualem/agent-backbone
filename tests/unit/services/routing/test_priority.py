@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agent_backbone.config import PriorityScoringConfig
+from agent_backbone.config import PriorityConfig
 from agent_backbone.models import IssueData, ParsedLabels
 from agent_backbone.services.routing import compute_priority_score, list_open_queue_for_target
 
@@ -20,7 +20,7 @@ def _make_issue(
 
 class TestComputePriorityScore:
     def test_blocking_always_highest(self):
-        config = PriorityScoringConfig()
+        config = PriorityConfig()
         blocking = _make_issue(issue_type="spec-gap", priority="blocking")
         non_blocking = _make_issue(issue_type="spec-gap", priority="")
 
@@ -32,7 +32,7 @@ class TestComputePriorityScore:
         assert score_blocking - score_non_blocking >= 1000.0
 
     def test_type_weight_ordering(self):
-        config = PriorityScoringConfig()
+        config = PriorityConfig()
         types = ["spec-gap", "bug", "task", "question", "optimization"]
         scores = [compute_priority_score(_make_issue(issue_type=t), config) for t in types]
 
@@ -41,7 +41,7 @@ class TestComputePriorityScore:
             assert scores[i] > scores[i + 1], f"{types[i]} should score > {types[i + 1]}"
 
     def test_dependents_increase_score(self):
-        config = PriorityScoringConfig()
+        config = PriorityConfig()
         issue = _make_issue(issue_type="task")
 
         score_0 = compute_priority_score(issue, config, dependents_count=0)
@@ -51,7 +51,7 @@ class TestComputePriorityScore:
         assert score_2 > score_1 > score_0
 
     def test_age_tiebreaker(self):
-        config = PriorityScoringConfig()
+        config = PriorityConfig()
         older = _make_issue(number=10, issue_type="task")
         newer = _make_issue(number=20, issue_type="task")
 
@@ -61,7 +61,7 @@ class TestComputePriorityScore:
         assert score_older > score_newer
 
     def test_unknown_type_zero(self):
-        config = PriorityScoringConfig()
+        config = PriorityConfig()
         issue = _make_issue(issue_type="nonexistent")
 
         score = compute_priority_score(issue, config)
@@ -71,7 +71,7 @@ class TestComputePriorityScore:
         assert abs(score - expected_age) < 0.001
 
     def test_custom_config(self):
-        config = PriorityScoringConfig(
+        config = PriorityConfig(
             blocking_weight=500.0,
             type_weights={"task": 200.0},
             dependents_multiplier=2.0,
@@ -86,7 +86,7 @@ class TestComputePriorityScore:
 
     def test_high_issue_number_no_negative_age(self):
         """Issue numbers > 10000 should not produce negative age bonus."""
-        config = PriorityScoringConfig(age_tiebreaker_weight=0.01)
+        config = PriorityConfig(age_tiebreaker_weight=0.01)
         high = _make_issue(number=15000, issue_type="task")
 
         score = compute_priority_score(high, config)
@@ -95,7 +95,7 @@ class TestComputePriorityScore:
         assert score >= 50.0
 
     def test_zero_dependents_no_bonus(self):
-        config = PriorityScoringConfig(age_tiebreaker_weight=0.0)
+        config = PriorityConfig(age_tiebreaker_weight=0.0)
         issue = _make_issue(issue_type="task")
 
         score = compute_priority_score(issue, config, dependents_count=0)

@@ -64,12 +64,12 @@ class TestOnIssueClosed:
         assert result["opener:ike"] == "delivered"
 
     async def test_queue_empty(self, config):
-        with _patch_session_exists(True), _patch_find_next(None):
+        with _patch_session_exists(True), _patch_find_next(None), _patch_deliver():
             result = await on_issue_closed(make_close_event(["feynman"]), config, AsyncMock())
         assert result["feynman"] == "queue_empty"
 
     async def test_session_offline(self, config):
-        with _patch_session_exists(False):
+        with _patch_session_exists(False), _patch_deliver():
             result = await on_issue_closed(make_close_event(["feynman"]), config, AsyncMock())
         assert result["feynman"] == "offline"
 
@@ -128,6 +128,7 @@ class TestOnIssueClosed:
         with (
             _patch_session_exists(True),
             _patch_find_next(None),
+            _patch_deliver(),
             patch(f"{_LC}.on_dependency_resolved", new_callable=AsyncMock) as mock_deps,
         ):
             await on_issue_closed(make_close_event(["feynman"]), config, mock_gh, db=AsyncMock())
@@ -163,7 +164,7 @@ class TestOnIssueClosed:
     async def test_purges_queued_messages_on_close(self, config):
         mock_db = AsyncMock()
         mock_db.queue.purge_for_issue = AsyncMock(return_value=2)
-        with _patch_session_exists(True), _patch_find_next(None):
+        with _patch_session_exists(True), _patch_find_next(None), _patch_deliver():
             result = await on_issue_closed(
                 make_close_event(["feynman"]), config, AsyncMock(), db=mock_db
             )

@@ -6,13 +6,13 @@ blocking status, downstream dependents, and age. Higher score = higher priority.
 
 from __future__ import annotations
 
-from agent_backbone.config import PriorityScoringConfig
+from agent_backbone.config import PriorityConfig
 from agent_backbone.models import IssueData
 
 
 def compute_priority_score(
     issue: IssueData,
-    config: PriorityScoringConfig,
+    config: PriorityConfig,
     dependents_count: int = 0,
 ) -> float:
     """Compute a priority score for an issue.

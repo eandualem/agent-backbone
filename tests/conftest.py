@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -82,6 +83,22 @@ def reset_module_state():
 
     yield
     _dedup.clear()
+
+
+@pytest.fixture(autouse=True)
+def no_real_tmux():
+    """The suite never touches the developer's tmux server.
+
+    Every tmux call goes through one subprocess entry point; unless a test
+    patches it (or a function above it) deliberately, reaching it is a bug
+    in the test's mocking, not something to run.
+    """
+
+    async def _refuse(*args, **kwargs):
+        raise RuntimeError(f"unpatched tmux call in a test: {' '.join(map(str, args))}")
+
+    with patch("agent_backbone.services.terminal._core.asyncio.create_subprocess_exec", _refuse):
+        yield
 
 
 @pytest.fixture

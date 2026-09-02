@@ -75,7 +75,7 @@ async def _pending_count_for_agent(
 async def check_for_stalls(config: BackboneConfig, states: AgentStates) -> list[dict]:
     """Agents busy on one issue for longer than ``timing.stall_threshold_seconds``."""
     stalls: list[dict] = []
-    threshold = config.escalation.stall_threshold_seconds
+    threshold = config.timing.stall_threshold_seconds
     for name, snapshot in states.items():
         if snapshot.state != AgentState.BUSY or snapshot.current_issue is None:
             continue
@@ -127,7 +127,9 @@ async def handle_stalls(config: BackboneConfig, states: AgentStates, db: Backbon
     """Detect stalled agents and escalate to the configured target."""
     for stall in await check_for_stalls(config, states):
         event_key = f"stall:{stall['repo']}#{stall['issue_number']}"
-        if not _should_escalate(stall["session"], event_key, config.escalation.dedup_seconds):
+        if not _should_escalate(
+            stall["session"], event_key, config.timing.escalation_dedup_seconds
+        ):
             continue
         escalation_session = _escalation_session(config, stall["session"])
         if escalation_session and escalation_session in states:
@@ -154,7 +156,7 @@ async def handle_offline(
 ) -> None:
     """Report dead sessions (never restart them) and clear their recorded state."""
     for agent in await check_for_unexpected_offline(config, active_sessions, db, gh):
-        if _should_escalate(agent["session"], "offline", config.escalation.dedup_seconds):
+        if _should_escalate(agent["session"], "offline", config.timing.escalation_dedup_seconds):
             escalation_session = _escalation_session(config, agent["session"])
             if escalation_session and escalation_session in active_sessions:
                 msg = format_unexpected_offline_notification(

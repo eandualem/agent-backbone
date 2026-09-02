@@ -5,9 +5,9 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from agent_backbone.config import sqlite_url
 from agent_backbone.services.database import build_engine
 from agent_backbone.services.database.backbone_db import BackboneDB, metadata
-from agent_backbone.services.database.engine import sqlite_url
 from tests.support import queue_row
 
 _EXPECTED_TABLES = {

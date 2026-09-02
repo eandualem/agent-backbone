@@ -661,54 +661,38 @@ async def _agent_start(args: argparse.Namespace) -> int:
         _print_start_result(data)
         return 0 if data.get("ok") else 1
 
-    # Backbone not running: register + start directly.
-    from agent_backbone.config import AgentSpec
-    from agent_backbone.services.agents import start_agent
+    # Backbone not running: register + start directly, through the same
+    # operations the API uses.
+    from agent_backbone.services.agents.operations import (
+        StartRequest,
+        resolve_agent,
+        start_resolved,
+    )
 
     async with _Direct(boot) as direct:
-        store = direct.store
-        if body["dir"]:
-            spec = await store.discover(
-                body["dir"], name=name, runtime=args.runtime, model=args.model
-            )
-            if args.watch:
-                spec = AgentSpec(
-                    **{
-                        **spec.__dict__,
-                        "watches": tuple(dict.fromkeys([*spec.watches, *args.watch])),
-                    }
-                )
-            spec = await store.register(spec)
-        else:
-            spec = store.agents.get(name)
-            if spec is None:
-                print(f"unknown agent '{name}' — pass --dir to register it")
-                return 1
-            # An override at start becomes the recorded setting (matches the API).
-            changes: dict = {}
-            if args.runtime and args.runtime != spec.runtime:
-                changes["runtime"] = args.runtime
-            if args.model is not None and args.model != spec.model:
-                changes["model"] = args.model
-            if changes:
-                spec = await store.update(name, **changes)
-        config = direct.config
-        result = await start_agent(
-            spec,
-            config,
+        req = StartRequest(
+            name=name,
+            directory=body["dir"],
             runtime=args.runtime,
             model=args.model,
             resume=args.resume,
-            db=direct.db,
+            watch=tuple(args.watch or ()),
             wait=not args.no_wait,
         )
+        try:
+            spec = await resolve_agent(direct.store, req)
+            result = await start_resolved(direct.store, direct.config, spec, req, db=direct.db)
+        except KeyError as exc:
+            print(f"unknown agent '{exc.args[0]}' — pass --dir to register it")
+            return 1
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 1
         if not result.ok:
             print(f"{spec.name}: failed to start")
             for line in result.evidence:
                 print(f"  - {line}")
             return 1
-        if not result.already_running:
-            await store.touch_started(spec.name)
         _print_start_result(
             {
                 "ok": result.ready != "exited",
@@ -844,7 +828,7 @@ async def _agent(args: argparse.Namespace) -> int:
         config = await _load_config()
         online = await session_exists(args.name)
         snapshot = await get_agent_state(
-            config.state_dir, args.name, config.agent_state.stale_threshold_seconds
+            config.state_dir, args.name, config.timing.stale_threshold_seconds
         )
         print(f"{args.name}: {'online' if online else 'offline'} (backbone not running)")
         print(

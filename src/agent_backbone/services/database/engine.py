@@ -12,14 +12,8 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-SQLITE_FILENAME = "backbone.db"
 _POSTGRES_POOL_SIZE = 5
 _POSTGRES_POOL_OVERFLOW = 10
-
-
-def sqlite_url(data_dir: Path) -> str:
-    """The default database URL: a SQLite file in the data directory."""
-    return f"sqlite+aiosqlite:///{data_dir / SQLITE_FILENAME}"
 
 
 def is_sqlite(url: str) -> bool:

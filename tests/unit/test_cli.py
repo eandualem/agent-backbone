@@ -101,7 +101,7 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.agents.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(
                     ok=True, ready="ready", evidence=("terminal shows an empty prompt",)
@@ -130,7 +130,7 @@ class TestAgentCommands:
         monkeypatch.chdir(project)
         with (
             patch(
-                "agent_backbone.services.agents.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
@@ -152,7 +152,7 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.agents.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
@@ -170,7 +170,7 @@ class TestAgentCommands:
         # A later bare start must reuse the recorded model.
         with (
             patch(
-                "agent_backbone.services.agents.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
@@ -194,7 +194,7 @@ class TestAgentCommands:
         old.mkdir(parents=True)
         with (
             patch(
-                "agent_backbone.services.agents.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
@@ -232,7 +232,7 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.agents.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ),
@@ -249,8 +249,13 @@ class TestAgentCommands:
         assert _run(["agent", "list"]) == 0
         assert "orch" in capsys.readouterr().out
         assert _run(["agent", "unwatch", "orch", "acme/web"]) == 0
-        assert _run(["agent", "forget", "orch"]) == 0
-        assert _run(["agent", "forget", "orch"]) == 1
+        with patch(
+            "agent_backbone.services.terminal.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            assert _run(["agent", "forget", "orch"]) == 0
+            assert _run(["agent", "forget", "orch"]) == 1
 
     def test_watch_defaults_to_own_session(self, tmp_path, monkeypatch, capsys):
         """Inside an agent session, the agent can watch repos without naming itself."""
@@ -259,7 +264,7 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.agents.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ),

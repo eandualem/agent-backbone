@@ -121,7 +121,7 @@ async def list_open_queue_for_target(
             ]
         )
 
-    scoring = config.priority_scoring
+    scoring = config.priority
     issues.sort(key=lambda issue: (-compute_priority_score(issue, scoring), issue.number))
     return issues
 

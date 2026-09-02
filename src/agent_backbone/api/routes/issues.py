@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api", tags=["issues"])
 
 
 def _issue_to_response(issue, config: BackboneConfig, dependents: int = 0) -> IssueResponse:
-    score = compute_priority_score(issue, config.priority_scoring, dependents)
+    score = compute_priority_score(issue, config.priority, dependents)
     return IssueResponse(
         number=issue.number,
         title=issue.title,

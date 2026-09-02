@@ -200,7 +200,7 @@ class TestDeliveryRetryQueueDrain:
         "agent_backbone.services.jobs.retry.list_open_queue_for_target",
         new_callable=AsyncMock,
     )
-    @patch("agent_backbone.services.terminal.list_sessions", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock)
     async def test_queue_drain_runs_without_failed_issue_rows(
         self, mock_list_sessions, mock_queue, mock_deliver, db, config
     ):
@@ -227,7 +227,7 @@ class TestDeliveryRetryQueueDrain:
         "agent_backbone.services.jobs.retry.list_open_queue_for_target",
         new_callable=AsyncMock,
     )
-    @patch("agent_backbone.services.terminal.list_sessions", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock)
     async def test_queue_drain_delivers_direct_messages_without_issue_metadata(
         self, mock_list_sessions, mock_queue, mock_deliver, db, config
     ):
@@ -249,7 +249,7 @@ class TestDeliveryRetryQueueDrain:
         mock_queue.assert_not_called()
 
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
-    @patch("agent_backbone.services.terminal.list_sessions", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock)
     async def test_delivery_retry_without_github_only_drains_queue(
         self, mock_list_sessions, mock_deliver, db, config
     ):

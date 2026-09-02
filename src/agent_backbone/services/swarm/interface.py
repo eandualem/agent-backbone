@@ -207,7 +207,7 @@ async def create_swarm(
     briefs_dir = config.data_dir / "swarms" / name
     briefs_dir.mkdir(parents=True, exist_ok=True)
     started: list[str] = []
-    default_runtime = config.agents_section.default_runtime
+    default_runtime = config.launch.default_runtime
     try:
         for agent_name, spec in named:
             runtime = spec.runtime or default_runtime

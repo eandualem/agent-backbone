@@ -153,7 +153,7 @@ async def start_agent(
         return StartResult(ok=False, evidence=(f"unknown runtime: {runtime_id}",))
     rt = RUNTIMES[runtime_id]
     effective_model = model if model is not None else spec.model
-    section = config.agents_section
+    section = config.launch
     if section.pre_trust:
         rt.pre_trust(spec.path)
 
@@ -199,7 +199,7 @@ async def start_agent(
             spec.name,
             state_dir=config.state_dir,
             runtime=rt,
-            timeout=config.monitor.start_timeout_seconds,
+            timeout=config.timing.start_timeout_seconds,
             since=launched_at,
         )
 

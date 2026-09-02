@@ -33,15 +33,15 @@ from agent_backbone.api.models import (
     WatchRequest,
 )
 from agent_backbone.api.session_updates import SessionFeed
-from agent_backbone.config import AgentSpec, BackboneConfig
+from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import (
     AgentStore,
     agent_state,
     approve_agent,
     read_state_file,
-    start_agent,
     write_state_file,
 )
+from agent_backbone.services.agents.operations import StartRequest, resolve_agent, start_resolved
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import get_session_intelligence
 from agent_backbone.services.runtimes import RUNTIMES, sanitize_pane_content
@@ -151,58 +151,49 @@ async def list_runtimes():
 
 
 async def _start(
-    request: Request,
-    spec: AgentSpec,
-    req: AgentStartRequest,
-    store: AgentStore,
-    feed: SessionFeed,
+    request: Request, req: StartRequest, store: AgentStore, feed: SessionFeed
 ) -> AgentStartResponse:
-    config: BackboneConfig = request.app.state.config
-    runtime = req.runtime or spec.runtime
-    model = req.model if req.model is not None else spec.model
-
-    # A runtime/model override at start becomes the agent's recorded setting,
-    # so the next bare `agent start NAME` reuses it.
-    changes: dict = {}
-    if req.runtime and req.runtime != spec.runtime:
-        changes["runtime"] = req.runtime
-    if req.model is not None and req.model != spec.model:
-        changes["model"] = req.model
-    if changes:
-        spec = await store.update(spec.name, **changes)
-
-    if runtime not in RUNTIMES:
-        raise HTTPException(status_code=400, detail=f"Unknown runtime: {runtime}")
-    if not RUNTIMES[runtime].available():
-        raise HTTPException(status_code=400, detail=f"Runtime '{runtime}' binary not found")
-    if not spec.path.is_dir():
-        raise HTTPException(status_code=400, detail=f"Directory does not exist: {spec.path}")
-
-    result = await start_agent(
-        spec,
-        config,
-        runtime=runtime,
-        model=model,
-        resume=req.resume,
-        db=request.app.state.db,
-        wait=req.wait,
-    )
-    response = AgentStartResponse(
+    try:
+        spec = await resolve_agent(store, req)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"'{exc.args[0]}' is not a known agent — pass dir to register it",
+        ) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        result = await start_resolved(
+            store, request.app.state.config, spec, req, db=request.app.state.db
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result.ok and not result.already_running:
+        await feed.refresh_and_emit()
+    return AgentStartResponse(
         ok=result.ok and result.ready != "exited",
         session=spec.name,
         name=spec.name,
         working_directory=str(spec.path),
-        runtime=runtime,
-        model=model,
+        runtime=req.runtime or spec.runtime,
+        model=req.model if req.model is not None else spec.model,
         repo=spec.repo,
         already_existed=result.already_running,
         ready=result.ready,
         evidence=list(result.evidence),
     )
-    if result.ok and not result.already_running:
-        await store.touch_started(spec.name)
-        await feed.refresh_and_emit()
-    return response
+
+
+def _request(body: AgentStartRequest, *, name: str | None = None) -> StartRequest:
+    return StartRequest(
+        name=name or body.name,
+        directory=body.dir,
+        runtime=body.runtime,
+        model=body.model,
+        resume=body.resume,
+        watch=tuple(body.watch),
+        wait=body.wait,
+    )
 
 
 @router.post("/agents/start", response_model=AgentStartResponse)
@@ -213,26 +204,7 @@ async def start_agent_discover(
     feed: SessionFeed = Depends(get_feed),
 ):
     """Start an agent from a directory (discovering it) or by name."""
-    directory = body.dir
-    if directory:
-        spec = await store.discover(
-            directory, name=body.name, runtime=body.runtime, model=body.model
-        )
-        if body.watch:
-            spec = AgentSpec(
-                **{**spec.__dict__, "watches": tuple(dict.fromkeys([*spec.watches, *body.watch]))}
-            )
-        spec = await store.register(spec)
-    elif body.name:
-        spec = store.agents.get(body.name)
-        if spec is None:
-            raise HTTPException(status_code=404, detail=f"Unknown agent '{body.name}' — pass dir")
-        if body.watch:
-            for repo in body.watch:
-                spec = await store.watch(body.name, repo)
-    else:
-        raise HTTPException(status_code=400, detail="name or dir is required")
-    return await _start(request, spec, body, store, feed)
+    return await _start(request, _request(body), store, feed)
 
 
 @router.post("/agents/{session}/start", response_model=AgentStartResponse)
@@ -244,20 +216,7 @@ async def start_known_agent(
     feed: SessionFeed = Depends(get_feed),
 ):
     """Start a known agent by name (``dir`` in the body registers it first)."""
-    req = body or AgentStartRequest()
-    directory = req.dir
-    if directory:
-        spec = await store.register(
-            await store.discover(directory, name=session, runtime=req.runtime, model=req.model)
-        )
-    else:
-        spec = store.agents.get(session)
-        if spec is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"'{session}' is not a known agent — pass dir to register it",
-            )
-    return await _start(request, spec, req, store, feed)
+    return await _start(request, _request(body or AgentStartRequest(), name=session), store, feed)
 
 
 @router.post("/agents/{session}/stop", response_model=AgentStopResponse)

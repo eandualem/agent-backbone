@@ -68,7 +68,7 @@ async def get_session_intelligence(
     state_snap = await get_agent_state(
         config.state_dir,
         session_name,
-        config.agent_state.stale_threshold_seconds,
+        config.timing.stale_threshold_seconds,
         runtime_hint=runtime,
         pane_content=pane_content,
     )
@@ -116,10 +116,10 @@ async def get_session_intelligence(
     if agent_state == AgentState.IDLE:
         if idle_since is not None:
             elapsed = time.monotonic() - idle_since
-            if elapsed < config.delivery.grace_period_seconds:
+            if elapsed < config.timing.grace_period_seconds:
                 return profile(
                     SessionIntelligence.SETTLING,
-                    f"idle for {elapsed:.1f}s < grace {config.delivery.grace_period_seconds}s",
+                    f"idle for {elapsed:.1f}s < grace {config.timing.grace_period_seconds}s",
                 )
         return profile(SessionIntelligence.READY, "prompt is empty")
 

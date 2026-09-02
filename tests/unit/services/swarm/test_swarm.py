@@ -223,7 +223,8 @@ class TestCreateSwarm:
         assert row["status"] == "active" and row["issue_number"] == 7
 
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
-    async def test_closed_issue_rejected(self, _git, db, tmp_path):
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
+    async def test_closed_issue_rejected(self, _exists, _git, db, tmp_path):
         config, _ = _swarm_config(tmp_path)
         gh = AsyncMock()
         gh.get_issue = AsyncMock(return_value=AsyncMock(state="closed", title="t"))
@@ -402,8 +403,9 @@ class TestTeardown:
 
 
 class TestOwnRepoGuardrail:
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
-    async def test_agent_cannot_swarm_on_foreign_repo(self, _git, db, tmp_path):
+    async def test_agent_cannot_swarm_on_foreign_repo(self, _git, _exists, db, tmp_path):
         """An agent initiator must own the issue's repository."""
         config, _ = _swarm_config(tmp_path)  # simon owns acme/app
         gh = AsyncMock()

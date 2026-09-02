@@ -49,7 +49,7 @@ def _register_jobs(app: FastAPI):
         return await delivery_retry(state.config, state.db, state.github)
 
     async def _prune():
-        days = state.config.delivery.retention_days
+        days = state.config.timing.delivery_retention_days
         return {
             "deliveries": await state.db.deliveries.prune(days),
             "events": await state.db.events.prune(days),
@@ -57,8 +57,10 @@ def _register_jobs(app: FastAPI):
         }
 
     # Immediately at startup: this is what syncs agent state after a restart.
-    scheduler.add("agent-monitor", config.monitor.interval_seconds, _monitor, run_immediately=True)
-    scheduler.add("delivery-retry", config.monitor.retry_interval_seconds, _retry)
+    scheduler.add(
+        "agent-monitor", config.timing.monitor_interval_seconds, _monitor, run_immediately=True
+    )
+    scheduler.add("delivery-retry", config.timing.retry_interval_seconds, _retry)
     scheduler.add("prune", 6 * 3600, _prune)
     # Integrations re-provision their per-agent surfaces (Telegram topics):
     # a config publish triggers it immediately, this catches everything else

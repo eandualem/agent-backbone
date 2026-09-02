@@ -24,6 +24,7 @@ from agent_backbone.config import (
     build_config,
     validate_setting,
 )
+from agent_backbone.git import detect_repo
 
 if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
@@ -31,52 +32,12 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
-_GITHUB_REMOTE_RE = re.compile(
-    r"(?:github\.com[:/])(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
-)
 
 
 def sanitize_name(raw: str) -> str:
     """Turn a directory name into a valid tmux session / label value."""
     cleaned = _NAME_RE.sub("-", raw.strip()).strip("-.")
     return cleaned or "agent"
-
-
-def parse_github_remote(url: str) -> str:
-    """``owner/name`` from an https or ssh GitHub remote, else ``""``."""
-    match = _GITHUB_REMOTE_RE.search(url.strip())
-    return f"{match.group('owner')}/{match.group('repo')}" if match else ""
-
-
-async def detect_repo(directory: Path) -> str:
-    """The GitHub ``owner/name`` of a directory's ``origin`` remote, if any.
-
-    Runs ``git`` as a subprocess without blocking the event loop (``discover``
-    is called from request handlers).
-    """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            "-C",
-            str(directory),
-            "remote",
-            "get-url",
-            "origin",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-    except OSError:
-        return ""
-    try:
-        async with asyncio.timeout(5):
-            stdout, _ = await proc.communicate()
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return ""
-    if proc.returncode != 0:
-        return ""
-    return parse_github_remote(stdout.decode())
 
 
 class AgentStore:
@@ -167,7 +128,7 @@ class AgentStore:
             name=agent_name,
             dir=str(path),
             runtime=runtime
-            or (existing.runtime if existing else self.config.agents_section.default_runtime),
+            or (existing.runtime if existing else self.config.launch.default_runtime),
             model=model if model is not None else (existing.model if existing else None),
             # Keep the recorded repo only for a record that lived elsewhere (a
             # moved project); rediscovering the same checkout trusts what the

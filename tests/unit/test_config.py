@@ -168,9 +168,9 @@ class TestBuildConfig:
         assert config.telegram.allowed_chat_ids == (1, 2)
         assert config.telegram.topic_routes == {42: "reviewer"}
         assert config.escalation.target == "reviewer"
-        assert config.agent_state.stale_threshold_seconds == 42
-        assert config.delivery.grace_period_seconds == 9
-        assert config.delivery.queue_expiry_minutes == 15
+        assert config.timing.stale_threshold_seconds == 42
+        assert config.timing.grace_period_seconds == 9
+        assert config.timing.queue_expiry_minutes == 15
         assert config.github.intake == "poll"
         assert config.security.allow_remote_plan_control is True
         assert config.settings["backbone.port"] == 7999
