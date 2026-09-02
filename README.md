@@ -1,18 +1,19 @@
 # agent-backbone
 
-**Your agents already work. Now let them work together.**
+A lightweight control plane for the terminal coding agents you already use.
 
-agent-backbone is a local control plane that connects the terminal agents you already run — Claude Code, Codex, OpenCode, Deep Code, Gemini CLI, Aider, or any CLI you can put in a tmux window — across CLIs, models and repositories. A Claude Code agent can hand work to a Codex agent, an OpenCode agent can ask a Claude agent a question, and any agent can put a mixed-runtime swarm on a single GitHub issue — all on one machine.
+agent-backbone runs Claude Code, Codex, OpenCode, Deep Code and other command-line agents as persistent sessions on your machine, and gives them what a single terminal cannot: a way to communicate with each other, a manager that knows what each of them is doing, a channel for delegating work, and a way to form teams around a task. The agents stay the tools you already run, with their own logins, configuration and model access. The backbone adds no model, no subscription and no files to your repositories.
 
-It uses what you already have. Your agents stay ordinary sessions with their own login, configuration and model access; the backbone calls no model and adds no subscription. It starts the session, tells the agent who it is and how to reach the others, and stays out of the way.
+**What it enables**
 
-Underneath is one guarantee: **you can address a live terminal agent from outside it, at any moment, without corrupting what it is doing.** The backbone knows whether each agent is idle, busy or waiting for a person, and can show you the evidence. A message that cannot land safely is stored and delivered when the agent is ready. Every delivery is recorded with who sent it. Attach to any session whenever you want to watch, guide or take over.
+- **Communication.** Any agent can message any other — across CLIs, models and repositories — with a single command. A message is delivered only when the recipient is ready to receive it and stored until then, so an agent in the middle of a task is never interrupted by another.
+- **Management.** The backbone knows whether each agent is idle, working or waiting for a person, and shows the evidence behind that reading. Start, stop, inspect and attach to any agent from one place; hear about the ones that need you on Telegram.
+- **Delegation.** GitHub Issues are the task list. An issue opened in an agent's repository is that agent's work; a `for:<agent>` label routes an issue to a specific agent; comments return to whoever opened it; closing an issue hands the agent its next one. An orchestrator is simply an agent that watches several repositories.
+- **Teams.** When a task benefits from parallel work, an agent creates a swarm: a coordinator plus members on the runtimes and models it chooses, sharing one worktree and branch, finishing in a pull request. When the issue closes, the swarm is torn down and the branch remains.
 
-Work organises around your repositories, not around the tool. An agent is a directory; the repository it owns is its task list; an orchestrator is an agent that watches several. When an issue benefits from parallel work, an agent can create a temporary swarm — a coordinator plus members on the runtimes and models you name, sharing one worktree and branch — and when the issue closes, the swarm is torn down and its committed branch remains.
+Every agent the backbone starts is told at launch who it is and how to use all of this, so agents can start other agents, subscribe to repositories, message each other and form teams without a person in the loop. You can watch any session at any time, or step in.
 
-Your repositories stay clean: nothing is committed, tracked or configured per repository. GitHub Issues carry coordination across repositories; Telegram topics let you talk to individual agents from your phone; a REST API and Socket.IO feed let you build your own view.
-
-> **Status:** pre-release. The core — state detection, safe delivery, GitHub routing, swarms, Telegram, the API — is tested and has been exercised against live Claude Code, Codex, OpenCode and Deep Code sessions. [Status and roadmap](https://github.com/eandualem/agent-backbone/blob/main/docs/status-and-roadmap.md) says what is verified and what is not.
+> **Status:** pre-release. The core — state detection, safe delivery, GitHub routing, swarms, Telegram, the API — is tested and has been exercised against live Claude Code, Codex, OpenCode and Deep Code sessions. [Status and roadmap](https://github.com/eandualem/agent-backbone/blob/main/docs/status-and-roadmap.md) records what is verified and what is not.
 
 ## Install
 
@@ -20,23 +21,25 @@ Requirements: macOS or Linux, Python 3.11+, `tmux`, [uv](https://docs.astral.sh/
 
 ```bash
 uv tool install "agent-backbone[github-app]"   # https://pypi.org/project/agent-backbone/
-backbone init                                  # data dir, .env with an API key, database
+backbone init                                  # data directory, .env with an API key, database
 backbone service install                       # runs now and at every login (launchd / systemd --user)
 ```
 
 `pipx install "agent-backbone[github-app]"` works the same. If `backbone` is not found afterwards, run `uv tool update-shell` once and open a new terminal. `ab` is the same command under a short name (on macOS `/usr/sbin/ab`, Apache Bench, may shadow it — put `~/.local/bin` first in your PATH or use `backbone`).
 
-No config file, no database server, no tunnel: everything the backbone knows lives in `~/.local/share/agent-backbone/` (a SQLite file, hook state, `.env`); settings are changed with `backbone config set`.
+There is no configuration file, no database server and no tunnel. Everything the backbone knows lives in `~/.local/share/agent-backbone/` (a SQLite file, hook state, `.env`); settings are changed with `backbone config set`.
 
-### Or let an agent do it
+### Setting up with an agent
 
-Paste this into any agent that has a shell — a Claude Code, Codex or OpenCode session in one of your repositories:
+The setup can be delegated to any agent that has a shell — a Claude Code, Codex or OpenCode session in one of your repositories:
 
 > Install agent-backbone from PyPI (`uv tool install "agent-backbone[github-app]"`), then run `backbone help setup` and follow it: get the backbone running, start an agent in this repository, and tell me what still needs me.
 
-Everything the agent needs ships with the package: `backbone help` (the playbooks — `setup`, `agents`, `messaging`, `github`, `swarms`) and `backbone docs` (this documentation, page by page). Every agent the backbone starts is briefed with the same at launch, so agents can start other agents, subscribe to repositories, message each other and create swarms without a person in the loop.
+Everything the agent needs ships with the package: `backbone help` (the playbooks — `setup`, `agents`, `messaging`, `github`, `swarms`) and `backbone docs` (this documentation, page by page).
 
-## Ninety seconds to the first win
+## First run
+
+An agent is started from the directory of the repository it will work in. The agent takes the directory's name, and that repository becomes its responsibility.
 
 ```bash
 cd ~/code/app
@@ -45,18 +48,16 @@ backbone tell app "Read every file under src/ and list the modules."
 backbone tell app "…and then tell me which one is the largest."   # while it is still working
 ```
 
-The second `tell` returns `"outcome": "agent_working"`: the text was **not** typed into a working terminal. `backbone agent inspect app` shows why — the state, the evidence behind it, and the message waiting. When the agent reaches its prompt, the message lands as if you had been sitting there. That is the guarantee everything else is built on; [Getting started](https://github.com/eandualem/agent-backbone/blob/main/docs/getting-started.md) walks through it with real output.
+The second `tell` returns `"outcome": "agent_working"`: the message was not typed into a working terminal. `backbone agent inspect app` shows the agent's state, the evidence for it, and the message waiting. When the agent reaches its prompt, the message is delivered. [Getting started](https://github.com/eandualem/agent-backbone/blob/main/docs/getting-started.md) continues from here with a second agent, GitHub and an orchestrator.
 
-## What it does
+## How it works
 
-- **Runs agents from any directory.** `cd ~/code/my-app && backbone agent start` — the agent is named after the directory, its repository is read from `git remote origin`, the runtime and model you choose are remembered, and the command returns when the agent is at its prompt. Folder-trust dialogs are answered for you.
-- **Knows the state of every agent** — `idle`, `busy`, `waiting_for_human` (plan approval, permission prompt, question), `starting`, `unknown` — from the runtime's own hooks where it has them and from the terminal otherwise, always with evidence: `backbone agent inspect reviewer`.
-- **Delivers safely.** Text is pasted into an agent only when it is idle — not while it is working, waiting for a person, or while you are typing in that terminal. What cannot land now is queued in SQLite and delivered when the agent is free; `priority` may skip the typing and settle checks but never interrupts a working agent. The few deliberate exceptions (an `unknown` state is attempted, a comment on the agent's *current* issue reaches it at once, GitHub issue notifications are retried rather than stored) are in [How it works](https://github.com/eandualem/agent-backbone/blob/main/docs/how-it-works.md).
-- **Lets agents unblock each other.** `backbone agent approve <name>` answers a runtime's permission dialog — only while it is on screen, only with its affirmative key, every approval audited — so a coordinator can keep a swarm moving without a person watching.
-- **Coordinates through GitHub Issues, per repository.** An issue opened in an agent's repository is its work; `for:<agent>` labels address issues explicitly; comments go back to the opener; closing an issue hands the agent its next one. An orchestrator is just an agent that *watches* other repositories.
-- **Swarms.** `backbone swarm create research --issue acme/app#42 --member 'scout*3@claude/sonnet' --member coder@codex` — a coordinator plus members, each on its own runtime and model, briefed for their roles, sharing one worktree and branch, torn down when the issue closes.
-- **Talks to you on Telegram.** `/tell reviewer fix the flaky test`, `/status`, plan-approval alerts, and a forum topic per agent.
-- **Feeds your dashboard.** REST plus a Socket.IO stream of agent state and read-only terminal output. It ships no UI.
+- **Agents are discovered, not declared.** `backbone agent start` in a directory records the agent: its name, its runtime and model, and the repository read from `git remote origin`. The command returns when the agent is at its prompt; folder-trust dialogs are answered for you.
+- **State comes from the runtime first, the terminal second.** Claude Code reports its state through hooks the backbone installs for the session; every other runtime is read from its terminal. Every reading carries its evidence, visible in `backbone agent inspect`.
+- **Delivery is gated on state.** Text is pasted into an agent only when it is idle — not while it is working, waiting for a person, or while you are typing in that terminal. What cannot land now is queued in SQLite and delivered when the agent is free. The few deliberate exceptions are documented in [How it works](https://github.com/eandualem/agent-backbone/blob/main/docs/how-it-works.md).
+- **Agents can unblock each other.** `backbone agent approve <name>` answers a runtime's permission dialog — only while it is on screen, only with its affirmative key, every approval audited — so a coordinator can keep a team moving without a person watching.
+- **Coordination goes through GitHub, per repository.** Nothing is configured per repository: GitHub credentials are set once, and every repository an agent owns or watches is tracked on its own, by polling or by webhook.
+- **You reach it from anywhere.** The CLI, Telegram (a forum topic per agent), and a REST + Socket.IO API for your own dashboard or automation. The backbone ships no UI.
 
 ## Runtimes
 
@@ -73,9 +74,9 @@ Any CLI that runs in a terminal can be an agent; how much the backbone can do fo
 
 ¹ Gemini CLI 0.46 completes Google OAuth and then refuses personal accounts ("no longer supported for Gemini Code Assist for individuals"); the backbone reports such a session as `waiting_for_human`. Delivery to a signed-in Gemini session (e.g. `GEMINI_API_KEY`) has not been tested yet. Deep Code is `@vegamo/deepcode-cli`, the community CLI DeepSeek's docs point to; its permission dialog has not been captured yet, so `agent approve` refuses it until then.
 
-`backbone runtimes` lists every runtime, whether its binary is installed, and example model ids. The backbone deliberately does **not** manage per-repository runtime configuration (`CLAUDE.md`, `AGENTS.md`, MCP servers, …) — how a repository configures its tools is the repository's business.
+`backbone runtimes` lists every runtime, whether its binary is installed, and example model ids. The backbone does not manage per-repository runtime configuration (`CLAUDE.md`, `AGENTS.md`, MCP servers, …) — how a repository configures its tools is the repository's business.
 
-## After the first win
+## Beyond the first run
 
 **GitHub in two commands.** Issues become the agents' task list in every repository they own or watch:
 
@@ -84,23 +85,13 @@ gh auth token | backbone secrets set GITHUB_TOKEN   # the backbone's own .env, n
 backbone service install                            # restart to pick it up
 ```
 
-That is poll intake (every 60 s, nothing exposed). For instant delivery and automatic coverage of every repository you ever create, do the one-time GitHub App + webhook setup: [GitHub App setup](https://github.com/eandualem/agent-backbone/blob/main/docs/github-app-setup.md).
+That is poll intake (every 60 s, nothing exposed). For instant delivery and automatic coverage of every repository you create, do the one-time GitHub App + webhook setup: [GitHub App setup](https://github.com/eandualem/agent-backbone/blob/main/docs/github-app-setup.md).
 
-**An orchestrator** is an agent that watches the repositories it coordinates — `backbone agent start --watch acme/app --watch acme/web` — and opens issues for the others with `for:` and `from:` labels. **A swarm** puts parallel workers on one issue ([Swarms](https://github.com/eandualem/agent-backbone/blob/main/docs/swarms.md)). **Telegram** gives every agent a topic you can talk to from your phone ([Telegram](https://github.com/eandualem/agent-backbone/blob/main/docs/telegram.md)). **Your own view** builds on the [API](https://github.com/eandualem/agent-backbone/blob/main/docs/api.md).
+**An orchestrator** watches the repositories it coordinates — `backbone agent start --watch acme/app --watch acme/web` — and opens issues for the others with `for:` and `from:` labels. **A swarm** puts parallel workers on one issue ([Swarms](https://github.com/eandualem/agent-backbone/blob/main/docs/swarms.md)). **Telegram** gives every agent a topic you can talk to from your phone ([Telegram](https://github.com/eandualem/agent-backbone/blob/main/docs/telegram.md)). **Your own view** builds on the [API](https://github.com/eandualem/agent-backbone/blob/main/docs/api.md).
 
-## How it compares
+## How it relates to other tools
 
-Descriptions are each project's own, as of 2026-09-02; corrections welcome.
-
-| | What it is | Where it is stronger | What the backbone adds |
-|---|---|---|---|
-| Claude Code Agent Teams | Teams of Claude sessions inside one Claude Code session | Zero setup if Claude Code is your only runtime | Other CLIs in the same team; agents addressable from outside the session; GitHub and Telegram; persistent agents that outlive a session |
-| [claude-squad](https://github.com/smtg-ai/claude-squad) | A TUI to run several terminal agents (Claude Code, Codex, OpenCode, Amp) in tmux with worktrees | One-screen management, worktree-per-task ergonomics, diff review | Agents that talk to each other; state-gated, recorded delivery; issues as the task list; a phone |
-| [vibe-kanban](https://github.com/BloopAI/vibe-kanban) | A kanban board over parallel coding-agent runs | A real UI, task board and review flow | No UI, but agent-to-agent messaging and persistent per-repository agents |
-| [cli-agent-orchestrator](https://github.com/awslabs/cli-agent-orchestrator) | Multi-agent orchestration for coding CLIs, coordinated in isolated tmux sessions | The closest structural peer; read both before choosing | Cross-CLI messaging with delivery gated on the recipient's live state; GitHub Issues as the routed work queue; Telegram; an agent-operated CLI |
-| [agent-manager](https://github.com/YoanWai/agent-manager) | A tmux TUI: live status, quick prompts, worktrees, diff review | The single-screen view | Agent-to-agent messaging (which it lists as not yet supported), queues, GitHub, Telegram |
-
-What none of them claims: a durable, state-gated address for a live terminal agent, usable from outside it — by another agent on a different CLI, by a GitHub issue, or by a phone.
+Session managers such as [claude-squad](https://github.com/smtg-ai/claude-squad), [agent-manager](https://github.com/YoanWai/agent-manager) and [vibe-kanban](https://github.com/BloopAI/vibe-kanban) give you one screen over many agent sessions, with worktrees and diff review; they are about the person operating the agents. agent-backbone is about what happens between the agents: addressing a live agent from outside its terminal, delivering only when it is safe, routing work through issues, and letting agents manage each other. Claude Code's Agent Teams offer collaboration inside a single Claude Code session; the backbone works across CLIs and vendors, persists agents beyond a session, and reaches them from GitHub and Telegram. Orchestrators such as [cli-agent-orchestrator](https://github.com/awslabs/cli-agent-orchestrator) are the closest structural peers; the differences are in the delivery model and the GitHub integration, and both are worth reading before you choose.
 
 ## The security model, up front
 
@@ -114,11 +105,11 @@ The backbone types into your agents' terminals, so be clear about what it assume
 
 Full detail: [Security](https://github.com/eandualem/agent-backbone/blob/main/docs/security.md).
 
-## Where it came from
+## Background
 
-agent-backbone began as one component inside a larger, private orchestration system. That system's coupling turned out to be the problem — every part assumed every other part — so the backbone was extracted and rebuilt as a plug-and-play control plane with no dependency on any of it: it runs standalone, needs nothing but tmux and an agent CLI, and is the whole product rather than a piece of one. Issue references to `eandualem/orchestration` predate the split and point at a private repository.
+agent-backbone began as one component of a larger, private orchestration system. That system's coupling was its weakness — every part assumed every other part — so the backbone was extracted and rebuilt as a standalone control plane with no dependency on any of it. It needs nothing but tmux and an agent CLI. Issue references to `eandualem/orchestration` predate the split and point at a private repository.
 
-It was built by the fleet it ships, with a human directing: the issues, reviews and commits in this repository are mostly agent-authored, through the backbone itself.
+The repository is itself run through the backbone: most of its issues, reviews and commits were produced by agents coordinated with it, under a person's direction.
 
 ## Documentation
 

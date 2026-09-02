@@ -34,21 +34,22 @@ Tests run against SQLite in memory and mock tmux; nothing external is needed.
 
 ## Releasing (maintainers)
 
-Releases are published to [PyPI](https://pypi.org/project/agent-backbone/)
-by `.github/workflows/release.yml` when a version tag is pushed:
+Publishing to [PyPI](https://pypi.org/project/agent-backbone/) happens
+only when someone triggers it — never on a push, a merge or a tag.
 
 ```bash
-uv version 2.0.0a1            # bump pyproject.toml; commit it
-git tag v2.0.0a1 && git push origin main v2.0.0a1
+uv version 2.0.0a1                              # bump pyproject.toml; commit and merge it
+gh workflow run release.yml -f version=2.0.0a1  # or Actions → Release → Run workflow
 ```
 
-The workflow refuses a tag that does not match `pyproject.toml`, runs the
-tests, builds with `uv build` and publishes with `uv publish`. It needs the
-`PYPI_API_TOKEN` repository secret (Settings → Secrets and variables →
-Actions; `gh secret set PYPI_API_TOKEN` prompts for it). The token is never
-in the repository or in the data directory's `.env`.
+`.github/workflows/release.yml` refuses a version that does not match
+`pyproject.toml` on `main`, runs the tests, builds with `uv build`,
+publishes with `uv publish` and then tags `v<version>`. It uses the
+`PYPI_API_TOKEN` repository secret. The token is never in the repository
+or in the data directory's `.env`.
 
-To publish from a laptop instead: `uv build && UV_PUBLISH_TOKEN=… uv publish`.
+To publish from a laptop instead: `uv build && UV_PUBLISH_TOKEN=… uv publish`,
+then `git tag v<version> && git push origin v<version>`.
 
 `docs/` ships inside the wheel (`backbone docs`), so a docs-only change is
 still worth a release.
