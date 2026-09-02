@@ -31,7 +31,7 @@ def _register_jobs(app: FastAPI):
     setting changes and newly discovered agents are picked up without a restart."""
     from agent_backbone.api.session_updates import emit_sessions_update
     from agent_backbone.services.agents import rotate_action_log
-    from agent_backbone.services.jobs import delivery_retry, monitor_agents
+    from agent_backbone.services.jobs import GitHubPoller, delivery_retry, monitor_agents
     from agent_backbone.services.scheduler import PeriodicScheduler
 
     scheduler = PeriodicScheduler()
@@ -73,8 +73,6 @@ def _register_jobs(app: FastAPI):
     scheduler.add("integrations-sync", 300, state.integrations.sync_agents)
 
     if state.github is not None:
-        from agent_backbone.services.github._poller import GitHubPoller
-
         poller = GitHubPoller(
             lambda: state.config,
             state.db,

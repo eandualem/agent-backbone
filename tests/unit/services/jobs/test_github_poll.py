@@ -8,7 +8,7 @@ import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import EventType
-from agent_backbone.services.github._poller import (
+from agent_backbone.services.jobs.github_poll import (
     GitHubPoller,
     comment_event_from_api,
     issue_event_from_api,

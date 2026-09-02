@@ -1,7 +1,8 @@
 """The agent monitor — one tick of everything the backbone keeps an eye on.
 
 Runs on ``timing.monitor_interval_seconds`` (60 s) and immediately at
-startup. Each step is isolated: a failing step is logged and the next one
+startup. Each agent's state is read once per tick and handed to every
+step; each step is isolated — a failing step is logged and the next one
 still runs.
 """
 
@@ -12,6 +13,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
+from agent_backbone.services.agents import StateSnapshot, get_agent_state
 from agent_backbone.services.jobs.copy_mode import handle_copy_mode_recovery
 from agent_backbone.services.jobs.escalation import (
     check_plan_waiting,
@@ -32,6 +34,29 @@ log = logging.getLogger(__name__)
 
 # Concurrency guard — prevents overlapping monitor runs
 _monitor_lock = asyncio.Lock()
+
+AgentStates = dict[str, StateSnapshot]
+"""State of every configured agent with a live session, read once per tick."""
+
+
+async def read_states(config: BackboneConfig, active_sessions: set[str]) -> AgentStates:
+    """One reconciled snapshot per configured agent whose session is up."""
+    states: AgentStates = {}
+    for name in config.agents.names:
+        if name in active_sessions:
+            states[name] = await get_agent_state(
+                config.state_dir, name, config.agent_state.stale_threshold_seconds
+            )
+    return states
+
+
+async def sync_states(db: BackboneDB, states: AgentStates) -> None:
+    """Mirror the snapshots into ``agent_states`` (read by the offline check and status)."""
+    for name, snapshot in states.items():
+        try:
+            await db.set_agent_state(session_name=name, **snapshot.db_fields())
+        except Exception:
+            log.exception("Failed to persist agent state for %s (non-fatal)", name)
 
 
 async def monitor_agents(
@@ -57,6 +82,9 @@ async def monitor_agents(
             log.debug("No tmux sessions active")
             return {}
 
+        states = await read_states(config, active_sessions)
+        await sync_states(db, states)
+
         if gh is not None:
             try:
                 await sync_dependencies(config, db, gh)
@@ -64,7 +92,7 @@ async def monitor_agents(
                 log.exception("Dependency sync failed (non-fatal)")
 
         try:
-            await handle_stalls(config, active_sessions, db)
+            await handle_stalls(config, states, db)
         except Exception:
             log.exception("Stall detection failed (non-fatal)")
 
@@ -74,7 +102,7 @@ async def monitor_agents(
             log.exception("Offline detection failed (non-fatal)")
 
         try:
-            await check_plan_waiting(config, active_sessions, db=db)
+            await check_plan_waiting(config, states, db=db)
         except Exception:
             log.exception("Plan-waiting notification failed (non-fatal)")
 
@@ -104,4 +132,4 @@ async def monitor_agents(
 
         if gh is None:
             return {}
-        return await deliver_pending_issues(config, active_sessions, db, gh)
+        return await deliver_pending_issues(config, states, db, gh)

@@ -1,4 +1,4 @@
-"""GitHub polling connector.
+"""GitHub polling — the ``github-poll`` and ``github-backfill`` jobs.
 
 Used two ways:
 
@@ -23,11 +23,12 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from agent_backbone.models import IssueEvent
+from agent_backbone.services.routing import dispatch_event
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
     from agent_backbone.services.database import BackboneDB
-    from agent_backbone.services.github.interface import GitHubClient
+    from agent_backbone.services.github import GitHubClient
     from agent_backbone.services.routing import DeliveryService, DispatchService
 
 log = logging.getLogger(__name__)
@@ -120,8 +121,6 @@ class GitHubPoller:
         return _iso(datetime.now(UTC) - lookback)
 
     async def run(self) -> dict[str, int]:
-        from agent_backbone.services.routing import dispatch_event
-
         config = self._config
         summary: dict[str, int] = {}
         try:

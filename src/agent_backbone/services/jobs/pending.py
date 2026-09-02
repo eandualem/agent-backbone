@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import SUCCESS_OUTCOMES, DeliveryOutcome, parse_from_tag
-from agent_backbone.services.agents import AgentState, get_agent_state, has_commented_on_issue
+from agent_backbone.services.agents import AgentState, has_commented_on_issue
 from agent_backbone.services.routing import (
     format_next_issue_notification,
     is_acknowledged,
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
     from agent_backbone.services.database import BackboneDB
     from agent_backbone.services.github import GitHubClient
+    from agent_backbone.services.jobs.monitor import AgentStates
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ SOURCE = "agent-monitor"
 
 async def deliver_pending_issues(
     config: BackboneConfig,
-    active_sessions: set[str],
+    states: AgentStates,
     db: BackboneDB,
     gh: GitHubClient,
 ) -> dict[str, str]:
@@ -95,13 +96,7 @@ async def deliver_pending_issues(
             )
         return False
 
-    for name in config.agents.names:
-        if name not in active_sessions:
-            continue
-
-        snapshot = await get_agent_state(
-            config.state_dir, name, config.agent_state.stale_threshold_seconds
-        )
+    for name, snapshot in states.items():
         if snapshot.state != AgentState.IDLE:  # only a confirmed idle agent gets new work
             result[name] = "deferred"
             log.debug("Deferred delivery to %s (state=%s)", name, snapshot.state.value)
