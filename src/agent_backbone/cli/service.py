@@ -84,8 +84,21 @@ WantedBy=default.target
 """
 
 
+_NOT_FOUND = 127  # the shell's own code for a missing command
+
+
 def _run(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, check=False)
+    """Run the service manager; a missing binary (a container, a minimal
+    image) is an ordinary failure, not a traceback."""
+    try:
+        return subprocess.run(args, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(args, _NOT_FOUND, "", f"{args[0]}: not found")
+
+
+def _no_manager(system: str) -> str:
+    manager = "launchd" if system == "Darwin" else "systemd --user"
+    return f"no {manager} on this machine; use `backbone up --detach` (and again after a reboot)"
 
 
 def _gui_domain() -> str:
@@ -102,6 +115,10 @@ def install() -> int:
         plist.write_text(_plist(binary, config.data_dir, config.data_dir / "backbone.log"))
         _run("launchctl", "bootout", _gui_domain(), str(plist))  # replace an older copy
         result = _run("launchctl", "bootstrap", _gui_domain(), str(plist))
+        if result.returncode == _NOT_FOUND:
+            plist.unlink()
+            print(_no_manager(system))
+            return 1
         if result.returncode != 0:
             print(f"launchctl bootstrap failed: {result.stderr.strip() or result.stdout.strip()}")
             return 1
@@ -115,6 +132,10 @@ def install() -> int:
         unit.write_text(_unit(binary, config.data_dir))
         for step in (("daemon-reload",), ("enable", "--now", "agent-backbone.service")):
             result = _run("systemctl", "--user", *step)
+            if result.returncode == _NOT_FOUND:
+                unit.unlink()
+                print(_no_manager(system))
+                return 1
             if result.returncode != 0:
                 print(f"systemctl --user {' '.join(step)} failed: {result.stderr.strip()}")
                 return 1
@@ -158,6 +179,8 @@ def state() -> str:
         if not _plist_path().exists():
             return "not installed"
         result = _run("launchctl", "print", f"{_gui_domain()}/{LABEL}")
+        if result.returncode == _NOT_FOUND:
+            return "unsupported"
         return (
             "running"
             if result.returncode == 0 and "state = running" in result.stdout
@@ -167,6 +190,8 @@ def state() -> str:
         if not _unit_path().exists():
             return "not installed"
         result = _run("systemctl", "--user", "is-active", "agent-backbone.service")
+        if result.returncode == _NOT_FOUND:
+            return "unsupported"
         return "running" if result.stdout.strip() == "active" else "installed"
     return "unsupported"
 
