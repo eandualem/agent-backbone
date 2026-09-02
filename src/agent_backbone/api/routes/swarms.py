@@ -83,5 +83,10 @@ async def disband_swarm_endpoint(
         raise HTTPException(status_code=404, detail=f"unknown swarm '{name}'")
     if swarm["status"] != "active":
         return {"ok": True, "name": name, "status": swarm["status"], "members": []}
-    members = await teardown_swarm(config, db, store, swarm, status="disbanded")
+    try:
+        members = await teardown_swarm(config, db, store, swarm, status="disbanded")
+    except SwarmError as exc:
+        # A member session that would not stop: nothing was removed, the
+        # swarm is still active, and the caller decides what to do next.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True, "name": name, "status": "disbanded", "members": members}
