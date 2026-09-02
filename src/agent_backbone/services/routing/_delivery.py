@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 from agent_backbone.models import BLOCKED_OUTCOMES, SUCCESS_OUTCOMES, DeliveryOutcome
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence
-from agent_backbone.services.terminal import send_message
+from agent_backbone.services.runtimes import send_message
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig

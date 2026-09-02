@@ -1,4 +1,4 @@
-"""Agent store — the known agents, backed by the database.
+"""The agent store — the known agents, backed by the database.
 
 Agents are discovered, not declared: the first ``agent start`` from a
 directory records it. The store keeps an in-memory snapshot

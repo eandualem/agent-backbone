@@ -40,23 +40,22 @@ from agent_backbone.api.session_updates import (
     invalidate_session_snapshot_caches,
 )
 from agent_backbone.config import AgentSpec, BackboneConfig
-from agent_backbone.services.agent_store import AgentStore
-from agent_backbone.services.agents import StateService, read_state_file, write_state_file
-from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.infrastructure import (
-    RUNTIME_COMMANDS,
-    RUNTIME_DISPLAY_NAMES,
+from agent_backbone.services.agents import (
+    AgentStore,
+    StateService,
     approve_agent,
-    runtime_available,
+    read_state_file,
     start_agent,
+    write_state_file,
 )
+from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import get_session_intelligence
+from agent_backbone.services.runtimes import RUNTIMES, sanitize_pane_content
 from agent_backbone.services.terminal import (
     SESSION_FORMAT_STR,
     TmuxService,
     capture_pane,
     query_format_vars,
-    sanitize_pane_content,
 )
 
 log = logging.getLogger(__name__)
@@ -170,8 +169,8 @@ async def inspect_agent(
 async def list_runtimes():
     """Supported runtimes and whether their binary is installed."""
     return [
-        RuntimeInfo(id=k, display_name=RUNTIME_DISPLAY_NAMES[k], available=runtime_available(k))
-        for k in RUNTIME_COMMANDS
+        RuntimeInfo(id=rt.id, display_name=rt.display_name, available=rt.available())
+        for rt in RUNTIMES.values()
     ]
 
 
@@ -196,9 +195,9 @@ async def _start(
     if changes:
         spec = await store.update(spec.name, **changes)
 
-    if runtime not in RUNTIME_COMMANDS:
+    if runtime not in RUNTIMES:
         raise HTTPException(status_code=400, detail=f"Unknown runtime: {runtime}")
-    if not runtime_available(runtime):
+    if not RUNTIMES[runtime].available():
         raise HTTPException(status_code=400, detail=f"Runtime '{runtime}' binary not found")
     if not spec.path.is_dir():
         raise HTTPException(status_code=400, detail=f"Directory does not exist: {spec.path}")

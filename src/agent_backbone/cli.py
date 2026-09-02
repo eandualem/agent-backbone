@@ -111,7 +111,7 @@ class _Direct:
         self.config = config
 
     async def __aenter__(self) -> _Direct:
-        from agent_backbone.services.agent_store import AgentStore
+        from agent_backbone.services.agents import AgentStore
         from agent_backbone.services.database import BackboneDB, DatabaseService
 
         self._service = DatabaseService(self._boot.database_url)
@@ -270,7 +270,7 @@ def cmd_secrets(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    from agent_backbone.services.infrastructure import RUNTIME_COMMANDS, runtime_available
+    from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
 
     ok = True
 
@@ -299,16 +299,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print("  - none yet (run `backbone agent start` from a project directory)")
         for spec in config.agents:
             check(f"'{spec.name}' dir exists: {spec.path}", spec.path.is_dir())
-            check(
-                f"'{spec.name}' runtime '{spec.runtime}' installed", runtime_available(spec.runtime)
-            )
+            installed = spec.runtime in REGISTRY and REGISTRY[spec.runtime].available()
+            check(f"'{spec.name}' runtime '{spec.runtime}' installed", installed)
             if not spec.repo:
                 print(f"  ! '{spec.name}' has no GitHub remote — issue routing is off for it")
 
         print("Tools")
         check("tmux on PATH", shutil.which("tmux") is not None, "install tmux")
-        installed = [r for r in RUNTIME_COMMANDS if runtime_available(r) and r != "shell"]
-        print(f"  - runtimes installed: {', '.join(installed) or 'none'}")
+        found = [rt.id for rt in REGISTRY.values() if rt.binary and rt.available()]
+        print(f"  - runtimes installed: {', '.join(found) or 'none'}")
 
         print("Security")
         check(
@@ -667,7 +666,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
 
     # Backbone not running: register + start directly.
     from agent_backbone.config import AgentSpec
-    from agent_backbone.services.infrastructure import start_agent
+    from agent_backbone.services.agents import start_agent
 
     async with _Direct(boot) as direct:
         store = direct.store
@@ -703,6 +702,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
             runtime=args.runtime,
             model=args.model,
             resume=args.resume,
+            db=direct.db,
             wait=not args.no_wait,
         )
         if not result.ok:
@@ -731,7 +731,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
 
 
 async def _agent(args: argparse.Namespace) -> int:
-    from agent_backbone.services.infrastructure import stop_agent
+    from agent_backbone.services.agents import stop_agent
 
     sub = args.agent_command
     if sub == "start":

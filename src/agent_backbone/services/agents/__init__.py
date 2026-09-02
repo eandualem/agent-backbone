@@ -1,4 +1,5 @@
-"""Agents service — state tracking and monitoring."""
+"""Agents — the registry (``store``), their state (``_inference``) and their
+sessions (``launch``). ``AgentSpec`` itself lives in ``config``."""
 
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
@@ -14,12 +15,25 @@ from agent_backbone.services.agents.acknowledgement import (
     rotate_action_log,
 )
 from agent_backbone.services.agents.interface import StateService
+from agent_backbone.services.agents.launch import (
+    StartResult,
+    approve_agent,
+    approve_plan,
+    start_agent,
+    stop_agent,
+    wait_until_ready,
+)
 from agent_backbone.services.agents.models import AgentState, StateSnapshot
+from agent_backbone.services.agents.store import AgentStore
 
 __all__ = [
     "AgentState",
+    "AgentStore",
+    "StartResult",
     "StateService",
     "StateSnapshot",
+    "approve_agent",
+    "approve_plan",
     "clear_starting_marker",
     "find_outgoing_comment",
     "get_agent_state",
@@ -28,6 +42,9 @@ __all__ = [
     "read_plan",
     "read_state_file",
     "rotate_action_log",
+    "start_agent",
+    "stop_agent",
+    "wait_until_ready",
     "write_starting_marker",
     "write_state_file",
 ]

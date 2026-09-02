@@ -13,15 +13,14 @@ from agent_backbone.services.agents.models import (
     AgentState,
     StateSnapshot,
 )
-from agent_backbone.services.terminal import (
+from agent_backbone.services.runtimes import (
     GENERIC_BUSY_FRAGMENTS,
-    TerminalRuntime,
-    capture_pane,
-    detect_runtime_from_pane,
-    get_terminal_adapter,
-    normalize_runtime,
+    UNKNOWN,
+    detect_runtime,
+    get_runtime,
     sanitize_pane_content,
 )
+from agent_backbone.services.terminal import capture_pane
 
 log = logging.getLogger(__name__)
 
@@ -57,29 +56,28 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
     if not lines:
         return StateSnapshot(state=AgentState.UNKNOWN, source="pull", evidence=["empty pane"])
 
-    runtime = normalize_runtime(runtime_hint)
-    if runtime == TerminalRuntime.UNKNOWN:
-        runtime = detect_runtime_from_pane(pane_content)
-    adapter = get_terminal_adapter(runtime)
+    runtime = get_runtime(runtime_hint)
+    if runtime is UNKNOWN:
+        runtime = detect_runtime(pane_content)
 
-    if adapter.detect_busy(pane_content):
+    if runtime.detect_busy(pane_content):
         return StateSnapshot(
             state=AgentState.BUSY,
             source="pull",
-            evidence=[f"terminal shows a busy marker ({runtime.value})"],
+            evidence=[f"terminal shows a busy marker ({runtime.id})"],
         )
-    if adapter.detect_waiting_for_human(pane_content):
+    if runtime.detect_waiting_for_human(pane_content):
         return StateSnapshot(
             state=AgentState.WAITING_FOR_HUMAN,
             reason=REASON_PERMISSION,
             source="pull",
-            evidence=[f"terminal shows a permission prompt ({runtime.value})"],
+            evidence=[f"terminal shows a permission prompt ({runtime.id})"],
         )
-    if adapter.detect_idle(pane_content):
+    if runtime.detect_idle(pane_content):
         return StateSnapshot(
             state=AgentState.IDLE,
             source="pull",
-            evidence=[f"terminal shows an empty prompt ({runtime.value})"],
+            evidence=[f"terminal shows an empty prompt ({runtime.id})"],
         )
 
     recent = "\n".join(ln.strip().lower() for ln in lines[-20:] if ln.strip())
@@ -91,7 +89,7 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
     return StateSnapshot(
         state=AgentState.UNKNOWN,
         source="pull",
-        evidence=[f"terminal inconclusive: no prompt, busy or question marker ({runtime.value})"],
+        evidence=[f"terminal inconclusive: no prompt, busy or question marker ({runtime.id})"],
     )
 
 

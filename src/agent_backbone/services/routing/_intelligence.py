@@ -24,13 +24,8 @@ from typing import TYPE_CHECKING
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import WORKING_STATES, AgentState
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
-from agent_backbone.services.terminal import (
-    capture_pane,
-    clear_copy_mode,
-    get_terminal_adapter,
-    list_sessions,
-    resolve_terminal_runtime,
-)
+from agent_backbone.services.runtimes import resolve_runtime
+from agent_backbone.services.terminal import capture_pane, clear_copy_mode, list_sessions
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -66,8 +61,8 @@ async def get_session_intelligence(
     except Exception:
         log.debug("Failed to capture pane for '%s' (non-fatal)", session_name)
 
-    runtime = (await resolve_terminal_runtime(session_name, pane_content=pane_content)).value
-    adapter = get_terminal_adapter(runtime)
+    rt = await resolve_runtime(session_name, pane_content=pane_content)
+    runtime = rt.id
     evidence.append(f"runtime: {runtime}")
 
     state_snap = await get_agent_state(
@@ -114,7 +109,7 @@ async def get_session_intelligence(
     if (
         agent_state == AgentState.IDLE
         and pane_content
-        and adapter.prompt_has_pending_input(pane_content)
+        and rt.prompt_has_pending_input(pane_content)
     ):
         return profile(SessionIntelligence.HUMAN_TYPING, "prompt contains typed text")
 

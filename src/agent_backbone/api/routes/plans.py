@@ -25,9 +25,9 @@ from agent_backbone.api.models import (
 )
 from agent_backbone.api.session_updates import listable_sessions
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents import StateService, read_plan
-from agent_backbone.services.infrastructure import approve_plan
-from agent_backbone.services.terminal import TmuxService, send_message
+from agent_backbone.services.agents import StateService, approve_plan, read_plan
+from agent_backbone.services.runtimes import send_message
+from agent_backbone.services.terminal import TmuxService
 
 log = logging.getLogger(__name__)
 

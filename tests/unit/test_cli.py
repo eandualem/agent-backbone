@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent_backbone import cli
-from agent_backbone.services.infrastructure import StartResult
+from agent_backbone.services.agents import StartResult
 
-_DETECT_REPO = "agent_backbone.services.agent_store.detect_repo"
+_DETECT_REPO = "agent_backbone.services.agents.store.detect_repo"
 
 
 def _run(argv: list[str]) -> int:
@@ -101,14 +101,14 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(
                     ok=True, ready="ready", evidence=("terminal shows an empty prompt",)
                 ),
             ) as start,
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                "agent_backbone.services.agents.store.detect_repo",
                 new_callable=AsyncMock,
                 return_value="acme/my-app",
             ),
@@ -130,12 +130,12 @@ class TestAgentCommands:
         monkeypatch.chdir(project)
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                "agent_backbone.services.agents.store.detect_repo",
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -152,12 +152,12 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                "agent_backbone.services.agents.store.detect_repo",
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -170,12 +170,12 @@ class TestAgentCommands:
         # A later bare start must reuse the recorded model.
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                "agent_backbone.services.agents.store.detect_repo",
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -194,12 +194,12 @@ class TestAgentCommands:
         old.mkdir(parents=True)
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                "agent_backbone.services.agents.store.detect_repo",
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -232,12 +232,12 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ),
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                "agent_backbone.services.agents.store.detect_repo",
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -259,12 +259,12 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ),
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                "agent_backbone.services.agents.store.detect_repo",
                 new_callable=AsyncMock,
                 return_value="",
             ),

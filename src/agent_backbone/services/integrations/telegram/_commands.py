@@ -11,8 +11,13 @@ from telegram.ext import ContextTypes
 if TYPE_CHECKING:
     from agent_backbone.services.integrations.telegram.interface import TelegramService
 
-from agent_backbone.services.agents import read_plan, read_state_file
-from agent_backbone.services.infrastructure import approve_plan, start_agent, stop_agent
+from agent_backbone.services.agents import (
+    approve_plan,
+    read_plan,
+    read_state_file,
+    start_agent,
+    stop_agent,
+)
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     process_message_for_discovery,

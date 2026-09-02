@@ -64,7 +64,7 @@ async def session_exists(session_name: str) -> bool:
     return rc == 0
 
 
-async def _send_submit_key(session_name: str) -> bool:
+async def press_submit(session_name: str) -> bool:
     """Send Enter to submit the currently buffered prompt input."""
     rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, "Enter")
     if rc != 0:
@@ -73,7 +73,7 @@ async def _send_submit_key(session_name: str) -> bool:
     return True
 
 
-async def _send_escape_key(session_name: str) -> bool:
+async def press_escape(session_name: str) -> bool:
     """Send Escape to interrupt active work and expose queued input."""
     rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, "Escape")
     if rc != 0:
@@ -82,7 +82,7 @@ async def _send_escape_key(session_name: str) -> bool:
     return True
 
 
-async def _write_message_buffer(session_name: str, message: str) -> bool:
+async def paste_message(session_name: str, message: str) -> bool:
     """Paste a message into the tmux session input buffer."""
     if not await session_exists(session_name):
         log.warning("tmux session '%s' not found — notification dropped", session_name)

@@ -36,7 +36,8 @@ DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
 DEFAULT_PORT = 7120
 
 RUNTIMES: tuple[str, ...] = ("claude", "codex", "gemini", "opencode", "aider", "shell")
-"""Every runtime an agent can be started with (``shell`` is a plain login shell)."""
+"""The ``agents.default_runtime`` vocabulary. ``services.runtimes`` registers
+exactly these ids (asserted at import); the knowledge about each lives there."""
 
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "BACKBONE_API_KEY",

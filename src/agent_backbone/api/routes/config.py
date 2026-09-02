@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from agent_backbone.api.deps import get_agent_store, get_config
 from agent_backbone.config import SETTINGS_DEFAULTS, SETTINGS_HELP, BackboneConfig
-from agent_backbone.services.agent_store import AgentStore
+from agent_backbone.services.agents import AgentStore
 
 router = APIRouter(prefix="/api", tags=["config"])
 

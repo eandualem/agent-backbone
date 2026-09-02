@@ -40,7 +40,7 @@ _COPY = "agent_backbone.services.terminal._copy_mode"
 @pytest.fixture(autouse=True)
 def _patch_tmux_runtime_env():
     with patch(
-        "agent_backbone.services.terminal._adapters.query_environment_var",
+        "agent_backbone.services.runtimes.query_environment_var",
         new_callable=AsyncMock,
         return_value=None,
     ):

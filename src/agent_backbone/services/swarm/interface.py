@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import AgentSpec
-from agent_backbone.services.infrastructure import start_agent
+from agent_backbone.services.agents import start_agent
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
@@ -34,7 +34,7 @@ from agent_backbone.services.terminal import session_exists, stop_session
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
-    from agent_backbone.services.agent_store import AgentStore
+    from agent_backbone.services.agents import AgentStore
     from agent_backbone.services.database import BackboneDB
 
 log = logging.getLogger(__name__)

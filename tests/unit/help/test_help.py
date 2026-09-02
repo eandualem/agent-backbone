@@ -46,7 +46,7 @@ class TestAgentBrief:
 
 class TestBriefInjection:
     def test_brief_file_written_and_passed_for_claude(self, tmp_path):
-        from agent_backbone.services.infrastructure._agents import agent_brief_file
+        from agent_backbone.services.agents.launch import agent_brief_file
 
         path = agent_brief_file("orch", "acme/app", tmp_path)
         assert path is not None and path.read_text().startswith("# agent-backbone environment")
@@ -55,7 +55,7 @@ class TestBriefInjection:
     def test_brief_is_written_for_every_runtime(self, tmp_path):
         # start_agent decides whether it goes in at launch or as the first
         # message; the file itself does not depend on the runtime.
-        from agent_backbone.services.infrastructure._agents import agent_brief_file
+        from agent_backbone.services.agents.launch import agent_brief_file
 
         path = agent_brief_file("orch", "acme/app", tmp_path)
         assert path == tmp_path / "briefs" / "orch.md"

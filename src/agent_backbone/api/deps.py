@@ -5,8 +5,7 @@ from __future__ import annotations
 from fastapi import HTTPException, Request
 
 from agent_backbone.config import AgentSpec, BackboneConfig
-from agent_backbone.services.agent_store import AgentStore
-from agent_backbone.services.agents import StateService
+from agent_backbone.services.agents import AgentStore, StateService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.integrations import Integrations

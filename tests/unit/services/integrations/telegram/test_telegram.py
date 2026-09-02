@@ -9,8 +9,7 @@ import pytest
 
 from agent_backbone.config import SecurityConfig, TelegramConfig
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.infrastructure import StartResult
+from agent_backbone.services.agents import AgentState, StartResult, StateSnapshot
 from agent_backbone.services.integrations.telegram import TelegramService
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import CATCH_ALL_TOPIC

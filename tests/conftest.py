@@ -215,7 +215,7 @@ async def api_app(config):
     app.state.github = None  # Tests override via dependency_overrides when needed
     from dataclasses import replace
 
-    from agent_backbone.services.agent_store import AgentStore
+    from agent_backbone.services.agents import AgentStore
 
     # Seed the database with the test agents so store refreshes reproduce them,
     # and keep the test config's secrets/sections when the store publishes.

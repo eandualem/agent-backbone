@@ -95,8 +95,7 @@ def _register_jobs(app: FastAPI):
 async def lifespan(app: FastAPI):
     """Open the data directory, start the database, load config, wire services."""
     from agent_backbone.api.socketio_server import configure_pty_manager, get_pty_manager
-    from agent_backbone.services.agent_store import AgentStore
-    from agent_backbone.services.agents import StateService
+    from agent_backbone.services.agents import AgentStore, StateService
     from agent_backbone.services.database import BackboneDB, DatabaseService
     from agent_backbone.services.github import GitHubClient
     from agent_backbone.services.integrations import build_integrations

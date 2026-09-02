@@ -9,7 +9,7 @@ import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.infrastructure import StartResult
+from agent_backbone.services.agents import StartResult
 from agent_backbone.services.swarm import (
     SwarmError,
     create_swarm,

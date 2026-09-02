@@ -14,11 +14,8 @@ from typing import TYPE_CHECKING, Any
 from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import StateService
-from agent_backbone.services.terminal import (
-    RUNTIME_ENV_KEY,
-    TmuxService,
-    query_environment_var,
-)
+from agent_backbone.services.runtimes import RUNTIME_ENV_KEY
+from agent_backbone.services.terminal import TmuxService, query_environment_var
 
 if TYPE_CHECKING:
     import socketio
