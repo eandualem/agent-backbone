@@ -273,3 +273,22 @@ class TestPreTrustCodexEscaping:
         assert pre_trust_codex_directory(project, codex_config=config) is True
         saved = tomllib.loads(config.read_text())
         assert saved["projects"] == {str(project.resolve()): {"trust_level": "trusted"}}
+
+
+class TestDeepCode:
+    def test_brief_and_resume(self, tmp_path):
+        brief = tmp_path / "brief.md"
+        brief.write_text("You are agent d.")
+        with _resolve("/bin/deepcode"):
+            fresh = RUNTIMES["deepcode"].build_command(brief_file=brief)
+            resumed = RUNTIMES["deepcode"].build_command(brief_file=brief, resume=True)
+        assert fresh == ["/bin/deepcode", "-p", "You are agent d."]
+        assert resumed == ["/bin/deepcode", "--last"]
+
+    def test_model_travels_in_the_environment(self):
+        # deepcode has no --model flag; MODEL in the environment selects it.
+        with _resolve("/bin/deepcode"):
+            assert RUNTIMES["deepcode"].build_command(model="deepseek-v4-pro") == ["/bin/deepcode"]
+        assert RUNTIMES["deepcode"].launch_env("deepseek-v4-pro") == {"MODEL": "deepseek-v4-pro"}
+        assert RUNTIMES["deepcode"].launch_env(None) == {}
+        assert RUNTIMES["codex"].launch_env("x") == {}

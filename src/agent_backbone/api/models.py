@@ -201,6 +201,8 @@ class RuntimeInfo(BaseModel):
     id: str
     display_name: str
     available: bool = True
+    models: list[str] = Field(default_factory=list)
+    """Example model ids known to work with ``--model`` (the CLI's picker is the authority)."""
 
 
 # --- Issues ---

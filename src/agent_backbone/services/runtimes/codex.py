@@ -51,6 +51,7 @@ class Codex(Runtime):
     display_name = "Codex"
     binary = "codex"
     brief_mode = "initial_prompt"
+    models = ("gpt-5.6-sol",)  # as shown by codex 0.152's status line (live capture)
 
     prompt_prefixes = ("›",)
     runtime_markers = ("openai codex", "gpt-5.", "context left")

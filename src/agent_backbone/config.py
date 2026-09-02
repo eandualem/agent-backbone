@@ -41,7 +41,7 @@ def sqlite_url(data_dir: Path) -> str:
     return f"sqlite+aiosqlite:///{data_dir / SQLITE_FILENAME}"
 
 
-RUNTIMES: tuple[str, ...] = ("claude", "codex", "gemini", "opencode", "aider", "shell")
+RUNTIMES: tuple[str, ...] = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "shell")
 """The ``agents.default_runtime`` vocabulary. ``services.runtimes`` registers
 exactly these ids (asserted at import); the knowledge about each lives there."""
 

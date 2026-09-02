@@ -304,3 +304,75 @@ class TestPendingInput:
         # prefix matched via the suffix only and is output, not typed input.
         claude = RUNTIMES["claude"]
         assert claude.prompt_has_pending_input("some output line $") is False
+
+
+DEEPCODE_IDLE = (
+    " ╭────────────────────────────────────────────────────────────────────╮\n"
+    " │ >_ Deep Code  (v0.3.1)                                             │\n"
+    " │                                                                    │\n"
+    " │ Model                                            deepseek-v4-flash │\n"
+    " │ Thinking Enabled                                              true │\n"
+    " │ Reasoning Effort                                               max │\n"
+    " │ CWD                                  /private/tmp/deepcode-capture │\n"
+    " ╰────────────────────────────────────────────────────────────────────╯\n"
+    " Tips: /raw - Toggle display mode for viewing or collapsing reasoning\n"
+    " content\n"
+    "──────────────────────────────────────────────────────────────────────\n"
+    ">   Type your message...\n"
+    "──────────────────────────────────────────────────────────────────────\n"
+    "enter send · shift+enter newline · @ files · ctrl+v image · / commands · ctrl+d exit\n"
+)
+
+DEEPCODE_TYPED = DEEPCODE_IDLE.replace(">   Type your message...", "> hello")
+
+DEEPCODE_BUSY = (
+    "   backbone help swarms     # e.g. before creating a swarm\n"
+    "   ```\n"
+    "⠇ status: processing · deepseek-v4-flash high\n"
+    "──────────────────────────────────────────────────────────────────────\n"
+    "> [via:backbone from:agent-backbone] Create a file named hello.txt in this direc\n"
+    "  tory containing the single line: hello from deepcode\n"
+    "──────────────────────────────────────────────────────────────────────\n"
+    "wait for the current response or press esc to interrupt\n"
+)
+
+DEEPCODE_FAILED = (
+    " ✦ Request failed: HTTP 402: Insufficient Balance [code: invalid_request_error,\n"
+    "    type: unknown_error, trace ID: 3ab22f6c8e2f6e98eaa921cc68f4ee9c]\n"
+    "status: failed · deepseek-v4-flash high · fail: HTTP 402: Insufficient Balance\n"
+    "──────────────────────────────────────────────────────────────────────\n"
+    "> [via:backbone from:agent-backbone] Create a file named hello.txt in this direc\n"
+    "  tory containing the single line: hello from deepcode\n"
+    "──────────────────────────────────────────────────────────────────────\n"
+    "enter send · shift+enter newline · @ files · ctrl+v image · / commands · ctrl+d\n"
+    "exit\n"
+)
+
+
+class TestDeepCodeLive:
+    """deepcode 0.3.1 captured live under tmux (idle only; busy needs an API key)."""
+
+    def test_detects_runtime_and_idle(self):
+        assert detect_runtime(DEEPCODE_IDLE).id == "deepcode"
+        runtime = RUNTIMES["deepcode"]
+        assert runtime.detect_idle(DEEPCODE_IDLE) is True
+        assert runtime.prompt_has_pending_input(DEEPCODE_IDLE) is False
+
+    def test_typed_text_is_pending_input(self):
+        assert RUNTIMES["deepcode"].prompt_has_pending_input(DEEPCODE_TYPED) is True
+
+    def test_gemini_is_not_mistaken_for_deepcode(self):
+        assert detect_runtime(GEMINI_AUTH_SCREEN).id == "gemini"
+
+    def test_working_turn_is_busy(self):
+        runtime = RUNTIMES["deepcode"]
+        assert runtime.detect_busy(DEEPCODE_BUSY) is True
+        assert runtime.detect_idle(DEEPCODE_BUSY) is False
+
+    def test_failed_turn_is_idle_and_the_stuck_envelope_is_not_typed_text(self):
+        # Deep Code leaves the submitted text in the box after a failure; the
+        # backbone envelope marks it as a prior delivery, not human input.
+        runtime = RUNTIMES["deepcode"]
+        assert runtime.detect_busy(DEEPCODE_FAILED) is False
+        assert runtime.detect_idle(DEEPCODE_FAILED) is True
+        assert runtime.prompt_has_pending_input(DEEPCODE_FAILED) is False

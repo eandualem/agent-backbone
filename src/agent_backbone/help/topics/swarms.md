@@ -23,7 +23,9 @@ a swarm costs several times the tokens.
        --member 'scout*2@claude/sonnet' --member coder@claude/opus
    ```
 
-   Member spec: `ROLE[*N][@RUNTIME[/MODEL]]`. Roles with shipped briefs:
+   Member spec: `ROLE[*N][@RUNTIME[/MODEL]]`. Model ids come from
+   `backbone runtimes` (see `backbone help agents`, "Choosing a model");
+   do not ask the human for one. Roles with shipped briefs:
    `coordinator` (added automatically; at most one), `scout` (read-only
    research), `coder` (implements an owned slice), `reviewer` (verifies
    by running). Any other role gets a generic brief. 3–5 members total

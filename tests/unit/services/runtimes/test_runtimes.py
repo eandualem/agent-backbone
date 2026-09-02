@@ -32,6 +32,7 @@ class TestRegistry:
             "codex": "initial_prompt",
             "gemini": "initial_prompt",
             "opencode": "initial_prompt",
+            "deepcode": "initial_prompt",
             "aider": "message",
             "shell": "none",
         }

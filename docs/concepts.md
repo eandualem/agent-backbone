@@ -1,7 +1,7 @@
 # Concepts
 
 agent-backbone is a **control plane for terminal AI agents** on one machine.
-You run Claude Code, Codex, Gemini CLI, OpenCode or Aider in tmux sessions;
+You run Claude Code, Codex, Gemini CLI, OpenCode, Deep Code or Aider in tmux sessions;
 the backbone starts those sessions, knows whether each one is ready to
 receive input, delivers text to them safely, and connects them to GitHub
 Issues, to people through **integrations** (Telegram today), and to each
@@ -23,7 +23,7 @@ app: ready — claude repo acme/app
 - **Name** — the directory name (`--name` to override). It is the tmux
   session name, the value of `for:<name>` labels, and the `from:` identity
   in messages the agent sends.
-- **Runtime** — `claude`, `codex`, `gemini`, `opencode`, `aider`
+- **Runtime** — `claude`, `codex`, `gemini`, `opencode`, `deepcode`, `aider`
   or `shell`; default `claude` (`agents.default_runtime`).
 - **Repository** — read from `git remote origin`. An agent whose directory is
   a GitHub checkout **owns** that repository.

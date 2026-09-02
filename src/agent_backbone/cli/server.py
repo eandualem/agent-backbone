@@ -54,6 +54,10 @@ async def _up_detached(config: BackboneConfig) -> int:
     ok = await start_session(session, working_dir=str(Path.cwd()), command=command, environment=env)
     if ok:
         print(f"backbone started in tmux session '{session}' (attach: tmux attach -t {session})")
+        from agent_backbone.cli.service import state as service_state
+
+        if service_state() == "not installed":
+            print("tip: `backbone service install` starts it at login and restarts it if it dies")
         return 0
     print("failed to start backbone session")
     return 1

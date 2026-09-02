@@ -6,6 +6,8 @@ backbone up [--detach]               run the backbone (API + scheduler + integra
 backbone down                        stop a detached backbone
 backbone status                      agents, sessions, repositories and health
 backbone doctor                      check tmux, runtimes, credentials
+backbone runtimes                    supported CLIs, installed or not, example model ids
+backbone service install|uninstall|status   start the backbone at login (launchd / systemd --user)
 backbone config list|get|set|unset   settings (stored in the database)
 backbone agent start [--dir D]       discover + start an agent (waits for its prompt)
 backbone agent list|stop|inspect|set|watch|unwatch|forget
@@ -27,7 +29,8 @@ import sys
 
 from agent_backbone.cli.agents import cmd_agent, cmd_hooks, cmd_reply, cmd_tell
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_status, cmd_up
-from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_secrets
+from agent_backbone.cli.service import cmd_service
+from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
 from agent_backbone.cli.swarms import cmd_help, cmd_swarm
 from agent_backbone.config import RUNTIMES
 
@@ -48,6 +51,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("doctor", help="check the environment and configuration")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("runtimes", help="supported runtimes, whether installed, example model ids")
+    p.set_defaults(func=cmd_runtimes)
+
+    p = sub.add_parser("service", help="start the backbone at login (launchd / systemd --user)")
+    svc = p.add_subparsers(dest="service_command", required=True)
+    svc.add_parser("install", help="install and start the login service")
+    svc.add_parser("uninstall", help="stop and remove the login service")
+    svc.add_parser("status", help="running | installed | not installed")
+    p.set_defaults(func=cmd_service)
 
     p = sub.add_parser(
         "secrets", help="tokens in <data_dir>/.env — the only secrets file the backbone reads"

@@ -173,7 +173,9 @@ async def start_agent(
         log.error("Cannot start agent '%s': %s", spec.name, exc)
         return StartResult(ok=False, evidence=(str(exc),))
 
-    environment = launch_environment(spec.name, rt.id, config.state_dir, spec.env)
+    environment = launch_environment(
+        spec.name, rt.id, config.state_dir, {**spec.env, **rt.launch_env(effective_model)}
+    )
     # `starting` lives in its own marker file, written before the launch: a
     # hook write newer than the marker outranks it, ``wait_until_ready``
     # clears it when the prompt shows, and ``get_agent_state`` stops
