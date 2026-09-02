@@ -113,10 +113,30 @@ class TestNoServiceManager:
             patch(f"{_SVC}.subprocess.run", side_effect=self._missing),
         ):
             assert service.install() == 1
-            assert service.state() == "not installed"  # the unit file was removed again
+            assert service.state() == "unsupported"
         out = capsys.readouterr().out
         assert "no systemd --user on this machine" in out and "backbone up --detach" in out
-        assert not service._unit_path().exists()
+        assert not service._unit_path().exists()  # the unit file was removed again
+
+    def test_clean_host_without_manager_reports_unsupported_not_not_installed(self):
+        for system in ("Linux", "Darwin"):
+            with (
+                patch(f"{_SVC}.platform.system", return_value=system),
+                patch(f"{_SVC}.subprocess.run", side_effect=self._missing),
+            ):
+                assert service.state() == "unsupported"
+
+    def test_manager_present_but_failing_leaves_no_service_file(self, tmp_path, capsys):
+        # systemctl exists but cannot reach a user bus (a container with the
+        # binary, ssh without a session): the unit must not stay behind.
+        failing = MagicMock(returncode=1, stdout="", stderr="Failed to connect to bus")
+        with (
+            patch(f"{_SVC}.platform.system", return_value="Linux"),
+            patch(f"{_SVC}._run", return_value=failing),
+        ):
+            assert service.install() == 1
+            assert not service._unit_path().exists()
+        assert "Failed to connect to bus" in capsys.readouterr().out
 
     def test_macos_without_launchd_reports_unsupported(self, tmp_path, capsys):
         service._plist_path().parent.mkdir(parents=True, exist_ok=True)

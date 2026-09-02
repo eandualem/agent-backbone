@@ -115,12 +115,13 @@ def install() -> int:
         plist.write_text(_plist(binary, config.data_dir, config.data_dir / "backbone.log"))
         _run("launchctl", "bootout", _gui_domain(), str(plist))  # replace an older copy
         result = _run("launchctl", "bootstrap", _gui_domain(), str(plist))
-        if result.returncode == _NOT_FOUND:
-            plist.unlink()
-            print(_no_manager(system))
-            return 1
         if result.returncode != 0:
-            print(f"launchctl bootstrap failed: {result.stderr.strip() or result.stdout.strip()}")
+            plist.unlink()  # a failed install leaves nothing behind
+            if result.returncode == _NOT_FOUND:
+                print(_no_manager(system))
+            else:
+                detail = result.stderr.strip() or result.stdout.strip()
+                print(f"launchctl bootstrap failed: {detail}")
             return 1
         print(f"installed {plist}")
         print("the backbone now starts at login and restarts if it dies")
@@ -132,12 +133,12 @@ def install() -> int:
         unit.write_text(_unit(binary, config.data_dir))
         for step in (("daemon-reload",), ("enable", "--now", "agent-backbone.service")):
             result = _run("systemctl", "--user", *step)
-            if result.returncode == _NOT_FOUND:
-                unit.unlink()
-                print(_no_manager(system))
-                return 1
             if result.returncode != 0:
-                print(f"systemctl --user {' '.join(step)} failed: {result.stderr.strip()}")
+                unit.unlink()  # a failed install leaves nothing behind
+                if result.returncode == _NOT_FOUND:
+                    print(_no_manager(system))
+                else:
+                    print(f"systemctl --user {' '.join(step)} failed: {result.stderr.strip()}")
                 return 1
         print(f"installed {unit}")
         print("the backbone now starts at login and restarts if it dies")
@@ -176,22 +177,22 @@ def state() -> str:
     """``running``, ``installed`` (present, not running), ``not installed`` or ``unsupported``."""
     system = platform.system()
     if system == "Darwin":
-        if not _plist_path().exists():
-            return "not installed"
         result = _run("launchctl", "print", f"{_gui_domain()}/{LABEL}")
         if result.returncode == _NOT_FOUND:
             return "unsupported"
+        if not _plist_path().exists():
+            return "not installed"
         return (
             "running"
             if result.returncode == 0 and "state = running" in result.stdout
             else "installed"
         )
     if system == "Linux":
-        if not _unit_path().exists():
-            return "not installed"
         result = _run("systemctl", "--user", "is-active", "agent-backbone.service")
         if result.returncode == _NOT_FOUND:
             return "unsupported"
+        if not _unit_path().exists():
+            return "not installed"
         return "running" if result.stdout.strip() == "active" else "installed"
     return "unsupported"
 
