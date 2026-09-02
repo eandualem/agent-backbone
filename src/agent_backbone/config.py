@@ -101,7 +101,10 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
 }
 
 SETTINGS_HELP: dict[str, str] = {
-    "backbone.host": "Bind address for the API (keep 127.0.0.1 unless you add TLS+auth in front)",
+    "backbone.host": (
+        "Bind address for the API (keep 127.0.0.1 unless you add TLS+auth in front; "
+        "the CLI reaches a non-loopback host over https)"
+    ),
     "backbone.port": "API port",
     "backbone.session_name": "tmux session used by `backbone up --detach`",
     "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",

@@ -47,8 +47,12 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     env_path = config.env_path
     if not env_path.exists() or args.force:
-        env_path.write_text(_EXAMPLE_ENV.format(api_key=secrets.token_urlsafe(32)))
-        os.chmod(env_path, 0o600)
+        # Created (or truncated) with mode 0600 before the key is written, so
+        # no umask and no earlier permissive mode ever exposes it.
+        fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            os.fchmod(fd, 0o600)
+            fh.write(_EXAMPLE_ENV.format(api_key=secrets.token_urlsafe(32)))
         print(f"wrote {env_path} (contains a generated BACKBONE_API_KEY)")
     else:
         print(f"{env_path} exists (kept; use --force to regenerate)")

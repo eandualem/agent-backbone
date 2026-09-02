@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
 from sqlalchemy import text
 
 from tests.support import queue_row
@@ -202,7 +203,7 @@ class TestDeliveryTracking:
             source="issue-dispatcher",
         )
 
-        async with db._engine.begin() as conn:
+        async with db.engine.begin() as conn:
             await conn.execute(
                 text("UPDATE deliveries SET created_at = :created_at WHERE id = :id"),
                 {"created_at": "2000-01-01T00:00:00.000000Z", "id": claim_id},
@@ -537,7 +538,7 @@ class TestMessageQueue:
         )
         await db.queue.dequeue("ike")
 
-        async with db._engine.begin() as conn:
+        async with db.engine.begin() as conn:
             await conn.execute(
                 text("UPDATE message_queue SET leased_at = :leased_at WHERE id = :id"),
                 {"leased_at": "2000-01-01T00:00:00.000000Z", "id": row_id},
@@ -578,3 +579,21 @@ class TestMessageQueue:
         row = await queue_row(db, row_id)
         assert row["status"] == "pending"
         assert row["delivered_at"] is None
+
+
+class TestSwarmNameConflict:
+    async def test_second_active_create_raises(self, db):
+        fields = dict(
+            repo="acme/app",
+            issue_number=1,
+            initiator="",
+            coordinator="s-c",
+            branch="b",
+            worktree_dir="/w",
+        )
+        await db.swarms.create("s", **fields)
+        with pytest.raises(ValueError, match="already active"):
+            await db.swarms.create("s", **{**fields, "issue_number": 2})
+        await db.swarms.set_status("s", "done")
+        await db.swarms.create("s", **{**fields, "issue_number": 3})  # a finished name is reusable
+        assert (await db.swarms.get("s"))["issue_number"] == 3

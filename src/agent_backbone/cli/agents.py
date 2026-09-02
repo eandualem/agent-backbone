@@ -164,7 +164,12 @@ async def _agent(args: argparse.Namespace) -> int:
         for name in args.names:
             if api_up:
                 result = await _common.api(boot, "POST", f"/api/agents/{name}/stop", timeout=30.0)
-                ok = bool(result and result[0] == 200 and result[1].get("ok"))
+                ok = bool(
+                    result
+                    and result[0] == 200
+                    and isinstance(result[1], dict)
+                    and result[1].get("ok")
+                )
             else:
                 ok = await stop_agent(name)
             print(f"{name}: {'stopped' if ok else 'not stopped'}")
@@ -251,7 +256,7 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"error: {result[1] if result else 'API unreachable'}")
             return 1
         # Offline inspection: state file + tmux only.
-        from agent_backbone.services.agents._inference import get_agent_state
+        from agent_backbone.services.agents import get_agent_state
         from agent_backbone.services.terminal import session_exists
 
         config = await _common.load_config()

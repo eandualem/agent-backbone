@@ -13,7 +13,9 @@ class Aider(Runtime):
     brief_mode = "message"
 
     prompt_prefixes = ("aider>", ">")
-    runtime_markers = ("aider", "aider v", "model:", "/help")
+    # "model:" and "/help" appear in other CLIs' chrome; only aider's own banner
+    # and prompt identify it.
+    runtime_markers = ("aider v", "aider>", "aider chat")
     status_fragments = ("tokens:", "cost:")
     prompt_markers = ("(y)es/(n)o", "[y/n]", "(y/n)")
     # approve_keys stays empty until aider's prompt is captured live.

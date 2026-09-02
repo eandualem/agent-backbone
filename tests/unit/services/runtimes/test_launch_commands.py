@@ -261,3 +261,15 @@ class TestPreTrustCodex:
         config.write_text("model = [broken")
         assert pre_trust_codex_directory(tmp_path / "p", codex_config=config) is False
         assert config.read_text() == "model = [broken"
+
+
+class TestPreTrustCodexEscaping:
+    def test_quotes_and_backslashes_in_the_path_cannot_forge_a_table(self, tmp_path):
+        import tomllib
+
+        project = tmp_path / 'x"]\n[projects."victim'
+        project.mkdir()
+        config = tmp_path / "config.toml"
+        assert pre_trust_codex_directory(project, codex_config=config) is True
+        saved = tomllib.loads(config.read_text())
+        assert saved["projects"] == {str(project.resolve()): {"trust_level": "trusted"}}

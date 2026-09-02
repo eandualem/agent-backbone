@@ -96,6 +96,12 @@ class TestDoctor:
 
 
 class TestAgentCommands:
+    @pytest.fixture(autouse=True)
+    def _runtimes_installed(self):
+        # CI runners have no claude binary; the launch itself is patched per test.
+        with patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True):
+            yield
+
     def test_start_discovers_agent_from_directory(self, tmp_path, capsys):
         assert _run(["init"]) == 0
         project = tmp_path / "my-app"
@@ -109,7 +115,7 @@ class TestAgentCommands:
                 ),
             ) as start,
             patch(
-                "agent_backbone.services.agents.store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="acme/my-app",
             ),
@@ -136,7 +142,7 @@ class TestAgentCommands:
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agents.store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -158,7 +164,7 @@ class TestAgentCommands:
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agents.store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -176,7 +182,7 @@ class TestAgentCommands:
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agents.store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -200,7 +206,7 @@ class TestAgentCommands:
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agents.store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -238,7 +244,7 @@ class TestAgentCommands:
                 return_value=StartResult(ok=True),
             ),
             patch(
-                "agent_backbone.services.agents.store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -270,7 +276,7 @@ class TestAgentCommands:
                 return_value=StartResult(ok=True),
             ),
             patch(
-                "agent_backbone.services.agents.store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -395,3 +401,41 @@ class TestSecrets:
         monkeypatch.setattr("sys.stdin", io.StringIO("piped-token\n"))
         assert _run(["secrets", "set", "GITHUB_TOKEN"]) == 0
         assert "GITHUB_TOKEN=piped-token" in (_isolated_data_dir / ".env").read_text()
+
+
+class TestApiClient:
+    def test_loopback_is_http_and_anything_else_is_https(self):
+        from dataclasses import replace
+
+        from agent_backbone.cli import _common
+        from agent_backbone.config import BackboneSection, bootstrap_config
+
+        config = bootstrap_config()
+        assert _common.api_url(config, "/health").startswith("http://127.0.0.1:")
+        remote = replace(config, backbone=BackboneSection(host="backbone.internal", port=443))
+        assert _common.api_url(remote, "/health") == "https://backbone.internal:443/health"
+
+    async def test_non_json_body_is_wrapped(self, monkeypatch):
+        import httpx
+
+        from agent_backbone.cli import _common
+        from agent_backbone.config import bootstrap_config
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return None
+
+            async def request(self, *args, **kwargs):
+                return httpx.Response(502, text="Bad Gateway")
+
+        monkeypatch.setattr(httpx, "AsyncClient", _Client)
+        assert await _common.api(bootstrap_config(), "GET", "/x") == (
+            502,
+            {"detail": "Bad Gateway"},
+        )

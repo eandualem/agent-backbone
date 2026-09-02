@@ -48,7 +48,7 @@ async def _swarm(args: argparse.Namespace) -> int:
         if result is None or result[0] != 200:
             print("backbone API unreachable")
             return 1
-        swarms = result[1].get("items", [])
+        swarms = result[1].get("items", []) if isinstance(result[1], dict) else []
         if sub == "status" and getattr(args, "name", None):
             swarms = [s for s in swarms if s["name"] == args.name]
             if not swarms:

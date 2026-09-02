@@ -11,8 +11,19 @@ from agent_backbone.config import BackboneConfig, bootstrap_config
 log = logging.getLogger(__name__)
 
 
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 def api_url(config: BackboneConfig, path: str) -> str:
-    return f"http://{config.backbone.host}:{config.backbone.port}{path}"
+    """The API's URL for ``path``.
+
+    A loopback host is plain HTTP. Any other host is reached over HTTPS:
+    the bearer token travels with every call, and the documented way to
+    expose the backbone beyond the machine is behind TLS
+    (``backbone.host`` help text).
+    """
+    scheme = "http" if config.backbone.host in _LOOPBACK else "https"
+    return f"{scheme}://{config.backbone.host}:{config.backbone.port}{path}"
 
 
 def headers(config: BackboneConfig) -> dict[str, str]:
@@ -22,7 +33,12 @@ def headers(config: BackboneConfig) -> dict[str, str]:
 async def api(
     config: BackboneConfig, method: str, path: str, *, json_body: Any = None, timeout: float = 10.0
 ) -> tuple[int, Any] | None:
-    """Call the running API. Returns None when the backbone is not reachable."""
+    """Call the running API: ``(status, payload)``, or None when it is not reachable.
+
+    The payload is the decoded JSON body (a mapping or a list). A body that
+    is not JSON — a proxy error page, an uvicorn crash — comes back as
+    ``{"detail": text}`` so callers can always read ``detail``.
+    """
     import httpx
 
     try:
@@ -35,7 +51,7 @@ async def api(
     try:
         data = resp.json()
     except ValueError:
-        data = resp.text
+        data = {"detail": resp.text}
     return resp.status_code, data
 
 

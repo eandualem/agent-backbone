@@ -33,8 +33,11 @@ RUNTIMES: dict[str, Runtime] = {
 """Every runtime an agent can be started with, in display order."""
 UNKNOWN = shell.UNKNOWN
 
-assert set(RUNTIMES) == set(RUNTIME_IDS), "config.RUNTIMES must list the registered runtimes"
-
+if set(RUNTIMES) != set(RUNTIME_IDS):
+    raise RuntimeError(
+        "config.RUNTIMES must list the registered runtimes: "
+        f"{sorted(set(RUNTIMES) ^ set(RUNTIME_IDS))}"
+    )
 _ALIASES: dict[str, Runtime] = {alias: r for r in RUNTIMES.values() for alias in r.aliases}
 
 _DETECTION_ORDER = (gemini.RUNTIME, opencode.RUNTIME, aider.RUNTIME, codex.RUNTIME, claude.RUNTIME)

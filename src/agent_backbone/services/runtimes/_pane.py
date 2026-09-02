@@ -30,14 +30,14 @@ def is_box_line(stripped: str) -> bool:
 
 def prompt_tail_line_pairs(pane_content: str) -> list[tuple[str, str]]:
     """Tail raw/sanitized line pairs used for prompt detection."""
-    raw_lines = pane_content.strip().splitlines()
-    sanitized_lines = sanitize_pane_content(pane_content).strip().splitlines()
-
-    pairs = [
-        (raw.rstrip(), sanitized.rstrip())
-        for raw, sanitized in zip(raw_lines, sanitized_lines, strict=False)
-        if sanitized.strip()
-    ]
+    # Sanitize each raw line on its own so the pairing is structural: a line
+    # that is only escape sequences vanishes from the sanitized text and
+    # would otherwise shift every pair after it.
+    pairs: list[tuple[str, str]] = []
+    for raw in pane_content.strip().splitlines():
+        sanitized = sanitize_pane_content(raw)
+        if sanitized.strip():
+            pairs.append((raw.rstrip(), sanitized.rstrip()))
     tail = pairs[-8:]
 
     last_sep = -1
@@ -70,6 +70,10 @@ def prompt_line_is_dim_placeholder(raw_prompt_line: str) -> bool:
                     elif code == 22:
                         dim = False
                 i = match.end()
+                continue
+            other = _ANSI_ESCAPE_RE.match(raw_prompt_line, i)
+            if other:  # a cursor/erase sequence, not text
+                i = other.end()
                 continue
 
         ch = raw_prompt_line[i]

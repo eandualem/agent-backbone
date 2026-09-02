@@ -191,3 +191,52 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
         )
     finally:
         await db.stop()
+
+
+async def test_restamp_migrates_the_previous_squash_columns(tmp_path):
+    """A database from the 387112cb1193 squash has flow_name/flow_run_id, not source."""
+    from sqlalchemy import inspect, text
+
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
+    await db.start()
+    try:
+        async with db.engine.begin() as conn:
+            for table in ("deliveries", "message_queue"):
+                await conn.execute(text(f"ALTER TABLE {table} RENAME COLUMN source TO flow_name"))
+            await conn.execute(
+                text("ALTER TABLE deliveries ADD COLUMN flow_run_id TEXT NOT NULL DEFAULT ''")
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO deliveries (kind, repo, issue_number, target_entity, "
+                    "session_name, outcome, flow_name, flow_run_id, preview, created_at) VALUES "
+                    "('issue', 'acme/app', 1, 'ike', 'ike', 'delivered', 'issue-dispatcher', '', "
+                    "'', '2026-09-01T00:00:00.000000Z')"
+                )
+            )
+            await conn.execute(text("UPDATE alembic_version SET version_num = '387112cb1193'"))
+    finally:
+        await db.stop()
+
+    db2 = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
+    await db2.start()
+    try:
+        async with db2.engine.connect() as conn:
+            columns = {
+                table: {
+                    c["name"]
+                    for c in await conn.run_sync(lambda sync, t=table: inspect(sync).get_columns(t))
+                }
+                for table in ("deliveries", "message_queue")
+            }
+        assert "source" in columns["deliveries"] and "flow_name" not in columns["deliveries"]
+        assert "flow_run_id" not in columns["deliveries"]
+        assert "source" in columns["message_queue"]
+        (row,) = await db2.deliveries.query(issue_number=1)
+        assert row["source"] == "issue-dispatcher"
+        # and new writes work
+        await db2.deliveries.record(
+            issue_number=2, target_entity="ike", session_name="ike", outcome="delivered", source="x"
+        )
+    finally:
+        await db2.stop()

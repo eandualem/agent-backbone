@@ -13,26 +13,29 @@ from collections.abc import Hashable
 
 
 class RecentKeys:
-    """Keys marked less than ``ttl_seconds`` ago. Monotonic clock; not thread-safe."""
+    """Keys marked less than ``ttl_seconds`` ago. Monotonic clock; not thread-safe.
+
+    A call may ask for a different window (``ttl_seconds=``, a setting read
+    at run time). Entries are kept for the widest window any call has ever
+    asked for, so a later wider lookup never finds a mark evicted by an
+    earlier narrower one; memory stays bounded by that widest window.
+    """
 
     def __init__(self, ttl_seconds: float) -> None:
         self.ttl_seconds = ttl_seconds
+        self._retention = ttl_seconds
         self._marked: dict[Hashable, float] = {}
 
-    def _evict(self, now: float, ttl: float) -> None:
-        for key in [k for k, t in self._marked.items() if now - t > ttl]:
+    def _evict(self, now: float) -> None:
+        for key in [k for k, t in self._marked.items() if now - t > self._retention]:
             del self._marked[key]
 
     def seen(self, key: Hashable, *, ttl_seconds: float | None = None) -> bool:
-        """Whether ``key`` was marked within the window (does not mark it).
-
-        ``ttl_seconds`` changes the window for this call only (a setting the
-        caller reads at run time); entries are evicted on the longer of the
-        two windows so a wider per-call window never loses its history.
-        """
-        now = time.monotonic()
+        """Whether ``key`` was marked within the window (does not mark it)."""
         ttl = self.ttl_seconds if ttl_seconds is None else ttl_seconds
-        self._evict(now, max(ttl, self.ttl_seconds))
+        self._retention = max(self._retention, ttl)
+        now = time.monotonic()
+        self._evict(now)
         marked_at = self._marked.get(key)
         return marked_at is not None and now - marked_at <= ttl
 

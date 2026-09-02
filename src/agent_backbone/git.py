@@ -7,8 +7,11 @@ import re
 from pathlib import Path
 
 _GITHUB_REMOTE_RE = re.compile(
-    r"(?:github\.com[:/])(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+    r"^(?:https?://(?:[^@/]+@)?github\.com/|ssh://(?:[^@/]+@)?github\.com/|git@github\.com:)"
+    r"(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
+"""The remote forms GitHub hands out (https, ssh, scp-style), and only for
+``github.com`` itself — ``evilgithub.com/acme/app`` is not ``acme/app``."""
 
 
 async def run_git(repo_dir: Path | str, *args: str, timeout: float = 30.0) -> tuple[int, str, str]:
@@ -39,7 +42,7 @@ async def run_git(repo_dir: Path | str, *args: str, timeout: float = 30.0) -> tu
 
 def parse_github_remote(url: str) -> str:
     """``owner/name`` from an https or ssh GitHub remote, else ``""``."""
-    match = _GITHUB_REMOTE_RE.search(url.strip())
+    match = _GITHUB_REMOTE_RE.match(url.strip())
     return f"{match.group('owner')}/{match.group('repo')}" if match else ""
 
 

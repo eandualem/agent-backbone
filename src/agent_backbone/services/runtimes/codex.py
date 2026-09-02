@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import tomllib
 from pathlib import Path
@@ -32,7 +33,9 @@ def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | Non
         if existing is not None:
             # Valid TOML with an unexpected shape is the user's; leave it alone.
             return isinstance(existing, dict) and existing.get("trust_level") == "trusted"
-        entry = f'\n[projects."{path}"]\ntrust_level = "trusted"\n'
+        # json.dumps yields a TOML basic string: quotes and backslashes in the
+        # directory name cannot open another table or change the key.
+        entry = f'\n[projects.{json.dumps(path)}]\ntrust_level = "trusted"\n'
         updated = raw.rstrip("\n") + "\n" + entry if raw else entry.lstrip("\n")
         tomllib.loads(updated)  # never leave codex an unparseable config
         atomic_write_text(config_file, updated)

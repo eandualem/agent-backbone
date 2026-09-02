@@ -24,7 +24,7 @@ class SwarmRepo(Repo):
         # The interface refuses reuse while the old swarm is still active, and
         # the uq_swarms_active_issue index guards the issue either way.
         async with self._tx() as conn:
-            await conn.execute(
+            result = await conn.execute(
                 text(
                     """INSERT INTO swarms
                        (name, repo, issue_number, initiator, coordinator, branch,
@@ -54,6 +54,11 @@ class SwarmRepo(Repo):
                     "now": now_iso(),
                 },
             )
+            if result.rowcount == 0:
+                # Lost the race past the interface's pre-check: an active
+                # swarm of this name exists and the conflict update touched
+                # nothing. The caller removes its worktree and aborts.
+                raise ValueError(f"swarm '{name}' is already active")
 
     async def get(self, name: str) -> dict | None:
         async with self._tx() as conn:

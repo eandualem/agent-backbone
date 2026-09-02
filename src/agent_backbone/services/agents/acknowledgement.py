@@ -104,7 +104,7 @@ def rotate_action_log(action_log: str | Path, keep_lines: int = 2000) -> int:
     """
     log_path = Path(action_log).expanduser()
     try:
-        lines = log_path.read_text().splitlines()
+        lines = log_path.read_text(errors="replace").splitlines()
     except OSError:
         return 0
     if len(lines) <= keep_lines:

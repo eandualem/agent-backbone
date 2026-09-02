@@ -35,18 +35,58 @@ _SUPERSEDED_INDEXES = ("uq_mq_comment_dedup", "uq_mq_dm_dedup")
 """Indexes earlier releases created that the model no longer has. Only these
 and the model's own are ever dropped — an index an operator added is theirs."""
 
+_RENAMED_COLUMNS = {"deliveries": {"flow_name": "source"}, "message_queue": {"flow_name": "source"}}
+"""Columns the previous squash spelled differently: renamed in place, data kept."""
+_DROPPED_COLUMNS = {"deliveries": ("flow_run_id",)}
+"""Columns the previous squash had and the model no longer has."""
+
+
+def _repair_columns(sync_conn) -> None:
+    """Rename, add and drop columns so a re-stamped database matches the model.
+
+    SQLite ≥ 3.25 and PostgreSQL both support the three statements used.
+    Column *types* and nullability are never altered.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(sync_conn)
+    for table in metadata.sorted_tables:
+        existing = {column["name"] for column in inspector.get_columns(table.name)}
+        for old, new in _RENAMED_COLUMNS.get(table.name, {}).items():
+            if old in existing and new not in existing:
+                sync_conn.execute(text(f"ALTER TABLE {table.name} RENAME COLUMN {old} TO {new}"))
+                sync_conn.execute(text(f"UPDATE {table.name} SET {new} = '' WHERE {new} IS NULL"))
+                existing.discard(old)
+                existing.add(new)
+                log.info("Renamed %s.%s to %s (re-stamped database)", table.name, old, new)
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            default = column.server_default.arg if column.server_default is not None else None
+            clause = f"ALTER TABLE {table.name} ADD COLUMN {column.name} {column.type}"
+            if default is not None:
+                clause += f" NOT NULL DEFAULT '{default}'"
+            sync_conn.execute(text(clause))
+            log.info("Added %s.%s (re-stamped database)", table.name, column.name)
+        for old in _DROPPED_COLUMNS.get(table.name, ()):
+            if old in existing:
+                sync_conn.execute(text(f"ALTER TABLE {table.name} DROP COLUMN {old}"))
+                log.info("Dropped %s.%s (re-stamped database)", table.name, old)
+
 
 def _repair_schema(sync_conn) -> None:
-    """Bring an existing database's indexes up to the model on a re-stamp.
+    """Bring an existing database up to the model on a re-stamp.
 
-    Tables are stable pre-1.0, but index *predicates* have changed (the
-    ``kind = 'issue'`` guard on the delivery owner index, the one queue
-    dedup rule for every non-issue kind). A re-stamp is the only moment an
-    existing database meets a regenerated squash, so indexes are rebuilt
-    from the model here. Duplicate pending queue rows — the reason the
-    dedup index exists — are expired first so the unique index can be
+    Tables are stable pre-1.0, but columns and index *predicates* have
+    changed (``flow_name`` became ``source``; the ``kind = 'issue'`` guard
+    on the delivery owner index; the one queue dedup rule for every
+    non-issue kind). A re-stamp is the only moment an existing database
+    meets a regenerated squash, so columns are repaired and indexes are
+    rebuilt from the model here. Duplicate pending queue rows — the reason
+    the dedup index exists — are expired first so the unique index can be
     created.
     """
+    _repair_columns(sync_conn)
     sync_conn.execute(
         text(
             """UPDATE message_queue SET status = 'expired'

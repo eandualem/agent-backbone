@@ -324,3 +324,17 @@ class TestClaudeCodeUi:
             patch("agent_backbone.services.runtimes.base.asyncio.sleep", new_callable=AsyncMock),
         ):
             assert await runtime.deliver_message("s", "second message") is True
+
+
+class TestPaneLinePairing:
+    def test_escape_only_line_does_not_shift_the_pairs(self):
+        # tmux captures with -e can hold a line that is nothing but a cursor
+        # sequence; it must not misalign raw and sanitized lines.
+        pane = "\x1b[?25l\nsome output\n❯ fix the flaky test\n"
+        runtime = RUNTIMES["claude"]
+        assert runtime.detect_prompt(pane) == "❯ fix the flaky test"
+        assert runtime.prompt_has_pending_input(pane) is True
+
+    def test_non_sgr_escapes_do_not_count_as_typed_text(self):
+        pane = "❯ \x1b[2mTry a suggestion\x1b[0m\x1b[K\n"
+        assert RUNTIMES["claude"].prompt_has_pending_input(pane) is False

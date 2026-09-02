@@ -593,3 +593,11 @@ class TestStartingMarker:
         (tmp_path / "ike.json").write_text(json.dumps({"state": "idle", "ts": time.time() - 900}))
         write_starting_marker(tmp_path, "ike", time.time())
         assert read_state_file(tmp_path, "ike").state == AgentState.STARTING
+
+
+def test_rotation_tolerates_invalid_utf8(tmp_path):
+    path = tmp_path / "actions.jsonl"
+    lines = b"".join(b'{"issue": %d}\n' % i for i in range(20))
+    path.write_bytes(lines + b"\xff\xfe not json\n")
+    assert rotate_action_log(path, keep_lines=5) == 16
+    assert len(path.read_text(errors="replace").splitlines()) == 5
