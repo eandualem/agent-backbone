@@ -7,7 +7,7 @@ backbone down                        stop a detached backbone
 backbone status                      agents, sessions, repositories and health
 backbone doctor                      check tmux, runtimes, credentials
 backbone runtimes                    supported CLIs, installed or not, example model ids
-backbone service install|status      start the backbone at login (launchd / systemd --user)
+backbone service install|uninstall|status   start the backbone at login (launchd / systemd --user)
 backbone config list|get|set|unset   settings (stored in the database)
 backbone agent start [--dir D]       discover + start an agent (waits for its prompt)
 backbone agent list|stop|inspect|set|watch|unwatch|forget

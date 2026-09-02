@@ -81,7 +81,7 @@ Any CLI that runs in a terminal can be an agent; how much the backbone can do fo
 | `aider`, `shell` | — | first message | terminal (best effort) | untested |
 
 > **Gemini note**: with Gemini CLI 0.46.0 (the version we tested) Google OAuth completes and the CLI then still refuses personal accounts ("no longer supported for Gemini Code Assist for individuals"), leaving it stuck on its auth picker. This is an upstream issue, not a backbone one — the backbone correctly reports such sessions as `waiting_for_human`. Start, trust and brief injection are verified; delivery to a signed-in Gemini session (e.g. via `GEMINI_API_KEY`) is **unverified** until we can test against one.
-
+>
 > **Deep Code note**: `deepcode` is the community terminal agent DeepSeek's own API docs point to (`npm install -g @vegamo/deepcode-cli`; there is no official DeepSeek CLI yet). Its idle prompt and chrome were captured live from 0.3.1; its busy spinner and permission dialog have not been, so those states fall back to generic detection and `agent approve` refuses it until a capture with an API key lands. The model is chosen with `--model deepseek-v4-flash|deepseek-v4-pro` (exported as `MODEL`), the key with `backbone agent set NAME env='{"API_KEY": "…"}'`.
 
 `backbone runtimes` lists every runtime, whether its binary is installed, and example model ids.

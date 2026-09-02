@@ -13,10 +13,12 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from agent_backbone.config import bootstrap_config
 
@@ -42,6 +44,7 @@ def _unit_path() -> Path:
 
 def _plist(binary: str, data_dir: Path, log: Path) -> str:
     path_var = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    binary, data_dir, log, path_var = (escape(str(v)) for v in (binary, data_dir, log, path_var))
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -63,14 +66,16 @@ def _plist(binary: str, data_dir: Path, log: Path) -> str:
 
 def _unit(binary: str, data_dir: Path) -> str:
     path_var = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    # systemd splits ExecStart on whitespace and reads Environment= as
+    # space-separated assignments: quote so paths with spaces survive.
     return f"""[Unit]
 Description=agent-backbone — local control plane for terminal AI agents
 After=default.target
 
 [Service]
-ExecStart={binary} up
-Environment=BACKBONE_DATA_DIR={data_dir}
-Environment=PATH={path_var}
+ExecStart={shlex.quote(binary)} up
+Environment={shlex.quote(f"BACKBONE_DATA_DIR={data_dir}")}
+Environment={shlex.quote(f"PATH={path_var}")}
 Restart=always
 RestartSec=3
 

@@ -223,3 +223,18 @@ class TestLaunchEnvFromRuntime:
             assert (await start_agent(spec, config, wait=False)).ok
         env = start.await_args.kwargs["environment"]
         assert env["MODEL"] == "deepseek-v4-pro" and env["BACKBONE_RUNTIME"] == "deepcode"
+
+    async def test_the_selected_model_beats_a_model_in_the_agents_env(self, tmp_path):
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(
+            name="ike", dir=str(project), runtime="deepcode", env={"MODEL": "deepseek-v4-flash"}
+        )
+        config = bootstrap_config(tmp_path / "data")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/bin/deepcode"),
+        ):
+            await start_agent(spec, config, model="deepseek-v4-pro", wait=False)
+        assert start.await_args.kwargs["environment"]["MODEL"] == "deepseek-v4-pro"

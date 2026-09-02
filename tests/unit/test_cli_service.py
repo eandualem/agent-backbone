@@ -82,3 +82,18 @@ def test_unsupported_platform():
     with patch(f"{_SVC}.platform.system", return_value="Windows"):
         assert service.install() == 1
         assert service.state() == "unsupported"
+
+
+class TestValueEncoding:
+    def test_plist_escapes_xml_special_characters(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PATH", "/opt/a&b:/usr/bin")
+        text = service._plist("/opt/<x>/backbone", tmp_path / "d&d", tmp_path / "l.log")
+        assert "&lt;x&gt;" in text and "d&amp;d" in text and "a&amp;b" in text
+        assert "<x>" not in text.split("ProgramArguments")[1].split("</array>")[0]
+
+    def test_unit_quotes_paths_with_spaces(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PATH", "/opt/my tools:/usr/bin")
+        text = service._unit("/opt/my tools/backbone", tmp_path / "data dir")
+        assert "ExecStart='/opt/my tools/backbone' up" in text
+        assert f"Environment='BACKBONE_DATA_DIR={tmp_path / 'data dir'}'" in text
+        assert "Environment='PATH=/opt/my tools:/usr/bin'" in text
