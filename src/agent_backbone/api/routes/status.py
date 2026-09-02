@@ -49,10 +49,10 @@ async def get_system_status(
         for session in listable_sessions(config, active_set)
     ]
 
-    failed_rows = await db.get_failed_deliveries(limit=1000)
+    failed_rows = await db.deliveries.failed(limit=1000)
 
     try:
-        last_events = await db.last_event_time_by_repo()
+        last_events = await db.events.last_time_by_repo()
     except Exception:
         last_events = {}
     repos = [

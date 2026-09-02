@@ -52,7 +52,7 @@ async def sync_states(db: BackboneDB, states: AgentStates) -> None:
     """Mirror the snapshots into ``agent_states`` (read by the offline check and status)."""
     for name, snapshot in states.items():
         try:
-            await db.set_agent_state(session_name=name, **snapshot.db_fields())
+            await db.states.set(session_name=name, **snapshot.db_fields())
         except Exception:
             log.exception("Failed to persist agent state for %s (non-fatal)", name)
 

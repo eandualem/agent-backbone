@@ -136,7 +136,7 @@ class TestGitHubPoller:
         assert dispatch.issue_dispatcher.await_count == 2
         assert gh.list_issues_since.await_args_list[1].args[1] == "2026-08-31T10:05:01Z"
         # Both events were stored in the activity feed
-        assert len(await db.query_events(repo=TEST_REPO)) == 2
+        assert len(await db.events.query(repo=TEST_REPO)) == 2
 
     async def test_closed_issue_goes_to_lifecycle(self, config, db, dispatch):
         gh = AsyncMock()
@@ -185,7 +185,7 @@ class TestGitHubPoller:
         assert dispatch.issue_dispatcher.await_count == 1
 
     async def test_backfill_resumes_from_last_stored_event(self, config, db, dispatch):
-        await db.record_event(
+        await db.events.record(
             delivery_id="x", source="webhook", event_type="issue_opened", repo=TEST_REPO
         )
         gh = AsyncMock()

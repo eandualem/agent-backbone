@@ -32,7 +32,7 @@ class TestDispatchEvent:
         with patch(f"{_INGEST}.issue_dispatcher", AsyncMock(return_value=_dispatch_result())):
             outcome = await dispatch_event(_event("d-1"), config, db, None)
         assert outcome == "dispatch: 1 delivered, 0 offline, 0 deferred"
-        (row,) = await db.query_events(repo=TEST_REPO)
+        (row,) = await db.events.query(repo=TEST_REPO)
         assert row["delivery_id"] == "d-1" and row["outcome"] == outcome
         assert row["processed_at"] is not None
 

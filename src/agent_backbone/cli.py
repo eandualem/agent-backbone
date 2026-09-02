@@ -530,7 +530,7 @@ async def _config_cmd(args: argparse.Namespace) -> int:
 
     if sub == "list":
         async with _Direct(boot) as direct:
-            stored = await direct.db.get_all_settings()
+            stored = await direct.db.settings.all()
         width = max(len(k) for k in SETTINGS_DEFAULTS)
         for key in sorted(SETTINGS_DEFAULTS):
             value = stored.get(key, SETTINGS_DEFAULTS[key])
@@ -541,7 +541,7 @@ async def _config_cmd(args: argparse.Namespace) -> int:
 
     if sub == "get":
         async with _Direct(boot) as direct:
-            stored = await direct.db.get_all_settings()
+            stored = await direct.db.settings.all()
         if args.key not in SETTINGS_DEFAULTS:
             print(f"unknown setting '{args.key}'")
             return 1
@@ -565,7 +565,7 @@ async def _config_cmd(args: argparse.Namespace) -> int:
             print(f"API error: {result[1] if result else 'unreachable'}")
             return 1
         async with _Direct(boot) as direct:
-            await direct.db.set_setting(args.key, clean)
+            await direct.db.settings.set(args.key, clean)
         print(f"{args.key} = {json.dumps(clean)}")
         return 0
 
@@ -576,7 +576,7 @@ async def _config_cmd(args: argparse.Namespace) -> int:
                 print(f"{args.key} reset to default")
                 return 0
         async with _Direct(boot) as direct:
-            await direct.db.delete_setting(args.key)
+            await direct.db.settings.delete(args.key)
         print(f"{args.key} reset to default")
         return 0
     return 1

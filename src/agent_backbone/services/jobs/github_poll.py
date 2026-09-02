@@ -123,7 +123,7 @@ class GitHubPoller:
         config = self._config
         summary: dict[str, int] = {}
         try:
-            last_events = await self._db.last_event_time_by_repo()
+            last_events = await self._db.events.last_time_by_repo()
         except Exception:
             log.exception("Could not read last event times (using lookback)")
             last_events = {}

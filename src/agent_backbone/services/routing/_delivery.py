@@ -67,9 +67,9 @@ async def is_acknowledged(
     db: BackboneDB, repo: str, issue_number: int, target_entity: str, session_name: str
 ) -> bool:
     """Whether the target (or the session delivering for it) acknowledged the issue."""
-    if await db.is_acknowledged(issue_number, target_entity, repo=repo):
+    if await db.acks.exists(issue_number, target_entity, repo=repo):
         return True
-    return session_name != target_entity and await db.is_acknowledged(
+    return session_name != target_entity and await db.acks.exists(
         issue_number, session_name, repo=repo
     )
 
@@ -77,7 +77,7 @@ async def is_acknowledged(
 async def _has_successful_issue_delivery(
     db: BackboneDB, repo: str, issue_number: int, session_name: str
 ) -> bool:
-    rows = await db.query_deliveries(
+    rows = await db.deliveries.query(
         issue_number=issue_number, session_name=session_name, limit=25, repo=repo, kind="issue"
     )
     return any((row.get("outcome") or "") in SUCCESS_OUTCOMES for row in rows)
@@ -92,7 +92,7 @@ async def _get_unacknowledged_gate_issue(
 ) -> tuple[str, int] | None:
     """The most recent successfully delivered issue still awaiting acknowledgment."""
     scope = {(r.casefold(), n) for r, n in (queue_scope or ())}
-    rows = await db.query_deliveries(session_name=session_name, limit=100, kind="issue")
+    rows = await db.deliveries.query(session_name=session_name, limit=100, kind="issue")
     for row in rows:
         issue_number = row.get("issue_number")
         target_entity = row.get("target_entity")
@@ -128,9 +128,9 @@ async def _record(
         return
     try:
         if claim_id is not None:
-            await db.finalize_delivery_attempt(claim_id, outcome.value)
+            await db.deliveries.finalize(claim_id, outcome.value)
             return
-        await db.record_delivery(
+        await db.deliveries.record(
             issue_number=issue_number,
             target_entity=target_entity or session_name,
             session_name=session_name,
@@ -160,7 +160,7 @@ async def _enqueue(
     if kind == "issue" and (issue_number is None or target_entity is None):
         return
     try:
-        row_id = await db.enqueue_message(
+        row_id = await db.queue.enqueue(
             session_name=session_name,
             message=message,
             issue_number=issue_number,
@@ -224,7 +224,7 @@ async def safe_deliver(
     # 2. Claim
     claim_id: int | None = None
     if kind == "issue" and trackable_issue:
-        claim = await db.claim_delivery_attempt(
+        claim = await db.deliveries.claim(
             issue_number=issue_number,
             target_entity=target_entity,
             session_name=session_name,

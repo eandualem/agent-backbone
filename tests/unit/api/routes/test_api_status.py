@@ -75,7 +75,7 @@ class TestGetSystemStatus:
         assert data["pending_issues"] is None  # no GitHub client configured
 
     async def test_counts_failed_deliveries(self, api_client, auth_headers, api_app):
-        await api_app.state.db.record_delivery(
+        await api_app.state.db.deliveries.record(
             issue_number=99,
             target_entity="ike",
             session_name="ike",

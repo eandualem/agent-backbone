@@ -46,7 +46,7 @@ async def deliver_pending_issues(
             if await is_acknowledged(db, repo, issue_number, name, name):
                 return True
             if has_commented_on_issue(issue_number, name, config.action_log_path, repo=repo):
-                await db.record_acknowledgment(issue_number, name, repo=repo)
+                await db.acks.record(issue_number, name, repo=repo)
                 return True
             key = (repo, issue_number)
             acknowledged = comment_ack_cache.get(key)
@@ -61,7 +61,7 @@ async def deliver_pending_issues(
                 }
                 comment_ack_cache[key] = acknowledged
             if name in acknowledged:
-                await db.record_acknowledgment(issue_number, name, repo=repo)
+                await db.acks.record(issue_number, name, repo=repo)
                 return True
         except Exception:
             log.exception(
@@ -73,7 +73,7 @@ async def deliver_pending_issues(
         repo: str, issue_number: int, target: str, session: str
     ) -> bool:
         try:
-            recent = await db.query_deliveries(
+            recent = await db.deliveries.query(
                 issue_number=issue_number,
                 target_entity=target,
                 session_name=session,

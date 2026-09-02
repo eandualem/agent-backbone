@@ -93,8 +93,8 @@ async def cmd_queue(
         await update.message.reply_text("Database not available.")
         return
 
-    recent = await bot._db.query_deliveries(limit=10)
-    failed = await bot._db.get_failed_deliveries(limit=10)
+    recent = await bot._db.deliveries.query(limit=10)
+    failed = await bot._db.deliveries.failed(limit=10)
 
     lines = []
     if failed:
@@ -183,8 +183,8 @@ async def cmd_digest(
     failed: list = []
     states: list = []
     if bot._db is not None:
-        failed = await bot._db.get_failed_deliveries(limit=50)
-        states = await bot._db.get_all_agent_states()
+        failed = await bot._db.deliveries.failed(limit=50)
+        states = await bot._db.states.all()
 
     lines = [
         "*System Digest*",

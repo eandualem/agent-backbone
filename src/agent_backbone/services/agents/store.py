@@ -123,8 +123,8 @@ class AgentStore:
     async def refresh(self) -> BackboneConfig:
         """Re-read settings and agents from the database and publish."""
         async with self._lock:
-            self._settings = await self._db.get_all_settings()
-            self._agents = agents_from_rows(await self._db.list_agents())
+            self._settings = await self._db.settings.all()
+            self._agents = agents_from_rows(await self._db.agents.list())
             self._config = build_config(
                 self._data_dir, settings=self._settings, agents=self._agents
             )
@@ -182,7 +182,7 @@ class AgentStore:
 
     async def register(self, spec: AgentSpec) -> AgentSpec:
         """Insert or update an agent and publish the new snapshot."""
-        await self._db.upsert_agent(
+        await self._db.agents.upsert(
             spec.name,
             dir=spec.dir,
             runtime=spec.runtime,
@@ -193,7 +193,7 @@ class AgentStore:
             description=spec.description,
         )
         for repo in spec.watches:
-            await self._db.add_watch(spec.name, repo)
+            await self._db.agents.add_watch(spec.name, repo)
         await self.refresh()
         return self._agents.get(spec.name) or spec
 
@@ -222,32 +222,32 @@ class AgentStore:
         return await self.register(spec)
 
     async def forget(self, name: str) -> bool:
-        removed = await self._db.delete_agent(name)
+        removed = await self._db.agents.delete(name)
         await self.refresh()
         return removed
 
     async def watch(self, name: str, repo: str) -> AgentSpec:
         if name not in self._agents:
             raise KeyError(name)
-        await self._db.add_watch(name, repo)
+        await self._db.agents.add_watch(name, repo)
         await self.refresh()
         return self._agents.get(name)  # type: ignore[return-value]
 
     async def unwatch(self, name: str, repo: str) -> bool:
-        removed = await self._db.remove_watch(name, repo)
+        removed = await self._db.agents.remove_watch(name, repo)
         await self.refresh()
         return removed
 
     async def touch_started(self, name: str) -> None:
-        await self._db.touch_agent_started(name)
+        await self._db.agents.touch_started(name)
 
     # --- Settings ---
 
     async def set_setting(self, key: str, value) -> BackboneConfig:
         clean = validate_setting(key, value)
-        await self._db.set_setting(key, clean)
+        await self._db.settings.set(key, clean)
         return await self.refresh()
 
     async def unset_setting(self, key: str) -> BackboneConfig:
-        await self._db.delete_setting(key)
+        await self._db.settings.delete(key)
         return await self.refresh()

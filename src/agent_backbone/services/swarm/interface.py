@@ -135,7 +135,7 @@ async def create_swarm(
     """
     if not _NAME_RE.match(name):
         raise SwarmError(f"invalid swarm name {name!r} (lowercase, digits, dashes)")
-    prior = await db.get_swarm(name)
+    prior = await db.swarms.get(name)
     if prior is not None and prior.get("status") == "active":
         raise SwarmError(f"swarm '{name}' already exists")
     if config.agents.get(name) is not None or await session_exists(name):
@@ -144,7 +144,7 @@ async def create_swarm(
         raise SwarmError(f"swarm name '{name}' is already used by an agent")
 
     repo, issue_number = parse_issue_ref(issue_ref)
-    existing = await db.find_active_swarm_for_issue(repo, issue_number)
+    existing = await db.swarms.active_for_issue(repo, issue_number)
     if existing is not None:
         raise SwarmError(f"swarm '{existing['name']}' is already working {repo}#{issue_number}")
     title = await _verify_issue(gh, repo, issue_number)
@@ -188,7 +188,7 @@ async def create_swarm(
     worktree, branch = await create_worktree(repo_dir, name)
 
     try:
-        await db.create_swarm(
+        await db.swarms.create(
             name,
             repo=repo,
             issue_number=issue_number,
@@ -255,7 +255,7 @@ async def create_swarm(
             except Exception:
                 log.debug("rollback: could not forget %s", agent_name)
         await remove_worktree(repo_dir, worktree)
-        await db.set_swarm_status(name, "disbanded")
+        await db.swarms.set_status(name, "disbanded")
         raise
 
     kickoff = (
@@ -317,7 +317,7 @@ async def teardown_swarm(
             await store.forget(member.name)
         except Exception:
             log.warning("Could not forget swarm member %s", member.name)
-    await db.set_swarm_status(name, status)
+    await db.swarms.set_status(name, status)
     log.info("Swarm '%s' torn down (%s): %d members", name, status, len(members))
     return [m.name for m in members]
 
@@ -326,7 +326,7 @@ async def teardown_for_issue(
     config: BackboneConfig, db: BackboneDB, store: AgentStore, repo: str, issue_number: int
 ) -> str | None:
     """Tear down the active swarm working this issue, if any. Returns its name."""
-    swarm = await db.find_active_swarm_for_issue(repo, issue_number)
+    swarm = await db.swarms.active_for_issue(repo, issue_number)
     if swarm is None:
         return None
     await teardown_swarm(config, db, store, swarm, status="done")
@@ -335,7 +335,7 @@ async def teardown_for_issue(
 
 async def swarm_overview(db: BackboneDB, store: AgentStore) -> list[dict]:
     """All swarms with their member rosters."""
-    swarms = await db.list_swarms()
+    swarms = await db.swarms.list()
     for swarm in swarms:
         members = await _members_of(store, swarm["name"])
         swarm["members"] = [

@@ -84,7 +84,7 @@ async def on_issue_closed(
 
     if db is not None:
         try:
-            purged = await db.purge_pending_for_issue(event.issue.number, repo=repo)
+            purged = await db.queue.purge_for_issue(event.issue.number, repo=repo)
             if purged:
                 log.info(
                     "Purged %d queued messages for closed %s#%d", purged, repo, event.issue.number

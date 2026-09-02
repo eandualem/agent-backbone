@@ -15,21 +15,21 @@ async def deliveries_app(api_app):
     db = BackboneDB("sqlite+aiosqlite:///:memory:")
     await db.start()
     # Seed test data: 3 deliveries across 2 issues and 3 outcomes
-    await db.record_delivery(
+    await db.deliveries.record(
         issue_number=42,
         target_entity="ike",
         session_name="ike",
         outcome="delivered",
         source="dispatcher",
     )
-    await db.record_delivery(
+    await db.deliveries.record(
         issue_number=42,
         target_entity="leo",
         session_name="leo",
         outcome="offline",
         source="dispatcher",
     )
-    await db.record_delivery(
+    await db.deliveries.record(
         issue_number=43,
         target_entity="ike",
         session_name="ike",

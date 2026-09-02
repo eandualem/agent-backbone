@@ -162,10 +162,10 @@ class TestOnIssueClosed:
 
     async def test_purges_queued_messages_on_close(self, config):
         mock_db = AsyncMock()
-        mock_db.purge_pending_for_issue = AsyncMock(return_value=2)
+        mock_db.queue.purge_for_issue = AsyncMock(return_value=2)
         with _patch_session_exists(True), _patch_find_next(None):
             result = await on_issue_closed(
                 make_close_event(["feynman"]), config, AsyncMock(), db=mock_db
             )
-        mock_db.purge_pending_for_issue.assert_awaited_once_with(10, repo=TEST_REPO)
+        mock_db.queue.purge_for_issue.assert_awaited_once_with(10, repo=TEST_REPO)
         assert result["feynman"] == "queue_empty"

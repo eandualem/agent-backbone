@@ -75,7 +75,7 @@ class TestReadAndSyncStates:
 
     async def test_sync_mirrors_snapshots_into_the_database(self, db):
         await sync_states(db, {"ike": _snap(AgentState.BUSY, issue=42, current_repo=_REPO)})
-        row = await db.get_agent_state("ike")
+        row = await db.states.get("ike")
         assert row["state"] == "busy" and row["current_repo"] == _REPO
 
 
@@ -134,7 +134,7 @@ class TestHandleStalls:
 class TestOffline:
     async def test_detects_and_clears_offline_agent(self, config, db):
         config = replace(config, escalation=EscalationConfig(target="leo"))
-        await db.set_agent_state("ike", "busy", current_issue=3)
+        await db.states.set("ike", "busy", current_issue=3)
         gh = AsyncMock()
         gh.list_issues = AsyncMock(return_value=[_issue(3)])
         with patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d:
@@ -142,11 +142,11 @@ class TestOffline:
         d.assert_awaited_once()
         assert "offline unexpectedly" in d.await_args.args[1]
         assert "1 pending issue" in d.await_args.args[1]
-        assert (await db.get_agent_state("ike"))["state"] == "unknown"
+        assert (await db.states.get("ike"))["state"] == "unknown"
 
     async def test_active_or_unknown_not_flagged(self, config, db):
-        await db.set_agent_state("ike", "busy")
-        await db.set_agent_state("leo", "unknown")
+        await db.states.set("ike", "busy")
+        await db.states.set("leo", "unknown")
         assert await esc.check_for_unexpected_offline(config, {"ike"}, db, AsyncMock()) == []
 
 
@@ -245,7 +245,7 @@ class TestDeliverPendingIssues:
         d.assert_not_called()
 
     async def test_skips_acknowledged_issue(self, config, db):
-        await db.record_acknowledgment(7, "ike", repo=_REPO)
+        await db.acks.record(7, "ike", repo=_REPO)
         gh = AsyncMock()
         gh.list_issues = AsyncMock(return_value=[_issue(7), _issue(8)])
         gh.list_comments = AsyncMock(return_value=[])
@@ -274,10 +274,10 @@ class TestDeliverPendingIssues:
             result = await deliver_pending_issues(config, _IDLE, db, gh)
         assert result["ike"] == "no_deliverable"
         d.assert_not_called()
-        assert await db.is_acknowledged(7, "ike", repo=_REPO)
+        assert await db.acks.exists(7, "ike", repo=_REPO)
 
     async def test_skips_recently_delivered(self, config, db):
-        await db.record_delivery(
+        await db.deliveries.record(
             issue_number=7,
             target_entity="ike",
             session_name="ike",

@@ -197,7 +197,7 @@ async def api_app(config):
     # Seed the database with the test agents so store refreshes reproduce them,
     # and keep the test config's secrets/sections when the store publishes.
     for spec in config.agents:
-        await db.upsert_agent(
+        await db.agents.upsert(
             spec.name,
             dir=spec.dir,
             runtime=spec.runtime,
@@ -208,7 +208,7 @@ async def api_app(config):
             description=spec.description,
         )
         for repo in spec.watches:
-            await db.add_watch(spec.name, repo)
+            await db.agents.add_watch(spec.name, repo)
 
     def _publish(new_config):
         app.state.config = replace(app.state.config, agents=new_config.agents)

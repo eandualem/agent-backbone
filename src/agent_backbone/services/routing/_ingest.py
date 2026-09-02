@@ -78,7 +78,7 @@ async def _store_route_mark(event, key, config, db, gh, issue_closed_hooks) -> s
     event_id: int | None = None
     if event.delivery_id:
         try:
-            event_id = await db.record_event(
+            event_id = await db.events.record(
                 delivery_id=key,
                 source=_source(event.delivery_id),
                 repo=event.issue.repo_full_name,
@@ -96,7 +96,7 @@ async def _store_route_mark(event, key, config, db, gh, issue_closed_hooks) -> s
 
     if event_id is not None:
         try:
-            await db.mark_event_processed(event_id, outcome)
+            await db.events.mark_processed(event_id, outcome)
         except Exception:
             log.debug("Failed to mark event processed (non-fatal)")
     return outcome

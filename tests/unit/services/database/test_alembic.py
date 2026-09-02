@@ -54,11 +54,11 @@ def test_metadata_indexes_match_expected():
 async def test_memory_db_bypasses_migrations():
     async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
         assert await db.check_connection()
-        row_id = await db.record_delivery(
+        row_id = await db.deliveries.record(
             issue_number=1, target_entity="ike", session_name="ike", outcome="delivered"
         )
         assert row_id > 0
-        assert len(await db.query_deliveries(issue_number=1)) == 1
+        assert len(await db.deliveries.query(issue_number=1)) == 1
 
 
 async def test_file_db_runs_migrations(tmp_path):
@@ -68,7 +68,7 @@ async def test_file_db_runs_migrations(tmp_path):
     try:
         assert await db.check_connection()
         assert (
-            await db.record_delivery(
+            await db.deliveries.record(
                 issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
             )
             > 0
@@ -85,14 +85,12 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
     try:
         await db._run_migrations()
         assert (
-            await db.record_delivery(
+            await db.deliveries.record(
                 issue_number=7, target_entity="ike", session_name="ike", outcome="delivered"
             )
             > 0
         )
-        await db.enqueue_message(
-            session_name="ike", message="hello", delivery_kind="direct_message"
-        )
+        await db.queue.enqueue(session_name="ike", message="hello", delivery_kind="direct_message")
         assert (await queue_row(db, 1))["status"] == "pending"
     finally:
         await db.stop()
@@ -102,7 +100,7 @@ async def test_file_db_idempotent_start(tmp_path):
     url = f"sqlite+aiosqlite:///{tmp_path / 'idem.db'}"
     db = BackboneDB(url)
     await db.start()
-    await db.record_delivery(
+    await db.deliveries.record(
         issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
     )
     await db.stop()
@@ -110,7 +108,7 @@ async def test_file_db_idempotent_start(tmp_path):
     db2 = BackboneDB(url)
     await db2.start()
     try:
-        assert len(await db2.query_deliveries(issue_number=42)) == 1
+        assert len(await db2.deliveries.query(issue_number=42)) == 1
     finally:
         await db2.stop()
 
@@ -186,7 +184,7 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
         assert "uq_mq_message_dedup" in names
         # ...and the rule now holds for new rows.
         assert (
-            await db.enqueue_message(
+            await db.queue.enqueue(
                 session_name="ike", message="same notice", delivery_kind="pull_request"
             )
             == -1

@@ -51,8 +51,8 @@ def _register_jobs(app: FastAPI):
     async def _prune():
         days = state.config.delivery.retention_days
         return {
-            "deliveries": await state.db.prune_old_deliveries(days),
-            "events": await state.db.prune_events(days),
+            "deliveries": await state.db.deliveries.prune(days),
+            "events": await state.db.events.prune(days),
             "action_log_lines": rotate_action_log(state.config.action_log_path),
         }
 

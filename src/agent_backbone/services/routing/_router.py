@@ -112,7 +112,7 @@ async def _dispatch_comment(
     if commenter:
         commenter_session = resolve_entity_session(commenter, config)
         try:
-            await db.record_acknowledgment(event.issue.number, commenter, repo=repo)
+            await db.acks.record(event.issue.number, commenter, repo=repo)
         except Exception:
             log.exception("Failed to record acknowledgment (non-fatal)")
 
@@ -122,7 +122,7 @@ async def _dispatch_comment(
             result.skipped.append(target)
             continue
         try:
-            await db.clear_acknowledgment(event.issue.number, target, repo=repo)
+            await db.acks.clear(event.issue.number, target, repo=repo)
         except Exception:
             log.exception("Failed to clear acknowledgment (non-fatal)")
         await _deliver(

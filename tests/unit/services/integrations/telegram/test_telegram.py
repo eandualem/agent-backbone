@@ -241,10 +241,10 @@ class TestStatusAndQueue:
 
     async def test_queue_uses_shared_db(self, config):
         bot = _bot(config)
-        bot._db.query_deliveries.return_value = [
+        bot._db.deliveries.query.return_value = [
             {"issue_number": 1, "target_entity": "ike", "outcome": "delivered"}
         ]
-        bot._db.get_failed_deliveries.return_value = []
+        bot._db.deliveries.failed.return_value = []
         update = _update()
         await bot.cmd_queue(update, MagicMock())
         assert "Recent Deliveries" in update.message.reply_text.await_args.args[0]

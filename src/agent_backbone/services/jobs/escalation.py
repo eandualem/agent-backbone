@@ -101,7 +101,7 @@ async def check_for_unexpected_offline(
     """Known agents whose last recorded state was live but whose session is gone."""
     offline: list[dict] = []
     try:
-        known_states = await db.get_all_agent_states()
+        known_states = await db.states.all()
     except Exception:
         log.exception("Failed to read agent states for offline check")
         return offline
@@ -176,9 +176,7 @@ async def handle_offline(
             )
             log.warning("Agent offline unexpectedly: %s", agent["entity"])
         try:
-            await db.set_agent_state(
-                session_name=agent["session"], state="unknown", current_issue=None
-            )
+            await db.states.set(session_name=agent["session"], state="unknown", current_issue=None)
         except Exception:
             log.exception(
                 "Failed to clear DB state for offline agent %s (non-fatal)", agent["session"]

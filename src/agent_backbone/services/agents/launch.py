@@ -217,7 +217,7 @@ async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:
             log.info("No database handle: agent '%s' starts without its brief", name)
         return
     try:
-        await db.enqueue_message(
+        await db.queue.enqueue(
             session_name=name,
             message=f"[via:backbone] {text}",
             delivery_kind="direct_message",

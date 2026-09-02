@@ -41,7 +41,7 @@ async def on_dependency_resolved(
 ) -> dict:
     """If closing this issue unblocks a parent, tell the parent's targets."""
     result: dict[str, str] = {"parents_checked": "0"}
-    parents = await db.get_parents(closed_issue_number, repo=repo)
+    parents = await db.dependencies.parents(closed_issue_number, repo=repo)
     if not parents:
         return result
     result["parents_checked"] = str(len(parents))
@@ -93,6 +93,6 @@ async def sync_dependencies(
             checked.add(key)
             subs = await gh.get_sub_issues(issue.number, repo_full_name=issue.repo_full_name)
             if subs:
-                await db.sync_dependencies(
+                await db.dependencies.sync(
                     issue.number, [s.number for s in subs], repo=issue.repo_full_name
                 )

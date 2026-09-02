@@ -57,9 +57,9 @@ def _comment_event(number: int, sender: str, targets: list[str], body: str) -> I
 @pytest.fixture
 def mock_db():
     db = AsyncMock()
-    db.record_acknowledgment = AsyncMock()
-    db.clear_acknowledgment = AsyncMock()
-    db.record_delivery = AsyncMock()
+    db.acks.record = AsyncMock()
+    db.acks.clear = AsyncMock()
+    db.deliveries.record = AsyncMock()
     return db
 
 
@@ -291,14 +291,14 @@ class TestCommentRouting:
         event = _comment_event(42, "leo", ["ike"], "[from:ike] Ack")
         with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             await issue_dispatcher(event, config, mock_db)
-        mock_db.record_acknowledgment.assert_called_once_with(42, "ike", repo=OTHER_REPO)
+        mock_db.acks.record.assert_called_once_with(42, "ike", repo=OTHER_REPO)
 
     async def test_external_comment_clears_acknowledgment(self, config, mock_db):
         event = _comment_event(42, "leo", ["ike"], "[from:leo] New info")
         with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == ["ike"]
-        mock_db.clear_acknowledgment.assert_called_with(42, "ike", repo=OTHER_REPO)
+        mock_db.acks.clear.assert_called_with(42, "ike", repo=OTHER_REPO)
 
     async def test_no_from_tag_falls_back_to_action_log(self, config, mock_db):
         event = _comment_event(12, "leo", ["ike"], "Just a plain comment.")

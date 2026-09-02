@@ -127,7 +127,7 @@ class TestStartAgentBrief:
         assert result.ok and result.ready == "ready"
         command = started.await_args.kwargs["command"]
         assert "--append-system-prompt-file" in command
-        db.enqueue_message.assert_not_awaited()
+        db.queue.enqueue.assert_not_awaited()
 
     async def test_aider_gets_the_brief_queued_as_its_first_message(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
@@ -137,8 +137,8 @@ class TestStartAgentBrief:
             result = await start_agent(self._spec(tmp_path, "aider"), config, db=db)
         assert result.ok
         assert "--append-system-prompt-file" not in started.await_args.kwargs["command"]
-        db.enqueue_message.assert_awaited_once()
-        queued = db.enqueue_message.await_args.kwargs
+        db.queue.enqueue.assert_awaited_once()
+        queued = db.queue.enqueue.await_args.kwargs
         assert queued["session_name"] == "ike"
         assert queued["message"].startswith("[via:backbone] ")
         assert queued["delivery_kind"] == "direct_message"
@@ -152,9 +152,7 @@ class TestStartAgentBrief:
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start, _cmd, _trust, _wait:
             await start_agent(self._spec(tmp_path, "aider"), config, brief_file=role, db=db)
-        assert (
-            db.enqueue_message.await_args.kwargs["message"] == "[via:backbone] You are the scout."
-        )
+        assert db.queue.enqueue.await_args.kwargs["message"] == "[via:backbone] You are the scout."
 
     async def test_shell_and_resume_get_no_brief(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
@@ -163,7 +161,7 @@ class TestStartAgentBrief:
         with exists, start, _cmd, _trust, _wait:
             await start_agent(self._spec(tmp_path, "shell"), config, db=db)
             await start_agent(self._spec(tmp_path, "aider"), config, resume=True, db=db)
-        db.enqueue_message.assert_not_awaited()
+        db.queue.enqueue.assert_not_awaited()
 
     async def test_unknown_runtime_is_refused(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")

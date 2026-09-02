@@ -189,7 +189,7 @@ class TestStartAgent:
             "/api/agents/ike/start", json={"runtime": "aider"}, headers=auth_headers
         )
         assert resp.status_code == 200
-        queued = await api_app.state.db.dequeue_messages("ike")
+        queued = await api_app.state.db.queue.dequeue("ike")
         assert len(queued) == 1
         assert queued[0]["message"].startswith("[via:backbone] ")
         assert queued[0]["delivery_kind"] == "direct_message"
@@ -207,7 +207,7 @@ class TestStartAgent:
             json={"runtime": "aider", "resume": True},
             headers=auth_headers,
         )
-        assert await api_app.state.db.get_sessions_with_pending() == []
+        assert await api_app.state.db.queue.sessions_with_pending() == []
 
     async def test_unknown_runtime_400(self, api_client, auth_headers):
         resp = await api_client.post(
@@ -357,7 +357,7 @@ class TestApproveAgent:
         data = resp.json()
         assert data["ok"] and data["outcome"] == "approved" and data["approved_by"] == "orch"
         assert approve.await_args.kwargs["runtime"] == "claude"
-        events = await api_app.state.db.query_events(limit=5)
+        events = await api_app.state.db.events.query(limit=5)
         assert events and events[0]["event_type"] == "approval"
         assert "orch approved a claude permission prompt on ike" in events[0]["summary"]
 

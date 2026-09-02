@@ -39,14 +39,14 @@ async def drain_message_queue(
     summary: dict[str, int] = {}
 
     try:
-        stale_leases = await db.expire_stale_leases(max_age_minutes=5)
+        stale_leases = await db.queue.expire_stale_leases(max_age_minutes=5)
         if stale_leases:
             summary["leases_recovered"] = stale_leases
     except Exception:
         log.exception("Failed to recover stale leases (non-fatal)")
 
     try:
-        expired = await db.expire_stale_pending(
+        expired = await db.queue.expire_pending(
             max_age_minutes=config.delivery.queue_expiry_minutes
         )
         if expired:
@@ -59,9 +59,9 @@ async def drain_message_queue(
     except Exception:
         log.exception("Failed to expire stale messages (non-fatal)")
 
-    queued_sessions = set(await db.get_sessions_with_pending())
+    queued_sessions = set(await db.queue.sessions_with_pending())
     for session_name in sorted(set(active_sessions) | queued_sessions):
-        queued = await db.dequeue_messages(session_name, limit=5)
+        queued = await db.queue.dequeue(session_name, limit=5)
         if not queued:
             continue
         for record in queued:
@@ -86,7 +86,7 @@ async def drain_message_queue(
                 delivery_kind=record.get("delivery_kind", "issue"),
             )
             if outcome in _QUEUE_DONE:
-                await db.mark_message_delivered(record["id"])
+                await db.queue.mark_delivered(record["id"])
                 key = "queue_delivered" if outcome == DeliveryOutcome.DELIVERED else "queue_cleared"
                 summary[key] = summary.get(key, 0) + 1
             else:
@@ -95,7 +95,7 @@ async def drain_message_queue(
                 # stale-lease sweep. Stop here to preserve oldest-first order.
                 index = queued.index(record)
                 for leased in queued[index:]:
-                    await db.release_lease(leased["id"])
+                    await db.queue.release(leased["id"])
                 break
     return summary
 
@@ -150,14 +150,14 @@ async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: GitHubClien
     """Retry failed issue deliveries, then drain the queue."""
     summary: dict[str, int] = {}
     try:
-        reclaimed = await db.reclaim_stale_attempts(max_age_minutes=5)
+        reclaimed = await db.deliveries.reclaim_stale(max_age_minutes=5)
         if reclaimed:
             summary["attempts_reclaimed"] = reclaimed
     except Exception:
         log.exception("Failed to reclaim stale attempts (non-fatal)")
 
     if gh is not None:
-        for delivery in await db.get_failed_deliveries(limit=20):
+        for delivery in await db.deliveries.failed(limit=20):
             outcome = await retry_delivery(config, delivery, db, gh)
             summary[outcome] = summary.get(outcome, 0) + 1
 

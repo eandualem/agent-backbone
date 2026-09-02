@@ -33,7 +33,7 @@ async def send_message(
     # delivers to the coordinator session.
     target = body.target_session
     if config.agents.get(target) is None:
-        swarm = await db.get_swarm(target)
+        swarm = await db.swarms.get(target)
         if swarm is not None and swarm.get("status") == "active":
             target = swarm["coordinator"]
     # Only registered agents are typed into — never an arbitrary tmux session.

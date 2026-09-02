@@ -114,7 +114,7 @@ async def inspect_agent(
         state_age = round(time.time() - push.timestamp, 1)
 
     try:
-        recent = await db.query_deliveries(session_name=name, limit=10)
+        recent = await db.deliveries.query(session_name=name, limit=10)
     except Exception:
         recent = []
 
@@ -309,7 +309,7 @@ async def approve_agent_prompt(
             detail={"outcome": outcome, "evidence": evidence},
         )
     dialog = next((ln for ln in evidence[1:] if ln), "")
-    event_id = await db.record_event(
+    event_id = await db.events.record(
         delivery_id=f"approval:{uuid.uuid4().hex}",
         source="backbone",
         event_type="approval",
@@ -317,7 +317,7 @@ async def approve_agent_prompt(
         summary=f"{approved_by} approved a {spec.runtime} permission prompt on {name}: {dialog}",
     )
     if event_id is not None:
-        await db.mark_event_processed(event_id, "approved")
+        await db.events.mark_processed(event_id, "approved")
     log.info("Permission prompt on '%s' approved by %s", name, approved_by)
     await feed.refresh_and_emit()
     return AgentApproveResponse(
