@@ -18,17 +18,29 @@ Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way
 ## Invariants — do not route around these
 
 - **Every paste into an agent terminal goes through `safe_deliver`**
-  (`services/routing/_delivery.py`). Never call `send_message`/tmux directly
-  from routing, jobs or API code.
+  (`services/routing/_delivery.py`). Never call `runtimes.send_message` or
+  the terminal primitives directly from routing, jobs or API code.
 - **Every state decision goes through `get_agent_state`**
-  (`services/agents/_inference.py`): fresh hook state is authoritative, the
-  terminal is the fallback, and every snapshot carries `evidence`.
-- **Layering**, bottom up: `terminal` is a leaf (never imports other
-  services); `agents` may import `terminal`; `routing` may import both;
-  `jobs` (the scheduler's periodic work) may import everything below and
-  never the API — the API hands it callbacks. A new cross-package import
-  must pass `tests/unit/test_imports.py` (fresh interpreter per entry
-  module).
+  (`services/agents/_inference.py`; `agent_state(config, name)` is the
+  configured form): fresh hook state is authoritative, the terminal is the
+  fallback, and every snapshot carries `evidence`.
+- **Everything runtime-specific lives in `services/runtimes/<cli>.py`.**
+  Prompt markers, permission dialogs, paste rules, the launch command, the
+  trust dialog and the hook wiring for one CLI are one `Runtime` object;
+  no other module names a runtime.
+- **Layering**, bottom up. `config`, `models` and the small helpers
+  (`fs`, `git`, `recent`, `templates`) are leaves. `services/terminal` is
+  tmux only and imports no other service. `services/runtimes` (one module
+  per CLI: what it looks like, how to paste into it, how to launch it) may
+  import `terminal` and `hooks`. `services/database` and
+  `services/github` are leaves. `services/agents` (the store, state,
+  launch, the start operation) may import `runtimes`, `terminal` and
+  `database`. `services/routing` may import everything below it.
+  `services/integrations` may import `routing`. `services/jobs` (monitor,
+  retry, GitHub poll) may import everything below and never the API — the
+  API hands it callbacks. `services/swarm` sits beside `jobs`. `api` and
+  `cli` are the top. `tests/unit/test_imports.py` asserts this graph in a
+  fresh interpreter per package; a new cross-package import must pass it.
 - The database is the only source of configuration. New settings go in
   `SETTINGS_DEFAULTS` in `config.py` (with `SETTINGS_HELP` text) and in
   `docs/configuration.md`. Secrets never go in the database — `.env` only.

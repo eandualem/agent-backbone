@@ -76,7 +76,7 @@ replaces it, and a visible prompt clears it). **Hooks** the runtime itself
 runs (Claude Code today) write `<data_dir>/state/<agent>.json` on every
 transition; a fresh hook state is authoritative. When there is no hook state or it is
 older than `timing.stale_threshold_seconds` (5 min), the backbone reads
-the **terminal** through the runtime's adapter (prompt visible, busy
+the **terminal** through the runtime's module (prompt visible, busy
 marker, permission prompt). Every reading keeps its **evidence**, shown by
 `backbone agent inspect`.
 

@@ -1,0 +1,104 @@
+"""``backbone swarm …`` and ``help`` — swarms and the agent-facing help topics."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import os
+
+from agent_backbone.cli import _common
+from agent_backbone.config import (
+    bootstrap_config,
+)
+
+log = logging.getLogger(__name__)
+
+
+async def _swarm(args: argparse.Namespace) -> int:
+    boot = await _common.client_config()
+    sub = args.swarm_command
+
+    if sub == "create":
+        initiator = args.initiator or os.environ.get("BACKBONE_AGENT", "").strip()
+        body = {
+            "name": args.name,
+            "issue": args.issue,
+            "members": args.member or [],
+            "initiator": initiator,
+        }
+        result = await _common.api(boot, "POST", "/api/swarms", json_body=body, timeout=300.0)
+        if result is None:
+            print("backbone API unreachable; `backbone up` must be running to create a swarm")
+            return 1
+        status, data = result
+        if status != 200:
+            print(f"error: {data.get('detail') if isinstance(data, dict) else data}")
+            return 1
+        print(f"swarm '{data['name']}' is live on {data['repo']}#{data['issue_number']}")
+        print(f"  coordinator: {data['coordinator']}")
+        print(f'  talk to it:  backbone tell {data["name"]} "..."')
+        print(f"  members:     {', '.join(data['members'])}")
+        print(f"  branch:      {data['branch']}")
+        print(f"  worktree:    {data['worktree']}")
+        return 0
+
+    if sub in ("list", "status"):
+        result = await _common.api(boot, "GET", "/api/swarms")
+        if result is None or result[0] != 200:
+            print("backbone API unreachable")
+            return 1
+        swarms = result[1].get("items", [])
+        if sub == "status" and getattr(args, "name", None):
+            swarms = [s for s in swarms if s["name"] == args.name]
+            if not swarms:
+                print(f"unknown swarm '{args.name}'")
+                return 1
+        if not swarms:
+            print("no swarms")
+            return 0
+        for swarm in swarms:
+            print(
+                f"{swarm['name']:<16s} {swarm['status']:<10s} "
+                f"{swarm['repo']}#{swarm['issue_number']}  branch {swarm['branch']}"
+            )
+            for member in swarm.get("members", []):
+                model = f" ({member['model']})" if member.get("model") else ""
+                print(f"    {member['name']:<28s} {member['role']:<12s} {member['runtime']}{model}")
+        return 0
+
+    if sub == "disband":
+        result = await _common.api(boot, "DELETE", f"/api/swarms/{args.name}", timeout=60.0)
+        if result is None:
+            print("backbone API unreachable")
+            return 1
+        status, data = result
+        if status != 200:
+            print(f"error: {data.get('detail') if isinstance(data, dict) else data}")
+            return 1
+        print(f"swarm '{args.name}': {data['status']}")
+        return 0
+    return 1
+
+
+def cmd_swarm(args: argparse.Namespace) -> int:
+    return asyncio.run(_swarm(args))
+
+
+def cmd_help(args: argparse.Namespace) -> int:
+    """Agent-facing capability help, straight from the installed package."""
+    from agent_backbone.help import get_topic, list_topics
+
+    data_dir = bootstrap_config().data_dir
+    if not args.topic:
+        print("backbone capabilities — `backbone help <topic>` for the details:\n")
+        for topic in list_topics(data_dir):
+            print(f"  {topic['name']:<12s} {topic['summary']}")
+        return 0
+    content = get_topic(args.topic, data_dir)
+    if content is None:
+        known = ", ".join(t["name"] for t in list_topics(data_dir))
+        print(f"unknown topic '{args.topic}' — try: {known}")
+        return 1
+    print(content)
+    return 0

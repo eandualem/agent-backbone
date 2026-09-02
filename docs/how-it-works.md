@@ -51,7 +51,7 @@ flowchart TD
     A[tmux session exists?] -->|no| OFF[offline]
     A -->|yes| B[hook state fresh? < timing.stale_threshold_seconds]
     B -->|yes| C[hook state is authoritative]
-    B -->|no| D[read the terminal through the runtime adapter]
+    B -->|no| D[read the terminal through the runtime's module]
     D -->|busy marker| BUSY[busy]
     D -->|permission prompt| WFH[waiting_for_human permission]
     D -->|empty prompt| IDLE[idle]
@@ -81,7 +81,7 @@ it is busy. The hook also appends `gh issue comment …` calls (with the
 repository when `--repo` is given) to `<data_dir>/state/actions.jsonl`;
 that is how acknowledgements are detected without a spoofable text tag.
 
-**Terminal reading** is the fallback. Each runtime adapter knows its prompt
+**Terminal reading** is the fallback. Each runtime's module (`services/runtimes/<cli>.py`) knows its prompt
 character, its status chrome (lines to ignore), its busy indicator
 (Claude: `esc to interrupt`), its permission prompts (`Do you want to
 proceed?`, the folder-trust question), and how to tell typed text from a

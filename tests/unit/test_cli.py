@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent_backbone import cli
+from agent_backbone.cli import setup
 from agent_backbone.services.agents import StartResult
 
 _DETECT_REPO = "agent_backbone.services.agents.store.detect_repo"
@@ -28,7 +29,7 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
     monkeypatch.delenv("BACKBONE_AGENT", raising=False)
     # Never talk to a real backbone during tests
-    with patch("agent_backbone.cli._api_up", new_callable=AsyncMock, return_value=False):
+    with patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=False):
         yield tmp_path / "data"
 
 
@@ -79,7 +80,7 @@ class TestDoctor:
     def test_reports_missing_pieces(self, tmp_path, capsys):
         assert _run(["init"]) == 0
         assert _run(["agent", "set", "ghost", "dir=/nope"]) == 1  # unknown agent
-        with patch("agent_backbone.cli.shutil.which", return_value=None):
+        with patch("agent_backbone.cli.setup.shutil.which", return_value=None):
             code = _run(["doctor"])
         out = capsys.readouterr().out
         assert code == 1
@@ -88,7 +89,7 @@ class TestDoctor:
     def test_passes_with_valid_setup(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
         assert _run(["init"]) == 0
-        with patch("agent_backbone.cli.shutil.which", return_value="/usr/bin/tmux"):
+        with patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"):
             code = _run(["doctor"])
         assert code == 0
         assert "All good" in capsys.readouterr().out
@@ -366,7 +367,7 @@ class TestSecrets:
     def test_set_prompts_when_value_omitted(self, _isolated_data_dir, monkeypatch):
         assert _run(["init"]) == 0
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-        monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "secret-from-prompt")
+        monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: "secret-from-prompt")
         assert _run(["secrets", "set", "GITHUB_TOKEN"]) == 0
         assert "GITHUB_TOKEN=secret-from-prompt" in (_isolated_data_dir / ".env").read_text()
 
