@@ -47,14 +47,18 @@ class TestMacOS:
         assert "starts at login" in capsys.readouterr().out
 
     def test_status_and_uninstall(self, tmp_path, capsys):
-        with patch(f"{_SVC}.platform.system", return_value="Darwin"):
+        # launchctl is mocked throughout: the probe must not depend on the
+        # machine running the tests (CI is Linux).
+        with (
+            patch(f"{_SVC}.platform.system", return_value="Darwin"),
+            patch(f"{_SVC}.subprocess.run", side_effect=_ok),
+        ):
             assert service.state() == "not installed"
             plist = tmp_path / "Library" / "LaunchAgents" / "dev.agent-backbone.plist"
             plist.parent.mkdir(parents=True)
             plist.write_text("<plist/>")
-            with patch(f"{_SVC}.subprocess.run", side_effect=_ok):
-                assert service.state() == "running"
-                assert _run(["service", "uninstall"]) == 0
+            assert service.state() == "running"
+            assert _run(["service", "uninstall"]) == 0
             assert not plist.exists()
             assert _run(["service", "status"]) == 0
         assert "not installed" in capsys.readouterr().out
