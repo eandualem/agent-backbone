@@ -172,6 +172,18 @@ def cmd_secrets(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_runtimes(args: argparse.Namespace) -> int:
+    """Every runtime, whether its binary is installed, and example model ids."""
+    from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
+
+    for rt in REGISTRY.values():
+        installed = "installed" if rt.available() else "not found"
+        models = ", ".join(rt.models) if rt.models else "use the CLI's own model picker"
+        print(f"  {rt.id:<10s} {rt.display_name:<12s} {installed:<10s} models: {models}")
+    print("\n`--model` is passed to the CLI verbatim; these are examples, not a complete list.")
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
 

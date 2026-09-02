@@ -8,7 +8,7 @@ but tmux and SQLite.
 - macOS or Linux, Python 3.11+, `tmux`
 - [uv](https://docs.astral.sh/uv/) (or plain `pip`)
 - At least one agent CLI on your `PATH`: `claude`, `codex`, `gemini`,
-  `opencode`, `aider`. (`shell` works for trying the plumbing.)
+  `opencode`, `deepcode`, `aider`. (`shell` works for trying the plumbing.)
 
 ## 1. Install the CLI
 
@@ -313,21 +313,24 @@ see [Telegram](telegram.md).
 
 ## After a reboot
 
-Agents and the backbone are tmux sessions, so a reboot ends them (a
-Cloudflare tunnel installed as a service comes back on its own):
+Install the login service once and the backbone comes back on its own
+(and restarts if it dies):
 
 ```bash
-backbone up --detach              # the backbone itself
+backbone service install          # macOS LaunchAgent / Linux systemd --user
+```
+
+Agents are tmux sessions, so a reboot ends them:
+
+```bash
 backbone agent start app web      # the agents you want, by name
 backbone status                   # confirm
 ```
 
 There is deliberately no "start everything ever registered" — start the
 agents you need, or keep a one-liner for the group you usually run
-(e.g. `alias work-agents='ab agent start app web orch'`).
-
-To start the backbone automatically at login on macOS, install a
-LaunchAgent once (see [CLI → `up`](cli.md#backbone-up---detach---reload--backbone-down)).
+(e.g. `alias work-agents='ab agent start app web orch'`). Without the
+service, `backbone up --detach` starts the backbone by hand.
 
 ## Where things are
 

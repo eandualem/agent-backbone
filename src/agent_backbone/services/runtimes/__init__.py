@@ -10,7 +10,15 @@ the modules next to this file; nothing else in the backbone names a CLI.
 from __future__ import annotations
 
 from agent_backbone.config import RUNTIMES as RUNTIME_IDS
-from agent_backbone.services.runtimes import aider, claude, codex, gemini, opencode, shell
+from agent_backbone.services.runtimes import (
+    aider,
+    claude,
+    codex,
+    deepcode,
+    gemini,
+    opencode,
+    shell,
+)
 from agent_backbone.services.runtimes._pane import GENERIC_BUSY_FRAGMENTS, sanitize_pane_content
 from agent_backbone.services.runtimes.base import Runtime, read_brief, resolve_command
 from agent_backbone.services.terminal import capture_pane, query_environment_var
@@ -26,6 +34,7 @@ RUNTIMES: dict[str, Runtime] = {
         codex.RUNTIME,
         gemini.RUNTIME,
         opencode.RUNTIME,
+        deepcode.RUNTIME,
         aider.RUNTIME,
         shell.RUNTIME,
     )
@@ -40,7 +49,14 @@ if set(RUNTIMES) != set(RUNTIME_IDS):
     )
 _ALIASES: dict[str, Runtime] = {alias: r for r in RUNTIMES.values() for alias in r.aliases}
 
-_DETECTION_ORDER = (gemini.RUNTIME, opencode.RUNTIME, aider.RUNTIME, codex.RUNTIME, claude.RUNTIME)
+_DETECTION_ORDER = (
+    deepcode.RUNTIME,
+    gemini.RUNTIME,
+    opencode.RUNTIME,
+    aider.RUNTIME,
+    codex.RUNTIME,
+    claude.RUNTIME,
+)
 """Runtimes with distinctive markers first; Claude's markers are the most generic."""
 
 

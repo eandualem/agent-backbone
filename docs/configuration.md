@@ -120,7 +120,7 @@ Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
 |---|---|---|
 | `name` | directory name, or `--name` | tmux session name, `for:`/`from:` identity |
 | `dir` | `agent start --dir` | Working directory the runtime is started in |
-| `runtime` | `--runtime` / `agent set` | `claude`, `codex`, `gemini`, `opencode`, `aider`, `shell` |
+| `runtime` | `--runtime` / `agent set` | `claude`, `codex`, `gemini`, `opencode`, `deepcode`, `aider`, `shell` |
 | `model` | `--model` / `agent set` | Passed as `--model` to the runtime |
 | `repo` | `git remote origin` / `agent set` | `owner/name` the agent owns |
 | `watches` | `agent watch` | Repositories it also hears about |

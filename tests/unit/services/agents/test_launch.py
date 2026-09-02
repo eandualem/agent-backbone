@@ -207,3 +207,19 @@ class TestStartingState:
                 "ike", state_dir=state_dir, runtime="claude", timeout=1, since=launched
             )
         assert outcome == "ready" and evidence[0].startswith("hook reported idle")
+
+
+class TestLaunchEnvFromRuntime:
+    async def test_runtime_environment_reaches_the_session(self, tmp_path):
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime="deepcode", model="deepseek-v4-pro")
+        config = bootstrap_config(tmp_path / "data")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/bin/deepcode"),
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        env = start.await_args.kwargs["environment"]
+        assert env["MODEL"] == "deepseek-v4-pro" and env["BACKBONE_RUNTIME"] == "deepcode"

@@ -439,3 +439,13 @@ class TestApiClient:
             502,
             {"detail": "Bad Gateway"},
         )
+
+
+class TestRuntimesCommand:
+    def test_lists_every_runtime_with_models(self, capsys):
+        with patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True):
+            assert _run(["runtimes"]) == 0
+        out = capsys.readouterr().out
+        assert "deepcode" in out and "deepseek-v4-flash" in out
+        assert "claude" in out and "opus, sonnet, haiku" in out
+        assert "passed to the CLI verbatim" in out

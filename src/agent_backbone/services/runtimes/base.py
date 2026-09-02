@@ -82,6 +82,10 @@ class Runtime:
     """How the agent brief reaches the runtime at launch: appended to the
     system prompt, passed as the first (initial) prompt, delivered as the
     first message once the agent is at its prompt, or not at all."""
+    models: tuple[str, ...] = ()
+    """Model ids known to work with ``--model`` (aliases or ids seen live).
+    Examples for `backbone runtimes`, not an exhaustive list — the CLI's own
+    model picker is the authority."""
 
     # --- pane recognition -------------------------------------------------
     prompt_prefixes: tuple[str, ...] = ()
@@ -116,6 +120,10 @@ class Runtime:
 
     def pre_trust(self, directory: Path | str) -> None:
         """Answer the runtime's folder-trust dialog ahead of launch, if it has one."""
+
+    def launch_env(self, model: str | None) -> dict[str, str]:
+        """Extra environment the session needs (runtimes that take the model from a variable)."""
+        return {}
 
     def hook_launch_args(
         self, data_dir: Path | str | None, state_dir: Path | str | None

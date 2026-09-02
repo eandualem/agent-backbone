@@ -39,26 +39,28 @@ intake — one process. `--detach` runs it inside a tmux session
 (`backbone.session_name`); `down` stops it gracefully. `--reload` restarts
 on code changes (development).
 
-Nothing starts at boot by itself — after a reboot, `backbone up --detach`.
-To start it at login on macOS, install a LaunchAgent once:
+`backbone up --detach` is manual: a tmux session ends with a reboot. To
+have the backbone start at login and restart if it dies, install the
+login service once:
 
 ```bash
-cat > ~/Library/LaunchAgents/dev.agent-backbone.plist <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>dev.agent-backbone</string>
-  <key>ProgramArguments</key><array>
-    <string>$HOME/.local/bin/backbone</string><string>up</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>$HOME/.local/share/agent-backbone/backbone.log</string>
-  <key>StandardErrorPath</key><string>$HOME/.local/share/agent-backbone/backbone.log</string>
-</dict></plist>
-EOF
-launchctl load ~/Library/LaunchAgents/dev.agent-backbone.plist
+backbone service install     # macOS: a LaunchAgent; Linux: a systemd --user unit
+backbone service status      # running | installed | not installed
+backbone service uninstall
 ```
+
+The service runs `backbone up` in the foreground with the data directory
+you installed it from; its log is `<data_dir>/backbone.log` on macOS and
+`journalctl --user -u agent-backbone` on Linux. Agents are still tmux
+sessions and still need `backbone agent start` after a reboot.
+
+## `backbone runtimes`
+
+Every runtime the backbone knows, whether its binary is on `PATH`, and
+example model ids that work with `--model` (Claude Code's aliases, the id
+Codex shows in its status line, Deep Code's two models). The list is a
+starting point for agents choosing a model for another agent or a swarm
+member; the runtime's own model picker is the authority.
 
 ## `backbone status`
 
@@ -103,7 +105,7 @@ an orchestrator that should spin up workers runs these commands itself.
 |---|---|---|
 | `NAME` (positional) | Agent name = tmux session = `for:` label. Known name: starts from its recorded directory. Unknown name: registers the cwd under it. Omitted: the folder name is the name — the usual case for single-repository agents | yes (the key) |
 | `--dir D` | Project directory to discover (name defaults from its folder name; repo from its `origin` remote) | yes |
-| `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `aider`, or `shell` | yes — later bare starts reuse it |
+| `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `deepcode`, `aider`, or `shell` | yes — later bare starts reuse it |
 | `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent | yes — later bare starts reuse it |
 | `--watch OWNER/REPO` | Also subscribe to a repository (repeatable) | yes |
 | `--resume` | Ask the runtime to resume its last conversation | no |

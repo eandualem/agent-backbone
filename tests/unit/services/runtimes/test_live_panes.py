@@ -304,3 +304,39 @@ class TestPendingInput:
         # prefix matched via the suffix only and is output, not typed input.
         claude = RUNTIMES["claude"]
         assert claude.prompt_has_pending_input("some output line $") is False
+
+
+DEEPCODE_IDLE = (
+    " ╭────────────────────────────────────────────────────────────────────╮\n"
+    " │ >_ Deep Code  (v0.3.1)                                             │\n"
+    " │                                                                    │\n"
+    " │ Model                                            deepseek-v4-flash │\n"
+    " │ Thinking Enabled                                              true │\n"
+    " │ Reasoning Effort                                               max │\n"
+    " │ CWD                                  /private/tmp/deepcode-capture │\n"
+    " ╰────────────────────────────────────────────────────────────────────╯\n"
+    " Tips: /raw - Toggle display mode for viewing or collapsing reasoning\n"
+    " content\n"
+    "──────────────────────────────────────────────────────────────────────\n"
+    ">   Type your message...\n"
+    "──────────────────────────────────────────────────────────────────────\n"
+    "enter send · shift+enter newline · @ files · ctrl+v image · / commands · ctrl+d exit\n"
+)
+
+DEEPCODE_TYPED = DEEPCODE_IDLE.replace(">   Type your message...", "> hello")
+
+
+class TestDeepCodeLive:
+    """deepcode 0.3.1 captured live under tmux (idle only; busy needs an API key)."""
+
+    def test_detects_runtime_and_idle(self):
+        assert detect_runtime(DEEPCODE_IDLE).id == "deepcode"
+        runtime = RUNTIMES["deepcode"]
+        assert runtime.detect_idle(DEEPCODE_IDLE) is True
+        assert runtime.prompt_has_pending_input(DEEPCODE_IDLE) is False
+
+    def test_typed_text_is_pending_input(self):
+        assert RUNTIMES["deepcode"].prompt_has_pending_input(DEEPCODE_TYPED) is True
+
+    def test_gemini_is_not_mistaken_for_deepcode(self):
+        assert detect_runtime(GEMINI_AUTH_SCREEN).id == "gemini"

@@ -47,6 +47,7 @@ class ClaudeCode(Runtime):
     aliases = ("claude-code", "claude code")
     binary = "claude"
     brief_mode = "system_prompt"
+    models = ("opus", "sonnet", "haiku")  # Claude Code's own aliases
 
     prompt_prefixes = ("❯",)
     prompt_suffixes = ("$", "%")

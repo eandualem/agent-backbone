@@ -1,6 +1,6 @@
 # agent-backbone
 
-A local control plane for terminal AI agents — Claude Code, Codex, Gemini CLI, OpenCode, Aider.
+A local control plane for terminal AI agents — Claude Code, Codex, Gemini CLI, OpenCode, Deep Code, Aider.
 
 It starts your agents in tmux, delivers messages to them **only when they are ready to receive one**, lets them talk to each other and to you, and coordinates multi-agent work through GitHub Issues. Reach it from the CLI, from Telegram, or from any HTTP/Socket.IO client.
 
@@ -77,9 +77,14 @@ Any CLI that runs in a terminal can be an agent; how much the backbone can do fo
 | `codex` | ✅ config record | ✅ initial prompt | ✅ terminal | ✅ verified live |
 | `opencode` | — (no trust dialog) | ✅ initial prompt | ✅ terminal | ✅ verified live (works out of the box on its free models) |
 | `gemini` | ✅ `--skip-trust` | ✅ initial prompt | ✅ terminal | ⚠️ see note |
+| `deepcode` (Deep Code, DeepSeek) | — (no trust dialog) | ✅ initial prompt (`-p`) | terminal: idle verified | ⚠️ see note |
 | `aider`, `shell` | — | first message | terminal (best effort) | untested |
 
 > **Gemini note**: with Gemini CLI 0.46.0 (the version we tested) Google OAuth completes and the CLI then still refuses personal accounts ("no longer supported for Gemini Code Assist for individuals"), leaving it stuck on its auth picker. This is an upstream issue, not a backbone one — the backbone correctly reports such sessions as `waiting_for_human`. Start, trust and brief injection are verified; delivery to a signed-in Gemini session (e.g. via `GEMINI_API_KEY`) is **unverified** until we can test against one.
+
+> **Deep Code note**: `deepcode` is the community terminal agent DeepSeek's own API docs point to (`npm install -g @vegamo/deepcode-cli`; there is no official DeepSeek CLI yet). Its idle prompt and chrome were captured live from 0.3.1; its busy spinner and permission dialog have not been, so those states fall back to generic detection and `agent approve` refuses it until a capture with an API key lands. The model is chosen with `--model deepseek-v4-flash|deepseek-v4-pro` (exported as `MODEL`), the key with `backbone agent set NAME env='{"API_KEY": "…"}'`.
+
+`backbone runtimes` lists every runtime, whether its binary is installed, and example model ids.
 
 The backbone deliberately does **not** manage per-repository runtime configuration (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, MCP servers, …) — how a repository configures its tools is the repository's business. The backbone starts the runtime, injects the agent's identity brief, delivers messages safely, and reads its state.
 

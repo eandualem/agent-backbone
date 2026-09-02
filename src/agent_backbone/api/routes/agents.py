@@ -145,7 +145,9 @@ async def inspect_agent(
 async def list_runtimes():
     """Supported runtimes and whether their binary is installed."""
     return [
-        RuntimeInfo(id=rt.id, display_name=rt.display_name, available=rt.available())
+        RuntimeInfo(
+            id=rt.id, display_name=rt.display_name, available=rt.available(), models=list(rt.models)
+        )
         for rt in RUNTIMES.values()
     ]
 
