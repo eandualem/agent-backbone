@@ -9,7 +9,7 @@ import pytest
 
 from agent_backbone import cli
 from agent_backbone.cli import setup
-from agent_backbone.services.agents import StartResult
+from agent_backbone.services.agents import AgentState, StartResult, StateSnapshot
 
 _DETECT_REPO = "agent_backbone.services.agents.store.detect_repo"
 
@@ -194,6 +194,31 @@ class TestAgentCommands:
         assert _run(["init"]) == 0
         assert _run(["agent", "start", "zzz", "yyy"]) == 1
         assert "unknown agent" in capsys.readouterr().out
+
+    def test_direct_stop_refuses_backbone_session(self, capsys):
+        with patch("agent_backbone.services.agents.stop_agent", new_callable=AsyncMock) as stop:
+            assert _run(["agent", "stop", "backbone"]) == 1
+        stop.assert_not_awaited()
+        assert "refusing to stop" in capsys.readouterr().out
+
+    def test_direct_inspect_uses_configured_state_helper(self, capsys):
+        snapshot = StateSnapshot(state=AgentState.BUSY, evidence=["configured runtime"])
+        with (
+            patch(
+                "agent_backbone.services.agents.agent_state",
+                new_callable=AsyncMock,
+                return_value=snapshot,
+            ) as state,
+            patch(
+                "agent_backbone.services.terminal.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            assert _run(["agent", "inspect", "ike"]) == 0
+
+        assert state.await_args.args[1] == "ike"
+        assert "configured runtime" in capsys.readouterr().out
 
     def test_moved_directory_follows_and_same_name_gets_suffix(self, tmp_path, capsys):
         assert _run(["init"]) == 0

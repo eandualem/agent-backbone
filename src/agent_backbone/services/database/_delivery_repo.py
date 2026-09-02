@@ -177,8 +177,7 @@ class DeliveryRepo(Repo):
                              AND d2.repo = d.repo
                              AND d2.issue_number = d.issue_number
                              AND d2.target_entity = d.target_entity
-                             AND d2.outcome IN ('delivered', 'retried')
-                             AND d2.created_at > d.created_at
+                             AND d2.id > d.id
                          )
                        ORDER BY d.created_at ASC LIMIT :lim"""
                 ),

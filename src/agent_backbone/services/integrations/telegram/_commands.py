@@ -145,6 +145,12 @@ async def cmd_stop_agent(
         return
 
     name = context.args[0]
+    if name == bot.config.backbone.session_name:
+        await update.message.reply_text("Refusing to stop the backbone's own session.")
+        return
+    if bot.config.agents.get(name) is None:
+        await update.message.reply_text(f"Unknown agent `{name}`", parse_mode="Markdown")
+        return
     ok = await stop_agent(name)
     status = "Stopped" if ok else "Failed to stop"
     await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
@@ -162,6 +168,9 @@ async def cmd_tell(
         return
 
     agent = context.args[0]
+    if bot.config.agents.get(agent) is None:
+        await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
+        return
     raw_message = " ".join(context.args[1:])
     sender = bot._sender_tag(update)
     message = f"[via:telegram from:{sender}] {raw_message}"
@@ -303,6 +312,9 @@ async def cmd_approve(
         return
 
     agent = context.args[0]
+    if bot.config.agents.get(agent) is None:
+        await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
+        return
     snapshot = read_state_file(bot.config.state_dir, agent)
 
     if not snapshot or not snapshot.is_plan_waiting:

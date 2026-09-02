@@ -162,6 +162,10 @@ async def _agent(args: argparse.Namespace) -> int:
     if sub == "stop":
         failed = False
         for name in args.names:
+            if name == boot.backbone.session_name:
+                print(f"{name}: not stopped (refusing to stop the backbone's own session)")
+                failed = True
+                continue
             if api_up:
                 result = await _common.api(boot, "POST", f"/api/agents/{name}/stop", timeout=30.0)
                 ok = bool(
@@ -256,14 +260,12 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"error: {result[1] if result else 'API unreachable'}")
             return 1
         # Offline inspection: state file + tmux only.
-        from agent_backbone.services.agents import get_agent_state
+        from agent_backbone.services.agents import agent_state
         from agent_backbone.services.terminal import session_exists
 
         config = await _common.load_config()
         online = await session_exists(args.name)
-        snapshot = await get_agent_state(
-            config.state_dir, args.name, config.timing.stale_threshold_seconds
-        )
+        snapshot = await agent_state(config, args.name)
         print(f"{args.name}: {'online' if online else 'offline'} (backbone not running)")
         print(
             f"  state: {snapshot.state.value}{f' ({snapshot.reason})' if snapshot.reason else ''}"
@@ -380,7 +382,11 @@ async def _tell(args: argparse.Namespace) -> int:
         return 1
     print(json.dumps(data))
     if not data.get("ok") and data.get("queued"):
-        print(f"queued — delivered when the agent is ready (blocked: {data.get('outcome')})")
+        print(
+            "queued — delivery will be retried until the agent is ready or the queue entry "
+            f"expires after {boot.timing.queue_expiry_minutes} minutes "
+            f"(blocked: {data.get('outcome')})"
+        )
     return 0 if data.get("ok") else 2
 
 
