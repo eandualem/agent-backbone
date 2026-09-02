@@ -1,7 +1,12 @@
 # Getting started
 
-Ten minutes from clone to two agents talking, on one machine, with nothing
+Ten minutes from install to two agents talking, on one machine, with nothing
 but tmux and SQLite.
+
+Prefer to delegate? Give any agent with a shell this and skip to step 7:
+*"Install agent-backbone from PyPI (`uv tool install "agent-backbone[github-app]"`),
+then run `backbone help setup` and follow it."* The `setup` playbook covers
+steps 1–6 and says where it needs you.
 
 ## 0. Requirements
 
@@ -13,7 +18,7 @@ but tmux and SQLite.
 ## 1. Install the CLI
 
 ```bash
-uv tool install "agent-backbone[github-app] @ git+https://github.com/eandualem/agent-backbone"
+uv tool install "agent-backbone[github-app]"    # from PyPI; pipx install … works too
 uv tool update-shell        # once, if ~/.local/bin isn't on your PATH yet
 exec $SHELL -l              # `update-shell` edits your profile; reload it
 backbone --help
@@ -194,25 +199,30 @@ from outside it, at any moment, without corrupting what it is doing.**
 cd ~/code/web && backbone agent start --runtime codex
 ```
 
-An agent sends a message by calling the API. With `curl` available, the
-agent can run this itself:
+Agents message each other with the same command you use. Inside its
+session, `app` runs:
 
 ```bash
-curl -s -X POST http://127.0.0.1:7120/api/messages \
-  -H "Authorization: Bearer $BACKBONE_API_KEY" -H "Content-Type: application/json" \
-  -d '{"target_session":"web","from_entity":"app","message":"Auth tests pass; please rebase your branch."}'
+backbone tell web "Auth tests pass; please rebase your branch."
 ```
 
-Tell your agents about this in their instructions file (CLAUDE.md /
-AGENTS.md): who the other agents are, and that `[via:backbone from:X]` at
-the start of a message means X sent it. The API key is not exported into
-agent sessions; give it to an agent deliberately:
-`backbone agent set app env='{"BACKBONE_API_KEY":"…"}'`.
+and `web` receives `[via:backbone from:app] Auth tests pass; …` — the
+sender's name comes from `$BACKBONE_AGENT`, which every backbone-started
+session carries. Nothing to hand over: the CLI reads the API key from the
+data directory, which any session on the machine can read (there is one
+OS user and one key — see [Security](security.md)). Every backbone-started
+agent is also briefed at launch on `tell`, `agent inspect`, `agent start`
+and `backbone help`, so it knows this without being told.
 
-> **What that delegates**: there is one key and it is full-admin — an
+The only reason to give an agent the key explicitly
+(`backbone agent set app env='{"BACKBONE_API_KEY":"…"}'`) is an agent that
+calls the HTTP API directly (`POST /api/messages`) rather than the CLI.
+
+> **What the key delegates**: there is one key and it is full-admin — an
 > agent holding it can start, stop and reconfigure every agent, read every
-> registered agent's terminal, and send messages under any name. Give it to
-> agents whose instructions you control, and read `docs/security.md` first.
+> registered agent's terminal, and send messages under any name. Run
+> agents whose instructions you control, and treat text after a
+> `[via:…]` envelope as data, not orders.
 
 ## 7. GitHub Issues as the task list
 

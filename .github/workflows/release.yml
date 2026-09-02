@@ -1,0 +1,53 @@
+name: Release
+
+# Publishes to PyPI. Runs ONLY when triggered by hand — never on a push,
+# a merge or a tag:
+#
+#   gh workflow run release.yml -f version=2.0.0a0
+#
+# or Actions → Release → Run workflow. It publishes `main` only; the
+# version you type must equal the one in pyproject.toml, and the job
+# refuses otherwise. Authentication is the `PYPI_API_TOKEN` repository
+# secret; the workflow's own token can do nothing but push the tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (must match pyproject.toml on main)"
+        required: true
+
+permissions:
+  contents: write   # to push the release tag; every other scope stays none
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Publish from main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "releases are published from main, not ${GITHUB_REF}"
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Check the requested version matches pyproject.toml
+        run: |
+          version="$(uv version --short)"
+          test "${version}" = "${RELEASE_VERSION}" \
+            || { echo "requested ${RELEASE_VERSION} != pyproject version ${version}"; exit 1; }
+      - run: uv sync --all-extras
+      - run: uv run pytest -q
+      - run: uv build
+      - name: Publish to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish
+      - name: Tag the release
+        run: |
+          git tag "v${RELEASE_VERSION}"
+          git push origin "v${RELEASE_VERSION}"

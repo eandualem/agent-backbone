@@ -153,12 +153,25 @@ automatically. `backbone tell <swarm-name> …` reaches its coordinator.
 ## `backbone help [TOPIC]`
 
 The backbone explains its own capabilities to agents: no argument lists
-the topics (`agents`, `messaging`, `swarms`, `github`, …), a topic name
-prints the full playbook. Also served at `GET /api/help[/{topic}]`.
+the topics (`setup`, `agents`, `messaging`, `swarms`, `github`, …), a
+topic name prints the full playbook. Also served at
+`GET /api/help[/{topic}]`. `setup` is the one written for an agent that
+is installing the backbone for a person: install, run, first agent,
+GitHub, Telegram, and exactly where a human is needed.
 Every backbone-started Claude agent carries a short injected brief (see
 `agents.inject_brief`) that points here, so the injected text stays
 small while the capability surface can grow. Add or override topics by
 dropping markdown files into `<data_dir>/help-topics/`.
+
+## `backbone docs [PAGE]`
+
+The documentation in this directory, from the installed package: no
+argument lists the pages with their titles, a page name
+(`getting-started`, `concepts`, `how-it-works`, `cli`, …) prints it.
+The wheel ships `docs/` inside the package so an agent that installed the
+backbone from PyPI can read the reference without a checkout; a source
+checkout reads the same files from the repository. Also served at
+`GET /api/docs[/{page}]`.
 
 ## `backbone tell AGENT MESSAGE… [--from NAME] [--priority]`
 

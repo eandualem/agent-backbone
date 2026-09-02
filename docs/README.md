@@ -2,7 +2,10 @@
 
 Start with **Concepts** for the mental model, then **Getting started** to run
 it, then **How it works** for the end-to-end flows. Everything else is
-reference.
+reference. These pages ship inside the package: `backbone docs <page>`
+prints any of them from an installed backbone, and `backbone help <topic>`
+prints the shorter playbooks written for agents (`setup`, `agents`,
+`messaging`, `github`, `swarms`).
 
 | Read this | When you want to |
 |---|---|
@@ -10,7 +13,7 @@ reference.
 | [Getting started](getting-started.md) | Install, start two agents from their directories, send the first message, add GitHub |
 | [How it works](how-it-works.md) | Follow a start, a message, an issue and a Telegram command through the system |
 | [Configuration](configuration.md) | Every setting (`backbone config`), every secret, the data directory |
-| [CLI](cli.md) | `backbone init / doctor / up / status / config / agent / swarm / tell / hooks` |
+| [CLI](cli.md) | `backbone init / doctor / up / status / config / agent / swarm / tell / hooks / help / docs` |
 | [Swarms](swarms.md) | A coordinator plus members on one worktree, one branch, one issue, one PR |
 | [HTTP & Socket.IO API](api.md) | Build a dashboard or script against the backbone |
 | [GitHub integration](github.md) | Repositories, labels, routing rules, intake modes, what an agent is expected to do |

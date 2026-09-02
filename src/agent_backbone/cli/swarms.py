@@ -102,3 +102,26 @@ def cmd_help(args: argparse.Namespace) -> int:
         return 1
     print(content)
     return 0
+
+
+def cmd_docs(args: argparse.Namespace) -> int:
+    """The user documentation, straight from the installed package."""
+    from agent_backbone.help import get_doc, list_docs
+
+    pages = list_docs()
+    if not pages:
+        print("no documentation shipped with this install — read it at")
+        print("https://github.com/eandualem/agent-backbone/tree/main/docs")
+        return 1
+    if not args.page:
+        print("agent-backbone documentation — `backbone docs <page>` prints one page:\n")
+        for page in pages:
+            print(f"  {page['name']:<20s} {page['summary']}")
+        return 0
+    content = get_doc(args.page)
+    if content is None:
+        known = ", ".join(p["name"] for p in pages)
+        print(f"unknown page '{args.page}' — try: {known}")
+        return 1
+    print(content)
+    return 0
