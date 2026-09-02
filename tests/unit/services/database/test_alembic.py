@@ -240,3 +240,39 @@ async def test_restamp_migrates_the_previous_squash_columns(tmp_path):
         )
     finally:
         await db2.stop()
+
+
+async def test_restamp_on_old_sqlite_keeps_the_dead_column(tmp_path, monkeypatch):
+    """SQLite before 3.35 cannot DROP COLUMN: the start must still succeed."""
+    import sqlite3
+
+    from sqlalchemy import inspect, text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'old.db'}"
+    db = BackboneDB(url)
+    await db.start()
+    try:
+        async with db.engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE deliveries RENAME COLUMN source TO flow_name"))
+            await conn.execute(
+                text("ALTER TABLE deliveries ADD COLUMN flow_run_id TEXT NOT NULL DEFAULT ''")
+            )
+            await conn.execute(text("UPDATE alembic_version SET version_num = '387112cb1193'"))
+    finally:
+        await db.stop()
+
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 34, 0))
+    db2 = BackboneDB(url)
+    await db2.start()  # must not raise
+    try:
+        async with db2.engine.connect() as conn:
+            columns = {
+                c["name"]
+                for c in await conn.run_sync(lambda s: inspect(s).get_columns("deliveries"))
+            }
+        assert "source" in columns and "flow_run_id" in columns  # renamed, dead one kept
+        await db2.deliveries.record(
+            issue_number=1, target_entity="ike", session_name="ike", outcome="delivered", source="x"
+        )
+    finally:
+        await db2.stop()

@@ -44,19 +44,31 @@ _DROPPED_COLUMNS = {"deliveries": ("flow_run_id",)}
 def _repair_columns(sync_conn) -> None:
     """Rename, add and drop columns so a re-stamped database matches the model.
 
-    SQLite ≥ 3.25 and PostgreSQL both support the three statements used.
-    Column *types* and nullability are never altered.
+    PostgreSQL supports all three statements. SQLite gained ``RENAME COLUMN``
+    in 3.25 and ``DROP COLUMN`` in 3.35; on an older system library the
+    rename falls back to add-and-copy and the dead column is left in place
+    (nullable and unused) rather than failing the start. Column *types* and
+    nullability are never altered.
     """
     from sqlalchemy import inspect
 
+    sqlite_version = _sqlite_version(sync_conn)
     inspector = inspect(sync_conn)
     for table in metadata.sorted_tables:
         existing = {column["name"] for column in inspector.get_columns(table.name)}
         for old, new in _RENAMED_COLUMNS.get(table.name, {}).items():
             if old in existing and new not in existing:
-                sync_conn.execute(text(f"ALTER TABLE {table.name} RENAME COLUMN {old} TO {new}"))
+                if sqlite_version is None or sqlite_version >= (3, 25):
+                    sync_conn.execute(
+                        text(f"ALTER TABLE {table.name} RENAME COLUMN {old} TO {new}")
+                    )
+                    existing.discard(old)
+                else:  # SQLite < 3.25: add the new column and copy the values across
+                    sync_conn.execute(
+                        text(f"ALTER TABLE {table.name} ADD COLUMN {new} TEXT NOT NULL DEFAULT ''")
+                    )
+                    sync_conn.execute(text(f"UPDATE {table.name} SET {new} = {old}"))
                 sync_conn.execute(text(f"UPDATE {table.name} SET {new} = '' WHERE {new} IS NULL"))
-                existing.discard(old)
                 existing.add(new)
                 log.info("Renamed %s.%s to %s (re-stamped database)", table.name, old, new)
         for column in table.columns:
@@ -69,9 +81,27 @@ def _repair_columns(sync_conn) -> None:
             sync_conn.execute(text(clause))
             log.info("Added %s.%s (re-stamped database)", table.name, column.name)
         for old in _DROPPED_COLUMNS.get(table.name, ()):
-            if old in existing:
-                sync_conn.execute(text(f"ALTER TABLE {table.name} DROP COLUMN {old}"))
-                log.info("Dropped %s.%s (re-stamped database)", table.name, old)
+            if old not in existing:
+                continue
+            if sqlite_version is not None and sqlite_version < (3, 35):
+                log.info(
+                    "Leaving %s.%s in place: SQLite %s cannot drop columns (3.35 needed)",
+                    table.name,
+                    old,
+                    ".".join(map(str, sqlite_version)),
+                )
+                continue
+            sync_conn.execute(text(f"ALTER TABLE {table.name} DROP COLUMN {old}"))
+            log.info("Dropped %s.%s (re-stamped database)", table.name, old)
+
+
+def _sqlite_version(sync_conn) -> tuple[int, ...] | None:
+    """The SQLite library's version when the connection is SQLite, else None."""
+    if sync_conn.dialect.name != "sqlite":
+        return None
+    import sqlite3
+
+    return sqlite3.sqlite_version_info
 
 
 def _repair_schema(sync_conn) -> None:
