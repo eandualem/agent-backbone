@@ -13,6 +13,11 @@ refuses this runtime until it has.
 
 from __future__ import annotations
 
+from agent_backbone.services.runtimes._pane import (
+    is_box_line,
+    prompt_tail_line_pairs,
+    sanitize_pane_content,
+)
 from agent_backbone.services.runtimes.base import Runtime, read_brief
 
 
@@ -42,6 +47,21 @@ class DeepCode(Runtime):
     def _is_status_chrome_line(self, line: str) -> bool:
         # The footer wraps at narrow widths and leaves "exit" alone on a line.
         return super()._is_status_chrome_line(line) or line.strip().lower() == "exit"
+
+    def detect_prompt(self, pane_content: str) -> str | None:
+        """Like the base scan, but the input box wraps: continuation lines are
+        indented two spaces and sit between the ``>`` line and the separator."""
+        for raw_candidate, candidate in reversed(prompt_tail_line_pairs(pane_content)):
+            stripped = candidate.strip()
+            if not stripped or is_box_line(stripped) or self._is_status_chrome_line(stripped):
+                continue
+            if candidate.startswith("  ") and not stripped.startswith(">"):
+                continue  # a wrapped continuation of the input box
+            if self._matches_prompt_line(stripped):
+                return raw_candidate.strip()
+            break
+        lowered = sanitize_pane_content(pane_content).lower()
+        return next((f for f in self.placeholder_fragments if f in lowered), None)
 
     def launch_env(self, model: str | None) -> dict[str, str]:
         return {"MODEL": model} if model else {}
