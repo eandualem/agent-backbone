@@ -15,10 +15,8 @@ from agent_backbone.services.agents import (
     read_state_file,
     rotate_action_log,
 )
-from agent_backbone.services.agents.interface import StateService
 
 _INF = "agent_backbone.services.agents._inference"
-_IFACE = "agent_backbone.services.agents.interface"
 
 
 class TestReadStateFile:
@@ -417,23 +415,6 @@ class TestGetAgentState:
             result = await get_agent_state(tmp_path, "feynman", stale_threshold=300)
         assert result.state == AgentState.UNKNOWN
         assert result.source == "pull"
-
-
-class TestStateService:
-    async def test_get_state_is_the_reconciled_reading(self, tmp_path):
-        state_file = tmp_path / "ike.json"
-        state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
-        svc = StateService(state_dir=str(tmp_path))
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.BUSY
-        assert snap.source == "push"
-
-    def test_read_state_is_the_hook_file_alone(self, tmp_path):
-        svc = StateService(state_dir=str(tmp_path))
-        assert svc.read_state("ike") is None
-        (tmp_path / "ike.json").write_text(json.dumps({"state": "idle", "ts": 1.0}))
-        assert svc.read_state("ike").state == AgentState.IDLE
 
 
 class TestStartedAt:

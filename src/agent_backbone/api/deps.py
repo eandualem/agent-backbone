@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from fastapi import HTTPException, Request
 
+from agent_backbone.api.session_updates import SessionFeed
 from agent_backbone.config import AgentSpec, BackboneConfig
-from agent_backbone.services.agents import AgentStore, StateService
+from agent_backbone.services.agents import AgentStore
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.integrations import Integrations
-from agent_backbone.services.routing import DeliveryService, DispatchService
+from agent_backbone.services.routing import IssueClosedHook
 from agent_backbone.services.scheduler import PeriodicScheduler
-from agent_backbone.services.terminal import TmuxService
 
 
 def get_config(request: Request) -> BackboneConfig:
@@ -54,20 +56,12 @@ def get_optional_github(request: Request) -> GitHubClient | None:
     return getattr(request.app.state, "github", None)
 
 
-def get_state_service(request: Request) -> StateService:
-    return request.app.state.state_service
+def get_feed(request: Request) -> SessionFeed:
+    return request.app.state.feed
 
 
-def get_tmux_service(request: Request) -> TmuxService:
-    return request.app.state.tmux_service
-
-
-def get_delivery_service(request: Request) -> DeliveryService:
-    return request.app.state.delivery_service
-
-
-def get_dispatch_service(request: Request) -> DispatchService:
-    return request.app.state.dispatch_service
+def get_issue_closed_hooks(request: Request) -> Sequence[IssueClosedHook]:
+    return getattr(request.app.state, "issue_closed_hooks", ())
 
 
 def get_scheduler(request: Request) -> PeriodicScheduler | None:

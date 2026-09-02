@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -112,24 +112,23 @@ class TestDependencies:
 
 class TestCreateIssue:
     async def test_creates_and_notifies(self, api_client, auth_headers, gh, api_app):
-        delivery = api_app.state.delivery_service
-        delivery.create_and_notify = AsyncMock(return_value=_issue(10, ["feynman"]))
-
-        resp = await api_client.post(
-            "/api/issues",
-            json={
-                "title": "[task] New",
-                "body": "b",
-                "labels": ["for:feynman", "task"],
-                "repo": TEST_REPO,
-            },
-            headers=auth_headers,
-        )
+        create = AsyncMock(return_value=_issue(10, ["feynman"]))
+        with patch("agent_backbone.api.routes.issues.create_and_notify", create):
+            resp = await api_client.post(
+                "/api/issues",
+                json={
+                    "title": "[task] New",
+                    "body": "b",
+                    "labels": ["for:feynman", "task"],
+                    "repo": TEST_REPO,
+                },
+                headers=auth_headers,
+            )
 
         assert resp.status_code == 201
         assert resp.json()["number"] == 10
-        delivery.create_and_notify.assert_awaited_once()
-        assert delivery.create_and_notify.await_args.kwargs["repo"] == TEST_REPO
+        create.assert_awaited_once()
+        assert create.await_args.kwargs["repo"] == TEST_REPO
 
     async def test_rejects_unknown_target(self, api_client, auth_headers, gh):
         resp = await api_client.post(

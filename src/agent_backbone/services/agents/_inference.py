@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents._file_reader import read_state_file
 from agent_backbone.services.agents.models import (
@@ -21,6 +22,9 @@ from agent_backbone.services.runtimes import (
     sanitize_pane_content,
 )
 from agent_backbone.services.terminal import capture_pane
+
+if TYPE_CHECKING:
+    from agent_backbone.config import BackboneConfig
 
 log = logging.getLogger(__name__)
 
@@ -152,3 +156,8 @@ async def get_agent_state(
         source="default",
         evidence=["no hook state and no terminal output"],
     )
+
+
+async def agent_state(config: BackboneConfig, name: str) -> StateSnapshot:
+    """``get_agent_state`` with the paths and thresholds taken from the configuration."""
+    return await get_agent_state(config.state_dir, name, config.agent_state.stale_threshold_seconds)

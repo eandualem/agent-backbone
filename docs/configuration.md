@@ -38,7 +38,6 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | `backbone.port` | `7120` | API port |
 | `backbone.session_name` | `backbone` | tmux session used by `backbone up --detach` |
 | `backbone.cors_origins` | `[]` | Browser origins allowed to call the API; empty disables CORS |
-| `backbone.max_delivery_ids` | `100` | In-memory webhook/poll dedup cache (the events table keeps the full log) |
 
 ### `agents.*`
 

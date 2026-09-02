@@ -65,10 +65,10 @@ class TestShouldEscalate:
 
 class TestReadAndSyncStates:
     async def test_reads_only_configured_live_agents(self, config):
-        async def _get(state_path, session, stale):
+        async def _get(config, name):
             return _snap(AgentState.BUSY, issue=1)
 
-        with patch(f"{_MON}.get_agent_state", side_effect=_get) as get:
+        with patch(f"{_MON}.agent_state", side_effect=_get) as get:
             states = await read_states(config, {"ike", "leo", "stranger"})
         assert set(states) == {"ike", "leo"}
         assert get.await_count == 2  # once per agent per tick, never more
@@ -308,7 +308,7 @@ class TestMonitorAgents:
         with (
             patch(f"{_MON}.list_sessions", new_callable=AsyncMock, return_value=["ike"]),
             patch(
-                f"{_MON}.get_agent_state",
+                f"{_MON}.agent_state",
                 new_callable=AsyncMock,
                 return_value=_snap(AgentState.IDLE),
             ),
@@ -335,7 +335,7 @@ class TestMonitorAgents:
         with (
             patch(f"{_MON}.list_sessions", new_callable=AsyncMock, return_value=["ike"]),
             patch(
-                f"{_MON}.get_agent_state",
+                f"{_MON}.agent_state",
                 new_callable=AsyncMock,
                 return_value=_snap(AgentState.IDLE),
             ),
@@ -360,7 +360,7 @@ class TestMonitorAgents:
         with (
             patch(f"{_MON}.list_sessions", new_callable=AsyncMock, return_value=["ike"]),
             patch(
-                f"{_MON}.get_agent_state",
+                f"{_MON}.agent_state",
                 new_callable=AsyncMock,
                 return_value=_snap(AgentState.IDLE),
             ),

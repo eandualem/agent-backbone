@@ -8,13 +8,16 @@ from agent_backbone.services.agents._file_reader import (
     write_starting_marker,
     write_state_file,
 )
-from agent_backbone.services.agents._inference import get_agent_state, infer_state_from_pane
+from agent_backbone.services.agents._inference import (
+    agent_state,
+    get_agent_state,
+    infer_state_from_pane,
+)
 from agent_backbone.services.agents.acknowledgement import (
     find_outgoing_comment,
     has_commented_on_issue,
     rotate_action_log,
 )
-from agent_backbone.services.agents.interface import StateService
 from agent_backbone.services.agents.launch import (
     StartResult,
     approve_agent,
@@ -30,8 +33,8 @@ __all__ = [
     "AgentState",
     "AgentStore",
     "StartResult",
-    "StateService",
     "StateSnapshot",
+    "agent_state",
     "approve_agent",
     "approve_plan",
     "clear_starting_marker",

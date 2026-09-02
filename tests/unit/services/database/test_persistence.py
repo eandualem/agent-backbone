@@ -5,15 +5,8 @@ from __future__ import annotations
 import hashlib
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
 
-from agent_backbone.services.database import BackboneDB
 from tests.support import queue_row
-
-
-def _make_db() -> BackboneDB:
-    """Create a BackboneDB with a lightweight engine for hot-cache-only tests."""
-    return BackboneDB(create_async_engine("sqlite+aiosqlite:///:memory:"))
 
 
 class TestDeliveryTracking:
@@ -585,25 +578,3 @@ class TestMessageQueue:
         row = await queue_row(db, row_id)
         assert row["status"] == "pending"
         assert row["delivered_at"] is None
-
-
-class TestDedupHotCache:
-    def test_first_delivery_not_duplicate(self):
-        db = _make_db()
-        assert db.is_duplicate("abc-123") is False
-
-    def test_duplicate_delivery(self):
-        db = _make_db()
-        db.is_duplicate("abc-123")
-        assert db.is_duplicate("abc-123") is True
-
-    def test_empty_id_never_duplicate(self):
-        db = _make_db()
-        assert db.is_duplicate("") is False
-
-    def test_max_capacity_eviction(self):
-        db = _make_db()
-        for i in range(150):
-            db.is_duplicate(f"delivery-{i}", max_ids=100)
-        assert db.is_duplicate("delivery-0", max_ids=100) is False
-        assert db.is_duplicate("delivery-149", max_ids=100) is True

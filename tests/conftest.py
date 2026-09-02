@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -80,11 +79,9 @@ def make_config(tmp_path: Path, **overrides) -> BackboneConfig:
 def reset_module_state():
     """Reset module-level caches between tests."""
     from agent_backbone.services.routing import _dedup
-    from tests.support import reset_session_updates
 
     yield
     _dedup.clear()
-    reset_session_updates()
 
 
 @pytest.fixture
@@ -155,22 +152,6 @@ def sample_close_event():
 
 
 @pytest.fixture
-def mock_tmux():
-    """Mock tmux operations behind the TmuxService facade."""
-    with (
-        patch(
-            "agent_backbone.services.terminal.interface._session_exists", new_callable=AsyncMock
-        ) as mock_exists,
-        patch(
-            "agent_backbone.services.terminal.interface._list_sessions", new_callable=AsyncMock
-        ) as mock_list,
-    ):
-        mock_exists.return_value = True
-        mock_list.return_value = list(AGENT_NAMES)
-        yield {"session_exists": mock_exists, "list_sessions": mock_list}
-
-
-@pytest.fixture
 def github_issue_json():
     return {
         "number": 42,
@@ -198,18 +179,14 @@ async def api_app(config):
     inner FastAPI app for dependency_overrides and state.
     """
     from agent_backbone.api.app import create_app
+    from agent_backbone.api.session_updates import SessionFeed
     from agent_backbone.base import LifecycleManager
-    from agent_backbone.services.agents.interface import StateService
-    from agent_backbone.services.database import build_engine
-    from agent_backbone.services.routing import DeliveryService, DispatchService
-    from agent_backbone.services.terminal import TmuxService
 
     asgi_app = create_app(config)
     app = asgi_app.other_asgi_app
 
     app.state.lifecycle = LifecycleManager()
-    engine = build_engine("sqlite+aiosqlite:///:memory:")
-    db = BackboneDB(engine)
+    db = BackboneDB("sqlite+aiosqlite:///:memory:")
     await db.start()
     app.state.db = db
     app.state.github = None  # Tests override via dependency_overrides when needed
@@ -240,10 +217,8 @@ async def api_app(config):
     store._agents = config.agents
     store._config = config
     app.state.agent_store = store
-    app.state.state_service = StateService(config.state_dir)
-    app.state.tmux_service = TmuxService()
-    app.state.delivery_service = DeliveryService()
-    app.state.dispatch_service = DispatchService()
+    app.state.feed = SessionFeed(lambda: app.state.config)
+    app.state.issue_closed_hooks = ()
     from agent_backbone.services.integrations import build_integrations
 
     app.state.integrations = build_integrations(lambda: app.state.config, db=db)
@@ -251,8 +226,7 @@ async def api_app(config):
 
     yield app
 
-    db._engine = None
-    await engine.dispose()
+    await db.stop()
 
 
 @pytest.fixture

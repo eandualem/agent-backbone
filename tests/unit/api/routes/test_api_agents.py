@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_backbone.api.deps import get_state_service, get_tmux_service
 from agent_backbone.services.agents import AgentState, StateSnapshot
 
 _ROUTE = "agent_backbone.api.routes.agents"
+_FEED = "agent_backbone.api.session_updates"
 _LAUNCH = "agent_backbone.services.agents.launch"
 _RUNTIME = "agent_backbone.services.runtimes.base.Runtime"
 
@@ -23,32 +24,45 @@ def _snapshot(state: AgentState = AgentState.IDLE, **kwargs) -> StateSnapshot:
 
 @pytest.fixture
 def state_svc():
-    svc = MagicMock()
-    svc.get_state = AsyncMock(return_value=_snapshot())
-    return svc
+    """The state read behind the feed and the state endpoint, answering idle."""
+    get_state = AsyncMock(return_value=_snapshot())
+    with patch(f"{_FEED}.agent_state", get_state), patch(f"{_ROUTE}.agent_state", get_state):
+        yield SimpleNamespace(get_state=get_state)
 
 
 @pytest.fixture
 def tmux_svc():
-    svc = MagicMock()
-    svc.list_sessions = AsyncMock(return_value=["ike", "feynman"])
-    svc.list_sessions_rich = AsyncMock(
-        return_value=[
-            {"name": "ike", "windows": 1, "created": 1000, "attached": True, "activity": 5},
-            {"name": "feynman", "windows": 2, "created": 2000, "attached": False, "activity": 0},
-        ]
+    """The tmux reads and writes behind the feed and the routes."""
+    mocks = SimpleNamespace(
+        list_sessions=AsyncMock(return_value=["ike", "feynman"]),
+        list_sessions_rich=AsyncMock(
+            return_value=[
+                {"name": "ike", "windows": 1, "created": 1000, "attached": True, "activity": 5},
+                {
+                    "name": "feynman",
+                    "windows": 2,
+                    "created": 2000,
+                    "attached": False,
+                    "activity": 0,
+                },
+            ]
+        ),
+        session_exists=AsyncMock(return_value=False),
+        stop_session=AsyncMock(return_value=True),
+        capture_pane=AsyncMock(return_value="prompt >"),
     )
-    svc.session_exists = AsyncMock(return_value=False)
-    svc.start_session = AsyncMock(return_value=True)
-    svc.stop_session = AsyncMock(return_value=True)
-    svc.capture_pane = AsyncMock(return_value="prompt >")
-    return svc
+    with (
+        patch(f"{_FEED}.list_sessions_rich", mocks.list_sessions_rich),
+        patch(f"{_ROUTE}.list_sessions", mocks.list_sessions),
+        patch(f"{_ROUTE}.session_exists", mocks.session_exists),
+        patch(f"{_ROUTE}.stop_session", mocks.stop_session),
+        patch(f"{_ROUTE}.capture_pane", mocks.capture_pane),
+    ):
+        yield mocks
 
 
 @pytest.fixture(autouse=True)
 def _override(api_app, state_svc, tmux_svc):
-    api_app.dependency_overrides[get_state_service] = lambda: state_svc
-    api_app.dependency_overrides[get_tmux_service] = lambda: tmux_svc
     with (
         patch(
             "agent_backbone.api.session_updates.query_environment_var",
@@ -62,7 +76,6 @@ def _override(api_app, state_svc, tmux_svc):
         ),
     ):
         yield
-    api_app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -263,8 +276,8 @@ class TestStartAgent:
                 current_repo="example/ike",
                 evidence=["hook state 'busy' written 3s ago (fresh)"],
             )
-            with patch(f"{_ROUTE}.capture_pane", new_callable=AsyncMock, return_value="❯ "):
-                resp = await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
+            tmux_svc.capture_pane.return_value = "❯ "
+            resp = await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["state"] == "busy" and data["delivery"] == "agent_working"

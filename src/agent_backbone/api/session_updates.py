@@ -1,4 +1,5 @@
-"""Shared session snapshot building and Socket.IO update broadcasting."""
+"""The session feed: one enriched snapshot of every agent, cached briefly and
+pushed to Socket.IO ``/sessions`` subscribers whenever something changed."""
 
 from __future__ import annotations
 
@@ -7,15 +8,15 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents import StateService
+from agent_backbone.services.agents import agent_state
 from agent_backbone.services.runtimes import RUNTIME_ENV_KEY
-from agent_backbone.services.terminal import TmuxService, query_environment_var
+from agent_backbone.services.terminal import list_sessions_rich, query_environment_var
 
 if TYPE_CHECKING:
     import socketio
@@ -24,25 +25,18 @@ log = logging.getLogger(__name__)
 
 SESSIONS_NAMESPACE = "/sessions"
 SESSIONS_UPDATE_EVENT = "sessions:update"
-
-_sessions_update_lock = asyncio.Lock()
-_last_sessions_update_signature: str | None = None
-_snapshot_cache: list[Any] = []
-_snapshot_cache_ts: float = 0.0
-_snapshot_cache_lock = asyncio.Lock()
-_SNAPSHOT_CACHE_TTL = 5.0
+SNAPSHOT_TTL_SECONDS = 5.0
 
 
 async def build_enriched_agent(
     session: str,
     config: BackboneConfig,
     active_sessions: set[str],
-    state_svc: StateService,
     tmux_info: dict | None = None,
 ) -> EnrichedAgent:
     """Build an EnrichedAgent for a session (configured agent or ad-hoc session)."""
     online = session in active_sessions
-    snapshot = await state_svc.get_state(session)
+    snapshot = await agent_state(config, session)
     spec = config.agents.get(session)
 
     tmux_created = None
@@ -100,90 +94,91 @@ def listable_sessions(config: BackboneConfig, active_sessions: set[str]) -> list
     return names
 
 
-async def build_session_snapshot(
-    config: BackboneConfig,
-    state_svc: StateService,
-    tmux_svc: TmuxService,
-) -> list[EnrichedAgent]:
-    """Build the full enriched session snapshot without caching."""
-    rich_sessions = await tmux_svc.list_sessions_rich()
+async def build_session_snapshot(config: BackboneConfig) -> list[EnrichedAgent]:
+    """The full enriched snapshot of every listable session, uncached."""
+    rich_sessions = await list_sessions_rich()
     tmux_lookup = {session["name"]: session for session in rich_sessions}
     active_sessions = set(tmux_lookup.keys())
-
     coros = [
-        build_enriched_agent(session, config, active_sessions, state_svc, tmux_lookup.get(session))
+        build_enriched_agent(session, config, active_sessions, tmux_lookup.get(session))
         for session in listable_sessions(config, active_sessions)
     ]
     return list(await asyncio.gather(*coros))
 
 
-async def get_cached_session_snapshot(
-    build_fn: Callable[[], Awaitable[list[Any]]],
-    ttl: float = _SNAPSHOT_CACHE_TTL,
-    force_refresh: bool = False,
-) -> list[Any]:
-    """Return a cached session snapshot, rebuilding under a shared lock when needed."""
-    global _snapshot_cache, _snapshot_cache_ts
+class SessionFeed:
+    """A cached session snapshot and the Socket.IO broadcast of it.
 
-    now = time.monotonic()
-    if not force_refresh and now - _snapshot_cache_ts < ttl and _snapshot_cache:
-        return _snapshot_cache
+    ``config`` is a provider so the feed always reads the latest published
+    configuration; ``sio`` may be None (no server — nothing is emitted).
+    """
 
-    async with _snapshot_cache_lock:
-        now = time.monotonic()
-        if not force_refresh and now - _snapshot_cache_ts < ttl and _snapshot_cache:
-            return _snapshot_cache
+    def __init__(
+        self,
+        config: Callable[[], BackboneConfig],
+        sio: socketio.AsyncServer | None = None,
+        *,
+        ttl_seconds: float = SNAPSHOT_TTL_SECONDS,
+    ) -> None:
+        self._config = config
+        self._sio = sio
+        self._ttl = ttl_seconds
+        self._cache: list[EnrichedAgent] = []
+        self._cached_at = 0.0
+        self._lock = asyncio.Lock()
+        self._emit_lock = asyncio.Lock()
+        self._last_signature: str | None = None
 
-        _snapshot_cache = await build_fn()
-        _snapshot_cache_ts = now
-        return _snapshot_cache
+    @property
+    def sio(self) -> socketio.AsyncServer | None:
+        return self._sio
 
+    @sio.setter
+    def sio(self, server: socketio.AsyncServer | None) -> None:
+        self._sio = server
 
-def _invalidate_session_snapshot_caches_unlocked() -> None:
-    global _snapshot_cache, _snapshot_cache_ts
+    async def snapshot(self, *, force_refresh: bool = False) -> list[EnrichedAgent]:
+        """The snapshot, rebuilt when older than the TTL (or when forced)."""
+        if not force_refresh and self._fresh():
+            return self._cache
+        async with self._lock:
+            if not force_refresh and self._fresh():
+                return self._cache
+            self._cache = await build_session_snapshot(self._config())
+            self._cached_at = time.monotonic()
+            return self._cache
 
-    _snapshot_cache = []
-    _snapshot_cache_ts = 0.0
+    def _fresh(self) -> bool:
+        return bool(self._cache) and time.monotonic() - self._cached_at < self._ttl
 
+    async def invalidate(self) -> None:
+        """Forget the cached snapshot (an agent was started, stopped or edited)."""
+        async with self._lock:
+            self._cache = []
+            self._cached_at = 0.0
 
-async def invalidate_session_snapshot_caches() -> None:
-    """Reset the shared cached agent snapshot under the shared lock."""
-    async with _snapshot_cache_lock:
-        _invalidate_session_snapshot_caches_unlocked()
+    async def emit(self, *, only_if_changed: bool = False) -> bool:
+        """Rebuild the snapshot and broadcast it to ``/sessions`` subscribers.
 
-
-def _serialize_snapshot(snapshot: list[EnrichedAgent]) -> list[dict]:
-    return [agent.model_dump(mode="json") for agent in snapshot]
-
-
-def _snapshot_signature(payload: list[dict]) -> str:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-async def emit_sessions_update(
-    sio: socketio.AsyncServer | None,
-    config: BackboneConfig,
-    state_svc: StateService | None,
-    tmux_svc: TmuxService | None,
-    *,
-    only_if_changed: bool = False,
-) -> bool:
-    """Broadcast the current enriched session snapshot to `/sessions` subscribers."""
-    global _last_sessions_update_signature
-    if sio is None or state_svc is None or tmux_svc is None:
-        return False
-
-    async with _sessions_update_lock:
-        snapshot = await get_cached_session_snapshot(
-            lambda: build_session_snapshot(config, state_svc, tmux_svc),
-            force_refresh=True,
-        )
-        payload = _serialize_snapshot(snapshot)
-        signature = _snapshot_signature(payload)
-
-        if only_if_changed and signature == _last_sessions_update_signature:
+        With ``only_if_changed`` (the monitor tick) nothing is sent when the
+        payload equals the last one broadcast.
+        """
+        if self._sio is None:
             return False
+        async with self._emit_lock:
+            payload = [
+                agent.model_dump(mode="json") for agent in await self.snapshot(force_refresh=True)
+            ]
+            signature = json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            if only_if_changed and signature == self._last_signature:
+                return False
+            await self._sio.emit(SESSIONS_UPDATE_EVENT, payload, namespace=SESSIONS_NAMESPACE)
+            self._last_signature = signature
+            return True
 
-        await sio.emit(SESSIONS_UPDATE_EVENT, payload, namespace=SESSIONS_NAMESPACE)
-        _last_sessions_update_signature = signature
-        return True
+    async def refresh_and_emit(self) -> None:
+        """After a change made through the API: drop the cache and broadcast."""
+        await self.invalidate()
+        await self.emit()

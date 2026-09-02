@@ -29,7 +29,6 @@ API_VERSION = "2.0.0"
 def _register_jobs(app: FastAPI):
     """Wire the periodic jobs. Each job reads ``app.state.config`` at run time so
     setting changes and newly discovered agents are picked up without a restart."""
-    from agent_backbone.api.session_updates import emit_sessions_update
     from agent_backbone.services.agents import rotate_action_log
     from agent_backbone.services.jobs import GitHubPoller, delivery_retry, monitor_agents
     from agent_backbone.services.scheduler import PeriodicScheduler
@@ -40,13 +39,7 @@ def _register_jobs(app: FastAPI):
 
     async def _broadcast():
         # Reconcile out-of-band session churn to live Socket.IO subscribers.
-        await emit_sessions_update(
-            getattr(state, "sio", None),
-            state.config,
-            state.state_service,
-            state.tmux_service,
-            only_if_changed=True,
-        )
+        await state.feed.emit(only_if_changed=True)
 
     async def _monitor():
         await state.agent_store.refresh()
@@ -77,8 +70,7 @@ def _register_jobs(app: FastAPI):
             lambda: state.config,
             state.db,
             state.github,
-            state.delivery_service,
-            state.dispatch_service,
+            issue_closed_hooks=state.issue_closed_hooks,
         )
         if config.github_intake == "poll":
             scheduler.add(
@@ -92,13 +84,13 @@ def _register_jobs(app: FastAPI):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Open the data directory, start the database, load config, wire services."""
+    from agent_backbone.api.session_updates import SessionFeed
     from agent_backbone.api.socketio_server import configure_pty_manager, get_pty_manager
-    from agent_backbone.services.agents import AgentStore, StateService
-    from agent_backbone.services.database import BackboneDB, DatabaseService
+    from agent_backbone.services.agents import AgentStore
+    from agent_backbone.services.database import BackboneDB
     from agent_backbone.services.github import GitHubClient
     from agent_backbone.services.integrations import build_integrations
-    from agent_backbone.services.routing import DeliveryService, DispatchService
-    from agent_backbone.services.terminal import TmuxService
+    from agent_backbone.services.swarm import teardown_for_issue
 
     boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
     data_dir = boot.data_dir
@@ -110,10 +102,8 @@ async def lifespan(app: FastAPI):
     app.state.lifecycle = lifecycle
 
     # Stage 1: the database, then the configuration stored in it.
-    app.state.database_service = DatabaseService(boot.database_url)
-    app.state.db = BackboneDB(database_service=app.state.database_service)
-    lifecycle.register("database", app.state.database_service)
-    lifecycle.register("persistence", app.state.db)
+    app.state.db = BackboneDB(boot.database_url)
+    lifecycle.register("database", app.state.db)
     await lifecycle.start_all()
 
     def _publish(new_config: BackboneConfig) -> None:
@@ -139,27 +129,14 @@ async def lifespan(app: FastAPI):
     app.state.github = GitHubClient(config) if config.github_ready else None
     if app.state.github is not None:
         lifecycle.register("github", app.state.github)
-    app.state.tmux_service = TmuxService()
-    lifecycle.register("tmux", app.state.tmux_service)
-    app.state.state_service = StateService(
-        config.state_dir, config.agent_state.stale_threshold_seconds
-    )
-    lifecycle.register("state", app.state.state_service)
-    app.state.delivery_service = DeliveryService()
-    lifecycle.register("delivery", app.state.delivery_service)
-    app.state.dispatch_service = DispatchService()
-    lifecycle.register("dispatch", app.state.dispatch_service)
+    app.state.feed = SessionFeed(lambda: app.state.config, getattr(app.state, "sio", None))
     app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
     for integration in app.state.integrations:
         lifecycle.register(integration.name, integration)
-    app.state.scheduler = _register_jobs(app)
-    lifecycle.register("scheduler", app.state.scheduler)
 
     # A closed issue ends the swarm that was working it (PR merged -> issue
-    # closed via "Closes #N" -> teardown). Wired here so routing stays a leaf.
-    from agent_backbone.services.routing import register_issue_closed_listener
-    from agent_backbone.services.swarm import teardown_for_issue
-
+    # closed via "Closes #N" -> teardown). Handed to ingest as a hook so
+    # routing never imports the packages above it.
     async def _swarm_teardown(repo: str, issue_number: int) -> None:
         name = await teardown_for_issue(
             app.state.config, app.state.db, app.state.agent_store, repo, issue_number
@@ -167,7 +144,9 @@ async def lifespan(app: FastAPI):
         if name:
             log.info("Swarm '%s' completed with %s#%s", name, repo, issue_number)
 
-    register_issue_closed_listener(_swarm_teardown)
+    app.state.issue_closed_hooks = (_swarm_teardown,)
+    app.state.scheduler = _register_jobs(app)
+    lifecycle.register("scheduler", app.state.scheduler)
 
     try:
         await lifecycle.start_all()

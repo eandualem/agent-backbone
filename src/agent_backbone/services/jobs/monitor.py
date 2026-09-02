@@ -13,7 +13,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents import StateSnapshot, get_agent_state
+from agent_backbone.services.agents import StateSnapshot, agent_state
 from agent_backbone.services.jobs.copy_mode import handle_copy_mode_recovery
 from agent_backbone.services.jobs.escalation import (
     check_plan_waiting,
@@ -44,9 +44,7 @@ async def read_states(config: BackboneConfig, active_sessions: set[str]) -> Agen
     states: AgentStates = {}
     for name in config.agents.names:
         if name in active_sessions:
-            states[name] = await get_agent_state(
-                config.state_dir, name, config.agent_state.stale_threshold_seconds
-            )
+            states[name] = await agent_state(config, name)
     return states
 
 

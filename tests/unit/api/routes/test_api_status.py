@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, patch
 
-from agent_backbone.api.deps import (
-    get_optional_github,
-    get_scheduler,
-    get_state_service,
-    get_tmux_service,
-)
+from agent_backbone.api.deps import get_optional_github, get_scheduler
 from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.scheduler import PeriodicScheduler
 
@@ -19,16 +15,22 @@ def _idle_snapshot() -> StateSnapshot:
     return StateSnapshot(state=AgentState.IDLE, source="push", timestamp=time.time())
 
 
-def _mock_state_svc() -> MagicMock:
-    svc = MagicMock()
-    svc.get_state = AsyncMock(return_value=_idle_snapshot())
-    return svc
-
-
-def _mock_tmux_svc(sessions: list[str] | None = None) -> MagicMock:
-    svc = MagicMock()
-    svc.list_sessions = AsyncMock(return_value=sessions or [])
-    return svc
+@contextlib.contextmanager
+def _live(sessions: list[str]):
+    """Every agent reads idle; ``sessions`` are the live tmux sessions."""
+    with (
+        patch(
+            "agent_backbone.api.session_updates.agent_state",
+            new_callable=AsyncMock,
+            return_value=_idle_snapshot(),
+        ),
+        patch(
+            "agent_backbone.api.routes.status.list_sessions",
+            new_callable=AsyncMock,
+            return_value=sessions,
+        ),
+    ):
+        yield
 
 
 class TestGetSystemStatus:
@@ -38,10 +40,9 @@ class TestGetSystemStatus:
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[object()] * 3)
         api_app.dependency_overrides[get_optional_github] = lambda: mock_gh
-        api_app.dependency_overrides[get_state_service] = _mock_state_svc
-        api_app.dependency_overrides[get_tmux_service] = lambda: _mock_tmux_svc(["feynman", "ike"])
 
-        resp = await api_client.get("/api/status", headers=auth_headers)
+        with _live(["feynman", "ike"]):
+            resp = await api_client.get("/api/status", headers=auth_headers)
         api_app.dependency_overrides.clear()
 
         assert resp.status_code == 200
@@ -62,13 +63,8 @@ class TestGetSystemStatus:
     async def test_unconfigured_sessions_are_listed_but_flagged(
         self, api_client, auth_headers, api_app
     ):
-        api_app.dependency_overrides[get_state_service] = _mock_state_svc
-        api_app.dependency_overrides[get_tmux_service] = lambda: _mock_tmux_svc(
-            ["ike", "scratch-session", "backbone"]
-        )
-
-        resp = await api_client.get("/api/status", headers=auth_headers)
-        api_app.dependency_overrides.clear()
+        with _live(["ike", "scratch-session", "backbone"]):
+            resp = await api_client.get("/api/status", headers=auth_headers)
 
         data = resp.json()
         names = [a["name"] for a in data["agents"]]
@@ -86,11 +82,8 @@ class TestGetSystemStatus:
             outcome="delivery_failed",
             source="test",
         )
-        api_app.dependency_overrides[get_state_service] = _mock_state_svc
-        api_app.dependency_overrides[get_tmux_service] = lambda: _mock_tmux_svc([])
-
-        resp = await api_client.get("/api/status", headers=auth_headers)
-        api_app.dependency_overrides.clear()
+        with _live([]):
+            resp = await api_client.get("/api/status", headers=auth_headers)
 
         assert resp.json()["failed_deliveries"] == 1
 

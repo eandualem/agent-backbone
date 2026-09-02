@@ -7,7 +7,7 @@ from pathlib import Path
 
 from agent_backbone.services.database import build_engine
 from agent_backbone.services.database.backbone_db import BackboneDB, metadata
-from agent_backbone.services.database.interface import sqlite_url
+from agent_backbone.services.database.engine import sqlite_url
 from tests.support import queue_row
 
 _EXPECTED_TABLES = {
@@ -63,8 +63,7 @@ async def test_memory_db_bypasses_migrations():
 
 async def test_file_db_runs_migrations(tmp_path):
     """File-based BackboneDB creates the schema and alembic_version via start()."""
-    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
-    db = BackboneDB(engine)
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
     await db.start()
     try:
         assert await db.check_connection()
@@ -75,14 +74,14 @@ async def test_file_db_runs_migrations(tmp_path):
             > 0
         )
     finally:
-        db._engine = None
-        await engine.dispose()
+        await db.stop()
 
 
 async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
     """_run_migrations() upgrades a fresh persistent database from the initial revision."""
-    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / 'fresh.db'}")
-    db = BackboneDB(engine)
+    url = f"sqlite+aiosqlite:///{tmp_path / 'fresh.db'}"
+    db = BackboneDB(url)
+    db._engine = build_engine(url)  # migrations alone, without start()'s create_all
     try:
         await db._run_migrations()
         assert (
@@ -96,29 +95,24 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
         )
         assert (await queue_row(db, 1))["status"] == "pending"
     finally:
-        db._engine = None
-        await engine.dispose()
+        await db.stop()
 
 
 async def test_file_db_idempotent_start(tmp_path):
-    db_path = tmp_path / "idem.db"
-    engine = build_engine(f"sqlite+aiosqlite:///{db_path}")
-    db = BackboneDB(engine)
+    url = f"sqlite+aiosqlite:///{tmp_path / 'idem.db'}"
+    db = BackboneDB(url)
     await db.start()
     await db.record_delivery(
         issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
     )
-    db._engine = None
-    await engine.dispose()
+    await db.stop()
 
-    engine2 = build_engine(f"sqlite+aiosqlite:///{db_path}")
-    db2 = BackboneDB(engine2)
+    db2 = BackboneDB(url)
     await db2.start()
     try:
         assert len(await db2.query_deliveries(issue_number=42)) == 1
     finally:
-        db2._engine = None
-        await engine2.dispose()
+        await db2.stop()
 
 
 def test_sqlite_url_points_into_data_dir(tmp_path):
@@ -136,25 +130,19 @@ async def test_unknown_stamped_revision_is_restamped_after_squash(tmp_path):
     exists (the squash was regenerated) must re-stamp to head, not crash."""
     from sqlalchemy import text
 
-    from agent_backbone.services.database import BackboneDB, build_engine
-
     url = f"sqlite+aiosqlite:///{tmp_path}/old.db"
-    engine = build_engine(url)
-    db = BackboneDB(engine)
+    db = BackboneDB(url)
     await db.start()  # creates schema and stamps head
-    async with engine.begin() as conn:
+    async with db.engine.begin() as conn:
         await conn.execute(text("UPDATE alembic_version SET version_num = 'deadbeef0000'"))
-    db._engine = None
-    await engine.dispose()
+    await db.stop()
 
-    engine2 = build_engine(url)
-    db2 = BackboneDB(engine2)
+    db2 = BackboneDB(url)
     await db2.start()  # must not raise
-    async with engine2.begin() as conn:
+    async with db2.engine.begin() as conn:
         stored = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
     assert stored != "deadbeef0000"
-    db2._engine = None
-    await engine2.dispose()
+    await db2.stop()
 
 
 async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_path):
@@ -163,9 +151,9 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
 
     from agent_backbone.services.database.backbone_db import _repair_schema
 
-    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
-    db = BackboneDB(engine)
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
     await db.start()
+    engine = db.engine
     try:
         async with engine.begin() as conn:
             # An older install: no dedup rule for PR notices, so the queue grew copies.
@@ -204,5 +192,4 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
             == -1
         )
     finally:
-        db._engine = None
-        await engine.dispose()
+        await db.stop()

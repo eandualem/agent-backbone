@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_backbone.api.deps import get_state_service, get_tmux_service
 from agent_backbone.config import SecurityConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
 
@@ -25,29 +25,33 @@ def _plan_snapshot(plan_file: str | None = None) -> StateSnapshot:
     )
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def state_svc():
-    svc = MagicMock()
-    svc.get_state = AsyncMock(return_value=StateSnapshot(state=AgentState.IDLE))
-    svc.read_state = MagicMock(return_value=None)
-    return svc
-
-
-@pytest.fixture
-def tmux_svc():
-    svc = MagicMock()
-    svc.list_sessions = AsyncMock(return_value=["ike"])
-    svc.session_exists = AsyncMock(return_value=True)
-    svc.send_keys = AsyncMock(return_value=True)
-    return svc
+    """The two state reads the plan routes make: reconciled, and the raw hook file."""
+    mocks = SimpleNamespace(
+        get_state=AsyncMock(return_value=StateSnapshot(state=AgentState.IDLE)),
+        read_state=MagicMock(return_value=None),
+    )
+    with (
+        patch(f"{_PLANS}.agent_state", mocks.get_state),
+        patch(f"{_PLANS}.read_state_file", mocks.read_state),
+    ):
+        yield mocks
 
 
 @pytest.fixture(autouse=True)
-def _override(api_app, state_svc, tmux_svc):
-    api_app.dependency_overrides[get_state_service] = lambda: state_svc
-    api_app.dependency_overrides[get_tmux_service] = lambda: tmux_svc
-    yield
-    api_app.dependency_overrides.clear()
+def tmux_svc():
+    mocks = SimpleNamespace(
+        list_sessions=AsyncMock(return_value=["ike"]),
+        session_exists=AsyncMock(return_value=True),
+        send_keys=AsyncMock(return_value=True),
+    )
+    with (
+        patch(f"{_PLANS}.list_sessions", mocks.list_sessions),
+        patch(f"{_PLANS}.session_exists", mocks.session_exists),
+        patch(f"{_PLANS}.send_keys", mocks.send_keys),
+    ):
+        yield mocks
 
 
 def _enable_plan_control(api_app):
@@ -58,10 +62,10 @@ def _enable_plan_control(api_app):
 
 class TestListPlans:
     async def test_lists_plan_waiting_agents(self, api_client, auth_headers, state_svc):
-        async def _state(session):
+        async def _state(config, session):
             return _plan_snapshot("/p.md") if session == "ike" else StateSnapshot(AgentState.IDLE)
 
-        state_svc.get_state = AsyncMock(side_effect=_state)
+        state_svc.get_state.side_effect = _state
         resp = await api_client.get("/api/plans", headers=auth_headers)
         assert resp.json()["total"] == 1
         assert resp.json()["items"][0]["session"] == "ike"

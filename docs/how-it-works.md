@@ -210,7 +210,8 @@ Opened in R: owners and watchers of R are told (informational).
 
 Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 
-1. Refreshes agents and settings from the database.
+1. Refreshes agents and settings from the database, reads every running
+   agent's state **once** and mirrors it into the `agent_states` table.
 2. Syncs sub-issue relationships for open issues.
 3. **Stalls**: `busy` on one issue for > `timing.stall_threshold_seconds`
    (90 min) → one message to `escalation.target`, deduplicated for

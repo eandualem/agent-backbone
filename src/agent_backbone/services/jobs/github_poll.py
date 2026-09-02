@@ -11,25 +11,25 @@ Used two ways:
 Both produce the same ``IssueEvent`` objects the webhook produces and hand
 them to ``dispatch_event``. Delivery ids are synthesised from the item id and
 update time; the ``events`` table dedups them, so overlapping windows and
-restarts never double-deliver. The "since" point per repository is the
+restarts never double-deliver (a batch with a failed dispatch is refetched
+whole; the table drops what already went through). The "since" point per repository is the
 newest stored event for that repository (or the configured lookback).
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from agent_backbone.models import IssueEvent
-from agent_backbone.services.routing import dispatch_event
+from agent_backbone.services.routing import IssueClosedHook, dispatch_event
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
     from agent_backbone.services.database import BackboneDB
     from agent_backbone.services.github import GitHubClient
-    from agent_backbone.services.routing import DeliveryService, DispatchService
 
 log = logging.getLogger(__name__)
 
@@ -94,14 +94,13 @@ class GitHubPoller:
         config: BackboneConfig | Callable[[], BackboneConfig],
         db: BackboneDB,
         gh: GitHubClient,
-        delivery_svc: DeliveryService,
-        dispatch_svc: DispatchService,
+        *,
+        issue_closed_hooks: Sequence[IssueClosedHook] = (),
     ) -> None:
         self._config_provider = config if callable(config) else (lambda: config)
         self._db = db
         self._gh = gh
-        self._delivery_svc = delivery_svc
-        self._dispatch_svc = dispatch_svc
+        self._issue_closed_hooks = tuple(issue_closed_hooks)
         self._since: dict[str, str] = {}
 
     @property
@@ -164,18 +163,18 @@ class GitHubPoller:
 
             had_errors = False
             for event in events:
-                if self._db.is_duplicate(event.delivery_id, config.backbone.max_delivery_ids):
-                    summary["deduped"] = summary.get("deduped", 0) + 1
-                    continue
                 try:
                     outcome = await dispatch_event(
-                        event, config, self._db, self._gh, self._delivery_svc, self._dispatch_svc
+                        event,
+                        config,
+                        self._db,
+                        self._gh,
+                        issue_closed_hooks=self._issue_closed_hooks,
                     )
                     key = outcome.split(":", 1)[0]
                     summary[key] = summary.get(key, 0) + 1
                 except Exception:
                     log.exception("Dispatch failed for polled event %s", event.delivery_id)
-                    self._db.forget_delivery(event.delivery_id)
                     had_errors = True
                     summary["errors"] = summary.get("errors", 0) + 1
 

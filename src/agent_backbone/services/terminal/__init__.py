@@ -24,13 +24,11 @@ from agent_backbone.services.terminal._sessions import (
     start_session,
     stop_session,
 )
-from agent_backbone.services.terminal.interface import TmuxService
 
 __all__ = [
     "SESSION_FORMAT_STR",
     "PtyManager",
     "PtySession",
-    "TmuxService",
     "active_pane_size",
     "capture_pane",
     "clear_copy_mode",

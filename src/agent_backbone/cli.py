@@ -112,11 +112,9 @@ class _Direct:
 
     async def __aenter__(self) -> _Direct:
         from agent_backbone.services.agents import AgentStore
-        from agent_backbone.services.database import BackboneDB, DatabaseService
+        from agent_backbone.services.database import BackboneDB
 
-        self._service = DatabaseService(self._boot.database_url)
-        await self._service.start()
-        self.db = BackboneDB(self._service.engine)
+        self.db = BackboneDB(self._boot.database_url)
         await self.db.start()
         self.store = AgentStore(self.db, self._boot.data_dir)
         self.config = await self.store.refresh()
@@ -124,7 +122,6 @@ class _Direct:
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.db.stop()
-        await self._service.stop()
 
 
 def _print_json(data: Any) -> None:

@@ -1,14 +1,8 @@
-"""Database persistence — AsyncEngine connection lifecycle and query delegation.
-
-Uses SQLAlchemy AsyncEngine for connection pooling and dialect abstraction.
-Production receives the engine from DatabaseService (single pool).
-Tests use BackboneDB.connect() for standalone in-memory engines.
-"""
+"""Database persistence — engine lifecycle, migrations and query delegation."""
 
 from __future__ import annotations
 
 import logging
-from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,7 +21,7 @@ from agent_backbone.services.database import (
     _swarms_repo,
 )
 from agent_backbone.services.database.base import Base
-from agent_backbone.services.database.interface import build_engine
+from agent_backbone.services.database.engine import build_engine, redact_url
 
 metadata = Base.metadata
 
@@ -74,55 +68,64 @@ def _repair_schema(sync_conn) -> None:
 
 
 class BackboneDB:
-    """Async database for backbone persistence.
+    """The backbone's database: owns the engine, migrates on start, runs every query.
 
     Usage (production — via LifecycleManager):
-        db = BackboneDB(database_service=service)
+        db = BackboneDB(url)
         await db.start()
         ...
         await db.stop()
 
     Usage (tests):
-        async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
+        async with BackboneDB.connect() as db:
             await db.record_delivery(...)
     """
 
-    def __init__(self, engine: AsyncEngine | None = None, *, database_service=None) -> None:
-        self._engine: AsyncEngine | None = engine
-        self._database_service = database_service
-        self._seen_deliveries: OrderedDict[str, bool] = OrderedDict()
+    def __init__(self, url: str) -> None:
+        self._url = url
+        self._engine: AsyncEngine | None = None
+
+    @property
+    def url(self) -> str:
+        return self._url
+
+    @property
+    def engine(self) -> AsyncEngine:
+        if self._engine is None:
+            raise RuntimeError("BackboneDB is not started")
+        return self._engine
 
     @property
     def _is_memory(self) -> bool:
-        return self._engine is not None and ":memory:" in str(self._engine.url)
+        return ":memory:" in self._url
 
     # --- LifecycleAware methods ---
 
     async def start(self) -> None:
-        """Create schema and run migrations. Engine is provided externally."""
-        if self._engine is None and self._database_service is not None:
-            self._engine = self._database_service.engine
-        if self._engine is None:
-            raise RuntimeError("BackboneDB requires an engine or database_service")
+        """Connect, create the schema (SQLite) and run migrations (persistent databases)."""
+        self._engine = build_engine(self._url)
+        async with self._engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        log.info("Database connected: %s", redact_url(self._url))
         # PostgreSQL: Alembic owns the schema. SQLite: create_all is safe and
         # needed for fresh files / in-memory databases.
-        if "postgresql" not in str(self._engine.url):
+        if "postgresql" not in self._url:
             async with self._engine.begin() as conn:
                 await conn.run_sync(metadata.create_all)
         if not self._is_memory:
             await self._run_migrations()
 
     async def stop(self) -> None:
-        """Release engine reference. Engine lifecycle is owned by DatabaseService."""
-        self._engine = None
+        if self._engine is not None:
+            await self._engine.dispose()
+            self._engine = None
 
     async def health_check(self) -> dict:
         """Check database connectivity."""
-        healthy = await self.check_connection()
         return {
-            "healthy": healthy,
-            "service": "persistence",
-            "connected": self._engine is not None,
+            "healthy": await self.check_connection(),
+            "service": "database",
+            "url": redact_url(self._url),
         }
 
     async def check_connection(self) -> bool:
@@ -136,20 +139,16 @@ class BackboneDB:
         except Exception:
             return False
 
+    @classmethod
     @asynccontextmanager
-    @staticmethod
-    async def connect(
-        database_url: str = "sqlite+aiosqlite:///:memory:",
-    ) -> AsyncIterator[BackboneDB]:
-        """Context manager for test/ad-hoc usage — creates standalone engine, yields, disposes."""
-        engine = build_engine(database_url)
-        db = BackboneDB(engine)
+    async def connect(cls, url: str = "sqlite+aiosqlite:///:memory:") -> AsyncIterator[BackboneDB]:
+        """Context manager for test/ad-hoc usage — starts, yields, stops."""
+        db = cls(url)
         await db.start()
         try:
             yield db
         finally:
-            db._engine = None
-            await engine.dispose()
+            await db.stop()
 
     async def _run_migrations(self) -> None:
         """Run Alembic migrations for persistent databases."""
@@ -300,23 +299,6 @@ class BackboneDB:
         """Get delivery counts grouped by outcome."""
         async with self._engine.begin() as conn:
             return await _delivery_repo.get_delivery_stats(conn)
-
-    # --- Webhook dedup hot cache (the events table is the durable record) ---
-
-    def is_duplicate(self, delivery_id: str, max_ids: int = 100) -> bool:
-        """Check and record delivery ID in hot cache for dedup."""
-        if not delivery_id:
-            return False
-        if delivery_id in self._seen_deliveries:
-            return True
-        self._seen_deliveries[delivery_id] = True
-        while len(self._seen_deliveries) > max_ids:
-            self._seen_deliveries.popitem(last=False)
-        return False
-
-    def forget_delivery(self, delivery_id: str) -> None:
-        """Drop a delivery id from the hot cache so a retry is not treated as a duplicate."""
-        self._seen_deliveries.pop(delivery_id, None)
 
     # --- Agent state (delegates to _state_repo) ---
 
