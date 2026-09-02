@@ -68,8 +68,10 @@ re-stamped; that path also rebuilds every index from the model
 ## Conventions
 
 - Commits: conventional prefixes (`feat:`, `fix:`, `refactor:`, `docs:`,
-  `test:`, `chore:`), body explains *why*. **Never push** — the repository
-  owner pushes and opens PRs.
+  `test:`, `chore:`), body explains *why*. Branch from `develop` and open
+  pull requests **against `develop`** (the default branch); `main` is the
+  released branch and only receives merges from `develop`. Never push to
+  `main` or `develop` directly.
 - Docs are part of a change: update the page that describes the behaviour
   you touched. User-visible strings use the vocabulary from
   `docs/concepts.md` (states, delivery conditions, kinds).
