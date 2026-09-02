@@ -116,6 +116,10 @@ async def handle_topic_message(
         agent = target
         message = f"{tag} {text}"
 
+    if bot.config.agents.get(agent) is None:
+        await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
+        return
+
     result = await safe_deliver(
         agent, message, bot.config, db=bot._db, delivery_kind="direct_message"
     )

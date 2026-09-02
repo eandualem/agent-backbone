@@ -299,9 +299,15 @@ async def teardown_swarm(
     """Stop members, remove the worktree, forget the agents. Returns member names."""
     name = swarm["name"]
     members = await _members_of(store, name)
+    failed_stops: list[str] = []
     for member in members:
-        if await session_exists(member.name):
-            await stop_session(member.name)
+        if await session_exists(member.name) and not await stop_session(member.name):
+            failed_stops.append(member.name)
+    if failed_stops:
+        raise SwarmError(
+            "could not stop swarm member session(s): "
+            f"{', '.join(failed_stops)} — the worktree was left in place"
+        )
     worktree = Path(swarm["worktree_dir"])
     # The worktree lives at <repo_dir>/.backbone/swarms/<name>.
     repo_dir = worktree.parent.parent.parent

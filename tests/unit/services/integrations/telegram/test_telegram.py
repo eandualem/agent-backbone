@@ -95,6 +95,14 @@ class TestTell:
             "`ike` is busy — queued.", parse_mode="Markdown"
         )
 
+    async def test_cmd_tell_refuses_unregistered_session(self, config):
+        bot = _bot(config)
+        update = _update()
+        with patch(f"{_CMD}.safe_deliver", new_callable=AsyncMock) as deliver:
+            await bot.cmd_tell(update, _context(["stray-tmux", "hi"]))
+        deliver.assert_not_awaited()
+        assert "Unknown agent" in update.message.reply_text.await_args.args[0]
+
     async def test_unauthorized_ignored(self, config):
         bot = _bot(config)
         update = _update(chat_id=999)
@@ -136,6 +144,14 @@ class TestTopicRouting:
         d.assert_not_called()
         assert "Usage" in update.message.reply_text.await_args.args[0]
 
+    async def test_catch_all_topic_refuses_unregistered_session(self, config):
+        bot = _bot(config, topic_routes={43: CATCH_ALL_TOPIC})
+        update = _update("stray-tmux: run tests", thread_id=43)
+        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as deliver:
+            await bot.handle_topic_message(update, MagicMock())
+        deliver.assert_not_awaited()
+        assert "Unknown agent" in update.message.reply_text.await_args.args[0]
+
     async def test_unmapped_topic_ignored(self, config):
         bot = _bot(config)
         with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
@@ -169,6 +185,22 @@ class TestStartStop:
             await bot.cmd_stop_agent(update, _context(["ike"]))
         update.message.reply_text.assert_awaited_once_with("Stopped `ike`", parse_mode="Markdown")
 
+    async def test_stop_refuses_unregistered_session(self, config):
+        bot = _bot(config)
+        update = _update()
+        with patch(f"{_CMD}.stop_agent", new_callable=AsyncMock) as stop:
+            await bot.cmd_stop_agent(update, _context(["stray-tmux"]))
+        stop.assert_not_awaited()
+        assert "Unknown agent" in update.message.reply_text.await_args.args[0]
+
+    async def test_stop_refuses_backbone_session(self, config):
+        bot = _bot(config)
+        update = _update()
+        with patch(f"{_CMD}.stop_agent", new_callable=AsyncMock) as stop:
+            await bot.cmd_stop_agent(update, _context([config.backbone.session_name]))
+        stop.assert_not_awaited()
+        assert "Refusing" in update.message.reply_text.await_args.args[0]
+
 
 class TestPlans:
     async def test_approve_disabled_by_default(self, config):
@@ -178,6 +210,18 @@ class TestPlans:
             await bot.cmd_approve(update, _context(["ike"]))
         approve.assert_not_called()
         assert "disabled" in update.message.reply_text.await_args.args[0]
+
+    async def test_approve_refuses_unregistered_session(self, config):
+        telegram = TelegramConfig(allowed_chat_ids=(ALLOWED_CHAT,))
+        cfg = replace(
+            config, telegram=telegram, security=SecurityConfig(allow_remote_plan_control=True)
+        )
+        bot = TelegramService(cfg, db=AsyncMock())
+        update = _update()
+        with patch(f"{_CMD}.approve_plan", new_callable=AsyncMock) as approve:
+            await bot.cmd_approve(update, _context(["stray-tmux"]))
+        approve.assert_not_awaited()
+        assert "Unknown agent" in update.message.reply_text.await_args.args[0]
 
     async def test_approve_sends_keys_when_enabled(self, config):
         telegram = TelegramConfig(allowed_chat_ids=(ALLOWED_CHAT,))

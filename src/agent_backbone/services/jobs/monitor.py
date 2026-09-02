@@ -78,7 +78,6 @@ async def monitor_agents(
         active_sessions = set(await list_sessions())
         if not active_sessions:
             log.debug("No tmux sessions active")
-            return {}
 
         states = await read_states(config, active_sessions)
         await sync_states(db, states)

@@ -397,6 +397,39 @@ class TestTeardown:
         assert store.forgotten == ["research-coordinator", "research-scout-1"]
         assert (await db.swarms.get("research"))["status"] == "done"
 
+    @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=False)
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=True)
+    async def test_failed_member_stop_preserves_worktree_and_registration(
+        self, _exists, _stop, remove_worktree, db, tmp_path
+    ):
+        config, repo_dir = _swarm_config(tmp_path)
+        worktree = repo_dir / ".backbone" / "swarms" / "research"
+        await db.swarms.create(
+            "research",
+            repo="acme/app",
+            issue_number=7,
+            initiator="simon",
+            coordinator="research-coordinator",
+            branch="swarm/research",
+            worktree_dir=str(worktree),
+        )
+        store = _FakeStore(config)
+        store.registered = [
+            AgentSpec(
+                name="research-coordinator",
+                dir=str(worktree),
+                tags=("swarm:research", "role:coordinator"),
+            )
+        ]
+
+        with pytest.raises(SwarmError, match="could not stop swarm member"):
+            await teardown_for_issue(config, db, store, "acme/app", 7)
+
+        remove_worktree.assert_not_awaited()
+        assert store.forgotten == []
+        assert (await db.swarms.get("research"))["status"] == "active"
+
     async def test_no_swarm_for_issue_is_none(self, db, tmp_path):
         config, _ = _swarm_config(tmp_path)
         assert await teardown_for_issue(config, db, _FakeStore(config), "acme/app", 99) is None

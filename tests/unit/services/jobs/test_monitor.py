@@ -376,6 +376,19 @@ class TestMonitorAgents:
         drain.assert_awaited_once()
         pend.assert_not_called()
 
-    async def test_no_sessions_short_circuits(self, config, db):
-        with patch(f"{_MON}.list_sessions", new_callable=AsyncMock, return_value=[]):
-            assert await monitor_agents(config, db, AsyncMock()) == {}
+    async def test_no_sessions_still_detects_agents_that_went_offline(self, config, db):
+        gh = AsyncMock()
+        with (
+            patch(f"{_MON}.list_sessions", new_callable=AsyncMock, return_value=[]),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock) as offline,
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock),
+            patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}) as drain,
+            patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}),
+        ):
+            assert await monitor_agents(config, db, gh) == {}
+
+        offline.assert_awaited_once_with(config, set(), db, gh)
+        drain.assert_awaited_once()

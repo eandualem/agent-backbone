@@ -24,7 +24,7 @@ Four things, each of which the agents can do among themselves once the backbone 
 - **Delegation.** GitHub Issues are the task list. An issue opened in an agent's repository is that agent's work; a `for:<agent>` label routes an issue to a specific agent; comments return to whoever opened it; closing an issue hands the agent its next one. An orchestrator is simply an agent that watches several repositories.
 - **Teams.** When a task benefits from parallel work, an agent creates a swarm: a coordinator plus members on the runtimes and models it chooses, sharing one worktree and branch, finishing in a pull request. When the issue closes, the swarm is torn down and the branch remains.
 
-Every agent the backbone starts is told at launch who it is and how to use all of this, so agents can start other agents, subscribe to repositories, message each other and form teams without a person in the loop. You can watch any session at any time, or step in.
+By default, each new agent session the backbone starts is briefed at launch on who it is and how to use all of this, so agents can start other agents, subscribe to repositories, message each other and form teams without a person in the loop. (A resumed session keeps its earlier conversation and is not briefed again; a plain `shell` agent gets no brief; `agents.inject_brief` turns the brief off.) You can watch any session at any time, or step in.
 
 > **Status:** early release. The core — state detection, safe delivery, GitHub routing, swarms, Telegram, the API — is tested and has been exercised against live Claude Code, Codex, OpenCode and Deep Code sessions. [Status and roadmap](https://github.com/eandualem/agent-backbone/blob/main/docs/status-and-roadmap.md) records what is verified and what is not.
 
@@ -91,7 +91,8 @@ Any CLI that runs in a terminal can be an agent; how much the backbone can do fo
 | `opencode` | ✅ (no trust dialog) | ✅ first prompt | ✅ terminal | ✅ verified | ✅ |
 | `deepcode` (Deep Code, DeepSeek) | ✅ (no trust dialog) | ✅ `-p` | ✅ terminal | ✅ verified | pending |
 | `gemini` | ✅ `--skip-trust` | ✅ first prompt | ✅ terminal | unverified¹ | — |
-| `aider`, `shell` | — | first message | terminal, best effort | untested | — |
+| `aider` | — | first message | terminal, best effort | untested | — |
+| `shell` | — | none | terminal, best effort | — | — |
 
 ¹ Gemini CLI 0.46 completes Google OAuth and then refuses personal accounts ("no longer supported for Gemini Code Assist for individuals"); the backbone reports such a session as `waiting_for_human`. Delivery to a signed-in Gemini session (e.g. `GEMINI_API_KEY`) has not been tested yet. Deep Code is `@vegamo/deepcode-cli`, the community CLI DeepSeek's docs point to; its permission dialog has not been captured yet, so `agent approve` refuses it until then.
 

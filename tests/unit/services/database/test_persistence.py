@@ -127,6 +127,19 @@ class TestDeliveryTracking:
         failed = await db.deliveries.failed()
         assert len(failed) == 0
 
+    async def test_get_failed_deliveries_returns_only_latest_retryable_attempt(self, db):
+        """Historical blocked attempts must not multiply work on every retry tick."""
+        await db.deliveries.record(
+            issue_number=42, target_entity="ike", session_name="ike", outcome="offline"
+        )
+        latest = await db.deliveries.record(
+            issue_number=42, target_entity="ike", session_name="ike", outcome="agent_working"
+        )
+
+        failed = await db.deliveries.failed()
+
+        assert [row["id"] for row in failed] == [latest]
+
     async def test_get_failed_deliveries_includes_unsuperseded(self, db):
         """A failed delivery for entity A is not superseded by entity B's retried row."""
         await db.deliveries.record(

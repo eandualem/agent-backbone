@@ -18,12 +18,13 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from agent_backbone import __version__
 from agent_backbone.base import LifecycleManager
 from agent_backbone.config import BackboneConfig, bootstrap_config
 
 log = logging.getLogger(__name__)
 
-API_VERSION = "2.0.0"
+API_VERSION = __version__  # the package version is the API version
 
 
 def _register_jobs(app: FastAPI):
@@ -92,7 +93,7 @@ async def lifespan(app: FastAPI):
     from agent_backbone.services.database import BackboneDB
     from agent_backbone.services.github import GitHubClient
     from agent_backbone.services.integrations import build_integrations
-    from agent_backbone.services.swarm import teardown_for_issue
+    from agent_backbone.services.swarm import SwarmError, teardown_for_issue
 
     boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
     data_dir = boot.data_dir
@@ -140,9 +141,15 @@ async def lifespan(app: FastAPI):
     # closed via "Closes #N" -> teardown). Handed to ingest as a hook so
     # routing never imports the packages above it.
     async def _swarm_teardown(repo: str, issue_number: int) -> None:
-        name = await teardown_for_issue(
-            app.state.config, app.state.db, app.state.agent_store, repo, issue_number
-        )
+        try:
+            name = await teardown_for_issue(
+                app.state.config, app.state.db, app.state.agent_store, repo, issue_number
+            )
+        except SwarmError as exc:
+            # A member that would not stop keeps its worktree; the swarm stays
+            # active for `backbone swarm disband` once the session is dealt with.
+            log.error("Swarm teardown for %s#%s failed: %s", repo, issue_number, exc)
+            return
         if name:
             log.info("Swarm '%s' completed with %s#%s", name, repo, issue_number)
 

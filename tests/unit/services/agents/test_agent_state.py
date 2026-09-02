@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
+from agent_backbone.config import AgentsConfig
 from agent_backbone.services.agents import (
     AgentState,
+    agent_state,
     find_outgoing_comment,
     get_agent_state,
     has_commented_on_issue,
@@ -248,6 +251,17 @@ class TestInferStateFromPane:
 
 
 class TestGetAgentState:
+    async def test_configured_runtime_guides_terminal_fallback(self, config):
+        spec = replace(config.agents.get("ike"), runtime="gemini")
+        configured = replace(config, agents=AgentsConfig({**config.agents.specs, "ike": spec}))
+        pane = "Generating response\nesc to cancel"
+
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value=pane):
+            result = await agent_state(configured, "ike")
+
+        assert result.state == AgentState.BUSY
+        assert "(gemini)" in result.evidence[-1]
+
     async def test_fresh_push_preferred(self, tmp_path):
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "busy", "issue": 42, "ts": time.time()}))
