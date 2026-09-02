@@ -20,12 +20,17 @@ class TestTopics:
 
 
 class TestDocs:
-    def test_shipped_docs_listed_with_summaries(self):
+    def test_every_docs_page_is_listed_with_a_summary(self):
+        # Whatever is under docs/ in the repository (minus the README index)
+        # is exactly what an installed package must be able to print.
+        from pathlib import Path
+
+        repo_docs = Path(__file__).resolve().parents[3] / "docs"
+        expected = {p.stem for p in repo_docs.glob("*.md")} - {"README"}
+        assert expected  # the repository's docs/ was found
         pages = list_docs()
-        names = {p["name"] for p in pages}
-        assert {"getting-started", "concepts", "how-it-works", "cli"} <= names
+        assert {p["name"] for p in pages} == expected
         assert all(p["summary"] for p in pages)
-        assert "README" not in names  # the index is the listing itself
 
     def test_get_doc_returns_markdown(self):
         assert get_doc("getting-started").startswith("# Getting started")

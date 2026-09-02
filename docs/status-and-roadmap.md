@@ -34,9 +34,10 @@ Honest inventory of what works, what is missing, and what is next. Updated
   `tell <swarm>` reaching the coordinator ([Swarms](swarms.md)).
 - A unit suite that runs with no services (SQLite in memory, tmux mocked) in
   under ten seconds; `make check` is the CI gate (GitHub Actions on 3.11–3.13).
-- Packaging: published to PyPI on version tags; the wheel carries the
-  documentation (`backbone docs`) and the agent playbooks (`backbone help`),
-  so an agent can install and set the backbone up from the package alone.
+- Packaging: published to PyPI by a manual workflow (never on a push or
+  merge), which then tags `v<version>`; the wheel carries the documentation
+  (`backbone docs`) and the agent playbooks (`backbone help`), so an agent
+  can install and set the backbone up from the package alone.
 
 ## Missing on purpose (not yet built)
 
