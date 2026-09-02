@@ -54,7 +54,7 @@ def _running_bot(
     bot._running = True
     if discovery is not None:
         bot._discovery = discovery
-    _topics._last_failure.clear()
+    _topics._failed_groups.clear()
     return bot, fake
 
 

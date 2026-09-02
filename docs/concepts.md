@@ -76,7 +76,7 @@ replaces it, and a visible prompt clears it). **Hooks** the runtime itself
 runs (Claude Code today) write `<data_dir>/state/<agent>.json` on every
 transition; a fresh hook state is authoritative. When there is no hook state or it is
 older than `timing.stale_threshold_seconds` (5 min), the backbone reads
-the **terminal** through the runtime's adapter (prompt visible, busy
+the **terminal** through the runtime's module (prompt visible, busy
 marker, permission prompt). Every reading keeps its **evidence**, shown by
 `backbone agent inspect`.
 
@@ -142,11 +142,11 @@ Background loops inside the backbone process:
 
 | Job | Every | Does |
 |---|---|---|
-| `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, stall and dead-session reports, plan-waiting alerts, copy-mode clear, queue drain, next pending issue to idle agents, Socket.IO snapshot |
+| `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, read every agent's state once and mirror it to the database, stall and dead-session reports, plan-waiting alerts, copy-mode clear, queue drain, next pending issue to idle agents, Socket.IO snapshot |
 | `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
 | `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
 | `github-backfill` | once at startup | webhook intake only: catch up on what happened while the backbone was down |
-| `prune` | 6 h | delete old deliveries and events |
+| `prune` | 6 h | delete old deliveries and events; rotate the hook action log |
 
 ## What the backbone does not decide
 

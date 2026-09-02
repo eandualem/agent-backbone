@@ -8,9 +8,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent_backbone import cli
-from agent_backbone.services.infrastructure import StartResult
+from agent_backbone.cli import setup
+from agent_backbone.services.agents import StartResult
 
-_DETECT_REPO = "agent_backbone.services.agent_store.detect_repo"
+_DETECT_REPO = "agent_backbone.services.agents.store.detect_repo"
 
 
 def _run(argv: list[str]) -> int:
@@ -28,7 +29,7 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
     monkeypatch.delenv("BACKBONE_AGENT", raising=False)
     # Never talk to a real backbone during tests
-    with patch("agent_backbone.cli._api_up", new_callable=AsyncMock, return_value=False):
+    with patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=False):
         yield tmp_path / "data"
 
 
@@ -79,7 +80,7 @@ class TestDoctor:
     def test_reports_missing_pieces(self, tmp_path, capsys):
         assert _run(["init"]) == 0
         assert _run(["agent", "set", "ghost", "dir=/nope"]) == 1  # unknown agent
-        with patch("agent_backbone.cli.shutil.which", return_value=None):
+        with patch("agent_backbone.cli.setup.shutil.which", return_value=None):
             code = _run(["doctor"])
         out = capsys.readouterr().out
         assert code == 1
@@ -88,27 +89,33 @@ class TestDoctor:
     def test_passes_with_valid_setup(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
         assert _run(["init"]) == 0
-        with patch("agent_backbone.cli.shutil.which", return_value="/usr/bin/tmux"):
+        with patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"):
             code = _run(["doctor"])
         assert code == 0
         assert "All good" in capsys.readouterr().out
 
 
 class TestAgentCommands:
+    @pytest.fixture(autouse=True)
+    def _runtimes_installed(self):
+        # CI runners have no claude binary; the launch itself is patched per test.
+        with patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True):
+            yield
+
     def test_start_discovers_agent_from_directory(self, tmp_path, capsys):
         assert _run(["init"]) == 0
         project = tmp_path / "my-app"
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(
                     ok=True, ready="ready", evidence=("terminal shows an empty prompt",)
                 ),
             ) as start,
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="acme/my-app",
             ),
@@ -130,12 +137,12 @@ class TestAgentCommands:
         monkeypatch.chdir(project)
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -152,12 +159,12 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -170,12 +177,12 @@ class TestAgentCommands:
         # A later bare start must reuse the recorded model.
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -194,12 +201,12 @@ class TestAgentCommands:
         old.mkdir(parents=True)
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ) as start,
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -232,12 +239,12 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ),
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -249,8 +256,13 @@ class TestAgentCommands:
         assert _run(["agent", "list"]) == 0
         assert "orch" in capsys.readouterr().out
         assert _run(["agent", "unwatch", "orch", "acme/web"]) == 0
-        assert _run(["agent", "forget", "orch"]) == 0
-        assert _run(["agent", "forget", "orch"]) == 1
+        with patch(
+            "agent_backbone.services.terminal.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            assert _run(["agent", "forget", "orch"]) == 0
+            assert _run(["agent", "forget", "orch"]) == 1
 
     def test_watch_defaults_to_own_session(self, tmp_path, monkeypatch, capsys):
         """Inside an agent session, the agent can watch repos without naming itself."""
@@ -259,12 +271,12 @@ class TestAgentCommands:
         project.mkdir()
         with (
             patch(
-                "agent_backbone.services.infrastructure.start_agent",
+                "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
                 return_value=StartResult(ok=True),
             ),
             patch(
-                "agent_backbone.services.agent_store.detect_repo",
+                _DETECT_REPO,
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -361,7 +373,7 @@ class TestSecrets:
     def test_set_prompts_when_value_omitted(self, _isolated_data_dir, monkeypatch):
         assert _run(["init"]) == 0
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-        monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "secret-from-prompt")
+        monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: "secret-from-prompt")
         assert _run(["secrets", "set", "GITHUB_TOKEN"]) == 0
         assert "GITHUB_TOKEN=secret-from-prompt" in (_isolated_data_dir / ".env").read_text()
 
@@ -389,3 +401,41 @@ class TestSecrets:
         monkeypatch.setattr("sys.stdin", io.StringIO("piped-token\n"))
         assert _run(["secrets", "set", "GITHUB_TOKEN"]) == 0
         assert "GITHUB_TOKEN=piped-token" in (_isolated_data_dir / ".env").read_text()
+
+
+class TestApiClient:
+    def test_loopback_is_http_and_anything_else_is_https(self):
+        from dataclasses import replace
+
+        from agent_backbone.cli import _common
+        from agent_backbone.config import BackboneSection, bootstrap_config
+
+        config = bootstrap_config()
+        assert _common.api_url(config, "/health").startswith("http://127.0.0.1:")
+        remote = replace(config, backbone=BackboneSection(host="backbone.internal", port=443))
+        assert _common.api_url(remote, "/health") == "https://backbone.internal:443/health"
+
+    async def test_non_json_body_is_wrapped(self, monkeypatch):
+        import httpx
+
+        from agent_backbone.cli import _common
+        from agent_backbone.config import bootstrap_config
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return None
+
+            async def request(self, *args, **kwargs):
+                return httpx.Response(502, text="Bad Gateway")
+
+        monkeypatch.setattr(httpx, "AsyncClient", _Client)
+        assert await _common.api(bootstrap_config(), "GET", "/x") == (
+            502,
+            {"detail": "Bad Gateway"},
+        )

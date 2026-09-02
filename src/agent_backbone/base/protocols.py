@@ -5,10 +5,9 @@ Defines structural contracts that components implement for lifecycle management.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 
-@runtime_checkable
 class LifecycleAware(Protocol):
     """Component that participates in managed startup/shutdown."""
 

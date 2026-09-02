@@ -78,7 +78,7 @@ async def disband_swarm_endpoint(
     db=Depends(get_db),
     store=Depends(get_agent_store),
 ):
-    swarm = await db.get_swarm(name)
+    swarm = await db.swarms.get(name)
     if swarm is None:
         raise HTTPException(status_code=404, detail=f"unknown swarm '{name}'")
     if swarm["status"] != "active":

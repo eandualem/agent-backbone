@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.config import DeliveryConfig
+from agent_backbone.config import TimingConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.routing import get_session_intelligence, safe_deliver
 from agent_backbone.services.routing._resolution import (
@@ -40,7 +40,7 @@ _COPY = "agent_backbone.services.terminal._copy_mode"
 @pytest.fixture(autouse=True)
 def _patch_tmux_runtime_env():
     with patch(
-        "agent_backbone.services.terminal._adapters.query_environment_var",
+        "agent_backbone.services.runtimes.query_environment_var",
         new_callable=AsyncMock,
         return_value=None,
     ):
@@ -58,7 +58,7 @@ def _patch_list_sessions(sessions: list[str]):
 
 
 def _patch_query_format_vars(vars_dict: dict[str, str]):
-    return patch(f"{_INTEL}.query_format_vars", new_callable=AsyncMock, return_value=vars_dict)
+    return patch(f"{_COPY}.query_format_vars", new_callable=AsyncMock, return_value=vars_dict)
 
 
 def _patch_get_agent_state(snap: StateSnapshot):
@@ -106,7 +106,7 @@ class TestGetSessionIntelligence:
             patch(f"{_COPY}.asyncio.sleep", new_callable=AsyncMock),
             _patch_get_agent_state(_IDLE_SNAP),
             patch(
-                "agent_backbone.services.terminal._adapters.TerminalAdapter.exit_copy_mode",
+                f"{_COPY}.cancel_copy_mode",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as exit_copy,
@@ -128,7 +128,7 @@ class TestGetSessionIntelligence:
             patch(f"{_COPY}.asyncio.sleep", new_callable=AsyncMock),
             _patch_get_agent_state(_IDLE_SNAP),
             patch(
-                "agent_backbone.services.terminal._adapters.TerminalAdapter.exit_copy_mode",
+                f"{_COPY}.cancel_copy_mode",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -180,7 +180,7 @@ class TestGetSessionIntelligence:
             _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
             _patch_get_agent_state(snap),
             patch(
-                "agent_backbone.services.terminal._adapters.TerminalAdapter.exit_copy_mode",
+                f"{_COPY}.cancel_copy_mode",
                 new_callable=AsyncMock,
             ) as exit_copy,
         ):
@@ -197,13 +197,13 @@ class TestGetSessionIntelligence:
         assert profile.current_issue == 42
 
     async def test_settling(self, config):
-        config = replace(config, delivery=DeliveryConfig(grace_period_seconds=5))
+        config = replace(config, timing=TimingConfig(grace_period_seconds=5))
         with _online():
             profile = await get_session_intelligence("ike", config, idle_since=time.monotonic() - 1)
         assert profile.intelligence == SessionIntelligence.SETTLING
 
     async def test_settling_elapsed(self, config):
-        config = replace(config, delivery=DeliveryConfig(grace_period_seconds=1))
+        config = replace(config, timing=TimingConfig(grace_period_seconds=1))
         with _online():
             profile = await get_session_intelligence(
                 "ike", config, idle_since=time.monotonic() - 10
@@ -240,7 +240,7 @@ class TestResolveEntitySession:
 
 
 def _issue_kwargs(**extra):
-    base = dict(repo="example/orchestration", issue_number=42, target_entity="ike", flow_name="t")
+    base = dict(repo="example/orchestration", issue_number=42, target_entity="ike", source="t")
     base.update(extra)
     return base
 
@@ -257,13 +257,13 @@ class TestSafeDeliver:
         with _patch_list_sessions([]):
             result = await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
         assert result == "offline"
-        mock_db.enqueue_message.assert_called_once_with(
+        mock_db.queue.enqueue.assert_called_once_with(
             session_name="ike",
             message="Hello",
             issue_number=42,
             target_entity="ike",
             delivery_kind="issue",
-            flow_name="t",
+            source="t",
             repo="example/orchestration",
         )
 
@@ -275,16 +275,16 @@ class TestSafeDeliver:
                 "Hi there",
                 config,
                 db=mock_db,
-                flow_name="api",
+                source="api",
                 delivery_kind="direct_message",
             )
         assert result == "delivered"
-        mock_db.record_delivery.assert_called_once_with(
-            None,
-            "ike",
-            "ike",
-            "delivered",
-            "api",
+        mock_db.deliveries.record.assert_called_once_with(
+            issue_number=None,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivered",
+            source="api",
             repo="",
             kind="direct_message",
             preview="Hi there",
@@ -311,7 +311,7 @@ class TestSafeDeliver:
                 "ike", "Hello", config, db=mock_db, delivery_kind="direct_message"
             )
         assert result == "human_typing"
-        mock_db.enqueue_message.assert_called_once()
+        mock_db.queue.enqueue.assert_called_once()
 
     async def test_agent_working_blocks_even_priority(self, config):
         with _online(snap=_BUSY_SNAP):
@@ -325,17 +325,17 @@ class TestSafeDeliver:
                 "Hello",
                 config,
                 db=mock_db,
-                flow_name="api-messages",
+                source="api-messages",
                 delivery_kind="direct_message",
             )
         assert result == "agent_working"
-        mock_db.enqueue_message.assert_called_once_with(
+        mock_db.queue.enqueue.assert_called_once_with(
             session_name="ike",
             message="Hello",
             issue_number=None,
             target_entity=None,
             delivery_kind="direct_message",
-            flow_name="api-messages",
+            source="api-messages",
             repo="",
         )
 
@@ -350,19 +350,19 @@ class TestSafeDeliver:
         with _online(), _patch_send_message(False):
             result = await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
         assert result == "delivery_failed"
-        mock_db.enqueue_message.assert_called_once()
+        mock_db.queue.enqueue.assert_called_once()
 
     async def test_unknown_state_still_delivers(self, config):
         mock_db = AsyncMock()
         with _online(snap=_UNKNOWN_SNAP), _patch_send_message(True):
             result = await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
         assert result == "delivered"
-        mock_db.enqueue_message.assert_not_called()
-        mock_db.finalize_delivery_attempt.assert_called_once()
+        mock_db.queue.enqueue.assert_not_called()
+        mock_db.deliveries.finalize.assert_called_once()
 
     async def test_enforce_issue_queue_blocks_duplicate_issue(self, config):
         mock_db = AsyncMock()
-        mock_db.query_deliveries.return_value = [
+        mock_db.deliveries.query.return_value = [
             {
                 "repo": "example/orchestration",
                 "issue_number": 42,
@@ -375,11 +375,11 @@ class TestSafeDeliver:
             "ike", "Hello", config, db=mock_db, enforce_issue_queue=True, **_issue_kwargs()
         )
         assert result == "already_delivered"
-        mock_db.record_delivery.assert_not_called()
+        mock_db.deliveries.record.assert_not_called()
 
     async def test_enforce_issue_queue_blocks_until_acknowledged(self, config):
         mock_db = AsyncMock()
-        mock_db.query_deliveries.side_effect = [
+        mock_db.deliveries.query.side_effect = [
             [],
             [
                 {
@@ -391,16 +391,16 @@ class TestSafeDeliver:
                 }
             ],
         ]
-        mock_db.is_acknowledged.return_value = False
+        mock_db.acks.exists.return_value = False
         result = await safe_deliver(
             "ike", "Hello", config, db=mock_db, enforce_issue_queue=True, **_issue_kwargs()
         )
         assert result == "awaiting_ack"
-        mock_db.record_delivery.assert_not_called()
+        mock_db.deliveries.record.assert_not_called()
 
     async def test_same_number_in_other_repo_does_not_block(self, config):
         mock_db = AsyncMock()
-        mock_db.query_deliveries.side_effect = [
+        mock_db.deliveries.query.side_effect = [
             [],
             [
                 {
@@ -412,7 +412,7 @@ class TestSafeDeliver:
                 }
             ],
         ]
-        mock_db.is_acknowledged.return_value = False
+        mock_db.acks.exists.return_value = False
         with _online(), _patch_send_message(True):
             result = await safe_deliver(
                 "ike",
@@ -427,7 +427,7 @@ class TestSafeDeliver:
 
     async def test_safe_deliver_claims_before_send(self, config):
         mock_db = AsyncMock()
-        mock_db.query_deliveries.return_value = []
+        mock_db.deliveries.query.return_value = []
         order: list[str] = []
 
         async def _claim(*args, **kwargs):
@@ -441,20 +441,20 @@ class TestSafeDeliver:
         async def _finalize(*args, **kwargs):
             order.append("finalize")
 
-        mock_db.claim_delivery_attempt = AsyncMock(side_effect=_claim)
-        mock_db.finalize_delivery_attempt = AsyncMock(side_effect=_finalize)
+        mock_db.deliveries.claim = AsyncMock(side_effect=_claim)
+        mock_db.deliveries.finalize = AsyncMock(side_effect=_finalize)
         with _online(), patch(f"{_DELIV}.send_message", new_callable=AsyncMock, side_effect=_send):
             result = await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
         assert result == "delivered"
         assert order == ["claim", "send", "finalize"]
-        mock_db.finalize_delivery_attempt.assert_awaited_once_with(123, "delivered")
-        assert mock_db.claim_delivery_attempt.await_args.kwargs["repo"] == "example/orchestration"
-        mock_db.record_delivery.assert_not_called()
+        mock_db.deliveries.finalize.assert_awaited_once_with(123, "delivered")
+        assert mock_db.deliveries.claim.await_args.kwargs["repo"] == "example/orchestration"
+        mock_db.deliveries.record.assert_not_called()
 
     async def test_safe_deliver_claim_conflict_returns_already_delivered(self, config):
         mock_db = AsyncMock()
-        mock_db.query_deliveries.return_value = []
-        mock_db.claim_delivery_attempt.return_value = None
+        mock_db.deliveries.query.return_value = []
+        mock_db.deliveries.claim.return_value = None
         with (
             patch(f"{_DELIV}.get_session_intelligence", new_callable=AsyncMock) as intel,
             patch(f"{_DELIV}.send_message", new_callable=AsyncMock) as send,
@@ -471,12 +471,12 @@ class TestSafeDeliver:
                 "ike", "Hello", config, db=mock_db, delivery_kind="comment", **_issue_kwargs()
             )
         assert result == "delivered"
-        mock_db.record_delivery.assert_called_once_with(
-            42,
-            "ike",
-            "ike",
-            "delivered",
-            "t",
+        mock_db.deliveries.record.assert_called_once_with(
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivered",
+            source="t",
             repo="example/orchestration",
             kind="comment",
             preview="Hello",
@@ -498,9 +498,9 @@ class TestSafeDeliver:
                 "ike", "Comment", config, db=mock_db, delivery_kind="comment", **_issue_kwargs()
             )
         assert result == "agent_working"
-        mock_db.enqueue_message.assert_called_once()
-        assert mock_db.record_delivery.await_args.args[3] == "agent_working"
-        assert mock_db.record_delivery.await_args.kwargs["kind"] == "comment"
+        mock_db.queue.enqueue.assert_called_once()
+        assert mock_db.deliveries.record.await_args.kwargs["outcome"] == "agent_working"
+        assert mock_db.deliveries.record.await_args.kwargs["kind"] == "comment"
 
     async def test_settling_defers(self, config):
         with patch(
@@ -520,8 +520,8 @@ class TestSafeDeliver:
             comment = await safe_deliver(
                 "ike", "Comment", config, db=mock_db, delivery_kind="comment", **_issue_kwargs()
             )
-            mock_db.enqueue_message.assert_called_once()
-            mock_db.enqueue_message.reset_mock()
+            mock_db.queue.enqueue.assert_called_once()
+            mock_db.queue.enqueue.reset_mock()
             issue = await safe_deliver("ike", "Issue", config, db=mock_db, **_issue_kwargs())
-            mock_db.enqueue_message.assert_not_called()
+            mock_db.queue.enqueue.assert_not_called()
         assert comment == "settling" and issue == "settling"

@@ -5,9 +5,9 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from agent_backbone.config import sqlite_url
 from agent_backbone.services.database import build_engine
 from agent_backbone.services.database.backbone_db import BackboneDB, metadata
-from agent_backbone.services.database.interface import sqlite_url
 from tests.support import queue_row
 
 _EXPECTED_TABLES = {
@@ -54,55 +54,63 @@ def test_metadata_indexes_match_expected():
 async def test_memory_db_bypasses_migrations():
     async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
         assert await db.check_connection()
-        row_id = await db.record_delivery(1, "ike", "ike", "delivered")
+        row_id = await db.deliveries.record(
+            issue_number=1, target_entity="ike", session_name="ike", outcome="delivered"
+        )
         assert row_id > 0
-        assert len(await db.query_deliveries(issue_number=1)) == 1
+        assert len(await db.deliveries.query(issue_number=1)) == 1
 
 
 async def test_file_db_runs_migrations(tmp_path):
     """File-based BackboneDB creates the schema and alembic_version via start()."""
-    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
-    db = BackboneDB(engine)
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
     await db.start()
     try:
         assert await db.check_connection()
-        assert await db.record_delivery(42, "ike", "ike", "delivered") > 0
+        assert (
+            await db.deliveries.record(
+                issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
+            )
+            > 0
+        )
     finally:
-        db._engine = None
-        await engine.dispose()
+        await db.stop()
 
 
 async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
     """_run_migrations() upgrades a fresh persistent database from the initial revision."""
-    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / 'fresh.db'}")
-    db = BackboneDB(engine)
+    url = f"sqlite+aiosqlite:///{tmp_path / 'fresh.db'}"
+    db = BackboneDB(url)
+    db._engine = build_engine(url)  # migrations alone, without start()'s create_all
     try:
         await db._run_migrations()
-        assert await db.record_delivery(7, "ike", "ike", "delivered") > 0
-        await db.enqueue_message("ike", "hello", delivery_kind="direct_message")
+        assert (
+            await db.deliveries.record(
+                issue_number=7, target_entity="ike", session_name="ike", outcome="delivered"
+            )
+            > 0
+        )
+        await db.queue.enqueue(session_name="ike", message="hello", delivery_kind="direct_message")
         assert (await queue_row(db, 1))["status"] == "pending"
     finally:
-        db._engine = None
-        await engine.dispose()
+        await db.stop()
 
 
 async def test_file_db_idempotent_start(tmp_path):
-    db_path = tmp_path / "idem.db"
-    engine = build_engine(f"sqlite+aiosqlite:///{db_path}")
-    db = BackboneDB(engine)
+    url = f"sqlite+aiosqlite:///{tmp_path / 'idem.db'}"
+    db = BackboneDB(url)
     await db.start()
-    await db.record_delivery(42, "ike", "ike", "delivered")
-    db._engine = None
-    await engine.dispose()
+    await db.deliveries.record(
+        issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
+    )
+    await db.stop()
 
-    engine2 = build_engine(f"sqlite+aiosqlite:///{db_path}")
-    db2 = BackboneDB(engine2)
+    db2 = BackboneDB(url)
     await db2.start()
     try:
-        assert len(await db2.query_deliveries(issue_number=42)) == 1
+        assert len(await db2.deliveries.query(issue_number=42)) == 1
     finally:
-        db2._engine = None
-        await engine2.dispose()
+        await db2.stop()
 
 
 def test_sqlite_url_points_into_data_dir(tmp_path):
@@ -120,25 +128,19 @@ async def test_unknown_stamped_revision_is_restamped_after_squash(tmp_path):
     exists (the squash was regenerated) must re-stamp to head, not crash."""
     from sqlalchemy import text
 
-    from agent_backbone.services.database import BackboneDB, build_engine
-
     url = f"sqlite+aiosqlite:///{tmp_path}/old.db"
-    engine = build_engine(url)
-    db = BackboneDB(engine)
+    db = BackboneDB(url)
     await db.start()  # creates schema and stamps head
-    async with engine.begin() as conn:
+    async with db.engine.begin() as conn:
         await conn.execute(text("UPDATE alembic_version SET version_num = 'deadbeef0000'"))
-    db._engine = None
-    await engine.dispose()
+    await db.stop()
 
-    engine2 = build_engine(url)
-    db2 = BackboneDB(engine2)
+    db2 = BackboneDB(url)
     await db2.start()  # must not raise
-    async with engine2.begin() as conn:
+    async with db2.engine.begin() as conn:
         stored = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
     assert stored != "deadbeef0000"
-    db2._engine = None
-    await engine2.dispose()
+    await db2.stop()
 
 
 async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_path):
@@ -147,9 +149,9 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
 
     from agent_backbone.services.database.backbone_db import _repair_schema
 
-    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
-    db = BackboneDB(engine)
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
     await db.start()
+    engine = db.engine
     try:
         async with engine.begin() as conn:
             # An older install: no dedup rule for PR notices, so the queue grew copies.
@@ -181,7 +183,96 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
         assert statuses == ["pending", "expired", "expired"]
         assert "uq_mq_message_dedup" in names
         # ...and the rule now holds for new rows.
-        assert await db.enqueue_message("ike", "same notice", delivery_kind="pull_request") == -1
+        assert (
+            await db.queue.enqueue(
+                session_name="ike", message="same notice", delivery_kind="pull_request"
+            )
+            == -1
+        )
     finally:
-        db._engine = None
-        await engine.dispose()
+        await db.stop()
+
+
+async def test_restamp_migrates_the_previous_squash_columns(tmp_path):
+    """A database from the 387112cb1193 squash has flow_name/flow_run_id, not source."""
+    from sqlalchemy import inspect, text
+
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
+    await db.start()
+    try:
+        async with db.engine.begin() as conn:
+            for table in ("deliveries", "message_queue"):
+                await conn.execute(text(f"ALTER TABLE {table} RENAME COLUMN source TO flow_name"))
+            await conn.execute(
+                text("ALTER TABLE deliveries ADD COLUMN flow_run_id TEXT NOT NULL DEFAULT ''")
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO deliveries (kind, repo, issue_number, target_entity, "
+                    "session_name, outcome, flow_name, flow_run_id, preview, created_at) VALUES "
+                    "('issue', 'acme/app', 1, 'ike', 'ike', 'delivered', 'issue-dispatcher', '', "
+                    "'', '2026-09-01T00:00:00.000000Z')"
+                )
+            )
+            await conn.execute(text("UPDATE alembic_version SET version_num = '387112cb1193'"))
+    finally:
+        await db.stop()
+
+    db2 = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
+    await db2.start()
+    try:
+        async with db2.engine.connect() as conn:
+            columns = {
+                table: {
+                    c["name"]
+                    for c in await conn.run_sync(lambda sync, t=table: inspect(sync).get_columns(t))
+                }
+                for table in ("deliveries", "message_queue")
+            }
+        assert "source" in columns["deliveries"] and "flow_name" not in columns["deliveries"]
+        assert "flow_run_id" not in columns["deliveries"]
+        assert "source" in columns["message_queue"]
+        (row,) = await db2.deliveries.query(issue_number=1)
+        assert row["source"] == "issue-dispatcher"
+        # and new writes work
+        await db2.deliveries.record(
+            issue_number=2, target_entity="ike", session_name="ike", outcome="delivered", source="x"
+        )
+    finally:
+        await db2.stop()
+
+
+async def test_restamp_on_old_sqlite_keeps_the_dead_column(tmp_path, monkeypatch):
+    """SQLite before 3.35 cannot DROP COLUMN: the start must still succeed."""
+    import sqlite3
+
+    from sqlalchemy import inspect, text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'old.db'}"
+    db = BackboneDB(url)
+    await db.start()
+    try:
+        async with db.engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE deliveries RENAME COLUMN source TO flow_name"))
+            await conn.execute(
+                text("ALTER TABLE deliveries ADD COLUMN flow_run_id TEXT NOT NULL DEFAULT ''")
+            )
+            await conn.execute(text("UPDATE alembic_version SET version_num = '387112cb1193'"))
+    finally:
+        await db.stop()
+
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 34, 0))
+    db2 = BackboneDB(url)
+    await db2.start()  # must not raise
+    try:
+        async with db2.engine.connect() as conn:
+            columns = {
+                c["name"]
+                for c in await conn.run_sync(lambda s: inspect(s).get_columns("deliveries"))
+            }
+        assert "source" in columns and "flow_run_id" in columns  # renamed, dead one kept
+        await db2.deliveries.record(
+            issue_number=1, target_entity="ike", session_name="ike", outcome="delivered", source="x"
+        )
+    finally:
+        await db2.stop()

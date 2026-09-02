@@ -4,28 +4,34 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-from agent_backbone.config import BackboneConfig
-from agent_backbone.models import parse_from_tag
-from agent_backbone.services.agents import get_agent_state, has_commented_on_issue, should_deliver
-from agent_backbone.services.database import BackboneDB
+from agent_backbone.models import SUCCESS_OUTCOMES, DeliveryOutcome, parse_from_tag
+from agent_backbone.services.agents import AgentState, has_commented_on_issue
 from agent_backbone.services.routing import (
     format_next_issue_notification,
     is_acknowledged,
-    issue_repo,
     list_open_queue_for_target,
     queue_scope,
     safe_deliver,
 )
 
+if TYPE_CHECKING:
+    from agent_backbone.config import BackboneConfig
+    from agent_backbone.services.database import BackboneDB
+    from agent_backbone.services.github import GitHubClient
+    from agent_backbone.services.jobs.monitor import AgentStates
+
 log = logging.getLogger(__name__)
+
+SOURCE = "agent-monitor"
 
 
 async def deliver_pending_issues(
     config: BackboneConfig,
-    active_sessions: set[str],
+    states: AgentStates,
     db: BackboneDB,
-    gh: object,
+    gh: GitHubClient,
 ) -> dict[str, str]:
     """Deliver the next pending issue to every idle agent. Returns agent -> action."""
     result: dict[str, str] = {}
@@ -40,7 +46,7 @@ async def deliver_pending_issues(
             if await is_acknowledged(db, repo, issue_number, name, name):
                 return True
             if has_commented_on_issue(issue_number, name, config.action_log_path, repo=repo):
-                await db.record_acknowledgment(issue_number, name, repo=repo)
+                await db.acks.record(issue_number, name, repo=repo)
                 return True
             key = (repo, issue_number)
             acknowledged = comment_ack_cache.get(key)
@@ -55,7 +61,7 @@ async def deliver_pending_issues(
                 }
                 comment_ack_cache[key] = acknowledged
             if name in acknowledged:
-                await db.record_acknowledgment(issue_number, name, repo=repo)
+                await db.acks.record(issue_number, name, repo=repo)
                 return True
         except Exception:
             log.exception(
@@ -67,7 +73,7 @@ async def deliver_pending_issues(
         repo: str, issue_number: int, target: str, session: str
     ) -> bool:
         try:
-            recent = await db.query_deliveries(
+            recent = await db.deliveries.query(
                 issue_number=issue_number,
                 target_entity=target,
                 session_name=session,
@@ -76,13 +82,13 @@ async def deliver_pending_issues(
                 kind="issue",
             )
             for row in recent or []:
-                if (row.get("outcome") or "") not in ("delivered", "retried"):
+                if (row.get("outcome") or "") not in SUCCESS_OUTCOMES:
                     continue
                 delivered_at = datetime.fromisoformat(row["created_at"])
                 if delivered_at.tzinfo is None:
                     delivered_at = delivered_at.replace(tzinfo=UTC)
                 age = (datetime.now(UTC) - delivered_at).total_seconds()
-                if age < config.monitor.interval_seconds * 2:
+                if age < config.timing.monitor_interval_seconds * 2:
                     return True
         except Exception:
             log.exception(
@@ -90,14 +96,8 @@ async def deliver_pending_issues(
             )
         return False
 
-    for name in config.agents.names:
-        if name not in active_sessions:
-            continue
-
-        snapshot = await get_agent_state(
-            config.state_dir, name, config.agent_state.stale_threshold_seconds
-        )
-        if not should_deliver(snapshot.state):
+    for name, snapshot in states.items():
+        if snapshot.state != AgentState.IDLE:  # only a confirmed idle agent gets new work
             result[name] = "deferred"
             log.debug("Deferred delivery to %s (state=%s)", name, snapshot.state.value)
             continue
@@ -109,7 +109,7 @@ async def deliver_pending_issues(
         scope = queue_scope(pending_issues)
 
         for candidate in pending_issues:
-            repo = issue_repo(candidate)
+            repo = candidate.repo_full_name
             if await acknowledged(repo, candidate.number, name):
                 continue
             if await was_recently_delivered(repo, candidate.number, name, name):
@@ -124,15 +124,15 @@ async def deliver_pending_issues(
                 repo=repo,
                 issue_number=candidate.number,
                 target_entity=name,
-                flow_name="agent-monitor",
+                source=SOURCE,
                 enforce_issue_queue=True,
                 queue_scope=scope,
             )
-            if outcome == "delivered":
+            if outcome == DeliveryOutcome.DELIVERED:
                 result[name] = f"delivered_#{candidate.number}"
                 log.info("Delivered pending %s#%d to %s", repo, candidate.number, name)
             else:
-                result[name] = outcome
+                result[name] = outcome.value
             break
         else:
             result[name] = "no_deliverable"

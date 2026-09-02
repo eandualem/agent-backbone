@@ -1,4 +1,4 @@
-"""Agent store — the known agents, backed by the database.
+"""The agent store — the known agents, backed by the database.
 
 Agents are discovered, not declared: the first ``agent start`` from a
 directory records it. The store keeps an in-memory snapshot
@@ -22,7 +22,9 @@ from agent_backbone.config import (
     BackboneConfig,
     agents_from_rows,
     build_config,
+    validate_setting,
 )
+from agent_backbone.git import detect_repo
 
 if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
@@ -30,52 +32,12 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
-_GITHUB_REMOTE_RE = re.compile(
-    r"(?:github\.com[:/])(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
-)
 
 
 def sanitize_name(raw: str) -> str:
     """Turn a directory name into a valid tmux session / label value."""
     cleaned = _NAME_RE.sub("-", raw.strip()).strip("-.")
     return cleaned or "agent"
-
-
-def parse_github_remote(url: str) -> str:
-    """``owner/name`` from an https or ssh GitHub remote, else ``""``."""
-    match = _GITHUB_REMOTE_RE.search(url.strip())
-    return f"{match.group('owner')}/{match.group('repo')}" if match else ""
-
-
-async def detect_repo(directory: Path) -> str:
-    """The GitHub ``owner/name`` of a directory's ``origin`` remote, if any.
-
-    Runs ``git`` as a subprocess without blocking the event loop (``discover``
-    is called from request handlers).
-    """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            "-C",
-            str(directory),
-            "remote",
-            "get-url",
-            "origin",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-    except OSError:
-        return ""
-    try:
-        async with asyncio.timeout(5):
-            stdout, _ = await proc.communicate()
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return ""
-    if proc.returncode != 0:
-        return ""
-    return parse_github_remote(stdout.decode())
 
 
 class AgentStore:
@@ -122,8 +84,8 @@ class AgentStore:
     async def refresh(self) -> BackboneConfig:
         """Re-read settings and agents from the database and publish."""
         async with self._lock:
-            self._settings = await self._db.get_all_settings()
-            self._agents = agents_from_rows(await self._db.list_agents())
+            self._settings = await self._db.settings.all()
+            self._agents = agents_from_rows(await self._db.agents.list())
             self._config = build_config(
                 self._data_dir, settings=self._settings, agents=self._agents
             )
@@ -166,7 +128,7 @@ class AgentStore:
             name=agent_name,
             dir=str(path),
             runtime=runtime
-            or (existing.runtime if existing else self.config.agents_section.default_runtime),
+            or (existing.runtime if existing else self.config.launch.default_runtime),
             model=model if model is not None else (existing.model if existing else None),
             # Keep the recorded repo only for a record that lived elsewhere (a
             # moved project); rediscovering the same checkout trusts what the
@@ -181,7 +143,7 @@ class AgentStore:
 
     async def register(self, spec: AgentSpec) -> AgentSpec:
         """Insert or update an agent and publish the new snapshot."""
-        await self._db.upsert_agent(
+        await self._db.agents.upsert(
             spec.name,
             dir=spec.dir,
             runtime=spec.runtime,
@@ -192,7 +154,7 @@ class AgentStore:
             description=spec.description,
         )
         for repo in spec.watches:
-            await self._db.add_watch(spec.name, repo)
+            await self._db.agents.add_watch(spec.name, repo)
         await self.refresh()
         return self._agents.get(spec.name) or spec
 
@@ -221,34 +183,32 @@ class AgentStore:
         return await self.register(spec)
 
     async def forget(self, name: str) -> bool:
-        removed = await self._db.delete_agent(name)
+        removed = await self._db.agents.delete(name)
         await self.refresh()
         return removed
 
     async def watch(self, name: str, repo: str) -> AgentSpec:
         if name not in self._agents:
             raise KeyError(name)
-        await self._db.add_watch(name, repo)
+        await self._db.agents.add_watch(name, repo)
         await self.refresh()
         return self._agents.get(name)  # type: ignore[return-value]
 
     async def unwatch(self, name: str, repo: str) -> bool:
-        removed = await self._db.remove_watch(name, repo)
+        removed = await self._db.agents.remove_watch(name, repo)
         await self.refresh()
         return removed
 
     async def touch_started(self, name: str) -> None:
-        await self._db.touch_agent_started(name)
+        await self._db.agents.touch_started(name)
 
     # --- Settings ---
 
     async def set_setting(self, key: str, value) -> BackboneConfig:
-        from agent_backbone.config import validate_setting
-
         clean = validate_setting(key, value)
-        await self._db.set_setting(key, clean)
+        await self._db.settings.set(key, clean)
         return await self.refresh()
 
     async def unset_setting(self, key: str) -> BackboneConfig:
-        await self._db.delete_setting(key)
+        await self._db.settings.delete(key)
         return await self.refresh()

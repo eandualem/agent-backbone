@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 from agent_backbone.config import AgentsConfig, AgentSpec
-from agent_backbone.models import EventType, IssueData, IssueEvent, ParsedLabels
+from agent_backbone.models import DeliveryOutcome, EventType, IssueData, IssueEvent, ParsedLabels
 from agent_backbone.services.routing._dedup import clear as clear_dedup
 from agent_backbone.services.routing._lifecycle import find_next_issue, on_issue_closed
 from tests.conftest import TEST_REPO, make_config
@@ -38,7 +38,7 @@ def _patch_find_next(issue):
     return patch(f"{_LC}.find_next_issue", new_callable=AsyncMock, return_value=issue)
 
 
-def _patch_deliver(outcome: str = "delivered"):
+def _patch_deliver(outcome: DeliveryOutcome = DeliveryOutcome.DELIVERED):
     return patch(f"{_LC}.safe_deliver", new_callable=AsyncMock, return_value=outcome)
 
 
@@ -64,12 +64,12 @@ class TestOnIssueClosed:
         assert result["opener:ike"] == "delivered"
 
     async def test_queue_empty(self, config):
-        with _patch_session_exists(True), _patch_find_next(None):
+        with _patch_session_exists(True), _patch_find_next(None), _patch_deliver():
             result = await on_issue_closed(make_close_event(["feynman"]), config, AsyncMock())
         assert result["feynman"] == "queue_empty"
 
     async def test_session_offline(self, config):
-        with _patch_session_exists(False):
+        with _patch_session_exists(False), _patch_deliver():
             result = await on_issue_closed(make_close_event(["feynman"]), config, AsyncMock())
         assert result["feynman"] == "offline"
 
@@ -113,7 +113,7 @@ class TestOnIssueClosed:
             _patch_session_exists(True),
             _patch_find_next(_next_issue()) as mock_find,
             _patch_deliver(),
-            patch(f"{_LC}._check_dependencies", new_callable=AsyncMock) as mock_deps,
+            patch(f"{_LC}.on_dependency_resolved", new_callable=AsyncMock) as mock_deps,
         ):
             result = await on_issue_closed(event, config, mock_gh, db=AsyncMock())
 
@@ -128,7 +128,8 @@ class TestOnIssueClosed:
         with (
             _patch_session_exists(True),
             _patch_find_next(None),
-            patch(f"{_LC}._check_dependencies", new_callable=AsyncMock) as mock_deps,
+            _patch_deliver(),
+            patch(f"{_LC}.on_dependency_resolved", new_callable=AsyncMock) as mock_deps,
         ):
             await on_issue_closed(make_close_event(["feynman"]), config, mock_gh, db=AsyncMock())
         mock_deps.assert_awaited_once()
@@ -162,10 +163,10 @@ class TestOnIssueClosed:
 
     async def test_purges_queued_messages_on_close(self, config):
         mock_db = AsyncMock()
-        mock_db.purge_pending_for_issue = AsyncMock(return_value=2)
-        with _patch_session_exists(True), _patch_find_next(None):
+        mock_db.queue.purge_for_issue = AsyncMock(return_value=2)
+        with _patch_session_exists(True), _patch_find_next(None), _patch_deliver():
             result = await on_issue_closed(
                 make_close_event(["feynman"]), config, AsyncMock(), db=mock_db
             )
-        mock_db.purge_pending_for_issue.assert_awaited_once_with(10, repo=TEST_REPO)
+        mock_db.queue.purge_for_issue.assert_awaited_once_with(10, repo=TEST_REPO)
         assert result["feynman"] == "queue_empty"

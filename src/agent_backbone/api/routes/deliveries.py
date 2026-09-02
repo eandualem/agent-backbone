@@ -24,7 +24,7 @@ async def list_deliveries(
     db: BackboneDB = Depends(get_db),
 ):
     """Query delivery records with optional filters."""
-    rows = await db.query_deliveries(
+    rows = await db.deliveries.query(
         issue_number=issue_number,
         target_entity=target_entity,
         session_name=session,
@@ -43,7 +43,7 @@ async def list_failed_deliveries(
     db: BackboneDB = Depends(get_db),
 ):
     """Get deliveries with failed outcomes (offline, delivery_failed, deferred)."""
-    rows = await db.get_failed_deliveries(limit=limit)
+    rows = await db.deliveries.failed(limit=limit)
     items = [DeliveryRecord(**row) for row in rows]
     return ListEnvelope(items=items, total=len(items))
 
@@ -51,7 +51,7 @@ async def list_failed_deliveries(
 @router.get("/deliveries/stats", response_model=DeliveryStats)
 async def get_delivery_stats(db: BackboneDB = Depends(get_db)):
     """Aggregate delivery statistics by outcome."""
-    rows = await db.get_delivery_stats()
+    rows = await db.deliveries.stats()
 
     stats = DeliveryStats()
     for row in rows:

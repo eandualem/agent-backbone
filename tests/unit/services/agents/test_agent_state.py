@@ -13,12 +13,10 @@ from agent_backbone.services.agents import (
     has_commented_on_issue,
     infer_state_from_pane,
     read_state_file,
-    should_deliver,
+    rotate_action_log,
 )
-from agent_backbone.services.agents.interface import StateService
 
 _INF = "agent_backbone.services.agents._inference"
-_IFACE = "agent_backbone.services.agents.interface"
 
 
 class TestReadStateFile:
@@ -128,9 +126,6 @@ class TestWaitingForHuman:
         assert AgentState.parse("waiting_for_human") == AgentState.WAITING_FOR_HUMAN
         assert AgentState.parse("sleeping") == AgentState.UNKNOWN
         assert AgentState.parse(None) == AgentState.UNKNOWN
-
-    def test_should_deliver_waiting(self):
-        assert should_deliver(AgentState.WAITING_FOR_HUMAN) is False
 
 
 class TestInferStateFromPane:
@@ -422,37 +417,6 @@ class TestGetAgentState:
         assert result.source == "pull"
 
 
-class TestStateService:
-    async def test_get_state_is_the_reconciled_reading(self, tmp_path):
-        state_file = tmp_path / "ike.json"
-        state_file.write_text(json.dumps({"state": "busy", "ts": time.time()}))
-        svc = StateService(state_dir=str(tmp_path))
-        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="random output"):
-            snap = await svc.get_state("ike")
-        assert snap.state == AgentState.BUSY
-        assert snap.source == "push"
-
-    def test_read_state_is_the_hook_file_alone(self, tmp_path):
-        svc = StateService(state_dir=str(tmp_path))
-        assert svc.read_state("ike") is None
-        (tmp_path / "ike.json").write_text(json.dumps({"state": "idle", "ts": 1.0}))
-        assert svc.read_state("ike").state == AgentState.IDLE
-
-
-class TestShouldDeliver:
-    def test_idle_always_delivers(self):
-        assert should_deliver(AgentState.IDLE) is True
-
-    def test_starting_deferred(self):
-        assert should_deliver(AgentState.STARTING) is False
-
-    def test_unknown_deferred(self):
-        assert should_deliver(AgentState.UNKNOWN) is False
-
-    def test_busy_never_delivers(self):
-        assert should_deliver(AgentState.BUSY) is False
-
-
 class TestStartedAt:
     def test_started_at_parsed_from_state_file(self, tmp_path):
         """State file with started_at field is parsed correctly."""
@@ -545,6 +509,39 @@ class TestHasCommentedOnIssue:
         )
 
 
+class TestRotateActionLog:
+    def _log(self, tmp_path, lines: int):
+        path = tmp_path / "actions.jsonl"
+        path.write_text(
+            "".join(
+                json.dumps({"ts": float(i), "session": "ike", "action": "comment", "issue": i})
+                + "\n"
+                for i in range(lines)
+            )
+        )
+        return path
+
+    def test_keeps_the_newest_entries(self, tmp_path):
+        path = self._log(tmp_path, 50)
+        assert rotate_action_log(path, keep_lines=10) == 40
+        kept = [json.loads(ln) for ln in path.read_text().splitlines()]
+        assert [e["issue"] for e in kept] == list(range(40, 50))
+
+    def test_short_log_untouched(self, tmp_path):
+        path = self._log(tmp_path, 5)
+        assert rotate_action_log(path, keep_lines=10) == 0
+        assert len(path.read_text().splitlines()) == 5
+
+    def test_missing_log_is_noop(self, tmp_path):
+        assert rotate_action_log(tmp_path / "nope.jsonl") == 0
+
+    def test_lookup_reads_only_the_tail(self, tmp_path):
+        """A large log is not read whole: an old entry beyond the tail is invisible."""
+        path = self._log(tmp_path, 20000)
+        assert has_commented_on_issue(19999, "ike", path) is True
+        assert has_commented_on_issue(0, "ike", path) is False
+
+
 class TestStartingMarker:
     async def test_fresh_starting_marker_is_trusted(self, tmp_path):
         import time
@@ -596,3 +593,11 @@ class TestStartingMarker:
         (tmp_path / "ike.json").write_text(json.dumps({"state": "idle", "ts": time.time() - 900}))
         write_starting_marker(tmp_path, "ike", time.time())
         assert read_state_file(tmp_path, "ike").state == AgentState.STARTING
+
+
+def test_rotation_tolerates_invalid_utf8(tmp_path):
+    path = tmp_path / "actions.jsonl"
+    lines = b"".join(b'{"issue": %d}\n' % i for i in range(20))
+    path.write_bytes(lines + b"\xff\xfe not json\n")
+    assert rotate_action_log(path, keep_lines=5) == 16
+    assert len(path.read_text(errors="replace").splitlines()) == 5

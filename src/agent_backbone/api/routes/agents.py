@@ -12,8 +12,7 @@ from agent_backbone.api.deps import (
     get_agent_store,
     get_config,
     get_db,
-    get_state_service,
-    get_tmux_service,
+    get_feed,
     registered_agent_or_404,
 )
 from agent_backbone.api.models import (
@@ -33,30 +32,26 @@ from agent_backbone.api.models import (
     StateUpdateRequest,
     WatchRequest,
 )
-from agent_backbone.api.session_updates import (
-    build_session_snapshot,
-    emit_sessions_update,
-    get_cached_session_snapshot,
-    invalidate_session_snapshot_caches,
-)
-from agent_backbone.config import AgentSpec, BackboneConfig
-from agent_backbone.services.agent_store import AgentStore
-from agent_backbone.services.agents import StateService, read_state_file, write_state_file
-from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.infrastructure import (
-    RUNTIME_COMMANDS,
-    RUNTIME_DISPLAY_NAMES,
+from agent_backbone.api.session_updates import SessionFeed
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.agents import (
+    AgentStore,
+    agent_state,
     approve_agent,
-    runtime_available,
-    start_agent,
+    read_state_file,
+    write_state_file,
 )
+from agent_backbone.services.agents.operations import StartRequest, resolve_agent, start_resolved
+from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import get_session_intelligence
+from agent_backbone.services.runtimes import RUNTIMES, sanitize_pane_content
 from agent_backbone.services.terminal import (
     SESSION_FORMAT_STR,
-    TmuxService,
     capture_pane,
+    list_sessions,
     query_format_vars,
-    sanitize_pane_content,
+    session_exists,
+    stop_session,
 )
 
 log = logging.getLogger(__name__)
@@ -64,36 +59,17 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["agents"])
 
 
-async def _broadcast(request: Request, config: BackboneConfig, tmux_svc: TmuxService) -> None:
-    await invalidate_session_snapshot_caches()
-    await emit_sessions_update(
-        getattr(request.app.state, "sio", None),
-        request.app.state.config if hasattr(request.app.state, "config") else config,
-        getattr(request.app.state, "state_service", None),
-        tmux_svc,
-    )
-
-
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
-async def list_agents(
-    config: BackboneConfig = Depends(get_config),
-    state_svc: StateService = Depends(get_state_service),
-    tmux_svc: TmuxService = Depends(get_tmux_service),
-):
+async def list_agents(feed: SessionFeed = Depends(get_feed)):
     """Known agents (plus other live tmux sessions) with live state."""
-    agents = await get_cached_session_snapshot(
-        lambda: build_session_snapshot(config, state_svc, tmux_svc)
-    )
+    agents = await feed.snapshot()
     return ListEnvelope(items=agents, total=len(agents))
 
 
 @router.get("/agents/{session}/state", response_model=AgentStateDetail)
-async def get_agent_state_endpoint(
-    session: str,
-    state_svc: StateService = Depends(get_state_service),
-):
+async def get_agent_state_endpoint(session: str, config: BackboneConfig = Depends(get_config)):
     """Reconciled state for one agent."""
-    snapshot = await state_svc.get_state(session)
+    snapshot = await agent_state(config, session)
     return AgentStateDetail(
         session=session,
         state=snapshot.state.value,
@@ -114,19 +90,17 @@ async def inspect_agent(
     name: str,
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
-    tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Everything the backbone knows about an agent, with the evidence behind it."""
     spec = config.agents.get(name)
-    online = await tmux_svc.session_exists(name)
+    online = await session_exists(name)
     profile = await get_session_intelligence(name, config)
 
-    tmux_vars: dict = dict(profile.tmux_vars)
+    tmux_vars: dict = {}
     pane_tail: list[str] = []
     if online:
         try:
-            if not tmux_vars:
-                tmux_vars = await query_format_vars(name, SESSION_FORMAT_STR)
+            tmux_vars = await query_format_vars(name, SESSION_FORMAT_STR)
             pane = await capture_pane(name, lines=40)
             pane_tail = [
                 ln.rstrip() for ln in sanitize_pane_content(pane).splitlines() if ln.strip()
@@ -140,7 +114,7 @@ async def inspect_agent(
         state_age = round(time.time() - push.timestamp, 1)
 
     try:
-        recent = await db.query_deliveries(session_name=name, limit=10)
+        recent = await db.deliveries.query(session_name=name, limit=10)
     except Exception:
         recent = []
 
@@ -171,64 +145,55 @@ async def inspect_agent(
 async def list_runtimes():
     """Supported runtimes and whether their binary is installed."""
     return [
-        RuntimeInfo(id=k, display_name=RUNTIME_DISPLAY_NAMES[k], available=runtime_available(k))
-        for k in RUNTIME_COMMANDS
+        RuntimeInfo(id=rt.id, display_name=rt.display_name, available=rt.available())
+        for rt in RUNTIMES.values()
     ]
 
 
 async def _start(
-    request: Request,
-    spec: AgentSpec,
-    req: AgentStartRequest,
-    store: AgentStore,
-    tmux_svc: TmuxService,
+    request: Request, req: StartRequest, store: AgentStore, feed: SessionFeed
 ) -> AgentStartResponse:
-    config: BackboneConfig = request.app.state.config
-    runtime = req.runtime or spec.runtime
-    model = req.model if req.model is not None else spec.model
-
-    # A runtime/model override at start becomes the agent's recorded setting,
-    # so the next bare `agent start NAME` reuses it.
-    changes: dict = {}
-    if req.runtime and req.runtime != spec.runtime:
-        changes["runtime"] = req.runtime
-    if req.model is not None and req.model != spec.model:
-        changes["model"] = req.model
-    if changes:
-        spec = await store.update(spec.name, **changes)
-
-    if runtime not in RUNTIME_COMMANDS:
-        raise HTTPException(status_code=400, detail=f"Unknown runtime: {runtime}")
-    if not runtime_available(runtime):
-        raise HTTPException(status_code=400, detail=f"Runtime '{runtime}' binary not found")
-    if not spec.path.is_dir():
-        raise HTTPException(status_code=400, detail=f"Directory does not exist: {spec.path}")
-
-    result = await start_agent(
-        spec,
-        config,
-        runtime=runtime,
-        model=model,
-        resume=req.resume,
-        db=request.app.state.db,
-        wait=req.wait,
-    )
-    response = AgentStartResponse(
+    try:
+        spec = await resolve_agent(store, req)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"'{exc.args[0]}' is not a known agent — pass dir to register it",
+        ) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        result = await start_resolved(
+            store, request.app.state.config, spec, req, db=request.app.state.db
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result.ok and not result.already_running:
+        await feed.refresh_and_emit()
+    return AgentStartResponse(
         ok=result.ok and result.ready != "exited",
         session=spec.name,
         name=spec.name,
         working_directory=str(spec.path),
-        runtime=runtime,
-        model=model,
+        runtime=req.runtime or spec.runtime,
+        model=req.model if req.model is not None else spec.model,
         repo=spec.repo,
         already_existed=result.already_running,
         ready=result.ready,
         evidence=list(result.evidence),
     )
-    if result.ok and not result.already_running:
-        await store.touch_started(spec.name)
-        await _broadcast(request, config, tmux_svc)
-    return response
+
+
+def _request(body: AgentStartRequest, *, name: str | None = None) -> StartRequest:
+    return StartRequest(
+        name=name or body.name,
+        directory=body.dir,
+        runtime=body.runtime,
+        model=body.model,
+        resume=body.resume,
+        watch=tuple(body.watch),
+        wait=body.wait,
+    )
 
 
 @router.post("/agents/start", response_model=AgentStartResponse)
@@ -236,29 +201,10 @@ async def start_agent_discover(
     request: Request,
     body: AgentStartRequest,
     store: AgentStore = Depends(get_agent_store),
-    tmux_svc: TmuxService = Depends(get_tmux_service),
+    feed: SessionFeed = Depends(get_feed),
 ):
     """Start an agent from a directory (discovering it) or by name."""
-    directory = body.dir
-    if directory:
-        spec = await store.discover(
-            directory, name=body.name, runtime=body.runtime, model=body.model
-        )
-        if body.watch:
-            spec = AgentSpec(
-                **{**spec.__dict__, "watches": tuple(dict.fromkeys([*spec.watches, *body.watch]))}
-            )
-        spec = await store.register(spec)
-    elif body.name:
-        spec = store.agents.get(body.name)
-        if spec is None:
-            raise HTTPException(status_code=404, detail=f"Unknown agent '{body.name}' — pass dir")
-        if body.watch:
-            for repo in body.watch:
-                spec = await store.watch(body.name, repo)
-    else:
-        raise HTTPException(status_code=400, detail="name or dir is required")
-    return await _start(request, spec, body, store, tmux_svc)
+    return await _start(request, _request(body), store, feed)
 
 
 @router.post("/agents/{session}/start", response_model=AgentStartResponse)
@@ -267,38 +213,24 @@ async def start_known_agent(
     session: str,
     body: AgentStartRequest | None = None,
     store: AgentStore = Depends(get_agent_store),
-    tmux_svc: TmuxService = Depends(get_tmux_service),
+    feed: SessionFeed = Depends(get_feed),
 ):
     """Start a known agent by name (``dir`` in the body registers it first)."""
-    req = body or AgentStartRequest()
-    directory = req.dir
-    if directory:
-        spec = await store.register(
-            await store.discover(directory, name=session, runtime=req.runtime, model=req.model)
-        )
-    else:
-        spec = store.agents.get(session)
-        if spec is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"'{session}' is not a known agent — pass dir to register it",
-            )
-    return await _start(request, spec, req, store, tmux_svc)
+    return await _start(request, _request(body or AgentStartRequest(), name=session), store, feed)
 
 
 @router.post("/agents/{session}/stop", response_model=AgentStopResponse)
 async def stop_agent(
-    request: Request,
     session: str,
     config: BackboneConfig = Depends(get_config),
-    tmux_svc: TmuxService = Depends(get_tmux_service),
+    feed: SessionFeed = Depends(get_feed),
 ):
     """Stop an agent tmux session."""
     if session == config.backbone.session_name:
         raise HTTPException(status_code=400, detail="Refusing to stop the backbone's own session")
-    ok = await tmux_svc.stop_session(session)
+    ok = await stop_session(session)
     if ok:
-        await _broadcast(request, config, tmux_svc)
+        await feed.refresh_and_emit()
     return AgentStopResponse(ok=ok, session=session)
 
 
@@ -307,12 +239,11 @@ _APPROVE_STATUS = {"not_waiting": 409, "unsupported": 400, "offline": 404, "fail
 
 @router.post("/agents/{name}/approve", response_model=AgentApproveResponse)
 async def approve_agent_prompt(
-    request: Request,
     name: str,
     body: AgentApproveRequest | None = None,
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
-    tmux_svc: TmuxService = Depends(get_tmux_service),
+    feed: SessionFeed = Depends(get_feed),
 ):
     """Answer the permission prompt a registered agent's runtime is showing.
 
@@ -337,7 +268,7 @@ async def approve_agent_prompt(
             detail={"outcome": outcome, "evidence": evidence},
         )
     dialog = next((ln for ln in evidence[1:] if ln), "")
-    event_id = await db.record_event(
+    event_id = await db.events.record(
         delivery_id=f"approval:{uuid.uuid4().hex}",
         source="backbone",
         event_type="approval",
@@ -345,9 +276,9 @@ async def approve_agent_prompt(
         summary=f"{approved_by} approved a {spec.runtime} permission prompt on {name}: {dialog}",
     )
     if event_id is not None:
-        await db.mark_event_processed(event_id, "approved")
+        await db.events.mark_processed(event_id, "approved")
     log.info("Permission prompt on '%s' approved by %s", name, approved_by)
-    await _broadcast(request, config, tmux_svc)
+    await feed.refresh_and_emit()
     return AgentApproveResponse(
         ok=True, session=name, outcome=outcome, evidence=evidence, approved_by=approved_by
     )
@@ -390,13 +321,9 @@ async def unwatch_repo(name: str, body: WatchRequest, store: AgentStore = Depend
 
 
 @router.delete("/agents/{name}")
-async def forget_agent(
-    name: str,
-    store: AgentStore = Depends(get_agent_store),
-    tmux_svc: TmuxService = Depends(get_tmux_service),
-):
+async def forget_agent(name: str, store: AgentStore = Depends(get_agent_store)):
     """Forget an agent (its session must be stopped first)."""
-    if await tmux_svc.session_exists(name):
+    if await session_exists(name):
         raise HTTPException(status_code=409, detail=f"'{name}' is running — stop it first")
     removed = await store.forget(name)
     if not removed:
@@ -405,9 +332,9 @@ async def forget_agent(
 
 
 @router.get("/sessions", response_model=list[str])
-async def get_sessions(tmux_svc: TmuxService = Depends(get_tmux_service)):
+async def get_sessions():
     """All active tmux sessions."""
-    return await tmux_svc.list_sessions()
+    return await list_sessions()
 
 
 @router.get("/sessions/{name}/terminal")
@@ -415,22 +342,21 @@ async def get_terminal_output(
     name: str,
     lines: int = Query(default=50, ge=1, le=500),
     config: BackboneConfig = Depends(get_config),
-    tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """Recent terminal output from a registered agent's session."""
     registered_agent_or_404(config, name)
-    output = await tmux_svc.capture_pane(name, lines=lines)
-    if not output and not await tmux_svc.session_exists(name):
+    output = await capture_pane(name, lines=lines)
+    if not output and not await session_exists(name):
         raise HTTPException(status_code=404, detail=f"Session '{name}' not found")
     return {"session": name, "lines": lines, "content": output}
 
 
 @router.post("/agents/{session}/state")
 async def post_agent_state(
-    request: Request,
     session: str,
     body: StateUpdateRequest,
     config: BackboneConfig = Depends(get_config),
+    feed: SessionFeed = Depends(get_feed),
 ):
     """Push an agent's state from outside — for runtimes the backbone ships no hook for.
 
@@ -449,5 +375,5 @@ async def post_agent_state(
         "plan_title": body.plan_title,
     }
     write_state_file(config.state_dir, session, record)
-    await _broadcast(request, config, getattr(request.app.state, "tmux_service", None))
+    await feed.refresh_and_emit()
     return {"ok": True, "session": session}

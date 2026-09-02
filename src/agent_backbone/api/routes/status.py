@@ -12,8 +12,6 @@ from agent_backbone.api.deps import (
     get_integrations,
     get_optional_github,
     get_scheduler,
-    get_state_service,
-    get_tmux_service,
 )
 from agent_backbone.api.models import (
     AgentConfigResponse,
@@ -25,12 +23,11 @@ from agent_backbone.api.models import (
 )
 from agent_backbone.api.session_updates import build_enriched_agent, listable_sessions
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents import StateService
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.integrations import Integrations
 from agent_backbone.services.scheduler import PeriodicScheduler
-from agent_backbone.services.terminal import TmuxService
+from agent_backbone.services.terminal import list_sessions
 
 log = logging.getLogger(__name__)
 
@@ -42,22 +39,20 @@ async def get_system_status(
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
     gh: GitHubClient | None = Depends(get_optional_github),
-    state_svc: StateService = Depends(get_state_service),
-    tmux_svc: TmuxService = Depends(get_tmux_service),
 ):
     """System-wide status digest: sessions, agents, deliveries."""
-    active = await tmux_svc.list_sessions()
+    active = await list_sessions()
     active_set = set(active)
 
     agents: list[EnrichedAgent] = [
-        await build_enriched_agent(session, config, active_set, state_svc)
+        await build_enriched_agent(session, config, active_set)
         for session in listable_sessions(config, active_set)
     ]
 
-    failed_rows = await db.get_failed_deliveries(limit=1000)
+    failed_rows = await db.deliveries.failed(limit=1000)
 
     try:
-        last_events = await db.last_event_time_by_repo()
+        last_events = await db.events.last_time_by_repo()
     except Exception:
         last_events = {}
     repos = [

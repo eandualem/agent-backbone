@@ -1,4 +1,4 @@
-"""Core tmux operations — session checks, message delivery, key sending, pane capture."""
+"""Core tmux operations — session checks, paste buffer, key sending, pane capture."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ async def session_exists(session_name: str) -> bool:
     return rc == 0
 
 
-async def _send_submit_key(session_name: str) -> bool:
+async def press_submit(session_name: str) -> bool:
     """Send Enter to submit the currently buffered prompt input."""
     rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, "Enter")
     if rc != 0:
@@ -73,7 +73,7 @@ async def _send_submit_key(session_name: str) -> bool:
     return True
 
 
-async def _send_escape_key(session_name: str) -> bool:
+async def press_escape(session_name: str) -> bool:
     """Send Escape to interrupt active work and expose queued input."""
     rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, "Escape")
     if rc != 0:
@@ -82,7 +82,7 @@ async def _send_escape_key(session_name: str) -> bool:
     return True
 
 
-async def _write_message_buffer(session_name: str, message: str) -> bool:
+async def paste_message(session_name: str, message: str) -> bool:
     """Paste a message into the tmux session input buffer."""
     if not await session_exists(session_name):
         log.warning("tmux session '%s' not found — notification dropped", session_name)
@@ -101,24 +101,6 @@ async def _write_message_buffer(session_name: str, message: str) -> bool:
         log.error("tmux paste-buffer failed for '%s': %s", session_name, stderr.decode())
         return False
     return True
-
-
-async def send_message(
-    session_name: str,
-    message: str,
-    *,
-    runtime_hint: str | None = None,
-) -> bool:
-    """Send a message to a tmux session via the runtime-specific adapter."""
-    from agent_backbone.services.terminal._adapters import get_terminal_adapter_for_session
-
-    pane_content = await capture_pane(session_name, lines=80)
-    adapter = await get_terminal_adapter_for_session(
-        session_name,
-        runtime_hint=runtime_hint,
-        pane_content=pane_content,
-    )
-    return await adapter.deliver_message(session_name, message)
 
 
 async def send_keys(session_name: str, keys: str) -> bool:

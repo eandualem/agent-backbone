@@ -4,17 +4,22 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._dependencies import on_dependency_resolved, sync_dependencies
-from agent_backbone.services.routing._lifecycle import _check_dependencies
 
 _DEP = "agent_backbone.services.routing._dependencies"
 
 
 def _make_issue(number: int, state: str = "closed", targets: list[str] | None = None) -> IssueData:
     labels = ParsedLabels(sender="ike", targets=targets or ["feynman"], issue_type="task")
-    return IssueData(number=number, title=f"[task] Issue #{number}", state=state, labels=labels)
+    return IssueData(
+        number=number,
+        repo_full_name="acme/app",
+        title=f"[task] Issue #{number}",
+        state=state,
+        labels=labels,
+    )
 
 
 class TestOnDependencyResolved:
@@ -26,7 +31,7 @@ class TestOnDependencyResolved:
     async def test_parent_found_all_resolved(self, config):
         parent = _make_issue(10, state="open", targets=["feynman"])
         async with BackboneDB.connect() as db:
-            await db.sync_dependencies(10, [20])
+            await db.dependencies.sync(10, [20])
             with (
                 patch(
                     f"{_DEP}.check_parent_resolved",
@@ -34,7 +39,9 @@ class TestOnDependencyResolved:
                     return_value={"parent": parent, "targets": ["feynman"]},
                 ),
                 patch(
-                    f"{_DEP}.safe_deliver", new_callable=AsyncMock, return_value="delivered"
+                    f"{_DEP}.safe_deliver",
+                    new_callable=AsyncMock,
+                    return_value=DeliveryOutcome.DELIVERED,
                 ) as d,
             ):
                 result = await on_dependency_resolved(20, "", config, db, AsyncMock())
@@ -44,7 +51,7 @@ class TestOnDependencyResolved:
 
     async def test_parent_found_some_open(self, config):
         async with BackboneDB.connect() as db:
-            await db.sync_dependencies(10, [20, 21])
+            await db.dependencies.sync(10, [20, 21])
             with patch(f"{_DEP}.check_parent_resolved", new_callable=AsyncMock, return_value=None):
                 result = await on_dependency_resolved(20, "", config, db, AsyncMock())
         assert result["parent_10"] == "still_blocked"
@@ -52,7 +59,7 @@ class TestOnDependencyResolved:
     async def test_unknown_target_not_delivered(self, config):
         parent = _make_issue(10, state="open", targets=["nobody"])
         async with BackboneDB.connect() as db:
-            await db.sync_dependencies(10, [20])
+            await db.dependencies.sync(10, [20])
             with (
                 patch(
                     f"{_DEP}.check_parent_resolved",
@@ -85,24 +92,6 @@ class TestCheckParentResolved:
 
 
 class TestLifecycleDependencyIntegration:
-    async def test_lifecycle_calls_dependency_tracker(self, config):
-        db, gh = AsyncMock(), AsyncMock()
-        with patch(
-            f"{_DEP}.on_dependency_resolved",
-            new_callable=AsyncMock,
-            return_value={"parents_checked": "0"},
-        ) as mock_dep:
-            await _check_dependencies(42, "acme/app", config, db, gh)
-        mock_dep.assert_called_once_with(42, "acme/app", config, db, gh)
-
-    async def test_lifecycle_dependency_error_isolated(self, config):
-        with patch(
-            f"{_DEP}.on_dependency_resolved",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("boom"),
-        ):
-            await _check_dependencies(42, "acme/app", config, AsyncMock(), AsyncMock())
-
     async def test_sync_dependencies_queries_each_agent(self, config):
         gh = AsyncMock()
         gh.list_issues = AsyncMock(return_value=[])
@@ -124,24 +113,24 @@ class TestLifecycleDependencyIntegration:
 class TestPersistenceDependencies:
     async def test_upsert_and_get_parents(self):
         async with BackboneDB.connect() as db:
-            await db.sync_dependencies(10, [20])
-            await db.sync_dependencies(11, [20])
-            assert sorted(await db.get_parents(20)) == [10, 11]
+            await db.dependencies.sync(10, [20])
+            await db.dependencies.sync(11, [20])
+            assert sorted(await db.dependencies.parents(20)) == [10, 11]
 
     async def test_no_parents(self):
         async with BackboneDB.connect() as db:
-            assert await db.get_parents(99) == []
+            assert await db.dependencies.parents(99) == []
 
     async def test_sync_dependencies(self):
         async with BackboneDB.connect() as db:
-            await db.sync_dependencies(10, [20, 21, 22])
-            assert 10 in await db.get_parents(20)
-            await db.sync_dependencies(10, [20, 21])
-            assert await db.get_parents(22) == []
-            assert 10 in await db.get_parents(20)
+            await db.dependencies.sync(10, [20, 21, 22])
+            assert 10 in await db.dependencies.parents(20)
+            await db.dependencies.sync(10, [20, 21])
+            assert await db.dependencies.parents(22) == []
+            assert 10 in await db.dependencies.parents(20)
 
     async def test_sync_empty_clears_all(self):
         async with BackboneDB.connect() as db:
-            await db.sync_dependencies(10, [20, 21])
-            await db.sync_dependencies(10, [])
-            assert await db.get_parents(20) == []
+            await db.dependencies.sync(10, [20, 21])
+            await db.dependencies.sync(10, [])
+            assert await db.dependencies.parents(20) == []

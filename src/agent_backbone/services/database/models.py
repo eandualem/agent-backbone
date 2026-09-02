@@ -123,8 +123,8 @@ class DeliveryORM(Base):
     target_entity: Mapped[str] = mapped_column(Text, nullable=False)
     session_name: Mapped[str] = mapped_column(Text, nullable=False)
     outcome: Mapped[str] = mapped_column(Text, nullable=False)
-    flow_name: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
-    flow_run_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    source: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    """Which code path made the attempt (``issue-dispatcher``, ``api-messages``, …)."""
     preview: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
@@ -204,7 +204,7 @@ class MessageQueueORM(Base):
     issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     target_entity: Mapped[str | None] = mapped_column(Text, nullable=True)
     delivery_kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="issue")
-    flow_name: Mapped[str | None] = mapped_column(Text, server_default="")
+    source: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     enqueued_at: Mapped[str] = mapped_column(Text, nullable=False)
     delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")

@@ -109,7 +109,8 @@ class DeliveryRecord(BaseModel):
     target_entity: str
     session_name: str
     outcome: str
-    flow_name: str = ""
+    source: str = ""
+    """Which code path made the attempt (``issue-dispatcher``, ``api-messages``, …)."""
     preview: str = ""
     created_at: str = ""
 

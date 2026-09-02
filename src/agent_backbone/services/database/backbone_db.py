@@ -1,14 +1,8 @@
-"""Database persistence — AsyncEngine connection lifecycle and query delegation.
-
-Uses SQLAlchemy AsyncEngine for connection pooling and dialect abstraction.
-Production receives the engine from DatabaseService (single pool).
-Tests use BackboneDB.connect() for standalone in-memory engines.
-"""
+"""Database persistence — engine lifecycle, migrations and query delegation."""
 
 from __future__ import annotations
 
 import logging
-from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,17 +11,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 import agent_backbone.services.database.models  # noqa: F401  (registers the ORM tables)
-from agent_backbone.services.database import (
-    _agents_repo,
-    _delivery_repo,
-    _events_repo,
-    _queue_repo,
-    _settings_repo,
-    _state_repo,
-    _swarms_repo,
-)
+from agent_backbone.services.database._acks_repo import AcknowledgementRepo
+from agent_backbone.services.database._agents_repo import AgentRepo
+from agent_backbone.services.database._delivery_repo import DeliveryRepo
+from agent_backbone.services.database._dependencies_repo import DependencyRepo
+from agent_backbone.services.database._events_repo import EventRepo
+from agent_backbone.services.database._queue_repo import QueueRepo
+from agent_backbone.services.database._settings_repo import SettingRepo
+from agent_backbone.services.database._state_repo import StateRepo
+from agent_backbone.services.database._swarms_repo import SwarmRepo
 from agent_backbone.services.database.base import Base
-from agent_backbone.services.database.interface import build_engine
+from agent_backbone.services.database.engine import build_engine, redact_url
 
 metadata = Base.metadata
 
@@ -41,18 +35,88 @@ _SUPERSEDED_INDEXES = ("uq_mq_comment_dedup", "uq_mq_dm_dedup")
 """Indexes earlier releases created that the model no longer has. Only these
 and the model's own are ever dropped — an index an operator added is theirs."""
 
+_RENAMED_COLUMNS = {"deliveries": {"flow_name": "source"}, "message_queue": {"flow_name": "source"}}
+"""Columns the previous squash spelled differently: renamed in place, data kept."""
+_DROPPED_COLUMNS = {"deliveries": ("flow_run_id",)}
+"""Columns the previous squash had and the model no longer has."""
+
+
+def _repair_columns(sync_conn) -> None:
+    """Rename, add and drop columns so a re-stamped database matches the model.
+
+    PostgreSQL supports all three statements. SQLite gained ``RENAME COLUMN``
+    in 3.25 and ``DROP COLUMN`` in 3.35; on an older system library the
+    rename falls back to add-and-copy and the dead column is left in place
+    (nullable and unused) rather than failing the start. Column *types* and
+    nullability are never altered.
+    """
+    from sqlalchemy import inspect
+
+    sqlite_version = _sqlite_version(sync_conn)
+    inspector = inspect(sync_conn)
+    for table in metadata.sorted_tables:
+        existing = {column["name"] for column in inspector.get_columns(table.name)}
+        for old, new in _RENAMED_COLUMNS.get(table.name, {}).items():
+            if old in existing and new not in existing:
+                if sqlite_version is None or sqlite_version >= (3, 25):
+                    sync_conn.execute(
+                        text(f"ALTER TABLE {table.name} RENAME COLUMN {old} TO {new}")
+                    )
+                    existing.discard(old)
+                else:  # SQLite < 3.25: add the new column and copy the values across
+                    sync_conn.execute(
+                        text(f"ALTER TABLE {table.name} ADD COLUMN {new} TEXT NOT NULL DEFAULT ''")
+                    )
+                    sync_conn.execute(text(f"UPDATE {table.name} SET {new} = {old}"))
+                sync_conn.execute(text(f"UPDATE {table.name} SET {new} = '' WHERE {new} IS NULL"))
+                existing.add(new)
+                log.info("Renamed %s.%s to %s (re-stamped database)", table.name, old, new)
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            default = column.server_default.arg if column.server_default is not None else None
+            clause = f"ALTER TABLE {table.name} ADD COLUMN {column.name} {column.type}"
+            if default is not None:
+                clause += f" NOT NULL DEFAULT '{default}'"
+            sync_conn.execute(text(clause))
+            log.info("Added %s.%s (re-stamped database)", table.name, column.name)
+        for old in _DROPPED_COLUMNS.get(table.name, ()):
+            if old not in existing:
+                continue
+            if sqlite_version is not None and sqlite_version < (3, 35):
+                log.info(
+                    "Leaving %s.%s in place: SQLite %s cannot drop columns (3.35 needed)",
+                    table.name,
+                    old,
+                    ".".join(map(str, sqlite_version)),
+                )
+                continue
+            sync_conn.execute(text(f"ALTER TABLE {table.name} DROP COLUMN {old}"))
+            log.info("Dropped %s.%s (re-stamped database)", table.name, old)
+
+
+def _sqlite_version(sync_conn) -> tuple[int, ...] | None:
+    """The SQLite library's version when the connection is SQLite, else None."""
+    if sync_conn.dialect.name != "sqlite":
+        return None
+    import sqlite3
+
+    return sqlite3.sqlite_version_info
+
 
 def _repair_schema(sync_conn) -> None:
-    """Bring an existing database's indexes up to the model on a re-stamp.
+    """Bring an existing database up to the model on a re-stamp.
 
-    Tables are stable pre-1.0, but index *predicates* have changed (the
-    ``kind = 'issue'`` guard on the delivery owner index, the one queue
-    dedup rule for every non-issue kind). A re-stamp is the only moment an
-    existing database meets a regenerated squash, so indexes are rebuilt
-    from the model here. Duplicate pending queue rows — the reason the
-    dedup index exists — are expired first so the unique index can be
+    Tables are stable pre-1.0, but columns and index *predicates* have
+    changed (``flow_name`` became ``source``; the ``kind = 'issue'`` guard
+    on the delivery owner index; the one queue dedup rule for every
+    non-issue kind). A re-stamp is the only moment an existing database
+    meets a regenerated squash, so columns are repaired and indexes are
+    rebuilt from the model here. Duplicate pending queue rows — the reason
+    the dedup index exists — are expired first so the unique index can be
     created.
     """
+    _repair_columns(sync_conn)
     sync_conn.execute(
         text(
             """UPDATE message_queue SET status = 'expired'
@@ -74,55 +138,76 @@ def _repair_schema(sync_conn) -> None:
 
 
 class BackboneDB:
-    """Async database for backbone persistence.
+    """The backbone's database: owns the engine, migrates on start, and holds
+    one repository per table family (``db.deliveries.record(...)``,
+    ``db.queue.enqueue(...)``, …).
 
     Usage (production — via LifecycleManager):
-        db = BackboneDB(database_service=service)
+        db = BackboneDB(url)
         await db.start()
         ...
         await db.stop()
 
     Usage (tests):
-        async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
-            await db.record_delivery(...)
+        async with BackboneDB.connect() as db:
+            await db.deliveries.record(...)
     """
 
-    def __init__(self, engine: AsyncEngine | None = None, *, database_service=None) -> None:
-        self._engine: AsyncEngine | None = engine
-        self._database_service = database_service
-        self._seen_deliveries: OrderedDict[str, bool] = OrderedDict()
+    def __init__(self, url: str) -> None:
+        self._url = url
+        self._engine: AsyncEngine | None = None
+        engine = lambda: self.engine  # noqa: E731 — the repos read the live engine
+        self.deliveries = DeliveryRepo(engine)
+        self.queue = QueueRepo(engine)
+        self.acks = AcknowledgementRepo(engine)
+        self.dependencies = DependencyRepo(engine)
+        self.events = EventRepo(engine)
+        self.settings = SettingRepo(engine)
+        self.agents = AgentRepo(engine)
+        self.swarms = SwarmRepo(engine)
+        self.states = StateRepo(engine)
+
+    @property
+    def url(self) -> str:
+        return self._url
+
+    @property
+    def engine(self) -> AsyncEngine:
+        if self._engine is None:
+            raise RuntimeError("BackboneDB is not started")
+        return self._engine
 
     @property
     def _is_memory(self) -> bool:
-        return self._engine is not None and ":memory:" in str(self._engine.url)
+        return ":memory:" in self._url
 
     # --- LifecycleAware methods ---
 
     async def start(self) -> None:
-        """Create schema and run migrations. Engine is provided externally."""
-        if self._engine is None and self._database_service is not None:
-            self._engine = self._database_service.engine
-        if self._engine is None:
-            raise RuntimeError("BackboneDB requires an engine or database_service")
+        """Connect, create the schema (SQLite) and run migrations (persistent databases)."""
+        self._engine = build_engine(self._url)
+        async with self._engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        log.info("Database connected: %s", redact_url(self._url))
         # PostgreSQL: Alembic owns the schema. SQLite: create_all is safe and
         # needed for fresh files / in-memory databases.
-        if "postgresql" not in str(self._engine.url):
+        if "postgresql" not in self._url:
             async with self._engine.begin() as conn:
                 await conn.run_sync(metadata.create_all)
         if not self._is_memory:
             await self._run_migrations()
 
     async def stop(self) -> None:
-        """Release engine reference. Engine lifecycle is owned by DatabaseService."""
-        self._engine = None
+        if self._engine is not None:
+            await self._engine.dispose()
+            self._engine = None
 
     async def health_check(self) -> dict:
         """Check database connectivity."""
-        healthy = await self.check_connection()
         return {
-            "healthy": healthy,
-            "service": "persistence",
-            "connected": self._engine is not None,
+            "healthy": await self.check_connection(),
+            "service": "database",
+            "url": redact_url(self._url),
         }
 
     async def check_connection(self) -> bool:
@@ -136,20 +221,16 @@ class BackboneDB:
         except Exception:
             return False
 
+    @classmethod
     @asynccontextmanager
-    @staticmethod
-    async def connect(
-        database_url: str = "sqlite+aiosqlite:///:memory:",
-    ) -> AsyncIterator[BackboneDB]:
-        """Context manager for test/ad-hoc usage — creates standalone engine, yields, disposes."""
-        engine = build_engine(database_url)
-        db = BackboneDB(engine)
+    async def connect(cls, url: str = "sqlite+aiosqlite:///:memory:") -> AsyncIterator[BackboneDB]:
+        """Context manager for test/ad-hoc usage — starts, yields, stops."""
+        db = cls(url)
         await db.start()
         try:
             yield db
         finally:
-            db._engine = None
-            await engine.dispose()
+            await db.stop()
 
     async def _run_migrations(self) -> None:
         """Run Alembic migrations for persistent databases."""
@@ -201,348 +282,3 @@ class BackboneDB:
                     )
 
             await async_conn.run_sync(_run_alembic)
-
-    # --- Delivery tracking (delegates to _delivery_repo) ---
-
-    async def record_delivery(
-        self,
-        issue_number: int | None,
-        target_entity: str,
-        session_name: str,
-        outcome: str,
-        flow_name: str = "",
-        flow_run_id: str = "",
-        *,
-        repo: str = "",
-        kind: str = "issue",
-        preview: str = "",
-    ) -> int:
-        """Record a delivery attempt. Returns the row ID."""
-        async with self._engine.begin() as conn:
-            return await _delivery_repo.record_delivery(
-                conn,
-                issue_number,
-                target_entity,
-                session_name,
-                outcome,
-                flow_name,
-                flow_run_id,
-                repo=repo,
-                kind=kind,
-                preview=preview,
-            )
-
-    async def claim_delivery_attempt(
-        self,
-        issue_number: int,
-        target_entity: str,
-        session_name: str,
-        flow_name: str,
-        *,
-        repo: str = "",
-        preview: str = "",
-    ) -> int | None:
-        """Reserve an issue delivery attempt before sending."""
-        async with self._engine.begin() as conn:
-            return await _delivery_repo.claim_delivery_attempt(
-                conn,
-                issue_number,
-                target_entity,
-                session_name,
-                flow_name,
-                repo=repo,
-                preview=preview,
-            )
-
-    async def finalize_delivery_attempt(self, delivery_id: int, outcome: str) -> None:
-        """Finalize a previously claimed delivery attempt."""
-        async with self._engine.begin() as conn:
-            await _delivery_repo.finalize_delivery_attempt(conn, delivery_id, outcome)
-
-    async def reclaim_stale_attempts(self, max_age_minutes: int = 5) -> int:
-        """Delete stale attempting rows so new claims can proceed."""
-        async with self._engine.begin() as conn:
-            return await _delivery_repo.reclaim_stale_attempts(conn, max_age_minutes)
-
-    async def query_deliveries(
-        self,
-        issue_number: int | None = None,
-        target_entity: str | None = None,
-        session_name: str | None = None,
-        outcome: str | None = None,
-        limit: int = 50,
-        *,
-        repo: str | None = None,
-        kind: str | None = None,
-    ) -> list[dict]:
-        """Query delivery records with optional filters."""
-        async with self._engine.begin() as conn:
-            return await _delivery_repo.query_deliveries(
-                conn,
-                issue_number,
-                target_entity,
-                session_name,
-                outcome,
-                limit,
-                repo=repo,
-                kind=kind,
-            )
-
-    async def get_failed_deliveries(self, limit: int = 50) -> list[dict]:
-        """Get deliveries with failed outcomes for retry."""
-        async with self._engine.begin() as conn:
-            return await _delivery_repo.get_failed_deliveries(conn, limit)
-
-    async def prune_old_deliveries(self, retention_days: int = 30) -> int:
-        """Delete delivery records older than retention period. Returns count deleted."""
-        async with self._engine.begin() as conn:
-            return await _delivery_repo.prune_old_deliveries(conn, retention_days)
-
-    async def get_delivery_stats(self) -> list[dict]:
-        """Get delivery counts grouped by outcome."""
-        async with self._engine.begin() as conn:
-            return await _delivery_repo.get_delivery_stats(conn)
-
-    # --- Webhook dedup hot cache (the events table is the durable record) ---
-
-    def is_duplicate(self, delivery_id: str, max_ids: int = 100) -> bool:
-        """Check and record delivery ID in hot cache for dedup."""
-        if not delivery_id:
-            return False
-        if delivery_id in self._seen_deliveries:
-            return True
-        self._seen_deliveries[delivery_id] = True
-        while len(self._seen_deliveries) > max_ids:
-            self._seen_deliveries.popitem(last=False)
-        return False
-
-    def forget_delivery(self, delivery_id: str) -> None:
-        """Drop a delivery id from the hot cache so a retry is not treated as a duplicate."""
-        self._seen_deliveries.pop(delivery_id, None)
-
-    # --- Agent state (delegates to _state_repo) ---
-
-    async def get_agent_state(self, session_name: str) -> dict | None:
-        """Get the current state record for an agent session."""
-        async with self._engine.begin() as conn:
-            return await _state_repo.get_agent_state(conn, session_name)
-
-    async def set_agent_state(
-        self,
-        session_name: str,
-        state: str,
-        current_issue: int | None = None,
-        started_at: str | None = None,
-        ts: str | None = None,
-        plan_file: str | None = None,
-        plan_title: str | None = None,
-        reason: str | None = None,
-        current_repo: str | None = None,
-    ) -> None:
-        """Upsert agent state."""
-        async with self._engine.begin() as conn:
-            await _state_repo.set_agent_state(
-                conn,
-                session_name,
-                state,
-                current_issue,
-                started_at,
-                ts=ts,
-                plan_file=plan_file,
-                plan_title=plan_title,
-                reason=reason,
-                current_repo=current_repo,
-            )
-
-    async def get_all_agent_states(self) -> list[dict]:
-        """Get state records for all tracked agents."""
-        async with self._engine.begin() as conn:
-            return await _state_repo.get_all_agent_states(conn)
-
-    # --- Swarms (delegates to _swarms_repo) ---
-
-    async def create_swarm(self, name: str, **fields) -> None:
-        """Record a new active swarm."""
-        async with self._engine.begin() as conn:
-            await _swarms_repo.create_swarm(conn, name, **fields)
-
-    async def get_swarm(self, name: str) -> dict | None:
-        async with self._engine.begin() as conn:
-            return await _swarms_repo.get_swarm(conn, name)
-
-    async def list_swarms(self, *, active_only: bool = False) -> list[dict]:
-        async with self._engine.begin() as conn:
-            return await _swarms_repo.list_swarms(conn, active_only=active_only)
-
-    async def find_active_swarm_for_issue(self, repo: str, issue_number: int) -> dict | None:
-        """The active swarm working a given issue, if any."""
-        async with self._engine.begin() as conn:
-            return await _swarms_repo.find_active_swarm_for_issue(conn, repo, issue_number)
-
-    async def set_swarm_status(self, name: str, status: str) -> None:
-        async with self._engine.begin() as conn:
-            await _swarms_repo.set_swarm_status(conn, name, status)
-
-    # --- Issue dependencies (delegates to _queue_repo) ---
-
-    async def get_parents(self, sub_issue_number: int, *, repo: str = "") -> list[int]:
-        """Get parent issue numbers for a given sub-issue."""
-        async with self._engine.begin() as conn:
-            return await _queue_repo.get_parents(conn, sub_issue_number, repo=repo)
-
-    async def sync_dependencies(
-        self, parent: int, sub_issues: list[int], *, repo: str = ""
-    ) -> None:
-        """Sync the dependency table for a parent."""
-        async with self._engine.begin() as conn:
-            await _queue_repo.sync_dependencies(conn, parent, sub_issues, repo=repo)
-
-    # --- Acknowledgments (delegates to _queue_repo) ---
-
-    async def record_acknowledgment(
-        self, issue_number: int, target_entity: str, *, repo: str = ""
-    ) -> None:
-        """Record that an entity has acknowledged an issue."""
-        async with self._engine.begin() as conn:
-            await _queue_repo.record_acknowledgment(conn, issue_number, target_entity, repo=repo)
-
-    async def is_acknowledged(
-        self, issue_number: int, target_entity: str, *, repo: str = ""
-    ) -> bool:
-        """Check if entity has acknowledged this issue."""
-        async with self._engine.begin() as conn:
-            return await _queue_repo.is_acknowledged(conn, issue_number, target_entity, repo=repo)
-
-    async def clear_acknowledgment(
-        self, issue_number: int, target_entity: str, *, repo: str = ""
-    ) -> None:
-        """Clear acknowledgment for entity on issue."""
-        async with self._engine.begin() as conn:
-            await _queue_repo.clear_acknowledgment(conn, issue_number, target_entity, repo=repo)
-
-    # --- Message queue (delegates to _queue_repo) ---
-
-    async def enqueue_message(
-        self,
-        session_name: str,
-        message: str,
-        issue_number: int | None = None,
-        target_entity: str | None = None,
-        delivery_kind: str = "issue",
-        flow_name: str = "",
-        *,
-        repo: str = "",
-    ) -> int:
-        """Enqueue a message for later delivery. Returns the row ID."""
-        async with self._engine.begin() as conn:
-            return await _queue_repo.enqueue_message(
-                conn,
-                session_name,
-                message,
-                issue_number,
-                target_entity,
-                delivery_kind,
-                flow_name,
-                repo=repo,
-            )
-
-    async def dequeue_messages(
-        self,
-        session_name: str,
-        limit: int = 10,
-    ) -> list[dict]:
-        """Atomically claim pending messages for a session, oldest first."""
-        async with self._engine.begin() as conn:
-            return await _queue_repo.dequeue_messages(conn, session_name, limit)
-
-    async def get_sessions_with_pending(self) -> list[str]:
-        """List sessions that currently have pending queue rows."""
-        async with self._engine.begin() as conn:
-            return await _queue_repo.get_sessions_with_pending(conn)
-
-    async def release_lease(self, message_id: int) -> None:
-        """Return a claimed queued message to pending."""
-        async with self._engine.begin() as conn:
-            await _queue_repo.release_lease(conn, message_id)
-
-    async def expire_stale_leases(self, max_age_minutes: int = 5) -> int:
-        """Recover stale queue leases older than max_age_minutes."""
-        async with self._engine.begin() as conn:
-            return await _queue_repo.expire_stale_leases(conn, max_age_minutes)
-
-    async def mark_message_delivered(self, message_id: int) -> None:
-        """Mark a queued message as delivered."""
-        async with self._engine.begin() as conn:
-            await _queue_repo.mark_message_delivered(conn, message_id)
-
-    async def purge_pending_for_issue(self, issue_number: int, *, repo: str = "") -> int:
-        """Mark all pending queue messages for an issue as delivered."""
-        async with self._engine.begin() as conn:
-            return await _queue_repo.purge_pending_for_issue(conn, issue_number, repo=repo)
-
-    async def expire_stale_pending(self, max_age_minutes: int = 30) -> int:
-        """Expire pending queue messages older than max_age_minutes."""
-        async with self._engine.begin() as conn:
-            return await _queue_repo.expire_stale_pending(conn, max_age_minutes)
-
-    # --- Settings (delegates to _settings_repo) ---
-
-    async def get_all_settings(self) -> dict[str, object]:
-        async with self._engine.begin() as conn:
-            return await _settings_repo.get_all_settings(conn)
-
-    async def set_setting(self, key: str, value: object) -> None:
-        async with self._engine.begin() as conn:
-            await _settings_repo.set_setting(conn, key, value)
-
-    async def delete_setting(self, key: str) -> bool:
-        async with self._engine.begin() as conn:
-            return await _settings_repo.delete_setting(conn, key)
-
-    # --- Agents (delegates to _agents_repo) ---
-
-    async def list_agents(self) -> list[dict]:
-        async with self._engine.begin() as conn:
-            return await _agents_repo.list_agents(conn)
-
-    async def upsert_agent(self, name: str, **fields) -> None:
-        async with self._engine.begin() as conn:
-            await _agents_repo.upsert_agent(conn, name, **fields)
-
-    async def touch_agent_started(self, name: str) -> None:
-        async with self._engine.begin() as conn:
-            await _agents_repo.touch_agent_started(conn, name)
-
-    async def delete_agent(self, name: str) -> bool:
-        async with self._engine.begin() as conn:
-            return await _agents_repo.delete_agent(conn, name)
-
-    async def add_watch(self, name: str, repo: str) -> None:
-        async with self._engine.begin() as conn:
-            await _agents_repo.add_watch(conn, name, repo)
-
-    async def remove_watch(self, name: str, repo: str) -> bool:
-        async with self._engine.begin() as conn:
-            return await _agents_repo.remove_watch(conn, name, repo)
-
-    # --- Events (delegates to _events_repo) ---
-
-    async def record_event(self, **fields) -> int | None:
-        async with self._engine.begin() as conn:
-            return await _events_repo.record_event(conn, **fields)
-
-    async def mark_event_processed(self, event_id: int, outcome: str) -> None:
-        async with self._engine.begin() as conn:
-            await _events_repo.mark_event_processed(conn, event_id, outcome)
-
-    async def query_events(self, *, repo: str | None = None, limit: int = 50) -> list[dict]:
-        async with self._engine.begin() as conn:
-            return await _events_repo.query_events(conn, repo=repo, limit=limit)
-
-    async def last_event_time_by_repo(self) -> dict[str, str]:
-        async with self._engine.begin() as conn:
-            return await _events_repo.last_event_time_by_repo(conn)
-
-    async def prune_events(self, retention_days: int = 30) -> int:
-        async with self._engine.begin() as conn:
-            return await _events_repo.prune_events(conn, retention_days)

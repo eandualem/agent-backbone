@@ -11,18 +11,9 @@ from __future__ import annotations
 from agent_backbone.models import CommentData, IssueData, parse_from_tag
 
 
-def _repo_from_html_url(html_url: str) -> str:
-    """Extract owner/repo from a GitHub issue URL."""
-    parts = html_url.split("/")
-    if len(parts) >= 5 and parts[2] == "github.com":
-        return f"{parts[3]}/{parts[4]}"
-    return ""
-
-
 def _issue_ref(issue: IssueData) -> str:
     """Repository-qualified reference such as ``owner/repo#42``."""
-    repo_full_name = issue.repo_full_name or _repo_from_html_url(issue.html_url)
-    return f"{repo_full_name}#{issue.number}" if repo_full_name else f"#{issue.number}"
+    return f"{issue.repo_full_name}#{issue.number}"
 
 
 def _link(issue: IssueData) -> str:
@@ -44,10 +35,9 @@ def format_issue_notification(issue: IssueData) -> str:
 
 def format_pull_request_notification(issue: IssueData) -> str:
     """Format a new-pull-request notification for repo-owner delivery."""
-    repo_full_name = issue.repo_full_name or _repo_from_html_url(issue.html_url) or "unknown repo"
     return (
         f"[via:github pr:{issue.number}] "
-        f'New pull request in {repo_full_name}: #{issue.number} "{issue.title}". '
+        f'New pull request in {issue.repo_full_name}: #{issue.number} "{issue.title}". '
         f"Review at: {issue.html_url}"
     )
 

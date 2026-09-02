@@ -5,17 +5,26 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.agents.models import REASON_PERMISSION, AgentState, StateSnapshot
-from agent_backbone.services.terminal import (
-    TerminalRuntime,
-    capture_pane,
-    detect_runtime_from_pane,
-    get_terminal_adapter,
-    normalize_runtime,
+from agent_backbone.services.agents.models import (
+    REASON_PERMISSION,
+    REASON_PLAN,
+    AgentState,
+    StateSnapshot,
+)
+from agent_backbone.services.runtimes import (
+    GENERIC_BUSY_FRAGMENTS,
+    UNKNOWN,
+    detect_runtime,
+    get_runtime,
     sanitize_pane_content,
 )
+from agent_backbone.services.terminal import capture_pane
+
+if TYPE_CHECKING:
+    from agent_backbone.config import BackboneConfig
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +49,7 @@ def _trust_stale_push(snapshot: StateSnapshot) -> bool:
     """Whether a stale hook snapshot is still worth using when the pane says nothing."""
     if snapshot.state in (AgentState.IDLE, AgentState.BUSY):
         return True
-    if snapshot.state == AgentState.WAITING_FOR_HUMAN and snapshot.reason == "plan":
+    if snapshot.state == AgentState.WAITING_FOR_HUMAN and snapshot.reason == REASON_PLAN:
         return bool(snapshot.plan_file and Path(snapshot.plan_file).exists())
     return False
 
@@ -51,33 +60,32 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
     if not lines:
         return StateSnapshot(state=AgentState.UNKNOWN, source="pull", evidence=["empty pane"])
 
-    runtime = normalize_runtime(runtime_hint)
-    if runtime == TerminalRuntime.UNKNOWN:
-        runtime = detect_runtime_from_pane(pane_content)
-    adapter = get_terminal_adapter(runtime)
+    runtime = get_runtime(runtime_hint)
+    if runtime is UNKNOWN:
+        runtime = detect_runtime(pane_content)
 
-    if adapter.detect_busy(pane_content):
+    if runtime.detect_busy(pane_content):
         return StateSnapshot(
             state=AgentState.BUSY,
             source="pull",
-            evidence=[f"terminal shows a busy marker ({runtime.value})"],
+            evidence=[f"terminal shows a busy marker ({runtime.id})"],
         )
-    if adapter.detect_waiting_for_human(pane_content):
+    if runtime.detect_waiting_for_human(pane_content):
         return StateSnapshot(
             state=AgentState.WAITING_FOR_HUMAN,
             reason=REASON_PERMISSION,
             source="pull",
-            evidence=[f"terminal shows a permission prompt ({runtime.value})"],
+            evidence=[f"terminal shows a permission prompt ({runtime.id})"],
         )
-    if adapter.detect_idle(pane_content):
+    if runtime.detect_idle(pane_content):
         return StateSnapshot(
             state=AgentState.IDLE,
             source="pull",
-            evidence=[f"terminal shows an empty prompt ({runtime.value})"],
+            evidence=[f"terminal shows an empty prompt ({runtime.id})"],
         )
 
     recent = "\n".join(ln.strip().lower() for ln in lines[-20:] if ln.strip())
-    if "thinking..." in recent or "tool call" in recent:
+    if any(fragment in recent for fragment in GENERIC_BUSY_FRAGMENTS):
         return StateSnapshot(
             state=AgentState.BUSY, source="pull", evidence=["terminal shows thinking/tool output"]
         )
@@ -85,7 +93,7 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
     return StateSnapshot(
         state=AgentState.UNKNOWN,
         source="pull",
-        evidence=[f"terminal inconclusive: no prompt, busy or question marker ({runtime.value})"],
+        evidence=[f"terminal inconclusive: no prompt, busy or question marker ({runtime.id})"],
     )
 
 
@@ -137,9 +145,6 @@ async def get_agent_state(
             return push
         return pull
 
-    if push and push_age is not None and push_age < stale_threshold:
-        return push
-
     if push and _trust_stale_push(push):
         push.evidence = [
             f"no terminal output; using stale hook state '{push.state.value}' ({push_age:.0f}s)"
@@ -151,3 +156,8 @@ async def get_agent_state(
         source="default",
         evidence=["no hook state and no terminal output"],
     )
+
+
+async def agent_state(config: BackboneConfig, name: str) -> StateSnapshot:
+    """``get_agent_state`` with the paths and thresholds taken from the configuration."""
+    return await get_agent_state(config.state_dir, name, config.timing.stale_threshold_seconds)

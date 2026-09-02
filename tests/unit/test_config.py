@@ -61,7 +61,7 @@ class TestDefaults:
         assert config.api_key == "k"
         assert config.github_ready is True
         assert config.github_intake == "webhook"
-        assert config.webhook_secrets == ("s",)
+        assert config.webhook_secret == "s"
 
     def test_env_file_in_data_dir_is_loaded(self, monkeypatch, tmp_path):
         for var in ("BACKBONE_API_KEY", "GITHUB_TOKEN", "GITHUB_WEBHOOK_SECRET"):
@@ -168,9 +168,9 @@ class TestBuildConfig:
         assert config.telegram.allowed_chat_ids == (1, 2)
         assert config.telegram.topic_routes == {42: "reviewer"}
         assert config.escalation.target == "reviewer"
-        assert config.agent_state.stale_threshold_seconds == 42
-        assert config.delivery.grace_period_seconds == 9
-        assert config.delivery.queue_expiry_minutes == 15
+        assert config.timing.stale_threshold_seconds == 42
+        assert config.timing.grace_period_seconds == 9
+        assert config.timing.queue_expiry_minutes == 15
         assert config.github.intake == "poll"
         assert config.security.allow_remote_plan_control is True
         assert config.settings["backbone.port"] == 7999

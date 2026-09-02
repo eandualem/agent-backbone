@@ -6,11 +6,11 @@ import hashlib
 import hmac
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_backbone.api.deps import get_delivery_service, get_dispatch_service
 from agent_backbone.config import AgentsConfig, AgentSpec
 from tests.conftest import TEST_REPO
 
@@ -39,30 +39,20 @@ def _webhook_headers(
     }
 
 
-@pytest.fixture
-def mock_delivery_svc():
-    svc = MagicMock()
-    svc.is_recent_notification = MagicMock(return_value=False)
-    return svc
-
-
-@pytest.fixture
-def mock_dispatch_svc():
-    svc = MagicMock()
-    svc.on_issue_closed = AsyncMock(return_value={"feynman": "delivered_#11"})
-    svc.issue_dispatcher = AsyncMock(
-        return_value=MagicMock(delivered=["ike"], offline=[], deferred=[])
-    )
-    return svc
-
-
 @pytest.fixture(autouse=True)
-def _override_services(api_app, mock_delivery_svc, mock_dispatch_svc):
-    api_app.dependency_overrides[get_delivery_service] = lambda: mock_delivery_svc
-    api_app.dependency_overrides[get_dispatch_service] = lambda: mock_dispatch_svc
-    yield
-    api_app.dependency_overrides.pop(get_delivery_service, None)
-    api_app.dependency_overrides.pop(get_dispatch_service, None)
+def mock_dispatch_svc():
+    """The two routing entry points behind ``dispatch_event``."""
+    mocks = SimpleNamespace(
+        on_issue_closed=AsyncMock(return_value={"feynman": "delivered_#11"}),
+        issue_dispatcher=AsyncMock(
+            return_value=MagicMock(delivered=["ike"], offline=[], deferred=[])
+        ),
+    )
+    with (
+        patch("agent_backbone.services.routing._ingest.on_issue_closed", mocks.on_issue_closed),
+        patch("agent_backbone.services.routing._ingest.issue_dispatcher", mocks.issue_dispatcher),
+    ):
+        yield mocks
 
 
 class TestHealthEndpoint:
@@ -126,24 +116,10 @@ class TestWebhookDeduplication:
 
         assert resp1.status_code == 200
         assert resp2.status_code == 200
-        assert resp2.text == "Duplicate, skipped"
+        assert resp2.text == "deduped: event dup-delivery-abc already stored"
         assert mock_dispatch_svc.issue_dispatcher.await_count == 1
 
-    async def test_issue_event_recent_notification_returns_deduped(
-        self, api_client, webhook_payload, mock_delivery_svc, mock_dispatch_svc
-    ):
-        payload_bytes = json.dumps(webhook_payload).encode()
-        headers = _webhook_headers(payload_bytes, delivery_id="recent-issue-dedup")
-        mock_delivery_svc.is_recent_notification.return_value = True
-
-        resp = await api_client.post(WEBHOOK_PATH, content=payload_bytes, headers=headers)
-
-        assert resp.text == "deduped: all targets already notified for #42"
-        mock_dispatch_svc.issue_dispatcher.assert_not_awaited()
-
-    async def test_comment_event_bypasses_recent_notification_dedup(
-        self, api_client, mock_delivery_svc, mock_dispatch_svc
-    ):
+    async def test_comment_event_is_dispatched(self, api_client, mock_dispatch_svc):
         payload = {
             "action": "created",
             "repository": {"full_name": TEST_REPO},
@@ -157,13 +133,11 @@ class TestWebhookDeduplication:
         }
         payload_bytes = json.dumps(payload).encode()
         headers = _webhook_headers(payload_bytes, event="issue_comment", delivery_id="c-1")
-        mock_delivery_svc.is_recent_notification.return_value = True
 
         resp = await api_client.post(WEBHOOK_PATH, content=payload_bytes, headers=headers)
 
         assert resp.text == "dispatch: 1 delivered, 0 offline, 0 deferred"
         mock_dispatch_svc.issue_dispatcher.assert_awaited_once()
-        mock_delivery_svc.is_recent_notification.assert_not_called()
 
     async def test_comment_on_closed_issue_ignored(self, api_client, mock_dispatch_svc):
         payload = {

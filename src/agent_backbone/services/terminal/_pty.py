@@ -20,6 +20,7 @@ import signal
 import struct
 import subprocess
 import termios
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -48,7 +49,7 @@ class PtySession:
         # Incremental decoder handles multi-byte UTF-8 split across reads
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         # Callback invoked on queue overflow: fn(session_name)
-        self.on_data_dropped: None | (callable) = None
+        self.on_data_dropped: Callable[[str], None] | None = None
 
     @property
     def output_queue(self) -> asyncio.Queue[str | None]:

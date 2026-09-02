@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
-from agent_backbone.services.infrastructure import StartResult
+from agent_backbone.models import DeliveryOutcome
+from agent_backbone.services.agents import StartResult
 from agent_backbone.services.swarm import (
     SwarmError,
     create_swarm,
@@ -173,7 +174,7 @@ def _swarm_config(tmp_path):
 
 
 class TestCreateSwarm:
-    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
+    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
@@ -218,11 +219,12 @@ class TestCreateSwarm:
         assert mock_deliver.await_args.args[0] == "research-coordinator"
         assert "Do the research" in mock_deliver.await_args.args[1]
         # Recorded as active.
-        row = await db.get_swarm("research")
+        row = await db.swarms.get("research")
         assert row["status"] == "active" and row["issue_number"] == 7
 
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
-    async def test_closed_issue_rejected(self, _git, db, tmp_path):
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
+    async def test_closed_issue_rejected(self, _exists, _git, db, tmp_path):
         config, _ = _swarm_config(tmp_path)
         gh = AsyncMock()
         gh.get_issue = AsyncMock(return_value=AsyncMock(state="closed", title="t"))
@@ -239,7 +241,7 @@ class TestCreateSwarm:
             )
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
-    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
+    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, side_effect=[_STARTED, _FAILED])
     @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
@@ -280,9 +282,9 @@ class TestCreateSwarm:
 
         mock_rm.assert_awaited_once()
         assert store.registered == []  # all rolled back
-        assert (await db.get_swarm("research"))["status"] == "disbanded"
+        assert (await db.swarms.get("research"))["status"] == "disbanded"
 
-    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
+    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
@@ -318,7 +320,7 @@ class TestCreateSwarm:
             "research-probe": "research-probe.md",
         }
         # Only the kickoff goes through delivery here.
-        assert [c.kwargs["flow_name"] for c in mock_deliver.await_args_list] == ["swarm-kickoff"]
+        assert [c.kwargs["source"] for c in mock_deliver.await_args_list] == ["swarm-kickoff"]
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
@@ -338,7 +340,7 @@ class TestCreateSwarm:
         gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
 
         with (
-            patch.object(db, "create_swarm", AsyncMock(side_effect=RuntimeError("UNIQUE"))),
+            patch.object(db.swarms, "create", AsyncMock(side_effect=RuntimeError("UNIQUE"))),
             pytest.raises(SwarmError, match="could not register"),
         ):
             await create_swarm(
@@ -365,7 +367,7 @@ class TestTeardown:
     ):
         config, repo_dir = _swarm_config(tmp_path)
         worktree = repo_dir / ".backbone" / "swarms" / "research"
-        await db.create_swarm(
+        await db.swarms.create(
             "research",
             repo="acme/app",
             issue_number=7,
@@ -393,7 +395,7 @@ class TestTeardown:
         assert name == "research"
         assert mock_stop.await_count == 2
         assert store.forgotten == ["research-coordinator", "research-scout-1"]
-        assert (await db.get_swarm("research"))["status"] == "done"
+        assert (await db.swarms.get("research"))["status"] == "done"
 
     async def test_no_swarm_for_issue_is_none(self, db, tmp_path):
         config, _ = _swarm_config(tmp_path)
@@ -401,8 +403,9 @@ class TestTeardown:
 
 
 class TestOwnRepoGuardrail:
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
-    async def test_agent_cannot_swarm_on_foreign_repo(self, _git, db, tmp_path):
+    async def test_agent_cannot_swarm_on_foreign_repo(self, _git, _exists, db, tmp_path):
         """An agent initiator must own the issue's repository."""
         config, _ = _swarm_config(tmp_path)  # simon owns acme/app
         gh = AsyncMock()

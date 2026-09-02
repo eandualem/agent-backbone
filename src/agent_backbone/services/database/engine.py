@@ -1,29 +1,19 @@
-"""Database engine lifecycle.
+"""Engine construction.
 
 SQLite (a file in the data directory) is the default and needs no setup.
 ``BACKBONE_DATABASE_URL`` can point at PostgreSQL (``postgresql+asyncpg://``).
-Query logic lives in the repository modules, which receive connections from
-this engine through :class:`BackboneDB`.
+``BackboneDB`` owns the engine's lifecycle; query logic lives in the
+repository modules, which receive connections from it.
 """
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-log = logging.getLogger(__name__)
-
-SQLITE_FILENAME = "backbone.db"
 _POSTGRES_POOL_SIZE = 5
 _POSTGRES_POOL_OVERFLOW = 10
-
-
-def sqlite_url(data_dir: Path) -> str:
-    """The default database URL: a SQLite file in the data directory."""
-    return f"sqlite+aiosqlite:///{data_dir / SQLITE_FILENAME}"
 
 
 def is_sqlite(url: str) -> bool:
@@ -61,38 +51,3 @@ def redact_url(url: str) -> str:
         _creds, host = rest.rsplit("@", 1)
         base = f"{scheme}://***@{host}"
     return f"{base}?***" if query else base
-
-
-class DatabaseService:
-    """Owns the engine: connect on start, dispose on stop, ping for health."""
-
-    def __init__(self, url: str) -> None:
-        self._url = url
-        self._engine: AsyncEngine | None = None
-
-    @property
-    def url(self) -> str:
-        return self._url
-
-    @property
-    def engine(self) -> AsyncEngine | None:
-        return self._engine
-
-    async def start(self) -> None:
-        self._engine = build_engine(self._url)
-        async with self._engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        log.info("Database connected: %s", redact_url(self._url))
-
-    async def stop(self) -> None:
-        if self._engine:
-            await self._engine.dispose()
-            self._engine = None
-
-    async def health_check(self) -> dict:
-        """Engine present or not; ``BackboneDB`` (the persistence component) does the ping."""
-        return {
-            "healthy": self._engine is not None,
-            "service": "database",
-            "url": redact_url(self._url),
-        }

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from agent_backbone.api.deps import get_db
 from agent_backbone.services.database import BackboneDB
@@ -13,19 +12,35 @@ from agent_backbone.services.database import BackboneDB
 @pytest.fixture
 async def deliveries_app(api_app):
     """App with get_db overridden to use an in-memory DB seeded with delivery records."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    db = BackboneDB(engine)
+    db = BackboneDB("sqlite+aiosqlite:///:memory:")
     await db.start()
     # Seed test data: 3 deliveries across 2 issues and 3 outcomes
-    await db.record_delivery(42, "ike", "ike", "delivered", "dispatcher")
-    await db.record_delivery(42, "leo", "leo", "offline", "dispatcher")
-    await db.record_delivery(43, "ike", "ike", "agent_working", "monitor")
+    await db.deliveries.record(
+        issue_number=42,
+        target_entity="ike",
+        session_name="ike",
+        outcome="delivered",
+        source="dispatcher",
+    )
+    await db.deliveries.record(
+        issue_number=42,
+        target_entity="leo",
+        session_name="leo",
+        outcome="offline",
+        source="dispatcher",
+    )
+    await db.deliveries.record(
+        issue_number=43,
+        target_entity="ike",
+        session_name="ike",
+        outcome="agent_working",
+        source="monitor",
+    )
 
     api_app.dependency_overrides[get_db] = lambda: db
     yield api_app
     api_app.dependency_overrides.clear()
-    db._engine = None
-    await engine.dispose()
+    await db.stop()
 
 
 @pytest.fixture

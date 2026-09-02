@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING
 
 from telegram import Update
@@ -11,14 +10,16 @@ from telegram.ext import ContextTypes
 if TYPE_CHECKING:
     from agent_backbone.services.integrations.telegram.interface import TelegramService
 
+from agent_backbone.models import DeliveryOutcome
+from agent_backbone.recent import RecentKeys
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     process_message_for_discovery,
 )
 from agent_backbone.services.routing import safe_deliver
 
-_HINT_DEDUP_SECONDS = 300
-_hinted_at: dict[tuple[int, int | None], float] = {}
+_hinted = RecentKeys(300)
+"""(chat, topic) pairs hinted in the last five minutes — guidance, not noise."""
 
 GENERAL_HINT = (
     "Each agent has its own topic here — write in an agent's topic to talk to it.\n"
@@ -31,14 +32,7 @@ UNMAPPED_HINT = (
 
 
 def _hint_due(chat_id: int, thread_id: int | None) -> bool:
-    """Once per chat/topic per ``_HINT_DEDUP_SECONDS`` — guidance, not noise."""
-    key = (chat_id, thread_id)
-    now = time.monotonic()
-    last = _hinted_at.get(key)
-    if last is not None and now - last < _HINT_DEDUP_SECONDS:
-        return False
-    _hinted_at[key] = now
-    return True
+    return not _hinted.check_and_mark((chat_id, thread_id))
 
 
 async def handle_general_message(
@@ -60,19 +54,19 @@ async def handle_general_message(
         await update.message.reply_text(GENERAL_HINT)
 
 
-def _delivery_reply(agent: str, status: str) -> str:
-    """Map safe_deliver outcome to a user-friendly Telegram reply."""
-    if status == "delivered":
+def _delivery_reply(agent: str, outcome: DeliveryOutcome) -> str:
+    """Map a delivery outcome to a user-friendly Telegram reply."""
+    if outcome == DeliveryOutcome.DELIVERED:
         return f"Sent to `{agent}`."
-    if status == "offline":
+    if outcome == DeliveryOutcome.OFFLINE:
         return f"`{agent}` is offline."
-    if status == "agent_working":
+    if outcome == DeliveryOutcome.AGENT_WORKING:
         return f"`{agent}` is busy — queued."
-    if status == "waiting_for_human":
+    if outcome == DeliveryOutcome.WAITING_FOR_HUMAN:
         return f"`{agent}` is waiting for a human — queued."
-    if status in ("human_typing", "settling"):
+    if outcome in (DeliveryOutcome.HUMAN_TYPING, DeliveryOutcome.SETTLING):
         return f"`{agent}` has someone at the keyboard — queued."
-    return f"Not delivered to `{agent}` ({status})."
+    return f"Not delivered to `{agent}` ({outcome.value})."
 
 
 async def handle_topic_message(

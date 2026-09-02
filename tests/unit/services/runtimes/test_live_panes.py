@@ -1,4 +1,4 @@
-"""Adapter regressions against panes captured from live CLIs.
+"""Runtime regressions against panes captured from live CLIs.
 
 The fixtures below are (trimmed) real captures: codex-cli 0.152.0 and
 Gemini CLI 0.46.0 running under tmux. When a runtime's UI changes, update
@@ -7,13 +7,12 @@ the fixture from a fresh capture, not from memory.
 
 import pytest
 
-from agent_backbone.services.terminal import TerminalRuntime, detect_runtime_from_pane
-from agent_backbone.services.terminal._adapters import get_terminal_adapter
+from agent_backbone.services.runtimes import RUNTIMES, detect_runtime
 
 
 def prompt_has_pending_input(pane: str) -> bool:
-    """The adapter for whatever runtime the pane shows, asked about typed input."""
-    return get_terminal_adapter(detect_runtime_from_pane(pane)).prompt_has_pending_input(pane)
+    """Whatever runtime the pane shows, asked about typed input."""
+    return detect_runtime(pane).prompt_has_pending_input(pane)
 
 
 CODEX_TRUST_DIALOG = (
@@ -66,7 +65,7 @@ GEMINI_AUTH_SCREEN = (
 
 
 class TestCodexAdapter:
-    adapter = get_terminal_adapter("codex")
+    adapter = RUNTIMES["codex"]
 
     def test_trust_dialog_is_waiting_for_human(self):
         assert self.adapter.detect_waiting_for_human(CODEX_TRUST_DIALOG)
@@ -75,7 +74,7 @@ class TestCodexAdapter:
     def test_idle_prompt_detected(self):
         assert self.adapter.detect_idle(CODEX_IDLE)
         assert not self.adapter.detect_busy(CODEX_IDLE)
-        assert detect_runtime_from_pane(CODEX_IDLE) == TerminalRuntime.CODEX
+        assert detect_runtime(CODEX_IDLE).id == "codex"
 
     def test_idle_placeholder_is_not_pending_input(self):
         assert not self.adapter.prompt_has_pending_input(CODEX_IDLE)
@@ -112,11 +111,11 @@ OPENCODE_IDLE_AFTER_RESPONSE = (
 
 
 class TestOpenCodeAdapter:
-    adapter = get_terminal_adapter("opencode")
+    adapter = RUNTIMES["opencode"]
 
     def test_fresh_idle_detected(self):
         assert self.adapter.detect_idle(OPENCODE_FRESH_IDLE)
-        assert detect_runtime_from_pane(OPENCODE_FRESH_IDLE) == TerminalRuntime.OPENCODE
+        assert detect_runtime(OPENCODE_FRESH_IDLE).id == "opencode"
 
     def test_busy_detected(self):
         assert self.adapter.detect_busy(OPENCODE_BUSY)
@@ -130,7 +129,7 @@ class TestOpenCodeAdapter:
 
 
 class TestGeminiAdapter:
-    adapter = get_terminal_adapter("gemini")
+    adapter = RUNTIMES["gemini"]
 
     def test_trust_dialog_is_waiting_for_human(self):
         assert self.adapter.detect_waiting_for_human(GEMINI_TRUST_DIALOG)
@@ -139,7 +138,7 @@ class TestGeminiAdapter:
     def test_auth_screen_is_waiting_for_human(self):
         assert self.adapter.detect_waiting_for_human(GEMINI_AUTH_SCREEN)
         assert not self.adapter.detect_idle(GEMINI_AUTH_SCREEN)
-        assert detect_runtime_from_pane(GEMINI_AUTH_SCREEN) == TerminalRuntime.GEMINI
+        assert detect_runtime(GEMINI_AUTH_SCREEN).id == "gemini"
 
 
 # Permission dialogs captured live on 2026-09-01: Claude Code 2.1.252
@@ -185,13 +184,13 @@ OPENCODE_PERMISSION_DIALOG = (
 
 class TestPermissionDialogs:
     def test_claude_permission_dialog_is_waiting(self):
-        adapter = get_terminal_adapter("claude")
+        adapter = RUNTIMES["claude"]
         assert adapter.detect_waiting_for_human(CLAUDE_PERMISSION_DIALOG)
         assert not adapter.detect_idle(CLAUDE_PERMISSION_DIALOG)
         assert adapter.approve_keys == ("Enter",)
 
     def test_codex_permission_dialog_is_waiting(self):
-        adapter = get_terminal_adapter("codex")
+        adapter = RUNTIMES["codex"]
         assert adapter.detect_waiting_for_human(CODEX_PERMISSION_DIALOG)
         assert not adapter.detect_idle(CODEX_PERMISSION_DIALOG)
         assert adapter.approve_keys == ("Enter",)
@@ -200,14 +199,14 @@ class TestPermissionDialogs:
         # Before this fixture the OpenCode adapter had no prompt markers at
         # all — a blocked member looked idle and deliveries were pasted into
         # the dialog.
-        adapter = get_terminal_adapter("opencode")
+        adapter = RUNTIMES["opencode"]
         assert adapter.detect_waiting_for_human(OPENCODE_PERMISSION_DIALOG)
         assert not adapter.detect_idle(OPENCODE_PERMISSION_DIALOG)
         assert not adapter.detect_waiting_for_human(OPENCODE_IDLE_AFTER_RESPONSE)
         assert adapter.approve_keys == ("Enter",)
 
     def test_shell_has_no_answer(self):
-        assert get_terminal_adapter("shell").approve_keys == ()
+        assert RUNTIMES["shell"].approve_keys == ()
 
 
 # The same dialogs a moment after they were answered: the text is still in
@@ -234,24 +233,24 @@ OPENCODE_DIALOG_ANSWERED = (
 
 class TestActiveDialogGate:
     def test_live_dialogs_are_active(self):
-        assert get_terminal_adapter("claude").detect_active_dialog(CLAUDE_PERMISSION_DIALOG)
-        assert get_terminal_adapter("codex").detect_active_dialog(CODEX_PERMISSION_DIALOG)
-        assert get_terminal_adapter("opencode").detect_active_dialog(OPENCODE_PERMISSION_DIALOG)
+        assert RUNTIMES["claude"].detect_active_dialog(CLAUDE_PERMISSION_DIALOG)
+        assert RUNTIMES["codex"].detect_active_dialog(CODEX_PERMISSION_DIALOG)
+        assert RUNTIMES["opencode"].detect_active_dialog(OPENCODE_PERMISSION_DIALOG)
 
     def test_answered_dialogs_are_not_active(self):
         # Stale "Press enter to confirm" above an idle prompt: Enter here would
         # submit whatever is typed at that prompt.
-        codex = get_terminal_adapter("codex")
+        codex = RUNTIMES["codex"]
         assert codex.detect_waiting_for_human(CODEX_DIALOG_ANSWERED)  # loose state reading
         assert not codex.detect_active_dialog(CODEX_DIALOG_ANSWERED)  # strict answer gate
-        claude = get_terminal_adapter("claude")
+        claude = RUNTIMES["claude"]
         assert not claude.detect_active_dialog(CLAUDE_DIALOG_ANSWERED_WITH_TYPED_TEXT)
-        opencode = get_terminal_adapter("opencode")
+        opencode = RUNTIMES["opencode"]
         assert not opencode.detect_active_dialog(OPENCODE_DIALOG_ANSWERED)
 
     def test_unverified_runtimes_have_no_answer(self):
-        assert get_terminal_adapter("gemini").approve_keys == ()
-        assert get_terminal_adapter("aider").approve_keys == ()
+        assert RUNTIMES["gemini"].approve_keys == ()
+        assert RUNTIMES["aider"].approve_keys == ()
 
 
 class TestRuntimeDetection:
@@ -262,7 +261,7 @@ class TestRuntimeDetection:
             "\u203a Explain this codebase\n\n"
             "  gpt-5.4 xhigh \u00b7 88% left \u00b7 ~/ws/core/code/WF/agent-backbone"
         )
-        assert detect_runtime_from_pane(pane) == TerminalRuntime.CODEX
+        assert detect_runtime(pane).id == "codex"
 
 
 class TestPendingInput:
@@ -303,5 +302,5 @@ class TestPendingInput:
     def test_prefix_guard_suffix_matched_output_not_pending(self):
         # Claude's prompt is ❯ with suffix $: a line ending in $ without the
         # prefix matched via the suffix only and is output, not typed input.
-        claude = get_terminal_adapter(TerminalRuntime.CLAUDE)
+        claude = RUNTIMES["claude"]
         assert claude.prompt_has_pending_input("some output line $") is False

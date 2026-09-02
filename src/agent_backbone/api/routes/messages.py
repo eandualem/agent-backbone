@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends
 
 from agent_backbone.api.deps import get_config, get_db, registered_agent_or_404
 from agent_backbone.api.models import MessageRequest, MessageResponse
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.routing import outcome_queues, safe_deliver
 
 log = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ async def send_message(
     # delivers to the coordinator session.
     target = body.target_session
     if config.agents.get(target) is None:
-        swarm = await db.get_swarm(target)
+        swarm = await db.swarms.get(target)
         if swarm is not None and swarm.get("status") == "active":
             target = swarm["coordinator"]
     # Only registered agents are typed into — never an arbitrary tmux session.
@@ -43,15 +44,15 @@ async def send_message(
         message=envelope,
         config=config,
         db=db,
-        flow_name="api-messages",
+        source="api-messages",
         priority=body.priority,
         delivery_kind="direct_message",
     )
 
     log.info("Message from %s → %s: %s", body.from_entity, target, outcome)
     return MessageResponse(
-        ok=outcome == "delivered",
+        ok=outcome == DeliveryOutcome.DELIVERED,
         session=target,
-        outcome=outcome,
+        outcome=outcome.value,
         queued=outcome_queues(outcome, "direct_message"),
     )

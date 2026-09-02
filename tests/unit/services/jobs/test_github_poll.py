@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import EventType
-from agent_backbone.services.github._poller import (
+from agent_backbone.services.jobs.github_poll import (
     GitHubPoller,
     comment_event_from_api,
     issue_event_from_api,
@@ -86,15 +87,19 @@ class TestPolledRepos:
 
 
 @pytest.fixture
-def services():
-    delivery = MagicMock()
-    delivery.is_recent_notification = MagicMock(return_value=False)
-    dispatch = MagicMock()
-    dispatch.issue_dispatcher = AsyncMock(
-        return_value=MagicMock(delivered=["ike"], offline=[], deferred=[])
+def dispatch():
+    """The routing entry points behind ``dispatch_event``."""
+    mocks = SimpleNamespace(
+        issue_dispatcher=AsyncMock(
+            return_value=MagicMock(delivered=["ike"], offline=[], deferred=[])
+        ),
+        on_issue_closed=AsyncMock(return_value={"ike": "queue_empty"}),
     )
-    dispatch.on_issue_closed = AsyncMock(return_value={"ike": "queue_empty"})
-    return delivery, dispatch
+    with (
+        patch("agent_backbone.services.routing._ingest.issue_dispatcher", mocks.issue_dispatcher),
+        patch("agent_backbone.services.routing._ingest.on_issue_closed", mocks.on_issue_closed),
+    ):
+        yield mocks
 
 
 @pytest.fixture
@@ -113,12 +118,11 @@ def config(tmp_path):
 
 
 class TestGitHubPoller:
-    async def test_dispatches_new_issue_and_comment_once(self, config, db, services):
-        delivery, dispatch = services
+    async def test_dispatches_new_issue_and_comment_once(self, config, db, dispatch):
         gh = AsyncMock()
         gh.list_issues_since = AsyncMock(return_value=[_issue(1, labels=["for:ike"])])
         gh.list_comments_since = AsyncMock(return_value=[_comment(9, 1, "[from:leo] hi")])
-        poller = GitHubPoller(lambda: config, db, gh, delivery, dispatch)
+        poller = GitHubPoller(lambda: config, db, gh)
         poller._since[TEST_REPO] = "2026-08-31T09:00:00Z"
 
         first = await poller.run()
@@ -132,27 +136,25 @@ class TestGitHubPoller:
         assert dispatch.issue_dispatcher.await_count == 2
         assert gh.list_issues_since.await_args_list[1].args[1] == "2026-08-31T10:05:01Z"
         # Both events were stored in the activity feed
-        assert len(await db.query_events(repo=TEST_REPO)) == 2
+        assert len(await db.events.query(repo=TEST_REPO)) == 2
 
-    async def test_closed_issue_goes_to_lifecycle(self, config, db, services):
-        delivery, dispatch = services
+    async def test_closed_issue_goes_to_lifecycle(self, config, db, dispatch):
         gh = AsyncMock()
         gh.list_issues_since = AsyncMock(return_value=[_issue(4, state="closed")])
         gh.list_comments_since = AsyncMock(return_value=[])
-        poller = GitHubPoller(config, db, gh, delivery, dispatch)
+        poller = GitHubPoller(config, db, gh)
 
         summary = await poller.run()
 
         assert summary == {"lifecycle": 1}
         dispatch.on_issue_closed.assert_awaited_once()
 
-    async def test_comment_on_unlisted_issue_fetches_it(self, config, db, services):
-        delivery, dispatch = services
+    async def test_comment_on_unlisted_issue_fetches_it(self, config, db, dispatch):
         gh = AsyncMock()
         gh.list_issues_since = AsyncMock(return_value=[])
         gh.list_comments_since = AsyncMock(return_value=[_comment(9, 7, "hello")])
         gh.get_issue_raw = AsyncMock(return_value=_issue(7, labels=["for:ike"]))
-        poller = GitHubPoller(config, db, gh, delivery, dispatch)
+        poller = GitHubPoller(config, db, gh)
 
         await poller.run()
 
@@ -160,39 +162,36 @@ class TestGitHubPoller:
         event = dispatch.issue_dispatcher.await_args.args[0]
         assert event.issue.number == 7 and event.comment.body == "hello"
 
-    async def test_api_failure_is_nonfatal(self, config, db, services):
-        delivery, dispatch = services
+    async def test_api_failure_is_nonfatal(self, config, db, dispatch):
         gh = AsyncMock()
         gh.list_issues_since = AsyncMock(side_effect=RuntimeError("rate limited"))
-        poller = GitHubPoller(config, db, gh, delivery, dispatch)
+        poller = GitHubPoller(config, db, gh)
         assert await poller.run() == {}
 
-    async def test_dedup_survives_restart_via_events_table(self, config, db, services):
-        delivery, dispatch = services
+    async def test_dedup_survives_restart_via_events_table(self, config, db, dispatch):
         gh = AsyncMock()
         gh.list_issues_since = AsyncMock(return_value=[_issue(1, labels=["for:ike"])])
         gh.list_comments_since = AsyncMock(return_value=[])
-        first = GitHubPoller(config, db, gh, delivery, dispatch)
+        first = GitHubPoller(config, db, gh)
         first._since[TEST_REPO] = "2026-08-31T09:00:00Z"
         await first.run()
-        db._seen_deliveries.clear()  # restart: hot cache gone, DB remains
+        # restart: nothing in memory survives, the events table does
 
-        second = GitHubPoller(config, db, gh, delivery, dispatch)
+        second = GitHubPoller(config, db, gh)
         second._since[TEST_REPO] = "2026-08-31T09:00:00Z"
         summary = await second.run()
 
         assert summary == {"deduped": 1}
         assert dispatch.issue_dispatcher.await_count == 1
 
-    async def test_backfill_resumes_from_last_stored_event(self, config, db, services):
-        delivery, dispatch = services
-        await db.record_event(
+    async def test_backfill_resumes_from_last_stored_event(self, config, db, dispatch):
+        await db.events.record(
             delivery_id="x", source="webhook", event_type="issue_opened", repo=TEST_REPO
         )
         gh = AsyncMock()
         gh.list_issues_since = AsyncMock(return_value=[])
         gh.list_comments_since = AsyncMock(return_value=[])
-        await GitHubPoller(config, db, gh, delivery, dispatch).run()
+        await GitHubPoller(config, db, gh).run()
         since = gh.list_issues_since.await_args.args[1]
         # A little before the stored event, never the full lookback window
         assert since.endswith("Z") and since >= "2020"

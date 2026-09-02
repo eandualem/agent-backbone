@@ -23,20 +23,27 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
 
 from agent_backbone.models import ISSUE_TYPE_WEIGHTS
-from agent_backbone.services.database.interface import sqlite_url
 
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
 DEFAULT_PORT = 7120
+SQLITE_FILENAME = "backbone.db"
+
+
+def sqlite_url(data_dir: Path) -> str:
+    """The default database URL: a SQLite file in the data directory."""
+    return f"sqlite+aiosqlite:///{data_dir / SQLITE_FILENAME}"
+
 
 RUNTIMES: tuple[str, ...] = ("claude", "codex", "gemini", "opencode", "aider", "shell")
-"""Every runtime an agent can be started with (``shell`` is a plain login shell)."""
+"""The ``agents.default_runtime`` vocabulary. ``services.runtimes`` registers
+exactly these ids (asserted at import); the knowledge about each lives there."""
 
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "BACKBONE_API_KEY",
@@ -60,7 +67,6 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "backbone.port": DEFAULT_PORT,
     "backbone.session_name": "backbone",
     "backbone.cors_origins": [],
-    "backbone.max_delivery_ids": 100,
     "agents.default_runtime": "claude",
     "agents.pre_trust": True,
     "agents.inject_brief": True,
@@ -95,11 +101,13 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
 }
 
 SETTINGS_HELP: dict[str, str] = {
-    "backbone.host": "Bind address for the API (keep 127.0.0.1 unless you add TLS+auth in front)",
+    "backbone.host": (
+        "Bind address for the API (keep 127.0.0.1 unless you add TLS+auth in front; "
+        "the CLI reaches a non-loopback host over https)"
+    ),
     "backbone.port": "API port",
     "backbone.session_name": "tmux session used by `backbone up --detach`",
     "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",
-    "backbone.max_delivery_ids": "Webhook delivery ids remembered for duplicate detection",
     "agents.default_runtime": "Runtime used by `agent start` when none is given",
     "agents.pre_trust": (
         "Answer the runtime's folder-trust dialog before starting (claude, codex, gemini)"
@@ -268,6 +276,10 @@ class AgentSpec:
                 seen.append(candidate)
         return tuple(seen)
 
+    def with_watches(self, *repos: str) -> AgentSpec:
+        """A copy that also watches ``repos`` (order kept, duplicates dropped)."""
+        return replace(self, watches=tuple(dict.fromkeys([*self.watches, *repos])))
+
 
 @dataclass(frozen=True)
 class AgentsConfig:
@@ -321,18 +333,19 @@ class AgentsConfig:
 
 
 # ---------------------------------------------------------------------------
-# Sections (frozen snapshots built from settings)
+# Sections (frozen snapshots built from settings) — one per settings prefix
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class BackboneSection:
+    """``backbone.*``"""
+
     data_dir: str = DEFAULT_DATA_DIR
     host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
     session_name: str = "backbone"
     cors_origins: tuple[str, ...] = ()
-    max_delivery_ids: int = 100
 
     @property
     def data_path(self) -> Path:
@@ -340,7 +353,10 @@ class BackboneSection:
 
 
 @dataclass(frozen=True)
-class AgentsSection:
+class LaunchConfig:
+    """``agents.*`` — how ``agent start`` launches a session (``config.launch``;
+    ``config.agents`` is the registry of known agents)."""
+
     default_runtime: str = "claude"
     pre_trust: bool = True
     inject_brief: bool = True
@@ -348,7 +364,7 @@ class AgentsSection:
 
 @dataclass(frozen=True)
 class GitHubConfig:
-    """GitHub intake settings (non-secret). Credentials come from the environment."""
+    """``github.*`` — intake settings (non-secret). Credentials come from the environment."""
 
     intake: str = "auto"
     poll_interval_seconds: int = 60
@@ -358,31 +374,31 @@ class GitHubConfig:
 
 @dataclass(frozen=True)
 class RoutingConfig:
+    """``routing.*``"""
+
     ignore_targets: frozenset[str] = frozenset()
     notification_dedup_seconds: int = 10
 
 
 @dataclass(frozen=True)
-class AgentStateConfig:
+class TimingConfig:
+    """``timing.*`` — every threshold and period, in one place."""
+
     stale_threshold_seconds: int = 300
-
-
-@dataclass(frozen=True)
-class MonitorConfig:
-    interval_seconds: int = 60
-    retry_interval_seconds: int = 300
-    start_timeout_seconds: int = 60
-
-
-@dataclass(frozen=True)
-class DeliveryConfig:
-    retention_days: int = 30
     grace_period_seconds: int = 5
     queue_expiry_minutes: int = 30
+    stall_threshold_seconds: int = 5400
+    escalation_dedup_seconds: int = 1800
+    monitor_interval_seconds: int = 60
+    retry_interval_seconds: int = 300
+    start_timeout_seconds: int = 60
+    delivery_retention_days: int = 30
 
 
 @dataclass(frozen=True)
 class TelegramConfig:
+    """``telegram.*``"""
+
     allowed_chat_ids: tuple[int, ...] = ()
     topic_routes: dict[int, str] = field(default_factory=dict)
     group_chat_id: int | None = None
@@ -391,7 +407,9 @@ class TelegramConfig:
 
 
 @dataclass(frozen=True)
-class PriorityScoringConfig:
+class PriorityConfig:
+    """``priority.*`` — issue queue ordering."""
+
     blocking_weight: float = 1000.0
     type_weights: dict[str, float] = field(
         default_factory=lambda: dict(SETTINGS_DEFAULTS["priority.type_weights"])
@@ -402,13 +420,15 @@ class PriorityScoringConfig:
 
 @dataclass(frozen=True)
 class EscalationConfig:
+    """``escalation.*``"""
+
     target: str = ""
-    stall_threshold_seconds: int = 5400
-    dedup_seconds: int = 1800
 
 
 @dataclass(frozen=True)
 class SecurityConfig:
+    """``security.*``"""
+
     allow_remote_plan_control: bool = False
     allow_remote_approval: bool = True
     allow_unauthenticated: bool = False
@@ -433,18 +453,17 @@ class BackboneConfig:
 
     backbone: BackboneSection = field(default_factory=BackboneSection)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
-    agents_section: AgentsSection = field(default_factory=AgentsSection)
+    """The known agents (the ``agents`` table); ``launch`` holds the ``agents.*`` settings."""
+    launch: LaunchConfig = field(default_factory=LaunchConfig)
     github: GitHubConfig = field(default_factory=GitHubConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
-    agent_state: AgentStateConfig = field(default_factory=AgentStateConfig)
-    monitor: MonitorConfig = field(default_factory=MonitorConfig)
-    delivery: DeliveryConfig = field(default_factory=DeliveryConfig)
-    database_url_override: str = ""
-    """``BACKBONE_DATABASE_URL`` when set (PostgreSQL); empty means SQLite in the data dir."""
+    timing: TimingConfig = field(default_factory=TimingConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
-    priority_scoring: PriorityScoringConfig = field(default_factory=PriorityScoringConfig)
+    priority: PriorityConfig = field(default_factory=PriorityConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    database_url_override: str = ""
+    """``BACKBONE_DATABASE_URL`` when set (PostgreSQL); empty means SQLite in the data dir."""
     settings: dict[str, Any] = field(default_factory=dict)
     """Raw effective settings (defaults overlaid with stored values)."""
 
@@ -501,10 +520,6 @@ class BackboneConfig:
     @property
     def telegram_ready(self) -> bool:
         return bool(self.telegram_token)
-
-    @property
-    def webhook_secrets(self) -> tuple[str, ...]:
-        return (self.webhook_secret,) if self.webhook_secret else ()
 
 
 # ---------------------------------------------------------------------------
@@ -609,10 +624,9 @@ def build_config(
             port=int(env.get("BACKBONE_PORT") or s["backbone.port"]),
             session_name=s["backbone.session_name"],
             cors_origins=tuple(s["backbone.cors_origins"]),
-            max_delivery_ids=s["backbone.max_delivery_ids"],
         ),
         agents=agents,
-        agents_section=AgentsSection(
+        launch=LaunchConfig(
             default_runtime=s["agents.default_runtime"],
             pre_trust=s["agents.pre_trust"],
             inject_brief=s["agents.inject_brief"],
@@ -627,18 +641,16 @@ def build_config(
             ignore_targets=frozenset(s["routing.ignore_targets"]),
             notification_dedup_seconds=s["routing.notification_dedup_seconds"],
         ),
-        agent_state=AgentStateConfig(
+        timing=TimingConfig(
             stale_threshold_seconds=s["timing.stale_threshold_seconds"],
-        ),
-        monitor=MonitorConfig(
-            interval_seconds=s["timing.monitor_interval_seconds"],
-            retry_interval_seconds=s["timing.retry_interval_seconds"],
-            start_timeout_seconds=s["timing.start_timeout_seconds"],
-        ),
-        delivery=DeliveryConfig(
-            retention_days=s["timing.delivery_retention_days"],
             grace_period_seconds=s["timing.grace_period_seconds"],
             queue_expiry_minutes=s["timing.queue_expiry_minutes"],
+            stall_threshold_seconds=s["timing.stall_threshold_seconds"],
+            escalation_dedup_seconds=s["timing.escalation_dedup_seconds"],
+            monitor_interval_seconds=s["timing.monitor_interval_seconds"],
+            retry_interval_seconds=s["timing.retry_interval_seconds"],
+            start_timeout_seconds=s["timing.start_timeout_seconds"],
+            delivery_retention_days=s["timing.delivery_retention_days"],
         ),
         database_url_override=env.get("BACKBONE_DATABASE_URL", ""),
         telegram=TelegramConfig(
@@ -648,17 +660,13 @@ def build_config(
             notification_chat_id=_opt_int(s["telegram.notification_chat_id"]),
             auto_topics=bool(s["telegram.auto_topics"]),
         ),
-        priority_scoring=PriorityScoringConfig(
+        priority=PriorityConfig(
             blocking_weight=float(s["priority.blocking_weight"]),
             type_weights={k: float(v) for k, v in s["priority.type_weights"].items()},
             dependents_multiplier=float(s["priority.dependents_multiplier"]),
             age_tiebreaker_weight=float(s["priority.age_tiebreaker_weight"]),
         ),
-        escalation=EscalationConfig(
-            target=s["escalation.target"],
-            stall_threshold_seconds=s["timing.stall_threshold_seconds"],
-            dedup_seconds=s["timing.escalation_dedup_seconds"],
-        ),
+        escalation=EscalationConfig(target=s["escalation.target"]),
         security=SecurityConfig(
             allow_remote_plan_control=bool(s["security.allow_remote_plan_control"]),
             allow_remote_approval=bool(s["security.allow_remote_approval"]),

@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection
+from typing import TYPE_CHECKING
 
-from agent_backbone.config import BackboneConfig
 from agent_backbone.models import BLOCKED_OUTCOMES, DeliveryOutcome
-from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import (
     format_next_issue_notification,
     is_acknowledged,
@@ -17,15 +16,22 @@ from agent_backbone.services.routing import (
 )
 from agent_backbone.services.terminal import list_sessions
 
+if TYPE_CHECKING:
+    from agent_backbone.config import BackboneConfig
+    from agent_backbone.services.database import BackboneDB
+    from agent_backbone.services.github import GitHubClient
+
 log = logging.getLogger(__name__)
 
 _BUSY_OUTCOMES = BLOCKED_OUTCOMES - {DeliveryOutcome.OFFLINE}
+_QUEUE_DONE = frozenset({DeliveryOutcome.DELIVERED, DeliveryOutcome.ALREADY_DELIVERED})
+SOURCE = "delivery-retry"
 
 
 async def drain_message_queue(
     config: BackboneConfig,
     db: BackboneDB,
-    gh: object | None,
+    gh: GitHubClient | None,
     *,
     active_sessions: Collection[str],
 ) -> dict[str, int]:
@@ -33,29 +39,27 @@ async def drain_message_queue(
     summary: dict[str, int] = {}
 
     try:
-        stale_leases = await db.expire_stale_leases(max_age_minutes=5)
+        stale_leases = await db.queue.expire_stale_leases(max_age_minutes=5)
         if stale_leases:
             summary["leases_recovered"] = stale_leases
     except Exception:
         log.exception("Failed to recover stale leases (non-fatal)")
 
     try:
-        expired = await db.expire_stale_pending(
-            max_age_minutes=config.delivery.queue_expiry_minutes
-        )
+        expired = await db.queue.expire_pending(max_age_minutes=config.timing.queue_expiry_minutes)
         if expired:
             log.info(
                 "Expired %d queued messages (> %d min)",
                 expired,
-                config.delivery.queue_expiry_minutes,
+                config.timing.queue_expiry_minutes,
             )
             summary["queue_expired"] = expired
     except Exception:
         log.exception("Failed to expire stale messages (non-fatal)")
 
-    queued_sessions = set(await db.get_sessions_with_pending())
+    queued_sessions = set(await db.queue.sessions_with_pending())
     for session_name in sorted(set(active_sessions) | queued_sessions):
-        queued = await db.dequeue_messages(session_name, limit=5)
+        queued = await db.queue.dequeue(session_name, limit=5)
         if not queued:
             continue
         for record in queued:
@@ -74,14 +78,14 @@ async def drain_message_queue(
                 repo=record.get("repo") or "",
                 issue_number=record.get("issue_number"),
                 target_entity=target,
-                flow_name="delivery-retry-queue",
+                source=f"{SOURCE}-queue",
                 enforce_issue_queue=True,
                 queue_scope=scope,
                 delivery_kind=record.get("delivery_kind", "issue"),
             )
-            if outcome in ("delivered", "already_delivered"):
-                await db.mark_message_delivered(record["id"])
-                key = "queue_delivered" if outcome == "delivered" else "queue_cleared"
+            if outcome in _QUEUE_DONE:
+                await db.queue.mark_delivered(record["id"])
+                key = "queue_delivered" if outcome == DeliveryOutcome.DELIVERED else "queue_cleared"
                 summary[key] = summary.get(key, 0) + 1
             else:
                 # Still blocked: release every remaining lease of this batch so
@@ -89,12 +93,14 @@ async def drain_message_queue(
                 # stale-lease sweep. Stop here to preserve oldest-first order.
                 index = queued.index(record)
                 for leased in queued[index:]:
-                    await db.release_lease(leased["id"])
+                    await db.queue.release(leased["id"])
                 break
     return summary
 
 
-async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB, gh: object) -> str:
+async def retry_delivery(
+    config: BackboneConfig, delivery: dict, db: BackboneDB, gh: GitHubClient
+) -> str:
     """Re-attempt one failed issue delivery."""
     session_name = delivery["session_name"]
     issue_number = delivery["issue_number"]
@@ -123,33 +129,33 @@ async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB,
         repo=repo,
         issue_number=issue_number,
         target_entity=target,
-        flow_name="delivery-retry",
+        source=SOURCE,
         enforce_issue_queue=True,
         queue_scope=scope,
     )
-    if outcome == "delivered":
+    if outcome == DeliveryOutcome.DELIVERED:
         return "retried"
-    if outcome == "offline":
+    if outcome == DeliveryOutcome.OFFLINE:
         return "still_offline"
     if outcome in _BUSY_OUTCOMES:
         return "still_busy"
-    if outcome in ("already_delivered", "awaiting_ack"):
-        return outcome
-    return "delivery_failed"
+    if outcome in (DeliveryOutcome.ALREADY_DELIVERED, DeliveryOutcome.AWAITING_ACK):
+        return outcome.value
+    return DeliveryOutcome.DELIVERY_FAILED.value
 
 
-async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: object | None) -> dict:
+async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: GitHubClient | None) -> dict:
     """Retry failed issue deliveries, then drain the queue."""
     summary: dict[str, int] = {}
     try:
-        reclaimed = await db.reclaim_stale_attempts(max_age_minutes=5)
+        reclaimed = await db.deliveries.reclaim_stale(max_age_minutes=5)
         if reclaimed:
             summary["attempts_reclaimed"] = reclaimed
     except Exception:
         log.exception("Failed to reclaim stale attempts (non-fatal)")
 
     if gh is not None:
-        for delivery in await db.get_failed_deliveries(limit=20):
+        for delivery in await db.deliveries.failed(limit=20):
             outcome = await retry_delivery(config, delivery, db, gh)
             summary[outcome] = summary.get(outcome, 0) + 1
 

@@ -15,19 +15,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from agent_backbone.models import EventType, IssueData, IssueEvent
+from agent_backbone.models import EventType, IssueData
 from agent_backbone.services.routing._priority import compute_priority_score
 
 if TYPE_CHECKING:
     from agent_backbone.config import AgentSpec, BackboneConfig
+    from agent_backbone.services.github import GitHubClient
 
 
 def _same(a: str, b: str) -> bool:
     return a.casefold() == b.casefold()
-
-
-def issue_repo(issue: IssueData) -> str:
-    return issue.repo_full_name or ""
 
 
 def agent_knows_repo(spec: AgentSpec, repo: str) -> bool:
@@ -47,28 +44,25 @@ class EventRouting:
     """Watchers told for information only."""
 
 
-def route_issue_event(event: IssueEvent, config: BackboneConfig) -> EventRouting:
+def route_issue(issue: IssueData, event_type: EventType, config: BackboneConfig) -> EventRouting:
     """Audiences for an issue/PR event (comments are routed separately)."""
-    repo = issue_repo(event.issue)
+    repo = issue.repo_full_name
     routing = EventRouting(repo=repo)
     agents = config.agents
     ignore = config.routing.ignore_targets
-    owners = [s.name for s in agents.owners(repo)] if repo else []
-    watchers = [s.name for s in agents.watchers(repo)] if repo else []
+    owners = [s.name for s in agents.owners(repo)]
+    watchers = [s.name for s in agents.watchers(repo)]
 
-    explicit = [t for t in event.issue.labels.targets if t not in ignore]
-    if event.event_type == EventType.PULL_REQUEST_OPENED:
+    explicit = [t for t in issue.labels.targets if t not in ignore and t in agents]
+    if event_type == EventType.PULL_REQUEST_OPENED:
         routing.watch = [n for n in owners + watchers if n not in explicit]
-        routing.queue = [t for t in explicit if t in agents]
+        routing.queue = explicit
         return routing
 
     if explicit:
-        routing.queue = [
-            t for t in explicit if t in agents and agent_knows_repo(agents.get(t), repo)
-        ]
-        # for: targets that don't know the repo still get it: explicit wins.
-        routing.queue += [t for t in explicit if t in agents and t not in routing.queue]
-    elif event.event_type == EventType.ISSUE_OPENED:
+        # Explicit always wins; targets that own or watch the repo go first.
+        routing.queue = sorted(explicit, key=lambda t: not agent_knows_repo(agents.get(t), repo))
+    elif event_type == EventType.ISSUE_OPENED:
         if len(owners) == 1:
             routing.queue = owners
         elif owners:
@@ -79,27 +73,22 @@ def route_issue_event(event: IssueEvent, config: BackboneConfig) -> EventRouting
     return routing
 
 
-def comment_audience(event: IssueEvent, commenter: str | None, config: BackboneConfig) -> list[str]:
-    """Agents notified about a comment: opener ∪ targets ∪ sole owner, minus the commenter."""
-    routing = route_issue_event(
-        IssueEvent(event_type=EventType.ISSUE_OPENED, issue=event.issue), config
-    )
-    parties: set[str] = set(routing.queue)
-    sender = event.issue.labels.sender
+def issue_parties(issue: IssueData, config: BackboneConfig) -> list[str]:
+    """The agents an issue belongs to: its queue targets plus its opener, if an agent."""
+    parties = set(route_issue(issue, EventType.ISSUE_OPENED, config).queue)
+    sender = issue.labels.sender
     if sender and sender != "unknown" and sender in config.agents:
         parties.add(sender)
-    parties -= set(config.routing.ignore_targets)
-    if commenter:
-        parties.discard(commenter)
-    return sorted(parties)
+    return sorted(parties - set(config.routing.ignore_targets))
 
 
-def _has_for_label(issue: IssueData) -> bool:
-    return bool(issue.labels.targets)
+def comment_audience(issue: IssueData, commenter: str | None, config: BackboneConfig) -> list[str]:
+    """Agents notified about a comment: the issue's parties minus the commenter."""
+    return [party for party in issue_parties(issue, config) if party != commenter]
 
 
 async def list_open_queue_for_target(
-    config: BackboneConfig, target: str, gh: object
+    config: BackboneConfig, target: str, gh: GitHubClient | None
 ) -> list[IssueData]:
     """An agent's open queue across every repository it owns or watches.
 
@@ -115,7 +104,7 @@ async def list_open_queue_for_target(
 
     def _add(items: list[IssueData]) -> None:
         for item in items:
-            key = (issue_repo(item).casefold(), item.number)
+            key = (item.repo_full_name.casefold(), item.number)
             if key not in seen:
                 seen.add(key)
                 issues.append(item)
@@ -124,17 +113,18 @@ async def list_open_queue_for_target(
         _add(await gh.list_issues(state="open", labels=[f"for:{target}"], repo_full_name=repo))
 
     if spec.repo and len(config.agents.owners(spec.repo)) == 1:
-        unlabelled = [
-            item
-            for item in await gh.list_issues(state="open", repo_full_name=spec.repo)
-            if not _has_for_label(item)
-        ]
-        _add(unlabelled)
+        _add(
+            [
+                item
+                for item in await gh.list_issues(state="open", repo_full_name=spec.repo)
+                if not item.labels.targets
+            ]
+        )
 
-    scoring = config.priority_scoring
+    scoring = config.priority
     issues.sort(key=lambda issue: (-compute_priority_score(issue, scoring), issue.number))
     return issues
 
 
 def queue_scope(issues: list[IssueData]) -> set[tuple[str, int]]:
-    return {(issue_repo(i), i.number) for i in issues}
+    return {(i.repo_full_name, i.number) for i in issues}

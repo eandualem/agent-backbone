@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_backbone.api.deps import get_state_service, get_tmux_service
 from agent_backbone.services.agents import AgentState, StateSnapshot
 
 _ROUTE = "agent_backbone.api.routes.agents"
-_LAUNCH = "agent_backbone.services.infrastructure._agents"
+_FEED = "agent_backbone.api.session_updates"
+_LAUNCH = "agent_backbone.services.agents.launch"
+_RUNTIME = "agent_backbone.services.runtimes.base.Runtime"
 
-_DETECT_REPO = "agent_backbone.services.agent_store.detect_repo"
+_DETECT_REPO = "agent_backbone.services.agents.store.detect_repo"
 
 
 def _snapshot(state: AgentState = AgentState.IDLE, **kwargs) -> StateSnapshot:
@@ -22,32 +24,45 @@ def _snapshot(state: AgentState = AgentState.IDLE, **kwargs) -> StateSnapshot:
 
 @pytest.fixture
 def state_svc():
-    svc = MagicMock()
-    svc.get_state = AsyncMock(return_value=_snapshot())
-    return svc
+    """The state read behind the feed and the state endpoint, answering idle."""
+    get_state = AsyncMock(return_value=_snapshot())
+    with patch(f"{_FEED}.agent_state", get_state), patch(f"{_ROUTE}.agent_state", get_state):
+        yield SimpleNamespace(get_state=get_state)
 
 
 @pytest.fixture
 def tmux_svc():
-    svc = MagicMock()
-    svc.list_sessions = AsyncMock(return_value=["ike", "feynman"])
-    svc.list_sessions_rich = AsyncMock(
-        return_value=[
-            {"name": "ike", "windows": 1, "created": 1000, "attached": True, "activity": 5},
-            {"name": "feynman", "windows": 2, "created": 2000, "attached": False, "activity": 0},
-        ]
+    """The tmux reads and writes behind the feed and the routes."""
+    mocks = SimpleNamespace(
+        list_sessions=AsyncMock(return_value=["ike", "feynman"]),
+        list_sessions_rich=AsyncMock(
+            return_value=[
+                {"name": "ike", "windows": 1, "created": 1000, "attached": True, "activity": 5},
+                {
+                    "name": "feynman",
+                    "windows": 2,
+                    "created": 2000,
+                    "attached": False,
+                    "activity": 0,
+                },
+            ]
+        ),
+        session_exists=AsyncMock(return_value=False),
+        stop_session=AsyncMock(return_value=True),
+        capture_pane=AsyncMock(return_value="prompt >"),
     )
-    svc.session_exists = AsyncMock(return_value=False)
-    svc.start_session = AsyncMock(return_value=True)
-    svc.stop_session = AsyncMock(return_value=True)
-    svc.capture_pane = AsyncMock(return_value="prompt >")
-    return svc
+    with (
+        patch(f"{_FEED}.list_sessions_rich", mocks.list_sessions_rich),
+        patch(f"{_ROUTE}.list_sessions", mocks.list_sessions),
+        patch(f"{_ROUTE}.session_exists", mocks.session_exists),
+        patch(f"{_ROUTE}.stop_session", mocks.stop_session),
+        patch(f"{_ROUTE}.capture_pane", mocks.capture_pane),
+    ):
+        yield mocks
 
 
 @pytest.fixture(autouse=True)
 def _override(api_app, state_svc, tmux_svc):
-    api_app.dependency_overrides[get_state_service] = lambda: state_svc
-    api_app.dependency_overrides[get_tmux_service] = lambda: tmux_svc
     with (
         patch(
             "agent_backbone.api.session_updates.query_environment_var",
@@ -61,27 +76,21 @@ def _override(api_app, state_svc, tmux_svc):
         ),
     ):
         yield
-    api_app.dependency_overrides.clear()
 
 
 @pytest.fixture
 def launch():
     """The launch seams under ``start_agent``: no real tmux, no real binaries."""
     with (
-        patch(f"{_ROUTE}.runtime_available", return_value=True),
+        patch(f"{_RUNTIME}.available", return_value=True),
         patch(f"{_LAUNCH}.session_exists", new_callable=AsyncMock, return_value=False) as exists,
         patch(f"{_LAUNCH}.start_session", new_callable=AsyncMock, return_value=True) as start,
-        patch(f"{_LAUNCH}.build_command", return_value=["/usr/bin/claude"]) as build,
-        patch(f"{_LAUNCH}.pre_trust_runtime") as trust,
-        patch("agent_backbone.services.routing.safe_deliver", new_callable=AsyncMock) as deliver,
+        patch(f"{_RUNTIME}.build_command", return_value=["/usr/bin/claude"]) as build,
+        patch("agent_backbone.services.runtimes.claude.pre_trust_directory"),
+        patch("agent_backbone.services.runtimes.codex.pre_trust_codex_directory") as trust,
     ):
-        deliver.return_value = "delivered"
         yield MagicMock(
-            session_exists=exists,
-            start_session=start,
-            build_command=build,
-            trust=trust,
-            deliver=deliver,
+            session_exists=exists, start_session=start, build_command=build, trust=trust
         )
 
 
@@ -157,7 +166,7 @@ class TestStartAgent:
             headers=auth_headers,
         )
         assert resp.json()["runtime"] == "codex"
-        assert launch.build_command.call_args.args == ("codex",)
+        assert launch.start_session.await_args.kwargs["environment"]["BACKBONE_RUNTIME"] == "codex"
         assert launch.build_command.call_args.kwargs["model"] == "x"
         assert launch.build_command.call_args.kwargs["resume"] is True
 
@@ -169,24 +178,25 @@ class TestStartAgent:
         )
         assert resp.status_code == 200
         launch.trust.assert_called_once()
-        assert launch.trust.call_args.args[0] == "codex"
+        assert launch.start_session.await_args.kwargs["environment"]["BACKBONE_RUNTIME"] == "codex"
         assert launch.build_command.call_args.kwargs["pre_trust"] is True
 
-    async def test_runtime_without_launch_injection_gets_brief_as_first_message(
-        self, api_client, auth_headers, launch
+    async def test_runtime_without_launch_injection_gets_brief_queued(
+        self, api_client, auth_headers, launch, api_app
     ):
         launch.build_command.return_value = ["/usr/bin/aider"]
         resp = await api_client.post(
             "/api/agents/ike/start", json={"runtime": "aider"}, headers=auth_headers
         )
         assert resp.status_code == 200
-        launch.deliver.assert_awaited_once()
-        assert launch.deliver.await_args.args[0] == "ike"
-        assert launch.deliver.await_args.args[1].startswith("[via:backbone] ")
-        assert launch.deliver.await_args.kwargs["delivery_kind"] == "direct_message"
+        queued = await api_app.state.db.queue.dequeue("ike")
+        assert len(queued) == 1
+        assert queued[0]["message"].startswith("[via:backbone] ")
+        assert queued[0]["delivery_kind"] == "direct_message"
+        assert queued[0]["source"] == "agent-brief"
 
     async def test_launch_injected_and_resumed_runtimes_are_not_rebriefed(
-        self, api_client, auth_headers, launch
+        self, api_client, auth_headers, launch, api_app
     ):
         await api_client.post("/api/agents/ike/start", headers=auth_headers)  # claude
         await api_client.post(
@@ -197,7 +207,7 @@ class TestStartAgent:
             json={"runtime": "aider", "resume": True},
             headers=auth_headers,
         )
-        launch.deliver.assert_not_awaited()
+        assert await api_app.state.db.queue.sessions_with_pending() == []
 
     async def test_unknown_runtime_400(self, api_client, auth_headers):
         resp = await api_client.post(
@@ -206,7 +216,7 @@ class TestStartAgent:
         assert resp.status_code == 400
 
     async def test_unavailable_binary_400(self, api_client, auth_headers):
-        with patch(f"{_ROUTE}.runtime_available", return_value=False):
+        with patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=False):
             resp = await api_client.post("/api/agents/ike/start", headers=auth_headers)
         assert resp.status_code == 400
         assert "binary not found" in resp.json()["detail"]
@@ -229,7 +239,7 @@ class TestStartAgent:
         project.mkdir()
         launch.build_command.return_value = None
         with patch(
-            "agent_backbone.services.agent_store.detect_repo",
+            "agent_backbone.services.agents.store.detect_repo",
             new_callable=AsyncMock,
             return_value="acme/scratch",
         ):
@@ -266,8 +276,8 @@ class TestStartAgent:
                 current_repo="example/ike",
                 evidence=["hook state 'busy' written 3s ago (fresh)"],
             )
-            with patch(f"{_ROUTE}.capture_pane", new_callable=AsyncMock, return_value="❯ "):
-                resp = await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
+            tmux_svc.capture_pane.return_value = "❯ "
+            resp = await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["state"] == "busy" and data["delivery"] == "agent_working"
@@ -347,7 +357,7 @@ class TestApproveAgent:
         data = resp.json()
         assert data["ok"] and data["outcome"] == "approved" and data["approved_by"] == "orch"
         assert approve.await_args.kwargs["runtime"] == "claude"
-        events = await api_app.state.db.query_events(limit=5)
+        events = await api_app.state.db.events.query(limit=5)
         assert events and events[0]["event_type"] == "approval"
         assert "orch approved a claude permission prompt on ike" in events[0]["summary"]
 

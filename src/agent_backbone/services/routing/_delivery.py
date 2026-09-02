@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 from agent_backbone.models import BLOCKED_OUTCOMES, SUCCESS_OUTCOMES, DeliveryOutcome
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence
-from agent_backbone.services.terminal import send_message
+from agent_backbone.services.runtimes import send_message
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -31,18 +31,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Conditions that block delivery, in priority order, with the outcome they produce
-# and whether ``priority`` may bypass them.
-_BLOCKING: dict[SessionIntelligence, tuple[DeliveryOutcome, bool]] = {
-    SessionIntelligence.OFFLINE: (DeliveryOutcome.OFFLINE, False),
-    SessionIntelligence.WAITING_FOR_HUMAN: (DeliveryOutcome.WAITING_FOR_HUMAN, False),
-    SessionIntelligence.AGENT_WORKING: (DeliveryOutcome.AGENT_WORKING, False),
-    SessionIntelligence.HUMAN_TYPING: (DeliveryOutcome.HUMAN_TYPING, True),
-    SessionIntelligence.SETTLING: (DeliveryOutcome.SETTLING, True),
-}
+_BYPASSABLE = frozenset({SessionIntelligence.HUMAN_TYPING, SessionIntelligence.SETTLING})
+"""Blocking conditions ``priority`` may push through. Busy and waiting never are."""
+_ACTIVE_ISSUE_CONDITIONS = frozenset(
+    {SessionIntelligence.AGENT_WORKING, SessionIntelligence.WAITING_FOR_HUMAN}
+)
+"""Conditions under which a comment on the agent's *current* issue still goes in."""
 
 
-def outcome_queues(outcome: str, kind: str) -> bool:
+def outcome_queues(outcome: DeliveryOutcome, kind: str) -> bool:
     """Whether ``safe_deliver`` queued the message for this blocked outcome.
 
     Mirrors the queueing decision in ``safe_deliver``: non-issue kinds are
@@ -70,9 +67,9 @@ async def is_acknowledged(
     db: BackboneDB, repo: str, issue_number: int, target_entity: str, session_name: str
 ) -> bool:
     """Whether the target (or the session delivering for it) acknowledged the issue."""
-    if await db.is_acknowledged(issue_number, target_entity, repo=repo):
+    if await db.acks.exists(issue_number, target_entity, repo=repo):
         return True
-    return session_name != target_entity and await db.is_acknowledged(
+    return session_name != target_entity and await db.acks.exists(
         issue_number, session_name, repo=repo
     )
 
@@ -80,7 +77,7 @@ async def is_acknowledged(
 async def _has_successful_issue_delivery(
     db: BackboneDB, repo: str, issue_number: int, session_name: str
 ) -> bool:
-    rows = await db.query_deliveries(
+    rows = await db.deliveries.query(
         issue_number=issue_number, session_name=session_name, limit=25, repo=repo, kind="issue"
     )
     return any((row.get("outcome") or "") in SUCCESS_OUTCOMES for row in rows)
@@ -95,7 +92,7 @@ async def _get_unacknowledged_gate_issue(
 ) -> tuple[str, int] | None:
     """The most recent successfully delivered issue still awaiting acknowledgment."""
     scope = {(r.casefold(), n) for r, n in (queue_scope or ())}
-    rows = await db.query_deliveries(session_name=session_name, limit=100, kind="issue")
+    rows = await db.deliveries.query(session_name=session_name, limit=100, kind="issue")
     for row in rows:
         issue_number = row.get("issue_number")
         target_entity = row.get("target_entity")
@@ -122,8 +119,8 @@ async def _record(
     issue_number: int | None,
     target_entity: str | None,
     session_name: str,
-    outcome: str,
-    flow_name: str,
+    outcome: DeliveryOutcome,
+    source: str,
     kind: str,
     preview: str,
 ) -> None:
@@ -131,14 +128,14 @@ async def _record(
         return
     try:
         if claim_id is not None:
-            await db.finalize_delivery_attempt(claim_id, outcome)
+            await db.deliveries.finalize(claim_id, outcome.value)
             return
-        await db.record_delivery(
-            issue_number,
-            target_entity or session_name,
-            session_name,
-            outcome,
-            flow_name,
+        await db.deliveries.record(
+            issue_number=issue_number,
+            target_entity=target_entity or session_name,
+            session_name=session_name,
+            outcome=outcome.value,
+            source=source,
             repo=repo,
             kind=kind,
             preview=preview,
@@ -155,7 +152,7 @@ async def _enqueue(
     repo: str,
     issue_number: int | None,
     target_entity: str | None,
-    flow_name: str,
+    source: str,
     kind: str,
 ) -> None:
     if db is None:
@@ -163,19 +160,17 @@ async def _enqueue(
     if kind == "issue" and (issue_number is None or target_entity is None):
         return
     try:
-        row_id = await db.enqueue_message(
+        row_id = await db.queue.enqueue(
             session_name=session_name,
             message=message,
             issue_number=issue_number,
             target_entity=target_entity,
             delivery_kind=kind,
-            flow_name=flow_name,
+            source=source,
             repo=repo,
         )
         if row_id != -1:
-            log.info(
-                "Queued %s for %s (%s) via %s", kind, session_name, repo or "-", flow_name or "?"
-            )
+            log.info("Queued %s for %s (%s) via %s", kind, session_name, repo or "-", source or "?")
     except Exception:
         log.warning("Failed to enqueue message for %s (non-fatal)", session_name)
 
@@ -189,18 +184,17 @@ async def safe_deliver(
     repo: str = "",
     issue_number: int | None = None,
     target_entity: str | None = None,
-    flow_name: str = "",
+    source: str = "",
     priority: bool = False,
     idle_since: float | None = None,
     enforce_issue_queue: bool = False,
     queue_scope: Collection[tuple[str, int]] | None = None,
     delivery_kind: str = "issue",
-) -> str:
+) -> DeliveryOutcome:
     """Deliver ``message`` to ``session_name`` if the agent can take it, else queue it.
 
-    Returns one of: ``delivered``, ``offline``, ``waiting_for_human``,
-    ``agent_working``, ``human_typing``, ``settling``, ``delivery_failed``,
-    ``already_delivered``, ``awaiting_ack``.
+    ``source`` names the code path for the delivery record (``issue-dispatcher``,
+    ``api-messages``, …).
     """
     kind = delivery_kind
     trackable_issue = db is not None and issue_number is not None and target_entity is not None
@@ -212,7 +206,7 @@ async def safe_deliver(
             log.info(
                 "Suppressed duplicate issue delivery %s#%s -> %s", repo, issue_number, session_name
             )
-            return DeliveryOutcome.ALREADY_DELIVERED.value
+            return DeliveryOutcome.ALREADY_DELIVERED
         if enforce_issue_queue:
             blocking = await _get_unacknowledged_gate_issue(
                 db, session_name, repo, issue_number, queue_scope
@@ -225,24 +219,24 @@ async def safe_deliver(
                     session_name,
                     *blocking,
                 )
-                return DeliveryOutcome.AWAITING_ACK.value
+                return DeliveryOutcome.AWAITING_ACK
 
     # 2. Claim
     claim_id: int | None = None
     if kind == "issue" and trackable_issue:
-        claim = await db.claim_delivery_attempt(
+        claim = await db.deliveries.claim(
             issue_number=issue_number,
             target_entity=target_entity,
             session_name=session_name,
-            flow_name=flow_name,
+            source=source,
             repo=repo,
             preview=preview,
         )
         if claim is None:
-            return DeliveryOutcome.ALREADY_DELIVERED.value
+            return DeliveryOutcome.ALREADY_DELIVERED
         claim_id = claim
 
-    async def finish(outcome: str, *, queue: bool) -> str:
+    async def finish(outcome: DeliveryOutcome, *, queue: bool) -> DeliveryOutcome:
         if queue:
             await _enqueue(
                 db,
@@ -251,7 +245,7 @@ async def safe_deliver(
                 repo=repo,
                 issue_number=issue_number,
                 target_entity=target_entity,
-                flow_name=flow_name,
+                source=source,
                 kind=kind,
             )
         await _record(
@@ -262,7 +256,7 @@ async def safe_deliver(
             target_entity=target_entity,
             session_name=session_name,
             outcome=outcome,
-            flow_name=flow_name,
+            source=source,
             kind=kind,
             preview=preview,
         )
@@ -275,11 +269,9 @@ async def safe_deliver(
         repo, issue_number, profile.current_repo, profile.current_issue
     )
 
-    if intel in _BLOCKING:
-        outcome, bypassable = _BLOCKING[intel]
-        bypass = (priority and bypassable) or (
-            same_issue_comment
-            and intel in (SessionIntelligence.AGENT_WORKING, SessionIntelligence.WAITING_FOR_HUMAN)
+    if intel in BLOCKED_OUTCOMES:
+        bypass = (priority and intel in _BYPASSABLE) or (
+            same_issue_comment and intel in _ACTIVE_ISSUE_CONDITIONS
         )
         if not bypass:
             # Issue deliveries are re-attempted by the retry job; other kinds
@@ -287,9 +279,9 @@ async def safe_deliver(
             queue = kind != "issue" or intel == SessionIntelligence.OFFLINE
             if intel == SessionIntelligence.SETTLING and kind == "issue":
                 queue = False
-            return await finish(outcome.value, queue=queue)
+            return await finish(DeliveryOutcome(intel.value), queue=queue)
 
     # 4. Paste + submit
     if await send_message(session_name, message, runtime_hint=profile.runtime):
-        return await finish(DeliveryOutcome.DELIVERED.value, queue=False)
-    return await finish(DeliveryOutcome.DELIVERY_FAILED.value, queue=True)
+        return await finish(DeliveryOutcome.DELIVERED, queue=False)
+    return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)

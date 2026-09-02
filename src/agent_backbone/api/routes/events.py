@@ -18,6 +18,6 @@ async def list_events(
     db: BackboneDB = Depends(get_db),
 ):
     """Most recent inbound events, newest first."""
-    rows = await db.query_events(repo=repo, limit=limit)
+    rows = await db.events.query(repo=repo, limit=limit)
     items = [EventRecord(**row) for row in rows]
     return ListEnvelope(items=items, total=len(items))

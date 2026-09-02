@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+from agent_backbone.models import DeliveryOutcome
+
 # ---------------------------------------------------------------------------
 # POST /api/messages
 # ---------------------------------------------------------------------------
@@ -15,7 +17,7 @@ class TestSendMessage:
         with patch(
             "agent_backbone.api.routes.messages.safe_deliver",
             new_callable=AsyncMock,
-            return_value="delivered",
+            return_value=DeliveryOutcome.DELIVERED,
         ):
             resp = await api_client.post(
                 "/api/messages",
@@ -51,7 +53,7 @@ class TestSendMessage:
         with patch(
             "agent_backbone.api.routes.messages.safe_deliver",
             new_callable=AsyncMock,
-            return_value="agent_working",
+            return_value=DeliveryOutcome.AGENT_WORKING,
         ):
             resp = await api_client.post(
                 "/api/messages",
@@ -70,7 +72,7 @@ class TestSendMessage:
 
     async def test_send_message_formats_envelope(self, api_client, auth_headers, api_app):
         """Message is wrapped with [via:backbone from:{entity}] envelope."""
-        mock_deliver = AsyncMock(return_value="delivered")
+        mock_deliver = AsyncMock(return_value=DeliveryOutcome.DELIVERED)
         with patch("agent_backbone.api.routes.messages.safe_deliver", mock_deliver):
             await api_client.post(
                 "/api/messages",
@@ -87,7 +89,7 @@ class TestSendMessage:
         assert call_kwargs.kwargs["session_name"] == "feynman"
         delivered_msg = call_kwargs.kwargs["message"]
         assert delivered_msg == "[via:backbone from:ike] Hello there"
-        assert call_kwargs.kwargs["flow_name"] == "api-messages"
+        assert call_kwargs.kwargs["source"] == "api-messages"
         assert call_kwargs.kwargs["delivery_kind"] == "direct_message"
 
     async def test_requires_auth(self, api_client, api_key):
@@ -113,7 +115,7 @@ class TestSendMessage:
 
     async def test_priority_passed_to_safe_deliver(self, api_client, auth_headers, api_app):
         """Priority flag is forwarded to safe_deliver."""
-        mock_deliver = AsyncMock(return_value="delivered")
+        mock_deliver = AsyncMock(return_value=DeliveryOutcome.DELIVERED)
         with patch("agent_backbone.api.routes.messages.safe_deliver", mock_deliver):
             await api_client.post(
                 "/api/messages",
