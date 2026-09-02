@@ -91,7 +91,8 @@ Any CLI that runs in a terminal can be an agent; how much the backbone can do fo
 | `opencode` | ✅ (no trust dialog) | ✅ first prompt | ✅ terminal | ✅ verified | ✅ |
 | `deepcode` (Deep Code, DeepSeek) | ✅ (no trust dialog) | ✅ `-p` | ✅ terminal | ✅ verified | pending |
 | `gemini` | ✅ `--skip-trust` | ✅ first prompt | ✅ terminal | unverified¹ | — |
-| `aider`, `shell` | — | first message | terminal, best effort | untested | — |
+| `aider` | — | first message | terminal, best effort | untested | — |
+| `shell` | — | none | terminal, best effort | — | — |
 
 ¹ Gemini CLI 0.46 completes Google OAuth and then refuses personal accounts ("no longer supported for Gemini Code Assist for individuals"); the backbone reports such a session as `waiting_for_human`. Delivery to a signed-in Gemini session (e.g. `GEMINI_API_KEY`) has not been tested yet. Deep Code is `@vegamo/deepcode-cli`, the community CLI DeepSeek's docs point to; its permission dialog has not been captured yet, so `agent approve` refuses it until then.
 
