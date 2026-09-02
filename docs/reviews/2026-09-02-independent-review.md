@@ -316,10 +316,17 @@ teardown, CLI/Telegram target guards, truthful CLI expiry wording, the README br
 qualification, regression tests, and this report. The architectural/API findings are
 intentionally report-only.
 
+Added by the repository's own agent while reviewing the branch: the `SwarmError`
+that stop-before-delete teardown raises is now handled at both callers (the
+issue-closed hook logs it and leaves the swarm active; `DELETE /swarms/{name}`
+answers 409 with the reason), with a route test; `API_VERSION` reads the package
+version instead of a hard-coded string; the README brief sentence was reworded
+without changing its qualification.
+
 Validation on the branch:
 
 - Focused regression set: **227 passed**.
 - Runtime/hook/import reviewer set: **134 passed**.
 - Import-only reviewer set: **14 passed**.
-- `make check`: **passed** — Ruff lint and format checks passed; **888 tests passed**
+- `make check`: **passed** — Ruff lint and format checks passed; **889 tests passed**
   with one pre-existing `PtySession._read_loop` unawaited-coroutine warning.
