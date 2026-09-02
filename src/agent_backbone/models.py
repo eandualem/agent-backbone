@@ -101,6 +101,11 @@ class ParsedLabels(BaseModel):
     targets: list[str] = Field(default_factory=list)
     issue_type: str = ""
     priority: str = ""
+    """``blocking``, ``non-blocking`` or empty."""
+
+    @property
+    def blocking(self) -> bool:
+        return self.priority == "blocking"
 
     @classmethod
     def from_github_labels(cls, labels: list[dict]) -> ParsedLabels:
@@ -125,14 +130,18 @@ class ParsedLabels(BaseModel):
 
 
 class IssueData(BaseModel):
-    """Minimal issue data extracted from webhook payload."""
+    """An issue (or pull request) as routing sees it.
+
+    ``repo_full_name`` is always set: issue-scoped data is keyed by
+    ``(repo, number)`` everywhere, never by the number alone.
+    """
 
     number: int
+    repo_full_name: str
     title: str = ""
     state: str = "open"
     labels: ParsedLabels = Field(default_factory=ParsedLabels)
     html_url: str = ""
-    repo_full_name: str = ""
 
 
 class CommentData(BaseModel):

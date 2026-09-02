@@ -502,10 +502,6 @@ class BackboneConfig:
     def telegram_ready(self) -> bool:
         return bool(self.telegram_token)
 
-    @property
-    def webhook_secrets(self) -> tuple[str, ...]:
-        return (self.webhook_secret,) if self.webhook_secret else ()
-
 
 # ---------------------------------------------------------------------------
 # Building

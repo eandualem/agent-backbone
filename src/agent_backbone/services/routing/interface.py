@@ -97,9 +97,9 @@ class DeliveryService:
         *,
         repo: str,
         db: BackboneDB | None = None,
-        flow_name: str = "",
+        source: str = "",
     ) -> IssueData:
         """Create an issue and notify targets."""
         return await _create_and_notify(
-            gh, title, body, labels, config, repo=repo, db=db, flow_name=flow_name
+            gh, title, body, labels, config, repo=repo, db=db, source=source
         )

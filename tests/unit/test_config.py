@@ -61,7 +61,7 @@ class TestDefaults:
         assert config.api_key == "k"
         assert config.github_ready is True
         assert config.github_intake == "webhook"
-        assert config.webhook_secrets == ("s",)
+        assert config.webhook_secret == "s"
 
     def test_env_file_in_data_dir_is_loaded(self, monkeypatch, tmp_path):
         for var in ("BACKBONE_API_KEY", "GITHUB_TOKEN", "GITHUB_WEBHOOK_SECRET"):

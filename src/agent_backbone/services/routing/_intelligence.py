@@ -25,12 +25,10 @@ from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import WORKING_STATES, AgentState
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.terminal import (
-    SESSION_FORMAT_STR,
     capture_pane,
     clear_copy_mode,
     get_terminal_adapter,
     list_sessions,
-    query_format_vars,
     resolve_terminal_runtime,
 )
 
@@ -62,12 +60,6 @@ async def get_session_intelligence(
             evidence=["no tmux session with that name"],
         )
 
-    tmux_vars: dict[str, str] = {}
-    try:
-        tmux_vars = await query_format_vars(session_name, SESSION_FORMAT_STR)
-    except Exception:
-        log.debug("Failed to query tmux vars for '%s' (non-fatal)", session_name)
-
     pane_content = ""
     try:
         pane_content = await capture_pane(session_name)
@@ -98,7 +90,6 @@ async def get_session_intelligence(
             current_issue=_profile_current_issue(agent_state, state_snap.current_issue),
             current_repo=state_snap.current_repo,
             state_source=state_snap.source,
-            tmux_vars=tmux_vars,
             evidence=evidence + list(extra),
         )
 
@@ -109,8 +100,8 @@ async def get_session_intelligence(
         return profile(SessionIntelligence.AGENT_WORKING)
 
     # Copy mode is a defect, not a state: clear it and re-read the pane.
-    if tmux_vars.get("pane_in_mode") == "1":
-        cleared = await clear_copy_mode(session_name)
+    was_in_copy_mode, cleared = await clear_copy_mode(session_name)
+    if was_in_copy_mode:
         evidence.append(f"tmux copy mode detected — {'cleared' if cleared else 'could not clear'}")
         if not cleared:
             # A frozen pane swallows pastes; report the session as occupied by

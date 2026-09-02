@@ -23,7 +23,7 @@ class TestDeliveryTracking:
             target_entity="ike",
             session_name="ike",
             outcome="delivered",
-            flow_name="issue-dispatcher",
+            source="issue-dispatcher",
         )
         assert row_id > 0
 
@@ -33,16 +33,24 @@ class TestDeliveryTracking:
         assert results[0]["outcome"] == "delivered"
 
     async def test_query_by_entity(self, db):
-        await db.record_delivery(42, "ike", "ike", "delivered")
-        await db.record_delivery(43, "feynman", "feynman", "delivered")
+        await db.record_delivery(
+            issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
+        )
+        await db.record_delivery(
+            issue_number=43, target_entity="feynman", session_name="feynman", outcome="delivered"
+        )
 
         results = await db.query_deliveries(target_entity="ike")
         assert len(results) == 1
         assert results[0]["issue_number"] == 42
 
     async def test_query_by_outcome(self, db):
-        await db.record_delivery(42, "ike", "ike", "delivered")
-        await db.record_delivery(43, "feynman", "feynman", "offline")
+        await db.record_delivery(
+            issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
+        )
+        await db.record_delivery(
+            issue_number=43, target_entity="feynman", session_name="feynman", outcome="offline"
+        )
 
         results = await db.query_deliveries(outcome="offline")
         assert len(results) == 1
@@ -50,16 +58,26 @@ class TestDeliveryTracking:
 
     async def test_query_limit(self, db):
         for i in range(10):
-            await db.record_delivery(i, "ike", "ike", "delivered")
+            await db.record_delivery(
+                issue_number=i, target_entity="ike", session_name="ike", outcome="delivered"
+            )
 
         results = await db.query_deliveries(limit=3)
         assert len(results) == 3
 
     async def test_get_failed_deliveries(self, db):
-        await db.record_delivery(1, "ike", "ike", "delivered")
-        await db.record_delivery(2, "feynman", "feynman", "offline")
-        await db.record_delivery(3, "leo", "leo", "delivery_failed")
-        await db.record_delivery(4, "ada", "ada", "agent_working")
+        await db.record_delivery(
+            issue_number=1, target_entity="ike", session_name="ike", outcome="delivered"
+        )
+        await db.record_delivery(
+            issue_number=2, target_entity="feynman", session_name="feynman", outcome="offline"
+        )
+        await db.record_delivery(
+            issue_number=3, target_entity="leo", session_name="leo", outcome="delivery_failed"
+        )
+        await db.record_delivery(
+            issue_number=4, target_entity="ada", session_name="ada", outcome="agent_working"
+        )
 
         failed = await db.get_failed_deliveries()
         assert len(failed) == 3
@@ -68,11 +86,24 @@ class TestDeliveryTracking:
 
     async def test_get_failed_deliveries_includes_transient(self, db):
         """Every blocking delivery condition is retryable."""
-        await db.record_delivery(1, "ike", "ike", "delivered")
-        await db.record_delivery(2, "feynman", "feynman", "human_typing")
-        await db.record_delivery(3, "leo", "leo", "settling")
-        await db.record_delivery(4, "ada", "ada", "agent_working")
-        await db.record_delivery(5, "brunel", "brunel", "waiting_for_human")
+        await db.record_delivery(
+            issue_number=1, target_entity="ike", session_name="ike", outcome="delivered"
+        )
+        await db.record_delivery(
+            issue_number=2, target_entity="feynman", session_name="feynman", outcome="human_typing"
+        )
+        await db.record_delivery(
+            issue_number=3, target_entity="leo", session_name="leo", outcome="settling"
+        )
+        await db.record_delivery(
+            issue_number=4, target_entity="ada", session_name="ada", outcome="agent_working"
+        )
+        await db.record_delivery(
+            issue_number=5,
+            target_entity="brunel",
+            session_name="brunel",
+            outcome="waiting_for_human",
+        )
 
         failed = await db.get_failed_deliveries()
         outcomes = {r["outcome"] for r in failed}
@@ -80,24 +111,36 @@ class TestDeliveryTracking:
 
     async def test_get_failed_deliveries_excludes_superseded(self, db):
         """A failed delivery superseded by a later retried/delivered row is excluded."""
-        await db.record_delivery(42, "ike", "ike", "offline")
-        await db.record_delivery(42, "ike", "ike", "retried")
+        await db.record_delivery(
+            issue_number=42, target_entity="ike", session_name="ike", outcome="offline"
+        )
+        await db.record_delivery(
+            issue_number=42, target_entity="ike", session_name="ike", outcome="retried"
+        )
 
         failed = await db.get_failed_deliveries()
         assert len(failed) == 0
 
     async def test_get_failed_deliveries_excludes_superseded_by_delivered(self, db):
         """A failed delivery superseded by a later delivered row is excluded."""
-        await db.record_delivery(42, "ike", "ike", "offline")
-        await db.record_delivery(42, "ike", "ike", "delivered")
+        await db.record_delivery(
+            issue_number=42, target_entity="ike", session_name="ike", outcome="offline"
+        )
+        await db.record_delivery(
+            issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
+        )
 
         failed = await db.get_failed_deliveries()
         assert len(failed) == 0
 
     async def test_get_failed_deliveries_includes_unsuperseded(self, db):
         """A failed delivery for entity A is not superseded by entity B's retried row."""
-        await db.record_delivery(42, "coding-agent", "ike", "offline")
-        await db.record_delivery(42, "feynman", "feynman", "retried")
+        await db.record_delivery(
+            issue_number=42, target_entity="coding-agent", session_name="ike", outcome="offline"
+        )
+        await db.record_delivery(
+            issue_number=42, target_entity="feynman", session_name="feynman", outcome="retried"
+        )
 
         failed = await db.get_failed_deliveries()
         assert len(failed) == 1
@@ -105,7 +148,9 @@ class TestDeliveryTracking:
 
     async def test_prune_old_deliveries(self, db):
         # Insert a record, then prune with 0-day retention
-        await db.record_delivery(42, "ike", "ike", "delivered")
+        await db.record_delivery(
+            issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
+        )
         deleted = await db.prune_old_deliveries(retention_days=0)
         assert deleted == 1
 
@@ -117,7 +162,7 @@ class TestDeliveryTracking:
             issue_number=42,
             target_entity="ike",
             session_name="ike",
-            flow_name="issue-dispatcher",
+            source="issue-dispatcher",
         )
 
         assert isinstance(claim_id, int)
@@ -130,13 +175,13 @@ class TestDeliveryTracking:
             issue_number=42,
             target_entity="ike",
             session_name="ike",
-            flow_name="issue-dispatcher",
+            source="issue-dispatcher",
         )
         second = await db.claim_delivery_attempt(
             issue_number=42,
             target_entity="ike",
             session_name="ike",
-            flow_name="issue-dispatcher",
+            source="issue-dispatcher",
         )
 
         assert isinstance(first, int)
@@ -147,7 +192,7 @@ class TestDeliveryTracking:
             issue_number=42,
             target_entity="ike",
             session_name="ike",
-            flow_name="issue-dispatcher",
+            source="issue-dispatcher",
         )
 
         await db.finalize_delivery_attempt(claim_id, "delivered")
@@ -161,7 +206,7 @@ class TestDeliveryTracking:
             issue_number=42,
             target_entity="ike",
             session_name="ike",
-            flow_name="issue-dispatcher",
+            source="issue-dispatcher",
         )
 
         async with db._engine.begin() as conn:
@@ -248,7 +293,7 @@ class TestMessageQueue:
             issue_number=42,
             target_entity="ike",
             delivery_kind="comment",
-            flow_name="test-flow",
+            source="test-flow",
         )
         assert row_id > 0
 
@@ -265,7 +310,7 @@ class TestMessageQueue:
         assert messages == []
 
     async def test_mark_delivered(self, db):
-        row_id = await db.enqueue_message("ike", "msg")
+        row_id = await db.enqueue_message(session_name="ike", message="msg")
         await db.dequeue_messages("ike")
         await db.mark_message_delivered(row_id)
 
@@ -274,29 +319,29 @@ class TestMessageQueue:
 
     async def test_dequeue_respects_limit(self, db):
         for i in range(5):
-            await db.enqueue_message("ike", f"msg-{i}")
+            await db.enqueue_message(session_name="ike", message=f"msg-{i}")
 
         messages = await db.dequeue_messages("ike", limit=2)
         assert len(messages) == 2
 
     async def test_dequeue_oldest_first(self, db):
-        await db.enqueue_message("ike", "first")
-        await db.enqueue_message("ike", "second")
+        await db.enqueue_message(session_name="ike", message="first")
+        await db.enqueue_message(session_name="ike", message="second")
 
         messages = await db.dequeue_messages("ike")
         assert messages[0]["message"] == "first"
         assert messages[1]["message"] == "second"
 
     async def test_dequeue_only_own_session(self, db):
-        await db.enqueue_message("ike", "for ike")
-        await db.enqueue_message("feynman", "for feynman")
+        await db.enqueue_message(session_name="ike", message="for ike")
+        await db.enqueue_message(session_name="feynman", message="for feynman")
 
         messages = await db.dequeue_messages("ike")
         assert len(messages) == 1
         assert messages[0]["session_name"] == "ike"
 
     async def test_enqueue_without_optional_fields(self, db):
-        row_id = await db.enqueue_message("ike", "bare message")
+        row_id = await db.enqueue_message(session_name="ike", message="bare message")
         assert row_id > 0
 
         messages = await db.dequeue_messages("ike")
@@ -306,7 +351,7 @@ class TestMessageQueue:
         assert messages[0]["target_entity"] is None
 
     async def test_mark_delivered_sets_timestamp(self, db):
-        row_id = await db.enqueue_message("ike", "msg")
+        row_id = await db.enqueue_message(session_name="ike", message="msg")
         await db.dequeue_messages("ike")
         await db.mark_message_delivered(row_id)
 
@@ -316,9 +361,9 @@ class TestMessageQueue:
         assert row["delivered_at"] is not None
 
     async def test_multiple_sessions_independent(self, db):
-        await db.enqueue_message("ike", "msg1", issue_number=1)
-        await db.enqueue_message("feynman", "msg2", issue_number=2)
-        await db.enqueue_message("ike", "msg3", issue_number=3)
+        await db.enqueue_message(session_name="ike", message="msg1", issue_number=1)
+        await db.enqueue_message(session_name="feynman", message="msg2", issue_number=2)
+        await db.enqueue_message(session_name="ike", message="msg3", issue_number=3)
 
         ike_msgs = await db.dequeue_messages("ike")
         feynman_msgs = await db.dequeue_messages("feynman")
@@ -326,8 +371,12 @@ class TestMessageQueue:
         assert len(feynman_msgs) == 1
 
     async def test_enqueue_dedup_issue_constraint(self, db):
-        first = await db.enqueue_message("ike", "first", issue_number=42, target_entity="ike")
-        second = await db.enqueue_message("ike", "second", issue_number=42, target_entity="ike")
+        first = await db.enqueue_message(
+            session_name="ike", message="first", issue_number=42, target_entity="ike"
+        )
+        second = await db.enqueue_message(
+            session_name="ike", message="second", issue_number=42, target_entity="ike"
+        )
 
         assert first > 0
         assert second == -1
@@ -337,8 +386,12 @@ class TestMessageQueue:
         assert messages[0]["message"] == "first"
 
     async def test_enqueue_dedup_different_issues(self, db):
-        first = await db.enqueue_message("ike", "first", issue_number=42, target_entity="ike")
-        second = await db.enqueue_message("ike", "second", issue_number=43, target_entity="ike")
+        first = await db.enqueue_message(
+            session_name="ike", message="first", issue_number=42, target_entity="ike"
+        )
+        second = await db.enqueue_message(
+            session_name="ike", message="second", issue_number=43, target_entity="ike"
+        )
 
         assert first > 0
         assert second > 0
@@ -349,22 +402,22 @@ class TestMessageQueue:
 
     async def test_enqueue_dedup_comment_constraint(self, db):
         first = await db.enqueue_message(
-            "ike",
-            "same comment",
+            session_name="ike",
+            message="same comment",
             issue_number=42,
             target_entity="ike",
             delivery_kind="comment",
         )
         duplicate = await db.enqueue_message(
-            "ike",
-            "same comment",
+            session_name="ike",
+            message="same comment",
             issue_number=42,
             target_entity="ike",
             delivery_kind="comment",
         )
         different = await db.enqueue_message(
-            "ike",
-            "different comment",
+            session_name="ike",
+            message="different comment",
             issue_number=42,
             target_entity="ike",
             delivery_kind="comment",
@@ -382,24 +435,31 @@ class TestMessageQueue:
         # A blocked drain re-offers a queued notice through safe_deliver;
         # the queue must not grow a copy per attempt (seen live with PR notices).
         for kind in ("pull_request", "watch", "escalation"):
-            first = await db.enqueue_message("ike", f"notice {kind}", delivery_kind=kind)
+            first = await db.enqueue_message(
+                session_name="ike", message=f"notice {kind}", delivery_kind=kind
+            )
             assert first > 0
-            assert await db.enqueue_message("ike", f"notice {kind}", delivery_kind=kind) == -1
+            assert (
+                await db.enqueue_message(
+                    session_name="ike", message=f"notice {kind}", delivery_kind=kind
+                )
+                == -1
+            )
 
     async def test_enqueue_dedup_dm_constraint(self, db):
         first = await db.enqueue_message(
-            "ike",
-            "same direct message",
+            session_name="ike",
+            message="same direct message",
             delivery_kind="direct_message",
         )
         duplicate = await db.enqueue_message(
-            "ike",
-            "same direct message",
+            session_name="ike",
+            message="same direct message",
             delivery_kind="direct_message",
         )
         different = await db.enqueue_message(
-            "ike",
-            "different direct message",
+            session_name="ike",
+            message="different direct message",
             delivery_kind="direct_message",
         )
 
@@ -417,8 +477,8 @@ class TestMessageQueue:
     async def test_enqueue_content_hash_populated(self, db):
         message = "hash me"
         row_id = await db.enqueue_message(
-            "ike",
-            message,
+            session_name="ike",
+            message=message,
             issue_number=42,
             target_entity="ike",
             delivery_kind="comment",
@@ -429,15 +489,21 @@ class TestMessageQueue:
         assert row["content_hash"] == hashlib.sha256(message.encode()).hexdigest()
 
     async def test_get_sessions_with_pending(self, db):
-        await db.enqueue_message("ike", "pending one", issue_number=42, target_entity="ike")
-        await db.enqueue_message("jarvis", "pending two", delivery_kind="direct_message")
+        await db.enqueue_message(
+            session_name="ike", message="pending one", issue_number=42, target_entity="ike"
+        )
+        await db.enqueue_message(
+            session_name="jarvis", message="pending two", delivery_kind="direct_message"
+        )
 
         sessions = await db.get_sessions_with_pending()
 
         assert set(sessions) == {"ike", "jarvis"}
 
     async def test_dequeue_marks_in_progress(self, db):
-        row_id = await db.enqueue_message("ike", "claim me", issue_number=42, target_entity="ike")
+        row_id = await db.enqueue_message(
+            session_name="ike", message="claim me", issue_number=42, target_entity="ike"
+        )
 
         messages = await db.dequeue_messages("ike")
 
@@ -450,7 +516,9 @@ class TestMessageQueue:
         assert row["leased_at"] is not None
 
     async def test_dequeue_skips_in_progress(self, db):
-        await db.enqueue_message("ike", "claim me once", issue_number=42, target_entity="ike")
+        await db.enqueue_message(
+            session_name="ike", message="claim me once", issue_number=42, target_entity="ike"
+        )
 
         first = await db.dequeue_messages("ike")
         second = await db.dequeue_messages("ike")
@@ -459,7 +527,9 @@ class TestMessageQueue:
         assert second == []
 
     async def test_release_lease(self, db):
-        row_id = await db.enqueue_message("ike", "lease me", issue_number=42, target_entity="ike")
+        row_id = await db.enqueue_message(
+            session_name="ike", message="lease me", issue_number=42, target_entity="ike"
+        )
         await db.dequeue_messages("ike")
 
         await db.release_lease(row_id)
@@ -470,7 +540,7 @@ class TestMessageQueue:
 
     async def test_expire_stale_leases(self, db):
         row_id = await db.enqueue_message(
-            "ike", "stale lease", issue_number=42, target_entity="ike"
+            session_name="ike", message="stale lease", issue_number=42, target_entity="ike"
         )
         await db.dequeue_messages("ike")
 
@@ -488,10 +558,12 @@ class TestMessageQueue:
         assert row["leased_at"] is None
 
     async def test_purge_covers_in_progress(self, db):
-        first = await db.enqueue_message("ike", "claim me", issue_number=775, target_entity="ike")
+        first = await db.enqueue_message(
+            session_name="ike", message="claim me", issue_number=775, target_entity="ike"
+        )
         second = await db.enqueue_message(
-            "feynman",
-            "leave pending",
+            session_name="feynman",
+            message="leave pending",
             issue_number=775,
             target_entity="feynman",
         )
@@ -505,7 +577,7 @@ class TestMessageQueue:
 
     async def test_mark_delivered_requires_in_progress(self, db):
         row_id = await db.enqueue_message(
-            "ike", "pending row", issue_number=42, target_entity="ike"
+            session_name="ike", message="pending row", issue_number=42, target_entity="ike"
         )
 
         await db.mark_message_delivered(row_id)

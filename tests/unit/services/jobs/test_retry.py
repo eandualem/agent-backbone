@@ -12,7 +12,13 @@ from tests.support import queue_row
 
 class TestRetryDeliveryAckCheck:
     async def test_retry_skips_acknowledged_target_entity(self, db, config):
-        await db.record_delivery(154, "feynman", "ike", "offline", repo=TEST_REPO)
+        await db.record_delivery(
+            issue_number=154,
+            target_entity="feynman",
+            session_name="ike",
+            outcome="offline",
+            repo=TEST_REPO,
+        )
         await db.record_acknowledgment(154, "feynman", repo=TEST_REPO)
         delivery = {
             "session_name": "ike",
@@ -24,7 +30,13 @@ class TestRetryDeliveryAckCheck:
         assert await retry_delivery(config, delivery, db, AsyncMock()) == "acknowledged"
 
     async def test_retry_skips_when_session_acknowledged(self, db, config):
-        await db.record_delivery(154, "feynman", "ike", "offline", repo=TEST_REPO)
+        await db.record_delivery(
+            issue_number=154,
+            target_entity="feynman",
+            session_name="ike",
+            outcome="offline",
+            repo=TEST_REPO,
+        )
         await db.record_acknowledgment(154, "ike", repo=TEST_REPO)
         delivery = {
             "session_name": "ike",
@@ -37,7 +49,13 @@ class TestRetryDeliveryAckCheck:
 
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_retry_proceeds_when_not_acknowledged(self, mock_deliver, db, config):
-        await db.record_delivery(154, "ike", "ike", "offline", repo=TEST_REPO)
+        await db.record_delivery(
+            issue_number=154,
+            target_entity="ike",
+            session_name="ike",
+            outcome="offline",
+            repo=TEST_REPO,
+        )
         mock_issue = MagicMock(state="open", repo_full_name=TEST_REPO)
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
@@ -73,7 +91,13 @@ class TestRetryDeliveryAckCheck:
                 specs={"backbone": AgentSpec(name="backbone", dir="/x", repo="acme/backbone")}
             ),
         )
-        await db.record_delivery(77, "backbone", "backbone", "offline", repo="acme/backbone")
+        await db.record_delivery(
+            issue_number=77,
+            target_entity="backbone",
+            session_name="backbone",
+            outcome="offline",
+            repo="acme/backbone",
+        )
         mock_issue = MagicMock(state="open", repo_full_name="acme/backbone")
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
@@ -113,7 +137,7 @@ class TestDeliveryRetryQueueDrain:
             session_name="scratch",
             message="Queued",
             delivery_kind="direct_message",
-            flow_name="api-messages",
+            source="api-messages",
         )
         mock_deliver.return_value = "delivered"
 
@@ -129,7 +153,7 @@ class TestDeliveryRetryQueueDrain:
             session_name="ike",
             message="Direct payload",
             delivery_kind="direct_message",
-            flow_name="api-messages",
+            source="api-messages",
         )
         db.release_lease = AsyncMock(wraps=db.release_lease)
         mock_deliver.return_value = "offline"
@@ -150,7 +174,7 @@ class TestDeliveryRetryQueueDrain:
                 session_name="ike",
                 message=f"payload {i}",
                 delivery_kind="direct_message",
-                flow_name="api-messages",
+                source="api-messages",
             )
         mock_deliver.return_value = "agent_working"
 
@@ -186,7 +210,7 @@ class TestDeliveryRetryQueueDrain:
             issue_number=91,
             target_entity="ike",
             delivery_kind="comment",
-            flow_name="issue-dispatcher",
+            source="issue-dispatcher",
         )
         mock_list_sessions.return_value = ["ike"]
         mock_queue.return_value = [MagicMock(number=91)]
@@ -211,7 +235,7 @@ class TestDeliveryRetryQueueDrain:
             session_name="ike",
             message="Direct payload",
             delivery_kind="direct_message",
-            flow_name="api-messages",
+            source="api-messages",
         )
         mock_list_sessions.return_value = ["ike"]
         mock_deliver.return_value = "delivered"
@@ -230,8 +254,14 @@ class TestDeliveryRetryQueueDrain:
         self, mock_list_sessions, mock_deliver, db, config
     ):
         """No GitHub client → failed issue rows are left alone but the queue still drains."""
-        await db.record_delivery(5, "ike", "ike", "offline", repo=TEST_REPO)
-        await db.enqueue_message("ike", "hi", delivery_kind="direct_message")
+        await db.record_delivery(
+            issue_number=5,
+            target_entity="ike",
+            session_name="ike",
+            outcome="offline",
+            repo=TEST_REPO,
+        )
+        await db.enqueue_message(session_name="ike", message="hi", delivery_kind="direct_message")
         mock_list_sessions.return_value = ["ike"]
         mock_deliver.return_value = "delivered"
 
@@ -263,16 +293,28 @@ class TestPurgePendingForIssue:
 
 class TestDeliveryDedupPrefixedOutcomes:
     async def test_comment_failures_are_not_retried_as_issues(self, db):
-        await db.record_delivery(100, "feynman", "feynman", "offline", kind="comment")
+        await db.record_delivery(
+            issue_number=100,
+            target_entity="feynman",
+            session_name="feynman",
+            outcome="offline",
+            kind="comment",
+        )
         assert 100 not in [r["issue_number"] for r in await db.get_failed_deliveries()]
 
     async def test_unprefixed_delivered_still_suppresses(self, db):
-        await db.record_delivery(101, "ike", "ike", "offline")
-        await db.record_delivery(101, "ike", "ike", "delivered")
+        await db.record_delivery(
+            issue_number=101, target_entity="ike", session_name="ike", outcome="offline"
+        )
+        await db.record_delivery(
+            issue_number=101, target_entity="ike", session_name="ike", outcome="delivered"
+        )
         assert 101 not in [r["issue_number"] for r in await db.get_failed_deliveries()]
 
     async def test_unsuppressed_failure_still_retried(self, db):
-        await db.record_delivery(102, "ike", "ike", "offline")
+        await db.record_delivery(
+            issue_number=102, target_entity="ike", session_name="ike", outcome="offline"
+        )
         assert 102 in [r["issue_number"] for r in await db.get_failed_deliveries()]
 
     @patch(
@@ -287,7 +329,13 @@ class TestDeliveryDedupPrefixedOutcomes:
         from agent_backbone.services.routing._delivery import safe_deliver
         from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 
-        await db.record_delivery(200, "feynman", "feynman", "delivered", kind="comment")
+        await db.record_delivery(
+            issue_number=200,
+            target_entity="feynman",
+            session_name="feynman",
+            outcome="delivered",
+            kind="comment",
+        )
         mock_intel.return_value = SessionProfile(
             session_name="feynman",
             intelligence=SessionIntelligence.READY,
@@ -303,7 +351,7 @@ class TestDeliveryDedupPrefixedOutcomes:
             db=db,
             issue_number=200,
             target_entity="feynman",
-            flow_name="test",
+            source="test",
             delivery_kind="comment",
         )
 
@@ -342,7 +390,7 @@ class TestIssueRedeliveryRegression:
                 repo=TEST_REPO,
                 issue_number=300,
                 target_entity="ike",
-                flow_name="issue-dispatcher",
+                source="issue-dispatcher",
                 delivery_kind=kind,
             )
 

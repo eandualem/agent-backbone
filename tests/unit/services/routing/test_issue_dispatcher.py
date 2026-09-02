@@ -9,6 +9,7 @@ import pytest
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import (
     CommentData,
+    DeliveryOutcome,
     EventType,
     IssueData,
     IssueEvent,
@@ -16,10 +17,12 @@ from agent_backbone.models import (
     parse_from_tag,
 )
 from agent_backbone.services.routing._router import issue_dispatcher
-from tests.conftest import make_config
+from tests.conftest import TEST_REPO, make_config
+
+OTHER_REPO = "acme/app"
 
 
-def _patch_safe_deliver(outcome: str = "delivered"):
+def _patch_safe_deliver(outcome: DeliveryOutcome = DeliveryOutcome.DELIVERED):
     return patch(
         "agent_backbone.services.routing._router.safe_deliver",
         new_callable=AsyncMock,
@@ -35,13 +38,18 @@ def _patch_find_outgoing(result: str | None):
 
 def _issue_event(number: int, sender: str, targets: list[str], **kwargs) -> IssueEvent:
     labels = ParsedLabels(sender=sender, targets=targets, issue_type="task", **kwargs)
-    issue = IssueData(number=number, title=f"[task] #{number}", labels=labels)
+    # A repository nobody owns or watches: routing comes from the labels alone.
+    issue = IssueData(
+        number=number, repo_full_name=OTHER_REPO, title=f"[task] #{number}", labels=labels
+    )
     return IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
 
 
 def _comment_event(number: int, sender: str, targets: list[str], body: str) -> IssueEvent:
     labels = ParsedLabels(sender=sender, targets=targets, issue_type="task")
-    issue = IssueData(number=number, title=f"[task] #{number}", labels=labels)
+    issue = IssueData(
+        number=number, repo_full_name=OTHER_REPO, title=f"[task] #{number}", labels=labels
+    )
     comment = CommentData(body=body, user_login="someone")
     return IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
 
@@ -82,8 +90,21 @@ class TestParseFromTag:
 
 
 class TestIssueDispatcher:
+    async def test_dedup_is_per_target(self, config, mock_db):
+        """A target announced moments ago is skipped; the others still get the issue."""
+        from agent_backbone.services.routing._dedup import is_recent_notification
+
+        is_recent_notification(OTHER_REPO, 5, "ike")  # records ike as just-notified
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
+            result = await issue_dispatcher(
+                _issue_event(5, "leo", ["ike", "feynman"]), config, mock_db
+            )
+        assert result.delivered == ["feynman"]
+        assert "ike" in result.skipped
+        assert [c.kwargs["target_entity"] for c in mock_deliver.await_args_list] == ["feynman"]
+
     async def test_dispatch_to_configured_agent(self, config, mock_db):
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             result = await issue_dispatcher(_issue_event(1, "leo", ["ike"]), config, mock_db)
 
         assert result.delivered == ["ike"]
@@ -96,53 +117,63 @@ class TestIssueDispatcher:
         assert result.delivered == []
 
     async def test_unknown_target_is_skipped(self, config, mock_db):
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             result = await issue_dispatcher(_issue_event(3, "leo", ["nobody"]), config, mock_db)
 
         assert result.skipped == ["nobody"]
         mock_deliver.assert_not_called()
 
     async def test_session_offline(self, config, mock_db):
-        with _patch_safe_deliver("delivery_failed"):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERY_FAILED):
             result = await issue_dispatcher(_issue_event(3, "leo", ["feynman"]), config, mock_db)
         assert "feynman" in result.offline
 
     async def test_multiple_targets(self, config, mock_db):
-        with _patch_safe_deliver("delivered"):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             result = await issue_dispatcher(
                 _issue_event(5, "leo", ["ike", "feynman"]), config, mock_db
             )
         assert sorted(result.delivered) == ["feynman", "ike"]
 
     async def test_ignores_unknown_event(self, config, mock_db):
-        issue = IssueData(number=6, title="Whatever", labels=ParsedLabels(targets=["ike"]))
+        issue = IssueData(
+            number=6,
+            repo_full_name=TEST_REPO,
+            title="Whatever",
+            labels=ParsedLabels(targets=["ike"]),
+        )
         event = IssueEvent(event_type=EventType.UNKNOWN, issue=issue)
         result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == [] and result.offline == []
 
     async def test_defers_busy_agent(self, config, mock_db):
-        with _patch_safe_deliver("agent_working"):
+        with _patch_safe_deliver(DeliveryOutcome.AGENT_WORKING):
             result = await issue_dispatcher(_issue_event(7, "leo", ["ike"]), config, mock_db)
         assert "ike" in result.deferred
 
     async def test_blocking_sets_priority(self, config, mock_db):
         event = _issue_event(8, "leo", ["ike"], priority="blocking")
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             await issue_dispatcher(event, config, mock_db)
         assert mock_deliver.await_args.kwargs["priority"] is True
 
     async def test_self_targeted_issue_is_suppressed(self, config, mock_db):
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             result = await issue_dispatcher(_issue_event(9, "ike", ["ike"]), config, mock_db)
         assert result.skipped == ["ike"]
         mock_deliver.assert_not_called()
 
     async def test_queue_scope_loaded_from_github(self, config, mock_db):
         mock_gh = AsyncMock()
-        mock_gh.list_issues = AsyncMock(return_value=[IssueData(number=1), IssueData(number=4)])
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        mock_gh.list_issues = AsyncMock(
+            return_value=[
+                IssueData(number=1, repo_full_name=TEST_REPO),
+                IssueData(number=4, repo_full_name=TEST_REPO),
+            ]
+        )
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             await issue_dispatcher(_issue_event(1, "leo", ["ike"]), config, mock_db, mock_gh)
-        assert mock_deliver.await_args.kwargs["queue_scope"] == {("", 1), ("", 4)}
+        assert mock_deliver.await_args.kwargs["queue_scope"] == {(TEST_REPO, 1), (TEST_REPO, 4)}
         assert mock_deliver.await_args.kwargs["enforce_issue_queue"] is True
 
     async def test_repo_owner_receives_repo_local_issue(self, tmp_path, mock_db):
@@ -162,7 +193,7 @@ class TestIssueDispatcher:
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[issue])
 
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             result = await issue_dispatcher(event, config, mock_db, mock_gh)
 
         assert result.delivered == ["backbone"]
@@ -185,7 +216,7 @@ class TestIssueDispatcher:
         )
         event = IssueEvent(event_type=EventType.PULL_REQUEST_OPENED, issue=issue)
 
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             result = await issue_dispatcher(event, config, mock_db, AsyncMock())
 
         assert result.delivered == ["backbone"]
@@ -208,7 +239,7 @@ class TestIssueDispatcher:
             number=3, title="Bug", labels=ParsedLabels(sender="leo"), repo_full_name="acme/app"
         )
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             result = await issue_dispatcher(event, config, mock_db)
         kinds = {c.args[0]: c.kwargs["delivery_kind"] for c in mock_deliver.await_args_list}
         assert kinds == {"app": "issue", "orch": "watch"}
@@ -228,7 +259,7 @@ class TestIssueDispatcher:
             number=3, title="Bug", labels=ParsedLabels(sender="leo"), repo_full_name="acme/app"
         )
         event = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue)
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             await issue_dispatcher(event, config, mock_db)
         assert {c.kwargs["delivery_kind"] for c in mock_deliver.await_args_list} == {"watch"}
         assert "comment on it to claim it" in mock_deliver.await_args.args[1]
@@ -238,7 +269,7 @@ class TestIssueDispatcher:
             number=3, title="Edit", labels=ParsedLabels(sender="leo"), repo_full_name="example/ike"
         )
         event = IssueEvent(event_type=EventType.ISSUE_LABELED, issue=issue)
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             await issue_dispatcher(event, config, mock_db)
         mock_deliver.assert_not_called()
 
@@ -246,51 +277,51 @@ class TestIssueDispatcher:
 class TestCommentRouting:
     async def test_unknown_commenter_notifies_everyone(self, config, mock_db):
         event = _comment_event(4, "leo", ["ike"], "Test comment")
-        with _patch_safe_deliver("delivered"), _patch_find_outgoing(None):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED), _patch_find_outgoing(None):
             result = await issue_dispatcher(event, config, mock_db)
         assert sorted(result.delivered) == ["ike", "leo"]
 
     async def test_from_tag_suppresses_self_notification(self, config, mock_db):
         event = _comment_event(9, "leo", ["ike"], "[from:ike] Done with this.")
-        with _patch_safe_deliver("delivered"):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == ["leo"]
 
     async def test_self_comment_records_acknowledgment(self, config, mock_db):
         event = _comment_event(42, "leo", ["ike"], "[from:ike] Ack")
-        with _patch_safe_deliver("delivered"):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             await issue_dispatcher(event, config, mock_db)
-        mock_db.record_acknowledgment.assert_called_once_with(42, "ike", repo="")
+        mock_db.record_acknowledgment.assert_called_once_with(42, "ike", repo=OTHER_REPO)
 
     async def test_external_comment_clears_acknowledgment(self, config, mock_db):
         event = _comment_event(42, "leo", ["ike"], "[from:leo] New info")
-        with _patch_safe_deliver("delivered"):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == ["ike"]
-        mock_db.clear_acknowledgment.assert_called_with(42, "ike", repo="")
+        mock_db.clear_acknowledgment.assert_called_with(42, "ike", repo=OTHER_REPO)
 
     async def test_no_from_tag_falls_back_to_action_log(self, config, mock_db):
         event = _comment_event(12, "leo", ["ike"], "Just a plain comment.")
-        with _patch_safe_deliver("delivered"), _patch_find_outgoing("ike"):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED), _patch_find_outgoing("ike"):
             result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == ["leo"]
 
     async def test_comment_delivery_kind(self, config, mock_db):
         event = _comment_event(13, "leo", ["ike"], "[from:leo] hi")
-        with _patch_safe_deliver("delivered") as mock_deliver:
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
             await issue_dispatcher(event, config, mock_db)
         assert mock_deliver.await_args.kwargs["delivery_kind"] == "comment"
 
     async def test_ignored_target_in_comment_routing(self, config, mock_db):
         event = _comment_event(15, "ike", ["elias"], "[from:leo] Thoughts?")
-        with _patch_safe_deliver("delivered"):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             result = await issue_dispatcher(event, config, mock_db)
         assert "elias" not in result.delivered
         assert result.delivered == ["ike"]
 
     async def test_multiple_targets_comment(self, config, mock_db):
         event = _comment_event(16, "leo", ["ike", "feynman"], "[from:feynman] I'll handle this.")
-        with _patch_safe_deliver("delivered"):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             result = await issue_dispatcher(event, config, mock_db)
         assert sorted(result.delivered) == ["ike", "leo"]
 
@@ -309,6 +340,6 @@ class TestCommentRouting:
             issue=issue,
             comment=CommentData(body="hello", user_login="someone"),
         )
-        with _patch_safe_deliver("delivered"), _patch_find_outgoing(None):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED), _patch_find_outgoing(None):
             result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == ["backbone"]

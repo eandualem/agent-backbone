@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.infrastructure import StartResult
 from agent_backbone.services.swarm import (
     SwarmError,
@@ -173,7 +174,7 @@ def _swarm_config(tmp_path):
 
 
 class TestCreateSwarm:
-    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
+    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
@@ -239,7 +240,7 @@ class TestCreateSwarm:
             )
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
-    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
+    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, side_effect=[_STARTED, _FAILED])
     @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
@@ -282,7 +283,7 @@ class TestCreateSwarm:
         assert store.registered == []  # all rolled back
         assert (await db.get_swarm("research"))["status"] == "disbanded"
 
-    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value="delivered")
+    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
@@ -318,7 +319,7 @@ class TestCreateSwarm:
             "research-probe": "research-probe.md",
         }
         # Only the kickoff goes through delivery here.
-        assert [c.kwargs["flow_name"] for c in mock_deliver.await_args_list] == ["swarm-kickoff"]
+        assert [c.kwargs["source"] for c in mock_deliver.await_args_list] == ["swarm-kickoff"]
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)

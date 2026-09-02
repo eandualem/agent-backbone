@@ -4,38 +4,32 @@ tell the opener, and check whether a parent issue is now unblocked."""
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from agent_backbone.config import BackboneConfig
-from agent_backbone.models import EventType, IssueData, IssueEvent
-from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.github import GitHubClient
+from agent_backbone.models import DeliveryOutcome, EventType, IssueData, IssueEvent
 from agent_backbone.services.routing._dedup import is_recent_notification
 from agent_backbone.services.routing._delivery import safe_deliver
+from agent_backbone.services.routing._dependencies import on_dependency_resolved
 from agent_backbone.services.routing._format import (
     format_closed_notification,
     format_next_issue_notification,
 )
 from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import (
-    issue_repo,
     list_open_queue_for_target,
     queue_scope,
-    route_issue_event,
+    route_issue,
 )
 from agent_backbone.services.terminal import session_exists
 
+if TYPE_CHECKING:
+    from agent_backbone.config import BackboneConfig
+    from agent_backbone.services.database import BackboneDB
+    from agent_backbone.services.github import GitHubClient
+
 log = logging.getLogger(__name__)
 
-
-async def _check_dependencies(
-    issue_number: int, repo: str, config: BackboneConfig, db: BackboneDB, gh: GitHubClient
-) -> None:
-    try:
-        from agent_backbone.services.routing._dependencies import on_dependency_resolved
-
-        await on_dependency_resolved(issue_number, repo, config, db, gh)
-    except Exception:
-        log.exception("Dependency tracker failed for %s#%d (non-fatal)", repo, issue_number)
+SOURCE = "issue-lifecycle"
 
 
 async def find_next_issue(
@@ -50,11 +44,9 @@ async def find_next_issue(
         issues = [
             i
             for i in issues
-            if not (i.number == exclude[1] and issue_repo(i).casefold() == exclude[0].casefold())
+            if not (i.number == exclude[1] and i.repo_full_name.casefold() == exclude[0].casefold())
         ]
-    if not issues:
-        return None
-    return issues[0]
+    return issues[0] if issues else None
 
 
 async def deliver_next(
@@ -64,16 +56,16 @@ async def deliver_next(
     db: BackboneDB | None = None,
     target_entity: str = "",
     scope: set[tuple[str, int]] | None = None,
-) -> str:
+) -> DeliveryOutcome:
     return await safe_deliver(
         session_name,
         format_next_issue_notification(issue),
         config,
         db=db,
-        repo=issue_repo(issue),
+        repo=issue.repo_full_name,
         issue_number=issue.number,
         target_entity=target_entity,
-        flow_name="issue-lifecycle",
+        source=SOURCE,
         enforce_issue_queue=True,
         queue_scope=scope,
     )
@@ -87,7 +79,7 @@ async def on_issue_closed(
 ) -> dict:
     """Handle an issue_closed event."""
     result: dict[str, str] = {}
-    repo = issue_repo(event.issue)
+    repo = event.issue.repo_full_name
     closed = (repo, event.issue.number)
 
     if db is not None:
@@ -100,11 +92,9 @@ async def on_issue_closed(
         except Exception:
             log.exception("Failed to purge queue for %s#%d (non-fatal)", repo, event.issue.number)
 
-    routing = route_issue_event(
-        IssueEvent(event_type=EventType.ISSUE_OPENED, issue=event.issue), config
-    )
+    targets = route_issue(event.issue, EventType.ISSUE_OPENED, config).queue
 
-    for target in routing.queue:
+    for target in targets:
         session_name = resolve_entity_session(target, config)
         if not session_name:
             result[target] = "no_session"
@@ -121,7 +111,7 @@ async def on_issue_closed(
         scope = queue_scope(await list_open_queue_for_target(config, target, gh))
         scope.discard(closed)
         if is_recent_notification(
-            issue_repo(next_issue),
+            next_issue.repo_full_name,
             next_issue.number,
             session_name,
             config.routing.notification_dedup_seconds,
@@ -132,11 +122,15 @@ async def on_issue_closed(
         outcome = await deliver_next(
             session_name, next_issue, config, db, target_entity=target, scope=scope
         )
-        result[target] = f"delivered_#{next_issue.number}" if outcome == "delivered" else outcome
+        result[target] = (
+            f"delivered_#{next_issue.number}"
+            if outcome == DeliveryOutcome.DELIVERED
+            else outcome.value
+        )
 
     # Tell the opener (from:) that their issue was closed, unless they were a target.
     sender = event.issue.labels.sender
-    if sender and sender in config.agents and sender not in routing.queue:
+    if sender and sender in config.agents and sender not in targets:
         session_name = resolve_entity_session(sender, config)
         if session_name:
             outcome = await safe_deliver(
@@ -147,13 +141,18 @@ async def on_issue_closed(
                 repo=repo,
                 issue_number=event.issue.number,
                 target_entity=sender,
-                flow_name="issue-lifecycle",
+                source=SOURCE,
                 delivery_kind="watch",
             )
-            result[f"opener:{sender}"] = outcome
+            result[f"opener:{sender}"] = outcome.value
 
     if db is not None:
-        await _check_dependencies(event.issue.number, repo, config, db, gh)
+        try:
+            await on_dependency_resolved(event.issue.number, repo, config, db, gh)
+        except Exception:
+            log.exception(
+                "Dependency tracker failed for %s#%d (non-fatal)", repo, event.issue.number
+            )
 
     log.info("Lifecycle %s#%d: %s", repo, event.issue.number, result)
     return result

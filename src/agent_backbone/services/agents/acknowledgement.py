@@ -1,26 +1,35 @@
-"""Delivery decision helpers — action-log lookups and the idle check."""
+"""Acknowledgement evidence from the hook action log (``actions.jsonl``)."""
 
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
-from agent_backbone.services.agents.models import AgentState
+_TAIL_BLOCK = 64 * 1024
+"""Bytes read from the end of the action log per lookup: a few hundred
+entries, far more than ``max_lines``. The log itself is rotated by the
+prune job; the reader never loads the whole file."""
 
 
 def _read_tail(action_log: str | Path | None, max_lines: int) -> list[dict]:
     if action_log is None:
         return []
     log_path = Path(action_log).expanduser()
-    if not log_path.exists():
-        return []
     try:
-        lines = log_path.read_text().strip().splitlines()
+        with log_path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - _TAIL_BLOCK))
+            chunk = fh.read().decode("utf-8", "replace")
     except OSError:
         return []
+    lines = chunk.splitlines()
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
     entries: list[dict] = []
-    for line in reversed(lines[-max_lines:]):
+    for line in reversed(lines):
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:
@@ -85,6 +94,23 @@ def has_commented_on_issue(
     return False
 
 
-def should_deliver(state: AgentState) -> bool:
-    """Only a confirmed idle agent should receive a new issue."""
-    return state == AgentState.IDLE
+def rotate_action_log(action_log: str | Path, keep_lines: int = 2000) -> int:
+    """Keep the newest ``keep_lines`` entries of the action log. Returns lines dropped.
+
+    The hook appends forever; nothing else prunes the file. Runs in the
+    prune job. The rewrite is atomic; a line the hook appends during it is
+    lost, which costs at most one acknowledgement that GitHub confirms on
+    the next poll anyway.
+    """
+    log_path = Path(action_log).expanduser()
+    try:
+        lines = log_path.read_text().splitlines()
+    except OSError:
+        return 0
+    if len(lines) <= keep_lines:
+        return 0
+    kept = lines[-keep_lines:]
+    tmp = log_path.with_name(f".{log_path.name}.{os.getpid()}.tmp")
+    tmp.write_text("\n".join(kept) + "\n")
+    os.replace(tmp, log_path)
+    return len(lines) - len(kept)

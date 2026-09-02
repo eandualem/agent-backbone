@@ -51,12 +51,12 @@ async def _handle(
 ) -> Response:
     payload_body = await request.body()
 
-    if not config.webhook_secrets:
+    if not config.webhook_secret:
         log.warning("Webhook received but GITHUB_WEBHOOK_SECRET is not set — rejecting")
         return Response(content="Webhook secret not configured", status_code=403)
 
     signature = request.headers.get("X-Hub-Signature-256")
-    if not any(verify_signature(payload_body, signature, s) for s in config.webhook_secrets):
+    if not verify_signature(payload_body, signature, config.webhook_secret):
         log.warning("Invalid webhook signature — rejecting")
         return Response(content="Invalid signature", status_code=403)
 

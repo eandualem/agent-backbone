@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from telegram.error import TelegramError
 
+from agent_backbone.recent import RecentKeys
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     agent_topic,
@@ -34,7 +35,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 RETRY_SECONDS = 600
-_last_failure: dict[int, float] = {}
+_failed_groups = RecentKeys(RETRY_SECONDS)
+"""Groups whose last sync raised; retried after ``RETRY_SECONDS``."""
 
 NO_GROUP_HINT = (
     "no forum group known yet — send any message in the group (or run /identify there), "
@@ -61,8 +63,7 @@ async def sync_topics(bot: TelegramService) -> dict:
         result["skipped"] = NO_GROUP_HINT
         log.debug("Topic sync skipped: %s", NO_GROUP_HINT)
         return result
-    last = _last_failure.get(group)
-    if last is not None and time.monotonic() - last < RETRY_SECONDS:
+    if _failed_groups.seen(group):
         result["skipped"] = "recent failure, waiting before retrying"
         return result
 
@@ -93,9 +94,9 @@ async def sync_topics(bot: TelegramService) -> dict:
             discovery.closed_topics.add(thread_id)
             result["closed"].append(name)
             changed = True
-        _last_failure.pop(group, None)
+        _failed_groups.forget(group)
     except TelegramError as exc:
-        _last_failure[group] = time.monotonic()
+        _failed_groups.mark(group)
         result["skipped"] = f"telegram error: {exc}"
         log.warning(
             "Telegram topic sync failed (%s); retrying in %ds. Is the bot an administrator "

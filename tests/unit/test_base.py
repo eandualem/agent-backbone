@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_backbone.base import LifecycleAware, LifecycleManager
+from agent_backbone.base import LifecycleManager
 
 
 class _Component:
@@ -27,12 +27,6 @@ class _Component:
 class _NotAComponent:
     async def start(self) -> None:
         pass
-
-
-class TestProtocol:
-    def test_runtime_checkable(self):
-        assert isinstance(_Component("a", []), LifecycleAware)
-        assert not isinstance(_NotAComponent(), LifecycleAware)
 
 
 class TestLifecycleManager:

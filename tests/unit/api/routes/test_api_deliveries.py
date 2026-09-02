@@ -17,9 +17,27 @@ async def deliveries_app(api_app):
     db = BackboneDB(engine)
     await db.start()
     # Seed test data: 3 deliveries across 2 issues and 3 outcomes
-    await db.record_delivery(42, "ike", "ike", "delivered", "dispatcher")
-    await db.record_delivery(42, "leo", "leo", "offline", "dispatcher")
-    await db.record_delivery(43, "ike", "ike", "agent_working", "monitor")
+    await db.record_delivery(
+        issue_number=42,
+        target_entity="ike",
+        session_name="ike",
+        outcome="delivered",
+        source="dispatcher",
+    )
+    await db.record_delivery(
+        issue_number=42,
+        target_entity="leo",
+        session_name="leo",
+        outcome="offline",
+        source="dispatcher",
+    )
+    await db.record_delivery(
+        issue_number=43,
+        target_entity="ike",
+        session_name="ike",
+        outcome="agent_working",
+        source="monitor",
+    )
 
     api_app.dependency_overrides[get_db] = lambda: db
     yield api_app

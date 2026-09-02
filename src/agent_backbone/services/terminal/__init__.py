@@ -2,6 +2,7 @@
 
 from agent_backbone.services.terminal._adapters import (
     AGENT_ENV_KEY,
+    GENERIC_BUSY_FRAGMENTS,
     RUNTIME_ENV_KEY,
     STATE_DIR_ENV_KEY,
     TerminalRuntime,
@@ -11,6 +12,7 @@ from agent_backbone.services.terminal._adapters import (
     normalize_runtime,
     resolve_terminal_runtime,
     sanitize_pane_content,
+    send_message,
 )
 from agent_backbone.services.terminal._copy_mode import clear_copy_mode
 from agent_backbone.services.terminal._core import (
@@ -18,7 +20,6 @@ from agent_backbone.services.terminal._core import (
     capture_pane,
     resize_window,
     send_keys,
-    send_message,
     session_exists,
     set_window_size_mode,
 )
@@ -37,6 +38,7 @@ from agent_backbone.services.terminal.interface import TmuxService
 
 __all__ = [
     "AGENT_ENV_KEY",
+    "GENERIC_BUSY_FRAGMENTS",
     "RUNTIME_ENV_KEY",
     "SESSION_FORMAT_STR",
     "STATE_DIR_ENV_KEY",

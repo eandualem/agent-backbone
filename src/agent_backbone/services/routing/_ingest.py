@@ -11,7 +11,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import EventType, IssueEvent
-from agent_backbone.services.routing._targets import issue_repo, route_issue_event
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -33,7 +32,7 @@ def _dedup_id(event: IssueEvent) -> str:
     so comments dedup on repo + comment id instead of the transport's id.
     """
     if event.event_type == EventType.COMMENT_CREATED and event.comment and event.comment.id:
-        return f"comment:{issue_repo(event.issue)}:{event.comment.id}"
+        return f"comment:{event.issue.repo_full_name}:{event.comment.id}"
     return event.delivery_id
 
 
@@ -59,7 +58,7 @@ async def dispatch_event(
             event_id = await db.record_event(
                 delivery_id=_dedup_id(event),
                 source=_source(event.delivery_id),
-                repo=issue_repo(event.issue),
+                repo=event.issue.repo_full_name,
                 event_type=event.event_type.value,
                 issue_number=event.issue.number or None,
                 sender=(event.comment.user_login if event.comment else event.issue.labels.sender),
@@ -70,7 +69,7 @@ async def dispatch_event(
         except Exception:
             log.warning("Failed to persist event %s (continuing)", event.delivery_id)
 
-    outcome = await _route(event, config, db, gh, delivery_svc, dispatch_svc)
+    outcome = await _route(event, config, db, gh, dispatch_svc)
 
     if event_id is not None:
         try:
@@ -91,14 +90,24 @@ def register_issue_closed_listener(listener) -> None:
     _issue_closed_listeners.append(listener)
 
 
-async def _route(event, config, db, gh, delivery_svc, dispatch_svc) -> str:
+_DISPATCHED = frozenset(
+    {
+        EventType.ISSUE_OPENED,
+        EventType.ISSUE_LABELED,
+        EventType.COMMENT_CREATED,
+        EventType.PULL_REQUEST_OPENED,
+    }
+)
+
+
+async def _route(event, config, db, gh, dispatch_svc) -> str:
     if event.event_type == EventType.ISSUE_CLOSED:
         if gh is None:
             return "ignored: github client not configured"
         result = await dispatch_svc.on_issue_closed(event, config, gh, db)
         for listener in _issue_closed_listeners:
             try:
-                await listener(issue_repo(event.issue), event.issue.number)
+                await listener(event.issue.repo_full_name, event.issue.number)
             except Exception:
                 log.exception("issue-closed listener failed (non-fatal)")
         return f"lifecycle: {result}"
@@ -106,22 +115,7 @@ async def _route(event, config, db, gh, delivery_svc, dispatch_svc) -> str:
     if event.event_type == EventType.COMMENT_CREATED and event.issue.state == "closed":
         return f"ignored: comment on closed issue #{event.issue.number}"
 
-    if event.event_type in (
-        EventType.ISSUE_OPENED,
-        EventType.ISSUE_LABELED,
-        EventType.COMMENT_CREATED,
-        EventType.PULL_REQUEST_OPENED,
-    ):
-        if event.event_type in (EventType.ISSUE_OPENED, EventType.ISSUE_LABELED):
-            targets = route_issue_event(event, config).queue
-            repo = issue_repo(event.issue)
-            window = config.routing.notification_dedup_seconds
-            if targets and all(
-                delivery_svc.is_recent_notification(repo, event.issue.number, t, window)
-                for t in targets
-            ):
-                return f"deduped: all targets already notified for #{event.issue.number}"
-
+    if event.event_type in _DISPATCHED:
         result = await dispatch_svc.issue_dispatcher(event, config, db, gh)
         return (
             f"dispatch: {len(result.delivered)} delivered, "

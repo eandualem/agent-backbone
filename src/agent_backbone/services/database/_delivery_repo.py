@@ -16,13 +16,12 @@ from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 async def record_delivery(
     conn: AsyncConnection,
+    *,
     issue_number: int | None,
     target_entity: str,
     session_name: str,
     outcome: str,
-    flow_name: str = "",
-    flow_run_id: str = "",
-    *,
+    source: str = "",
     repo: str = "",
     kind: str = "issue",
     preview: str = "",
@@ -32,9 +31,9 @@ async def record_delivery(
         text(
             """INSERT INTO deliveries
                (kind, repo, issue_number, target_entity, session_name,
-                outcome, flow_name, flow_run_id, preview, created_at)
+                outcome, source, preview, created_at)
                VALUES (:kind, :repo, :issue_number, :target_entity, :session_name,
-                       :outcome, :flow_name, :flow_run_id, :preview, :created_at)
+                       :outcome, :source, :preview, :created_at)
                RETURNING id"""
         ),
         {
@@ -44,8 +43,7 @@ async def record_delivery(
             "target_entity": target_entity,
             "session_name": session_name,
             "outcome": outcome,
-            "flow_name": flow_name,
-            "flow_run_id": flow_run_id,
+            "source": source,
             "preview": preview[:200],
             "created_at": now_iso(),
         },
@@ -55,11 +53,11 @@ async def record_delivery(
 
 async def claim_delivery_attempt(
     conn: AsyncConnection,
+    *,
     issue_number: int,
     target_entity: str,
     session_name: str,
-    flow_name: str,
-    *,
+    source: str,
     repo: str = "",
     preview: str = "",
 ) -> int | None:
@@ -68,9 +66,9 @@ async def claim_delivery_attempt(
         text(
             """INSERT INTO deliveries
                (kind, repo, issue_number, target_entity, session_name, outcome,
-                flow_name, preview, created_at)
+                source, preview, created_at)
                VALUES ('issue', :repo, :issue_number, :target_entity, :session_name,
-                       'attempting', :flow_name, :preview, :now)
+                       'attempting', :source, :preview, :now)
                ON CONFLICT (repo, issue_number, session_name)
                WHERE kind = 'issue'
                  AND issue_number IS NOT NULL
@@ -83,7 +81,7 @@ async def claim_delivery_attempt(
             "issue_number": issue_number,
             "target_entity": target_entity,
             "session_name": session_name,
-            "flow_name": flow_name,
+            "source": source,
             "preview": preview[:200],
             "now": now_iso(),
         },

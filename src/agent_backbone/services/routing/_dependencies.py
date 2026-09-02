@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from agent_backbone.config import BackboneConfig
-from agent_backbone.services.database import BackboneDB
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import format_unblock_notification
 from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import list_open_queue_for_target
 
+if TYPE_CHECKING:
+    from agent_backbone.config import BackboneConfig
+    from agent_backbone.services.database import BackboneDB
+    from agent_backbone.services.github import GitHubClient
+
 log = logging.getLogger(__name__)
+
+SOURCE = "dependency-tracker"
 
 
 async def check_parent_resolved(
-    config: BackboneConfig, parent_number: int, gh: object, *, repo: str = ""
+    config: BackboneConfig, parent_number: int, gh: GitHubClient, *, repo: str = ""
 ) -> dict | None:
     """Parent issue + targets if every sub-issue is closed, else None."""
     sub_issues = await gh.get_sub_issues(parent_number, repo_full_name=repo)
@@ -30,7 +37,7 @@ async def on_dependency_resolved(
     repo: str,
     config: BackboneConfig,
     db: BackboneDB,
-    gh: object,
+    gh: GitHubClient,
 ) -> dict:
     """If closing this issue unblocks a parent, tell the parent's targets."""
     result: dict[str, str] = {"parents_checked": "0"}
@@ -58,10 +65,10 @@ async def on_dependency_resolved(
                 repo=repo,
                 issue_number=parent_num,
                 target_entity=target,
-                flow_name="dependency-tracker",
+                source=SOURCE,
                 delivery_kind="watch",
             )
-            if outcome == "delivered":
+            if outcome == DeliveryOutcome.DELIVERED:
                 delivered_to.append(session_name)
         result[f"parent_{parent_num}"] = (
             f"unblocked_delivered_to:{','.join(delivered_to)}"
@@ -71,7 +78,9 @@ async def on_dependency_resolved(
     return result
 
 
-async def sync_dependencies(config: BackboneConfig, db: BackboneDB, gh: object) -> None:
+async def sync_dependencies(
+    config: BackboneConfig, db: BackboneDB, gh: GitHubClient | None
+) -> None:
     """Record sub-issue relationships for every open issue in every agent queue."""
     if gh is None:
         return

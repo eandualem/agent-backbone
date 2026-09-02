@@ -268,7 +268,7 @@ async def create_swarm(
         kickoff,
         config,
         db=db,
-        flow_name="swarm-kickoff",
+        source="swarm-kickoff",
         delivery_kind="direct_message",
     )
     log.info("Swarm '%s' started (%d members); kickoff: %s", name, len(all_names), outcome)

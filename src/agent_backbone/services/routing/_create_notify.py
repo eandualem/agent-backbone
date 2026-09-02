@@ -31,7 +31,7 @@ async def create_and_notify(
     *,
     repo: str,
     db: BackboneDB | None = None,
-    flow_name: str = "",
+    source: str = "",
 ) -> IssueData:
     """Create ``repo#N`` and deliver it to its ``for:`` targets immediately."""
     targets = [label.removeprefix("for:") for label in labels if label.startswith("for:")]
@@ -55,7 +55,7 @@ async def create_and_notify(
             repo=repo,
             issue_number=issue.number,
             target_entity=target,
-            flow_name=flow_name,
+            source=source,
             enforce_issue_queue=True,
             queue_scope=scope,
         )

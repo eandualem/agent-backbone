@@ -58,7 +58,7 @@ def _patch_list_sessions(sessions: list[str]):
 
 
 def _patch_query_format_vars(vars_dict: dict[str, str]):
-    return patch(f"{_INTEL}.query_format_vars", new_callable=AsyncMock, return_value=vars_dict)
+    return patch(f"{_COPY}.query_format_vars", new_callable=AsyncMock, return_value=vars_dict)
 
 
 def _patch_get_agent_state(snap: StateSnapshot):
@@ -106,7 +106,7 @@ class TestGetSessionIntelligence:
             patch(f"{_COPY}.asyncio.sleep", new_callable=AsyncMock),
             _patch_get_agent_state(_IDLE_SNAP),
             patch(
-                "agent_backbone.services.terminal._adapters.TerminalAdapter.exit_copy_mode",
+                f"{_COPY}.cancel_copy_mode",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as exit_copy,
@@ -128,7 +128,7 @@ class TestGetSessionIntelligence:
             patch(f"{_COPY}.asyncio.sleep", new_callable=AsyncMock),
             _patch_get_agent_state(_IDLE_SNAP),
             patch(
-                "agent_backbone.services.terminal._adapters.TerminalAdapter.exit_copy_mode",
+                f"{_COPY}.cancel_copy_mode",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -180,7 +180,7 @@ class TestGetSessionIntelligence:
             _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
             _patch_get_agent_state(snap),
             patch(
-                "agent_backbone.services.terminal._adapters.TerminalAdapter.exit_copy_mode",
+                f"{_COPY}.cancel_copy_mode",
                 new_callable=AsyncMock,
             ) as exit_copy,
         ):
@@ -240,7 +240,7 @@ class TestResolveEntitySession:
 
 
 def _issue_kwargs(**extra):
-    base = dict(repo="example/orchestration", issue_number=42, target_entity="ike", flow_name="t")
+    base = dict(repo="example/orchestration", issue_number=42, target_entity="ike", source="t")
     base.update(extra)
     return base
 
@@ -263,7 +263,7 @@ class TestSafeDeliver:
             issue_number=42,
             target_entity="ike",
             delivery_kind="issue",
-            flow_name="t",
+            source="t",
             repo="example/orchestration",
         )
 
@@ -275,16 +275,16 @@ class TestSafeDeliver:
                 "Hi there",
                 config,
                 db=mock_db,
-                flow_name="api",
+                source="api",
                 delivery_kind="direct_message",
             )
         assert result == "delivered"
         mock_db.record_delivery.assert_called_once_with(
-            None,
-            "ike",
-            "ike",
-            "delivered",
-            "api",
+            issue_number=None,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivered",
+            source="api",
             repo="",
             kind="direct_message",
             preview="Hi there",
@@ -325,7 +325,7 @@ class TestSafeDeliver:
                 "Hello",
                 config,
                 db=mock_db,
-                flow_name="api-messages",
+                source="api-messages",
                 delivery_kind="direct_message",
             )
         assert result == "agent_working"
@@ -335,7 +335,7 @@ class TestSafeDeliver:
             issue_number=None,
             target_entity=None,
             delivery_kind="direct_message",
-            flow_name="api-messages",
+            source="api-messages",
             repo="",
         )
 
@@ -472,11 +472,11 @@ class TestSafeDeliver:
             )
         assert result == "delivered"
         mock_db.record_delivery.assert_called_once_with(
-            42,
-            "ike",
-            "ike",
-            "delivered",
-            "t",
+            issue_number=42,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivered",
+            source="t",
             repo="example/orchestration",
             kind="comment",
             preview="Hello",
@@ -499,7 +499,7 @@ class TestSafeDeliver:
             )
         assert result == "agent_working"
         mock_db.enqueue_message.assert_called_once()
-        assert mock_db.record_delivery.await_args.args[3] == "agent_working"
+        assert mock_db.record_delivery.await_args.kwargs["outcome"] == "agent_working"
         assert mock_db.record_delivery.await_args.kwargs["kind"] == "comment"
 
     async def test_settling_defers(self, config):

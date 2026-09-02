@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection
+from typing import TYPE_CHECKING
 
-from agent_backbone.config import BackboneConfig
 from agent_backbone.models import BLOCKED_OUTCOMES, DeliveryOutcome
-from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import (
     format_next_issue_notification,
     is_acknowledged,
@@ -17,15 +16,22 @@ from agent_backbone.services.routing import (
 )
 from agent_backbone.services.terminal import list_sessions
 
+if TYPE_CHECKING:
+    from agent_backbone.config import BackboneConfig
+    from agent_backbone.services.database import BackboneDB
+    from agent_backbone.services.github import GitHubClient
+
 log = logging.getLogger(__name__)
 
 _BUSY_OUTCOMES = BLOCKED_OUTCOMES - {DeliveryOutcome.OFFLINE}
+_QUEUE_DONE = frozenset({DeliveryOutcome.DELIVERED, DeliveryOutcome.ALREADY_DELIVERED})
+SOURCE = "delivery-retry"
 
 
 async def drain_message_queue(
     config: BackboneConfig,
     db: BackboneDB,
-    gh: object | None,
+    gh: GitHubClient | None,
     *,
     active_sessions: Collection[str],
 ) -> dict[str, int]:
@@ -74,14 +80,14 @@ async def drain_message_queue(
                 repo=record.get("repo") or "",
                 issue_number=record.get("issue_number"),
                 target_entity=target,
-                flow_name="delivery-retry-queue",
+                source=f"{SOURCE}-queue",
                 enforce_issue_queue=True,
                 queue_scope=scope,
                 delivery_kind=record.get("delivery_kind", "issue"),
             )
-            if outcome in ("delivered", "already_delivered"):
+            if outcome in _QUEUE_DONE:
                 await db.mark_message_delivered(record["id"])
-                key = "queue_delivered" if outcome == "delivered" else "queue_cleared"
+                key = "queue_delivered" if outcome == DeliveryOutcome.DELIVERED else "queue_cleared"
                 summary[key] = summary.get(key, 0) + 1
             else:
                 # Still blocked: release every remaining lease of this batch so
@@ -94,7 +100,9 @@ async def drain_message_queue(
     return summary
 
 
-async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB, gh: object) -> str:
+async def retry_delivery(
+    config: BackboneConfig, delivery: dict, db: BackboneDB, gh: GitHubClient
+) -> str:
     """Re-attempt one failed issue delivery."""
     session_name = delivery["session_name"]
     issue_number = delivery["issue_number"]
@@ -123,22 +131,22 @@ async def retry_delivery(config: BackboneConfig, delivery: dict, db: BackboneDB,
         repo=repo,
         issue_number=issue_number,
         target_entity=target,
-        flow_name="delivery-retry",
+        source=SOURCE,
         enforce_issue_queue=True,
         queue_scope=scope,
     )
-    if outcome == "delivered":
+    if outcome == DeliveryOutcome.DELIVERED:
         return "retried"
-    if outcome == "offline":
+    if outcome == DeliveryOutcome.OFFLINE:
         return "still_offline"
     if outcome in _BUSY_OUTCOMES:
         return "still_busy"
-    if outcome in ("already_delivered", "awaiting_ack"):
-        return outcome
-    return "delivery_failed"
+    if outcome in (DeliveryOutcome.ALREADY_DELIVERED, DeliveryOutcome.AWAITING_ACK):
+        return outcome.value
+    return DeliveryOutcome.DELIVERY_FAILED.value
 
 
-async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: object | None) -> dict:
+async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: GitHubClient | None) -> dict:
     """Retry failed issue deliveries, then drain the queue."""
     summary: dict[str, int] = {}
     try:

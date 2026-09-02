@@ -4,17 +4,22 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing._dependencies import on_dependency_resolved, sync_dependencies
-from agent_backbone.services.routing._lifecycle import _check_dependencies
 
 _DEP = "agent_backbone.services.routing._dependencies"
 
 
 def _make_issue(number: int, state: str = "closed", targets: list[str] | None = None) -> IssueData:
     labels = ParsedLabels(sender="ike", targets=targets or ["feynman"], issue_type="task")
-    return IssueData(number=number, title=f"[task] Issue #{number}", state=state, labels=labels)
+    return IssueData(
+        number=number,
+        repo_full_name="acme/app",
+        title=f"[task] Issue #{number}",
+        state=state,
+        labels=labels,
+    )
 
 
 class TestOnDependencyResolved:
@@ -34,7 +39,9 @@ class TestOnDependencyResolved:
                     return_value={"parent": parent, "targets": ["feynman"]},
                 ),
                 patch(
-                    f"{_DEP}.safe_deliver", new_callable=AsyncMock, return_value="delivered"
+                    f"{_DEP}.safe_deliver",
+                    new_callable=AsyncMock,
+                    return_value=DeliveryOutcome.DELIVERED,
                 ) as d,
             ):
                 result = await on_dependency_resolved(20, "", config, db, AsyncMock())
@@ -85,24 +92,6 @@ class TestCheckParentResolved:
 
 
 class TestLifecycleDependencyIntegration:
-    async def test_lifecycle_calls_dependency_tracker(self, config):
-        db, gh = AsyncMock(), AsyncMock()
-        with patch(
-            f"{_DEP}.on_dependency_resolved",
-            new_callable=AsyncMock,
-            return_value={"parents_checked": "0"},
-        ) as mock_dep:
-            await _check_dependencies(42, "acme/app", config, db, gh)
-        mock_dep.assert_called_once_with(42, "acme/app", config, db, gh)
-
-    async def test_lifecycle_dependency_error_isolated(self, config):
-        with patch(
-            f"{_DEP}.on_dependency_resolved",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("boom"),
-        ):
-            await _check_dependencies(42, "acme/app", config, AsyncMock(), AsyncMock())
-
     async def test_sync_dependencies_queries_each_agent(self, config):
         gh = AsyncMock()
         gh.list_issues = AsyncMock(return_value=[])

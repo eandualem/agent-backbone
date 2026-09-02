@@ -22,6 +22,7 @@ from agent_backbone.config import (
     BackboneConfig,
     agents_from_rows,
     build_config,
+    validate_setting,
 )
 
 if TYPE_CHECKING:
@@ -243,8 +244,6 @@ class AgentStore:
     # --- Settings ---
 
     async def set_setting(self, key: str, value) -> BackboneConfig:
-        from agent_backbone.config import validate_setting
-
         clean = validate_setting(key, value)
         await self._db.set_setting(key, clean)
         return await self.refresh()

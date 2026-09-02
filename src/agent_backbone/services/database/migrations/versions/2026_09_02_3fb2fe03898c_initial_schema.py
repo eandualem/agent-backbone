@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 387112cb1193
+Revision ID: 3fb2fe03898c
 Revises:
-Create Date: 2026-09-01 22:31:06.163929
+Create Date: 2026-09-02 10:38:08.720386
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "387112cb1193"
+revision: str = "3fb2fe03898c"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -74,8 +74,7 @@ def upgrade() -> None:
         sa.Column("target_entity", sa.Text(), nullable=False),
         sa.Column("session_name", sa.Text(), nullable=False),
         sa.Column("outcome", sa.Text(), nullable=False),
-        sa.Column("flow_name", sa.Text(), server_default="", nullable=False),
-        sa.Column("flow_run_id", sa.Text(), server_default="", nullable=False),
+        sa.Column("source", sa.Text(), server_default="", nullable=False),
         sa.Column("preview", sa.Text(), server_default="", nullable=False),
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_deliveries")),
@@ -139,7 +138,7 @@ def upgrade() -> None:
         sa.Column("issue_number", sa.Integer(), nullable=True),
         sa.Column("target_entity", sa.Text(), nullable=True),
         sa.Column("delivery_kind", sa.Text(), server_default="issue", nullable=False),
-        sa.Column("flow_name", sa.Text(), server_default="", nullable=True),
+        sa.Column("source", sa.Text(), server_default="", nullable=False),
         sa.Column("enqueued_at", sa.Text(), nullable=False),
         sa.Column("delivered_at", sa.Text(), nullable=True),
         sa.Column("status", sa.Text(), server_default="pending", nullable=False),

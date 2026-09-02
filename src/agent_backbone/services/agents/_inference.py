@@ -7,8 +7,14 @@ import time
 from pathlib import Path
 
 from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.agents.models import REASON_PERMISSION, AgentState, StateSnapshot
+from agent_backbone.services.agents.models import (
+    REASON_PERMISSION,
+    REASON_PLAN,
+    AgentState,
+    StateSnapshot,
+)
 from agent_backbone.services.terminal import (
+    GENERIC_BUSY_FRAGMENTS,
     TerminalRuntime,
     capture_pane,
     detect_runtime_from_pane,
@@ -40,7 +46,7 @@ def _trust_stale_push(snapshot: StateSnapshot) -> bool:
     """Whether a stale hook snapshot is still worth using when the pane says nothing."""
     if snapshot.state in (AgentState.IDLE, AgentState.BUSY):
         return True
-    if snapshot.state == AgentState.WAITING_FOR_HUMAN and snapshot.reason == "plan":
+    if snapshot.state == AgentState.WAITING_FOR_HUMAN and snapshot.reason == REASON_PLAN:
         return bool(snapshot.plan_file and Path(snapshot.plan_file).exists())
     return False
 
@@ -77,7 +83,7 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
         )
 
     recent = "\n".join(ln.strip().lower() for ln in lines[-20:] if ln.strip())
-    if "thinking..." in recent or "tool call" in recent:
+    if any(fragment in recent for fragment in GENERIC_BUSY_FRAGMENTS):
         return StateSnapshot(
             state=AgentState.BUSY, source="pull", evidence=["terminal shows thinking/tool output"]
         )
@@ -136,9 +142,6 @@ async def get_agent_state(
             ]
             return push
         return pull
-
-    if push and push_age is not None and push_age < stale_threshold:
-        return push
 
     if push and _trust_stale_push(push):
         push.evidence = [

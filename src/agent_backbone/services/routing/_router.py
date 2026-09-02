@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from agent_backbone.config import BackboneConfig
 from agent_backbone.models import DeliveryOutcome, EventType, IssueEvent, parse_from_tag
-from agent_backbone.services.agents._delivery_check import find_outgoing_comment
-from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.agents.acknowledgement import find_outgoing_comment
+from agent_backbone.services.routing._dedup import is_recent_notification
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import (
     format_comment_notification,
@@ -19,14 +19,20 @@ from agent_backbone.services.routing._format import (
 from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import (
     comment_audience,
-    issue_repo,
     list_open_queue_for_target,
     queue_scope,
-    route_issue_event,
+    route_issue,
 )
 from agent_backbone.services.routing.models import DispatchResult
 
+if TYPE_CHECKING:
+    from agent_backbone.config import BackboneConfig
+    from agent_backbone.services.database import BackboneDB
+    from agent_backbone.services.github import GitHubClient
+
 log = logging.getLogger(__name__)
+
+SOURCE = "issue-dispatcher"
 
 
 def _resolve_commenter_entity(event: IssueEvent, config: BackboneConfig) -> str | None:
@@ -36,11 +42,11 @@ def _resolve_commenter_entity(event: IssueEvent, config: BackboneConfig) -> str 
         if entity:
             return entity
     return find_outgoing_comment(
-        event.issue.number, action_log=config.action_log_path, repo=issue_repo(event.issue)
+        event.issue.number, action_log=config.action_log_path, repo=event.issue.repo_full_name
     )
 
 
-def _record(result: DispatchResult, session: str, outcome: str) -> None:
+def _record(result: DispatchResult, session: str, outcome: DeliveryOutcome) -> None:
     if outcome == DeliveryOutcome.DELIVERED:
         result.delivered.append(session)
     elif outcome == DeliveryOutcome.ALREADY_DELIVERED:
@@ -64,9 +70,16 @@ async def _deliver(
     enforce_issue_queue: bool = False,
     scope: set[tuple[str, int]] | None = None,
 ) -> None:
+    repo = event.issue.repo_full_name
     session = resolve_entity_session(target, config)
     if session is None:
         log.warning("No session for target '%s'", target)
+        result.skipped.append(target)
+        return
+    if kind == "issue" and is_recent_notification(
+        repo, event.issue.number, target, config.routing.notification_dedup_seconds
+    ):
+        log.info("Deduped %s#%d → %s (announced moments ago)", repo, event.issue.number, target)
         result.skipped.append(target)
         return
     outcome = await safe_deliver(
@@ -74,80 +87,74 @@ async def _deliver(
         message,
         config,
         db=db,
-        repo=issue_repo(event.issue),
+        repo=repo,
         issue_number=event.issue.number,
         target_entity=target,
-        flow_name="issue-dispatcher",
+        source=SOURCE,
         priority=priority,
         enforce_issue_queue=enforce_issue_queue,
         queue_scope=scope,
         delivery_kind=kind,
     )
     _record(result, session, outcome)
-    log.info(
-        "Decision: %s#%d → %s (%s) = %s",
-        issue_repo(event.issue),
-        event.issue.number,
-        target,
-        kind,
-        outcome,
-    )
+    log.info("Decision: %s#%d → %s (%s) = %s", repo, event.issue.number, target, kind, outcome)
 
 
-async def issue_dispatcher(
+async def _dispatch_comment(
+    event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
+) -> None:
+    repo = event.issue.repo_full_name
+    commenter = _resolve_commenter_entity(event, config)
+    audience = comment_audience(event.issue, commenter, config)
+    message = format_comment_notification(event.issue, event.comment, commenter_entity=commenter)
+
+    commenter_session: str | None = None
+    if commenter:
+        commenter_session = resolve_entity_session(commenter, config)
+        try:
+            await db.record_acknowledgment(event.issue.number, commenter, repo=repo)
+        except Exception:
+            log.exception("Failed to record acknowledgment (non-fatal)")
+
+    for target in audience:
+        session = resolve_entity_session(target, config)
+        if session is None or session == commenter_session:
+            result.skipped.append(target)
+            continue
+        try:
+            await db.clear_acknowledgment(event.issue.number, target, repo=repo)
+        except Exception:
+            log.exception("Failed to clear acknowledgment (non-fatal)")
+        await _deliver(
+            target,
+            message,
+            event,
+            config,
+            db,
+            result,
+            kind="comment",
+            priority=event.issue.labels.blocking,
+        )
+
+
+async def _dispatch_pull_request(
+    event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
+) -> None:
+    routing = route_issue(event.issue, event.event_type, config)
+    message = format_pull_request_notification(event.issue)
+    for target in routing.queue + routing.watch:
+        await _deliver(target, message, event, config, db, result, kind="pull_request")
+
+
+async def _dispatch_issue(
     event: IssueEvent,
     config: BackboneConfig,
     db: BackboneDB,
-    gh: object | None = None,
-) -> DispatchResult:
-    """Dispatch an issue / comment / pull-request event to its audiences."""
-    result = DispatchResult()
-    repo = issue_repo(event.issue)
-    is_blocking = event.issue.labels.priority == "blocking"
-
-    # --- Comments ---
-    if event.event_type == EventType.COMMENT_CREATED and event.comment:
-        commenter = _resolve_commenter_entity(event, config)
-        audience = comment_audience(event, commenter, config)
-        message = format_comment_notification(
-            event.issue, event.comment, commenter_entity=commenter
-        )
-
-        commenter_session: str | None = None
-        if commenter:
-            commenter_session = resolve_entity_session(commenter, config)
-            try:
-                await db.record_acknowledgment(event.issue.number, commenter, repo=repo)
-            except Exception:
-                log.exception("Failed to record acknowledgment (non-fatal)")
-
-        for target in audience:
-            session = resolve_entity_session(target, config)
-            if session is None or session == commenter_session:
-                result.skipped.append(target)
-                continue
-            try:
-                await db.clear_acknowledgment(event.issue.number, target, repo=repo)
-            except Exception:
-                log.exception("Failed to clear acknowledgment (non-fatal)")
-            await _deliver(
-                target, message, event, config, db, result, kind="comment", priority=is_blocking
-            )
-        return result
-
-    # --- Issues and pull requests ---
-    routing = route_issue_event(event, config)
-
-    if event.event_type == EventType.PULL_REQUEST_OPENED:
-        message = format_pull_request_notification(event.issue)
-        for target in routing.queue + routing.watch:
-            await _deliver(target, message, event, config, db, result, kind="pull_request")
-        return result
-
-    if event.event_type not in (EventType.ISSUE_OPENED, EventType.ISSUE_LABELED):
-        log.info("Ignoring event type: %s", event.event_type)
-        return result
-
+    gh: GitHubClient | None,
+    result: DispatchResult,
+) -> None:
+    repo = event.issue.repo_full_name
+    routing = route_issue(event.issue, event.event_type, config)
     sender = event.issue.labels.sender
     message = format_issue_notification(event.issue)
 
@@ -179,7 +186,7 @@ async def issue_dispatcher(
             db,
             result,
             kind="issue",
-            priority=is_blocking,
+            priority=event.issue.labels.blocking,
             enforce_issue_queue=True,
             scope=scope,
         )
@@ -187,20 +194,37 @@ async def issue_dispatcher(
     if routing.announce:
         announce = format_unassigned_notification(event.issue, routing.announce)
         for target in routing.announce:
-            if target == sender:
-                continue
-            await _deliver(target, announce, event, config, db, result, kind="watch")
+            if target != sender:
+                await _deliver(target, announce, event, config, db, result, kind="watch")
 
     if routing.watch:
         watch = format_watch_notification(event.issue)
         for target in routing.watch:
-            if target == sender:
-                continue
-            await _deliver(target, watch, event, config, db, result, kind="watch")
+            if target != sender:
+                await _deliver(target, watch, event, config, db, result, kind="watch")
+
+
+async def issue_dispatcher(
+    event: IssueEvent,
+    config: BackboneConfig,
+    db: BackboneDB,
+    gh: GitHubClient | None = None,
+) -> DispatchResult:
+    """Dispatch an issue / comment / pull-request event to its audiences."""
+    result = DispatchResult()
+    if event.event_type == EventType.COMMENT_CREATED and event.comment:
+        await _dispatch_comment(event, config, db, result)
+    elif event.event_type == EventType.PULL_REQUEST_OPENED:
+        await _dispatch_pull_request(event, config, db, result)
+    elif event.event_type in (EventType.ISSUE_OPENED, EventType.ISSUE_LABELED):
+        await _dispatch_issue(event, config, db, gh, result)
+    else:
+        log.info("Ignoring event type: %s", event.event_type)
+        return result
 
     log.info(
         "Dispatch %s#%d: %d delivered, %d skipped, %d offline, %d deferred",
-        repo,
+        event.issue.repo_full_name,
         event.issue.number,
         len(result.delivered),
         len(result.skipped),

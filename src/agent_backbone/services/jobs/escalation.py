@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import TYPE_CHECKING
 
-from agent_backbone.config import BackboneConfig
+from agent_backbone.models import DeliveryOutcome
+from agent_backbone.recent import RecentKeys
 from agent_backbone.services.agents import AgentState, get_agent_state
-from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.integrations import notify_humans
 from agent_backbone.services.routing import (
     format_plan_notification,
@@ -22,22 +23,22 @@ from agent_backbone.services.routing import (
     safe_deliver,
 )
 
+if TYPE_CHECKING:
+    from agent_backbone.config import BackboneConfig
+    from agent_backbone.services.database import BackboneDB
+    from agent_backbone.services.github import GitHubClient
+
 log = logging.getLogger(__name__)
 
-_escalation_dedup: dict[tuple[str, str], float] = {}
-_plan_notify_dedup: dict[tuple[str, str], float] = {}
 _PLAN_NOTIFY_DEDUP_SECONDS = 1800
+_escalated = RecentKeys(1800)
+"""(session, event) pairs escalated within ``timing.escalation_dedup_seconds``."""
+_plan_notified = RecentKeys(_PLAN_NOTIFY_DEDUP_SECONDS)
+"""(session, plan ref) pairs the humans / escalation target were told about."""
 
 
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
-    key = (session, event_key)
-    now = time.monotonic()
-    for stale in [k for k, t in _escalation_dedup.items() if now - t > dedup_seconds]:
-        del _escalation_dedup[stale]
-    if key in _escalation_dedup:
-        return False
-    _escalation_dedup[key] = now
-    return True
+    return not _escalated.check_and_mark((session, event_key), ttl_seconds=dedup_seconds)
 
 
 def _plan_notification_source_ref(
@@ -48,14 +49,11 @@ def _plan_notification_source_ref(
 
 
 def _plan_notification_already_sent(session_name: str, source_ref: str) -> bool:
-    now = time.monotonic()
-    for stale in [k for k, t in _plan_notify_dedup.items() if now - t > _PLAN_NOTIFY_DEDUP_SECONDS]:
-        del _plan_notify_dedup[stale]
-    return (session_name, source_ref) in _plan_notify_dedup
+    return _plan_notified.seen((session_name, source_ref))
 
 
 def _record_plan_notification(session_name: str, source_ref: str) -> None:
-    _plan_notify_dedup[(session_name, source_ref)] = time.monotonic()
+    _plan_notified.mark((session_name, source_ref))
 
 
 def _escalation_session(config: BackboneConfig, source_session: str) -> str | None:
@@ -65,7 +63,9 @@ def _escalation_session(config: BackboneConfig, source_session: str) -> str | No
     return target
 
 
-async def _pending_count_for_agent(name: str, config: BackboneConfig, gh: object) -> int:
+async def _pending_count_for_agent(
+    name: str, config: BackboneConfig, gh: GitHubClient | None
+) -> int:
     if gh is None:
         return 0
     return len(await list_open_queue_for_target(config, name, gh))
@@ -108,7 +108,7 @@ async def check_for_stalls(
 
 
 async def check_for_unexpected_offline(
-    config: BackboneConfig, active_sessions: set[str], db: BackboneDB, gh: object
+    config: BackboneConfig, active_sessions: set[str], db: BackboneDB, gh: GitHubClient | None
 ) -> list[dict]:
     """Known agents whose last recorded state was live but whose session is gone."""
     offline: list[dict] = []
@@ -162,7 +162,7 @@ async def handle_stalls(config: BackboneConfig, active_sessions: set[str], db: B
 
 
 async def handle_offline(
-    config: BackboneConfig, active_sessions: set[str], db: BackboneDB, gh: object
+    config: BackboneConfig, active_sessions: set[str], db: BackboneDB, gh: GitHubClient | None
 ) -> None:
     """Report dead sessions (never restart them) and clear their recorded state."""
     for agent in await check_for_unexpected_offline(config, active_sessions, db, gh):
@@ -254,7 +254,7 @@ async def check_plan_waiting(
                 )
                 # A queued notification will reach the target when it frees up,
                 # so record it either way and do not enqueue it again next run.
-                if outcome == "delivered" or outcome_queues(outcome, "escalation"):
+                if outcome == DeliveryOutcome.DELIVERED or outcome_queues(outcome, "escalation"):
                     _record_plan_notification(name, orch_ref)
                     log.info(
                         "Plan notification for %s -> %s (%s)", name, escalation_session, outcome

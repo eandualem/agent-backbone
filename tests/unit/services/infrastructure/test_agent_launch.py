@@ -406,7 +406,7 @@ class TestStartAgentBrief:
         delivered.assert_awaited_once()
         assert delivered.await_args.args[0] == "ike"
         assert delivered.await_args.args[1].startswith("[via:backbone] ")
-        assert delivered.await_args.kwargs["flow_name"] == "agent-brief"
+        assert delivered.await_args.kwargs["source"] == "agent-brief"
 
     async def test_a_swarm_role_brief_replaces_the_common_brief(self, tmp_path):
         from agent_backbone.config import bootstrap_config

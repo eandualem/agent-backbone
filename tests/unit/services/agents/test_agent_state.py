@@ -13,7 +13,7 @@ from agent_backbone.services.agents import (
     has_commented_on_issue,
     infer_state_from_pane,
     read_state_file,
-    should_deliver,
+    rotate_action_log,
 )
 from agent_backbone.services.agents.interface import StateService
 
@@ -128,9 +128,6 @@ class TestWaitingForHuman:
         assert AgentState.parse("waiting_for_human") == AgentState.WAITING_FOR_HUMAN
         assert AgentState.parse("sleeping") == AgentState.UNKNOWN
         assert AgentState.parse(None) == AgentState.UNKNOWN
-
-    def test_should_deliver_waiting(self):
-        assert should_deliver(AgentState.WAITING_FOR_HUMAN) is False
 
 
 class TestInferStateFromPane:
@@ -439,20 +436,6 @@ class TestStateService:
         assert svc.read_state("ike").state == AgentState.IDLE
 
 
-class TestShouldDeliver:
-    def test_idle_always_delivers(self):
-        assert should_deliver(AgentState.IDLE) is True
-
-    def test_starting_deferred(self):
-        assert should_deliver(AgentState.STARTING) is False
-
-    def test_unknown_deferred(self):
-        assert should_deliver(AgentState.UNKNOWN) is False
-
-    def test_busy_never_delivers(self):
-        assert should_deliver(AgentState.BUSY) is False
-
-
 class TestStartedAt:
     def test_started_at_parsed_from_state_file(self, tmp_path):
         """State file with started_at field is parsed correctly."""
@@ -543,6 +526,39 @@ class TestHasCommentedOnIssue:
             has_commented_on_issue(42, "ike", action_log=str(tmp_path / "nonexistent.jsonl"))
             is False
         )
+
+
+class TestRotateActionLog:
+    def _log(self, tmp_path, lines: int):
+        path = tmp_path / "actions.jsonl"
+        path.write_text(
+            "".join(
+                json.dumps({"ts": float(i), "session": "ike", "action": "comment", "issue": i})
+                + "\n"
+                for i in range(lines)
+            )
+        )
+        return path
+
+    def test_keeps_the_newest_entries(self, tmp_path):
+        path = self._log(tmp_path, 50)
+        assert rotate_action_log(path, keep_lines=10) == 40
+        kept = [json.loads(ln) for ln in path.read_text().splitlines()]
+        assert [e["issue"] for e in kept] == list(range(40, 50))
+
+    def test_short_log_untouched(self, tmp_path):
+        path = self._log(tmp_path, 5)
+        assert rotate_action_log(path, keep_lines=10) == 0
+        assert len(path.read_text().splitlines()) == 5
+
+    def test_missing_log_is_noop(self, tmp_path):
+        assert rotate_action_log(tmp_path / "nope.jsonl") == 0
+
+    def test_lookup_reads_only_the_tail(self, tmp_path):
+        """A large log is not read whole: an old entry beyond the tail is invisible."""
+        path = self._log(tmp_path, 20000)
+        assert has_commented_on_issue(19999, "ike", path) is True
+        assert has_commented_on_issue(0, "ike", path) is False
 
 
 class TestStartingMarker:

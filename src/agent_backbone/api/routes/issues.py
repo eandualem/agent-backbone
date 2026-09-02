@@ -156,7 +156,7 @@ async def create_issue(
         config,
         repo=body.repo,
         db=db,
-        flow_name="api-create-issue",
+        source="api-create-issue",
     )
     return _issue_to_response(issue, config, delivery_svc)
 

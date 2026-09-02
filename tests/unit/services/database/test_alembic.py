@@ -54,7 +54,9 @@ def test_metadata_indexes_match_expected():
 async def test_memory_db_bypasses_migrations():
     async with BackboneDB.connect("sqlite+aiosqlite:///:memory:") as db:
         assert await db.check_connection()
-        row_id = await db.record_delivery(1, "ike", "ike", "delivered")
+        row_id = await db.record_delivery(
+            issue_number=1, target_entity="ike", session_name="ike", outcome="delivered"
+        )
         assert row_id > 0
         assert len(await db.query_deliveries(issue_number=1)) == 1
 
@@ -66,7 +68,12 @@ async def test_file_db_runs_migrations(tmp_path):
     await db.start()
     try:
         assert await db.check_connection()
-        assert await db.record_delivery(42, "ike", "ike", "delivered") > 0
+        assert (
+            await db.record_delivery(
+                issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
+            )
+            > 0
+        )
     finally:
         db._engine = None
         await engine.dispose()
@@ -78,8 +85,15 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
     db = BackboneDB(engine)
     try:
         await db._run_migrations()
-        assert await db.record_delivery(7, "ike", "ike", "delivered") > 0
-        await db.enqueue_message("ike", "hello", delivery_kind="direct_message")
+        assert (
+            await db.record_delivery(
+                issue_number=7, target_entity="ike", session_name="ike", outcome="delivered"
+            )
+            > 0
+        )
+        await db.enqueue_message(
+            session_name="ike", message="hello", delivery_kind="direct_message"
+        )
         assert (await queue_row(db, 1))["status"] == "pending"
     finally:
         db._engine = None
@@ -91,7 +105,9 @@ async def test_file_db_idempotent_start(tmp_path):
     engine = build_engine(f"sqlite+aiosqlite:///{db_path}")
     db = BackboneDB(engine)
     await db.start()
-    await db.record_delivery(42, "ike", "ike", "delivered")
+    await db.record_delivery(
+        issue_number=42, target_entity="ike", session_name="ike", outcome="delivered"
+    )
     db._engine = None
     await engine.dispose()
 
@@ -181,7 +197,12 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
         assert statuses == ["pending", "expired", "expired"]
         assert "uq_mq_message_dedup" in names
         # ...and the rule now holds for new rows.
-        assert await db.enqueue_message("ike", "same notice", delivery_kind="pull_request") == -1
+        assert (
+            await db.enqueue_message(
+                session_name="ike", message="same notice", delivery_kind="pull_request"
+            )
+            == -1
+        )
     finally:
         db._engine = None
         await engine.dispose()

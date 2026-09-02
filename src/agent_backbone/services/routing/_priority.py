@@ -21,7 +21,7 @@ def compute_priority_score(
     """
     base = config.type_weights.get(issue.labels.issue_type, 0.0)
 
-    blocking_bonus = config.blocking_weight if issue.labels.priority == "blocking" else 0.0
+    blocking_bonus = config.blocking_weight if issue.labels.blocking else 0.0
 
     if dependents_count > 0:
         dependents_bonus = base * (config.dependents_multiplier**dependents_count - 1)

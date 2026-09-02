@@ -25,6 +25,7 @@ from agent_backbone.services.terminal import (
     STATE_DIR_ENV_KEY,
     capture_pane,
     get_terminal_adapter,
+    get_terminal_adapter_for_session,
     sanitize_pane_content,
     send_keys,
     session_exists,
@@ -445,7 +446,7 @@ async def start_agent(
             f"[via:backbone] {text}",
             config,
             db=db,
-            flow_name="agent-brief",
+            source="agent-brief",
             delivery_kind="direct_message",
         )
     return StartResult(ok=True, ready=ready, evidence=tuple(evidence))
@@ -528,8 +529,6 @@ async def approve_agent(
     runtime IPC (hook adapters, #88) closes that; the after-capture reports
     what actually happened.
     """
-    from agent_backbone.services.terminal._adapters import get_terminal_adapter_for_session
-
     if not await session_exists(name):
         return "offline", [f"no tmux session named '{name}'"]
     pane = await capture_pane(name, lines=60)

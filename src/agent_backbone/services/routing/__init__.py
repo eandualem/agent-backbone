@@ -20,7 +20,6 @@ from agent_backbone.services.routing._intelligence import get_session_intelligen
 from agent_backbone.services.routing._priority import compute_priority_score
 from agent_backbone.services.routing._resolution import validate_issue_targets
 from agent_backbone.services.routing._targets import (
-    issue_repo,
     list_open_queue_for_target,
     queue_scope,
 )
@@ -37,7 +36,6 @@ __all__ = [
     "format_unexpected_offline_notification",
     "get_session_intelligence",
     "is_acknowledged",
-    "issue_repo",
     "list_open_queue_for_target",
     "outcome_queues",
     "queue_scope",

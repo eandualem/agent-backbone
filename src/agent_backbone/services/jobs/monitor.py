@@ -26,6 +26,7 @@ from agent_backbone.services.terminal import list_sessions
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
     from agent_backbone.services.database import BackboneDB
+    from agent_backbone.services.github import GitHubClient
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ _monitor_lock = asyncio.Lock()
 async def monitor_agents(
     config: BackboneConfig,
     db: BackboneDB,
-    gh: object | None,
+    gh: GitHubClient | None,
     *,
     on_change: Callable[[], Awaitable[object]] | None = None,
 ) -> dict:

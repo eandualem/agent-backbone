@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_backbone.config import SecurityConfig, TelegramConfig
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.infrastructure import StartResult
 from agent_backbone.services.integrations.telegram import TelegramService
@@ -73,7 +74,9 @@ class TestTell:
     async def test_cmd_tell_uses_safe_deliver(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.safe_deliver", new_callable=AsyncMock, return_value="delivered") as d:
+        with patch(
+            f"{_CMD}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED
+        ) as d:
             await bot.cmd_tell(update, _context(["ike", "hello", "there"]))
         d.assert_awaited_once()
         assert d.await_args.args[:2] == ("ike", "[via:telegram from:alice] hello there")
@@ -83,7 +86,11 @@ class TestTell:
     async def test_cmd_tell_busy(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.safe_deliver", new_callable=AsyncMock, return_value="agent_working"):
+        with patch(
+            f"{_CMD}.safe_deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryOutcome.AGENT_WORKING,
+        ):
             await bot.cmd_tell(update, _context(["ike", "hi"]))
         update.message.reply_text.assert_awaited_once_with(
             "`ike` is busy — queued.", parse_mode="Markdown"
@@ -103,7 +110,9 @@ class TestTopicRouting:
         bot = _bot(config, topic_routes={42: "ike"})
         update = _update("do the thing", thread_id=42)
         with patch(
-            f"{_ROUTING}.safe_deliver", new_callable=AsyncMock, return_value="delivered"
+            f"{_ROUTING}.safe_deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryOutcome.DELIVERED,
         ) as d:
             await bot.handle_topic_message(update, MagicMock())
         assert d.await_args.args[:2] == ("ike", "[via:telegram from:alice] do the thing")
@@ -111,7 +120,9 @@ class TestTopicRouting:
     async def test_catch_all_topic_parses_agent_prefix(self, config):
         bot = _bot(config, topic_routes={43: CATCH_ALL_TOPIC})
         update = _update("feynman: run tests", thread_id=43)
-        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock, return_value="offline") as d:
+        with patch(
+            f"{_ROUTING}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.OFFLINE
+        ) as d:
             await bot.handle_topic_message(update, MagicMock())
         assert d.await_args.args[0] == "feynman"
         update.message.reply_text.assert_awaited_once_with(
@@ -244,11 +255,11 @@ class TestDeliveryReplyFallbacks:
     @pytest.mark.parametrize(
         ("status", "expected"),
         [
-            ("delivered", "Sent to `ike`."),
-            ("offline", "`ike` is offline."),
-            ("waiting_for_human", "`ike` is waiting for a human — queued."),
-            ("human_typing", "`ike` has someone at the keyboard — queued."),
-            ("delivery_failed", "Not delivered to `ike` (delivery_failed)."),
+            (DeliveryOutcome.DELIVERED, "Sent to `ike`."),
+            (DeliveryOutcome.OFFLINE, "`ike` is offline."),
+            (DeliveryOutcome.WAITING_FOR_HUMAN, "`ike` is waiting for a human — queued."),
+            (DeliveryOutcome.HUMAN_TYPING, "`ike` has someone at the keyboard — queued."),
+            (DeliveryOutcome.DELIVERY_FAILED, "Not delivered to `ike` (delivery_failed)."),
         ],
     )
     def test_reply(self, status, expected):
@@ -284,7 +295,7 @@ class TestGeneralAndUnmapped:
     async def test_general_text_gets_a_pointer_not_a_guess(self, config):
         from agent_backbone.services.integrations.telegram import _routing
 
-        _routing._hinted_at.clear()
+        _routing._hinted.clear()
         bot = _bot(config)
         update = _update("ike: run the tests", thread_id=None)
         with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
@@ -308,7 +319,7 @@ class TestGeneralAndUnmapped:
     async def test_unmapped_topic_gets_a_hint_once(self, config):
         from agent_backbone.services.integrations.telegram import _routing
 
-        _routing._hinted_at.clear()
+        _routing._hinted.clear()
         bot = _bot(config)
         update = _update("x", thread_id=99)
         with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:

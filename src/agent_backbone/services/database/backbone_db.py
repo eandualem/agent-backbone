@@ -206,13 +206,12 @@ class BackboneDB:
 
     async def record_delivery(
         self,
+        *,
         issue_number: int | None,
         target_entity: str,
         session_name: str,
         outcome: str,
-        flow_name: str = "",
-        flow_run_id: str = "",
-        *,
+        source: str = "",
         repo: str = "",
         kind: str = "issue",
         preview: str = "",
@@ -221,12 +220,11 @@ class BackboneDB:
         async with self._engine.begin() as conn:
             return await _delivery_repo.record_delivery(
                 conn,
-                issue_number,
-                target_entity,
-                session_name,
-                outcome,
-                flow_name,
-                flow_run_id,
+                issue_number=issue_number,
+                target_entity=target_entity,
+                session_name=session_name,
+                outcome=outcome,
+                source=source,
                 repo=repo,
                 kind=kind,
                 preview=preview,
@@ -234,11 +232,11 @@ class BackboneDB:
 
     async def claim_delivery_attempt(
         self,
+        *,
         issue_number: int,
         target_entity: str,
         session_name: str,
-        flow_name: str,
-        *,
+        source: str,
         repo: str = "",
         preview: str = "",
     ) -> int | None:
@@ -246,10 +244,10 @@ class BackboneDB:
         async with self._engine.begin() as conn:
             return await _delivery_repo.claim_delivery_attempt(
                 conn,
-                issue_number,
-                target_entity,
-                session_name,
-                flow_name,
+                issue_number=issue_number,
+                target_entity=target_entity,
+                session_name=session_name,
+                source=source,
                 repo=repo,
                 preview=preview,
             )
@@ -424,25 +422,25 @@ class BackboneDB:
 
     async def enqueue_message(
         self,
+        *,
         session_name: str,
         message: str,
         issue_number: int | None = None,
         target_entity: str | None = None,
         delivery_kind: str = "issue",
-        flow_name: str = "",
-        *,
+        source: str = "",
         repo: str = "",
     ) -> int:
         """Enqueue a message for later delivery. Returns the row ID."""
         async with self._engine.begin() as conn:
             return await _queue_repo.enqueue_message(
                 conn,
-                session_name,
-                message,
-                issue_number,
-                target_entity,
-                delivery_kind,
-                flow_name,
+                session_name=session_name,
+                message=message,
+                issue_number=issue_number,
+                target_entity=target_entity,
+                delivery_kind=delivery_kind,
+                source=source,
                 repo=repo,
             )
 

@@ -121,12 +121,11 @@ async def inspect_agent(
     online = await tmux_svc.session_exists(name)
     profile = await get_session_intelligence(name, config)
 
-    tmux_vars: dict = dict(profile.tmux_vars)
+    tmux_vars: dict = {}
     pane_tail: list[str] = []
     if online:
         try:
-            if not tmux_vars:
-                tmux_vars = await query_format_vars(name, SESSION_FORMAT_STR)
+            tmux_vars = await query_format_vars(name, SESSION_FORMAT_STR)
             pane = await capture_pane(name, lines=40)
             pane_tail = [
                 ln.rstrip() for ln in sanitize_pane_content(pane).splitlines() if ln.strip()

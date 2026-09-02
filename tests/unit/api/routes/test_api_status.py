@@ -79,7 +79,13 @@ class TestGetSystemStatus:
         assert data["pending_issues"] is None  # no GitHub client configured
 
     async def test_counts_failed_deliveries(self, api_client, auth_headers, api_app):
-        await api_app.state.db.record_delivery(99, "ike", "ike", "delivery_failed", "test")
+        await api_app.state.db.record_delivery(
+            issue_number=99,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivery_failed",
+            source="test",
+        )
         api_app.dependency_overrides[get_state_service] = _mock_state_svc
         api_app.dependency_overrides[get_tmux_service] = lambda: _mock_tmux_svc([])
 

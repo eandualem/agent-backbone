@@ -33,7 +33,7 @@ def issues_url():
 
 @pytest.fixture(autouse=True)
 def mock_installation_token(monkeypatch):
-    async def _fake_installation_token(self, repo_full_name=None):
+    async def _fake_installation_token(self, owner, repo):
         return "installation-token"
 
     monkeypatch.setattr(GitHubClient, "_get_installation_token", _fake_installation_token)

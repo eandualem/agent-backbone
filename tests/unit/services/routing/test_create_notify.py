@@ -33,7 +33,7 @@ def _patch_queue(numbers: list[int]):
     return patch(
         f"{_CN}.list_open_queue_for_target",
         new_callable=AsyncMock,
-        return_value=[IssueData(number=n) for n in numbers],
+        return_value=[IssueData(number=n, repo_full_name=TEST_REPO) for n in numbers],
     )
 
 
@@ -50,7 +50,7 @@ class TestCreateAndNotify:
                 labels=["from:backbone", "for:brunel", "task"],
                 config=config,
                 repo=TEST_REPO,
-                flow_name="test",
+                source="test",
             )
 
         assert result.number == 99
@@ -64,10 +64,10 @@ class TestCreateAndNotify:
         kwargs = mock_deliver.call_args.kwargs
         assert kwargs["issue_number"] == 99
         assert kwargs["target_entity"] == "brunel"
-        assert kwargs["flow_name"] == "test"
+        assert kwargs["source"] == "test"
         assert kwargs["enforce_issue_queue"] is True
         assert kwargs["repo"] == TEST_REPO
-        assert kwargs["queue_scope"] == {("", 99)}
+        assert kwargs["queue_scope"] == {(TEST_REPO, 99)}
 
     async def test_multiple_targets(self, config):
         mock_gh = AsyncMock()

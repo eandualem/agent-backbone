@@ -23,6 +23,7 @@ class SessionIntelligence(StrEnum):
 
     Derived from the agent state plus terminal conditions. Copy mode is not
     a value here: it is cleared automatically before the decision is made.
+    The blocking values share their names with ``DeliveryOutcome``.
     """
 
     READY = "ready"
@@ -46,5 +47,4 @@ class SessionProfile:
     current_issue: int | None = None
     current_repo: str | None = None
     state_source: str = "default"
-    tmux_vars: dict[str, str] = field(default_factory=dict)
     evidence: list[str] = field(default_factory=list)

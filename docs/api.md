@@ -159,7 +159,7 @@ GitHub credentials these routes return 503.
 `GET /api/deliveries?repo=&issue_number=&kind=&target_entity=&session=&outcome=&limit=`,
 `GET /api/deliveries/failed`, `GET /api/deliveries/stats`. Every delivery is
 recorded, direct messages included, with `kind`, `repo`, `outcome`,
-`flow_name` and a `preview`.
+`source` (which code path made the attempt) and a `preview`.
 
 `GET /api/events?repo=&limit=` — inbound GitHub events (webhook and poll),
 newest first, each with `source`, `event_type`, `issue_number`, `sender`,

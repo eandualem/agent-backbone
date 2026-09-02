@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent_backbone.config import EscalationConfig, TelegramConfig
-from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.jobs import escalation as esc
 from agent_backbone.services.jobs.monitor import monitor_agents
@@ -22,11 +22,11 @@ _MON = "agent_backbone.services.jobs.monitor"
 
 @pytest.fixture(autouse=True)
 def _clear_dedup():
-    esc._escalation_dedup.clear()
-    esc._plan_notify_dedup.clear()
+    esc._escalated.clear()
+    esc._plan_notified.clear()
     yield
-    esc._escalation_dedup.clear()
-    esc._plan_notify_dedup.clear()
+    esc._escalated.clear()
+    esc._plan_notified.clear()
 
 
 def _snap(state: AgentState, issue: int | None = None, age: float = 0.0, **kwargs):
@@ -66,7 +66,7 @@ class TestShouldEscalate:
         assert esc._should_escalate("leo", "stall:1", 60) is True
 
     def test_expired_entry_re_allowed(self):
-        esc._escalation_dedup[("ike", "stall:1")] = time.monotonic() - 100
+        esc._escalated._marked[("ike", "stall:1")] = time.monotonic() - 100
         assert esc._should_escalate("ike", "stall:1", 60) is True
 
 
@@ -162,7 +162,11 @@ class TestPlanWaiting:
         with (
             _patch_states(states),
             patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
-            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock, return_value="delivered") as d,
+            patch(
+                f"{_ESC}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value=DeliveryOutcome.DELIVERED,
+            ) as d,
         ):
             await esc.check_plan_waiting(config, {"ike", "leo"}, db=db)
             await esc.check_plan_waiting(config, {"ike", "leo"}, db=db)
@@ -220,7 +224,11 @@ class TestDeliverPendingIssues:
         gh.list_comments = AsyncMock(return_value=[])
         with (
             _patch_states({"ike": _snap(AgentState.IDLE)}, _PEND),
-            patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock, return_value="delivered") as d,
+            patch(
+                f"{_PEND}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value=DeliveryOutcome.DELIVERED,
+            ) as d,
         ):
             result = await deliver_pending_issues(config, {"ike"}, db, gh)
 
@@ -246,7 +254,11 @@ class TestDeliverPendingIssues:
         gh.list_comments = AsyncMock(return_value=[])
         with (
             _patch_states({"ike": _snap(AgentState.IDLE)}, _PEND),
-            patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock, return_value="delivered") as d,
+            patch(
+                f"{_PEND}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value=DeliveryOutcome.DELIVERED,
+            ) as d,
         ):
             result = await deliver_pending_issues(config, {"ike"}, db, gh)
         assert result["ike"] == "delivered_#8"
@@ -270,7 +282,14 @@ class TestDeliverPendingIssues:
         assert await db.is_acknowledged(7, "ike", repo=_REPO)
 
     async def test_skips_recently_delivered(self, config, db):
-        await db.record_delivery(7, "ike", "ike", "delivered", "agent-monitor", repo=_REPO)
+        await db.record_delivery(
+            issue_number=7,
+            target_entity="ike",
+            session_name="ike",
+            outcome="delivered",
+            source="agent-monitor",
+            repo=_REPO,
+        )
         gh = AsyncMock()
         gh.list_issues = AsyncMock(return_value=[_issue(7)])
         gh.list_comments = AsyncMock(return_value=[])

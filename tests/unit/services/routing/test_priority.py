@@ -13,7 +13,9 @@ def _make_issue(
     priority: str = "",
 ) -> IssueData:
     labels = ParsedLabels(sender="leo", targets=["ike"], issue_type=issue_type, priority=priority)
-    return IssueData(number=number, title=f"[{issue_type}] Test", labels=labels)
+    return IssueData(
+        number=number, repo_full_name="acme/app", title=f"[{issue_type}] Test", labels=labels
+    )
 
 
 class TestComputePriorityScore:

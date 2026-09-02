@@ -24,8 +24,8 @@ def _default_shell() -> list[str]:
     return [os.environ.get("SHELL") or "/bin/sh", "-l"]
 
 
-SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}\nclient_activity=#{client_activity}"
-"""Format variables the readiness check asks tmux for."""
+SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}"
+"""Format variables ``agent inspect`` shows for a session."""
 
 
 async def query_environment_var(session_name: str, key: str) -> str | None:

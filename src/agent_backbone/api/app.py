@@ -30,6 +30,7 @@ def _register_jobs(app: FastAPI):
     """Wire the periodic jobs. Each job reads ``app.state.config`` at run time so
     setting changes and newly discovered agents are picked up without a restart."""
     from agent_backbone.api.session_updates import emit_sessions_update
+    from agent_backbone.services.agents import rotate_action_log
     from agent_backbone.services.jobs import delivery_retry, monitor_agents
     from agent_backbone.services.scheduler import PeriodicScheduler
 
@@ -59,6 +60,7 @@ def _register_jobs(app: FastAPI):
         return {
             "deliveries": await state.db.prune_old_deliveries(days),
             "events": await state.db.prune_events(days),
+            "action_log_lines": rotate_action_log(state.config.action_log_path),
         }
 
     # Immediately at startup: this is what syncs agent state after a restart.

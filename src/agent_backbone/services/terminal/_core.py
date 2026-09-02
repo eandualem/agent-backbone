@@ -1,4 +1,4 @@
-"""Core tmux operations — session checks, message delivery, key sending, pane capture."""
+"""Core tmux operations — session checks, paste buffer, key sending, pane capture."""
 
 from __future__ import annotations
 
@@ -101,24 +101,6 @@ async def _write_message_buffer(session_name: str, message: str) -> bool:
         log.error("tmux paste-buffer failed for '%s': %s", session_name, stderr.decode())
         return False
     return True
-
-
-async def send_message(
-    session_name: str,
-    message: str,
-    *,
-    runtime_hint: str | None = None,
-) -> bool:
-    """Send a message to a tmux session via the runtime-specific adapter."""
-    from agent_backbone.services.terminal._adapters import get_terminal_adapter_for_session
-
-    pane_content = await capture_pane(session_name, lines=80)
-    adapter = await get_terminal_adapter_for_session(
-        session_name,
-        runtime_hint=runtime_hint,
-        pane_content=pane_content,
-    )
-    return await adapter.deliver_message(session_name, message)
 
 
 async def send_keys(session_name: str, keys: str) -> bool:

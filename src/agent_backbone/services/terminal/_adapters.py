@@ -8,7 +8,6 @@ import re
 from enum import StrEnum
 
 from agent_backbone.services.terminal._core import (
-    _run_tmux,
     _send_escape_key,
     _send_submit_key,
     _write_message_buffer,
@@ -29,6 +28,10 @@ _ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
 _BOX_CHARS = "\u2500\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u253c\u2501"
 _PROMPT_START_CHARS = ">$\u276f\u203a%#"
 _BACKBONE_ENVELOPE_PREFIX = "[via:"
+GENERIC_BUSY_FRAGMENTS = ("thinking...", "tool call")
+"""Last-resort busy evidence for panes no adapter recognises (a bare
+``Thinking...`` line, a tool-call trace) — consulted only when no prompt,
+busy marker or question was found."""
 
 
 class TerminalRuntime(StrEnum):
@@ -331,19 +334,6 @@ class TerminalAdapter:
                 return False
         return True
 
-    async def exit_copy_mode(self, session_name: str) -> bool:
-        """Immediately attempt to leave copy mode."""
-        rc, _, stderr = await _run_tmux("send-keys", "-X", "-t", session_name, "cancel")
-        if rc == 0:
-            return True
-
-        err = stderr.decode().strip().lower()
-        if "not in a mode" in err:
-            return True
-
-        log.error("tmux copy-mode cancel failed for '%s': %s", session_name, stderr.decode())
-        return False
-
     async def deliver_message(self, session_name: str, message: str) -> bool:
         """Paste a message and submit it according to runtime-specific rules."""
         if not await _write_message_buffer(session_name, message):
@@ -353,66 +343,47 @@ class TerminalAdapter:
             await asyncio.sleep(self.paste_settle_seconds)
 
         if self.auto_submit:
+            state = "submitted"
+        else:
+            state = await self._submit(session_name)
+
+        if state == "submitted" or (state == "queued" and not self.interrupt_queued_delivery):
             log.info(
-                "Terminal delivery sent to '%s' via %s adapter (auto-submit)",
+                "Terminal delivery %s in '%s' via %s adapter",
+                "sent" if state == "submitted" else "queued (runtime will run it next)",
                 session_name,
                 self.runtime.value,
             )
             return True
+        log.warning(
+            "Terminal delivery remained unsent in '%s' via %s adapter (state=%s)",
+            session_name,
+            self.runtime.value,
+            state,
+        )
+        return False
 
+    async def _submit(self, session_name: str) -> str:
+        """Press Enter (retrying once where the runtime needs it) and report what happened."""
         state = "submitted"
         for _attempt in range(self.submit_attempts):
             if not await _send_submit_key(session_name):
-                return False
-
+                return "failed"
             await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)
             state = await self.delivery_submission_state(session_name)
             if state == "submitted":
-                log.info(
-                    "Terminal delivery sent to '%s' via %s adapter",
-                    session_name,
-                    self.runtime.value,
-                )
-                return True
-
+                return state
             if state == "queued" and self.interrupt_queued_delivery:
-                log.debug(
-                    "Queued delivery detected for '%s' via %s adapter; interrupting",
-                    session_name,
-                    self.runtime.value,
-                )
+                # The runtime parked the text for its next turn; Escape exposes
+                # it, Enter sends it now.
                 if not await _send_escape_key(session_name):
-                    return False
+                    return "failed"
                 await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)
                 if not await _send_submit_key(session_name):
-                    return False
+                    return "failed"
                 await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)
-                state = await self.delivery_submission_state(session_name)
-                break
-
-        if state == "queued" and not self.interrupt_queued_delivery:
-            log.info(
-                "Terminal delivery queued in '%s' via %s adapter (runtime will run it next)",
-                session_name,
-                self.runtime.value,
-            )
-            return True
-
-        if state != "submitted":
-            log.warning(
-                "Terminal delivery remained unsent in '%s' via %s adapter (state=%s)",
-                session_name,
-                self.runtime.value,
-                state,
-            )
-            return False
-
-        log.info(
-            "Terminal delivery sent to '%s' via %s adapter",
-            session_name,
-            self.runtime.value,
-        )
-        return True
+                return await self.delivery_submission_state(session_name)
+        return state
 
     async def delivery_submission_state(self, session_name: str) -> str:
         """Best-effort state after a submit attempt."""
@@ -673,3 +644,19 @@ async def get_terminal_adapter_for_session(
         pane_content=pane_content,
     )
     return get_terminal_adapter(runtime)
+
+
+async def send_message(
+    session_name: str,
+    message: str,
+    *,
+    runtime_hint: str | None = None,
+) -> bool:
+    """Paste ``message`` into a session and submit it the way its runtime expects."""
+    pane_content = await capture_pane(session_name, lines=80)
+    adapter = await get_terminal_adapter_for_session(
+        session_name,
+        runtime_hint=runtime_hint,
+        pane_content=pane_content,
+    )
+    return await adapter.deliver_message(session_name, message)

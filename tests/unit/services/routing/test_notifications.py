@@ -12,6 +12,7 @@ from agent_backbone.services.routing._format import (
     format_unblock_notification,
     format_unexpected_offline_notification,
 )
+from tests.conftest import TEST_REPO
 
 
 class TestFormatIssueNotification:
@@ -27,7 +28,7 @@ class TestFormatIssueNotification:
         labels = ParsedLabels(
             sender="ike", targets=["feynman"], issue_type="bug", priority="blocking"
         )
-        issue = IssueData(number=7, title="[bug] Critical", labels=labels)
+        issue = IssueData(number=7, repo_full_name=TEST_REPO, title="[bug] Critical", labels=labels)
         msg = format_issue_notification(issue)
         assert msg.startswith("[via:github issue:7]")
         assert "blocking" in msg
@@ -35,7 +36,7 @@ class TestFormatIssueNotification:
 
     def test_no_type(self):
         labels = ParsedLabels(sender="leo", targets=["ike"])
-        issue = IssueData(number=1, title="Something", labels=labels)
+        issue = IssueData(number=1, repo_full_name=TEST_REPO, title="Something", labels=labels)
         msg = format_issue_notification(issue)
         assert "[]" not in msg
 
@@ -124,7 +125,9 @@ class TestFormatNextIssueNotification:
         labels = ParsedLabels(
             sender="ada", targets=["ike"], issue_type="spec-gap", priority="blocking"
         )
-        issue = IssueData(number=99, title="[spec-gap] Missing contract", labels=labels)
+        issue = IssueData(
+            number=99, repo_full_name=TEST_REPO, title="[spec-gap] Missing contract", labels=labels
+        )
         msg = format_next_issue_notification(issue)
         assert msg.startswith("[via:backbone]")
         assert "[blocking]" in msg
@@ -142,7 +145,9 @@ class TestFormatUnblockNotification:
 
     def test_includes_sender(self):
         labels = ParsedLabels(sender="ada", targets=["ike"], issue_type="spec-gap")
-        issue = IssueData(number=10, title="[spec-gap] Missing spec", labels=labels)
+        issue = IssueData(
+            number=10, repo_full_name=TEST_REPO, title="[spec-gap] Missing spec", labels=labels
+        )
         msg = format_unblock_notification(issue)
         assert msg.startswith("[via:backbone]")
         assert "from ada" in msg

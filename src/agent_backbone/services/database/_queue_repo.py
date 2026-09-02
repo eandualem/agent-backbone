@@ -107,20 +107,20 @@ async def clear_acknowledgment(
 # --- Message queue ---
 
 _INSERT_COLUMNS = """(session_name, message, repo, issue_number, target_entity,
-                delivery_kind, flow_name, enqueued_at, status, content_hash)
+                delivery_kind, source, enqueued_at, status, content_hash)
                VALUES (:session_name, :message, :repo, :issue_number, :target_entity,
-                       :delivery_kind, :flow_name, :enqueued_at, 'pending', :content_hash)"""
+                       :delivery_kind, :source, :enqueued_at, 'pending', :content_hash)"""
 
 
 async def enqueue_message(
     conn: AsyncConnection,
+    *,
     session_name: str,
     message: str,
     issue_number: int | None = None,
     target_entity: str | None = None,
     delivery_kind: str = "issue",
-    flow_name: str = "",
-    *,
+    source: str = "",
     repo: str = "",
 ) -> int:
     """Enqueue a message for later delivery. Returns the row ID or -1 when deduped."""
@@ -132,7 +132,7 @@ async def enqueue_message(
         "issue_number": issue_number,
         "target_entity": target_entity,
         "delivery_kind": delivery_kind,
-        "flow_name": flow_name,
+        "source": source,
         "enqueued_at": now_iso(),
         "content_hash": content_hash,
     }

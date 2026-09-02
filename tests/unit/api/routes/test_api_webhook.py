@@ -129,18 +129,6 @@ class TestWebhookDeduplication:
         assert resp2.text == "Duplicate, skipped"
         assert mock_dispatch_svc.issue_dispatcher.await_count == 1
 
-    async def test_issue_event_recent_notification_returns_deduped(
-        self, api_client, webhook_payload, mock_delivery_svc, mock_dispatch_svc
-    ):
-        payload_bytes = json.dumps(webhook_payload).encode()
-        headers = _webhook_headers(payload_bytes, delivery_id="recent-issue-dedup")
-        mock_delivery_svc.is_recent_notification.return_value = True
-
-        resp = await api_client.post(WEBHOOK_PATH, content=payload_bytes, headers=headers)
-
-        assert resp.text == "deduped: all targets already notified for #42"
-        mock_dispatch_svc.issue_dispatcher.assert_not_awaited()
-
     async def test_comment_event_bypasses_recent_notification_dedup(
         self, api_client, mock_delivery_svc, mock_dispatch_svc
     ):

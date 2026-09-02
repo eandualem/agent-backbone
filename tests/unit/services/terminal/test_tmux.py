@@ -61,7 +61,7 @@ class TestSendMessage:
         mock_adapter.deliver_message = AsyncMock(return_value=True)
         with (
             patch(
-                "agent_backbone.services.terminal._core.capture_pane",
+                "agent_backbone.services.terminal._adapters.capture_pane",
                 new_callable=AsyncMock,
                 return_value="\u203a ",
             ),
