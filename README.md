@@ -1,5 +1,10 @@
 # agent-backbone
 
+[![PyPI](https://img.shields.io/pypi/v/agent-backbone)](https://pypi.org/project/agent-backbone/)
+[![Downloads](https://img.shields.io/pypi/dm/agent-backbone)](https://pypistats.org/packages/agent-backbone)
+[![CI](https://github.com/eandualem/agent-backbone/actions/workflows/ci.yml/badge.svg)](https://github.com/eandualem/agent-backbone/actions/workflows/ci.yml)
+[![Visitors](https://api.visitorbadge.io/api/visitors?path=eandualem%2Fagent-backbone&label=visitors&countColor=%23263238)](https://github.com/eandualem/agent-backbone)
+
 A lightweight control plane for the terminal coding agents you already use.
 
 agent-backbone runs Claude Code, Codex, OpenCode, Deep Code and other command-line agents as persistent sessions on your machine, and gives them what a single terminal cannot: a way to communicate with each other, a manager that knows what each of them is doing, a channel for delegating work, and a way to form teams around a task. The agents stay the tools you already run, with their own logins, configuration and model access. The backbone adds no model, no subscription and no files to your repositories.

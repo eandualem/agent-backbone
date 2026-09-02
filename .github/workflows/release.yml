@@ -3,7 +3,7 @@ name: Release
 # Publishes to PyPI. Runs ONLY when triggered by hand — never on a push,
 # a merge or a tag:
 #
-#   gh workflow run release.yml -f version=2.0.0a0
+#   gh workflow run release.yml -f version=0.1.0
 #
 # or Actions → Release → Run workflow. It publishes `main` only; the
 # version you type must equal the one in pyproject.toml, and the job

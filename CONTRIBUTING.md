@@ -38,8 +38,8 @@ Publishing to [PyPI](https://pypi.org/project/agent-backbone/) happens
 only when someone triggers it — never on a push, a merge or a tag.
 
 ```bash
-uv version 2.0.0a1                              # bump pyproject.toml; commit and merge it
-gh workflow run release.yml -f version=2.0.0a1  # or Actions → Release → Run workflow
+uv version 0.1.1                              # bump pyproject.toml; commit and merge it
+gh workflow run release.yml -f version=0.1.1  # or Actions → Release → Run workflow
 ```
 
 `.github/workflows/release.yml` publishes `main` only (it refuses any

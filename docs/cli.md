@@ -45,9 +45,14 @@ login service once:
 
 ```bash
 backbone service install     # macOS: a LaunchAgent; Linux: a systemd --user unit
-backbone service status      # running | installed | not installed
+backbone service status      # running | installed | not installed | unsupported
 backbone service uninstall
 ```
+
+Where there is no launchd or `systemd --user` — a container, a minimal
+image — `install` says so and leaves nothing behind; `status` reports
+`unsupported`. Run `backbone up --detach` there instead (and again after
+a restart).
 
 The service runs `backbone up` in the foreground with the data directory
 you installed it from; its log is `<data_dir>/backbone.log` on macOS and
