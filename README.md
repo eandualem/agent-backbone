@@ -77,12 +77,12 @@ Any CLI that runs in a terminal can be an agent; how much the backbone can do fo
 | `codex` | ✅ config record | ✅ initial prompt | ✅ terminal | ✅ verified live |
 | `opencode` | — (no trust dialog) | ✅ initial prompt | ✅ terminal | ✅ verified live (works out of the box on its free models) |
 | `gemini` | ✅ `--skip-trust` | ✅ initial prompt | ✅ terminal | ⚠️ see note |
-| `deepcode` (Deep Code, DeepSeek) | — (no trust dialog) | ✅ initial prompt (`-p`) | terminal: idle verified | ⚠️ see note |
+| `deepcode` (Deep Code, DeepSeek) | — (no trust dialog) | ✅ initial prompt (`-p`) | ✅ terminal (idle, busy) | ✅ verified live; approve pending |
 | `aider`, `shell` | — | first message | terminal (best effort) | untested |
 
 > **Gemini note**: with Gemini CLI 0.46.0 (the version we tested) Google OAuth completes and the CLI then still refuses personal accounts ("no longer supported for Gemini Code Assist for individuals"), leaving it stuck on its auth picker. This is an upstream issue, not a backbone one — the backbone correctly reports such sessions as `waiting_for_human`. Start, trust and brief injection are verified; delivery to a signed-in Gemini session (e.g. via `GEMINI_API_KEY`) is **unverified** until we can test against one.
 >
-> **Deep Code note**: `deepcode` is the community terminal agent DeepSeek's own API docs point to (`npm install -g @vegamo/deepcode-cli`; there is no official DeepSeek CLI yet). Its idle prompt and chrome were captured live from 0.3.1; its busy spinner and permission dialog have not been, so those states fall back to generic detection and `agent approve` refuses it until a capture with an API key lands. The model is chosen with `--model deepseek-v4-flash|deepseek-v4-pro` (exported as `MODEL`), the key with `backbone agent set NAME env='{"API_KEY": "…"}'`.
+> **Deep Code note**: `deepcode` is the community terminal agent DeepSeek's own API docs point to (`npm install -g @vegamo/deepcode-cli`; there is no official DeepSeek CLI yet — DeepSeek Harness is a web app and SDK). Verified live with 0.3.1 through the backbone: unattended start, brief injected with `-p`, a message delivered and submitted, the idle prompt, the working spinner (`status: processing`) and a failed turn. Its permission dialog has not been captured yet, so `agent approve` refuses it until then. The model is `--model deepseek-v4-flash|deepseek-v4-pro` (exported as `MODEL`); the key lives in Deep Code's own `~/.deepcode/settings.json` under `env`.
 
 `backbone runtimes` lists every runtime, whether its binary is installed, and example model ids.
 

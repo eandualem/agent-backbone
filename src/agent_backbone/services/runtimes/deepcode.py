@@ -2,12 +2,13 @@
 
 Markers captured live from deepcode 0.3.1: the banner box (``>_ Deep Code
 (v0.3.1)`` with Model / Thinking / Reasoning rows), the ``>`` prompt with
-its ``Type your message...`` placeholder and the ``enter send · … ctrl+d
-exit`` bar. The model is not a CLI flag: it comes from ``MODEL`` in the
-environment (or ``~/.deepcode/settings.json``). Busy and permission
-markers are still empty — they need a capture from a session with a
-DeepSeek API key; until then those states are read from the hook-less
-fallbacks (see ``GENERIC_BUSY_FRAGMENTS``) and ``approve`` is refused.
+its ``Type your message...`` placeholder, the ``enter send · … ctrl+d
+exit`` bar, and while it works a spinner line ``status: processing ·
+<model> <effort>`` with ``press esc to interrupt`` in the footer (a failed
+turn leaves ``status: failed · …``). The model is not a CLI flag: it comes
+from ``MODEL`` in the environment or ``~/.deepcode/settings.json`` (under
+``env``). The permission dialog has not been captured yet, so ``approve``
+refuses this runtime until it has.
 """
 
 from __future__ import annotations
@@ -32,9 +33,15 @@ class DeepCode(Runtime):
         "/raw - toggle display mode",
         "reasoning effort",
         "thinking enabled",
+        "status: failed",
     )
-    # busy_markers / prompt_markers / approve_keys: pending a live capture
-    # with an API key (README's Deep Code note).
+    busy_markers = ("status: processing", "press esc to interrupt")
+    # prompt_markers / approve_keys: the permission dialog is pending a live
+    # capture (README's Deep Code note).
+
+    def _is_status_chrome_line(self, line: str) -> bool:
+        # The footer wraps at narrow widths and leaves "exit" alone on a line.
+        return super()._is_status_chrome_line(line) or line.strip().lower() == "exit"
 
     def launch_env(self, model: str | None) -> dict[str, str]:
         return {"MODEL": model} if model else {}
