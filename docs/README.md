@@ -2,7 +2,10 @@
 
 Start with **Concepts** for the mental model, then **Getting started** to run
 it, then **How it works** for the end-to-end flows. Everything else is
-reference.
+reference. These pages ship inside the package: `backbone docs <page>`
+prints any of them from an installed backbone, and `backbone help <topic>`
+prints the shorter playbooks written for agents (`setup`, `agents`,
+`messaging`, `github`, `swarms`).
 
 | Read this | When you want to |
 |---|---|

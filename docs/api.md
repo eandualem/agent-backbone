@@ -137,6 +137,16 @@ This is the endpoint agents use to talk to each other.
 | `GET /api/config/{key}` · `PUT /api/config/{key}` `{"value": …}` · `DELETE /api/config/{key}` | Read / set / reset one setting (applied live) |
 | `GET /api/config/agents` | The known agents (non-secret) |
 
+## Help and documentation
+
+| Route | Purpose |
+|---|---|
+| `GET /api/help` · `GET /api/help/{topic}` | The agent playbooks (`setup`, `agents`, `messaging`, `github`, `swarms`, plus any under `<data_dir>/help-topics/`) — index with one-line summaries, or one topic's markdown |
+| `GET /api/docs` · `GET /api/docs/{page}` | The documentation shipped with the installed package (`getting-started`, `concepts`, …) — index, or one page's markdown |
+
+The same content as `backbone help` and `backbone docs`, for agents that
+reach the backbone over HTTP.
+
 ## Issues (requires GitHub credentials)
 
 Every route takes `repo=owner/name`.

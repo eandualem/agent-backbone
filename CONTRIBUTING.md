@@ -31,3 +31,24 @@ Tests run against SQLite in memory and mock tmux; nothing external is needed.
 - One logical change per PR, with a message that says why.
 - `make check` must pass; CI runs the same on 3.11–3.13.
 - Update the docs page that describes the behaviour you changed.
+
+## Releasing (maintainers)
+
+Releases are published to [PyPI](https://pypi.org/project/agent-backbone/)
+by `.github/workflows/release.yml` when a version tag is pushed:
+
+```bash
+uv version 2.0.0a1            # bump pyproject.toml; commit it
+git tag v2.0.0a1 && git push origin main v2.0.0a1
+```
+
+The workflow refuses a tag that does not match `pyproject.toml`, runs the
+tests, builds with `uv build` and publishes with `uv publish`. It needs the
+`PYPI_API_TOKEN` repository secret (Settings → Secrets and variables →
+Actions; `gh secret set PYPI_API_TOKEN` prompts for it). The token is never
+in the repository or in the data directory's `.env`.
+
+To publish from a laptop instead: `uv build && UV_PUBLISH_TOKEN=… uv publish`.
+
+`docs/` ships inside the wheel (`backbone docs`), so a docs-only change is
+still worth a release.
