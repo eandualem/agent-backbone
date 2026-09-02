@@ -1,6 +1,6 @@
 [project]
 name = "agent-backbone"
-version = "2.0.0a0"
+version = "0.1.0"
 description = "Local control plane for terminal AI agents: run them, message them, coordinate them through GitHub Issues, reach them from Telegram."
 readme = "README.md"
 requires-python = ">=3.11"
