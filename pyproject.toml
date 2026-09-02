@@ -42,6 +42,8 @@ ab = "agent_backbone.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/eandualem/agent-backbone"
+Documentation = "https://github.com/eandualem/agent-backbone/blob/main/docs/README.md"
+Source = "https://github.com/eandualem/agent-backbone"
 Issues = "https://github.com/eandualem/agent-backbone/issues"
 
 [dependency-groups]
@@ -62,8 +64,13 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_backbone"]
 
+# The user documentation ships inside the wheel so an installed backbone can
+# print it (`backbone docs <page>`) without a checkout of the repository.
+[tool.hatch.build.targets.wheel.force-include]
+"docs" = "agent_backbone/help/docs"
+
 [tool.hatch.build.targets.sdist]
-include = ["src/agent_backbone", "alembic.ini", "README.md", "LICENSE"]
+include = ["src/agent_backbone", "docs", "alembic.ini", "README.md", "LICENSE"]
 
 [tool.ruff]
 target-version = "py311"

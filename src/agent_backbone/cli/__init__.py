@@ -15,6 +15,8 @@ backbone swarm create|list|status|disband   coordinator+members on one issue
 backbone tell <agent> <msg>          deliver a message to an agent (or a swarm)
 backbone reply <text>                answer the humans on their channel (Telegram topic, …)
 backbone hooks install claude        install the state-reporting hooks
+backbone help [topic]                capability playbooks for agents (setup, agents, messaging, …)
+backbone docs [page]                 the documentation shipped with this install
 
 Commands talk to the running backbone API when it is up and fall back to the
 database directly when it is not.
@@ -31,7 +33,7 @@ from agent_backbone.cli.agents import cmd_agent, cmd_hooks, cmd_reply, cmd_tell
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_status, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
-from agent_backbone.cli.swarms import cmd_help, cmd_swarm
+from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
 from agent_backbone.config import RUNTIMES
 
 
@@ -209,9 +211,13 @@ def build_parser() -> argparse.ArgumentParser:
     psd.add_argument("name")
     p.set_defaults(func=cmd_swarm)
 
-    p = sub.add_parser("help", help="capability help for agents (topics: swarms, messaging, …)")
+    p = sub.add_parser("help", help="capability playbooks for agents (setup, swarms, messaging, …)")
     p.add_argument("topic", nargs="?", default=None)
     p.set_defaults(func=cmd_help)
+
+    p = sub.add_parser("docs", help="the documentation shipped with this install")
+    p.add_argument("page", nargs="?", default=None)
+    p.set_defaults(func=cmd_docs)
 
     p = sub.add_parser("tell", help="deliver a message to an agent (via the running API)")
     p.add_argument("agent")

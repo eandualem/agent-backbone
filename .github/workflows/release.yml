@@ -1,0 +1,31 @@
+name: Release
+
+# Publishes to PyPI when a version tag is pushed (`git tag v2.0.0a1 && git
+# push origin v2.0.0a1`). The tag must match the version in pyproject.toml;
+# the build step refuses otherwise. Authentication is the `PYPI_API_TOKEN`
+# repository secret (Settings → Secrets and variables → Actions).
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Check the tag matches pyproject.toml
+        run: |
+          version="$(uv version --short)"
+          test "v${version}" = "${GITHUB_REF_NAME}" \
+            || { echo "tag ${GITHUB_REF_NAME} != pyproject version ${version}"; exit 1; }
+      - run: uv sync --all-extras
+      - run: uv run pytest -q
+      - run: uv build
+      - name: Publish to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish

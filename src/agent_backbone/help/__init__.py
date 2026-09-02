@@ -6,6 +6,10 @@ of reading the backbone's source. Topics ship with the package
 (``topics/*.md``); a file with the same name under
 ``<data_dir>/help-topics/`` overrides it, and new files there become new
 topics.
+
+The user documentation (``docs/*.md`` in the repository) ships with the
+package too — ``backbone docs getting-started`` — so an agent that installed
+the backbone from PyPI can read the reference without a checkout.
 """
 
 from __future__ import annotations
@@ -17,6 +21,43 @@ from agent_backbone.templates import load_template, render
 
 _TOPICS_DIR = Path(__file__).with_name("topics")
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,40}$")
+
+# The docs live at ``docs/`` in a source checkout and are force-included into
+# the wheel as ``agent_backbone/help/docs``; whichever exists is used.
+_DOCS_DIRS = (
+    Path(__file__).with_name("docs"),
+    Path(__file__).resolve().parents[3] / "docs",
+)
+
+
+def _docs_dir() -> Path | None:
+    return next((d for d in _DOCS_DIRS if d.is_dir()), None)
+
+
+def _summary(path: Path) -> str:
+    """The first non-empty line, without its heading marker."""
+    return next((ln.lstrip("# ").strip() for ln in path.read_text().splitlines() if ln.strip()), "")
+
+
+def list_docs() -> list[dict]:
+    """The shipped documentation pages as ``{name, summary}``."""
+    docs_dir = _docs_dir()
+    if docs_dir is None:
+        return []
+    return [
+        {"name": path.stem, "summary": _summary(path)}
+        for path in sorted(docs_dir.glob("*.md"))
+        if _NAME_RE.match(path.stem)
+    ]
+
+
+def get_doc(name: str) -> str | None:
+    """One documentation page's markdown, or None."""
+    docs_dir = _docs_dir()
+    if docs_dir is None or not _NAME_RE.match(name):
+        return None
+    path = docs_dir / f"{name}.md"
+    return path.read_text() if path.is_file() else None
 
 
 def _override_dir(data_dir: Path | None) -> Path | None:
@@ -32,13 +73,7 @@ def list_topics(data_dir: Path | None = None) -> list[dict]:
         for path in sorted(source.glob("*.md")):
             if _NAME_RE.match(path.stem):
                 names[path.stem] = path  # later sources override
-    topics = []
-    for name, path in sorted(names.items()):
-        first_line = next(
-            (ln.lstrip("# ").strip() for ln in path.read_text().splitlines() if ln.strip()), ""
-        )
-        topics.append({"name": name, "summary": first_line})
-    return topics
+    return [{"name": name, "summary": _summary(path)} for name, path in sorted(names.items())]
 
 
 def get_topic(name: str, data_dir: Path | None = None) -> str | None:

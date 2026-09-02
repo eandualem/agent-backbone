@@ -2,15 +2,40 @@
 
 from __future__ import annotations
 
-from agent_backbone.help import get_topic, list_topics, render_agent_brief
+import agent_backbone.help as help_module
+from agent_backbone.help import get_doc, get_topic, list_docs, list_topics, render_agent_brief
 
 
 class TestTopics:
     def test_shipped_topics_listed_with_summaries(self):
         topics = list_topics()
         names = {t["name"] for t in topics}
-        assert {"swarms", "messaging", "agents", "github"} <= names
+        assert {"setup", "swarms", "messaging", "agents", "github"} <= names
         assert all(t["summary"] for t in topics)
+
+    def test_setup_topic_walks_install_to_first_agent(self):
+        content = get_topic("setup")
+        for step in ("uv tool install", "backbone init", "agent start", "backbone tell"):
+            assert step in content
+
+
+class TestDocs:
+    def test_shipped_docs_listed_with_summaries(self):
+        pages = list_docs()
+        names = {p["name"] for p in pages}
+        assert {"getting-started", "concepts", "how-it-works", "cli"} <= names
+        assert all(p["summary"] for p in pages)
+        assert "README" not in names  # the index is the listing itself
+
+    def test_get_doc_returns_markdown(self):
+        assert get_doc("getting-started").startswith("# Getting started")
+        assert get_doc("nope") is None
+        assert get_doc("../pyproject") is None
+
+    def test_no_docs_dir_means_empty_not_error(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(help_module, "_DOCS_DIRS", (tmp_path / "missing",))
+        assert list_docs() == []
+        assert get_doc("getting-started") is None
 
     def test_get_topic_returns_markdown(self):
         content = get_topic("swarms")
