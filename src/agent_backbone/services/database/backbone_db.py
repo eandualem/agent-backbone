@@ -98,7 +98,12 @@ def _repair_columns(sync_conn) -> None:
 def _backfill_dedup_keys(sync_conn) -> None:
     """Give queue rows from before ``dedup_key`` (they had ``content_hash``)
     the identity new rows get, so the dedup index can be built and a
-    re-offered message still folds into the row that already waits."""
+    re-offered message still folds into the row that already waits.
+
+    Rows with no sender and no source event get the sender-less text key —
+    the same identity ``content_hash`` gave them — so pending copies of one
+    text in one session collapse to the oldest exactly as the previous
+    repair did; nothing that was distinct before becomes the same now."""
     from agent_backbone.services.database._queue_repo import dedup_key_for
 
     rows = sync_conn.execute(

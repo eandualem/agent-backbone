@@ -271,6 +271,57 @@ class TestDeliveryRetryQueueDrain:
         assert mock_deliver.await_count == 1
 
 
+class TestDrainKeepsTheRowIdentity:
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock)
+    async def test_blocked_comment_is_reoffered_under_its_comment_id(
+        self, mock_list_sessions, mock_deliver, db, config
+    ):
+        """A leased comment row that is still blocked must fold back into itself —
+        re-offering it under a text key would add a second row and deliver twice."""
+        await db.queue.enqueue(
+            session_name="ike",
+            message="LGTM",
+            delivery_kind="comment",
+            issue_number=7,
+            target_entity="ike",
+            repo=TEST_REPO,
+            sender="leo",
+            source_key=f"comment:{TEST_REPO}#7:100",
+        )
+        mock_list_sessions.return_value = ["ike"]
+        mock_deliver.return_value = "agent_working"
+
+        await delivery_retry(config, db, None)
+
+        kwargs = mock_deliver.await_args.kwargs
+        assert kwargs["sender"] == "leo"
+        assert kwargs["source_key"] == f"comment:{TEST_REPO}#7:100"
+
+    async def test_reoffer_of_a_leased_row_never_adds_a_second_one(self, db):
+        first = await db.queue.enqueue(
+            session_name="ike",
+            message="LGTM",
+            delivery_kind="comment",
+            issue_number=7,
+            target_entity="ike",
+            source_key="comment:acme/app#7:100",
+        )
+        leased = await db.queue.dequeue("ike")  # in_progress while safe_deliver re-offers it
+        assert [row["id"] for row in leased] == [first.id]
+        again = await db.queue.enqueue(
+            session_name="ike",
+            message="LGTM",
+            delivery_kind="comment",
+            issue_number=7,
+            target_entity="ike",
+            source_key="comment:acme/app#7:100",
+        )
+        assert again.status == "already_queued"
+        await db.queue.release(first.id)
+        assert len(await db.queue.dequeue("ike")) == 1
+
+
 class TestPurgePendingForIssue:
     async def test_purges_pending_messages_for_issue(self, db):
         for session, number in (("feynman", 775), ("ike", 775), ("feynman", 776)):

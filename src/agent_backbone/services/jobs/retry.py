@@ -83,6 +83,9 @@ async def drain_message_queue(
                 queue_scope=scope,
                 delivery_kind=record.get("delivery_kind", "issue"),
                 sender=record.get("sender") or "",
+                # A blocked re-offer must fold into this leased row, not add a
+                # second one: hand back the identity it was stored under.
+                source_key=_source_key_of(record),
             )
             if outcome in _QUEUE_DONE:
                 await db.queue.mark_delivered(record["id"])
@@ -143,6 +146,12 @@ async def retry_delivery(
     if outcome in (DeliveryOutcome.ALREADY_DELIVERED, DeliveryOutcome.AWAITING_ACK):
         return outcome.value
     return DeliveryOutcome.DELIVERY_FAILED.value
+
+
+def _source_key_of(record: dict) -> str | None:
+    """The source-event identity a queued row was stored under, if any."""
+    key = record.get("dedup_key") or ""
+    return key[len("src:") :] if key.startswith("src:") else None
 
 
 async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: GitHubClient | None) -> dict:
