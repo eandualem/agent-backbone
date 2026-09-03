@@ -37,7 +37,7 @@ and the model's own are ever dropped — an index an operator added is theirs.""
 
 _RENAMED_COLUMNS = {"deliveries": {"flow_name": "source"}, "message_queue": {"flow_name": "source"}}
 """Columns the previous squash spelled differently: renamed in place, data kept."""
-_DROPPED_COLUMNS = {"deliveries": ("flow_run_id",)}
+_DROPPED_COLUMNS = {"deliveries": ("flow_run_id",), "message_queue": ("content_hash",)}
 """Columns the previous squash had and the model no longer has."""
 
 
@@ -95,6 +95,24 @@ def _repair_columns(sync_conn) -> None:
             log.info("Dropped %s.%s (re-stamped database)", table.name, old)
 
 
+def _backfill_dedup_keys(sync_conn) -> None:
+    """Give queue rows from before ``dedup_key`` (they had ``content_hash``)
+    the identity new rows get, so the dedup index can be built and a
+    re-offered message still folds into the row that already waits."""
+    from agent_backbone.services.database._queue_repo import dedup_key_for
+
+    rows = sync_conn.execute(
+        text("SELECT id, message, sender FROM message_queue WHERE dedup_key IS NULL")
+    ).fetchall()
+    for row in rows:
+        sync_conn.execute(
+            text("UPDATE message_queue SET dedup_key = :key WHERE id = :id"),
+            {"key": dedup_key_for(row.message, row.sender or "", None), "id": row.id},
+        )
+    if rows:
+        log.info("Backfilled dedup_key on %d queue rows (re-stamped database)", len(rows))
+
+
 def _sqlite_version(sync_conn) -> tuple[int, ...] | None:
     """The SQLite library's version when the connection is SQLite, else None."""
     if sync_conn.dialect.name != "sqlite":
@@ -117,6 +135,7 @@ def _repair_schema(sync_conn) -> None:
     created.
     """
     _repair_columns(sync_conn)
+    _backfill_dedup_keys(sync_conn)
     sync_conn.execute(
         text(
             """UPDATE message_queue SET status = 'expired'
@@ -124,7 +143,7 @@ def _repair_schema(sync_conn) -> None:
                  AND id NOT IN (
                    SELECT MIN(id) FROM message_queue
                    WHERE delivery_kind != 'issue' AND status IN ('pending','in_progress')
-                   GROUP BY session_name, content_hash
+                   GROUP BY session_name, dedup_key
                  )"""
         )
     )

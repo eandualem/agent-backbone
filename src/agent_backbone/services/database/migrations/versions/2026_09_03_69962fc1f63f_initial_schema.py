@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 3fb2fe03898c
+Revision ID: 69962fc1f63f
 Revises:
-Create Date: 2026-09-02 10:38:08.720386
+Create Date: 2026-09-03 08:50:52.135689
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "3fb2fe03898c"
+revision: str = "69962fc1f63f"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -143,7 +143,8 @@ def upgrade() -> None:
         sa.Column("delivered_at", sa.Text(), nullable=True),
         sa.Column("status", sa.Text(), server_default="pending", nullable=False),
         sa.Column("leased_at", sa.Text(), nullable=True),
-        sa.Column("content_hash", sa.Text(), nullable=True),
+        sa.Column("sender", sa.Text(), server_default="", nullable=False),
+        sa.Column("dedup_key", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_message_queue")),
     )
     with op.batch_alter_table("message_queue", schema=None) as batch_op:
@@ -169,7 +170,7 @@ def upgrade() -> None:
         )
         batch_op.create_index(
             "uq_mq_message_dedup",
-            ["session_name", "content_hash"],
+            ["session_name", "dedup_key"],
             unique=True,
             postgresql_where=sa.text(
                 "delivery_kind != 'issue' AND status IN ('pending','in_progress')"

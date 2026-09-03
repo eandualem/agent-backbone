@@ -120,7 +120,13 @@ messages included. A `plan_response` (an answer typed into a plan prompt)
 is the one kind that is **never queued**: it goes in only while the agent
 is waiting for a plan decision, and is refused as `not_waiting` otherwise. What cannot be delivered now is **queued** in the database and
 delivered by the background jobs; queued messages expire after
-`timing.queue_expiry_minutes` (30). Issue deliveries are additionally
+`timing.queue_expiry_minutes` (30). The sender is told whether a row
+exists (`stored`), whether the same message from them was already
+waiting (`already_queued`), or whether storing it failed (`failed`) —
+"queued" is never claimed for a message that is not in the database.
+The same message means the same source event (a comment id) or the same
+sender with the same text; two senders with identical text are two
+messages. Issue deliveries are additionally
 **claimed** so two jobs can never deliver the same issue twice.
 
 ## Event

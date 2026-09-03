@@ -95,6 +95,12 @@ async def _deliver(
         enforce_issue_queue=enforce_issue_queue,
         queue_scope=scope,
         delivery_kind=kind,
+        sender=event.comment.user_login if event.comment else "",
+        source_key=(
+            f"comment:{repo}#{event.issue.number}:{event.comment.id}"
+            if kind == "comment" and event.comment and event.comment.id
+            else None
+        ),
     )
     _record(result, session, outcome)
     log.info("Decision: %s#%d → %s (%s) = %s", repo, event.issue.number, target, kind, outcome)

@@ -82,6 +82,7 @@ async def drain_message_queue(
                 enforce_issue_queue=True,
                 queue_scope=scope,
                 delivery_kind=record.get("delivery_kind", "issue"),
+                sender=record.get("sender") or "",
             )
             if outcome in _QUEUE_DONE:
                 await db.queue.mark_delivered(record["id"])

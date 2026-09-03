@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-
 import pytest
 from sqlalchemy import text
 
@@ -302,7 +300,7 @@ class TestMessageQueue:
             delivery_kind="comment",
             source="test-flow",
         )
-        assert row_id > 0
+        assert row_id.status == "inserted" and row_id.id > 0
 
         messages = await db.queue.dequeue("ike")
         assert len(messages) == 1
@@ -317,7 +315,7 @@ class TestMessageQueue:
         assert messages == []
 
     async def test_mark_delivered(self, db):
-        row_id = await db.queue.enqueue(session_name="ike", message="msg")
+        row_id = (await db.queue.enqueue(session_name="ike", message="msg")).id
         await db.queue.dequeue("ike")
         await db.queue.mark_delivered(row_id)
 
@@ -349,7 +347,7 @@ class TestMessageQueue:
 
     async def test_enqueue_without_optional_fields(self, db):
         row_id = await db.queue.enqueue(session_name="ike", message="bare message")
-        assert row_id > 0
+        assert row_id.status == "inserted" and row_id.id > 0
 
         messages = await db.queue.dequeue("ike")
         assert len(messages) == 1
@@ -358,7 +356,7 @@ class TestMessageQueue:
         assert messages[0]["target_entity"] is None
 
     async def test_mark_delivered_sets_timestamp(self, db):
-        row_id = await db.queue.enqueue(session_name="ike", message="msg")
+        row_id = (await db.queue.enqueue(session_name="ike", message="msg")).id
         await db.queue.dequeue("ike")
         await db.queue.mark_delivered(row_id)
 
@@ -385,8 +383,8 @@ class TestMessageQueue:
             session_name="ike", message="second", issue_number=42, target_entity="ike"
         )
 
-        assert first > 0
-        assert second == -1
+        assert first.status == "inserted"
+        assert second.status == "already_queued" and second.id is None
 
         messages = await db.queue.dequeue("ike")
         assert len(messages) == 1
@@ -400,8 +398,8 @@ class TestMessageQueue:
             session_name="ike", message="second", issue_number=43, target_entity="ike"
         )
 
-        assert first > 0
-        assert second > 0
+        assert first.status == "inserted"
+        assert second.status == "inserted"
 
         messages = await db.queue.dequeue("ike")
         assert len(messages) == 2
@@ -430,9 +428,9 @@ class TestMessageQueue:
             delivery_kind="comment",
         )
 
-        assert first > 0
-        assert duplicate == -1
-        assert different > 0
+        assert first.status == "inserted"
+        assert duplicate.status == "already_queued"
+        assert different.status == "inserted"
 
         messages = await db.queue.dequeue("ike")
         assert len(messages) == 2
@@ -445,13 +443,11 @@ class TestMessageQueue:
             first = await db.queue.enqueue(
                 session_name="ike", message=f"notice {kind}", delivery_kind=kind
             )
-            assert first > 0
-            assert (
-                await db.queue.enqueue(
-                    session_name="ike", message=f"notice {kind}", delivery_kind=kind
-                )
-                == -1
+            assert first.status == "inserted"
+            again = await db.queue.enqueue(
+                session_name="ike", message=f"notice {kind}", delivery_kind=kind
             )
+            assert again.status == "already_queued"
 
     async def test_enqueue_dedup_dm_constraint(self, db):
         first = await db.queue.enqueue(
@@ -470,9 +466,9 @@ class TestMessageQueue:
             delivery_kind="direct_message",
         )
 
-        assert first > 0
-        assert duplicate == -1
-        assert different > 0
+        assert first.status == "inserted"
+        assert duplicate.status == "already_queued"
+        assert different.status == "inserted"
 
         messages = await db.queue.dequeue("ike")
         assert len(messages) == 2
@@ -481,19 +477,70 @@ class TestMessageQueue:
             "same direct message",
         }
 
-    async def test_enqueue_content_hash_populated(self, db):
-        message = "hash me"
-        row_id = await db.queue.enqueue(
-            session_name="ike",
-            message=message,
-            issue_number=42,
-            target_entity="ike",
-            delivery_kind="comment",
+    async def test_dedup_key_is_sender_plus_text_or_the_source_event(self, db):
+        from agent_backbone.services.database._queue_repo import dedup_key_for
+
+        row = await db.queue.enqueue(
+            session_name="ike", message="hash me", delivery_kind="direct_message", sender="leo"
         )
+        stored = await queue_row(db, row.id)
+        assert stored["sender"] == "leo"
+        assert stored["dedup_key"] == dedup_key_for("hash me", "leo", None)
+        assert stored["dedup_key"].startswith("msg:")
+        assert dedup_key_for("x", "leo", "comment:acme/app#1:99") == "src:comment:acme/app#1:99"
 
-        row = await queue_row(db, row_id)
+    async def test_same_text_from_two_senders_is_two_messages(self, db):
+        a = await db.queue.enqueue(
+            session_name="ike",
+            message="run the tests",
+            delivery_kind="direct_message",
+            sender="leo",
+        )
+        b = await db.queue.enqueue(
+            session_name="ike",
+            message="run the tests",
+            delivery_kind="direct_message",
+            sender="orch",
+        )
+        again = await db.queue.enqueue(
+            session_name="ike",
+            message="run the tests",
+            delivery_kind="direct_message",
+            sender="leo",
+        )
+        assert a.status == b.status == "inserted"
+        assert again.status == "already_queued"
+        assert len(await db.queue.dequeue("ike")) == 2
 
-        assert row["content_hash"] == hashlib.sha256(message.encode()).hexdigest()
+    async def test_source_event_identity_beats_text(self, db):
+        # Two GitHub comments with identical text are two messages; the same
+        # comment re-offered by a blocked drain is one.
+        first = await db.queue.enqueue(
+            session_name="ike",
+            message="LGTM",
+            delivery_kind="comment",
+            issue_number=7,
+            target_entity="ike",
+            source_key="comment:acme/app#7:100",
+        )
+        other = await db.queue.enqueue(
+            session_name="ike",
+            message="LGTM",
+            delivery_kind="comment",
+            issue_number=7,
+            target_entity="ike",
+            source_key="comment:acme/app#7:101",
+        )
+        again = await db.queue.enqueue(
+            session_name="ike",
+            message="LGTM",
+            delivery_kind="comment",
+            issue_number=7,
+            target_entity="ike",
+            source_key="comment:acme/app#7:100",
+        )
+        assert first.status == other.status == "inserted"
+        assert again.status == "already_queued"
 
     async def test_get_sessions_with_pending(self, db):
         await db.queue.enqueue(
@@ -508,9 +555,11 @@ class TestMessageQueue:
         assert set(sessions) == {"ike", "jarvis"}
 
     async def test_dequeue_marks_in_progress(self, db):
-        row_id = await db.queue.enqueue(
-            session_name="ike", message="claim me", issue_number=42, target_entity="ike"
-        )
+        row_id = (
+            await db.queue.enqueue(
+                session_name="ike", message="claim me", issue_number=42, target_entity="ike"
+            )
+        ).id
 
         messages = await db.queue.dequeue("ike")
 
@@ -534,9 +583,11 @@ class TestMessageQueue:
         assert second == []
 
     async def test_release_lease(self, db):
-        row_id = await db.queue.enqueue(
-            session_name="ike", message="lease me", issue_number=42, target_entity="ike"
-        )
+        row_id = (
+            await db.queue.enqueue(
+                session_name="ike", message="lease me", issue_number=42, target_entity="ike"
+            )
+        ).id
         await db.queue.dequeue("ike")
 
         await db.queue.release(row_id)
@@ -546,9 +597,11 @@ class TestMessageQueue:
         assert row["leased_at"] is None
 
     async def test_expire_stale_leases(self, db):
-        row_id = await db.queue.enqueue(
-            session_name="ike", message="stale lease", issue_number=42, target_entity="ike"
-        )
+        row_id = (
+            await db.queue.enqueue(
+                session_name="ike", message="stale lease", issue_number=42, target_entity="ike"
+            )
+        ).id
         await db.queue.dequeue("ike")
 
         async with db.engine.begin() as conn:
@@ -565,15 +618,19 @@ class TestMessageQueue:
         assert row["leased_at"] is None
 
     async def test_purge_covers_in_progress(self, db):
-        first = await db.queue.enqueue(
-            session_name="ike", message="claim me", issue_number=775, target_entity="ike"
-        )
-        second = await db.queue.enqueue(
-            session_name="feynman",
-            message="leave pending",
-            issue_number=775,
-            target_entity="feynman",
-        )
+        first = (
+            await db.queue.enqueue(
+                session_name="ike", message="claim me", issue_number=775, target_entity="ike"
+            )
+        ).id
+        second = (
+            await db.queue.enqueue(
+                session_name="feynman",
+                message="leave pending",
+                issue_number=775,
+                target_entity="feynman",
+            )
+        ).id
         await db.queue.dequeue("ike")
 
         purged = await db.queue.purge_for_issue(775)
@@ -583,9 +640,11 @@ class TestMessageQueue:
         assert (await queue_row(db, second))["status"] == "delivered"
 
     async def test_mark_delivered_requires_in_progress(self, db):
-        row_id = await db.queue.enqueue(
-            session_name="ike", message="pending row", issue_number=42, target_entity="ike"
-        )
+        row_id = (
+            await db.queue.enqueue(
+                session_name="ike", message="pending row", issue_number=42, target_entity="ike"
+            )
+        ).id
 
         await db.queue.mark_delivered(row_id)
 
