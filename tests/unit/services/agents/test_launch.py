@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent_backbone.config import AgentSpec, bootstrap_config
 from agent_backbone.services.agents import (
     approve_agent,
+    plan_control,
     read_state_file,
     start_agent,
     wait_until_ready,
@@ -71,6 +74,63 @@ class TestApproveAgent:
             outcome, _ = await approve_agent("ike", runtime="claude", settle_seconds=0)
         assert outcome == "not_waiting"
         keys.assert_not_called()
+
+
+class TestPlanControl:
+    """Plan approve/reject go through the runtime's own keys, or nowhere."""
+
+    async def test_claude_approve_sends_shift_tab(self):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value="❯ \n"),
+            patch(f"{_BASE}.send_keys", return_value=True) as keys,
+        ):
+            outcome, evidence = await plan_control("ike", "approve", runtime="claude")
+        assert outcome == "approved"
+        assert [c.args for c in keys.await_args_list] == [("ike", "Escape"), ("ike", "[Z")]
+        assert evidence == ["sent Escape [Z to claude"]
+
+    async def test_claude_reject_only_leaves_plan_mode(self):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value="❯ \n"),
+            patch(f"{_BASE}.send_keys", return_value=True) as keys,
+        ):
+            outcome, _ = await plan_control("ike", "reject", runtime="claude")
+        assert outcome == "rejected"
+        assert [c.args for c in keys.await_args_list] == [("ike", "Escape")]
+
+    @pytest.mark.parametrize(
+        "runtime", ["codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    )
+    async def test_other_runtimes_get_no_keys_at_all(self, runtime):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value="› \n"),
+            patch(f"{_BASE}.send_keys") as keys,
+        ):
+            outcome, evidence = await plan_control("ike", "approve", runtime=runtime)
+        assert outcome == "unsupported"
+        assert "nothing was sent" in evidence[0]
+        keys.assert_not_called()
+
+    async def test_partial_sequence_is_reported_not_hidden(self):
+        # Escape goes in, "[Z" is refused: plan mode was left without approval.
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value="❯ \n"),
+            patch(f"{_BASE}.send_keys", side_effect=[True, False]),
+        ):
+            outcome, evidence = await plan_control("ike", "approve", runtime="claude")
+        assert outcome == "failed"
+        assert "sent Escape but tmux refused [Z" in evidence[0]
+        assert "may have left plan mode" in evidence[0]
+
+    async def test_offline_and_bad_action(self):
+        with patch(f"{_MOD}.session_exists", return_value=False):
+            assert (await plan_control("ike", "approve", runtime="claude"))[0] == "offline"
+        with pytest.raises(ValueError):
+            await plan_control("ike", "respond", runtime="claude")
 
 
 class TestStartAgentScrubsSecrets:

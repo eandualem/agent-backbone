@@ -102,6 +102,12 @@ class Runtime:
     """tmux key names that accept the runtime's permission prompt as shown
     (verified against a live capture of that dialog). Empty: the backbone
     does not know how to answer this runtime and refuses to guess."""
+    plan_approve_keys: tuple[str, ...] = ()
+    """tmux key names that accept the plan the runtime is presenting (Claude
+    Code: Shift+Tab). Empty: the runtime has no plan mode the backbone can
+    drive, and every plan action is refused as unsupported — nothing is typed."""
+    plan_reject_keys: tuple[str, ...] = ()
+    """tmux key names that leave plan mode so feedback can follow as a message."""
 
     # --- paste behaviour ---------------------------------------------------
     auto_submit: bool = False
@@ -329,6 +335,31 @@ class Runtime:
             if not await send_keys(session_name, key):
                 return False
         return True
+
+    @property
+    def supports_plan_control(self) -> bool:
+        """Whether the backbone can approve or reject this runtime's plans."""
+        return bool(self.plan_approve_keys)
+
+    async def _send_all(self, session_name: str, keys: tuple[str, ...]) -> int:
+        """Send keys in order; returns how many went in (tmux refused the next)."""
+        sent = 0
+        for key in keys:
+            if not await send_keys(session_name, key):
+                break
+            sent += 1
+        return sent
+
+    async def approve_plan(self, session_name: str) -> int:
+        """Accept the plan on screen. Returns the number of keys sent: all of
+        ``plan_approve_keys`` on success, fewer when tmux refused one part-way
+        (the caller reports that: the earlier keys may have changed the mode),
+        0 when this runtime has no plan mode."""
+        return await self._send_all(session_name, self.plan_approve_keys)
+
+    async def reject_plan(self, session_name: str) -> int:
+        """Leave plan mode so feedback can follow as a message; see ``approve_plan``."""
+        return await self._send_all(session_name, self.plan_reject_keys)
 
     async def deliver_message(self, session_name: str, message: str) -> bool:
         """Paste a message and submit it according to runtime-specific rules."""

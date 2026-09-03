@@ -184,6 +184,19 @@ arbitrary path the state record names), and — only when
 agent — `POST /api/plans/{name}/approve`, `/reject {"feedback"}`,
 `/respond {"input"}`.
 
+Approve and reject send the agent's **runtime's own** plan keys
+(`Runtime.plan_approve_keys` / `plan_reject_keys`; Claude Code today). A
+runtime without a plan mode the backbone can drive answers **409** and
+nothing is typed. The response text (`/respond`) is a `plan_response`
+delivery through `safe_deliver`: it goes in only while the agent is
+waiting for a plan decision (`not_waiting` otherwise — a bare option
+number at an idle prompt would be a new instruction), is recorded like
+every other delivery, and is never queued — a 409 names the outcome.
+`not_waiting` occurs only here, never on `POST /api/messages`. Rejection
+feedback is not a plan response: it is sent *after* plan mode is left, as
+an ordinary `direct_message` (enveloped, queued if the agent is busy); the
+reply's `feedback` field is its outcome.
+
 ## Status
 
 | Route | Purpose |

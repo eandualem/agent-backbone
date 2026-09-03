@@ -75,6 +75,10 @@ class ClaudeCode(Runtime):
     )
     # "❯ 1. Yes" is preselected in the permission dialog (live capture, 2.1.x).
     approve_keys = ("Enter",)
+    # Plan mode: Shift+Tab (sent as Escape then "[Z") accepts the plan;
+    # Escape leaves plan mode so feedback can follow as a message.
+    plan_approve_keys = ("Escape", "[Z")
+    plan_reject_keys = ("Escape",)
 
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_directory(directory)

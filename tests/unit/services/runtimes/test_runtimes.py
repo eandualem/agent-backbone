@@ -339,3 +339,27 @@ class TestPaneLinePairing:
     def test_non_sgr_escapes_do_not_count_as_typed_text(self):
         pane = "❯ \x1b[2mTry a suggestion\x1b[0m\x1b[K\n"
         assert RUNTIMES["claude"].prompt_has_pending_input(pane) is False
+
+
+class TestPlanControlCapability:
+    def test_only_claude_code_has_a_plan_mode_the_backbone_drives(self):
+        from agent_backbone.services.runtimes import RUNTIMES, get_runtime
+
+        supported = {name for name in RUNTIMES if get_runtime(name).supports_plan_control}
+        assert supported == {"claude"}
+        assert get_runtime("claude").plan_approve_keys == ("Escape", "[Z")
+        assert get_runtime("claude").plan_reject_keys == ("Escape",)
+
+    async def test_unsupported_runtime_sends_nothing(self):
+        from unittest.mock import AsyncMock, patch
+
+        from agent_backbone.services.runtimes import get_runtime
+
+        with patch(
+            "agent_backbone.services.runtimes.base.send_keys", new_callable=AsyncMock
+        ) as keys:
+            approved = await get_runtime("codex").approve_plan("x")
+            rejected = await get_runtime("codex").reject_plan("x")
+        assert type(approved) is int and approved == 0  # a count, not a bool
+        assert type(rejected) is int and rejected == 0
+        keys.assert_not_awaited()
