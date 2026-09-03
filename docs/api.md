@@ -123,8 +123,7 @@ Response: `{"ok": true, "session": "web", "outcome": "delivered"}`. The
 target must be a registered agent or an active swarm (404 otherwise — the
 backbone never types into a tmux session that is not one of its agents).
 Outcomes: `delivered`, `agent_working`, `waiting_for_human`, `offline`,
-`human_typing`, `settling`, `delivery_failed` (and `not_waiting`, for a
-plan response with no plan on screen). Every non-`delivered` outcome
+`human_typing`, `settling`, `delivery_failed`. Every non-`delivered` outcome
 means the message was **queued** and will be delivered when the agent is
 free (or expire after `timing.queue_expiry_minutes`).
 
