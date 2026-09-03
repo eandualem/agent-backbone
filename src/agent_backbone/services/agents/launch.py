@@ -31,7 +31,6 @@ from agent_backbone.services.runtimes import (
 )
 from agent_backbone.services.terminal import (
     capture_pane,
-    send_keys,
     session_exists,
     start_session,
     stop_session,
@@ -325,13 +324,37 @@ async def approve_agent(
     return "approved", [f"answered with {' '.join(rt.approve_keys)}; {verdict}", *tail]
 
 
-async def approve_plan(name: str) -> bool:
-    """Accept the plan Claude Code is showing: Shift+Tab (``Escape`` + ``[Z``).
+async def plan_control(
+    name: str, action: str, *, runtime: str | None = None
+) -> tuple[str, list[str]]:
+    """Approve or reject the plan an agent is presenting, through its runtime.
 
-    This is the one surface that types into a waiting agent without the
-    delivery pipeline; callers gate it on ``security.allow_remote_plan_control``.
+    ``action`` is ``approve`` or ``reject``. Returns ``(outcome, evidence)``:
+    ``approved`` / ``rejected`` (the runtime's keys were sent), ``unsupported``
+    (the runtime has no plan mode the backbone can drive — nothing is typed,
+    so Claude Code's key sequence can never reach a Codex or OpenCode
+    terminal), ``offline`` or ``failed``. Rejecting only leaves plan mode;
+    the feedback itself is a ``plan_response`` delivery through
+    ``safe_deliver``. Callers gate on ``security.allow_remote_plan_control``
+    and on the agent actually waiting for a plan decision.
     """
-    return await send_keys(name, "Escape") and await send_keys(name, "[Z")
+    if action not in ("approve", "reject"):
+        raise ValueError(f"unknown plan action {action!r}")
+    if not await session_exists(name):
+        return "offline", [f"no tmux session named '{name}'"]
+    pane = await capture_pane(name, lines=60)
+    rt = await resolve_runtime(name, hint=runtime, pane_content=pane)
+    if not rt.supports_plan_control:
+        return "unsupported", [
+            f"{rt.display_name} has no plan mode the backbone can drive; nothing was sent"
+        ]
+    keys = rt.plan_approve_keys if action == "approve" else rt.plan_reject_keys
+    sent = await (rt.approve_plan(name) if action == "approve" else rt.reject_plan(name))
+    if not sent:
+        return "failed", ["tmux refused the keys"]
+    outcome = "approved" if action == "approve" else "rejected"
+    log.info("Plan %s on '%s' via %s", outcome, name, rt.id)
+    return outcome, [f"sent {' '.join(keys)} to {rt.id}"]
 
 
 async def stop_agent(name: str) -> bool:

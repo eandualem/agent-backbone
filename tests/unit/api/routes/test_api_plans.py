@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_backbone.config import SecurityConfig
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import AgentState, StateSnapshot
 
 _PLANS = "agent_backbone.api.routes.plans"
@@ -41,16 +42,8 @@ def state_svc():
 
 @pytest.fixture(autouse=True)
 def tmux_svc():
-    mocks = SimpleNamespace(
-        list_sessions=AsyncMock(return_value=["ike"]),
-        session_exists=AsyncMock(return_value=True),
-        send_keys=AsyncMock(return_value=True),
-    )
-    with (
-        patch(f"{_PLANS}.list_sessions", mocks.list_sessions),
-        patch(f"{_PLANS}.session_exists", mocks.session_exists),
-        patch(f"{_PLANS}.send_keys", mocks.send_keys),
-    ):
+    mocks = SimpleNamespace(list_sessions=AsyncMock(return_value=["ike"]))
+    with patch(f"{_PLANS}.list_sessions", mocks.list_sessions):
         yield mocks
 
 
@@ -114,45 +107,75 @@ class TestGetPlan:
 
 class TestPlanControl:
     async def test_approve_disabled_by_default(self, api_client, auth_headers):
-        with patch(f"{_PLANS}.approve_plan", new_callable=AsyncMock) as approve:
+        with patch(f"{_PLANS}.plan_control", new_callable=AsyncMock) as control:
             resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
         assert resp.status_code == 403
-        approve.assert_not_awaited()
+        control.assert_not_awaited()
 
     async def test_plan_control_only_targets_registered_agents(
-        self, api_client, auth_headers, api_app, tmux_svc
+        self, api_client, auth_headers, api_app
     ):
         # "stray" is a live tmux session but not a backbone agent: no keys.
         _enable_plan_control(api_app)
-        resp = await api_client.post("/api/plans/stray/approve", headers=auth_headers)
-        assert resp.status_code == 404
-        assert "not a registered agent" in resp.json()["detail"]
-        resp = await api_client.post(
-            "/api/plans/stray/respond", json={"input": "1"}, headers=auth_headers
-        )
-        assert resp.status_code == 404
-        tmux_svc.send_keys.assert_not_awaited()
+        with patch(f"{_PLANS}.plan_control", new_callable=AsyncMock) as control:
+            resp = await api_client.post("/api/plans/stray/approve", headers=auth_headers)
+            assert resp.status_code == 404
+            assert "not a registered agent" in resp.json()["detail"]
+            resp = await api_client.post(
+                "/api/plans/stray/respond", json={"input": "1"}, headers=auth_headers
+            )
+            assert resp.status_code == 404
+        control.assert_not_awaited()
 
-    async def test_approve_sends_shift_tab_when_enabled(self, api_client, auth_headers, api_app):
+    async def test_approve_uses_the_agents_runtime(self, api_client, auth_headers, api_app):
         _enable_plan_control(api_app)
-        with patch(f"{_PLANS}.approve_plan", new_callable=AsyncMock, return_value=True) as approve:
+        with patch(
+            f"{_PLANS}.plan_control",
+            new_callable=AsyncMock,
+            return_value=("approved", ["sent Escape [Z to claude"]),
+        ) as control:
             resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
         assert resp.json()["action"] == "plan_approved"
-        approve.assert_awaited_once_with("ike")
+        control.assert_awaited_once_with("ike", "approve", runtime="claude")
 
-    async def test_reject_delivers_feedback(self, api_client, auth_headers, api_app, state_svc):
+    async def test_runtime_without_plan_mode_is_409_and_nothing_is_typed(
+        self, api_client, auth_headers, api_app
+    ):
+        _enable_plan_control(api_app)
+        refusal = ("unsupported", ["Codex has no plan mode; nothing was sent"])
+        with (
+            patch(f"{_PLANS}.plan_control", new_callable=AsyncMock, return_value=refusal),
+            patch(f"{_PLANS}.safe_deliver", new_callable=AsyncMock) as deliver,
+        ):
+            resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
+        assert resp.status_code == 409
+        assert "not available" in resp.json()["detail"]
+        deliver.assert_not_awaited()
+
+    async def test_reject_leaves_plan_mode_then_delivers_feedback_as_plan_response(
+        self, api_client, auth_headers, api_app, state_svc
+    ):
         _enable_plan_control(api_app)
         state_svc.read_state.return_value = _plan_snapshot()
-        with patch(
-            "agent_backbone.api.routes.plans.send_message",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as send:
+        with (
+            patch(
+                f"{_PLANS}.plan_control",
+                new_callable=AsyncMock,
+                return_value=("rejected", ["sent Escape to claude"]),
+            ) as control,
+            patch(
+                f"{_PLANS}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value=DeliveryOutcome.DELIVERED,
+            ) as deliver,
+        ):
             resp = await api_client.post(
                 "/api/plans/ike/reject", json={"feedback": "too big"}, headers=auth_headers
             )
         assert resp.json()["action"] == "plan_rejected"
-        assert "too big" in send.await_args.args[1]
+        control.assert_awaited_once_with("ike", "reject", runtime="claude")
+        assert "too big" in deliver.await_args.args[1]
+        assert deliver.await_args.kwargs["delivery_kind"] == "plan_response"
 
     async def test_reject_requires_plan_waiting(self, api_client, auth_headers, api_app):
         _enable_plan_control(api_app)
@@ -161,16 +184,33 @@ class TestPlanControl:
         )
         assert resp.status_code == 409
 
-    async def test_respond_sends_input(self, api_client, auth_headers, api_app, state_svc):
+    async def test_respond_goes_through_safe_deliver(
+        self, api_client, auth_headers, api_app, state_svc
+    ):
         _enable_plan_control(api_app)
         state_svc.read_state.return_value = _plan_snapshot()
         with patch(
-            "agent_backbone.api.routes.plans.send_message",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as send:
+            f"{_PLANS}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED
+        ) as deliver:
             resp = await api_client.post(
                 "/api/plans/ike/respond", json={"input": "2"}, headers=auth_headers
             )
         assert resp.json()["action"] == "plan_response_sent"
-        send.assert_awaited_once_with("ike", "2")
+        assert deliver.await_args.args[:2] == ("ike", "2")  # verbatim: no envelope on a plan prompt
+        assert deliver.await_args.kwargs["delivery_kind"] == "plan_response"
+
+    async def test_undelivered_response_is_reported_not_queued(
+        self, api_client, auth_headers, api_app, state_svc
+    ):
+        _enable_plan_control(api_app)
+        state_svc.read_state.return_value = _plan_snapshot()
+        with patch(
+            f"{_PLANS}.safe_deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryOutcome.AGENT_WORKING,
+        ):
+            resp = await api_client.post(
+                "/api/plans/ike/respond", json={"input": "2"}, headers=auth_headers
+            )
+        assert resp.status_code == 409
+        assert "agent_working" in resp.json()["detail"]

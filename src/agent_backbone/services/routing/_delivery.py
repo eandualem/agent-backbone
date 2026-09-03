@@ -46,6 +46,8 @@ def outcome_queues(outcome: DeliveryOutcome, kind: str) -> bool:
     queued durably on every blocking condition and on paste failure; issue
     deliveries rely on the retry job except when the agent is offline.
     """
+    if kind == "plan_response":
+        return False  # answers to a plan prompt are never queued
     if outcome == DeliveryOutcome.DELIVERY_FAILED:
         return True
     if outcome not in BLOCKED_OUTCOMES:
@@ -268,6 +270,19 @@ async def safe_deliver(
     same_issue_comment = kind == "comment" and _comment_matches_active_issue(
         repo, issue_number, profile.current_repo, profile.current_issue
     )
+
+    if kind == "plan_response":
+        # A plan response is typed into the plan prompt itself, so it goes in
+        # exactly when the agent is waiting for one — the one condition every
+        # other kind must wait out — and is never queued: by the time the
+        # queue drained, the question would be gone.
+        if intel == SessionIntelligence.WAITING_FOR_HUMAN and profile.reason != "plan":
+            return await finish(DeliveryOutcome.WAITING_FOR_HUMAN, queue=False)
+        if intel in BLOCKED_OUTCOMES and intel != SessionIntelligence.WAITING_FOR_HUMAN:
+            return await finish(DeliveryOutcome(intel.value), queue=False)
+        if await send_message(session_name, message, runtime_hint=profile.runtime):
+            return await finish(DeliveryOutcome.DELIVERED, queue=False)
+        return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=False)
 
     if intel in BLOCKED_OUTCOMES:
         bypass = (priority and intel in _BYPASSABLE) or (

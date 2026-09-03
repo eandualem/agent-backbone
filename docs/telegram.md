@@ -40,7 +40,7 @@ command and message from an unlisted chat is ignored silently.
 | `/queue` | Failed/pending and recent deliveries |
 | `/digest` | Sessions, pending deliveries, tracked agent states |
 | `/viewplan <agent>` | Show the plan an agent is waiting to have approved |
-| `/approve <agent>` | Approve it — only when `security.allow_remote_plan_control` is on |
+| `/approve <agent>` | Approve it — only when `security.allow_remote_plan_control` is on, and only for runtimes with a plan mode the backbone can drive (Claude Code) |
 | `/identify` | Print this chat/topic id and its current mapping |
 | `/help` | Command list |
 

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from agent_backbone.services.integrations.telegram.interface import TelegramService
 
 from agent_backbone.services.agents import (
-    approve_plan,
+    plan_control,
     read_plan,
     read_state_file,
     start_agent,
@@ -295,7 +295,7 @@ async def cmd_viewplan(
 async def cmd_approve(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Approve an agent's plan by sending Shift+Tab: /approve <agent>"""
+    """Approve an agent's plan with its runtime's own keys: /approve <agent>"""
     if not _authorized(bot, update):
         return
 
@@ -329,13 +329,16 @@ async def cmd_approve(
         await update.message.reply_text(f"Session `{agent}` is offline.", parse_mode="Markdown")
         return
 
-    if await approve_plan(agent):
+    spec = bot.config.agents.get(agent)
+    outcome, evidence = await plan_control(agent, "approve", runtime=spec.runtime if spec else None)
+    if outcome == "approved":
+        await update.message.reply_text(f"Plan approved for `{agent}`.", parse_mode="Markdown")
+    elif outcome == "unsupported":
         await update.message.reply_text(
-            f"Plan approved for `{agent}`. Sending approval signal.",
-            parse_mode="Markdown",
+            f"Plan approval is not available for `{agent}`: {evidence[0]}", parse_mode="Markdown"
         )
     else:
         await update.message.reply_text(
-            f"Failed to send approval keys to `{agent}`.",
+            f"Could not approve the plan for `{agent}` ({outcome}): {evidence[0]}",
             parse_mode="Markdown",
         )

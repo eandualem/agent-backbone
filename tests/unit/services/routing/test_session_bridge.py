@@ -525,3 +525,38 @@ class TestSafeDeliver:
             issue = await safe_deliver("ike", "Issue", config, db=mock_db, **_issue_kwargs())
             mock_db.queue.enqueue.assert_not_called()
         assert comment == "settling" and issue == "settling"
+
+
+class TestPlanResponseDelivery:
+    """A plan response goes in exactly when the agent waits for a plan decision."""
+
+    async def test_delivered_while_waiting_for_a_plan(self, config):
+        mock_db = AsyncMock()
+        with _online(snap=_PLAN_SNAP), _patch_send_message(True) as send:
+            result = await safe_deliver(
+                "ike", "2", config, db=mock_db, source="api-plans", delivery_kind="plan_response"
+            )
+        assert result == "delivered"
+        send.assert_called_once_with("ike", "2", runtime_hint="unknown")
+        assert mock_db.deliveries.record.await_args.kwargs["kind"] == "plan_response"
+        mock_db.queue.enqueue.assert_not_called()
+
+    async def test_a_permission_prompt_is_not_a_plan(self, config):
+        mock_db = AsyncMock()
+        with _online(snap=_PERMISSION_SNAP), _patch_send_message(True) as send:
+            result = await safe_deliver(
+                "ike", "2", config, db=mock_db, delivery_kind="plan_response"
+            )
+        assert result == "waiting_for_human"
+        send.assert_not_called()
+        mock_db.queue.enqueue.assert_not_called()
+
+    async def test_busy_agent_refuses_and_never_queues(self, config):
+        mock_db = AsyncMock()
+        with _online(snap=_BUSY_SNAP), _patch_send_message(True) as send:
+            result = await safe_deliver(
+                "ike", "2", config, db=mock_db, delivery_kind="plan_response"
+            )
+        assert result == "agent_working"
+        send.assert_not_called()
+        mock_db.queue.enqueue.assert_not_called()

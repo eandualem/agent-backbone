@@ -206,7 +206,7 @@ class TestPlans:
     async def test_approve_disabled_by_default(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.approve_plan", new_callable=AsyncMock) as approve:
+        with patch(f"{_CMD}.plan_control", new_callable=AsyncMock) as approve:
             await bot.cmd_approve(update, _context(["ike"]))
         approve.assert_not_called()
         assert "disabled" in update.message.reply_text.await_args.args[0]
@@ -218,7 +218,7 @@ class TestPlans:
         )
         bot = TelegramService(cfg, db=AsyncMock())
         update = _update()
-        with patch(f"{_CMD}.approve_plan", new_callable=AsyncMock) as approve:
+        with patch(f"{_CMD}.plan_control", new_callable=AsyncMock) as approve:
             await bot.cmd_approve(update, _context(["stray-tmux"]))
         approve.assert_not_awaited()
         assert "Unknown agent" in update.message.reply_text.await_args.args[0]
@@ -236,10 +236,34 @@ class TestPlans:
         with (
             patch(f"{_CMD}.read_state_file", return_value=snapshot),
             patch(f"{_CMD}.session_exists", new_callable=AsyncMock, return_value=True),
-            patch(f"{_CMD}.approve_plan", new_callable=AsyncMock, return_value=True) as approve,
+            patch(
+                f"{_CMD}.plan_control",
+                new_callable=AsyncMock,
+                return_value=("approved", ["sent Escape [Z to claude"]),
+            ) as approve,
         ):
             await bot.cmd_approve(update, _context(["ike"]))
-        approve.assert_awaited_once_with("ike")
+        approve.assert_awaited_once_with("ike", "approve", runtime="claude")
+        assert "approved" in update.message.reply_text.await_args.args[0]
+
+    async def test_approve_on_a_runtime_without_plan_mode_says_so(self, config):
+        telegram = TelegramConfig(allowed_chat_ids=(ALLOWED_CHAT,))
+        cfg = replace(
+            config, telegram=telegram, security=SecurityConfig(allow_remote_plan_control=True)
+        )
+        bot = TelegramService(cfg, db=AsyncMock())
+        update = _update()
+        snapshot = StateSnapshot(
+            state=AgentState.WAITING_FOR_HUMAN, reason="plan", plan_file="/p.md"
+        )
+        refusal = ("unsupported", ["Codex has no plan mode; nothing was sent"])
+        with (
+            patch(f"{_CMD}.read_state_file", return_value=snapshot),
+            patch(f"{_CMD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(f"{_CMD}.plan_control", new_callable=AsyncMock, return_value=refusal),
+        ):
+            await bot.cmd_approve(update, _context(["ike"]))
+        assert "not available" in update.message.reply_text.await_args.args[0]
 
     async def test_viewplan_shows_content(self, config):
         bot = _bot(config)

@@ -115,8 +115,8 @@ knows where it came from:
 
 One attempt to hand a message to a session, recorded with its **kind**
 (`issue`, `comment`, `pull_request`, `direct_message`, `watch`,
-`escalation`), repository, outcome and a preview — direct messages
-included. What cannot be delivered now is **queued** in the database and
+`escalation`, `plan_response`), repository, outcome and a preview — direct
+messages included. What cannot be delivered now is **queued** in the database and
 delivered by the background jobs; queued messages expire after
 `timing.queue_expiry_minutes` (30). Issue deliveries are additionally
 **claimed** so two jobs can never deliver the same issue twice.
