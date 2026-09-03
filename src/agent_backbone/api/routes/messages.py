@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends
 from agent_backbone.api.deps import get_config, get_db, registered_agent_or_404
 from agent_backbone.api.models import MessageRequest, MessageResponse
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.routing import outcome_queues, safe_deliver
+from agent_backbone.services.routing import deliver, queue_detail
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ async def send_message(
     # Only registered agents are typed into — never an arbitrary tmux session.
     registered_agent_or_404(config, target)
 
-    outcome = await safe_deliver(
+    report = await deliver(
         session_name=target,
         message=envelope,
         config=config,
@@ -47,12 +47,17 @@ async def send_message(
         source="api-messages",
         priority=body.priority,
         delivery_kind="direct_message",
+        sender=body.from_entity,
     )
 
-    log.info("Message from %s → %s: %s", body.from_entity, target, outcome)
+    log.info(
+        "Message from %s → %s: %s (%s)", body.from_entity, target, report.outcome, report.queue
+    )
     return MessageResponse(
-        ok=outcome == DeliveryOutcome.DELIVERED,
+        ok=report.outcome == DeliveryOutcome.DELIVERED,
         session=target,
-        outcome=outcome.value,
-        queued=outcome_queues(outcome, "direct_message"),
+        outcome=report.outcome.value,
+        queued=report.queued,
+        queue=report.queue,
+        detail=queue_detail(report, target, config.timing.queue_expiry_minutes),
     )

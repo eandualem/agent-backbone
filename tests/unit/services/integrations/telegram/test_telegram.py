@@ -14,6 +14,7 @@ from agent_backbone.services.integrations.telegram import TelegramService
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import CATCH_ALL_TOPIC
 from agent_backbone.services.integrations.telegram.interface import _send
+from agent_backbone.services.routing import DeliveryReport
 
 _CMD = "agent_backbone.services.integrations.telegram._commands"
 _ROUTING = "agent_backbone.services.integrations.telegram._routing"
@@ -74,7 +75,9 @@ class TestTell:
         bot = _bot(config)
         update = _update()
         with patch(
-            f"{_CMD}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED
+            f"{_CMD}.deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
         ) as d:
             await bot.cmd_tell(update, _context(["ike", "hello", "there"]))
         d.assert_awaited_once()
@@ -86,19 +89,34 @@ class TestTell:
         bot = _bot(config)
         update = _update()
         with patch(
-            f"{_CMD}.safe_deliver",
+            f"{_CMD}.deliver",
             new_callable=AsyncMock,
-            return_value=DeliveryOutcome.AGENT_WORKING,
+            return_value=DeliveryReport(DeliveryOutcome.AGENT_WORKING, "stored"),
         ):
             await bot.cmd_tell(update, _context(["ike", "hi"]))
         update.message.reply_text.assert_awaited_once_with(
             "`ike` is busy — queued.", parse_mode="Markdown"
         )
 
+    async def test_cmd_tell_same_message_already_waiting(self, config):
+        bot = _bot(config)
+        update = _update()
+        with patch(
+            f"{_CMD}.deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryReport(DeliveryOutcome.AGENT_WORKING, "already_queued"),
+        ) as d:
+            await bot.cmd_tell(update, _context(["ike", "hi"]))
+        assert d.await_args.kwargs["sender"] == "alice"
+        update.message.reply_text.assert_awaited_once_with(
+            "The same message from you is already in the queue, waiting for `ike`.",
+            parse_mode="Markdown",
+        )
+
     async def test_cmd_tell_refuses_unregistered_session(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.safe_deliver", new_callable=AsyncMock) as deliver:
+        with patch(f"{_CMD}.deliver", new_callable=AsyncMock) as deliver:
             await bot.cmd_tell(update, _context(["stray-tmux", "hi"]))
         deliver.assert_not_awaited()
         assert "Unknown agent" in update.message.reply_text.await_args.args[0]
@@ -106,7 +124,7 @@ class TestTell:
     async def test_unauthorized_ignored(self, config):
         bot = _bot(config)
         update = _update(chat_id=999)
-        with patch(f"{_CMD}.safe_deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_CMD}.deliver", new_callable=AsyncMock) as d:
             await bot.cmd_tell(update, _context(["ike", "hi"]))
         d.assert_not_called()
         update.message.reply_text.assert_not_awaited()
@@ -117,9 +135,9 @@ class TestTopicRouting:
         bot = _bot(config, topic_routes={42: "ike"})
         update = _update("do the thing", thread_id=42)
         with patch(
-            f"{_ROUTING}.safe_deliver",
+            f"{_ROUTING}.deliver",
             new_callable=AsyncMock,
-            return_value=DeliveryOutcome.DELIVERED,
+            return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
         ) as d:
             await bot.handle_topic_message(update, MagicMock())
         assert d.await_args.args[:2] == ("ike", "[via:telegram from:alice] do the thing")
@@ -128,18 +146,20 @@ class TestTopicRouting:
         bot = _bot(config, topic_routes={43: CATCH_ALL_TOPIC})
         update = _update("feynman: run tests", thread_id=43)
         with patch(
-            f"{_ROUTING}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.OFFLINE
+            f"{_ROUTING}.deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryReport(DeliveryOutcome.OFFLINE, "stored"),
         ) as d:
             await bot.handle_topic_message(update, MagicMock())
         assert d.await_args.args[0] == "feynman"
         update.message.reply_text.assert_awaited_once_with(
-            "`feynman` is offline.", parse_mode="Markdown"
+            "`feynman` is offline — queued.", parse_mode="Markdown"
         )
 
     async def test_catch_all_topic_without_body(self, config):
         bot = _bot(config, topic_routes={43: CATCH_ALL_TOPIC})
         update = _update("feynman", thread_id=43)
-        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as d:
             await bot.handle_topic_message(update, MagicMock())
         d.assert_not_called()
         assert "Usage" in update.message.reply_text.await_args.args[0]
@@ -147,14 +167,14 @@ class TestTopicRouting:
     async def test_catch_all_topic_refuses_unregistered_session(self, config):
         bot = _bot(config, topic_routes={43: CATCH_ALL_TOPIC})
         update = _update("stray-tmux: run tests", thread_id=43)
-        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as deliver:
+        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as deliver:
             await bot.handle_topic_message(update, MagicMock())
         deliver.assert_not_awaited()
         assert "Unknown agent" in update.message.reply_text.await_args.args[0]
 
     async def test_unmapped_topic_ignored(self, config):
         bot = _bot(config)
-        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as d:
             await bot.handle_topic_message(_update("x", thread_id=99), MagicMock())
         d.assert_not_called()
 
@@ -320,17 +340,28 @@ class TestStatusAndQueue:
 
 class TestDeliveryReplyFallbacks:
     @pytest.mark.parametrize(
-        ("status", "expected"),
+        ("status", "queue", "expected"),
         [
-            (DeliveryOutcome.DELIVERED, "Sent to `ike`."),
-            (DeliveryOutcome.OFFLINE, "`ike` is offline."),
-            (DeliveryOutcome.WAITING_FOR_HUMAN, "`ike` is waiting for a human — queued."),
-            (DeliveryOutcome.HUMAN_TYPING, "`ike` has someone at the keyboard — queued."),
-            (DeliveryOutcome.DELIVERY_FAILED, "Not delivered to `ike` (delivery_failed)."),
+            (DeliveryOutcome.DELIVERED, None, "Sent to `ike`."),
+            (DeliveryOutcome.OFFLINE, "stored", "`ike` is offline — queued."),
+            (DeliveryOutcome.OFFLINE, None, "`ike` is offline."),
+            (DeliveryOutcome.WAITING_FOR_HUMAN, "stored", "`ike` is waiting for a human — queued."),
+            (DeliveryOutcome.HUMAN_TYPING, "stored", "`ike` has someone at the keyboard — queued."),
+            (
+                DeliveryOutcome.AGENT_WORKING,
+                "already_queued",
+                "The same message from you is already in the queue, waiting for `ike`.",
+            ),
+            (
+                DeliveryOutcome.AGENT_WORKING,
+                "failed",
+                "Not delivered and not queued: could not store the message for `ike`.",
+            ),
+            (DeliveryOutcome.DELIVERY_FAILED, None, "Not delivered to `ike` (delivery_failed)."),
         ],
     )
-    def test_reply(self, status, expected):
-        assert _delivery_reply("ike", status) == expected
+    def test_reply(self, status, queue, expected):
+        assert _delivery_reply("ike", DeliveryReport(status, queue)) == expected
 
 
 class TestSend:
@@ -365,7 +396,7 @@ class TestGeneralAndUnmapped:
         _routing._hinted.clear()
         bot = _bot(config)
         update = _update("ike: run the tests", thread_id=None)
-        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as d:
             await bot.handle_general_message(update, MagicMock())
             await bot.handle_general_message(update, MagicMock())  # deduped
         d.assert_not_called()
@@ -389,7 +420,7 @@ class TestGeneralAndUnmapped:
         _routing._hinted.clear()
         bot = _bot(config)
         update = _update("x", thread_id=99)
-        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as d:
             await bot.handle_topic_message(update, MagicMock())
             await bot.handle_topic_message(update, MagicMock())
         d.assert_not_called()

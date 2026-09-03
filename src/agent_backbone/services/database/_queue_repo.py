@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 
 from sqlalchemy import text
 
@@ -10,9 +11,39 @@ from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 _INSERT_COLUMNS = """(session_name, message, repo, issue_number, target_entity,
-                delivery_kind, source, enqueued_at, status, content_hash)
+                delivery_kind, source, enqueued_at, status, sender, dedup_key)
                VALUES (:session_name, :message, :repo, :issue_number, :target_entity,
-                       :delivery_kind, :source, :enqueued_at, 'pending', :content_hash)"""
+                       :delivery_kind, :source, :enqueued_at, 'pending', :sender, :dedup_key)"""
+
+
+@dataclass(frozen=True)
+class EnqueueResult:
+    """What ``enqueue`` did: ``inserted`` (a new row, ``id`` set) or
+    ``already_queued`` (the same message is already waiting — nothing added).
+    A database error is raised, never swallowed: the caller decides what to
+    tell the sender."""
+
+    status: str
+    id: int | None = None
+
+    @property
+    def stored(self) -> bool:
+        """Whether a row for this message now exists in the queue."""
+        return self.status in ("inserted", "already_queued")
+
+
+def dedup_key_for(message: str, sender: str, source_key: str | None) -> str:
+    """The identity of a non-issue message for duplicate detection.
+
+    The source event (a GitHub comment id, an issue lifecycle event) when
+    the caller has one; otherwise the sender and the text together, so the
+    same words from two senders are two messages and one sender repeating
+    itself by accident is one.
+    """
+    if source_key:
+        return f"src:{source_key}"
+    digest = hashlib.sha256(f"{sender}\x00{message}".encode()).hexdigest()
+    return f"msg:{digest}"
 
 
 class QueueRepo(Repo):
@@ -26,10 +57,16 @@ class QueueRepo(Repo):
         delivery_kind: str = "issue",
         source: str = "",
         repo: str = "",
-    ) -> int:
-        """Enqueue a message for later delivery. Returns the row ID or -1 when deduped."""
+        sender: str = "",
+        source_key: str | None = None,
+    ) -> EnqueueResult:
+        """Store a message for later delivery.
+
+        ``sender`` and ``source_key`` form the duplicate key for non-issue
+        kinds (``dedup_key_for``); issue notifications are unique per
+        ``(session, repo, issue)`` while pending.
+        """
         async with self._tx() as conn:
-            content_hash = hashlib.sha256(message.encode()).hexdigest()
             params = {
                 "session_name": session_name,
                 "message": message,
@@ -39,7 +76,8 @@ class QueueRepo(Repo):
                 "delivery_kind": delivery_kind,
                 "source": source,
                 "enqueued_at": now_iso(),
-                "content_hash": content_hash,
+                "sender": sender,
+                "dedup_key": dedup_key_for(message, sender, source_key),
             }
 
             if delivery_kind == "issue" and issue_number is not None:
@@ -51,14 +89,16 @@ class QueueRepo(Repo):
             elif delivery_kind == "issue":
                 conflict = ""
             else:
-                conflict = """ON CONFLICT (session_name, content_hash)
+                conflict = """ON CONFLICT (session_name, dedup_key)
                        WHERE delivery_kind != 'issue' AND status IN ('pending','in_progress')
                        DO NOTHING"""
 
             sql = f"INSERT INTO message_queue {_INSERT_COLUMNS} {conflict} RETURNING id"
             result = await conn.execute(text(sql), params)
             row = result.fetchone()
-            return row._mapping["id"] if row else -1
+            if row is None:
+                return EnqueueResult("already_queued")
+            return EnqueueResult("inserted", row._mapping["id"])
 
     async def sessions_with_pending(self) -> list[str]:
         async with self._tx() as conn:

@@ -22,7 +22,7 @@ from agent_backbone.services.integrations.telegram._routing import _delivery_rep
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     process_message_for_discovery,
 )
-from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.routing import deliver
 from agent_backbone.services.terminal import list_sessions, session_exists
 
 log = logging.getLogger(__name__)
@@ -174,11 +174,11 @@ async def cmd_tell(
     raw_message = " ".join(context.args[1:])
     sender = bot._sender_tag(update)
     message = f"[via:telegram from:{sender}] {raw_message}"
-    result = await safe_deliver(
-        agent, message, bot.config, db=bot._db, delivery_kind="direct_message"
+    report = await deliver(
+        agent, message, bot.config, db=bot._db, delivery_kind="direct_message", sender=sender
     )
 
-    await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")
+    await update.message.reply_text(_delivery_reply(agent, report), parse_mode="Markdown")
 
 
 async def cmd_digest(

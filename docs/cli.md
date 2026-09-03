@@ -187,12 +187,16 @@ messages are attributed to the agent, not the human account; `--from`
 overrides it. `--priority` lets the
 message through while a human is typing or the agent is settling; it never
 interrupts a busy agent — that is an invariant, not a gap. A message that
-cannot be delivered now (`agent_working`, `offline`, …) is **queued
-durably** — the response carries `"queued": true` — and the monitor
-delivers it when the agent is ready, oldest first; queued messages expire
-after `timing.queue_expiry_minutes` (default 30). Exit code 0 if
-delivered, 2 if queued, 1 on API errors. Multi-line messages are pasted
-with bracketed paste and arrive intact as a single message.
+cannot be delivered now (`agent_working`, `offline`, …) is stored in the
+queue and the monitor delivers it when the agent is ready, oldest first;
+queued messages expire after `timing.queue_expiry_minutes` (default 30).
+The reply prints one sentence saying what happened: delivered; stored
+(`"queued": true`); the same message from you already waiting
+(`"queue": "already_queued"` — nothing was added); or not stored
+(`"queue": "failed"` — send again later). Exit code 0 if delivered, 2 if
+the message is in the queue, 1 if it is not (API error or storage
+failure). Multi-line messages are pasted with bracketed paste and arrive
+intact as a single message.
 
 ## `backbone reply TEXT… [--agent NAME]`
 

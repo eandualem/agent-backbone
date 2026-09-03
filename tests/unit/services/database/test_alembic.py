@@ -144,8 +144,8 @@ async def test_unknown_stamped_revision_is_restamped_after_squash(tmp_path):
 
 
 async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_path):
-    """A database whose indexes predate the model is repaired when it is re-stamped."""
-    from sqlalchemy import text
+    """A database whose queue predates ``dedup_key`` is repaired when it is re-stamped."""
+    from sqlalchemy import inspect, text
 
     from agent_backbone.services.database.backbone_db import _repair_schema
 
@@ -154,8 +154,10 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
     engine = db.engine
     try:
         async with engine.begin() as conn:
-            # An older install: no dedup rule for PR notices, so the queue grew copies.
+            # An older install: content_hash instead of dedup_key, no dedup
+            # rule for PR notices, so the queue grew copies.
             await conn.execute(text("DROP INDEX uq_mq_message_dedup"))
+            await conn.execute(text("ALTER TABLE message_queue ADD COLUMN content_hash TEXT"))
             digest = hashlib.sha256(b"same notice").hexdigest()
             for _ in range(3):
                 await conn.execute(
@@ -174,21 +176,26 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
                 .scalars()
                 .all()
             )
+            keys = (await conn.execute(text("SELECT dedup_key FROM message_queue"))).scalars().all()
             names = {
                 row[0]
                 for row in (
                     await conn.execute(text("SELECT name FROM sqlite_master WHERE type='index'"))
                 ).fetchall()
             }
+            columns = {
+                c["name"]
+                for c in await conn.run_sync(lambda s: inspect(s).get_columns("message_queue"))
+            }
         assert statuses == ["pending", "expired", "expired"]
+        assert len(set(keys)) == 1 and keys[0].startswith("msg:")
         assert "uq_mq_message_dedup" in names
-        # ...and the rule now holds for new rows.
-        assert (
-            await db.queue.enqueue(
-                session_name="ike", message="same notice", delivery_kind="pull_request"
-            )
-            == -1
+        assert "content_hash" not in columns and "dedup_key" in columns
+        # ...and the rule now holds for new rows: the old pending copy is *the same* message.
+        again = await db.queue.enqueue(
+            session_name="ike", message="same notice", delivery_kind="pull_request"
         )
+        assert again.status == "already_queued"
     finally:
         await db.stop()
 

@@ -16,7 +16,7 @@ from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     process_message_for_discovery,
 )
-from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.routing import DeliveryReport, deliver
 
 _hinted = RecentKeys(300)
 """(chat, topic) pairs hinted in the last five minutes — guidance, not noise."""
@@ -54,18 +54,24 @@ async def handle_general_message(
         await update.message.reply_text(GENERAL_HINT)
 
 
-def _delivery_reply(agent: str, outcome: DeliveryOutcome) -> str:
-    """Map a delivery outcome to a user-friendly Telegram reply."""
+def _delivery_reply(agent: str, report: DeliveryReport) -> str:
+    """Map a delivery report to a Telegram reply: what happened, in words."""
+    outcome = report.outcome
     if outcome == DeliveryOutcome.DELIVERED:
         return f"Sent to `{agent}`."
+    if report.queue == "already_queued":
+        return f"The same message from you is already in the queue, waiting for `{agent}`."
+    if report.queue == "failed":
+        return f"Not delivered and not queued: could not store the message for `{agent}`."
+    held = " — queued" if report.queued else ""
     if outcome == DeliveryOutcome.OFFLINE:
-        return f"`{agent}` is offline."
+        return f"`{agent}` is offline{held}."
     if outcome == DeliveryOutcome.AGENT_WORKING:
-        return f"`{agent}` is busy — queued."
+        return f"`{agent}` is busy{held}."
     if outcome == DeliveryOutcome.WAITING_FOR_HUMAN:
-        return f"`{agent}` is waiting for a human — queued."
+        return f"`{agent}` is waiting for a human{held}."
     if outcome in (DeliveryOutcome.HUMAN_TYPING, DeliveryOutcome.SETTLING):
-        return f"`{agent}` has someone at the keyboard — queued."
+        return f"`{agent}` has someone at the keyboard{held}."
     return f"Not delivered to `{agent}` ({outcome.value})."
 
 
@@ -120,7 +126,7 @@ async def handle_topic_message(
         await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
         return
 
-    result = await safe_deliver(
-        agent, message, bot.config, db=bot._db, delivery_kind="direct_message"
+    report = await deliver(
+        agent, message, bot.config, db=bot._db, delivery_kind="direct_message", sender=sender
     )
-    await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")
+    await update.message.reply_text(_delivery_reply(agent, report), parse_mode="Markdown")

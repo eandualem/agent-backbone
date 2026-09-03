@@ -11,7 +11,7 @@ import pytest
 
 from agent_backbone.config import TimingConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.routing import get_session_intelligence, safe_deliver
+from agent_backbone.services.routing import deliver, get_session_intelligence, safe_deliver
 from agent_backbone.services.routing._resolution import (
     resolve_entity_session,
     validate_issue_targets,
@@ -265,6 +265,8 @@ class TestSafeDeliver:
             delivery_kind="issue",
             source="t",
             repo="example/orchestration",
+            sender="",
+            source_key=None,
         )
 
     async def test_every_delivery_is_recorded_even_direct_messages(self, config):
@@ -337,6 +339,8 @@ class TestSafeDeliver:
             delivery_kind="direct_message",
             source="api-messages",
             repo="",
+            sender="",
+            source_key=None,
         )
 
     @pytest.mark.parametrize("snap", [_PLAN_SNAP, _PERMISSION_SNAP])
@@ -571,3 +575,44 @@ class TestPlanResponseDelivery:
             )
         assert result == "offline"
         mock_db.queue.enqueue.assert_not_called()
+
+
+class TestDeliveryReport:
+    """`queued` is claimed only for a message that is in the database."""
+
+    def _db(self, status):
+        from agent_backbone.services.database._queue_repo import EnqueueResult
+
+        mock_db = AsyncMock()
+        row_id = 1 if status == "inserted" else None
+        mock_db.queue.enqueue.return_value = EnqueueResult(status, row_id)
+        return mock_db
+
+    async def test_stored(self, config):
+        mock_db = self._db("inserted")
+        with _online(snap=_BUSY_SNAP):
+            report = await deliver(
+                "ike", "hi", config, db=mock_db, delivery_kind="direct_message", sender="leo"
+            )
+        assert report.outcome == "agent_working"
+        assert report.queue == "stored" and report.queued
+        assert mock_db.queue.enqueue.await_args.kwargs["sender"] == "leo"
+
+    async def test_already_queued_is_reported_as_such(self, config):
+        mock_db = self._db("already_queued")
+        with _online(snap=_BUSY_SNAP):
+            report = await deliver("ike", "hi", config, db=mock_db, delivery_kind="direct_message")
+        assert report.queue == "already_queued" and report.queued
+
+    async def test_storage_error_is_failed_not_queued(self, config):
+        mock_db = AsyncMock()
+        mock_db.queue.enqueue.side_effect = RuntimeError("disk full")
+        with _online(snap=_BUSY_SNAP):
+            report = await deliver("ike", "hi", config, db=mock_db, delivery_kind="direct_message")
+        assert report.outcome == "agent_working"
+        assert report.queue == "failed" and not report.queued
+
+    async def test_delivered_needs_no_queue(self, config):
+        with _online(), _patch_send_message(True):
+            report = await deliver("ike", "hi", config, delivery_kind="direct_message")
+        assert report.outcome == "delivered" and report.queue is None and not report.queued

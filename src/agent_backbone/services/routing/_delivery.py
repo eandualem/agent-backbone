@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import BLOCKED_OUTCOMES, SUCCESS_OUTCOMES, DeliveryOutcome
@@ -39,12 +40,57 @@ _ACTIVE_ISSUE_CONDITIONS = frozenset(
 """Conditions under which a comment on the agent's *current* issue still goes in."""
 
 
-def outcome_queues(outcome: DeliveryOutcome, kind: str) -> bool:
-    """Whether ``safe_deliver`` queued the message for this blocked outcome.
+@dataclass(frozen=True)
+class DeliveryReport:
+    """What ``deliver`` did: the outcome, and — when it could not deliver —
+    whether the message is now in the queue.
 
-    Mirrors the queueing decision in ``safe_deliver``: non-issue kinds are
-    queued durably on every blocking condition and on paste failure; issue
-    deliveries rely on the retry job except when the agent is offline.
+    ``queue`` is ``stored`` (a new row), ``already_queued`` (the same message
+    from this sender was already waiting; nothing added), ``failed`` (the
+    database refused it — the message is NOT held anywhere) or None (nothing
+    needed queueing: delivered, or a kind that is never queued).
+    """
+
+    outcome: DeliveryOutcome
+    queue: str | None = None
+
+    @property
+    def queued(self) -> bool:
+        """True only when a row for this message exists in the queue."""
+        return self.queue in ("stored", "already_queued")
+
+
+def queue_detail(report: DeliveryReport, session_name: str, expiry_minutes: int) -> str:
+    """One plain sentence about what happened, for people and agents alike."""
+    if report.outcome == DeliveryOutcome.DELIVERED:
+        return f"Delivered to {session_name}."
+    why = report.outcome.value.replace("_", " ")
+    if report.queue == "stored":
+        return (
+            f"Queued: {session_name} is {why}; the message is stored and will be delivered "
+            f"when the agent is ready (it expires after {expiry_minutes} minutes)."
+        )
+    if report.queue == "already_queued":
+        return (
+            f"Already in the queue: the same message from you is waiting for "
+            f"{session_name}. It was not added again."
+        )
+    if report.queue == "failed":
+        return (
+            f"Not delivered and not queued: {session_name} is {why} and the message "
+            "could not be stored. Send it again later."
+        )
+    return f"Not delivered: {session_name} is {why}. This kind of message is not queued."
+
+
+def outcome_queues(outcome: DeliveryOutcome, kind: str) -> bool:
+    """Whether ``safe_deliver`` *tries* to queue a message with this blocked outcome.
+
+    Mirrors the queueing decision in ``deliver``: non-issue kinds are queued
+    on every blocking condition and on paste failure; issue deliveries rely
+    on the retry job except when the agent is offline. Whether a row was
+    actually stored is ``DeliveryReport.queue`` — use ``deliver`` when the
+    sender must be told the truth.
     """
     if kind == "plan_response":
         return False  # answers to a plan prompt are never queued
@@ -156,13 +202,17 @@ async def _enqueue(
     target_entity: str | None,
     source: str,
     kind: str,
-) -> None:
+    sender: str,
+    source_key: str | None,
+) -> str | None:
+    """Store the message; say what happened (``stored`` / ``already_queued`` /
+    ``failed``), or None when there is nothing to store it in."""
     if db is None:
-        return
+        return None
     if kind == "issue" and (issue_number is None or target_entity is None):
-        return
+        return None
     try:
-        row_id = await db.queue.enqueue(
+        result = await db.queue.enqueue(
             session_name=session_name,
             message=message,
             issue_number=issue_number,
@@ -170,11 +220,17 @@ async def _enqueue(
             delivery_kind=kind,
             source=source,
             repo=repo,
+            sender=sender,
+            source_key=source_key,
         )
-        if row_id != -1:
-            log.info("Queued %s for %s (%s) via %s", kind, session_name, repo or "-", source or "?")
     except Exception:
-        log.warning("Failed to enqueue message for %s (non-fatal)", session_name)
+        log.exception("Could not store a %s for %s — the sender is told", kind, session_name)
+        return "failed"
+    if result.status == "inserted":
+        log.info("Queued %s for %s (%s) via %s", kind, session_name, repo or "-", source or "?")
+        return "stored"
+    log.info("Same %s for %s already queued (from %s)", kind, session_name, sender or "?")
+    return "already_queued"
 
 
 async def safe_deliver(
@@ -192,11 +248,54 @@ async def safe_deliver(
     enforce_issue_queue: bool = False,
     queue_scope: Collection[tuple[str, int]] | None = None,
     delivery_kind: str = "issue",
+    sender: str = "",
+    source_key: str | None = None,
 ) -> DeliveryOutcome:
+    """``deliver`` for callers that only act on the outcome."""
+    report = await deliver(
+        session_name,
+        message,
+        config,
+        db=db,
+        repo=repo,
+        issue_number=issue_number,
+        target_entity=target_entity,
+        source=source,
+        priority=priority,
+        idle_since=idle_since,
+        enforce_issue_queue=enforce_issue_queue,
+        queue_scope=queue_scope,
+        delivery_kind=delivery_kind,
+        sender=sender,
+        source_key=source_key,
+    )
+    return report.outcome
+
+
+async def deliver(
+    session_name: str,
+    message: str,
+    config: BackboneConfig,
+    *,
+    db: BackboneDB | None = None,
+    repo: str = "",
+    issue_number: int | None = None,
+    target_entity: str | None = None,
+    source: str = "",
+    priority: bool = False,
+    idle_since: float | None = None,
+    enforce_issue_queue: bool = False,
+    queue_scope: Collection[tuple[str, int]] | None = None,
+    delivery_kind: str = "issue",
+    sender: str = "",
+    source_key: str | None = None,
+) -> DeliveryReport:
     """Deliver ``message`` to ``session_name`` if the agent can take it, else queue it.
 
     ``source`` names the code path for the delivery record (``issue-dispatcher``,
-    ``api-messages``, …).
+    ``api-messages``, …). ``sender`` is who is speaking (``from_entity``) and
+    ``source_key`` the identity of the originating event when there is one;
+    together they decide what counts as *the same* queued message.
     """
     kind = delivery_kind
     trackable_issue = db is not None and issue_number is not None and target_entity is not None
@@ -208,7 +307,7 @@ async def safe_deliver(
             log.info(
                 "Suppressed duplicate issue delivery %s#%s -> %s", repo, issue_number, session_name
             )
-            return DeliveryOutcome.ALREADY_DELIVERED
+            return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED)
         if enforce_issue_queue:
             blocking = await _get_unacknowledged_gate_issue(
                 db, session_name, repo, issue_number, queue_scope
@@ -221,7 +320,7 @@ async def safe_deliver(
                     session_name,
                     *blocking,
                 )
-                return DeliveryOutcome.AWAITING_ACK
+                return DeliveryReport(DeliveryOutcome.AWAITING_ACK)
 
     # 2. Claim
     claim_id: int | None = None
@@ -235,12 +334,13 @@ async def safe_deliver(
             preview=preview,
         )
         if claim is None:
-            return DeliveryOutcome.ALREADY_DELIVERED
+            return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED)
         claim_id = claim
 
-    async def finish(outcome: DeliveryOutcome, *, queue: bool) -> DeliveryOutcome:
+    async def finish(outcome: DeliveryOutcome, *, queue: bool) -> DeliveryReport:
+        stored: str | None = None
         if queue:
-            await _enqueue(
+            stored = await _enqueue(
                 db,
                 session_name=session_name,
                 message=message,
@@ -249,6 +349,8 @@ async def safe_deliver(
                 target_entity=target_entity,
                 source=source,
                 kind=kind,
+                sender=sender,
+                source_key=source_key,
             )
         await _record(
             db,
@@ -262,7 +364,7 @@ async def safe_deliver(
             kind=kind,
             preview=preview,
         )
-        return outcome
+        return DeliveryReport(outcome, stored)
 
     # 3. Readiness
     profile = await get_session_intelligence(session_name, config, idle_since=idle_since)

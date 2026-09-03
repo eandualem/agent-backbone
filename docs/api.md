@@ -119,13 +119,25 @@ the API never reads or types into sessions that are not backbone agents).
  "message": "Auth tests pass; please rebase.", "priority": false}
 ```
 
-Response: `{"ok": true, "session": "web", "outcome": "delivered"}`. The
-target must be a registered agent or an active swarm (404 otherwise — the
-backbone never types into a tmux session that is not one of its agents).
-Outcomes: `delivered`, `agent_working`, `waiting_for_human`, `offline`,
-`human_typing`, `settling`, `delivery_failed`. Every non-`delivered` outcome
-means the message was **queued** and will be delivered when the agent is
-free (or expire after `timing.queue_expiry_minutes`).
+Response: `{"ok": true, "session": "web", "outcome": "delivered", "queued":
+false, "queue": null, "detail": "Delivered to web."}`. The target must be a
+registered agent or an active swarm (404 otherwise — the backbone never
+types into a tmux session that is not one of its agents). Outcomes:
+`delivered`, `agent_working`, `waiting_for_human`, `offline`,
+`human_typing`, `settling`, `delivery_failed`.
+
+When the message could not be delivered now, `queue` says what happened to
+it and `queued` is true **only when a row for it exists**:
+
+| `queue` | `queued` | Meaning |
+|---|---|---|
+| `stored` | true | Kept; delivered when the agent is ready, or expired after `timing.queue_expiry_minutes` |
+| `already_queued` | true | The same message from this `from_entity` is already waiting; nothing was added |
+| `failed` | false | The database refused it — the message is not held anywhere; send it again later |
+
+`detail` is the same information as one sentence, for a person or an agent
+reading the reply. Two senders with identical text are two messages; the
+same sender repeating the same text while the first copy waits is one.
 
 This is the endpoint agents use to talk to each other.
 

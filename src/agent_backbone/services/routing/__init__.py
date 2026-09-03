@@ -8,7 +8,14 @@ below are the surface the API, the jobs and the integrations use.
 """
 
 from agent_backbone.services.routing._create_notify import create_and_notify
-from agent_backbone.services.routing._delivery import is_acknowledged, outcome_queues, safe_deliver
+from agent_backbone.services.routing._delivery import (
+    DeliveryReport,
+    deliver,
+    is_acknowledged,
+    outcome_queues,
+    queue_detail,
+    safe_deliver,
+)
 from agent_backbone.services.routing._dependencies import sync_dependencies
 from agent_backbone.services.routing._format import (
     format_next_issue_notification,
@@ -23,9 +30,11 @@ from agent_backbone.services.routing._resolution import validate_issue_targets
 from agent_backbone.services.routing._targets import list_open_queue_for_target, queue_scope
 
 __all__ = [
+    "DeliveryReport",
     "IssueClosedHook",
     "compute_priority_score",
     "create_and_notify",
+    "deliver",
     "dispatch_event",
     "format_next_issue_notification",
     "format_plan_notification",
@@ -35,6 +44,7 @@ __all__ = [
     "is_acknowledged",
     "list_open_queue_for_target",
     "outcome_queues",
+    "queue_detail",
     "queue_scope",
     "safe_deliver",
     "sync_dependencies",

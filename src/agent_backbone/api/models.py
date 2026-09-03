@@ -314,7 +314,13 @@ class MessageResponse(BaseModel):
     session: str
     outcome: str
     queued: bool = False
-    """Whether the message was queued for delivery when the agent is ready."""
+    """True only when a row for this message now exists in the queue."""
+    queue: str | None = None
+    """``stored`` (kept, delivered when the agent is ready), ``already_queued``
+    (the same message from this sender is already waiting), ``failed`` (could
+    not be stored — not queued), or None when nothing needed queueing."""
+    detail: str = ""
+    """One plain sentence for the sender, whoever they are."""
 
 
 class IntegrationReplyRequest(BaseModel):

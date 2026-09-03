@@ -209,7 +209,11 @@ class MessageQueueORM(Base):
     delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     leased_at: Mapped[str | None] = mapped_column(Text, nullable=True)
-    content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sender: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    """Who sent it (``from_entity``): part of the duplicate key, shown in the queue."""
+    dedup_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """What makes a non-issue message *the same* message: the source event's
+    identity when the caller has one, else a hash of sender and text."""
 
     __table_args__ = (
         Index("idx_mq_status", "status"),
@@ -235,13 +239,14 @@ class MessageQueueORM(Base):
                 "AND issue_number IS NOT NULL"
             ),
         ),
-        # One pending copy of any other message per session: a blocked drain
-        # re-offers the same text through safe_deliver, which must not grow
-        # the queue (comments, direct messages, PR/watch/escalation notices).
+        # One pending copy of the *same* message per session — the same
+        # source event, or the same sender saying the same thing — so a
+        # blocked drain re-offering it, or an accidental double send, never
+        # grows the queue, while two senders with identical text both get in.
         Index(
             "uq_mq_message_dedup",
             "session_name",
-            "content_hash",
+            "dedup_key",
             unique=True,
             postgresql_where=text(
                 "delivery_kind != 'issue' AND status IN ('pending','in_progress')"

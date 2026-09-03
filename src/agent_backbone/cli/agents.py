@@ -381,13 +381,11 @@ async def _tell(args: argparse.Namespace) -> int:
         print(f"error {status}: {data}")
         return 1
     print(json.dumps(data))
-    if not data.get("ok") and data.get("queued"):
-        print(
-            "queued — delivery will be retried until the agent is ready or the queue entry "
-            f"expires after {boot.timing.queue_expiry_minutes} minutes "
-            f"(blocked: {data.get('outcome')})"
-        )
-    return 0 if data.get("ok") else 2
+    if data.get("detail"):
+        print(data["detail"])
+    if data.get("ok"):
+        return 0
+    return 2 if data.get("queued") else 1
 
 
 def cmd_tell(args: argparse.Namespace) -> int:
