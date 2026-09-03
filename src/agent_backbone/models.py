@@ -44,6 +44,8 @@ class DeliveryOutcome(StrEnum):
     HUMAN_TYPING = "human_typing"
     SETTLING = "settling"
     DELIVERY_FAILED = "delivery_failed"
+    NOT_WAITING = "not_waiting"
+    """A plan response with no plan on screen to answer — refused, never queued."""
 
 
 SUCCESS_OUTCOMES = frozenset({DeliveryOutcome.DELIVERED, DeliveryOutcome.RETRIED})

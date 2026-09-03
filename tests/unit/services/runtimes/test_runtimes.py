@@ -358,6 +358,6 @@ class TestPlanControlCapability:
         with patch(
             "agent_backbone.services.runtimes.base.send_keys", new_callable=AsyncMock
         ) as keys:
-            assert await get_runtime("codex").approve_plan("x") is False
-            assert await get_runtime("codex").reject_plan("x") is False
+            assert await get_runtime("codex").approve_plan("x") == 0
+            assert await get_runtime("codex").reject_plan("x") == 0
         keys.assert_not_awaited()

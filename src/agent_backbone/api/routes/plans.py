@@ -71,6 +71,7 @@ async def _run_plan_control(config: BackboneConfig, session: str, action: str) -
 
 
 async def _deliver_plan_response(config, db, session: str, message: str) -> DeliveryOutcome:
+    """Type an answer into the plan prompt — only while it is on screen, never queued."""
     outcome = await safe_deliver(
         session,
         message,
@@ -129,6 +130,7 @@ async def approve_pending_plan(session: str, config: BackboneConfig = Depends(ge
     """Approve a pending plan with the agent's runtime's own keys."""
     _require_plan_control(config)
     registered_agent_or_404(config, session)
+    _require_plan_waiting(config, session)
     evidence = await _run_plan_control(config, session, "approve")
     return {"ok": True, "session": session, "action": "plan_approved", "evidence": evidence}
 
@@ -140,17 +142,32 @@ async def reject_plan(
     config: BackboneConfig = Depends(get_config),
     db=Depends(get_db),
 ):
-    """Reject a pending plan: leave plan mode, then deliver the feedback."""
+    """Reject a pending plan: leave plan mode, then send the feedback as a message.
+
+    Once plan mode is left the agent is back at an ordinary prompt, so the
+    feedback is an ordinary direct message: enveloped, gated, queued if the
+    agent is not ready yet.
+    """
     _require_plan_control(config)
     registered_agent_or_404(config, session)
     _require_plan_waiting(config, session)
     await _run_plan_control(config, session, "reject")
-    await _deliver_plan_response(
-        config, db, session, f"[via:backbone] Plan rejected: {body.feedback}"
+    outcome = await safe_deliver(
+        session,
+        f"[via:backbone] Plan rejected: {body.feedback}",
+        config,
+        db=db,
+        source="api-plans",
+        delivery_kind="direct_message",
     )
 
-    log.info("Plan rejected for %s: %s", session, body.feedback[:80])
-    return {"ok": True, "session": session, "action": "plan_rejected"}
+    log.info("Plan rejected for %s: %s (%s)", session, body.feedback[:80], outcome)
+    return {
+        "ok": True,
+        "session": session,
+        "action": "plan_rejected",
+        "feedback": outcome.value,
+    }
 
 
 @router.post("/plans/{session}/respond")

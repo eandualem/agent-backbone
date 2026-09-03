@@ -341,20 +341,24 @@ class Runtime:
         """Whether the backbone can approve or reject this runtime's plans."""
         return bool(self.plan_approve_keys)
 
-    async def _send_all(self, session_name: str, keys: tuple[str, ...]) -> bool:
-        if not keys:
-            return False
+    async def _send_all(self, session_name: str, keys: tuple[str, ...]) -> int:
+        """Send keys in order; returns how many went in (tmux refused the next)."""
+        sent = 0
         for key in keys:
             if not await send_keys(session_name, key):
-                return False
-        return True
+                break
+            sent += 1
+        return sent
 
-    async def approve_plan(self, session_name: str) -> bool:
-        """Accept the plan on screen; False when this runtime has no plan mode."""
+    async def approve_plan(self, session_name: str) -> int:
+        """Accept the plan on screen. Returns the number of keys sent: all of
+        ``plan_approve_keys`` on success, fewer when tmux refused one part-way
+        (the caller reports that: the earlier keys may have changed the mode),
+        0 when this runtime has no plan mode."""
         return await self._send_all(session_name, self.plan_approve_keys)
 
-    async def reject_plan(self, session_name: str) -> bool:
-        """Leave plan mode so the caller can deliver feedback as a message."""
+    async def reject_plan(self, session_name: str) -> int:
+        """Leave plan mode so feedback can follow as a message; see ``approve_plan``."""
         return await self._send_all(session_name, self.plan_reject_keys)
 
     async def deliver_message(self, session_name: str, message: str) -> bool:

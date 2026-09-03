@@ -114,6 +114,18 @@ class TestPlanControl:
         assert "nothing was sent" in evidence[0]
         keys.assert_not_called()
 
+    async def test_partial_sequence_is_reported_not_hidden(self):
+        # Escape goes in, "[Z" is refused: plan mode was left without approval.
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value="❯ \n"),
+            patch(f"{_BASE}.send_keys", side_effect=[True, False]),
+        ):
+            outcome, evidence = await plan_control("ike", "approve", runtime="claude")
+        assert outcome == "failed"
+        assert "sent Escape but tmux refused [Z" in evidence[0]
+        assert "may have left plan mode" in evidence[0]
+
     async def test_offline_and_bad_action(self):
         with patch(f"{_MOD}.session_exists", return_value=False):
             assert (await plan_control("ike", "approve", runtime="claude"))[0] == "offline"

@@ -547,16 +547,27 @@ class TestPlanResponseDelivery:
             result = await safe_deliver(
                 "ike", "2", config, db=mock_db, delivery_kind="plan_response"
             )
-        assert result == "waiting_for_human"
+        assert result == "not_waiting"
         send.assert_not_called()
         mock_db.queue.enqueue.assert_not_called()
 
-    async def test_busy_agent_refuses_and_never_queues(self, config):
+    async def test_anything_but_a_waiting_plan_is_not_waiting_and_never_queued(self, config):
+        # An idle prompt is the dangerous case: a bare "2" would become an instruction.
+        for snap in (_IDLE_SNAP, _BUSY_SNAP, _UNKNOWN_SNAP):
+            mock_db = AsyncMock()
+            with _online(snap=snap), _patch_send_message(True) as send:
+                result = await safe_deliver(
+                    "ike", "2", config, db=mock_db, delivery_kind="plan_response"
+                )
+            assert result == "not_waiting", snap
+            send.assert_not_called()
+            mock_db.queue.enqueue.assert_not_called()
+
+    async def test_offline_agent_is_offline_not_queued(self, config):
         mock_db = AsyncMock()
-        with _online(snap=_BUSY_SNAP), _patch_send_message(True) as send:
+        with _patch_list_sessions([]):
             result = await safe_deliver(
                 "ike", "2", config, db=mock_db, delivery_kind="plan_response"
             )
-        assert result == "agent_working"
-        send.assert_not_called()
+        assert result == "offline"
         mock_db.queue.enqueue.assert_not_called()

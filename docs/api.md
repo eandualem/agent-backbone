@@ -123,7 +123,8 @@ Response: `{"ok": true, "session": "web", "outcome": "delivered"}`. The
 target must be a registered agent or an active swarm (404 otherwise — the
 backbone never types into a tmux session that is not one of its agents).
 Outcomes: `delivered`, `agent_working`, `waiting_for_human`, `offline`,
-`human_typing`, `settling`, `delivery_failed`. Every non-`delivered` outcome
+`human_typing`, `settling`, `delivery_failed` (and `not_waiting`, for a
+plan response with no plan on screen). Every non-`delivered` outcome
 means the message was **queued** and will be delivered when the agent is
 free (or expire after `timing.queue_expiry_minutes`).
 
@@ -189,9 +190,12 @@ Approve and reject send the agent's **runtime's own** plan keys
 runtime without a plan mode the backbone can drive answers **409** and
 nothing is typed. The rejection feedback and the response text are
 `plan_response` deliveries through `safe_deliver`: they go in only while
-the agent is waiting for a plan decision, are recorded like every other
-delivery, and are never queued — a 409 names the delivery outcome when the
-agent was not ready.
+the agent is waiting for a plan decision (`not_waiting` otherwise — a bare
+option number at an idle prompt would be a new instruction), are recorded
+like every other delivery, and are never queued — a 409 names the outcome.
+Rejection feedback is sent *after* plan mode is left, as an ordinary
+`direct_message` (enveloped, queued if the agent is busy); the reply's
+`feedback` field is its outcome.
 
 ## Status
 

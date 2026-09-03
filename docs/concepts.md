@@ -116,7 +116,9 @@ knows where it came from:
 One attempt to hand a message to a session, recorded with its **kind**
 (`issue`, `comment`, `pull_request`, `direct_message`, `watch`,
 `escalation`, `plan_response`), repository, outcome and a preview — direct
-messages included. What cannot be delivered now is **queued** in the database and
+messages included. A `plan_response` (an answer typed into a plan prompt)
+is the one kind that is **never queued**: it goes in only while the agent
+is waiting for a plan decision, and is refused as `not_waiting` otherwise. What cannot be delivered now is **queued** in the database and
 delivered by the background jobs; queued messages expire after
 `timing.queue_expiry_minutes` (30). Issue deliveries are additionally
 **claimed** so two jobs can never deliver the same issue twice.

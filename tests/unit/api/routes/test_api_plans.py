@@ -127,8 +127,19 @@ class TestPlanControl:
             assert resp.status_code == 404
         control.assert_not_awaited()
 
-    async def test_approve_uses_the_agents_runtime(self, api_client, auth_headers, api_app):
+    async def test_approve_requires_a_waiting_plan(self, api_client, auth_headers, api_app):
+        # An idle Claude agent must never receive Shift+Tab: it would toggle its mode.
         _enable_plan_control(api_app)
+        with patch(f"{_PLANS}.plan_control", new_callable=AsyncMock) as control:
+            resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
+        assert resp.status_code == 409
+        control.assert_not_awaited()
+
+    async def test_approve_uses_the_agents_runtime(
+        self, api_client, auth_headers, api_app, state_svc
+    ):
+        _enable_plan_control(api_app)
+        state_svc.read_state.return_value = _plan_snapshot()
         with patch(
             f"{_PLANS}.plan_control",
             new_callable=AsyncMock,
@@ -139,9 +150,10 @@ class TestPlanControl:
         control.assert_awaited_once_with("ike", "approve", runtime="claude")
 
     async def test_runtime_without_plan_mode_is_409_and_nothing_is_typed(
-        self, api_client, auth_headers, api_app
+        self, api_client, auth_headers, api_app, state_svc
     ):
         _enable_plan_control(api_app)
+        state_svc.read_state.return_value = _plan_snapshot()
         refusal = ("unsupported", ["Codex has no plan mode; nothing was sent"])
         with (
             patch(f"{_PLANS}.plan_control", new_callable=AsyncMock, return_value=refusal),
@@ -152,7 +164,7 @@ class TestPlanControl:
         assert "not available" in resp.json()["detail"]
         deliver.assert_not_awaited()
 
-    async def test_reject_leaves_plan_mode_then_delivers_feedback_as_plan_response(
+    async def test_reject_leaves_plan_mode_then_sends_feedback_as_a_message(
         self, api_client, auth_headers, api_app, state_svc
     ):
         _enable_plan_control(api_app)
@@ -173,9 +185,10 @@ class TestPlanControl:
                 "/api/plans/ike/reject", json={"feedback": "too big"}, headers=auth_headers
             )
         assert resp.json()["action"] == "plan_rejected"
+        assert resp.json()["feedback"] == "delivered"
         control.assert_awaited_once_with("ike", "reject", runtime="claude")
-        assert "too big" in deliver.await_args.args[1]
-        assert deliver.await_args.kwargs["delivery_kind"] == "plan_response"
+        assert deliver.await_args.args[1] == "[via:backbone] Plan rejected: too big"
+        assert deliver.await_args.kwargs["delivery_kind"] == "direct_message"
 
     async def test_reject_requires_plan_waiting(self, api_client, auth_headers, api_app):
         _enable_plan_control(api_app)

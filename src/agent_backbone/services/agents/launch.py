@@ -350,8 +350,15 @@ async def plan_control(
         ]
     keys = rt.plan_approve_keys if action == "approve" else rt.plan_reject_keys
     sent = await (rt.approve_plan(name) if action == "approve" else rt.reject_plan(name))
-    if not sent:
-        return "failed", ["tmux refused the keys"]
+    if sent == 0:
+        return "failed", ["tmux refused the keys; nothing was sent"]
+    if sent < len(keys):
+        # Part of the sequence went in (Claude: Escape without "[Z" leaves
+        # plan mode without accepting) — say exactly what happened.
+        return "failed", [
+            f"sent {' '.join(keys[:sent])} but tmux refused {keys[sent]}; "
+            f"the {rt.id} session may have left plan mode — check it before retrying"
+        ]
     outcome = "approved" if action == "approve" else "rejected"
     log.info("Plan %s on '%s' via %s", outcome, name, rt.id)
     return outcome, [f"sent {' '.join(keys)} to {rt.id}"]
