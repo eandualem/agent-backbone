@@ -139,6 +139,14 @@ def _repair_schema(sync_conn) -> None:
     the dedup index exists — are expired first so the unique index can be
     created.
     """
+    # Indexes go first: an index that still names a column about to be
+    # dropped (uq_mq_message_dedup on content_hash) makes SQLite refuse the
+    # DROP COLUMN. They are rebuilt from the model at the end.
+    for table in metadata.sorted_tables:
+        for index in table.indexes:
+            sync_conn.execute(text(f"DROP INDEX IF EXISTS {index.name}"))
+    for name in _SUPERSEDED_INDEXES:
+        sync_conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
     _repair_columns(sync_conn)
     _backfill_dedup_keys(sync_conn)
     sync_conn.execute(
@@ -154,10 +162,7 @@ def _repair_schema(sync_conn) -> None:
     )
     for table in metadata.sorted_tables:
         for index in table.indexes:
-            sync_conn.execute(text(f"DROP INDEX IF EXISTS {index.name}"))
             index.create(sync_conn)
-    for name in _SUPERSEDED_INDEXES:
-        sync_conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
     log.info("Rebuilt indexes from the model (re-stamped database)")
 
 

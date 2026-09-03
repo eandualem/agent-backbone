@@ -200,6 +200,47 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
         await db.stop()
 
 
+async def test_restamp_drops_a_column_the_old_index_still_names(tmp_path):
+    """The 0.1.0 database: uq_mq_message_dedup on content_hash is present when
+    content_hash has to go. SQLite refuses DROP COLUMN while an index names
+    the column, so the repair must drop indexes before columns (seen live)."""
+    from sqlalchemy import inspect, text
+
+    from agent_backbone.services.database.backbone_db import _repair_schema
+
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
+    await db.start()
+    try:
+        async with db.engine.begin() as conn:
+            await conn.execute(text("DROP INDEX uq_mq_message_dedup"))
+            await conn.execute(text("ALTER TABLE message_queue ADD COLUMN content_hash TEXT"))
+            await conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX uq_mq_message_dedup ON message_queue "
+                    "(session_name, content_hash) WHERE delivery_kind != 'issue' "
+                    "AND status IN ('pending','in_progress')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO message_queue (session_name, message, delivery_kind, "
+                    "enqueued_at, status, content_hash) VALUES "
+                    "('ike', 'old notice', 'watch', '2026-09-01T00:00:00.000000Z', 'pending', 'h')"
+                )
+            )
+        async with db.engine.begin() as conn:
+            await conn.run_sync(_repair_schema)
+            columns = {
+                c["name"]
+                for c in await conn.run_sync(lambda s: inspect(s).get_columns("message_queue"))
+            }
+            key = (await conn.execute(text("SELECT dedup_key FROM message_queue"))).scalar()
+        assert "content_hash" not in columns and "dedup_key" in columns
+        assert key.startswith("msg:")
+    finally:
+        await db.stop()
+
+
 async def test_restamp_migrates_the_previous_squash_columns(tmp_path):
     """A database from the 387112cb1193 squash has flow_name/flow_run_id, not source."""
     from sqlalchemy import inspect, text
