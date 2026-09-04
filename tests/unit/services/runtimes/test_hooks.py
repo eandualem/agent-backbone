@@ -88,6 +88,12 @@ class TestCodex:
         assert resumed[:3] == ["/c", "resume", "--last"] and resumed[3] == "-c"
         assert resumed[-1] == "--dangerously-bypass-hook-trust"
 
+    def test_resume_by_session_id(self):
+        with patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/c"):
+            assert RUNTIMES["codex"].build_command(resume="01a0")[:3] == ["/c", "resume", "01a0"]
+            assert RUNTIMES["claude"].build_command(resume="01a0")[:3] == ["/c", "--resume", "01a0"]
+            assert RUNTIMES["gemini"].build_command(resume="01a0")[1:3] == ["--resume", "latest"]
+
     def test_install_writes_hooks_json_in_codex_home(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: tmp_path / "home"))
         path, _ = RUNTIMES["codex"].install_hooks(tmp_path / "data", tmp_path / "state")

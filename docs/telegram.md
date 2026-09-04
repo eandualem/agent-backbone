@@ -106,6 +106,9 @@ is internal to the agent that runs it, and you talk to that agent.
 - **Plan waiting** — `📋 Plan waiting — app / Title: … / /viewplan app / /approve app`, once per plan.
 - **Agent went offline unexpectedly** — an `always_on` agent's session died; it was not restarted.
 - **Agent is offline with N queued messages** — messages are waiting for an agent that is not running (agents without `always_on`, which were not reported when they died; once per `timing.escalation_dedup_seconds`); it was not restarted.
+- **Agent is blocked on its usage limit** — the runtime paused for its
+  quota and will resume on its own (with what it said about the reset);
+  once per `timing.escalation_dedup_seconds`.
 - **Copy mode stuck** — a pane sits in tmux copy mode and the automatic
   cancel did not clear it.
 

@@ -47,4 +47,7 @@ class SessionProfile:
     current_issue: int | None = None
     current_repo: str | None = None
     state_source: str = "default"
+    session_id: str | None = None
+    last_message: str | None = None
+    detail: str | None = None
     evidence: list[str] = field(default_factory=list)

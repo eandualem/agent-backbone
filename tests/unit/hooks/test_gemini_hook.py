@@ -58,7 +58,7 @@ class TestDerive:
         assert record["issue"] == 12
 
     def test_shell_comment_action(self):
-        _, action = hook.derive(
+        _, actions = hook.derive(
             _payload(
                 "AfterTool",
                 tool_name="run_shell_command",
@@ -66,7 +66,7 @@ class TestDerive:
             ),
             None,
         )
-        assert action["issue"] == 3 and action["repo"] == "acme/app"
+        assert actions[0]["issue"] == 3 and actions[0]["repo"] == "acme/app"
 
 
 class TestMainWritesStateTheBackboneReads:

@@ -12,12 +12,15 @@ class AgentState(StrEnum):
     ``waiting_for_human`` covers plan approval, permission prompts and any
     other question the runtime is blocking on; the detail is in
     ``StateSnapshot.reason`` (``plan``, ``permission``, ``question``).
+    ``blocked`` is the runtime waiting on something that is not a person —
+    today its usage limit (``reason`` ``quota``); it resumes on its own.
     """
 
     STARTING = "starting"
     IDLE = "idle"
     BUSY = "busy"
     WAITING_FOR_HUMAN = "waiting_for_human"
+    BLOCKED = "blocked"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -29,11 +32,13 @@ class AgentState(StrEnum):
             return cls.UNKNOWN
 
 
-WORKING_STATES = frozenset({AgentState.STARTING, AgentState.BUSY})
+WORKING_STATES = frozenset({AgentState.STARTING, AgentState.BUSY, AgentState.BLOCKED})
+"""States in which the agent is occupied and will come back by itself."""
 
 REASON_PLAN = "plan"
 REASON_PERMISSION = "permission"
 REASON_QUESTION = "question"
+REASON_QUOTA = "quota"
 
 
 @dataclass
@@ -51,10 +56,14 @@ class StateSnapshot:
     plan_title: str | None = None
     session_id: str | None = None
     """The runtime's own session id, when its hook reports one."""
+    runtime: str | None = None
+    """The runtime whose hook wrote the record (a session id is only good for that runtime)."""
     last_message: str | None = None
     """The agent's last reply (clipped), when its hook reports one."""
     event: str | None = None
     """The hook event that produced a push snapshot."""
+    detail: str | None = None
+    """What the runtime said about a ``blocked`` state (e.g. when the limit resets)."""
     evidence: list[str] = field(default_factory=list)
 
     @property
