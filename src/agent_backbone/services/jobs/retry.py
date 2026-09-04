@@ -50,10 +50,10 @@ async def drain_message_queue(
         if expired:
             log.info(
                 "Expired %d queued messages (> %d min)",
-                expired,
+                len(expired),
                 config.timing.queue_expiry_minutes,
             )
-            summary["queue_expired"] = expired
+            summary["queue_expired"] = len(expired)  # each left a delivery row (same transaction)
     except Exception:
         log.exception("Failed to expire stale messages (non-fatal)")
 
@@ -69,7 +69,18 @@ async def drain_message_queue(
                 try:
                     scope = queue_scope(await list_open_queue_for_target(config, target, gh))
                 except Exception:
-                    log.exception("Failed to load queue scope for %s (non-fatal)", target)
+                    # Without the open queue the acknowledgement gate would
+                    # widen to every historical delivery (closed issues
+                    # included) and could stall the whole queue. Defer: the
+                    # rows go back to pending and the next drain retries.
+                    log.exception("Failed to load queue scope for %s; deferring", target)
+                    index = queued.index(record)
+                    for leased in queued[index:]:
+                        await db.queue.release(leased["id"])
+                    summary["queue_deferred"] = summary.get("queue_deferred", 0) + (
+                        len(queued) - index
+                    )
+                    break
             outcome = await safe_deliver(
                 session_name,
                 record["message"],

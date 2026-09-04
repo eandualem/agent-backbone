@@ -186,6 +186,65 @@ class TestDeliveryRetryQueueDrain:
             assert row["status"] == "pending"
             assert row["leased_at"] is None
 
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
+    @patch(
+        "agent_backbone.services.jobs.retry.list_open_queue_for_target",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("GitHub 502"),
+    )
+    @patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock)
+    async def test_a_scope_lookup_failure_defers_instead_of_widening_the_gate(
+        self, mock_list_sessions, mock_scope, mock_deliver, db, config
+    ):
+        await db.queue.enqueue(
+            session_name="ike",
+            message="Issue payload",
+            issue_number=91,
+            target_entity="ike",
+            delivery_kind="issue",
+            repo=TEST_REPO,
+        )
+        mock_list_sessions.return_value = ["ike"]
+        summary = await drain_message_queue(
+            config=config, db=db, gh=MagicMock(), active_sessions={"ike"}
+        )
+        mock_deliver.assert_not_called()
+        assert summary.get("queue_deferred") == 1
+        # the row went back to pending for the next drain
+        assert await db.queue.pending_count("ike") == 1
+
+    async def test_expired_messages_leave_a_delivery_record_in_the_same_transaction(
+        self, db, config
+    ):
+        from sqlalchemy import text
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="[via:backbone from:leo] are you there?",
+            delivery_kind="direct_message",
+            source="backbone",
+        )
+        async with db.queue._tx() as conn:  # age the row past the expiry
+            await conn.execute(
+                text("UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00+00:00'")
+            )
+        expired = await db.queue.expire_pending(max_age_minutes=30)
+        assert len(expired) == 1 and expired[0]["session_name"] == "ike"
+        rows = await db.deliveries.query(session_name="ike", limit=5, kind="direct_message")
+        assert rows and rows[0]["outcome"] == "expired"
+        assert rows[0]["preview"].startswith("[via:backbone from:leo]")
+        assert await db.queue.pending_count("ike") == 0
+
+    async def test_the_drain_counts_expiries(self, db, config):
+        db.queue.expire_pending = AsyncMock(return_value=[{"id": 7, "session_name": "ike"}])
+        db.queue.expire_stale_leases = AsyncMock(return_value=0)
+        db.queue.sessions_with_pending = AsyncMock(return_value=[])
+        with patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock):
+            summary = await drain_message_queue(
+                config=config, db=db, gh=None, active_sessions=set()
+            )
+        assert summary["queue_expired"] == 1
+
     async def test_drain_calls_expire_stale_leases(self, db, config):
         db.queue.expire_stale_leases = AsyncMock(return_value=0)
         db.queue.expire_pending = AsyncMock(return_value=0)

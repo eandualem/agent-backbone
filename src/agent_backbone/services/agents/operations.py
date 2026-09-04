@@ -6,12 +6,15 @@ when it is not; both paths call these functions so the two never drift.
 
 from __future__ import annotations
 
+import asyncio
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import launch
 from agent_backbone.services.agents.launch import StartResult
 from agent_backbone.services.runtimes import RUNTIMES
+from agent_backbone.services.terminal import session_exists
 
 if TYPE_CHECKING:
     from agent_backbone.config import AgentSpec, BackboneConfig
@@ -71,6 +74,34 @@ async def resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     return spec
 
 
+_lifecycle_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+"""One lock per agent name: a start and a forget never interleave."""
+
+
+def lifecycle_lock(name: str) -> asyncio.Lock:
+    return _lifecycle_locks[name]
+
+
+async def stop_agent_session(config: BackboneConfig, name: str) -> bool:
+    """Stop an agent's tmux session. The backbone's own session is refused
+    (``ValueError``) on every surface — API, CLI, Telegram — from here."""
+    if name == config.backbone.session_name:
+        raise ValueError("refusing to stop the backbone's own session")
+    return await launch.stop_agent(name)
+
+
+async def forget_agent(store: AgentStore, name: str) -> bool:
+    """Remove an agent from the backbone. A running session is refused
+    (``RuntimeError``): stop it first. Returns False for an unknown name.
+
+    Holds the agent's lifecycle lock, so a start in progress finishes first
+    and the session check right before the delete sees it."""
+    async with lifecycle_lock(name):
+        if await session_exists(name):
+            raise RuntimeError(f"'{name}' is running — stop it first")
+        return await store.forget(name)
+
+
 async def start_resolved(
     store: AgentStore,
     config: BackboneConfig,
@@ -87,15 +118,16 @@ async def start_resolved(
         raise ValueError(f"Runtime '{runtime}' binary not found")
     if not spec.path.is_dir():
         raise ValueError(f"Directory does not exist: {spec.path}")
-    result = await launch.start_agent(
-        spec,
-        config,
-        runtime=runtime,
-        model=req.model if req.model is not None else spec.model,
-        resume=req.resume,
-        db=db,
-        wait=req.wait,
-    )
-    if result.ok and not result.already_running:
-        await store.touch_started(spec.name)
+    async with lifecycle_lock(spec.name):
+        result = await launch.start_agent(
+            spec,
+            config,
+            runtime=runtime,
+            model=req.model if req.model is not None else spec.model,
+            resume=req.resume,
+            db=db,
+            wait=req.wait,
+        )
+        if result.ok and not result.already_running:
+            await store.touch_started(spec.name)
     return result

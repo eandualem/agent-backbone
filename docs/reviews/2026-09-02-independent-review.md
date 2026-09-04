@@ -16,15 +16,15 @@ found.
 
 | Rank | Severity | Finding | Status |
 |---:|:---:|---|---|
-| 1 | P1 | Plan control is Claude-specific, is callable for every runtime, and bypasses `safe_deliver` | Open |
-| 2 | P1 | `queued: true` does not prove that a message was retained; enqueue errors and content dedup can lose it | Open |
-| 3 | P2 | Hook installation and event translation are not `Runtime` capabilities | Open |
-| 4 | P2 | A missing swarm directory leaves a registered Git worktree that blocks reuse | Open |
-| 5 | P2 | A transient GitHub error widens the acknowledgment gate to closed issues | Open |
-| 6 | P2 | Queue expiry has no per-message terminal record | Open; CLI wording fixed |
-| 7 | P2 | Import enforcement misses lazy edges and leaves `agents -> help` outside the documented graph | Open |
-| 8 | P2 | CLI/API/Telegram mutations are duplicated and have already drifted | Guards fixed; consolidation open |
-| 9 | P2 | Runtime IDs and hook behavior have owners outside the runtime registry | Open |
+| 1 | P1 | Plan control is Claude-specific, is callable for every runtime, and bypasses `safe_deliver` | Fixed (#108) |
+| 2 | P1 | `queued: true` does not prove that a message was retained; enqueue errors and content dedup can lose it | Fixed (#109) |
+| 3 | P2 | Hook installation and event translation are not `Runtime` capabilities | Fixed (#123) |
+| 4 | P2 | A missing swarm directory leaves a registered Git worktree that blocks reuse | Fixed (#121 follow-ups) |
+| 5 | P2 | A transient GitHub error widens the acknowledgment gate to closed issues | Fixed (#121 follow-ups) |
+| 6 | P2 | Queue expiry has no per-message terminal record | Fixed (#121 follow-ups) |
+| 7 | P2 | Import enforcement misses lazy edges and leaves `agents -> help` outside the documented graph | Fixed (#121 follow-ups) |
+| 8 | P2 | CLI/API/Telegram mutations are duplicated and have already drifted | Fixed: stop and forget behind shared operations (#121 follow-ups) |
+| 9 | P2 | Runtime IDs and hook behavior have owners outside the runtime registry | Fixed (#123) |
 | 10 | P3 | Duplicate DTOs and one unreachable queue branch add avoidable maintenance risk | Open |
 
 ## 1. Runtime boundary

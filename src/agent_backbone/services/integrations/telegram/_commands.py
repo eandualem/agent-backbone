@@ -16,12 +16,13 @@ from agent_backbone.services.agents import (
     approve_agent,
     deny_agent,
     plan_control,
+    prompt_id,
     read_plan,
     read_state_file,
     record_answer,
     start_agent,
-    stop_agent,
 )
+from agent_backbone.services.agents.operations import stop_agent_session
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     process_message_for_discovery,
@@ -155,7 +156,11 @@ async def cmd_stop_agent(
     if bot.config.agents.get(name) is None:
         await update.message.reply_text(f"Unknown agent `{name}`", parse_mode="Markdown")
         return
-    ok = await stop_agent(name)
+    try:
+        ok = await stop_agent_session(bot.config, name)
+    except ValueError:
+        await update.message.reply_text("Refusing to stop the backbone's own session.")
+        return
     status = "Stopped" if ok else "Failed to stop"
     await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
 
@@ -313,8 +318,6 @@ def _who(update: Update) -> tuple[str, str]:
 
 def _prompt_matches(bot: TelegramService, agent: str, action: str, ref: str) -> bool:
     """Whether the prompt the button was raised for is still the one waiting."""
-    from agent_backbone.services.jobs.escalation import prompt_id
-
     snapshot = read_state_file(bot.config.state_dir, agent)
     if snapshot is None or snapshot.state != AgentState.WAITING_FOR_HUMAN:
         return False

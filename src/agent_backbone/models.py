@@ -46,6 +46,8 @@ class DeliveryOutcome(StrEnum):
     DELIVERY_FAILED = "delivery_failed"
     NOT_WAITING = "not_waiting"
     """A plan response with no plan on screen to answer — refused, never queued."""
+    EXPIRED = "expired"
+    """A queued message dropped after ``timing.queue_expiry_minutes`` — terminal, never retried."""
 
 
 SUCCESS_OUTCOMES = frozenset({DeliveryOutcome.DELIVERED, DeliveryOutcome.RETRIED})

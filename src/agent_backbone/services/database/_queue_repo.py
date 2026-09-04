@@ -171,21 +171,47 @@ class QueueRepo(Repo):
                 {"delivered_at": now_iso(), "id": message_id},
             )
 
-    async def expire_pending(self, max_age_minutes: int = 30) -> int:
-        """Expire pending messages older than the cutoff. Returns the count.
+    async def expire_pending(self, max_age_minutes: int = 30) -> list[dict]:
+        """Expire pending messages older than the cutoff and, in the same
+        transaction, leave a delivery row with outcome ``expired`` for each,
+        so a dropped message is never lost from the record. Returns the rows.
 
         Leased rows are not considered: ``expire_stale_leases`` returns them to
         ``pending`` long before this cutoff, so they expire on the next sweep.
         """
         async with self._tx() as conn:
+            now = now_iso()
             result = await conn.execute(
                 text(
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
-                       WHERE status = 'pending' AND enqueued_at < :cutoff"""
+                       WHERE status = 'pending' AND enqueued_at < :cutoff
+                       RETURNING *"""
                 ),
-                {"now": now_iso(), "cutoff": cutoff_iso(minutes=max_age_minutes)},
+                {"now": now, "cutoff": cutoff_iso(minutes=max_age_minutes)},
             )
-            return result.rowcount or 0
+            rows = [dict(row._mapping) for row in result.fetchall()]
+            for row in rows:
+                message = row.get("message") or ""
+                await conn.execute(
+                    text(
+                        """INSERT INTO deliveries
+                           (kind, repo, issue_number, target_entity, session_name,
+                            outcome, source, preview, created_at)
+                           VALUES (:kind, :repo, :issue_number, :target_entity, :session_name,
+                                   'expired', :source, :preview, :created_at)"""
+                    ),
+                    {
+                        "kind": row.get("delivery_kind") or "issue",
+                        "repo": row.get("repo") or "",
+                        "issue_number": row.get("issue_number"),
+                        "target_entity": row.get("target_entity") or row.get("session_name") or "",
+                        "session_name": row.get("session_name") or "",
+                        "source": row.get("source") or "queue",
+                        "preview": message[:120],
+                        "created_at": now,
+                    },
+                )
+            return rows
 
     async def purge_for_issue(self, issue_number: int, *, repo: str = "") -> int:
         """Mark pending/leased messages for an issue as delivered (issue closed)."""

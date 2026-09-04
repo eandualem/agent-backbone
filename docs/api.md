@@ -126,7 +126,7 @@ Response: `{"ok": true, "session": "web", "outcome": "delivered", "queued":
 false, "queue": null, "detail": "Delivered to web."}`. The target must be a
 registered agent or an active swarm (404 otherwise — the backbone never
 types into a tmux session that is not one of its agents). Outcomes:
-`delivered`, `agent_working`, `waiting_for_human`, `offline`,
+`delivered`, `agent_working`, `waiting_for_human`, `offline`, `expired`,
 `human_typing`, `settling`, `delivery_failed`.
 
 When the message could not be delivered now, `queue` says what happened to

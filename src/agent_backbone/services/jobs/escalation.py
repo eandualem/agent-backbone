@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.recent import RecentKeys
-from agent_backbone.services.agents import AgentState
+from agent_backbone.services.agents import AgentState, prompt_id
 from agent_backbone.services.integrations import notify_humans
 from agent_backbone.services.routing import (
     format_offline_queue_notification,
@@ -49,11 +49,6 @@ async def _attended(session: str) -> bool:
     except Exception:
         return False
     return vars_.get("attached", "0") not in ("", "0")
-
-
-def prompt_id(timestamp: float) -> str:
-    """The identity of one prompt: the state's timestamp, as the button carries it."""
-    return f"{timestamp:.3f}"
 
 
 def permission_actions(

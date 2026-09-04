@@ -55,7 +55,9 @@ def tmux_svc():
         patch(f"{_FEED}.list_sessions_rich", mocks.list_sessions_rich),
         patch(f"{_ROUTE}.list_sessions", mocks.list_sessions),
         patch(f"{_ROUTE}.session_exists", mocks.session_exists),
-        patch(f"{_ROUTE}.stop_session", mocks.stop_session),
+        # stop and forget go through the shared operations now
+        patch("agent_backbone.services.agents.operations.session_exists", mocks.session_exists),
+        patch("agent_backbone.services.agents.launch.stop_session", mocks.stop_session),
         patch(f"{_ROUTE}.capture_pane", mocks.capture_pane),
     ):
         yield mocks
