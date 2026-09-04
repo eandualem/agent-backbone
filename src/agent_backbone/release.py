@@ -84,24 +84,38 @@ def installed_version() -> str:
 
 
 def code_identity(install: Installation | None = None) -> str:
-    """What code a fresh process would run: the checkout's commit for an
-    editable install, the installed version otherwise. When this differs
+    """What code a fresh process would run: ``git:<branch>@<commit>`` for an
+    editable checkout, ``version:<installed>`` otherwise. When this differs
     from what the running backbone started with, a restart runs new code."""
     install = install or installation()
     if install.kind == "editable" and install.path:
-        try:
-            result = subprocess.run(
-                ["git", "-C", install.path, "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=10,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            result = None
-        if result is not None and result.returncode == 0 and result.stdout.strip():
-            return f"git:{result.stdout.strip()}"
+        branch = _git(install.path, "rev-parse", "--abbrev-ref", "HEAD")
+        commit = _git(install.path, "rev-parse", "HEAD")
+        if branch and commit:
+            return f"git:{branch}@{commit}"
     return f"version:{installed_version()}"
+
+
+def _git(path: str, *args: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", path, *args], capture_output=True, text=True, check=False, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+
+
+def same_line(started: str, current: str) -> bool:
+    """Whether ``current`` is a newer state of the *same* thing as ``started``.
+
+    A checkout on another branch is development, not an upgrade: the
+    backbone keeps running until the branch it started on moves (a pull
+    into it, or a switch back to it with new commits).
+    """
+    if started.startswith("git:") and current.startswith("git:"):
+        return started[4:].split("@", 1)[0] == current[4:].split("@", 1)[0]
+    return True
 
 
 def latest_published(timeout: float = 5.0) -> str | None:

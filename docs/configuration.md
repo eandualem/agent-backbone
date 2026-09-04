@@ -38,7 +38,7 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | `backbone.port` | `7120` | API port |
 | `backbone.session_name` | `backbone` | tmux session used by `backbone up --detach` |
 | `backbone.cors_origins` | `[]` | Browser origins allowed to call the API; empty disables CORS |
-| `backbone.restart_on_upgrade` | `true` | Restart the running backbone onto new code when the installed version (or, for a development checkout, its commit) changes. Checked once a minute; waits until nothing is being routed. Agents are untouched |
+| `backbone.restart_on_upgrade` | `true` | Restart the running backbone onto new code when the installed version (or, for a development checkout, the commit of the branch it started on) changes. Checked once a minute; waits until nothing is being routed; a checkout switched to another branch is left alone. Agents are untouched |
 
 ### `agents.*`
 

@@ -15,7 +15,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
-from agent_backbone.release import Installation, code_identity, installation
+from agent_backbone.release import Installation, code_identity, installation, same_line
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +44,9 @@ class UpgradeWatch:
         current = await asyncio.to_thread(self._identity, self._install)
         if current == self.started:
             return {"code": current}
+        if not same_line(self.started, current):
+            # The checkout is on another branch: someone is developing in it.
+            return {"code": current, "changed_from": self.started, "restart": "other branch"}
         if not self._enabled():
             return {"code": current, "changed_from": self.started, "restart": "disabled"}
         pending = self._in_flight()

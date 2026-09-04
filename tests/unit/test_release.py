@@ -38,12 +38,21 @@ class TestInstallation:
 
 
 class TestCodeIdentity:
-    def test_editable_uses_the_checkouts_commit(self):
+    def test_editable_uses_the_checkouts_branch_and_commit(self):
         install = release.Installation("editable", "/ws/x")
-        ok = MagicMock(returncode=0, stdout="abc123\n", stderr="")
-        with patch(f"{_R}.subprocess.run", return_value=ok) as run:
-            assert release.code_identity(install) == "git:abc123"
+        answers = [
+            MagicMock(returncode=0, stdout="develop\n", stderr=""),
+            MagicMock(returncode=0, stdout="abc123\n", stderr=""),
+        ]
+        with patch(f"{_R}.subprocess.run", side_effect=answers) as run:
+            assert release.code_identity(install) == "git:develop@abc123"
         assert run.call_args.args[0][:4] == ["git", "-C", "/ws/x", "rev-parse"]
+
+    def test_same_line_is_the_same_branch_or_a_package(self):
+        assert release.same_line("git:develop@a", "git:develop@b")
+        assert not release.same_line("git:develop@a", "git:feat/x@b")
+        assert release.same_line("version:0.1.0", "version:0.1.1")
+        assert release.same_line("git:develop@a", "version:0.1.1")  # a reinstall counts
 
     def test_editable_without_git_falls_back_to_the_version(self):
         install = release.Installation("editable", "/ws/x")

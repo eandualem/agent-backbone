@@ -77,7 +77,10 @@ code on disk with what it started as and, when they differ and nothing is
 being routed, re-executes `backbone up` in place
 (`backbone.restart_on_upgrade`, on by default). So `uv tool upgrade`, or
 pulling the checkout, is enough; `backbone upgrade` is the same thing
-done now. `backbone service restart` is the plain building block.
+done now. A development checkout switched to another branch is left
+alone — that is development, not an upgrade; the restart happens when
+the branch the backbone started on moves. `backbone service restart` is
+the plain building block.
 
 ## `backbone runtimes`
 
