@@ -31,11 +31,13 @@ from pathlib import Path
 STATE_IDLE = "idle"
 STATE_BUSY = "busy"
 STATE_WAITING = "waiting_for_human"
+STATE_BLOCKED = "blocked"
 STATE_UNKNOWN = "unknown"
 
 REASON_PLAN = "plan"
 REASON_PERMISSION = "permission"
 REASON_QUESTION = "question"
+REASON_QUOTA = "quota"
 
 LAST_MESSAGE_CHARS = 500
 
@@ -120,6 +122,56 @@ def comment_action_from_mcp(tool: str, tool_input: dict, now: float) -> dict | N
     if owner and name:
         action["repo"] = f"{owner}/{name}"
     return action
+
+
+_GH_PR_CREATE_RE = re.compile(r"\bgh\s+pr\s+create\b")
+_GH_HEAD_RE = re.compile(r"(?:--head|-H)[\s=]+(\S+)")
+_REMOTE_RE = re.compile(r"github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
+
+
+def _git_output(cwd: str | None, *args: str) -> str | None:
+    if not cwd:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, *args], capture_output=True, text=True, timeout=5, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
+
+
+def pull_request_action_from_command(command: str, cwd: str | None, now: float) -> dict | None:
+    """A ``gh pr create`` in a shell command: the backbone should not announce
+    that pull request back to the agent that opened it, and the issues it
+    closes count as acknowledged. Records the repository and head branch, the
+    two things the pull request event will carry."""
+    if not _GH_PR_CREATE_RE.search(command or ""):
+        return None
+    repo_match = _GH_REPO_RE.search(command)
+    repo = repo_match.group(1) if repo_match else None
+    if repo is None:
+        remote = _git_output(cwd, "remote", "get-url", "origin")
+        found = _REMOTE_RE.search(remote or "")
+        repo = found.group(1) if found else None
+    head_match = _GH_HEAD_RE.search(command)
+    if head_match:
+        branch = head_match.group(1)
+    else:
+        branch = _git_output(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    action = {"ts": now, "action": "pull_request"}
+    if repo:
+        action["repo"] = repo
+    if branch:
+        action["branch"] = branch
+    return action
+
+
+def shell_action(command: str, cwd: str | None, now: float) -> dict | None:
+    """Whatever a shell command tells the backbone: a comment, or a pull request."""
+    return comment_action_from_command(command, now) or pull_request_action_from_command(
+        command, cwd, now
+    )
 
 
 def plan_title(plan: str) -> str:

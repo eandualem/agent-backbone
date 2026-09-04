@@ -51,10 +51,9 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
     if event == "AfterTool":
         tool = payload.get("tool_name", "") or ""
         tool_input = payload.get("tool_input") or {}
-        action = bb.comment_action_from_command(
-            tool_input.get("command", "") or "", now
-        ) or bb.comment_action_from_mcp(tool, tool_input, now)
-        return None, action
+        command = tool_input.get("command", "") or ""
+        action = bb.shell_action(command, payload.get("cwd"), now)
+        return None, action or bb.comment_action_from_mcp(tool, tool_input, now)
     return None, None
 
 

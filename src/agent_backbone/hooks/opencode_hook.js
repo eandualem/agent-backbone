@@ -13,6 +13,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 const STATE_IDLE = "idle";
 const STATE_BUSY = "busy";
@@ -20,6 +21,37 @@ const STATE_WAITING = "waiting_for_human";
 const REASON_PERMISSION = "permission";
 const GH_COMMENT = /\bgh\s+issue\s+comment\s+(?:\S+\s+)*?(\d+)\b/;
 const GH_REPO = /(?:--repo|-R)[\s=]+([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/;
+const GH_PR_CREATE = /\bgh\s+pr\s+create\b/;
+const GH_HEAD = /(?:--head|-H)[\s=]+(\S+)/;
+const REMOTE = /github\.com[:/]([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
+
+function git(cwd, args) {
+  try {
+    return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000 }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function shellAction(command, cwd) {
+  const comment = GH_COMMENT.exec(command);
+  if (comment) {
+    const action = { ts: Date.now() / 1000, action: "comment", issue: Number(comment[1]) };
+    const repo = GH_REPO.exec(command);
+    if (repo) action.repo = repo[1];
+    return action;
+  }
+  if (!GH_PR_CREATE.test(command)) return null;
+  const action = { ts: Date.now() / 1000, action: "pull_request" };
+  const repoFlag = GH_REPO.exec(command);
+  const remote = repoFlag ? null : REMOTE.exec(git(cwd, ["remote", "get-url", "origin"]) ?? "");
+  const repo = repoFlag ? repoFlag[1] : remote ? remote[1] : null;
+  const headFlag = GH_HEAD.exec(command);
+  const branch = headFlag ? headFlag[1] : git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (repo) action.repo = repo;
+  if (branch) action.branch = branch;
+  return action;
+}
 
 function target() {
   const agent = (process.env.BACKBONE_AGENT || "").trim();
@@ -72,7 +104,7 @@ function record(t, event, state, reason, extra = {}) {
   writeState(t, out);
 }
 
-export const AgentBackbone = async () => {
+export const AgentBackbone = async ({ directory } = {}) => {
   const t = target();
   if (!t) return {};
   const children = new Set(); // subagent sessions, never the agent's own state
@@ -131,12 +163,8 @@ export const AgentBackbone = async () => {
       if (isChild(input?.sessionID)) return;
       const command = output?.args?.command;
       if (typeof command !== "string") return;
-      const match = GH_COMMENT.exec(command);
-      if (!match) return;
-      const action = { ts: Date.now() / 1000, action: "comment", issue: Number(match[1]) };
-      const repo = GH_REPO.exec(command);
-      if (repo) action.repo = repo[1];
-      appendAction(t, action);
+      const action = shellAction(command, directory ?? process.cwd());
+      if (action) appendAction(t, action);
     },
   };
 };

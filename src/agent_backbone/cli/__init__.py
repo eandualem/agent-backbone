@@ -139,7 +139,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="model passed to the runtime CLI (e.g. opus, sonnet, or a full model id); "
         "recorded on the agent and reused by later starts",
     )
-    ps.add_argument("--resume", action="store_true", help="resume the runtime's last conversation")
+    ps.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume the runtime's conversation (the session the backbone last saw, when known)",
+    )
+    ps.add_argument(
+        "--always-on",
+        action="store_true",
+        help="start every agent marked always_on (after a reboot: `--always-on --resume`)",
+    )
     ps.add_argument(
         "--watch",
         action="append",

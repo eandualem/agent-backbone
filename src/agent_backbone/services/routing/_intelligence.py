@@ -85,12 +85,20 @@ async def get_session_intelligence(
             current_issue=_profile_current_issue(agent_state, state_snap.current_issue),
             current_repo=state_snap.current_repo,
             state_source=state_snap.source,
+            session_id=state_snap.session_id,
+            last_message=state_snap.last_message,
             evidence=evidence + list(extra),
         )
 
     if agent_state == AgentState.WAITING_FOR_HUMAN:
         return profile(SessionIntelligence.WAITING_FOR_HUMAN)
 
+    if agent_state == AgentState.BLOCKED:
+        detail = f": {state_snap.detail}" if state_snap.detail else ""
+        return profile(
+            SessionIntelligence.AGENT_WORKING,
+            f"blocked on its {state_snap.reason or 'runtime'}{detail}; it resumes on its own",
+        )
     if agent_state in WORKING_STATES:
         return profile(SessionIntelligence.AGENT_WORKING)
 

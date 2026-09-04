@@ -21,6 +21,9 @@ from agent_backbone.services.routing.models import SessionIntelligence, SessionP
 _IDLE_SNAP = StateSnapshot(state=AgentState.IDLE, source="push")
 _BUSY_SNAP = StateSnapshot(state=AgentState.BUSY, source="push")
 _STARTING_SNAP = StateSnapshot(state=AgentState.STARTING, source="push")
+_BLOCKED_SNAP = StateSnapshot(
+    state=AgentState.BLOCKED, reason="quota", detail="resets at 3 PM", source="push"
+)
 _PLAN_SNAP = StateSnapshot(state=AgentState.WAITING_FOR_HUMAN, reason="plan", source="push")
 _PERMISSION_SNAP = StateSnapshot(
     state=AgentState.WAITING_FOR_HUMAN, reason="permission", source="push"
@@ -161,6 +164,7 @@ class TestGetSessionIntelligence:
             (_PLAN_SNAP, SessionIntelligence.WAITING_FOR_HUMAN),
             (_PERMISSION_SNAP, SessionIntelligence.WAITING_FOR_HUMAN),
             (_BUSY_SNAP, SessionIntelligence.AGENT_WORKING),
+            (_BLOCKED_SNAP, SessionIntelligence.AGENT_WORKING),
             (_STARTING_SNAP, SessionIntelligence.AGENT_WORKING),
             (_IDLE_SNAP, SessionIntelligence.READY),
             (_UNKNOWN_SNAP, SessionIntelligence.UNKNOWN),

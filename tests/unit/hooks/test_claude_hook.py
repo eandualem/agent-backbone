@@ -52,6 +52,24 @@ class TestDerive:
         )
         assert record["state"] == hook.STATE_IDLE
 
+    @pytest.mark.parametrize(
+        ("kind", "expected_state", "expected_reason"),
+        [
+            ("quota_auto_resume_armed", "blocked", "quota"),
+            ("quota_auto_resume_cancelled", "blocked", "quota"),
+            ("quota_auto_resume_fired", hook.STATE_BUSY, None),
+            ("quota_auto_resume_stale_resumed", hook.STATE_BUSY, None),
+        ],
+    )
+    def test_quota_notifications(self, kind, expected_state, expected_reason):
+        record, _ = hook.derive(
+            _payload("Notification", notification_type=kind, message="Resumes at 3:00 PM"), None
+        )
+        assert record["state"] == expected_state
+        assert record["reason"] == expected_reason
+        if expected_state == "blocked":
+            assert record["detail"] == "Resumes at 3:00 PM"
+
     def test_notification_other_is_ignored(self):
         assert hook.derive(_payload("Notification", message="something else"), None) == (None, None)
 
@@ -113,6 +131,49 @@ class TestDerive:
             assert action is None
         else:
             assert action["action"] == "comment" and action["issue"] == issue
+
+
+class TestPullRequestActions:
+    def test_gh_pr_create_with_explicit_repo_and_head_needs_no_git(self):
+        _, action = hook.derive(
+            _payload(
+                "PostToolUse",
+                tool_name="Bash",
+                tool_input={"command": "gh pr create --repo acme/app --head feat/x --title t"},
+            ),
+            None,
+        )
+        assert action["action"] == "pull_request"
+        assert action["repo"] == "acme/app" and action["branch"] == "feat/x"
+
+    def test_repository_and_branch_come_from_the_checkout(self):
+        from agent_backbone.hooks import backbone_state as bb
+
+        answers = {
+            ("remote", "get-url", "origin"): "git@github.com:acme/app.git\n",
+            ("rev-parse", "--abbrev-ref", "HEAD"): "feat/y\n",
+        }
+
+        def _run(argv, **kwargs):
+            return type("R", (), {"returncode": 0, "stdout": answers[tuple(argv[3:])]})()
+
+        with patch.object(bb.subprocess, "run", side_effect=_run):
+            _, action = hook.derive(
+                _payload("PostToolUse", tool_name="Bash", tool_input={"command": "gh pr create"}),
+                None,
+            )
+        assert action["repo"] == "acme/app" and action["branch"] == "feat/y"
+
+    def test_a_comment_wins_over_a_pull_request_in_one_command(self):
+        _, action = hook.derive(
+            _payload(
+                "PostToolUse",
+                tool_name="Bash",
+                tool_input={"command": "gh issue comment 4 -b x && gh pr create --head b"},
+            ),
+            None,
+        )
+        assert action["action"] == "comment" and action["issue"] == 4
 
 
 class TestResolveAgent:

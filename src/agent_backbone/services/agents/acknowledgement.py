@@ -74,6 +74,32 @@ def find_outgoing_comment(
     return None
 
 
+def find_outgoing_pull_request(
+    repo: str,
+    head_ref: str,
+    action_log: str | Path | None = None,
+    max_lines: int = 200,
+    recency_seconds: float = 900.0,
+) -> str | None:
+    """Session that recently ran ``gh pr create`` for this repository and branch.
+
+    Log format: ``{"ts": …, "session": "app", "action": "pull_request",
+    "repo": "owner/name", "branch": "feat/x"}``. Both repository and branch
+    must match: the pull request event carries exactly those two.
+    """
+    if not repo or not head_ref:
+        return None
+    now = time.time()
+    for entry in _read_tail(action_log, max_lines):
+        if entry.get("action") != "pull_request":
+            continue
+        if not _repo_matches(entry, repo) or (entry.get("branch") or "") != head_ref:
+            continue
+        if now - float(entry.get("ts", 0)) <= recency_seconds:
+            return entry.get("session")
+    return None
+
+
 def has_commented_on_issue(
     issue_number: int,
     session: str,

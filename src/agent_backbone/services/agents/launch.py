@@ -159,10 +159,17 @@ async def start_agent(
     brief = Path(brief_file) if brief_file else None
     if brief is None and section.inject_brief and rt.brief_mode != "none":
         brief = agent_brief_file(spec.name, spec.repo, config.data_dir)
+    resume_target: bool | str = resume
+    resume_evidence: list[str] = []
+    if resume:
+        last = read_state_file(config.state_dir, spec.name)
+        if last is not None and last.session_id:
+            resume_target = last.session_id
+            resume_evidence.append(f"resuming the session the backbone last saw: {last.session_id}")
     try:
         command = rt.build_command(
             model=effective_model,
-            resume=resume,
+            resume=resume_target,
             brief_file=brief,
             pre_trust=section.pre_trust,
             data_dir=config.data_dir,
@@ -215,7 +222,7 @@ async def start_agent(
     # first message, delivered by the monitor once the agent is at its prompt.
     if rt.brief_mode == "message" and brief is not None and not resume and ready != "exited":
         await _queue_brief(db, spec.name, brief)
-    return StartResult(ok=True, ready=ready, evidence=tuple(evidence))
+    return StartResult(ok=True, ready=ready, evidence=tuple(resume_evidence + evidence))
 
 
 async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:
