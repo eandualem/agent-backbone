@@ -675,7 +675,14 @@ class TestAgentAlwaysOn:
     async def test_always_on_round_trips_and_defaults_off(self, db):
         from agent_backbone.config import agents_from_rows
 
-        common = {"dir": "/tmp/a", "runtime": "claude", "model": None, "repo": "", "tags": [], "env": {}}
+        common = {
+            "dir": "/tmp/a",
+            "runtime": "claude",
+            "model": None,
+            "repo": "",
+            "tags": [],
+            "env": {},
+        }
         await db.agents.upsert("quiet", description="", **common)
         await db.agents.upsert("vital", description="", always_on=True, **common)
         rows = await db.agents.list()
