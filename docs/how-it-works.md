@@ -78,6 +78,7 @@ shared vocabulary:
 | `UserPromptSubmit` | `busy` (captures `owner/name#N` or `#N` from the prompt as the current issue) |
 | `Stop` | `idle`, with `last_assistant_message` |
 | `Notification` "needs your permission…" | `waiting_for_human` / `permission` |
+| `Notification` `quota_auto_resume_*` | `blocked` / `quota` while Claude Code waits for its usage limit to reset (`detail` keeps its message); `busy` once it resumes |
 | `PreToolUse ExitPlanMode` | `waiting_for_human` / `plan`, plan text saved to `<data_dir>/state/plans/<agent>.md` |
 | `PreToolUse AskUserQuestion` | `waiting_for_human` / `question` |
 | `PostToolUse` of either | `busy` |
@@ -108,7 +109,9 @@ shared vocabulary:
 | `session.error` | `idle` |
 
 Each hook also appends a `gh issue comment N` it sees in a shell command to
-the action log (the acknowledgement signal). How the hooks reach a session
+the action log (the acknowledgement signal), and a `gh pr create` with the
+repository and head branch — so the pull request is not announced back to
+the agent that opened it, and the issues it closes count as acknowledged. How the hooks reach a session
 is the runtime's business ([Getting started §3](getting-started.md#3-state-hooks--nothing-to-install)).
 
 A fresh hook state is **authoritative**: these CLIs keep their input box
@@ -217,8 +220,9 @@ label) routes nobody.
 The **issue queue gate** keeps issue delivery orderly: an agent gets one
 issue at a time. A newer issue is held (`awaiting_ack`) while the last
 delivered issue in the agent's open queue has not been acknowledged.
-**Acknowledgement** = the agent commented on the issue: detected from the
-hook action log, a `[from:<agent>]` comment prefix, or GitHub comments on
+**Acknowledgement** = the agent commented on the issue (or opened a pull
+request that closes it): detected from the hook action log, a
+`[from:<agent>]` comment prefix, or GitHub comments on
 the next poll.
 
 An agent's **queue** is the union of `for:<agent>` issues in every

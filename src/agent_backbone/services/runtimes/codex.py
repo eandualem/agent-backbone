@@ -162,7 +162,8 @@ class Codex(Runtime):
         # `codex resume` is a subcommand; the resumed session keeps its model.
         # Both the TUI and `resume` take `-c` and the hook-trust flag.
         if resume:
-            return ["resume", "--last", *hook]
+            target = resume if isinstance(resume, str) else "--last"
+            return ["resume", target, *hook]
         args: list[str] = [*hook]
         if model:
             args.extend(["--model", model])

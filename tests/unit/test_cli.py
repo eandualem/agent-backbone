@@ -474,3 +474,25 @@ class TestRuntimesCommand:
         assert "deepcode" in out and "deepseek-v4-flash" in out
         assert "claude" in out and "opus, sonnet, haiku" in out
         assert "passed to the CLI verbatim" in out
+
+
+class TestAlwaysOnStart:
+    def test_without_always_on_agents_it_says_so(self, capsys):
+        assert _run(["agent", "start", "--always-on"]) == 0
+        assert "no always_on agents" in capsys.readouterr().out
+
+    def test_names_and_always_on_do_not_mix(self, capsys):
+        assert _run(["agent", "start", "app", "--always-on"]) == 1
+        assert "do not pass names" in capsys.readouterr().out
+
+    def test_helper_lists_the_marked_agents(self, tmp_path):
+        from dataclasses import replace
+
+        from agent_backbone.cli.agents import always_on_names
+        from agent_backbone.config import AgentsConfig
+        from tests.conftest import make_config
+
+        config = make_config(tmp_path)
+        marked = replace(config.agents.get("ike"), always_on=True)
+        config = replace(config, agents=AgentsConfig({**config.agents.specs, "ike": marked}))
+        assert always_on_names(config) == ["ike"]

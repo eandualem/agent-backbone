@@ -217,25 +217,32 @@ class Runtime:
         self,
         *,
         model: str | None,
-        resume: bool,
+        resume: bool | str,
         brief_file: Path | None,
         pre_trust: bool,
         data_dir: Path | str | None,
         state_dir: Path | str | None,
     ) -> list[str]:
-        """Arguments after the binary. The default: ``--model``, ``--resume``."""
+        """Arguments after the binary. The default: ``--model``, ``--resume``.
+
+        ``resume`` is ``True`` for the runtime's own notion of "the last
+        conversation", or a session id the backbone saw through the hook;
+        a runtime that cannot address a session by id treats it as ``True``.
+        """
         args: list[str] = []
         if model:
             args.extend(["--model", model])
         if resume:
             args.append("--resume")
+            if isinstance(resume, str):
+                args.append(resume)  # claude --resume <session id>
         return args
 
     def build_command(
         self,
         *,
         model: str | None = None,
-        resume: bool = False,
+        resume: bool | str = False,
         brief_file: Path | str | None = None,
         pre_trust: bool = False,
         data_dir: Path | str | None = None,

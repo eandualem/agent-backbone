@@ -315,6 +315,31 @@ async def report_offline_queues(
         log.info("Agent %s is offline with %d queued message(s)", spec.name, queued)
 
 
+async def check_blocked(config: BackboneConfig, states: AgentStates) -> None:
+    """Tell the humans once when an agent is blocked on its usage limit.
+
+    Nothing to approve: the runtime resumes on its own. The message is
+    what the runtime said (when the limit resets), deduplicated per agent
+    for ``timing.escalation_dedup_seconds``."""
+    for name, snapshot in states.items():
+        if snapshot.state != AgentState.BLOCKED:
+            continue
+        if not _should_escalate(name, "blocked", config.timing.escalation_dedup_seconds):
+            continue
+        reason = snapshot.reason or "its runtime"
+        detail = f" ({snapshot.detail})" if snapshot.detail else ""
+        what = "its usage limit" if reason == "quota" else reason
+        sent = await notify_humans(
+            config,
+            f"Agent {name} is blocked on {what}{detail}. It resumes on its own; "
+            "messages for it are queued meanwhile.",
+            agent=name,
+        )
+        if not sent:
+            _escalated.forget((name, "blocked"))  # nobody heard it: try again next cycle
+        log.info("Agent %s is blocked on %s%s", name, what, detail)
+
+
 async def check_plan_waiting(
     config: BackboneConfig, states: AgentStates, db: BackboneDB | None = None
 ) -> None:

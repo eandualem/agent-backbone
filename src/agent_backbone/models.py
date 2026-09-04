@@ -151,6 +151,24 @@ class IssueData(BaseModel):
     state: str = "open"
     labels: ParsedLabels = Field(default_factory=ParsedLabels)
     html_url: str = ""
+    body: str = ""
+    """The issue or pull request body (a pull request's ``Closes #N`` lives here)."""
+    head_ref: str = ""
+    """A pull request's head branch — how the backbone recognises one an agent opened."""
+    head_repo: str = ""
+    """The repository the head branch lives in (a fork, or the base repository)."""
+
+    def linked_issues(self) -> list[int]:
+        """Issues this body closes (``Closes #N``, ``Fixes #N``, ``Resolves #N``)."""
+        seen: list[int] = []
+        for match in _CLOSES_RE.finditer(self.body or ""):
+            number = int(match.group(1))
+            if number not in seen:
+                seen.append(number)
+        return seen
+
+
+_CLOSES_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d{1,7})\b", re.I)
 
 
 class CommentData(BaseModel):
@@ -203,6 +221,9 @@ class IssueEvent(BaseModel):
             labels=labels,
             html_url=issue_data.get("html_url", ""),
             repo_full_name=repository.get("full_name", ""),
+            body=issue_data.get("body") or "",
+            head_ref=((issue_data.get("head") or {}).get("ref") or ""),
+            head_repo=(((issue_data.get("head") or {}).get("repo") or {}).get("full_name") or ""),
         )
 
         comment = None

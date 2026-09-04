@@ -285,6 +285,28 @@ class TestStartAgent:
         assert data["evidence"] == ["hook state 'busy' written 3s ago (fresh)"]
         assert data["known"] is True and data["online"] is True
 
+    async def test_inspect_carries_the_session_id_and_last_reply(
+        self, api_client, auth_headers, tmux_svc
+    ):
+        tmux_svc.session_exists.return_value = True
+        from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+        with patch(f"{_ROUTE}.get_session_intelligence", new_callable=AsyncMock) as intel:
+            intel.return_value = SessionProfile(
+                "ike",
+                SessionIntelligence.READY,
+                runtime="claude",
+                agent_state=AgentState.IDLE,
+                session_id="01a0-sess",
+                last_message="Shipped it.",
+                detail="resets at 3 PM",
+            )
+            resp = await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["session_id"] == "01a0-sess"
+        assert resp.json()["last_message"] == "Shipped it."
+        assert resp.json()["detail"] == "resets at 3 PM"
+
     async def test_patch_watch_and_forget(self, api_client, auth_headers, tmux_svc):
         resp = await api_client.patch(
             "/api/agents/ike", json={"description": "Reviews", "model": "m"}, headers=auth_headers

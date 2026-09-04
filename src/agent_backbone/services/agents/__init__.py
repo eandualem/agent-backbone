@@ -15,6 +15,7 @@ from agent_backbone.services.agents._inference import (
 )
 from agent_backbone.services.agents.acknowledgement import (
     find_outgoing_comment,
+    find_outgoing_pull_request,
     has_commented_on_issue,
     rotate_action_log,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "clear_starting_marker",
     "deny_agent",
     "find_outgoing_comment",
+    "find_outgoing_pull_request",
     "get_agent_state",
     "has_commented_on_issue",
     "infer_state_from_pane",

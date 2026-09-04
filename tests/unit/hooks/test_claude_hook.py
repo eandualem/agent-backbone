@@ -52,6 +52,24 @@ class TestDerive:
         )
         assert record["state"] == hook.STATE_IDLE
 
+    @pytest.mark.parametrize(
+        ("kind", "expected_state", "expected_reason"),
+        [
+            ("quota_auto_resume_armed", "blocked", "quota"),
+            ("quota_auto_resume_cancelled", "blocked", "quota"),
+            ("quota_auto_resume_fired", hook.STATE_BUSY, None),
+            ("quota_auto_resume_stale_resumed", hook.STATE_BUSY, None),
+        ],
+    )
+    def test_quota_notifications(self, kind, expected_state, expected_reason):
+        record, _ = hook.derive(
+            _payload("Notification", notification_type=kind, message="Resumes at 3:00 PM"), None
+        )
+        assert record["state"] == expected_state
+        assert record["reason"] == expected_reason
+        if expected_state == "blocked":
+            assert record["detail"] == "Resumes at 3:00 PM"
+
     def test_notification_other_is_ignored(self):
         assert hook.derive(_payload("Notification", message="something else"), None) == (None, None)
 
@@ -109,10 +127,100 @@ class TestDerive:
         _, action = hook.derive(
             _payload("PostToolUse", tool_name=tool, tool_input=tool_input), None
         )
+        entries = action if isinstance(action, list) else ([action] if action else [])
         if issue is None:
-            assert action is None
+            assert entries == []
         else:
-            assert action["action"] == "comment" and action["issue"] == issue
+            assert entries[0]["action"] == "comment" and entries[0]["issue"] == issue
+
+
+class TestPullRequestActions:
+    def test_gh_pr_create_with_explicit_repo_and_head_needs_no_git(self):
+        _, actions = hook.derive(
+            _payload(
+                "PostToolUse",
+                tool_name="Bash",
+                tool_input={"command": "gh pr create --repo acme/app --head feat/x --title t"},
+            ),
+            None,
+        )
+        (action,) = actions
+        assert action["action"] == "pull_request"
+        assert action["repo"] == "acme/app" and action["branch"] == "feat/x"
+
+    def test_repository_and_branch_come_from_the_checkout(self):
+        from agent_backbone.hooks import backbone_state as bb
+
+        answers = {
+            ("remote", "get-url", "origin"): "git@github.com:acme/app.git\n",
+            ("rev-parse", "--abbrev-ref", "HEAD"): "feat/y\n",
+        }
+
+        def _run(argv, **kwargs):
+            return type("R", (), {"returncode": 0, "stdout": answers[tuple(argv[3:])]})()
+
+        with patch.object(bb.subprocess, "run", side_effect=_run):
+            _, actions = hook.derive(
+                _payload("PostToolUse", tool_name="Bash", tool_input={"command": "gh pr create"}),
+                None,
+            )
+        (action,) = actions
+        assert action["repo"] == "acme/app" and action["branch"] == "feat/y"
+        assert action["head_repo"] == "acme/app"  # same repository: origin is the head
+
+    def test_a_compound_command_logs_both_actions(self):
+        _, actions = hook.derive(
+            _payload(
+                "PostToolUse",
+                tool_name="Bash",
+                tool_input={"command": "gh issue comment 4 -b x && gh pr create --head b"},
+            ),
+            None,
+        )
+        assert [a["action"] for a in actions] == ["comment", "pull_request"]
+        assert actions[0]["issue"] == 4 and actions[1]["branch"] == "b"
+
+    def test_a_fork_is_identified_by_its_head_repository(self):
+        from agent_backbone.hooks import backbone_state as bb
+
+        answers = {
+            ("remote", "get-url", "origin"): "https://github.com/forker/app.git\n",
+            ("rev-parse", "--abbrev-ref", "HEAD"): "feat/z\n",
+        }
+
+        def _run(argv, **kwargs):
+            return type("R", (), {"returncode": 0, "stdout": answers[tuple(argv[3:])]})()
+
+        with patch.object(bb.subprocess, "run", side_effect=_run):
+            _, actions = hook.derive(
+                _payload(
+                    "PostToolUse",
+                    tool_name="Bash",
+                    tool_input={"command": "gh pr create --repo acme/app --title t"},
+                ),
+                None,
+            )
+        (action,) = actions
+        assert action["repo"] == "acme/app"  # the base, from --repo
+        assert action["head_repo"] == "forker/app"  # the fork, from origin
+        assert action["branch"] == "feat/z"
+
+    def test_head_owner_colon_branch_names_the_fork(self):
+        _, actions = hook.derive(
+            _payload(
+                "PostToolUse",
+                tool_name="Bash",
+                tool_input={"command": "gh pr create --repo acme/app --head forker:feat/q"},
+            ),
+            None,
+        )
+        (action,) = actions
+        assert action["head_repo"] == "forker/app" and action["branch"] == "feat/q"
+
+    def test_records_carry_the_runtime_that_wrote_them(self, monkeypatch):
+        monkeypatch.setenv("BACKBONE_RUNTIME", "claude")
+        record, _ = hook.derive(_payload("SessionStart"), None)
+        assert record["runtime"] == "claude"
 
 
 class TestResolveAgent:

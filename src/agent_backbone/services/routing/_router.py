@@ -6,7 +6,10 @@ import logging
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import DeliveryOutcome, EventType, IssueEvent, parse_from_tag
-from agent_backbone.services.agents.acknowledgement import find_outgoing_comment
+from agent_backbone.services.agents.acknowledgement import (
+    find_outgoing_comment,
+    find_outgoing_pull_request,
+)
 from agent_backbone.services.routing._dedup import is_recent_notification
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import (
@@ -193,9 +196,25 @@ async def _dispatch_review(
 async def _dispatch_pull_request(
     event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
 ) -> None:
+    """Owners and watchers hear about a pull request — except the agent that
+    opened it (its hook logged the ``gh pr create``), for which the issues
+    the pull request closes count as acknowledged instead."""
+    repo = event.issue.repo_full_name
+    opener = find_outgoing_pull_request(
+        event.issue.head_repo or repo, event.issue.head_ref, action_log=config.action_log_path
+    )
+    if opener:
+        for number in event.issue.linked_issues():
+            try:
+                await db.acks.record(number, opener, repo=repo)
+            except Exception:
+                log.exception("Failed to record acknowledgment (non-fatal)")
     routing = route_issue(event.issue, event.event_type, config)
     message = format_pull_request_notification(event.issue)
     for target in routing.queue + routing.watch:
+        if opener and resolve_entity_session(target, config) == opener:
+            result.skipped.append(target)
+            continue
         await _deliver(target, message, event, config, db, result, kind="pull_request")
 
 
