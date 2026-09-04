@@ -11,6 +11,7 @@ from agent_backbone.services.agents._file_reader import read_state_file
 from agent_backbone.services.agents.models import (
     REASON_PERMISSION,
     REASON_PLAN,
+    REASON_QUESTION,
     AgentState,
     StateSnapshot,
 )
@@ -71,12 +72,7 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
             evidence=[f"terminal shows a busy marker ({runtime.id})"],
         )
     if runtime.detect_waiting_for_human(pane_content):
-        return StateSnapshot(
-            state=AgentState.WAITING_FOR_HUMAN,
-            reason=REASON_PERMISSION,
-            source="pull",
-            evidence=[f"terminal shows a permission prompt ({runtime.id})"],
-        )
+        return _dialog_snapshot(runtime, pane_content)
     if runtime.detect_idle(pane_content):
         return StateSnapshot(
             state=AgentState.IDLE,
@@ -94,6 +90,25 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
         state=AgentState.UNKNOWN,
         source="pull",
         evidence=[f"terminal inconclusive: no prompt, busy or question marker ({runtime.id})"],
+    )
+
+
+def _dialog_snapshot(runtime, pane_content: str, prefix: list[str] | None = None) -> StateSnapshot:
+    """``waiting_for_human`` as read from the terminal: a known permission
+    prompt, or any dialog recognised by its numbered options."""
+    known = runtime.prompt_markers and any(
+        marker in sanitize_pane_content(pane_content).lower()[-2000:]
+        for marker in runtime.prompt_markers
+    )
+    if known:
+        reason, seen = REASON_PERMISSION, "a permission prompt"
+    else:
+        reason, seen = REASON_QUESTION, "a dialog with numbered options"
+    return StateSnapshot(
+        state=AgentState.WAITING_FOR_HUMAN,
+        reason=reason,
+        source="pull",
+        evidence=[*(prefix or []), f"terminal shows {seen} ({runtime.id})"],
     )
 
 
@@ -122,6 +137,20 @@ async def get_agent_state(
         push.evidence = [f"hook state '{push.state.value}' written {push_age:.0f}s ago (fresh)"]
         if push.reason:
             push.evidence.append(f"reason: {push.reason}")
+        if push.state == AgentState.IDLE:
+            # The one thing a hook cannot see: a dialog drawn by the runtime
+            # itself (Claude Code's resume picker arrives after SessionStart
+            # already said idle). A dialog on screen beats the idle claim.
+            if pane_content is None:
+                pane_content = await capture_pane(session)
+            runtime = get_runtime(runtime_hint)
+            if runtime is UNKNOWN and pane_content:
+                runtime = detect_runtime(pane_content)
+            if pane_content and runtime.detect_active_dialog(pane_content):
+                dialog = _dialog_snapshot(runtime, pane_content, prefix=push.evidence)
+                dialog.current_issue = push.current_issue
+                dialog.evidence.append("the dialog on screen beats the hook's idle")
+                return dialog
         return push
 
     if pane_content is None:

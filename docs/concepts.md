@@ -66,7 +66,7 @@ What an agent is doing, in a vocabulary shared by every runtime:
 | `starting` | Session exists; runtime not at its prompt yet |
 | `idle` | At the prompt, nothing running |
 | `busy` | Working on a prompt |
-| `waiting_for_human` | Blocked on a person — `reason` is `plan` (plan approval), `permission` (tool permission prompt) or `question` |
+| `waiting_for_human` | Blocked on a person — `reason` is `plan` (plan approval), `permission` (tool permission prompt) or `question` (`AskUserQuestion`, or any dialog seen on the terminal) |
 | `unknown` | No trustworthy signal |
 | `offline` | No tmux session (reported by the API; not a stored state) |
 

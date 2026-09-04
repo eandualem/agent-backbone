@@ -28,8 +28,12 @@ This page follows real requests through the system. Read
 4. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
    fresh hook-written `idle` state, or a visible empty prompt for runtimes
    without hooks. If the runtime is asking a question (Claude's folder-trust
-   prompt), `start` returns `waiting_for_human` with the question shown
-   instead of guessing.
+   prompt, the "resume from summary" picker on `--resume`), `start` returns
+   `waiting_for_human` with the question shown instead of guessing, and
+   `backbone agent approve` answers it. A dialog is recognised by its
+   furniture — numbered options with a selection cursor — so one the
+   backbone has never seen still counts. The wait always ends in one of
+   `ready`, `waiting_for_human`, `exited` or `timeout`.
 5. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
 The backbone keeps no process handle; tmux owns the session. If the
@@ -77,7 +81,10 @@ session exists — and from then on by the shipped Claude Code hook:
 
 A fresh hook state is **authoritative**: Claude Code keeps its `❯` input
 box on screen while working, so the terminal alone would say "idle" while
-it is busy. The hook also appends `gh issue comment …` calls (with the
+it is busy. The one exception is a dialog the runtime draws itself: Claude
+Code fires `SessionStart` with its resume picker still on screen, so a
+fresh `idle` is checked against the terminal and a dialog there wins
+(`waiting_for_human` / `question`, with the evidence saying so). The hook also appends `gh issue comment …` calls (with the
 repository when `--repo` is given) to `<data_dir>/state/actions.jsonl`;
 that is how acknowledgements are detected without a spoofable text tag.
 
