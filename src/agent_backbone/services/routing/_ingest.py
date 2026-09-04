@@ -33,9 +33,13 @@ durably; this closes the window in which a retry of the same delivery
 arrives before the first copy is marked processed."""
 
 
+_active_routes = 0
+"""Events inside ``dispatch_event`` right now, whatever their dedup key."""
+
+
 def routing_in_flight() -> int:
     """How many events are being routed right now (a restart waits for zero)."""
-    return len(_in_flight)
+    return _active_routes
 
 
 def _source(delivery_id: str) -> str:
@@ -81,13 +85,17 @@ async def dispatch_event(
     issue_closed_hooks: Sequence[IssueClosedHook] = (),
 ) -> str:
     """Store, route and mark an event. Returns a short outcome string."""
+    global _active_routes
     key = _dedup_id(event)
     if key and key in _in_flight:
         return f"deduped: event {event.delivery_id} is being routed"
-    _in_flight.add(key)
+    if key:
+        _in_flight.add(key)
+    _active_routes += 1
     try:
         return await _store_route_mark(event, key, config, db, gh, issue_closed_hooks)
     finally:
+        _active_routes -= 1
         _in_flight.discard(key)
 
 

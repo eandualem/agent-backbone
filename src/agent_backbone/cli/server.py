@@ -40,11 +40,19 @@ def _run_server(config: BackboneConfig, reload: bool = False) -> None:
 
     app = create_app(config)
     uvicorn.run(app, host=config.backbone.host, port=config.backbone.port, log_level="info")
-    if getattr(app.state, "restart_requested", False):
+    if restart_requested(app):
         # The upgrade watch asked for new code: become a fresh `backbone up`
         # in place, so the login service or tmux session is unchanged.
         log.warning("restarting onto the new code")
         os.execv(sys.executable, [sys.executable, "-m", "agent_backbone.cli", *sys.argv[1:]])
+
+
+def restart_requested(app) -> bool:
+    """Whether the upgrade watch asked for a restart. ``create_app`` returns the
+    Socket.IO wrapper; the flag is on the FastAPI app inside it."""
+    inner = getattr(app, "other_asgi_app", app)
+    state = getattr(inner, "state", None)
+    return bool(getattr(state, "restart_requested", False))
 
 
 async def _up_detached(config: BackboneConfig) -> int:

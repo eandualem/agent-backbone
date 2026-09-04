@@ -24,12 +24,29 @@ def _fresh_version() -> str:
     return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else "unknown"
 
 
-async def _wait_for_api(config: BackboneConfig, seconds: float = 30.0) -> str | None:
-    """The running version once the API answers, or None after ``seconds``."""
+async def _generation(config: BackboneConfig) -> tuple[float | None, str] | None:
+    """``(started, version)`` of the process answering /health, or None when none does."""
+    health = await _common.api(config, "GET", "/health", timeout=2.0)
+    if health is None or health[0] != 200 or not isinstance(health[1], dict):
+        return None
+    started = health[1].get("started")
+    return (float(started) if started is not None else None, str(health[1].get("version") or "?"))
+
+
+async def _wait_for_api(
+    config: BackboneConfig, seconds: float = 30.0, *, before: float | None = None
+) -> str | None:
+    """The version of the *new* process once it answers, or None after ``seconds``.
+
+    A service manager returns from its restart while the old process may
+    still be serving; the process start time in /health tells them apart.
+    """
     for _ in range(int(seconds * 2)):
-        health = await _common.api(config, "GET", "/health", timeout=2.0)
-        if health is not None and isinstance(health[1], dict):
-            return str(health[1].get("version") or "?")
+        generation = await _generation(config)
+        if generation is not None:
+            started, version = generation
+            if before is None or started is None or started != before:
+                return version
         await asyncio.sleep(0.5)
     return None
 
@@ -39,6 +56,8 @@ async def restart_backbone(config: BackboneConfig) -> int:
     from agent_backbone.cli import server, service
     from agent_backbone.services.terminal import session_exists
 
+    old = await _generation(config)
+    before = old[0] if old else None
     if service.state() == "running":
         rc = service.restart()
         if rc:
@@ -55,9 +74,9 @@ async def restart_backbone(config: BackboneConfig) -> int:
         print("the backbone is not running; nothing to restart")
         print("start it with `backbone service install` (at login) or `backbone up --detach`")
         return 0
-    version = await _wait_for_api(config)
+    version = await _wait_for_api(config, before=before)
     if version is None:
-        print("restarted, but the API did not answer within 30s")
+        print("restarted, but a new backbone did not answer within 30s")
         return 1
     print(f"backbone is back (version {version})")
     return 0
@@ -89,7 +108,9 @@ async def _upgrade(args: argparse.Namespace) -> int:
     elif install.kind == "editable":
         print("a development checkout runs whatever is checked out; nothing to download")
     else:
-        print("installed some other way: upgrade it yourself (pip install -U agent-backbone)")
+        print("installed some other way: upgrade it yourself (pip install -U agent-backbone),")
+        print("then `backbone service restart`; nothing was restarted")
+        return 1
 
     if args.no_restart:
         print("not restarting (--no-restart); the running backbone keeps the old code")

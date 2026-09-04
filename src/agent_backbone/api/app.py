@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import time
 from contextlib import asynccontextmanager
 
 import httpx
@@ -27,6 +28,8 @@ from agent_backbone.config import BackboneConfig, bootstrap_config
 log = logging.getLogger(__name__)
 
 API_VERSION = __version__  # the package version is the API version
+STARTED_AT = time.time()
+"""When this process started: /health reports it so a restart is observable."""
 
 
 def _register_jobs(app: FastAPI):
@@ -249,8 +252,13 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     async def health(request: Request):
         lifecycle: LifecycleManager | None = getattr(request.app.state, "lifecycle", None)
         if lifecycle is None:
-            return {"healthy": False, "components": {}, "version": API_VERSION}
-        return {**(await lifecycle.health()), "version": API_VERSION}
+            return {
+                "healthy": False,
+                "components": {},
+                "version": API_VERSION,
+                "started": STARTED_AT,
+            }
+        return {**(await lifecycle.health()), "version": API_VERSION, "started": STARTED_AT}
 
     from agent_backbone.api.auth import require_api_key
     from agent_backbone.api.routes.agents import router as agents_router
