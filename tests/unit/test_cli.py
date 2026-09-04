@@ -196,10 +196,23 @@ class TestAgentCommands:
         assert "unknown agent" in capsys.readouterr().out
 
     def test_direct_stop_refuses_backbone_session(self, capsys):
-        with patch("agent_backbone.services.agents.stop_agent", new_callable=AsyncMock) as stop:
+        # The shared operation stops through the launch module: patch what it calls.
+        with patch(
+            "agent_backbone.services.agents.operations.launch.stop_agent", new_callable=AsyncMock
+        ) as stop:
             assert _run(["agent", "stop", "backbone"]) == 1
         stop.assert_not_awaited()
         assert "refusing to stop" in capsys.readouterr().out
+
+    def test_direct_stop_stops_an_agent_through_the_shared_operation(self, capsys):
+        with patch(
+            "agent_backbone.services.agents.operations.launch.stop_agent",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as stop:
+            assert _run(["agent", "stop", "orch"]) == 0
+        stop.assert_awaited_once_with("orch")
+        assert "orch: stopped" in capsys.readouterr().out
 
     def test_direct_inspect_uses_configured_state_helper(self, capsys):
         snapshot = StateSnapshot(state=AgentState.BUSY, evidence=["configured runtime"])
