@@ -171,8 +171,9 @@ class QueueRepo(Repo):
                 {"delivered_at": now_iso(), "id": message_id},
             )
 
-    async def expire_pending(self, max_age_minutes: int = 30) -> int:
-        """Expire pending messages older than the cutoff. Returns the count.
+    async def expire_pending(self, max_age_minutes: int = 30) -> list[dict]:
+        """Expire pending messages older than the cutoff. Returns the rows, so
+        the caller can record what was dropped.
 
         Leased rows are not considered: ``expire_stale_leases`` returns them to
         ``pending`` long before this cutoff, so they expire on the next sweep.
@@ -181,11 +182,12 @@ class QueueRepo(Repo):
             result = await conn.execute(
                 text(
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
-                       WHERE status = 'pending' AND enqueued_at < :cutoff"""
+                       WHERE status = 'pending' AND enqueued_at < :cutoff
+                       RETURNING *"""
                 ),
                 {"now": now_iso(), "cutoff": cutoff_iso(minutes=max_age_minutes)},
             )
-            return result.rowcount or 0
+            return [dict(row._mapping) for row in result.fetchall()]
 
     async def purge_for_issue(self, issue_number: int, *, repo: str = "") -> int:
         """Mark pending/leased messages for an issue as delivered (issue closed)."""

@@ -58,9 +58,9 @@ Honest inventory of what works, what is missing, and what is next. Updated
 - Claude Code's folder-trust prompt is answered by the backbone at
   `agent start` (`agents.pre_trust`, on by default). With it disabled, a
   human answers once per directory (`start` tells you; `tmux attach`).
-- A queued message expires after 30 minutes (`timing.queue_expiry_minutes`).
-  Comments that expire are still on GitHub; the agent finds them when it
-  reads the issue.
+- A queued message expires after 30 minutes (`timing.queue_expiry_minutes`)
+  and leaves a delivery with outcome `expired`. Comments that expire are
+  still on GitHub; the agent finds them when it reads the issue.
 - The `shell` runtime treats the `[via:…]` envelope as a glob. It exists for
   testing the plumbing, not for real use.
 - The poll checkpoint is the newest stored event per repository; a repository

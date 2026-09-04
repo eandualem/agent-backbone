@@ -201,14 +201,14 @@ class TestStartStop:
     async def test_stop_agent(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.stop_agent", new_callable=AsyncMock, return_value=True):
+        with patch(f"{_CMD}.stop_agent_session", new_callable=AsyncMock, return_value=True):
             await bot.cmd_stop_agent(update, _context(["ike"]))
         update.message.reply_text.assert_awaited_once_with("Stopped `ike`", parse_mode="Markdown")
 
     async def test_stop_refuses_unregistered_session(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.stop_agent", new_callable=AsyncMock) as stop:
+        with patch(f"{_CMD}.stop_agent_session", new_callable=AsyncMock) as stop:
             await bot.cmd_stop_agent(update, _context(["stray-tmux"]))
         stop.assert_not_awaited()
         assert "Unknown agent" in update.message.reply_text.await_args.args[0]
@@ -216,7 +216,9 @@ class TestStartStop:
     async def test_stop_refuses_backbone_session(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.stop_agent", new_callable=AsyncMock) as stop:
+        with patch(
+            "agent_backbone.services.agents.operations.launch.stop_agent", new_callable=AsyncMock
+        ) as stop:
             await bot.cmd_stop_agent(update, _context([config.backbone.session_name]))
         stop.assert_not_awaited()
         assert "Refusing" in update.message.reply_text.await_args.args[0]

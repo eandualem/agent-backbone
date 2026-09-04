@@ -139,7 +139,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
 
 
 async def _agent(args: argparse.Namespace) -> int:
-    from agent_backbone.services.agents import stop_agent
+    from agent_backbone.services.agents.operations import forget_agent, stop_agent_session
 
     sub = args.agent_command
     if sub == "start":
@@ -175,7 +175,11 @@ async def _agent(args: argparse.Namespace) -> int:
                     and result[1].get("ok")
                 )
             else:
-                ok = await stop_agent(name)
+                try:
+                    ok = await stop_agent_session(boot, name)
+                except ValueError as exc:
+                    print(f"{name}: not stopped ({exc})")
+                    ok = False
             print(f"{name}: {'stopped' if ok else 'not stopped'}")
             failed = failed or not ok
         return 1 if failed else 0
@@ -343,16 +347,15 @@ async def _agent(args: argparse.Namespace) -> int:
                 return 0
             print(f"error: {result[1] if result else 'API unreachable'}")
             return 1
-        from agent_backbone.services.terminal import session_exists
-
-        if await session_exists(args.name):
-            print(
-                f"{args.name}: session is still running — "
-                f"stop it first (`backbone agent stop {args.name}`)"
-            )
-            return 1
         async with _common.Direct(boot) as direct:
-            removed = await direct.store.forget(args.name)
+            try:
+                removed = await forget_agent(direct.store, args.name)
+            except RuntimeError:
+                print(
+                    f"{args.name}: session is still running — "
+                    f"stop it first (`backbone agent stop {args.name}`)"
+                )
+                return 1
         print(f"{args.name}: {'forgotten' if removed else 'unknown agent'}")
         return 0 if removed else 1
 

@@ -29,8 +29,10 @@ Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way
   trust dialog and the hook wiring for one CLI are one `Runtime` object;
   no other module names a runtime.
 - **Layering**, bottom up. `config`, `models` and the small helpers
-  (`fs`, `git`, `recent`, `templates`) are leaves. `services/terminal` is
-  tmux only and imports no other service. `services/runtimes` (one module
+  (`fs`, `git`, `recent`, `templates`, `help`, `release`, `base`) are
+  leaves, and so is `hooks` (the shipped hook scripts import nothing from
+  the package). `services/terminal` and `services/scheduler` are next and
+  import no other service. `services/runtimes` (one module
   per CLI: what it looks like, how to paste into it, how to launch it) may
   import `terminal` and `hooks`. `services/database` and
   `services/github` are leaves. `services/agents` (the store, state,
@@ -39,8 +41,10 @@ Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way
   `services/integrations` may import `routing`. `services/jobs` (monitor,
   retry, GitHub poll) may import everything below and never the API — the
   API hands it callbacks. `services/swarm` sits beside `jobs`. `api` and
-  `cli` are the top. `tests/unit/test_imports.py` asserts this graph in a
-  fresh interpreter per package; a new cross-package import must pass it.
+  `cli` are the top. `tests/unit/test_imports.py` asserts this graph two
+  ways: statically over every import edge (function-local ones included;
+  `_RANK` is the table) and in a fresh interpreter per entry module; a new
+  cross-package import must pass both.
 - The database is the only source of configuration. New settings go in
   `SETTINGS_DEFAULTS` in `config.py` (with `SETTINGS_HELP` text) and in
   `docs/configuration.md`. Secrets never go in the database — `.env` only.

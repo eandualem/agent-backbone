@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from agent_backbone.services.agents import launch
 from agent_backbone.services.agents.launch import StartResult
 from agent_backbone.services.runtimes import RUNTIMES
+from agent_backbone.services.terminal import session_exists
 
 if TYPE_CHECKING:
     from agent_backbone.config import AgentSpec, BackboneConfig
@@ -69,6 +70,22 @@ async def resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     if changes:
         spec = await store.update(spec.name, **changes)
     return spec
+
+
+async def stop_agent_session(config: BackboneConfig, name: str) -> bool:
+    """Stop an agent's tmux session. The backbone's own session is refused
+    (``ValueError``) on every surface — API, CLI, Telegram — from here."""
+    if name == config.backbone.session_name:
+        raise ValueError("refusing to stop the backbone's own session")
+    return await launch.stop_agent(name)
+
+
+async def forget_agent(store: AgentStore, name: str) -> bool:
+    """Remove an agent from the backbone. A running session is refused
+    (``RuntimeError``): stop it first. Returns False for an unknown name."""
+    if await session_exists(name):
+        raise RuntimeError(f"'{name}' is running — stop it first")
+    return await store.forget(name)
 
 
 async def start_resolved(

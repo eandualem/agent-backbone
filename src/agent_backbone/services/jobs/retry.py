@@ -50,10 +50,12 @@ async def drain_message_queue(
         if expired:
             log.info(
                 "Expired %d queued messages (> %d min)",
-                expired,
+                len(expired),
                 config.timing.queue_expiry_minutes,
             )
-            summary["queue_expired"] = expired
+            summary["queue_expired"] = len(expired)
+            for row in expired:
+                await _record_expiry(db, row)
     except Exception:
         log.exception("Failed to expire stale messages (non-fatal)")
 
@@ -69,7 +71,18 @@ async def drain_message_queue(
                 try:
                     scope = queue_scope(await list_open_queue_for_target(config, target, gh))
                 except Exception:
-                    log.exception("Failed to load queue scope for %s (non-fatal)", target)
+                    # Without the open queue the acknowledgement gate would
+                    # widen to every historical delivery (closed issues
+                    # included) and could stall the whole queue. Defer: the
+                    # rows go back to pending and the next drain retries.
+                    log.exception("Failed to load queue scope for %s; deferring", target)
+                    index = queued.index(record)
+                    for leased in queued[index:]:
+                        await db.queue.release(leased["id"])
+                    summary["queue_deferred"] = summary.get("queue_deferred", 0) + (
+                        len(queued) - index
+                    )
+                    break
             outcome = await safe_deliver(
                 session_name,
                 record["message"],
@@ -100,6 +113,25 @@ async def drain_message_queue(
                     await db.queue.release(leased["id"])
                 break
     return summary
+
+
+async def _record_expiry(db: BackboneDB, row: dict) -> None:
+    """A dropped message leaves a delivery row with outcome ``expired``, so
+    ``agent inspect`` and the sender can see which message never arrived."""
+    try:
+        message = row.get("message") or ""
+        await db.deliveries.record(
+            issue_number=row.get("issue_number"),
+            target_entity=row.get("target_entity") or row.get("session_name") or "",
+            session_name=row.get("session_name") or "",
+            outcome=DeliveryOutcome.EXPIRED.value,
+            source=row.get("source") or "queue",
+            repo=row.get("repo") or "",
+            kind=row.get("delivery_kind") or "issue",
+            preview=message[:120],
+        )
+    except Exception:
+        log.exception("Failed to record an expired message (non-fatal)")
 
 
 async def retry_delivery(

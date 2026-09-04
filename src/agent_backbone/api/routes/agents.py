@@ -41,7 +41,15 @@ from agent_backbone.services.agents import (
     read_state_file,
     write_state_file,
 )
-from agent_backbone.services.agents.operations import StartRequest, resolve_agent, start_resolved
+from agent_backbone.services.agents.operations import (
+    StartRequest,
+    resolve_agent,
+    start_resolved,
+    stop_agent_session,
+)
+from agent_backbone.services.agents.operations import (
+    forget_agent as forget_agent_op,
+)
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import get_session_intelligence
 from agent_backbone.services.runtimes import RUNTIMES, sanitize_pane_content
@@ -51,7 +59,6 @@ from agent_backbone.services.terminal import (
     list_sessions,
     query_format_vars,
     session_exists,
-    stop_session,
 )
 
 log = logging.getLogger(__name__)
@@ -227,10 +234,11 @@ async def stop_agent(
     config: BackboneConfig = Depends(get_config),
     feed: SessionFeed = Depends(get_feed),
 ):
-    """Stop an agent tmux session."""
-    if session == config.backbone.session_name:
-        raise HTTPException(status_code=400, detail="Refusing to stop the backbone's own session")
-    ok = await stop_session(session)
+    """Stop an agent tmux session (never the backbone's own)."""
+    try:
+        ok = await stop_agent_session(config, session)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     if ok:
         await feed.refresh_and_emit()
     return AgentStopResponse(ok=ok, session=session)
@@ -326,9 +334,10 @@ async def unwatch_repo(name: str, body: WatchRequest, store: AgentStore = Depend
 @router.delete("/agents/{name}")
 async def forget_agent(name: str, store: AgentStore = Depends(get_agent_store)):
     """Forget an agent (its session must be stopped first)."""
-    if await session_exists(name):
-        raise HTTPException(status_code=409, detail=f"'{name}' is running — stop it first")
-    removed = await store.forget(name)
+    try:
+        removed = await forget_agent_op(store, name)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     if not removed:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'")
     return {"ok": True, "name": name}
