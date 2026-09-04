@@ -342,6 +342,17 @@ agents you need, or keep a one-liner for the group you usually run
 (e.g. `alias work-agents='ab agent start app web orch'`). Without the
 service, `backbone up --detach` starts the backbone by hand.
 
+## Upgrading
+
+```bash
+backbone upgrade                  # new package in, backbone restarted, agents untouched
+backbone upgrade --check          # installed vs newest on PyPI
+```
+
+The running backbone notices new code on its own (a `uv tool upgrade`, or
+a pull of a development checkout) and restarts onto it within a minute,
+once nothing is being routed. Agents keep running through it.
+
 ## Where things are
 
 | What | Where |

@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -37,9 +38,13 @@ def _run_server(config: BackboneConfig, reload: bool = False) -> None:
 
     from agent_backbone.api.app import create_app
 
-    uvicorn.run(
-        create_app(config), host=config.backbone.host, port=config.backbone.port, log_level="info"
-    )
+    app = create_app(config)
+    uvicorn.run(app, host=config.backbone.host, port=config.backbone.port, log_level="info")
+    if getattr(app.state, "restart_requested", False):
+        # The upgrade watch asked for new code: become a fresh `backbone up`
+        # in place, so the login service or tmux session is unchanged.
+        log.warning("restarting onto the new code")
+        os.execv(sys.executable, [sys.executable, "-m", "agent_backbone.cli", *sys.argv[1:]])
 
 
 async def _up_detached(config: BackboneConfig) -> int:

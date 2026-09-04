@@ -33,6 +33,11 @@ durably; this closes the window in which a retry of the same delivery
 arrives before the first copy is marked processed."""
 
 
+def routing_in_flight() -> int:
+    """How many events are being routed right now (a restart waits for zero)."""
+    return len(_in_flight)
+
+
 def _source(delivery_id: str) -> str:
     return "poll" if delivery_id.startswith("poll:") else "webhook"
 

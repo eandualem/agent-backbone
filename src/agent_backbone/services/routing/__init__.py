@@ -25,7 +25,11 @@ from agent_backbone.services.routing._format import (
     format_stall_notification,
     format_unexpected_offline_notification,
 )
-from agent_backbone.services.routing._ingest import IssueClosedHook, dispatch_event
+from agent_backbone.services.routing._ingest import (
+    IssueClosedHook,
+    dispatch_event,
+    routing_in_flight,
+)
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing._priority import compute_priority_score
 from agent_backbone.services.routing._resolution import validate_issue_targets
@@ -50,6 +54,7 @@ __all__ = [
     "outcome_queues",
     "queue_detail",
     "queue_scope",
+    "routing_in_flight",
     "safe_deliver",
     "sync_dependencies",
     "validate_issue_targets",

@@ -9,5 +9,6 @@ imports the API.
 from agent_backbone.services.jobs.github_poll import GitHubPoller
 from agent_backbone.services.jobs.monitor import monitor_agents
 from agent_backbone.services.jobs.retry import delivery_retry
+from agent_backbone.services.jobs.upgrade_watch import UpgradeWatch
 
-__all__ = ["GitHubPoller", "delivery_retry", "monitor_agents"]
+__all__ = ["GitHubPoller", "UpgradeWatch", "delivery_retry", "monitor_agents"]

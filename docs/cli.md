@@ -46,6 +46,7 @@ login service once:
 ```bash
 backbone service install     # macOS: a LaunchAgent; Linux: a systemd --user unit
 backbone service status      # running | installed | not installed | unsupported
+backbone service restart     # what `backbone upgrade` does after upgrading
 backbone service uninstall
 ```
 
@@ -58,6 +59,25 @@ The service runs `backbone up` in the foreground with the data directory
 you installed it from; its log is `<data_dir>/backbone.log` on macOS and
 `journalctl --user -u agent-backbone` on Linux. Agents are still tmux
 sessions and still need `backbone agent start` after a reboot.
+
+## `backbone upgrade [--check] [--no-restart]`
+
+New code in, one restart, agents untouched. Upgrades the package through
+the installer that put it there (`uv tool upgrade agent-backbone` or
+`pipx upgrade agent-backbone`; a development checkout runs whatever is
+checked out, so nothing is downloaded), then restarts the backbone: the
+login service when it is installed, otherwise the `backbone up --detach`
+tmux session. Waits for the API to answer and prints the running version.
+Agents are tmux sessions and the queue is in the database, so the restart
+loses nothing but a few seconds of API. `--check` only reports the
+installed version and the newest on PyPI.
+
+The running backbone also restarts itself: once a minute it compares the
+code on disk with what it started as and, when they differ and nothing is
+being routed, re-executes `backbone up` in place
+(`backbone.restart_on_upgrade`, on by default). So `uv tool upgrade`, or
+pulling the checkout, is enough; `backbone upgrade` is the same thing
+done now. `backbone service restart` is the plain building block.
 
 ## `backbone runtimes`
 

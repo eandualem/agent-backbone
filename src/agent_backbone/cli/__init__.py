@@ -29,17 +29,20 @@ import logging
 import os
 import sys
 
+from agent_backbone import __version__
 from agent_backbone.cli.agents import cmd_agent, cmd_hooks, cmd_reply, cmd_tell
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_status, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
+from agent_backbone.cli.upgrade import cmd_upgrade
 from agent_backbone.config import RUNTIMES
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="backbone", description=__doc__.split("\n\n")[0])
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    parser.add_argument("--version", action="version", version=f"backbone {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("init", help="create the data directory, .env and database")
@@ -61,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     svc = p.add_subparsers(dest="service_command", required=True)
     svc.add_parser("install", help="install and start the login service")
     svc.add_parser("uninstall", help="stop and remove the login service")
+    svc.add_parser("restart", help="restart the login service")
     svc.add_parser("status", help="running | installed | not installed")
     p.set_defaults(func=cmd_service)
 
@@ -86,6 +90,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("down", help="stop a detached backbone")
     p.set_defaults(func=cmd_down)
+
+    p = sub.add_parser(
+        "upgrade", help="upgrade the package and restart the backbone; agents are untouched"
+    )
+    p.add_argument("--check", action="store_true", help="report versions only")
+    p.add_argument("--no-restart", action="store_true", help="upgrade without restarting")
+    p.set_defaults(func=cmd_upgrade)
 
     p = sub.add_parser("status", help="show agents, repositories, sessions and health")
     p.set_defaults(func=cmd_status)
