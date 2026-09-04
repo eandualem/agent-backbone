@@ -247,7 +247,8 @@ class TestIssueDispatcher:
             ) as opener,
         ):
             result = await issue_dispatcher(event, config, mock_db)
-        assert opener.call_args.args[:2] == ("acme/backbone", "feat/x")
+        assert opener.call_args.args[:2] == ("acme/backbone", "feat/x")  # head repo, branch
+        assert opener.call_args.kwargs["base_repo"] == "acme/backbone"
         assert result.delivered == ["leo"] and result.skipped == ["backbone"]
         assert deliver.await_count == 1
         recorded = sorted(call.args[:2] for call in mock_db.acks.record.await_args_list)

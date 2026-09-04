@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from agent_backbone.services.agents import (
     AgentState,
+    agent_state,
     approve_agent,
     deny_agent,
     plan_control,
@@ -316,14 +317,19 @@ def _who(update: Update) -> tuple[str, str]:
     return actor, display
 
 
-def _prompt_matches(bot: TelegramService, agent: str, action: str, ref: str) -> bool:
-    """Whether the prompt the button was raised for is still the one waiting."""
-    snapshot = read_state_file(bot.config.state_dir, agent)
+async def _prompt_matches(bot: TelegramService, agent: str, action: str, ref: str) -> bool:
+    """Whether the prompt the button was raised for is still the one waiting.
+
+    Read the way the alert was: ``agent_state`` reconciles the hook and the
+    terminal exactly as the monitor did, so the identity on the button and
+    the identity now are computed from the same kind of reading.
+    """
+    snapshot = await agent_state(bot.config, agent)
     if snapshot is None or snapshot.state != AgentState.WAITING_FOR_HUMAN:
         return False
     if action.startswith("plan_") != snapshot.is_plan_waiting:
         return False
-    return prompt_id(snapshot.timestamp) == ref
+    return prompt_id(snapshot) == ref
 
 
 async def on_callback(
@@ -350,7 +356,7 @@ async def on_callback(
     actor, who = _who(update)
     security = bot.config.security
 
-    if not _prompt_matches(bot, agent, action, ref):
+    if not await _prompt_matches(bot, agent, action, ref):
         # The agent moved on: this button must not answer whatever is on screen now.
         result = f"Not answered: that prompt is no longer waiting (pressed by {who})"
     elif action in ("approve", "deny"):

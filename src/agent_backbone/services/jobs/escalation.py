@@ -52,22 +52,18 @@ async def _attended(session: str) -> bool:
 
 
 def permission_actions(
-    config: BackboneConfig, agent: str, timestamp: float
+    config: BackboneConfig, agent: str, ref: str
 ) -> list[tuple[str, str]] | None:
     """Allow / Deny bound to *this* prompt: a button pressed after the agent
     moved on must not answer whatever is on screen then."""
     if not config.security.allow_remote_approval:
         return None
-    ref = prompt_id(timestamp)
     return [("Allow", f"approve:{agent}:{ref}"), ("Deny", f"deny:{agent}:{ref}")]
 
 
-def plan_actions(
-    config: BackboneConfig, agent: str, timestamp: float
-) -> list[tuple[str, str]] | None:
+def plan_actions(config: BackboneConfig, agent: str, ref: str) -> list[tuple[str, str]] | None:
     if not config.security.allow_remote_plan_control:
         return None
-    ref = prompt_id(timestamp)
     return [
         ("Approve plan", f"plan_approve:{agent}:{ref}"),
         ("Reject plan", f"plan_reject:{agent}:{ref}"),
@@ -85,7 +81,7 @@ async def check_permission_waiting(config: BackboneConfig, states: AgentStates) 
     for name, snapshot in states.items():
         if snapshot.state != AgentState.WAITING_FOR_HUMAN or snapshot.is_plan_waiting:
             continue
-        key = (name, f"{snapshot.reason}:{snapshot.timestamp:.3f}")
+        key = (name, prompt_id(snapshot))
         if _permission_notified.seen(key):
             continue
         if await _attended(name):
@@ -96,7 +92,7 @@ async def check_permission_waiting(config: BackboneConfig, states: AgentStates) 
                 "The runtime is asking to run a tool. Allow or deny it here, or in the "
                 f"terminal: tmux attach -t {name}"
             )
-            actions = permission_actions(config, name, snapshot.timestamp)
+            actions = permission_actions(config, name, prompt_id(snapshot))
             if actions is None:
                 text += (
                     "\n\nButtons are off: backbone config set security.allow_remote_approval true"
@@ -330,9 +326,12 @@ async def check_blocked(config: BackboneConfig, states: AgentStates) -> None:
             "messages for it are queued meanwhile.",
             agent=name,
         )
-        if not sent:
-            _escalated.forget((name, "blocked"))  # nobody heard it: try again next cycle
-        log.info("Agent %s is blocked on %s%s", name, what, detail)
+        if sent:
+            log.info("Agent %s is blocked on %s%s", name, what, detail)
+        else:
+            # Nobody heard it (no integration, or a transient failure): try
+            # again next cycle, and say nothing until it lands.
+            _escalated.forget((name, "blocked"))
 
 
 async def check_plan_waiting(
@@ -360,7 +359,7 @@ async def check_plan_waiting(
                 f"/viewplan {name}\n/approve {name}"
             )
             if await notify_humans(
-                config, msg, agent=name, actions=plan_actions(config, name, plan_timestamp)
+                config, msg, agent=name, actions=plan_actions(config, name, prompt_id(snapshot))
             ):
                 _record_plan_notification(name, human_ref)
                 log.info("Sent plan-waiting notification for %s", name)

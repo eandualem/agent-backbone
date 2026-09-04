@@ -352,6 +352,25 @@ class TestResumeBySessionId:
         assert command[command.index("--resume") + 1] == "01a0-sess"
         assert any("01a0-sess" in line for line in result.evidence)
 
+    async def test_a_record_without_a_runtime_still_resumes(self, tmp_path):
+        """An older state file, or a hook wired outside a backbone session: the
+        id is this agent's own, so it is still used."""
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        write_state_file(
+            config.state_dir, "ike", {"state": "unknown", "ts": 1.0, "session_id": "01a0-old"}
+        )
+        spec = AgentSpec(name="ike", dir=str(project), runtime="claude")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/claude"),
+        ):
+            await start_agent(spec, config, resume=True, wait=False)
+        command = start.await_args.kwargs["command"]
+        assert command[command.index("--resume") + 1] == "01a0-old"
+
     async def test_another_runtimes_session_id_is_not_handed_over(self, tmp_path):
         """The agent was switched from Claude to Codex: Claude's id means nothing to Codex."""
         config = bootstrap_config(tmp_path / "data")

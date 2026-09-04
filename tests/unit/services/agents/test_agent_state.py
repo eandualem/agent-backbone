@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 from agent_backbone.config import AgentsConfig
 from agent_backbone.services.agents import (
     AgentState,
+    StateSnapshot,
     agent_state,
     find_outgoing_comment,
     find_outgoing_pull_request,
@@ -648,6 +649,31 @@ def test_rotation_tolerates_invalid_utf8(tmp_path):
     assert len(path.read_text(errors="replace").splitlines()) == 5
 
 
+class TestPromptIdentity:
+    def _pane(self, question: str) -> str:
+        return f" {question}\n ❯ 1. Yes\n   2. No\n Esc to cancel\n"
+
+    def test_a_hook_state_is_identified_by_its_timestamp(self):
+        from agent_backbone.services.agents.models import prompt_id
+
+        snapshot = StateSnapshot(state=AgentState.WAITING_FOR_HUMAN, timestamp=5.5, source="push")
+        assert prompt_id(snapshot) == "5.500"
+
+    def test_a_terminal_reading_is_identified_by_the_dialog_not_the_clock(self):
+        """The same dialog polled twice keeps its identity; a new one does not."""
+        from agent_backbone.services.agents.models import prompt_id
+
+        first = infer_state_from_pane(self._pane("Do you want to proceed?"), "claude")
+        first.timestamp = 100.0
+        again = infer_state_from_pane(self._pane("Do you want to proceed?"), "claude")
+        again.timestamp = 160.0
+        other = infer_state_from_pane(self._pane("Do you want to make this edit?"), "claude")
+
+        assert first.state == AgentState.WAITING_FOR_HUMAN
+        assert prompt_id(first) == prompt_id(again)
+        assert prompt_id(first) != prompt_id(other)
+
+
 class TestFindOutgoingPullRequest:
     def _log(self, tmp_path, *entries: dict):
         path = tmp_path / "actions.jsonl"
@@ -667,10 +693,47 @@ class TestFindOutgoingPullRequest:
             },
         )
         assert find_outgoing_pull_request("forker/app", "feat/x", action_log=log) == "app"
-        # the same branch name from another fork, or the base repository, is not it
+        # the same branch name from another fork is not it
         assert find_outgoing_pull_request("other/app", "feat/x", action_log=log) is None
-        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) is None
         assert find_outgoing_pull_request("forker/app", "feat/other", action_log=log) is None
+
+    def test_an_event_without_a_head_repository_compares_the_base_ones(self, tmp_path):
+        """A fork deleted before the event arrives: GitHub names no head repo,
+        so the two base repositories are compared instead."""
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time(),
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "head_repo": "forker/app",
+                "branch": "feat/x",
+            },
+        )
+        found = find_outgoing_pull_request("", "feat/x", action_log=log, base_repo="acme/app")
+        assert found == "app"
+        missed = find_outgoing_pull_request("", "feat/x", action_log=log, base_repo="other/app")
+        assert missed is None
+
+    def test_an_explicit_head_repository_is_never_satisfied_by_a_base_one(self, tmp_path):
+        """Someone else's pull request in the base repo, same branch name: the
+        fork entry must not claim it."""
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time(),
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "head_repo": "forker/app",
+                "branch": "feat/x",
+            },
+        )
+        found = find_outgoing_pull_request(
+            "acme/app", "feat/x", action_log=log, base_repo="acme/app"
+        )
+        assert found is None
 
     def test_an_older_entry_without_head_repo_matches_on_repo(self, tmp_path):
         log = self._log(

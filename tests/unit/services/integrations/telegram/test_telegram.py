@@ -96,11 +96,39 @@ class TestButtons:
         assert payload["message_thread_id"] == 7
         assert payload["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "approve:ike"
 
+    async def test_a_terminal_read_prompt_can_be_answered_from_telegram(self, config):
+        """No hook: the alert's identity comes from the dialog, and the callback
+        must recompute the same one instead of a timestamp."""
+        from agent_backbone.services.agents.models import prompt_id
+        from agent_backbone.services.jobs.escalation import permission_actions
+
+        snapshot = StateSnapshot(
+            state=AgentState.WAITING_FOR_HUMAN,
+            reason="permission",
+            source="pull",
+            prompt_ref="abc123",
+        )
+        ref = permission_actions(_bot(config).config, "ike", prompt_id(snapshot))[0][1]
+        bot = _bot(config)
+        update = _callback(ref.split(":", 1)[1].replace("ike:", "approve:ike:", 1))
+        update.callback_query.data = ref
+        with (
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=snapshot),
+            patch(
+                f"{_CMD}.approve_agent",
+                new_callable=AsyncMock,
+                return_value=("approved", ["sent Enter to claude; dialog cleared"]),
+            ) as approve,
+            patch(f"{_CMD}.record_answer", new_callable=AsyncMock),
+        ):
+            await bot.on_callback(update, _context([]))
+        approve.assert_awaited_once_with("ike", runtime="claude")
+
     async def test_allow_answers_the_dialog_and_records_the_user_id(self, config):
         bot = _bot(config)
         update = _callback(f"approve:ike:{_REF}")
         with (
-            patch(f"{_CMD}.read_state_file", return_value=_PERMISSION),
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=_PERMISSION),
             patch(
                 f"{_CMD}.approve_agent",
                 new_callable=AsyncMock,
@@ -120,7 +148,7 @@ class TestButtons:
         bot = _bot(config)
         update = _callback(f"deny:ike:{_REF}")
         with (
-            patch(f"{_CMD}.read_state_file", return_value=_PERMISSION),
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=_PERMISSION),
             patch(
                 f"{_CMD}.deny_agent",
                 new_callable=AsyncMock,
@@ -138,7 +166,7 @@ class TestButtons:
         later = replace(_PERMISSION, timestamp=_WAITING_TS + 60)
         update = _callback(f"approve:ike:{_REF}")
         with (
-            patch(f"{_CMD}.read_state_file", return_value=later),
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=later),
             patch(f"{_CMD}.approve_agent", new_callable=AsyncMock) as approve,
         ):
             await bot.on_callback(update, _context([]))
@@ -150,7 +178,7 @@ class TestButtons:
         bot = _bot(config)
         update = _callback(f"approve:ike:{_REF}")
         with (
-            patch(f"{_CMD}.read_state_file", return_value=_PLAN),
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=_PLAN),
             patch(f"{_CMD}.approve_agent", new_callable=AsyncMock) as approve,
         ):
             await bot.on_callback(update, _context([]))
@@ -162,7 +190,7 @@ class TestButtons:
         bot._config_provider = lambda: cfg
         update = _callback(f"approve:ike:{_REF}")
         with (
-            patch(f"{_CMD}.read_state_file", return_value=_PERMISSION),
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=_PERMISSION),
             patch(f"{_CMD}.approve_agent", new_callable=AsyncMock) as approve,
         ):
             await bot.on_callback(update, _context([]))
@@ -173,7 +201,7 @@ class TestButtons:
         bot = _bot(config)
         update = _callback(f"approve:ike:{_REF}")
         with (
-            patch(f"{_CMD}.read_state_file", return_value=_PERMISSION),
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=_PERMISSION),
             patch(
                 f"{_CMD}.approve_agent",
                 new_callable=AsyncMock,
@@ -190,7 +218,7 @@ class TestButtons:
         bot = _bot(config)
         update = _callback(f"plan_approve:ike:{_REF}")
         with (
-            patch(f"{_CMD}.read_state_file", return_value=_PLAN),
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=_PLAN),
             patch(f"{_CMD}.plan_control", new_callable=AsyncMock) as plan,
         ):
             await bot.on_callback(update, _context([]))
@@ -198,7 +226,7 @@ class TestButtons:
         cfg = replace(bot.config, security=SecurityConfig(allow_remote_plan_control=True))
         bot._config_provider = lambda: cfg
         with (
-            patch(f"{_CMD}.read_state_file", return_value=_PLAN),
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=_PLAN),
             patch(
                 f"{_CMD}.plan_control",
                 new_callable=AsyncMock,

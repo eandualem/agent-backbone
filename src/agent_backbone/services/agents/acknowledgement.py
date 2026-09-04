@@ -80,6 +80,8 @@ def find_outgoing_pull_request(
     action_log: str | Path | None = None,
     max_lines: int = 200,
     recency_seconds: float = 900.0,
+    *,
+    base_repo: str = "",
 ) -> str | None:
     """Session that recently ran ``gh pr create`` from this head repository and branch.
 
@@ -87,16 +89,26 @@ def find_outgoing_pull_request(
     "repo": "owner/name", "head_repo": "forker/name", "branch": "feat/x"}``.
     The head repository *and* the branch must match: two forks may use the
     same branch name, and the event names the head repository exactly.
-    An older entry without ``head_repo`` is matched on ``repo`` instead.
+
+    ``head_repo`` is what the event named, ``base_repo`` the repository the
+    pull request was opened against. When the event names a head, only a
+    head is compared to it (an entry that predates ``head_repo`` falls back
+    to its own ``repo``); when it names none — a fork deleted before the
+    event arrived — the two base repositories are compared instead. An
+    explicit head is therefore never satisfied by a base repository.
     """
-    if not head_repo or not head_ref:
+    if not head_ref or not (head_repo or base_repo):
         return None
     now = time.time()
     for entry in _read_tail(action_log, max_lines):
         if entry.get("action") != "pull_request":
             continue
-        entry_head = entry.get("head_repo") or entry.get("repo") or ""
-        if entry_head.casefold() != head_repo.casefold():
+        entry_head = (entry.get("head_repo") or "").casefold()
+        entry_base = (entry.get("repo") or "").casefold()
+        if head_repo:
+            if (entry_head or entry_base) != head_repo.casefold():
+                continue
+        elif entry_base != base_repo.casefold():
             continue
         if (entry.get("branch") or "") != head_ref:
             continue

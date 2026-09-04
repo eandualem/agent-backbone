@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from pathlib import Path
@@ -108,8 +109,21 @@ def _dialog_snapshot(runtime, pane_content: str, prefix: list[str] | None = None
         state=AgentState.WAITING_FOR_HUMAN,
         reason=reason,
         source="pull",
+        prompt_ref=dialog_ref(pane_content),
         evidence=[*(prefix or []), f"terminal shows {seen} ({runtime.id})"],
     )
+
+
+def dialog_ref(pane_content: str) -> str:
+    """A short digest of the dialog on screen.
+
+    A terminal reading is stamped at the moment it is taken, so its
+    timestamp cannot identify the prompt: it moves at every poll. What is on
+    screen does not, until the agent moves on — so the tail of the pane is
+    the identity of that prompt (see ``models.prompt_id``).
+    """
+    tail = [ln.strip() for ln in sanitize_pane_content(pane_content).splitlines() if ln.strip()]
+    return hashlib.sha256("\n".join(tail[-10:]).encode()).hexdigest()[:12]
 
 
 async def get_agent_state(
