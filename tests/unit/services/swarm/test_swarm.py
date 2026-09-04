@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -395,6 +396,40 @@ class TestTeardown:
         assert name == "research"
         assert mock_stop.await_count == 2
         assert store.forgotten == ["research-coordinator", "research-scout-1"]
+        assert (await db.swarms.get("research"))["status"] == "done"
+
+    @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=False)
+    @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
+    async def test_a_repository_that_is_gone_leaves_nothing_to_remove(
+        self, _exists, _stop, remove_worktree, db, tmp_path
+    ):
+        """The checkout was deleted: git cannot be asked, and teardown must not
+        wedge the swarm for good."""
+        config, repo_dir = _swarm_config(tmp_path)
+        worktree = repo_dir / ".backbone" / "swarms" / "research"
+        await db.swarms.create(
+            "research",
+            repo="acme/app",
+            issue_number=7,
+            initiator="simon",
+            coordinator="research-coordinator",
+            branch="swarm/research",
+            worktree_dir=str(worktree),
+        )
+        store = _FakeStore(config)
+        store.registered = [
+            AgentSpec(
+                name="research-coordinator",
+                dir=str(worktree),
+                tags=("swarm:research", "role:coordinator"),
+            )
+        ]
+        shutil.rmtree(repo_dir)
+
+        assert await teardown_for_issue(config, db, store, "acme/app", 7) == "research"
+        remove_worktree.assert_not_awaited()
+        assert store.forgotten == ["research-coordinator"]
         assert (await db.swarms.get("research"))["status"] == "done"
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)

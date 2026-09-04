@@ -216,6 +216,22 @@ class TestPermissionWaiting:
         ]
         assert tg.await_args.kwargs["agent"] == "ike"
 
+    async def test_a_terminal_read_prompt_alerts_once_not_every_tick(self, config):
+        """A runtime without hooks is stamped at every poll: the identity must
+        not move, or the humans would be alerted every minute."""
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+        ):
+            for _ in range(3):
+                snapshot = StateSnapshot(
+                    state=_WAITING, reason="permission", timestamp=time.time(), source="pull"
+                )
+                await esc.check_permission_waiting(config, {"ike": snapshot})
+        tg.assert_awaited_once()
+        ref = tg.await_args.kwargs["actions"][0][1].split(":", 2)[2]
+        assert ref == "pull:permission"  # stable while that dialog is up
+
     async def test_a_new_prompt_is_a_new_alert(self, config):
         first = _snap(_WAITING, reason="permission", age=30)
         second = _snap(_WAITING, reason="permission")

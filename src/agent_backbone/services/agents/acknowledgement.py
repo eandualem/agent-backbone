@@ -95,8 +95,14 @@ def find_outgoing_pull_request(
     for entry in _read_tail(action_log, max_lines):
         if entry.get("action") != "pull_request":
             continue
-        entry_head = entry.get("head_repo") or entry.get("repo") or ""
-        if entry_head.casefold() != head_repo.casefold():
+        # The event's head repository, matched against what the hook recorded:
+        # its head repository, or the base one when the event named no head
+        # (a deleted fork) or the entry predates head_repo.
+        candidates = {
+            (entry.get("head_repo") or "").casefold(),
+            (entry.get("repo") or "").casefold(),
+        } - {""}
+        if head_repo.casefold() not in candidates:
             continue
         if (entry.get("branch") or "") != head_ref:
             continue

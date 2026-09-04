@@ -667,10 +667,25 @@ class TestFindOutgoingPullRequest:
             },
         )
         assert find_outgoing_pull_request("forker/app", "feat/x", action_log=log) == "app"
-        # the same branch name from another fork, or the base repository, is not it
+        # the same branch name from another fork is not it
         assert find_outgoing_pull_request("other/app", "feat/x", action_log=log) is None
-        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) is None
         assert find_outgoing_pull_request("forker/app", "feat/other", action_log=log) is None
+
+    def test_an_event_without_a_head_repository_falls_back_to_the_base(self, tmp_path):
+        """A fork deleted before the event arrives: GitHub names no head repo,
+        so the router passes the base one — the entry's `repo` still matches."""
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time(),
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "head_repo": "forker/app",
+                "branch": "feat/x",
+            },
+        )
+        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) == "app"
 
     def test_an_older_entry_without_head_repo_matches_on_repo(self, tmp_path):
         log = self._log(

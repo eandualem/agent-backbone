@@ -323,7 +323,7 @@ def _prompt_matches(bot: TelegramService, agent: str, action: str, ref: str) -> 
         return False
     if action.startswith("plan_") != snapshot.is_plan_waiting:
         return False
-    return prompt_id(snapshot.timestamp) == ref
+    return prompt_id(snapshot) == ref
 
 
 async def on_callback(

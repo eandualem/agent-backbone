@@ -32,10 +32,20 @@ class AgentState(StrEnum):
             return cls.UNKNOWN
 
 
-def prompt_id(timestamp: float) -> str:
-    """The identity of one prompt: the waiting state's timestamp, as a
-    Telegram button carries it and as the callback checks it."""
-    return f"{timestamp:.3f}"
+def prompt_id(snapshot: StateSnapshot) -> str:
+    """The identity of one prompt, as an alert's dedup key and a Telegram
+    button both carry it.
+
+    A hook-written state has a timestamp that changes only when the agent
+    does, so it names that prompt exactly. A state read from the terminal is
+    stamped at every poll, so its identity is the reason alone: coarser (a
+    later prompt of the same kind matches), but stable — otherwise every
+    monitor tick would look like a new prompt and re-alert. Answering is
+    still gated on the dialog being on screen either way.
+    """
+    if snapshot.source == "push":
+        return f"{snapshot.timestamp:.3f}"
+    return f"{snapshot.source}:{snapshot.reason or 'waiting'}"
 
 
 WORKING_STATES = frozenset({AgentState.STARTING, AgentState.BUSY, AgentState.BLOCKED})

@@ -311,8 +311,9 @@ async def teardown_swarm(
     worktree = Path(swarm["worktree_dir"])
     # The worktree lives at <repo_dir>/.backbone/swarms/<name>.
     repo_dir = worktree.parent.parent.parent
-    # Even a missing directory is still registered with git until removed.
-    if not await remove_worktree(repo_dir, worktree):
+    # A missing directory is still registered with git until removed; a
+    # repository that is gone entirely has nothing left to remove.
+    if repo_dir.is_dir() and not await remove_worktree(repo_dir, worktree):
         # Stop here so the worktree is not silently orphaned: the members are
         # stopped, nothing is forgotten, and teardown can be retried.
         raise SwarmError(
