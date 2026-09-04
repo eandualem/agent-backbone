@@ -1,4 +1,4 @@
-"""``backbone service install|uninstall|status`` — start the backbone at login.
+"""``backbone service install|uninstall|restart|status`` — start the backbone at login.
 
 Agents are tmux sessions and end with a reboot, but the backbone itself is
 a plain server process: on macOS a LaunchAgent (``launchd``) and on Linux
@@ -173,6 +173,32 @@ def uninstall() -> int:
     return 1
 
 
+def restart() -> int:
+    """Restart the login service (the building block of ``backbone upgrade``)."""
+    system = platform.system()
+    if system == "Darwin":
+        if not _plist_path().exists():
+            print("not installed")
+            return 1
+        result = _run("launchctl", "kickstart", "-k", f"{_gui_domain()}/{LABEL}")
+    elif system == "Linux":
+        if not _unit_path().exists():
+            print("not installed")
+            return 1
+        result = _run("systemctl", "--user", "restart", "agent-backbone.service")
+    else:
+        print(f"no service manager support for {system}")
+        return 1
+    if result.returncode == _NOT_FOUND:
+        print(_no_manager(system))
+        return 1
+    if result.returncode != 0:
+        print(f"restart failed: {result.stderr.strip() or result.stdout.strip()}")
+        return 1
+    print("service restarted")
+    return 0
+
+
 def state() -> str:
     """``running``, ``installed`` (present, not running), ``not installed`` or ``unsupported``."""
     system = platform.system()
@@ -203,5 +229,7 @@ def cmd_service(args: argparse.Namespace) -> int:
         return install()
     if sub == "uninstall":
         return uninstall()
+    if sub == "restart":
+        return restart()
     print(f"service: {state()}")
     return 0

@@ -10,6 +10,9 @@ wires the remaining services against that snapshot.
 from __future__ import annotations
 
 import logging
+import os
+import signal
+import time
 from contextlib import asynccontextmanager
 
 import httpx
@@ -25,13 +28,21 @@ from agent_backbone.config import BackboneConfig, bootstrap_config
 log = logging.getLogger(__name__)
 
 API_VERSION = __version__  # the package version is the API version
+STARTED_AT = time.time()
+"""When this process started: /health reports it so a restart is observable."""
 
 
 def _register_jobs(app: FastAPI):
     """Wire the periodic jobs. Each job reads ``app.state.config`` at run time so
     setting changes and newly discovered agents are picked up without a restart."""
     from agent_backbone.services.agents import rotate_action_log
-    from agent_backbone.services.jobs import GitHubPoller, delivery_retry, monitor_agents
+    from agent_backbone.services.jobs import (
+        GitHubPoller,
+        UpgradeWatch,
+        delivery_retry,
+        monitor_agents,
+    )
+    from agent_backbone.services.routing import routing_in_flight
     from agent_backbone.services.scheduler import PeriodicScheduler
 
     scheduler = PeriodicScheduler()
@@ -67,6 +78,21 @@ def _register_jobs(app: FastAPI):
     # a config publish triggers it immediately, this catches everything else
     # (a group discovered from a message, a transient Telegram error).
     scheduler.add("integrations-sync", 300, state.integrations.sync_agents)
+
+    async def _restart() -> None:
+        # Ask uvicorn for a graceful shutdown; `backbone up` re-executes
+        # itself when it sees the flag, so the same service or tmux session
+        # comes back on the new code.
+        state.restart_requested = True
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    watch = UpgradeWatch(
+        enabled=lambda: state.config.backbone.restart_on_upgrade,
+        restart=_restart,
+        in_flight=routing_in_flight,
+    )
+    state.upgrade_watch = watch
+    scheduler.add("upgrade-watch", 60, watch.run)
 
     if state.github is not None:
         poller = GitHubPoller(
@@ -226,8 +252,13 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     async def health(request: Request):
         lifecycle: LifecycleManager | None = getattr(request.app.state, "lifecycle", None)
         if lifecycle is None:
-            return {"healthy": False, "components": {}}
-        return await lifecycle.health()
+            return {
+                "healthy": False,
+                "components": {},
+                "version": API_VERSION,
+                "started": STARTED_AT,
+            }
+        return {**(await lifecycle.health()), "version": API_VERSION, "started": STARTED_AT}
 
     from agent_backbone.api.auth import require_api_key
     from agent_backbone.api.routes.agents import router as agents_router

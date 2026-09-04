@@ -67,6 +67,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "backbone.port": DEFAULT_PORT,
     "backbone.session_name": "backbone",
     "backbone.cors_origins": [],
+    "backbone.restart_on_upgrade": True,
     "agents.default_runtime": "claude",
     "agents.pre_trust": True,
     "agents.inject_brief": True,
@@ -108,6 +109,10 @@ SETTINGS_HELP: dict[str, str] = {
     "backbone.port": "API port",
     "backbone.session_name": "tmux session used by `backbone up --detach`",
     "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",
+    "backbone.restart_on_upgrade": (
+        "Restart the running backbone onto new code when the installed version "
+        "(or the checkout's commit) changes; agents are untouched"
+    ),
     "agents.default_runtime": "Runtime used by `agent start` when none is given",
     "agents.pre_trust": (
         "Answer the runtime's folder-trust dialog before starting (claude, codex, gemini)"
@@ -362,6 +367,7 @@ class BackboneSection:
     port: int = DEFAULT_PORT
     session_name: str = "backbone"
     cors_origins: tuple[str, ...] = ()
+    restart_on_upgrade: bool = True
 
     @property
     def data_path(self) -> Path:
@@ -640,6 +646,7 @@ def build_config(
             port=int(env.get("BACKBONE_PORT") or s["backbone.port"]),
             session_name=s["backbone.session_name"],
             cors_origins=tuple(s["backbone.cors_origins"]),
+            restart_on_upgrade=bool(s["backbone.restart_on_upgrade"]),
         ),
         agents=agents,
         launch=LaunchConfig(
