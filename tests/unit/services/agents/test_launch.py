@@ -294,6 +294,28 @@ class TestStartingState:
         assert any("Resume from summary" in line for line in evidence)
 
 
+class TestHookWiringReachesTheSession:
+    async def test_gemini_and_opencode_get_their_hook_environment(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        for runtime, key in (
+            ("gemini", "GEMINI_CLI_SYSTEM_SETTINGS_PATH"),
+            ("opencode", "OPENCODE_CONFIG_CONTENT"),
+        ):
+            spec = AgentSpec(name=f"{runtime}-agent", dir=str(project), runtime=runtime)
+            with (
+                patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+                patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+                patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{runtime}"),
+            ):
+                result = await start_agent(spec, config, wait=False)
+            assert result.ok
+            env = start.await_args.kwargs["environment"]
+            assert key in env
+            assert env["BACKBONE_AGENT"] == f"{runtime}-agent"
+
+
 class TestLaunchEnvFromRuntime:
     async def test_runtime_environment_reaches_the_session(self, tmp_path):
         project = tmp_path / "project"

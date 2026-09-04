@@ -227,17 +227,22 @@ agent. Inside an agent session `--agent` defaults to `$BACKBONE_AGENT`.
 Exit 1 with the reason when no integration is configured or none has a
 surface for the agent yet. See [Integrations](integrations.md).
 
-## `backbone hooks install|uninstall claude [--dir PROJECT]`
+## `backbone hooks install|uninstall claude|codex|gemini [--dir PROJECT]`
 
-Sessions started by `agent start` need no install: the backbone passes
-`--settings <data_dir>/hooks/claude-settings.json` (a file it owns and
-regenerates on every start) to every Claude Code launch, so the hooks are
-wired without touching any repository or the user's settings.
+Sessions started by `agent start` need no install: the backbone wires its
+hooks into every launch it performs (Claude Code `--settings`, Codex `-c`
+overrides, Gemini's system-settings path, OpenCode's inline config), from
+files it owns under `<data_dir>/hooks/` and regenerates on every start,
+without touching any repository or the CLI's own settings.
 
-`hooks install` is for Claude Code sessions started outside the backbone.
-It copies the hook script into `<data_dir>/hooks/` and adds tagged entries
-to `~/.claude/settings.json` (or `PROJECT/.claude/settings.json`).
-Re-running is idempotent; `uninstall` removes only the backbone's entries.
-The hook prefers `$BACKBONE_STATE_DIR` (exported into every session the
+`hooks install` is for sessions started outside the backbone. It copies the
+hook files into `<data_dir>/hooks/` and adds tagged entries to the CLI's
+settings: `~/.claude/settings.json`, `~/.codex/hooks.json` or
+`~/.gemini/settings.json` (with `--dir`, the project's `.claude/`,
+`.codex/` or `.gemini/` file instead). Re-running is idempotent;
+`uninstall` removes only the backbone's entries. Codex asks once to trust
+hooks it has not seen: accept them with `/hooks` in a session. OpenCode
+loads its plugin only through the launch wiring; there is no install.
+The hooks prefer `$BACKBONE_STATE_DIR` (exported into every session the
 backbone starts), so one global install serves any data directory. Restart
-running Claude Code sessions afterwards.
+running sessions afterwards.

@@ -179,7 +179,10 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
     for rt in REGISTRY.values():
         installed = "installed" if rt.available() else "not found"
         models = ", ".join(rt.models) if rt.models else "use the CLI's own model picker"
-        print(f"  {rt.id:<10s} {rt.display_name:<12s} {installed:<10s} models: {models}")
+        print(
+            f"  {rt.id:<10s} {rt.display_name:<12s} {installed:<10s} "
+            f"state: {rt.reports_state:<17s} models: {models}"
+        )
     print("\n`--model` is passed to the CLI verbatim; these are examples, not a complete list.")
     return 0
 

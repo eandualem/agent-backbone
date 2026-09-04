@@ -66,22 +66,54 @@ flowchart TD
 
 **Hook state** (`<data_dir>/state/<agent>.json`) is written first by the
 backbone itself — `agent start` records `starting` the moment the tmux
-session exists — and from then on by the shipped Claude Code hook:
+session exists — and from then on by the runtime's shipped hook. Every
+record carries the event that produced it (shown in `agent inspect`'s
+evidence), the runtime's session id, and, after a turn, the agent's last
+reply (clipped). One script per runtime maps that CLI's events onto the
+shared vocabulary:
 
 | Claude Code event | State written |
 |---|---|
 | `SessionStart` | `idle` (Claude is at its prompt) |
 | `UserPromptSubmit` | `busy` (captures `owner/name#N` or `#N` from the prompt as the current issue) |
-| `Stop` | `idle` |
+| `Stop` | `idle`, with `last_assistant_message` |
 | `Notification` "needs your permission…" | `waiting_for_human` / `permission` |
 | `PreToolUse ExitPlanMode` | `waiting_for_human` / `plan`, plan text saved to `<data_dir>/state/plans/<agent>.md` |
 | `PreToolUse AskUserQuestion` | `waiting_for_human` / `question` |
 | `PostToolUse` of either | `busy` |
 | `SessionEnd` | `unknown` |
 
-A fresh hook state is **authoritative**: Claude Code keeps its `❯` input
-box on screen while working, so the terminal alone would say "idle" while
-it is busy. The one exception is a dialog the runtime draws itself: Claude
+| Codex event | State written |
+|---|---|
+| `SessionStart` | `idle` |
+| `UserPromptSubmit` | `busy` (issue captured from the prompt) |
+| `PermissionRequest` | `waiting_for_human` / `permission` |
+| `PreToolUse` | `busy` (the dialog is behind us) |
+| `Stop`, `Interrupt` | `idle`, with `last_assistant_message` |
+| `SessionEnd` | `unknown` |
+
+| Gemini CLI event | State written |
+|---|---|
+| `SessionStart` | `idle` |
+| `BeforeAgent` | `busy` (issue captured from the prompt) |
+| `Notification` `ToolPermission` | `waiting_for_human` / `permission` |
+| `BeforeTool` | `busy` |
+| `AfterAgent` | `idle`, with `prompt_response` |
+| `SessionEnd` | `unknown` |
+
+| OpenCode plugin event | State written |
+|---|---|
+| `session.status` `busy` / `idle`, `session.idle` | `busy` / `idle` (the root session only; subagent sessions are ignored) |
+| `permission.asked` / `permission.replied` | `waiting_for_human` / `permission`, then `busy` |
+| `session.error` | `idle` |
+
+Each hook also appends a `gh issue comment N` it sees in a shell command to
+the action log (the acknowledgement signal). How the hooks reach a session
+is the runtime's business ([Getting started §3](getting-started.md#3-state-hooks--nothing-to-install)).
+
+A fresh hook state is **authoritative**: these CLIs keep their input box
+on screen while working, so the terminal alone would say "idle" while
+they are busy. The one exception is a dialog the runtime draws itself: Claude
 Code fires `SessionStart` with its resume picker still on screen, so a
 fresh `idle` is checked against the terminal and a dialog there wins
 (`waiting_for_human` / `question`, with the evidence saying so). The hook also appends `gh issue comment …` calls (with the

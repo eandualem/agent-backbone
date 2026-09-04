@@ -9,8 +9,12 @@ Honest inventory of what works, what is missing, and what is next. Updated
   `git remote origin`; `agent start` returns when the agent is at its prompt
   and reports a folder-trust question instead of timing out.
 - Runtime-agnostic states (`idle`, `busy`, `waiting_for_human` with reason,
-  `starting`, `unknown`) from Claude Code hooks first and the terminal
-  second, with evidence (`agent inspect`).
+  `starting`, `unknown`) from the runtime's hooks first and the terminal
+  second, with evidence (`agent inspect`). Hooks ship for Claude Code,
+  Codex, Gemini CLI and OpenCode, wired per launch without touching the
+  CLI's own configuration; the wiring and the session-lifecycle events were
+  verified live against codex-cli 0.152, Gemini CLI 0.46 and OpenCode 1.18
+  (a permission dialog through each new hook is still to be captured live).
 - State-gated delivery: a message sent while the agent is busy is queued
   and delivered exactly once when it is free; `priority` never interrupts a
   busy agent; copy mode is cleared automatically; every delivery (direct
@@ -43,7 +47,7 @@ Honest inventory of what works, what is missing, and what is next. Updated
 
 | Gap | Why it matters | Plan |
 |---|---|---|
-| Hooks for Codex / Gemini / OpenCode / Aider | Those runtimes are read from the terminal only; permission prompts and busy markers are recognised, but the signal is weaker than a hook | Codex has a `notify` hook; Gemini CLI has hooks; OpenCode has plugins; Aider has none. Ship a hook adapter per runtime where one exists, keep the terminal path for the rest |
+| Hooks for Deep Code / Aider | Those runtimes are read from the terminal only; permission prompts and busy markers are recognised, but the signal is weaker than a hook | Neither has hooks today; the terminal path stays |
 | Scheduled messages (`08:00 → tell app "daily triage"`) | Recurring nudges without a cron job | A `schedules` table → scheduler jobs that call `safe_deliver` |
 | Auto-registering per-repo webhooks for token users | Personal accounts have no account-wide webhook; today token+webhook means clicking per repository | On agent discovery, `POST /repos/{owner}/{repo}/hooks` when a token with `admin:repo_hook` is present (the App path already avoids this entirely) |
 | Other trackers (GitLab, Linear) | GitHub-only today | Only if someone needs it; the GitHub client is the only tracker-specific code |

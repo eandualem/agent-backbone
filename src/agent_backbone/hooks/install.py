@@ -1,10 +1,13 @@
-"""Install runtime hooks into an agent CLI's settings.
+"""The files and settings shapes behind every runtime's hooks.
 
-Currently supports Claude Code (``~/.claude/settings.json`` or a project's
-``.claude/settings.json``). The hook script is copied into
-``<data_dir>/hooks/`` so the agent never needs the backbone's virtualenv,
-and every hook entry is tagged with a marker so re-installs and uninstalls
-are idempotent.
+The hook scripts are copied into ``<data_dir>/hooks/`` so an agent never
+needs the backbone's virtualenv; ``hook_command`` builds the command a CLI
+runs for each event; ``merge_hooks`` / ``remove_hooks`` edit the
+``{"hooks": {"<Event>": [{"matcher": …, "hooks": [{"type": "command",
+"command": …}]}]}}`` shape that Claude Code, Codex and Gemini CLI all use,
+tagging every entry so re-installs and uninstalls are idempotent. Which
+events a runtime listens to, and where its settings live, is that
+runtime's own business (``services/runtimes/<cli>.py``).
 """
 
 from __future__ import annotations
@@ -16,74 +19,80 @@ import sys
 from pathlib import Path
 
 HOOK_MARKER = "agent-backbone"
-CLAUDE_SETTINGS_GLOBAL = Path("~/.claude/settings.json")
 
-# (event, matcher) pairs the Claude hook listens to. An empty matcher means
-# "all" for tool events and is omitted for the others.
-CLAUDE_EVENTS: tuple[tuple[str, str | None], ...] = (
-    ("SessionStart", None),
-    ("SessionEnd", None),
-    ("UserPromptSubmit", None),
-    ("Stop", None),
-    ("Notification", None),
-    ("PreToolUse", "ExitPlanMode|AskUserQuestion"),
-    ("PostToolUse", ""),
+HOOK_FILES = (
+    "backbone_state.py",
+    "claude_hook.py",
+    "codex_hook.py",
+    "gemini_hook.py",
+    "opencode_hook.js",
 )
+"""Everything ``<data_dir>/hooks/`` receives; the runtime names its own script."""
+
+Events = tuple[tuple[str, str | None], ...]
+"""``(event, matcher)`` pairs; ``None`` omits the matcher, ``""`` means every tool."""
 
 
-def hook_script_source() -> Path:
-    return Path(__file__).with_name("claude_hook.py")
+def hook_source(name: str) -> Path:
+    return Path(__file__).with_name(name)
+
+
+def install_hook_files(data_dir: Path) -> Path:
+    """Copy the standard-library-only hook files into ``<data_dir>/hooks/``."""
+    hooks_dir = data_dir / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    for name in HOOK_FILES:
+        target = hooks_dir / name
+        shutil.copyfile(hook_source(name), target)
+        if name.endswith(".py"):
+            target.chmod(0o755)
+    return hooks_dir
 
 
 def install_hook_script(data_dir: Path) -> Path:
-    """Copy the stdlib-only hook script into the data dir and return its path."""
-    hooks_dir = data_dir / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
-    target = hooks_dir / "claude_hook.py"
-    shutil.copyfile(hook_script_source(), target)
-    target.chmod(0o755)
-    return target
+    """The Claude script's path once the hook files are installed."""
+    return install_hook_files(data_dir) / "claude_hook.py"
 
 
 _TAG_ARG = f"--tag {HOOK_MARKER}"
 
 
 def hook_command(script: Path, state_dir: Path, python: str | None = None) -> str:
-    """Shell command Claude Code runs for each event (tagged so we can find it again)."""
+    """Shell command a CLI runs for each event (tagged so we can find it again)."""
     interpreter = python or "python3"
     quoted = shlex.join([interpreter, str(script), "--state-dir", str(state_dir)])
     return f"{quoted} {_TAG_ARG}"
 
 
-def _is_ours(entry: dict) -> bool:
+def is_ours(entry: dict) -> bool:
     return any(
         isinstance(h, dict) and h.get("type") == "command" and _TAG_ARG in h.get("command", "")
         for h in entry.get("hooks", [])
     )
 
 
-def _hook_entry(command: str, matcher: str | None) -> dict:
-    entry: dict = {"hooks": [{"type": "command", "command": command, "timeout": 10}]}
+def hook_entry(command: str, matcher: str | None, timeout: int) -> dict:
+    entry: dict = {"hooks": [{"type": "command", "command": command, "timeout": timeout}]}
     if matcher is not None:
         entry["matcher"] = matcher
     return entry
 
 
-def merge_claude_hooks(settings: dict, command: str) -> dict:
+def merge_hooks(settings: dict, events: Events, command: str, timeout: int) -> dict:
     """Return settings with backbone hook entries added (replacing older ones)."""
     hooks = dict(settings.get("hooks") or {})
-    for event, matcher in CLAUDE_EVENTS:
-        entries = [e for e in hooks.get(event, []) if not (isinstance(e, dict) and _is_ours(e))]
-        entries.append(_hook_entry(command, matcher))
+    for event, matcher in events:
+        entries = [e for e in hooks.get(event, []) if not (isinstance(e, dict) and is_ours(e))]
+        entries.append(hook_entry(command, matcher, timeout))
         hooks[event] = entries
     return {**settings, "hooks": hooks}
 
 
-def remove_claude_hooks(settings: dict) -> dict:
+def remove_hooks(settings: dict) -> dict:
     """Return settings with every backbone hook entry removed."""
     hooks = {}
     for event, entries in (settings.get("hooks") or {}).items():
-        kept = [e for e in entries if not (isinstance(e, dict) and _is_ours(e))]
+        kept = [e for e in entries if not (isinstance(e, dict) and is_ours(e))]
         if kept:
             hooks[event] = kept
     result = dict(settings)
@@ -109,49 +118,6 @@ def load_settings(path: Path) -> dict:
 def save_settings(path: Path, settings: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2) + "\n")
-
-
-def claude_settings_path(project_dir: Path | None) -> Path:
-    if project_dir is not None:
-        return project_dir.expanduser() / ".claude" / "settings.json"
-    return CLAUDE_SETTINGS_GLOBAL.expanduser()
-
-
-def ensure_launch_settings(data_dir: Path, state_dir: Path, *, python: str | None = None) -> Path:
-    """Backbone-owned Claude settings file passed at launch via ``--settings``.
-
-    Regenerated on every agent start so the hook script and command stay
-    current. Nothing outside ``<data_dir>/hooks/`` is touched — the user's
-    ``~/.claude/settings.json`` and per-project settings are left alone.
-    """
-    script = install_hook_script(data_dir)
-    command = hook_command(script, state_dir, python=python or default_python())
-    path = data_dir / "hooks" / "claude-settings.json"
-    save_settings(path, merge_claude_hooks({}, command))
-    return path
-
-
-def install_claude(
-    data_dir: Path,
-    state_dir: Path,
-    *,
-    project_dir: Path | None = None,
-    python: str | None = None,
-) -> tuple[Path, str]:
-    """Install the Claude Code hooks. Returns (settings_path, command)."""
-    script = install_hook_script(data_dir)
-    command = hook_command(script, state_dir, python=python)
-    settings_path = claude_settings_path(project_dir)
-    settings = load_settings(settings_path)
-    save_settings(settings_path, merge_claude_hooks(settings, command))
-    return settings_path, command
-
-
-def uninstall_claude(*, project_dir: Path | None = None) -> Path:
-    settings_path = claude_settings_path(project_dir)
-    settings = load_settings(settings_path)
-    save_settings(settings_path, remove_claude_hooks(settings))
-    return settings_path
 
 
 def default_python() -> str:

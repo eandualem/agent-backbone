@@ -84,6 +84,11 @@ class TestDerive:
         later, _ = hook.derive(_payload("Stop"), record)
         assert later["issue"] == 42 and later["repo"] == "acme/app"
 
+    def test_stop_records_the_last_message_and_the_event(self):
+        record, _ = hook.derive(_payload("Stop", last_assistant_message="Shipped."), None)
+        assert record["last_message"] == "Shipped."
+        assert record["event"] == "Stop" and record["session_id"] == "abc"
+
     def test_started_at_is_stable(self):
         first, _ = hook.derive(_payload("SessionStart"), None)
         later, _ = hook.derive(_payload("Stop"), first)
