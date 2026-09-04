@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from agent_backbone.services.integrations.telegram.interface import TelegramService
 
 from agent_backbone.services.agents import (
+    AgentState,
     approve_agent,
     deny_agent,
     plan_control,
@@ -296,15 +297,30 @@ async def cmd_viewplan(
 
 
 BUTTON_ACTIONS = ("approve", "deny", "plan_approve", "plan_reject")
-"""Callback data is ``<action>:<agent>``; the alerts in ``jobs.escalation`` build it."""
+"""Callback data is ``<action>:<agent>:<prompt id>``; ``jobs.escalation`` builds it."""
 
 
-def _who(update: Update) -> str:
+def _who(update: Update) -> tuple[str, str]:
+    """``(actor, display)``: the Telegram user id for the audit trail (stable,
+    unique), and a readable form for the edited alert."""
     user = getattr(update, "effective_user", None)
-    name = "someone"
-    if user is not None:
-        name = getattr(user, "first_name", None) or getattr(user, "id", None) or "someone"
-    return f"telegram:{name}"
+    user_id = getattr(user, "id", None) if user is not None else None
+    name = (getattr(user, "first_name", None) or "") if user is not None else ""
+    actor = f"telegram:{user_id}" if user_id is not None else "telegram:unknown"
+    display = f"{name} ({actor})" if name else actor
+    return actor, display
+
+
+def _prompt_matches(bot: TelegramService, agent: str, action: str, ref: str) -> bool:
+    """Whether the prompt the button was raised for is still the one waiting."""
+    from agent_backbone.services.jobs.escalation import prompt_id
+
+    snapshot = read_state_file(bot.config.state_dir, agent)
+    if snapshot is None or snapshot.state != AgentState.WAITING_FOR_HUMAN:
+        return False
+    if action.startswith("plan_") != snapshot.is_plan_waiting:
+        return False
+    return prompt_id(snapshot.timestamp) == ref
 
 
 async def on_callback(
@@ -319,18 +335,22 @@ async def on_callback(
     if not _authorized(bot, update):
         await query.answer("Not allowed from this chat.")
         return
-    action, _, agent = (query.data or "").partition(":")
-    if action not in BUTTON_ACTIONS or not agent:
+    parts = (query.data or "").split(":", 2)
+    action, agent, ref = [*parts, "", ""][:3]
+    if action not in BUTTON_ACTIONS or not agent or not ref:
         await query.answer("Unknown button.")
         return
     spec = bot.config.agents.get(agent)
     if spec is None:
         await query.answer(f"Unknown agent {agent}.")
         return
-    who = _who(update)
+    actor, who = _who(update)
     security = bot.config.security
 
-    if action in ("approve", "deny"):
+    if not _prompt_matches(bot, agent, action, ref):
+        # The agent moved on: this button must not answer whatever is on screen now.
+        result = f"Not answered: that prompt is no longer waiting (pressed by {who})"
+    elif action in ("approve", "deny"):
         if not security.allow_remote_approval:
             await query.answer("Remote approval is off (security.allow_remote_approval).")
             return
@@ -338,11 +358,17 @@ async def on_callback(
         outcome, evidence = await answer(agent, runtime=spec.runtime)
         if outcome in ("approved", "denied"):
             await record_answer(
-                bot._db, agent=agent, runtime=spec.runtime, verb=outcome, by=who, evidence=evidence
+                bot._db,
+                agent=agent,
+                runtime=spec.runtime,
+                verb=outcome,
+                by=actor,
+                evidence=evidence,
             )
             result = f"{'Allowed' if outcome == 'approved' else 'Denied'} by {who}"
         else:
-            result = f"Not answered ({outcome}): {evidence[0] if evidence else ''}"
+            reason = evidence[0] if evidence else ""
+            result = f"Not answered ({outcome}): {reason} (pressed by {who})"
     else:
         if not security.allow_remote_plan_control:
             await query.answer("Remote plan control is off (security.allow_remote_plan_control).")
@@ -352,7 +378,8 @@ async def on_callback(
         if outcome in ("approved", "rejected"):
             result = f"Plan {outcome} by {who}"
         else:
-            result = f"Plan not {verb}d ({outcome}): {evidence[0] if evidence else ''}"
+            reason = evidence[0] if evidence else ""
+            result = f"Plan not {verb}d ({outcome}): {reason} (pressed by {who})"
 
     await query.answer(result[:200])
     message = getattr(query, "message", None)

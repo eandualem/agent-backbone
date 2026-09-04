@@ -51,16 +51,32 @@ async def _attended(session: str) -> bool:
     return vars_.get("attached", "0") not in ("", "0")
 
 
-def permission_actions(config: BackboneConfig, agent: str) -> list[tuple[str, str]] | None:
+def prompt_id(timestamp: float) -> str:
+    """The identity of one prompt: the state's timestamp, as the button carries it."""
+    return f"{timestamp:.3f}"
+
+
+def permission_actions(
+    config: BackboneConfig, agent: str, timestamp: float
+) -> list[tuple[str, str]] | None:
+    """Allow / Deny bound to *this* prompt: a button pressed after the agent
+    moved on must not answer whatever is on screen then."""
     if not config.security.allow_remote_approval:
         return None
-    return [("Allow", f"approve:{agent}"), ("Deny", f"deny:{agent}")]
+    ref = prompt_id(timestamp)
+    return [("Allow", f"approve:{agent}:{ref}"), ("Deny", f"deny:{agent}:{ref}")]
 
 
-def plan_actions(config: BackboneConfig, agent: str) -> list[tuple[str, str]] | None:
+def plan_actions(
+    config: BackboneConfig, agent: str, timestamp: float
+) -> list[tuple[str, str]] | None:
     if not config.security.allow_remote_plan_control:
         return None
-    return [("Approve plan", f"plan_approve:{agent}"), ("Reject plan", f"plan_reject:{agent}")]
+    ref = prompt_id(timestamp)
+    return [
+        ("Approve plan", f"plan_approve:{agent}:{ref}"),
+        ("Reject plan", f"plan_reject:{agent}:{ref}"),
+    ]
 
 
 async def check_permission_waiting(config: BackboneConfig, states: AgentStates) -> None:
@@ -85,7 +101,7 @@ async def check_permission_waiting(config: BackboneConfig, states: AgentStates) 
                 "The runtime is asking to run a tool. Allow or deny it here, or in the "
                 f"terminal: tmux attach -t {name}"
             )
-            actions = permission_actions(config, name)
+            actions = permission_actions(config, name, snapshot.timestamp)
             if actions is None:
                 text += (
                     "\n\nButtons are off: backbone config set security.allow_remote_approval true"
@@ -323,7 +339,9 @@ async def check_plan_waiting(
                 f"\U0001f4cb Plan waiting — {name}\nTitle: {plan_title}\n\n"
                 f"/viewplan {name}\n/approve {name}"
             )
-            if await notify_humans(config, msg, agent=name, actions=plan_actions(config, name)):
+            if await notify_humans(
+                config, msg, agent=name, actions=plan_actions(config, name, plan_timestamp)
+            ):
                 _record_plan_notification(name, human_ref)
                 log.info("Sent plan-waiting notification for %s", name)
 

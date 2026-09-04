@@ -46,10 +46,25 @@ def _context(args: list[str]):
     return ctx
 
 
+_WAITING_TS = 1_725_400_000.5
+_PERMISSION = StateSnapshot(
+    state=AgentState.WAITING_FOR_HUMAN, reason="permission", timestamp=_WAITING_TS, source="push"
+)
+_PLAN = StateSnapshot(
+    state=AgentState.WAITING_FOR_HUMAN,
+    reason="plan",
+    plan_file="/p.md",
+    timestamp=_WAITING_TS,
+    source="push",
+)
+_REF = f"{_WAITING_TS:.3f}"
+
+
 def _callback(data: str, chat_id: int = ALLOWED_CHAT):
     update = MagicMock()
     update.effective_chat.id = chat_id
     update.effective_user.first_name = "Alice"
+    update.effective_user.id = 4242
     update.callback_query.data = data
     update.callback_query.message.text = "🔐 Permission prompt — ike"
     update.callback_query.answer = AsyncMock()
@@ -81,10 +96,11 @@ class TestButtons:
         assert payload["message_thread_id"] == 7
         assert payload["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "approve:ike"
 
-    async def test_allow_answers_the_dialog_and_records_who(self, config):
+    async def test_allow_answers_the_dialog_and_records_the_user_id(self, config):
         bot = _bot(config)
-        update = _callback("approve:ike")
+        update = _callback(f"approve:ike:{_REF}")
         with (
+            patch(f"{_CMD}.read_state_file", return_value=_PERMISSION),
             patch(
                 f"{_CMD}.approve_agent",
                 new_callable=AsyncMock,
@@ -94,16 +110,17 @@ class TestButtons:
         ):
             await bot.on_callback(update, _context([]))
         approve.assert_awaited_once_with("ike", runtime="claude")
-        assert record.await_args.kwargs["by"] == "telegram:Alice"
+        assert record.await_args.kwargs["by"] == "telegram:4242"  # the id, not the name
         assert record.await_args.kwargs["verb"] == "approved"
         edited = update.callback_query.edit_message_text.await_args.args[0]
         assert edited.startswith("🔐 Permission prompt — ike")
-        assert "Allowed by telegram:Alice" in edited
+        assert "Allowed by Alice (telegram:4242)" in edited
 
     async def test_deny_uses_the_refusing_key(self, config):
         bot = _bot(config)
-        update = _callback("deny:ike")
+        update = _callback(f"deny:ike:{_REF}")
         with (
+            patch(f"{_CMD}.read_state_file", return_value=_PERMISSION),
             patch(
                 f"{_CMD}.deny_agent",
                 new_callable=AsyncMock,
@@ -115,20 +132,48 @@ class TestButtons:
         deny.assert_awaited_once_with("ike", runtime="claude")
         assert record.await_args.kwargs["verb"] == "denied"
 
+    async def test_a_button_for_an_earlier_prompt_answers_nothing(self, config):
+        """The agent moved on to a new prompt (a new timestamp): the old button is inert."""
+        bot = _bot(config)
+        later = replace(_PERMISSION, timestamp=_WAITING_TS + 60)
+        update = _callback(f"approve:ike:{_REF}")
+        with (
+            patch(f"{_CMD}.read_state_file", return_value=later),
+            patch(f"{_CMD}.approve_agent", new_callable=AsyncMock) as approve,
+        ):
+            await bot.on_callback(update, _context([]))
+        approve.assert_not_called()
+        edited = update.callback_query.edit_message_text.await_args.args[0]
+        assert "no longer waiting" in edited and "pressed by Alice (telegram:4242)" in edited
+
+    async def test_a_permission_button_cannot_answer_a_plan(self, config):
+        bot = _bot(config)
+        update = _callback(f"approve:ike:{_REF}")
+        with (
+            patch(f"{_CMD}.read_state_file", return_value=_PLAN),
+            patch(f"{_CMD}.approve_agent", new_callable=AsyncMock) as approve,
+        ):
+            await bot.on_callback(update, _context([]))
+        approve.assert_not_called()
+
     async def test_remote_approval_off_refuses_the_button(self, config):
         bot = _bot(config)
         cfg = replace(bot.config, security=SecurityConfig(allow_remote_approval=False))
         bot._config_provider = lambda: cfg
-        update = _callback("approve:ike")
-        with patch(f"{_CMD}.approve_agent", new_callable=AsyncMock) as approve:
+        update = _callback(f"approve:ike:{_REF}")
+        with (
+            patch(f"{_CMD}.read_state_file", return_value=_PERMISSION),
+            patch(f"{_CMD}.approve_agent", new_callable=AsyncMock) as approve,
+        ):
             await bot.on_callback(update, _context([]))
         approve.assert_not_called()
         assert "off" in update.callback_query.answer.await_args.args[0]
 
-    async def test_a_stale_button_is_not_answered_and_says_why(self, config):
+    async def test_a_dialog_that_vanished_is_reported_with_who_pressed(self, config):
         bot = _bot(config)
-        update = _callback("approve:ike")
+        update = _callback(f"approve:ike:{_REF}")
         with (
+            patch(f"{_CMD}.read_state_file", return_value=_PERMISSION),
             patch(
                 f"{_CMD}.approve_agent",
                 new_callable=AsyncMock,
@@ -138,32 +183,42 @@ class TestButtons:
         ):
             await bot.on_callback(update, _context([]))
         record.assert_not_called()
-        assert "not_waiting" in update.callback_query.edit_message_text.await_args.args[0]
+        edited = update.callback_query.edit_message_text.await_args.args[0]
+        assert "not_waiting" in edited and "pressed by Alice (telegram:4242)" in edited
 
     async def test_plan_buttons_need_plan_control(self, config):
         bot = _bot(config)
-        update = _callback("plan_approve:ike")
-        with patch(f"{_CMD}.plan_control", new_callable=AsyncMock) as plan:
+        update = _callback(f"plan_approve:ike:{_REF}")
+        with (
+            patch(f"{_CMD}.read_state_file", return_value=_PLAN),
+            patch(f"{_CMD}.plan_control", new_callable=AsyncMock) as plan,
+        ):
             await bot.on_callback(update, _context([]))
         plan.assert_not_called()
         cfg = replace(bot.config, security=SecurityConfig(allow_remote_plan_control=True))
         bot._config_provider = lambda: cfg
-        with patch(
-            f"{_CMD}.plan_control",
-            new_callable=AsyncMock,
-            return_value=("rejected", ["sent Escape"]),
-        ) as plan:
-            await bot.on_callback(_callback("plan_reject:ike"), _context([]))
+        with (
+            patch(f"{_CMD}.read_state_file", return_value=_PLAN),
+            patch(
+                f"{_CMD}.plan_control",
+                new_callable=AsyncMock,
+                return_value=("rejected", ["sent Escape"]),
+            ) as plan,
+        ):
+            await bot.on_callback(_callback(f"plan_reject:ike:{_REF}"), _context([]))
         plan.assert_awaited_once_with("ike", "reject", runtime="claude")
 
-    async def test_unauthorized_chat_and_unknown_agent(self, config):
+    async def test_unauthorized_chat_unknown_agent_and_malformed_data(self, config):
         bot = _bot(config)
-        stranger = _callback("approve:ike", chat_id=999)
+        stranger = _callback(f"approve:ike:{_REF}", chat_id=999)
         await bot.on_callback(stranger, _context([]))
         assert "Not allowed" in stranger.callback_query.answer.await_args.args[0]
-        unknown = _callback("approve:nobody")
+        unknown = _callback(f"approve:nobody:{_REF}")
         await bot.on_callback(unknown, _context([]))
         assert "Unknown agent" in unknown.callback_query.answer.await_args.args[0]
+        old_style = _callback("approve:ike")  # no prompt identity: never acted on
+        await bot.on_callback(old_style, _context([]))
+        assert "Unknown button" in old_style.callback_query.answer.await_args.args[0]
 
 
 class TestAuthorization:

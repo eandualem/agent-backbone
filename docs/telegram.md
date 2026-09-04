@@ -41,7 +41,7 @@ command and message from an unlisted chat is ignored silently.
 | `/digest` | Sessions, pending deliveries, tracked agent states |
 | `/viewplan <agent>` | Show the plan an agent is waiting to have approved |
 | `/approve <agent>` | Approve it — only when `security.allow_remote_plan_control` is on, and only for runtimes with a plan mode the backbone can drive (Claude Code) |
-| *buttons on alerts* | A permission alert carries **Allow** / **Deny**, a plan alert **Approve plan** / **Reject plan** (see below). Pressing one is answered once; the alert is edited with who pressed it |
+| *buttons on alerts* | A permission alert carries **Allow** / **Deny**, a plan alert **Approve plan** / **Reject plan** (see below). A button is bound to the prompt it was raised for: once the agent has moved on it answers nothing. Pressing one is answered once; the alert is edited with the outcome and who pressed it (name and Telegram user id), and a successful answer is recorded under the user id |
 | `/identify` | Print this chat/topic id and its current mapping |
 | `/help` | Command list |
 

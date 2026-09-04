@@ -209,7 +209,11 @@ class TestPermissionWaiting:
             await esc.check_permission_waiting(config, states)
         tg.assert_awaited_once()
         assert "Permission prompt — ike" in tg.await_args.args[1]
-        assert tg.await_args.kwargs["actions"] == [("Allow", "approve:ike"), ("Deny", "deny:ike")]
+        ref = f"{states['ike'].timestamp:.3f}"
+        assert tg.await_args.kwargs["actions"] == [
+            ("Allow", f"approve:ike:{ref}"),
+            ("Deny", f"deny:ike:{ref}"),
+        ]
         assert tg.await_args.kwargs["agent"] == "ike"
 
     async def test_a_new_prompt_is_a_new_alert(self, config):
