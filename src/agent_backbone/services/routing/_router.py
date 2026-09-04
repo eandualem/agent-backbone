@@ -13,6 +13,7 @@ from agent_backbone.services.routing._format import (
     format_comment_notification,
     format_issue_notification,
     format_pull_request_notification,
+    format_review_notification,
     format_unassigned_notification,
     format_watch_notification,
 )
@@ -143,6 +144,38 @@ async def _dispatch_comment(
         )
 
 
+async def _dispatch_review(
+    event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
+) -> None:
+    """A review reaches the pull request's parties, like a comment would.
+
+    The reviewer is excluded when it is an agent (a ``[from:X]`` tag in the
+    review body); a bot or human reviewer excludes nobody.
+    """
+    review = event.review
+    if review is None:
+        return
+    reviewer = parse_from_tag(review.body)
+    audience = comment_audience(event.issue, reviewer, config)
+    message = format_review_notification(event.issue, review)
+    reviewer_session = resolve_entity_session(reviewer, config) if reviewer else None
+    for target in audience:
+        session = resolve_entity_session(target, config)
+        if session is None or session == reviewer_session:
+            result.skipped.append(target)
+            continue
+        await _deliver(
+            target,
+            message,
+            event,
+            config,
+            db,
+            result,
+            kind="review",
+            priority=event.issue.labels.blocking,
+        )
+
+
 async def _dispatch_pull_request(
     event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
 ) -> None:
@@ -220,6 +253,8 @@ async def issue_dispatcher(
     result = DispatchResult()
     if event.event_type == EventType.COMMENT_CREATED and event.comment:
         await _dispatch_comment(event, config, db, result)
+    elif event.event_type == EventType.REVIEW_SUBMITTED and event.review:
+        await _dispatch_review(event, config, db, result)
     elif event.event_type == EventType.PULL_REQUEST_OPENED:
         await _dispatch_pull_request(event, config, db, result)
     elif event.event_type in (EventType.ISSUE_OPENED, EventType.ISSUE_LABELED):

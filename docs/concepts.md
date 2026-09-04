@@ -114,7 +114,7 @@ knows where it came from:
 ## Delivery
 
 One attempt to hand a message to a session, recorded with its **kind**
-(`issue`, `comment`, `pull_request`, `direct_message`, `watch`,
+(`issue`, `comment`, `review`, `pull_request`, `direct_message`, `watch`,
 `escalation`, `plan_response`), repository, outcome and a preview — direct
 messages included. A `plan_response` (an answer typed into a plan prompt)
 is the one kind that is **never queued**: it goes in only while the agent

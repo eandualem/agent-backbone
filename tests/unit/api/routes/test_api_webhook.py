@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
+from agent_backbone.models import EventType
 from tests.conftest import TEST_REPO
 
 WEBHOOK_PATH = "/webhooks/github"
@@ -138,6 +139,60 @@ class TestWebhookDeduplication:
 
         assert resp.text == "dispatch: 1 delivered, 0 offline, 0 deferred"
         mock_dispatch_svc.issue_dispatcher.assert_awaited_once()
+
+    async def test_review_submitted_is_dispatched(self, api_client, mock_dispatch_svc):
+        payload = {
+            "action": "submitted",
+            "repository": {"full_name": TEST_REPO},
+            "pull_request": {"number": 113, "title": "fix: x", "state": "open", "labels": []},
+            "review": {
+                "id": 77,
+                "body": "",
+                "state": "commented",
+                "user": {"login": "coderabbitai[bot]"},
+                "html_url": "https://github.com/x/y/pull/113#pullrequestreview-77",
+            },
+        }
+        payload_bytes = json.dumps(payload).encode()
+        headers = _webhook_headers(payload_bytes, event="pull_request_review", delivery_id="r-1")
+
+        resp = await api_client.post(WEBHOOK_PATH, content=payload_bytes, headers=headers)
+
+        assert resp.text == "dispatch: 1 delivered, 0 offline, 0 deferred"
+        event = mock_dispatch_svc.issue_dispatcher.await_args.args[0]
+        assert event.event_type == EventType.REVIEW_SUBMITTED
+        assert event.issue.number == 113 and event.review.id == 77
+        assert event.review.user_login == "coderabbitai[bot]"
+
+    async def test_review_on_a_closed_pull_request_is_ignored(self, api_client, mock_dispatch_svc):
+        payload = {
+            "action": "submitted",
+            "repository": {"full_name": TEST_REPO},
+            "pull_request": {"number": 5, "title": "x", "state": "closed", "labels": []},
+            "review": {"id": 78, "body": "late", "state": "approved", "user": {"login": "h"}},
+        }
+        payload_bytes = json.dumps(payload).encode()
+        headers = _webhook_headers(payload_bytes, event="pull_request_review", delivery_id="r-2")
+        resp = await api_client.post(WEBHOOK_PATH, content=payload_bytes, headers=headers)
+        assert resp.text == "ignored: review on closed pull request #5"
+        mock_dispatch_svc.issue_dispatcher.assert_not_awaited()
+
+    async def test_inline_review_comments_are_not_routed_separately(
+        self, api_client, mock_dispatch_svc
+    ):
+        payload = {
+            "action": "created",
+            "repository": {"full_name": TEST_REPO},
+            "pull_request": {"number": 113, "title": "x", "state": "open", "labels": []},
+            "comment": {"id": 5, "body": "nit", "user": {"login": "h"}},
+        }
+        payload_bytes = json.dumps(payload).encode()
+        headers = _webhook_headers(
+            payload_bytes, event="pull_request_review_comment", delivery_id="rc-1"
+        )
+        resp = await api_client.post(WEBHOOK_PATH, content=payload_bytes, headers=headers)
+        assert resp.text.startswith("ignored:")
+        mock_dispatch_svc.issue_dispatcher.assert_not_awaited()
 
     async def test_comment_on_closed_issue_ignored(self, api_client, mock_dispatch_svc):
         payload = {

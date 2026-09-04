@@ -45,6 +45,8 @@ def _dedup_id(event: IssueEvent) -> str:
     """
     if event.event_type == EventType.COMMENT_CREATED and event.comment and event.comment.id:
         return f"comment:{event.issue.repo_full_name}:{event.comment.id}"
+    if event.event_type == EventType.REVIEW_SUBMITTED and event.review and event.review.id:
+        return f"review:{event.issue.repo_full_name}:{event.review.id}"
     return event.delivery_id
 
 
@@ -52,7 +54,17 @@ def _summary(event: IssueEvent) -> str:
     title = event.issue.title[:120]
     if event.event_type == EventType.COMMENT_CREATED and event.comment:
         return f'comment on "{title}": {event.comment.body[:120]}'
+    if event.event_type == EventType.REVIEW_SUBMITTED and event.review:
+        return f'review on "{title}" ({event.review.state}): {event.review.body[:120]}'
     return f'{event.event_type.value}: "{title}"'
+
+
+def _sender(event: IssueEvent) -> str:
+    if event.comment:
+        return event.comment.user_login
+    if event.review:
+        return event.review.user_login
+    return event.issue.labels.sender
 
 
 async def dispatch_event(
@@ -84,7 +96,7 @@ async def _store_route_mark(event, key, config, db, gh, issue_closed_hooks) -> s
                 repo=event.issue.repo_full_name,
                 event_type=event.event_type.value,
                 issue_number=event.issue.number or None,
-                sender=(event.comment.user_login if event.comment else event.issue.labels.sender),
+                sender=_sender(event),
                 summary=_summary(event),
             )
             if event_id is None:
@@ -107,6 +119,7 @@ _DISPATCHED = frozenset(
         EventType.ISSUE_OPENED,
         EventType.ISSUE_LABELED,
         EventType.COMMENT_CREATED,
+        EventType.REVIEW_SUBMITTED,
         EventType.PULL_REQUEST_OPENED,
     }
 )
@@ -126,6 +139,8 @@ async def _route(event, config, db, gh, issue_closed_hooks) -> str:
 
     if event.event_type == EventType.COMMENT_CREATED and event.issue.state == "closed":
         return f"ignored: comment on closed issue #{event.issue.number}"
+    if event.event_type == EventType.REVIEW_SUBMITTED and event.issue.state == "closed":
+        return f"ignored: review on closed pull request #{event.issue.number}"
 
     if event.event_type in _DISPATCHED:
         result = await issue_dispatcher(event, config, db, gh)

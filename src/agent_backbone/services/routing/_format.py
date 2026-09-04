@@ -8,7 +8,7 @@ the envelope is untrusted input from the tracker.
 
 from __future__ import annotations
 
-from agent_backbone.models import CommentData, IssueData, parse_from_tag
+from agent_backbone.models import CommentData, IssueData, ReviewData, parse_from_tag
 
 
 def _issue_ref(issue: IssueData) -> str:
@@ -107,6 +107,36 @@ def format_offline_queue_notification(session: str, queued: int) -> str:
         f"[via:backbone] Agent {session} is offline with {queued} queued {word}. "
         f"It was not restarted; `backbone agent start {session}` delivers them."
     )
+
+
+_REVIEW_STATES = {
+    "approved": "approved",
+    "changes_requested": "changes requested",
+    "commented": "commented",
+}
+
+
+def format_review_notification(issue: IssueData, review: ReviewData) -> str:
+    """A pull request review: verdict, summary preview (500 chars) and link.
+
+    Inline comments are not relayed; the link points at the review.
+    """
+    body = review.body
+    tag = parse_from_tag(body)
+    if tag:
+        body = body[body.index("]") + 1 :].lstrip()
+    preview = body[:500].replace("\n", " ")
+    if len(body) > 500:
+        preview += "..."
+    verdict = _REVIEW_STATES.get(review.state, review.state or "review")
+    summary = f'"{preview}"' if preview else "(no summary; see the inline comments)"
+    attribution = tag or review.user_login
+    link = review.html_url or issue.html_url
+    return (
+        f"[via:github pr:{issue.number}] "
+        f'Review on {_issue_ref(issue)} "{issue.title}" from {attribution} ({verdict}): '
+        f"{summary} Link: {link}"
+    ).rstrip()
 
 
 def format_plan_notification(

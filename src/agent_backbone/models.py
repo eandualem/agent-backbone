@@ -72,6 +72,7 @@ class EventType(StrEnum):
     ISSUE_CLOSED = "issue_closed"
     COMMENT_CREATED = "comment_created"
     PULL_REQUEST_OPENED = "pull_request_opened"
+    REVIEW_SUBMITTED = "review_submitted"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -93,6 +94,12 @@ class EventType(StrEnum):
                 "reopened": cls.PULL_REQUEST_OPENED,
             }
             return mapping.get(action, cls.UNKNOWN)
+        if event_type == "pull_request_review" and action == "submitted":
+            # One event per review. Its inline comments arrive separately as
+            # ``pull_request_review_comment`` and are deliberately not routed:
+            # every inline comment belongs to a review, so the review is the
+            # signal and the agent reads the details on GitHub.
+            return cls.REVIEW_SUBMITTED
         return cls.UNKNOWN
 
 
@@ -154,12 +161,24 @@ class CommentData(BaseModel):
     user_login: str = "unknown"
 
 
+class ReviewData(BaseModel):
+    """A pull request review from ``pull_request_review`` webhook events."""
+
+    id: int = 0
+    body: str = ""
+    user_login: str = "unknown"
+    state: str = ""
+    """``approved``, ``changes_requested`` or ``commented`` (GitHub's spelling)."""
+    html_url: str = ""
+
+
 class IssueEvent(BaseModel):
     """Normalized webhook event ready for flow processing."""
 
     event_type: EventType
     issue: IssueData
     comment: CommentData | None = None
+    review: ReviewData | None = None
     delivery_id: str = ""
 
     @classmethod
@@ -172,7 +191,7 @@ class IssueEvent(BaseModel):
     ) -> IssueEvent:
         """Construct from raw GitHub webhook data."""
         event_type = EventType.from_github(event_type_str, action)
-        issue_key = "pull_request" if event_type_str == "pull_request" else "issue"
+        issue_key = "pull_request" if event_type_str.startswith("pull_request") else "issue"
         issue_data = payload.get(issue_key, {})
         repository = payload.get("repository", {})
         labels = ParsedLabels.from_github_labels(issue_data.get("labels", []))
@@ -195,9 +214,21 @@ class IssueEvent(BaseModel):
                 user_login=comment_data.get("user", {}).get("login", "unknown"),
             )
 
+        review = None
+        review_data = payload.get("review")
+        if review_data:
+            review = ReviewData(
+                id=review_data.get("id", 0),
+                body=review_data.get("body") or "",
+                user_login=(review_data.get("user") or {}).get("login", "unknown"),
+                state=(review_data.get("state") or "").lower(),
+                html_url=review_data.get("html_url", ""),
+            )
+
         return cls(
             event_type=event_type,
             issue=issue,
             comment=comment,
+            review=review,
             delivery_id=delivery_id,
         )
