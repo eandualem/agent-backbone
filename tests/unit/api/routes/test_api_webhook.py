@@ -176,7 +176,12 @@ class TestWebhookDeduplication:
                     "action": "submitted",
                     "repository": {"full_name": repo},
                     "pull_request": {"number": 9, "title": "x", "state": "open", "labels": []},
-                    "review": {"id": 500, "body": "ok", "state": "approved", "user": {"login": "h"}},
+                    "review": {
+                        "id": 500,
+                        "body": "ok",
+                        "state": "approved",
+                        "user": {"login": "h"},
+                    },
                 }
             ).encode()
 
