@@ -170,14 +170,14 @@ class TestWebhookDeduplication:
     async def test_a_review_is_deduplicated_by_repository_and_review_id(
         self, api_client, mock_dispatch_svc
     ):
-        def _payload(repo: str) -> bytes:
+        def _payload(repo: str, review_id: int = 500) -> bytes:
             return json.dumps(
                 {
                     "action": "submitted",
                     "repository": {"full_name": repo},
                     "pull_request": {"number": 9, "title": "x", "state": "open", "labels": []},
                     "review": {
-                        "id": 500,
+                        "id": review_id,
                         "body": "ok",
                         "state": "approved",
                         "user": {"login": "h"},
@@ -205,6 +205,17 @@ class TestWebhookDeduplication:
         )
         assert resp.text.startswith("dispatch:")
         assert mock_dispatch_svc.issue_dispatcher.await_count == 2
+
+        # Another review in the same repository is routed too: the key is
+        # repository *and* review id, not the repository alone.
+        second = _payload(TEST_REPO, review_id=501)
+        resp = await api_client.post(
+            WEBHOOK_PATH,
+            content=second,
+            headers=_webhook_headers(second, event="pull_request_review", delivery_id="r-second"),
+        )
+        assert resp.text.startswith("dispatch:")
+        assert mock_dispatch_svc.issue_dispatcher.await_count == 3
 
     async def test_review_on_a_closed_pull_request_is_ignored(self, api_client, mock_dispatch_svc):
         payload = {
