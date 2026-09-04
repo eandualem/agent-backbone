@@ -45,7 +45,7 @@ def prompt_id(snapshot: StateSnapshot) -> str:
     """
     if snapshot.source == "push":
         return f"{snapshot.timestamp:.3f}"
-    return f"{snapshot.source}:{snapshot.reason or 'waiting'}"
+    return f"pane:{snapshot.prompt_ref or snapshot.reason or 'waiting'}"
 
 
 WORKING_STATES = frozenset({AgentState.STARTING, AgentState.BUSY, AgentState.BLOCKED})
@@ -80,6 +80,9 @@ class StateSnapshot:
     """The hook event that produced a push snapshot."""
     detail: str | None = None
     """What the runtime said about a ``blocked`` state (e.g. when the limit resets)."""
+    prompt_ref: str | None = None
+    """Identifies the dialog a terminal reading found (a digest of what is on
+    screen): stable while it is up, different for the next one."""
     evidence: list[str] = field(default_factory=list)
 
     @property

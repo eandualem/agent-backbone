@@ -225,12 +225,16 @@ class TestPermissionWaiting:
         ):
             for _ in range(3):
                 snapshot = StateSnapshot(
-                    state=_WAITING, reason="permission", timestamp=time.time(), source="pull"
+                    state=_WAITING,
+                    reason="permission",
+                    timestamp=time.time(),
+                    source="pull",
+                    prompt_ref="abc123",  # the dialog on screen, not the clock
                 )
                 await esc.check_permission_waiting(config, {"ike": snapshot})
         tg.assert_awaited_once()
         ref = tg.await_args.kwargs["actions"][0][1].split(":", 2)[2]
-        assert ref == "pull:permission"  # stable while that dialog is up
+        assert ref == "pane:abc123"  # stable while that dialog is up
 
     async def test_a_new_prompt_is_a_new_alert(self, config):
         first = _snap(_WAITING, reason="permission", age=30)
