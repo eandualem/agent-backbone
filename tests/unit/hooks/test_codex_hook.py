@@ -75,6 +75,18 @@ class TestDerive:
         assert hook.derive(_payload("SubagentStart"), None) == (None, None)
 
 
+class TestAHookNeverFailsTheCli:
+    def test_an_unexpected_payload_shape_exits_zero(self, tmp_path):
+        payload = _payload("PostToolUse", tool_name="Bash", tool_input=["not", "a", "dict"])
+        with patch.object(bb.sys, "stdin", io.StringIO(json.dumps(payload))):
+            assert hook.main(["--state-dir", str(tmp_path), "--agent", "cx"]) == 0
+
+    def test_a_prompt_that_is_not_a_string_exits_zero(self, tmp_path):
+        payload = _payload("UserPromptSubmit", prompt={"weird": True})
+        with patch.object(bb.sys, "stdin", io.StringIO(json.dumps(payload))):
+            assert hook.main(["--state-dir", str(tmp_path), "--agent", "cx"]) == 0
+
+
 class TestMainWritesStateTheBackboneReads:
     def test_roundtrip_with_file_reader(self, tmp_path):
         payload = _payload("Stop", last_assistant_message="Done.")

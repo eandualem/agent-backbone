@@ -229,6 +229,8 @@ def run_hook(derive: Derive, argv: list[str] | None = None) -> int:
             write_state(state_dir, agent, record)
         if action is not None:
             append_action(state_dir, agent, action)
-    except OSError:
+    except Exception:  # a hook must never make the CLI fail
+        # An unexpected payload shape or an unwritable state dir: the
+        # backbone falls back to the terminal; the agent is not disturbed.
         return 0
     return 0
