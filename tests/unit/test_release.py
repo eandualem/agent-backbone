@@ -38,12 +38,36 @@ class TestInstallation:
 
 
 class TestCodeIdentity:
-    def test_editable_uses_the_checkouts_commit(self):
+    def test_editable_reads_branch_and_commit_from_one_git_status(self):
+        """One invocation, so the pair cannot straddle a branch switch."""
         install = release.Installation("editable", "/ws/x")
-        ok = MagicMock(returncode=0, stdout="abc123\n", stderr="")
+        status = "# branch.oid abc123\n# branch.head develop\n# branch.upstream origin/develop\n"
+        ok = MagicMock(returncode=0, stdout=status, stderr="")
         with patch(f"{_R}.subprocess.run", return_value=ok) as run:
-            assert release.code_identity(install) == "git:abc123"
-        assert run.call_args.args[0][:4] == ["git", "-C", "/ws/x", "rev-parse"]
+            assert release.code_identity(install) == "git:develop@abc123"
+        assert run.call_count == 1
+        expected = ["git", "-C", "/ws/x", "status", "--porcelain=v2", "--branch"]
+        assert run.call_args.args[0] == expected
+
+    def test_a_fresh_repository_without_commits_falls_back_to_the_version(self):
+        install = release.Installation("editable", "/ws/x")
+        status = "# branch.oid (initial)\n# branch.head main\n"
+        ok = MagicMock(returncode=0, stdout=status, stderr="")
+        with (
+            patch(f"{_R}.subprocess.run", return_value=ok),
+            patch(f"{_R}.installed_version", return_value="0.1.0"),
+        ):
+            assert release.code_identity(install) == "version:0.1.0"
+
+    def test_same_line_is_the_same_branch_or_a_package(self):
+        assert release.same_line("git:develop@a", "git:develop@b")
+        assert not release.same_line("git:develop@a", "git:feat/x@b")
+        assert release.same_line("version:0.1.0", "version:0.1.1")
+        assert release.same_line("git:develop@a", "version:0.1.1")  # a reinstall counts
+
+    def test_a_branch_name_may_contain_an_at_sign(self):
+        assert release.same_line("git:feature@a@111", "git:feature@a@222")
+        assert not release.same_line("git:feature@a@111", "git:feature@b@111")
 
     def test_editable_without_git_falls_back_to_the_version(self):
         install = release.Installation("editable", "/ws/x")

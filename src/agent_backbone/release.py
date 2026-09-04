@@ -84,24 +84,55 @@ def installed_version() -> str:
 
 
 def code_identity(install: Installation | None = None) -> str:
-    """What code a fresh process would run: the checkout's commit for an
-    editable install, the installed version otherwise. When this differs
+    """What code a fresh process would run: ``git:<branch>@<commit>`` for an
+    editable checkout, ``version:<installed>`` otherwise. When this differs
     from what the running backbone started with, a restart runs new code."""
     install = install or installation()
     if install.kind == "editable" and install.path:
-        try:
-            result = subprocess.run(
-                ["git", "-C", install.path, "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=10,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            result = None
-        if result is not None and result.returncode == 0 and result.stdout.strip():
-            return f"git:{result.stdout.strip()}"
+        checkout = _checkout(install.path)
+        if checkout:
+            branch, commit = checkout
+            return f"git:{branch}@{commit}"
     return f"version:{installed_version()}"
+
+
+def _checkout(path: str) -> tuple[str, str] | None:
+    """``(branch, commit)`` read from one ``git status`` so they belong to the
+    same checkout state (two reads could straddle a branch switch)."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", path, "status", "--porcelain=v2", "--branch"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    fields: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if line.startswith("# branch."):
+            key, _, value = line[2:].partition(" ")
+            fields[key] = value.strip()
+    branch, commit = fields.get("branch.head"), fields.get("branch.oid")
+    if not branch or not commit or commit == "(initial)":
+        return None
+    return branch, commit
+
+
+def same_line(started: str, current: str) -> bool:
+    """Whether ``current`` is a newer state of the *same* thing as ``started``.
+
+    A checkout on another branch is development, not an upgrade: the
+    backbone keeps running until the branch it started on moves (a pull
+    into it, or a switch back to it with new commits).
+    """
+    if started.startswith("git:") and current.startswith("git:"):
+        # The commit is last and never contains "@"; a branch name may.
+        return started[4:].rsplit("@", 1)[0] == current[4:].rsplit("@", 1)[0]
+    return True
 
 
 def latest_published(timeout: float = 5.0) -> str | None:

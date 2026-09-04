@@ -35,14 +35,23 @@ async def test_changed_code_restarts_once():
     restart.assert_awaited_once()
 
 
+async def test_a_checkout_on_another_branch_is_development_not_an_upgrade():
+    watch, restart = _watch(["git:develop@a", "git:feat/x@b", "git:develop@c"])
+    assert (await watch.run())["restart"] == "other branch"
+    restart.assert_not_called()
+    # back on the branch it started on, with new commits: that is the upgrade
+    assert (await watch.run())["restart"] == "requested"
+    restart.assert_awaited_once()
+
+
 async def test_disabled_reports_but_does_not_restart():
-    watch, restart = _watch(["git:a", "git:b"], enabled=False)
+    watch, restart = _watch(["git:develop@a", "git:develop@b"], enabled=False)
     assert (await watch.run())["restart"] == "disabled"
     restart.assert_not_called()
 
 
 async def test_routing_in_flight_defers_the_restart():
-    watch, restart = _watch(["git:a", "git:b", "git:b"], in_flight=2)
+    watch, restart = _watch(["git:develop@a", "git:develop@b", "git:develop@b"], in_flight=2)
     assert (await watch.run())["restart"] == "deferred (2 in flight)"
     restart.assert_not_called()
     assert not watch.requested
