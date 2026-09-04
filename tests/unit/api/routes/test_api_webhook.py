@@ -147,8 +147,8 @@ class TestWebhookDeduplication:
             "pull_request": {"number": 113, "title": "fix: x", "state": "open", "labels": []},
             "review": {
                 "id": 77,
-                "body": "",
-                "state": "commented",
+                "body": "Two findings.",
+                "state": "CHANGES_REQUESTED",  # GitHub upper-cases it in some payloads
                 "user": {"login": "coderabbitai[bot]"},
                 "html_url": "https://github.com/x/y/pull/113#pullrequestreview-77",
             },
@@ -163,6 +163,43 @@ class TestWebhookDeduplication:
         assert event.event_type == EventType.REVIEW_SUBMITTED
         assert event.issue.number == 113 and event.review.id == 77
         assert event.review.user_login == "coderabbitai[bot]"
+        assert event.review.body == "Two findings."
+        assert event.review.state == "changes_requested"
+        assert event.review.html_url == "https://github.com/x/y/pull/113#pullrequestreview-77"
+
+    async def test_a_review_is_deduplicated_by_repository_and_review_id(
+        self, api_client, mock_dispatch_svc
+    ):
+        def _payload(repo: str) -> bytes:
+            return json.dumps(
+                {
+                    "action": "submitted",
+                    "repository": {"full_name": repo},
+                    "pull_request": {"number": 9, "title": "x", "state": "open", "labels": []},
+                    "review": {"id": 500, "body": "ok", "state": "approved", "user": {"login": "h"}},
+                }
+            ).encode()
+
+        first = _payload(TEST_REPO)
+        again = _webhook_headers(first, event="pull_request_review", delivery_id="r-redelivered")
+        await api_client.post(
+            WEBHOOK_PATH,
+            content=first,
+            headers=_webhook_headers(first, event="pull_request_review", delivery_id="r-first"),
+        )
+        resp = await api_client.post(WEBHOOK_PATH, content=first, headers=again)
+        assert resp.text.startswith("deduped:")
+        assert mock_dispatch_svc.issue_dispatcher.await_count == 1
+
+        # The same review id in another repository is a different review.
+        other = _payload("acme/other")
+        resp = await api_client.post(
+            WEBHOOK_PATH,
+            content=other,
+            headers=_webhook_headers(other, event="pull_request_review", delivery_id="r-other"),
+        )
+        assert resp.text.startswith("dispatch:")
+        assert mock_dispatch_svc.issue_dispatcher.await_count == 2
 
     async def test_review_on_a_closed_pull_request_is_ignored(self, api_client, mock_dispatch_svc):
         payload = {

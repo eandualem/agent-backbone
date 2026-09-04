@@ -58,6 +58,24 @@ def _record(result: DispatchResult, session: str, outcome: DeliveryOutcome) -> N
         result.deferred.append(session)
 
 
+def _event_sender(event: IssueEvent) -> str:
+    if event.comment:
+        return event.comment.user_login
+    if event.review:
+        return event.review.user_login
+    return ""
+
+
+def _source_key(event: IssueEvent, kind: str) -> str | None:
+    """The originating event's identity, so a queued copy is never stored twice."""
+    repo = event.issue.repo_full_name
+    if kind == "comment" and event.comment and event.comment.id:
+        return f"comment:{repo}#{event.issue.number}:{event.comment.id}"
+    if kind == "review" and event.review and event.review.id:
+        return f"review:{repo}#{event.issue.number}:{event.review.id}"
+    return None
+
+
 async def _deliver(
     target: str,
     message: str,
@@ -96,12 +114,8 @@ async def _deliver(
         enforce_issue_queue=enforce_issue_queue,
         queue_scope=scope,
         delivery_kind=kind,
-        sender=event.comment.user_login if event.comment else "",
-        source_key=(
-            f"comment:{repo}#{event.issue.number}:{event.comment.id}"
-            if kind == "comment" and event.comment and event.comment.id
-            else None
-        ),
+        sender=_event_sender(event),
+        source_key=_source_key(event, kind),
     )
     _record(result, session, outcome)
     log.info("Decision: %s#%d → %s (%s) = %s", repo, event.issue.number, target, kind, outcome)

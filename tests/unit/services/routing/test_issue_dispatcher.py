@@ -78,6 +78,9 @@ class TestReviewDispatch:
         assert message.startswith("[via:github pr:41] Review on acme/app#41")
         assert "from coderabbitai[bot] (changes requested)" in message
         assert '"Two findings."' in message and "https://r/9" in message
+        # A queued copy is identified by the review, so a retry never stores it twice.
+        assert deliver.await_args.kwargs["source_key"] == "review:acme/app#41:9"
+        assert deliver.await_args.kwargs["sender"] == "coderabbitai[bot]"
 
     async def test_an_agent_reviewer_is_not_told_about_its_own_review(self, config, mock_db):
         event = _review_event(41, "ike", ["feynman"], "[from:feynman] LGTM", state="approved")
