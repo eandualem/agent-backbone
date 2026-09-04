@@ -496,3 +496,25 @@ class TestAlwaysOnStart:
         marked = replace(config.agents.get("ike"), always_on=True)
         config = replace(config, agents=AgentsConfig({**config.agents.specs, "ike": marked}))
         assert always_on_names(config) == ["ike"]
+
+    def test_always_on_with_resume_resumes_every_marked_agent(self, tmp_path, capsys):
+        from agent_backbone.config import AgentSpec
+        from agent_backbone.services.agents import StartResult
+
+        seen: list[tuple[str, bool]] = []
+
+        async def _resolve(store, req):
+            return AgentSpec(name=req.name, dir=str(tmp_path), runtime="shell")
+
+        async def _start(store, config, spec, req, *, db):
+            seen.append((spec.name, req.resume))
+            return StartResult(ok=True, ready="not_waited")
+
+        with (
+            patch("agent_backbone.cli.agents.always_on_names", return_value=["app", "web"]),
+            patch("agent_backbone.services.agents.operations.resolve_agent", side_effect=_resolve),
+            patch("agent_backbone.services.agents.operations.start_resolved", side_effect=_start),
+        ):
+            assert _run(["agent", "start", "--always-on", "--resume", "--no-wait"]) == 0
+        assert seen == [("app", True), ("web", True)]
+        assert "starting always_on agents: app, web" in capsys.readouterr().out
