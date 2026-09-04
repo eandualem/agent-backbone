@@ -12,9 +12,12 @@ if TYPE_CHECKING:
     from agent_backbone.services.integrations.telegram.interface import TelegramService
 
 from agent_backbone.services.agents import (
+    approve_agent,
+    deny_agent,
     plan_control,
     read_plan,
     read_state_file,
+    record_answer,
     start_agent,
     stop_agent,
 )
@@ -290,6 +293,75 @@ async def cmd_viewplan(
     max_len = 4096
     for i in range(0, len(full_text), max_len):
         await update.message.reply_text(full_text[i : i + max_len])
+
+
+BUTTON_ACTIONS = ("approve", "deny", "plan_approve", "plan_reject")
+"""Callback data is ``<action>:<agent>``; the alerts in ``jobs.escalation`` build it."""
+
+
+def _who(update: Update) -> str:
+    user = getattr(update, "effective_user", None)
+    name = "someone"
+    if user is not None:
+        name = getattr(user, "first_name", None) or getattr(user, "id", None) or "someone"
+    return f"telegram:{name}"
+
+
+async def on_callback(
+    bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Answer a button on an alert with the same bounded controls the commands
+    and the API use: only a registered agent, only a dialog on screen, only
+    the runtime's verified keys, every answer recorded with who pressed it."""
+    query = getattr(update, "callback_query", None)
+    if query is None:
+        return
+    if not _authorized(bot, update):
+        await query.answer("Not allowed from this chat.")
+        return
+    action, _, agent = (query.data or "").partition(":")
+    if action not in BUTTON_ACTIONS or not agent:
+        await query.answer("Unknown button.")
+        return
+    spec = bot.config.agents.get(agent)
+    if spec is None:
+        await query.answer(f"Unknown agent {agent}.")
+        return
+    who = _who(update)
+    security = bot.config.security
+
+    if action in ("approve", "deny"):
+        if not security.allow_remote_approval:
+            await query.answer("Remote approval is off (security.allow_remote_approval).")
+            return
+        answer = approve_agent if action == "approve" else deny_agent
+        outcome, evidence = await answer(agent, runtime=spec.runtime)
+        if outcome in ("approved", "denied"):
+            await record_answer(
+                bot._db, agent=agent, runtime=spec.runtime, verb=outcome, by=who, evidence=evidence
+            )
+            result = f"{'Allowed' if outcome == 'approved' else 'Denied'} by {who}"
+        else:
+            result = f"Not answered ({outcome}): {evidence[0] if evidence else ''}"
+    else:
+        if not security.allow_remote_plan_control:
+            await query.answer("Remote plan control is off (security.allow_remote_plan_control).")
+            return
+        verb = "approve" if action == "plan_approve" else "reject"
+        outcome, evidence = await plan_control(agent, verb, runtime=spec.runtime)
+        if outcome in ("approved", "rejected"):
+            result = f"Plan {outcome} by {who}"
+        else:
+            result = f"Plan not {verb}d ({outcome}): {evidence[0] if evidence else ''}"
+
+    await query.answer(result[:200])
+    message = getattr(query, "message", None)
+    original = getattr(message, "text", None) or ""
+    try:
+        # Editing drops the keyboard: a button is answered once.
+        await query.edit_message_text(f"{original}\n\n{result}".strip())
+    except Exception:
+        log.debug("Could not edit the alert after the button press (non-fatal)")
 
 
 async def cmd_approve(

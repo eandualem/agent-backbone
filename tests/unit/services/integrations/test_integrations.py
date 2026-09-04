@@ -96,7 +96,13 @@ class TestNotifyHumans:
     async def test_fans_out_and_reports_any_success(self, config):
         with patch(f"{_TG}.notify_static", new_callable=AsyncMock, return_value=True) as tg:
             assert await notify_humans(config, "hello", agent="ike") is True
-        tg.assert_awaited_once_with(config, "hello", agent="ike")
+        tg.assert_awaited_once_with(config, "hello", agent="ike", actions=None)
+
+    async def test_actions_reach_the_channel(self, config):
+        buttons = [("Allow", "approve:ike")]
+        with patch(f"{_TG}.notify_static", new_callable=AsyncMock, return_value=True) as tg:
+            assert await notify_humans(config, "hello", agent="ike", actions=buttons) is True
+        tg.assert_awaited_once_with(config, "hello", agent="ike", actions=buttons)
 
     async def test_nothing_configured_is_false_not_an_error(self, config):
         assert await notify_humans(config, "hello") is False
