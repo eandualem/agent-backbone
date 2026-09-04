@@ -13,6 +13,7 @@ from agent_backbone.services.routing._format import (
     format_comment_notification,
     format_issue_notification,
     format_pull_request_notification,
+    format_review_notification,
     format_unassigned_notification,
     format_watch_notification,
 )
@@ -57,6 +58,24 @@ def _record(result: DispatchResult, session: str, outcome: DeliveryOutcome) -> N
         result.deferred.append(session)
 
 
+def _event_sender(event: IssueEvent) -> str:
+    if event.comment:
+        return event.comment.user_login
+    if event.review:
+        return event.review.user_login
+    return ""
+
+
+def _source_key(event: IssueEvent, kind: str) -> str | None:
+    """The originating event's identity, so a queued copy is never stored twice."""
+    repo = event.issue.repo_full_name
+    if kind == "comment" and event.comment and event.comment.id:
+        return f"comment:{repo}#{event.issue.number}:{event.comment.id}"
+    if kind == "review" and event.review and event.review.id:
+        return f"review:{repo}#{event.issue.number}:{event.review.id}"
+    return None
+
+
 async def _deliver(
     target: str,
     message: str,
@@ -95,12 +114,8 @@ async def _deliver(
         enforce_issue_queue=enforce_issue_queue,
         queue_scope=scope,
         delivery_kind=kind,
-        sender=event.comment.user_login if event.comment else "",
-        source_key=(
-            f"comment:{repo}#{event.issue.number}:{event.comment.id}"
-            if kind == "comment" and event.comment and event.comment.id
-            else None
-        ),
+        sender=_event_sender(event),
+        source_key=_source_key(event, kind),
     )
     _record(result, session, outcome)
     log.info("Decision: %s#%d → %s (%s) = %s", repo, event.issue.number, target, kind, outcome)
@@ -139,6 +154,38 @@ async def _dispatch_comment(
             db,
             result,
             kind="comment",
+            priority=event.issue.labels.blocking,
+        )
+
+
+async def _dispatch_review(
+    event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
+) -> None:
+    """A review reaches the pull request's parties, like a comment would.
+
+    The reviewer is excluded when it is an agent (a ``[from:X]`` tag in the
+    review body); a bot or human reviewer excludes nobody.
+    """
+    review = event.review
+    if review is None:
+        return
+    reviewer = parse_from_tag(review.body)
+    audience = comment_audience(event.issue, reviewer, config)
+    message = format_review_notification(event.issue, review)
+    reviewer_session = resolve_entity_session(reviewer, config) if reviewer else None
+    for target in audience:
+        session = resolve_entity_session(target, config)
+        if session is None or session == reviewer_session:
+            result.skipped.append(target)
+            continue
+        await _deliver(
+            target,
+            message,
+            event,
+            config,
+            db,
+            result,
+            kind="review",
             priority=event.issue.labels.blocking,
         )
 
@@ -220,6 +267,8 @@ async def issue_dispatcher(
     result = DispatchResult()
     if event.event_type == EventType.COMMENT_CREATED and event.comment:
         await _dispatch_comment(event, config, db, result)
+    elif event.event_type == EventType.REVIEW_SUBMITTED and event.review:
+        await _dispatch_review(event, config, db, result)
     elif event.event_type == EventType.PULL_REQUEST_OPENED:
         await _dispatch_pull_request(event, config, db, result)
     elif event.event_type in (EventType.ISSUE_OPENED, EventType.ISSUE_LABELED):

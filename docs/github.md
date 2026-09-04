@@ -73,7 +73,7 @@ agents' queues. All paths produce the same event; the `events` table
 deduplicates by delivery id and the per-issue delivery claim guarantees an
 issue reaches an agent once, so overlap is safe. For a quick real-time test
 without any tunnel, `gh webhook forward --repo=acme/app
---events=issues,issue_comment,pull_request
+--events=issues,issue_comment,pull_request,pull_request_review
 --url=http://127.0.0.1:7120/webhooks/github --secret=$GITHUB_WEBHOOK_SECRET`
 also works.
 
@@ -91,6 +91,7 @@ For an issue in repository R:
 | Issue closed | each target gets its **next** issue; the `from:` opener is told it was closed | |
 | All sub-issues of a parent closed | the parent's targets | "Dependencies resolved" |
 | Pull request opened in R | owners and watchers of R | informational |
+| Review submitted on a pull request | as for a comment, minus the reviewer when it is an agent | review notice: verdict, summary preview, link (one per review, not per inline comment; webhook intake only) |
 
 The `from:` sender never receives its own issue. Editing an existing issue
 (a `labeled` event without a new `for:`) notifies nobody.

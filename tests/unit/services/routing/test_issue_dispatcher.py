@@ -14,6 +14,7 @@ from agent_backbone.models import (
     IssueData,
     IssueEvent,
     ParsedLabels,
+    ReviewData,
     parse_from_tag,
 )
 from agent_backbone.services.routing._router import issue_dispatcher
@@ -52,6 +53,47 @@ def _comment_event(number: int, sender: str, targets: list[str], body: str) -> I
     )
     comment = CommentData(body=body, user_login="someone")
     return IssueEvent(event_type=EventType.COMMENT_CREATED, issue=issue, comment=comment)
+
+
+def _review_event(
+    number: int, sender: str, targets: list[str], body: str, state: str = "commented"
+) -> IssueEvent:
+    labels = ParsedLabels(sender=sender, targets=targets, issue_type="task")
+    issue = IssueData(
+        number=number, repo_full_name=OTHER_REPO, title=f"feat: #{number}", labels=labels
+    )
+    review = ReviewData(
+        id=9, body=body, user_login="coderabbitai[bot]", state=state, html_url="https://r/9"
+    )
+    return IssueEvent(event_type=EventType.REVIEW_SUBMITTED, issue=issue, review=review)
+
+
+class TestReviewDispatch:
+    async def test_review_reaches_the_pull_requests_parties(self, config, mock_db):
+        event = _review_event(41, "ike", ["feynman"], "Two findings.", state="changes_requested")
+        with _patch_safe_deliver() as deliver:
+            result = await issue_dispatcher(event, config, mock_db)
+        assert sorted(result.delivered) == ["feynman", "ike"]
+        message = deliver.await_args.args[1]
+        assert message.startswith("[via:github pr:41] Review on acme/app#41")
+        assert "from coderabbitai[bot] (changes requested)" in message
+        assert '"Two findings."' in message and "https://r/9" in message
+        # A queued copy is identified by the review, so a retry never stores it twice.
+        assert deliver.await_args.kwargs["source_key"] == "review:acme/app#41:9"
+        assert deliver.await_args.kwargs["sender"] == "coderabbitai[bot]"
+
+    async def test_an_agent_reviewer_is_not_told_about_its_own_review(self, config, mock_db):
+        event = _review_event(41, "ike", ["feynman"], "[from:feynman] LGTM", state="approved")
+        with _patch_safe_deliver() as deliver:
+            result = await issue_dispatcher(event, config, mock_db)
+        assert result.delivered == ["ike"]
+        assert "from feynman (approved)" in deliver.await_args.args[1]
+
+    async def test_empty_review_body_points_at_the_inline_comments(self, config, mock_db):
+        event = _review_event(41, "ike", ["feynman"], "")
+        with _patch_safe_deliver() as deliver:
+            await issue_dispatcher(event, config, mock_db)
+        assert "(no summary; see the inline comments)" in deliver.await_args.args[1]
 
 
 @pytest.fixture

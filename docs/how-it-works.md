@@ -200,6 +200,16 @@ Audience = `for:` targets ∪ the `from:` opener ∪ the sole owner, minus the
 commenter and anyone in `routing.ignore_targets`. The commenter's
 acknowledgement is recorded; the targets' acknowledgements are cleared.
 
+### A review is submitted on a pull request
+
+Audience as for a comment (the pull request's `for:` targets, its `from:`
+opener and the sole owner), minus the reviewer when it is an agent
+(`[from:X]` in the review body). One message per review — verdict,
+summary preview, link — not one per inline comment: every inline comment
+belongs to a review, and the agent reads them on GitHub. A review on a
+closed pull request notifies nobody. Reviews arrive through the webhook
+intake; the poll intake lists issues and comments only.
+
 ### An issue is closed — close-then-next
 
 1. Queued messages about the issue are purged.
