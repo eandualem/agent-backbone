@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 from typing import Literal
 
+from agent_backbone.hooks import install as hooks
 from agent_backbone.services.runtimes._pane import (
     DIALOG_CURSOR_RE,
     DIALOG_OPTION_RE,
@@ -110,6 +111,17 @@ class Runtime:
     plan_reject_keys: tuple[str, ...] = ()
     """tmux key names that leave plan mode so feedback can follow as a message."""
 
+    # --- state hooks ---------------------------------------------------------
+    hook_script: str | None = None
+    """The shipped hook for this runtime (a file in ``hooks/``), copied into
+    ``<data_dir>/hooks/`` at launch. ``None``: the terminal is the only
+    source of state."""
+    hook_events: hooks.Events = ()
+    """``(event, matcher)`` pairs the hook listens to, in the CLI's own names."""
+    hook_timeout: int = 10
+    """Per-hook timeout in the unit the CLI uses (seconds for Claude Code and
+    Codex, milliseconds for Gemini CLI)."""
+
     # --- paste behaviour ---------------------------------------------------
     auto_submit: bool = False
     submit_attempts: int = 2
@@ -132,11 +144,71 @@ class Runtime:
         """Extra environment the session needs (runtimes that take the model from a variable)."""
         return {}
 
+    @property
+    def reports_state(self) -> str:
+        """How the backbone learns this runtime's state (for ``backbone runtimes``)."""
+        return "hooks + terminal" if self.hook_script else "terminal"
+
     def hook_launch_args(
         self, data_dir: Path | str | None, state_dir: Path | str | None
     ) -> list[str]:
         """Extra CLI args that wire the runtime's state hooks to the backbone."""
         return []
+
+    def hook_launch_env(
+        self, data_dir: Path | str | None, state_dir: Path | str | None
+    ) -> dict[str, str]:
+        """Extra environment that wires the runtime's state hooks to the backbone."""
+        return {}
+
+    def hook_settings(
+        self, data_dir: Path | str, state_dir: Path | str, *, python: str | None = None
+    ) -> tuple[str, dict]:
+        """``(command, settings)``: the hook command for this runtime and the
+        ``{"hooks": …}`` document that wires it, after the hook files are in
+        ``<data_dir>/hooks/``. Raises ``RuntimeError`` for a runtime without a hook."""
+        if not self.hook_script:
+            raise RuntimeError(f"runtime '{self.id}' has no state hook")
+        hooks_dir = hooks.install_hook_files(Path(data_dir))
+        command = hooks.hook_command(
+            hooks_dir / self.hook_script, Path(state_dir), python=python or hooks.default_python()
+        )
+        return command, hooks.merge_hooks({}, self.hook_events, command, self.hook_timeout)
+
+    def hook_settings_path(self, project_dir: Path | None) -> Path | None:
+        """Where ``backbone hooks install`` writes for sessions started outside the
+        backbone: the user's global file, or a project's. ``None``: no such place."""
+        return None
+
+    def install_hooks(
+        self,
+        data_dir: Path | str,
+        state_dir: Path | str,
+        *,
+        project_dir: Path | None = None,
+        python: str | None = None,
+    ) -> tuple[Path, str] | None:
+        """Add the hooks to the runtime's own settings (``backbone hooks install``).
+
+        Returns ``(settings_path, command)``, or ``None`` when this runtime has
+        no settings file the backbone knows how to edit.
+        """
+        path = self.hook_settings_path(project_dir)
+        if path is None or not self.hook_script:
+            return None
+        command, _ = self.hook_settings(data_dir, state_dir, python=python)
+        settings = hooks.load_settings(path)
+        hooks.save_settings(
+            path, hooks.merge_hooks(settings, self.hook_events, command, self.hook_timeout)
+        )
+        return path, command
+
+    def uninstall_hooks(self, *, project_dir: Path | None = None) -> Path | None:
+        path = self.hook_settings_path(project_dir)
+        if path is None:
+            return None
+        hooks.save_settings(path, hooks.remove_hooks(hooks.load_settings(path)))
+        return path
 
     def launch_args(
         self,

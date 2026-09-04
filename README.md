@@ -74,7 +74,7 @@ The second `tell` returns `"outcome": "agent_working"`: the message was not type
 Six decisions the backbone makes for you; the full flows are in [How it works](https://github.com/eandualem/agent-backbone/blob/main/docs/how-it-works.md).
 
 - **Agents are discovered, not declared.** `backbone agent start` in a directory records the agent: its name, its runtime and model, and the repository read from `git remote origin`. The command returns when the agent is at its prompt; folder-trust dialogs are answered for you.
-- **State comes from the runtime first, the terminal second.** Claude Code reports its state through hooks the backbone installs for the session; every other runtime is read from its terminal. Every reading carries its evidence, visible in `backbone agent inspect`.
+- **State comes from the runtime first, the terminal second.** Claude Code, Codex, Gemini CLI and OpenCode report their state through hooks the backbone wires into the session at launch, without touching the CLI's own configuration; the rest are read from their terminal. Every reading carries its evidence, visible in `backbone agent inspect`.
 - **Delivery is gated on state.** Text is pasted into an agent only when it is idle — not while it is working, waiting for a person, or while you are typing in that terminal. What cannot land now is queued in SQLite and delivered when the agent is free. The few deliberate exceptions are documented.
 - **Agents can unblock each other.** `backbone agent approve <name>` answers a runtime's permission dialog — only while it is on screen, only with its affirmative key, every approval audited — so a coordinator can keep a team moving without a person watching.
 - **Coordination goes through GitHub, per repository.** Nothing is configured per repository: GitHub credentials are set once, and every repository an agent owns or watches is tracked on its own, by polling or by webhook.
@@ -87,10 +87,10 @@ Any CLI that runs in a terminal can be an agent; how much the backbone can do fo
 | Runtime | Unattended start | Brief at launch | State detection | Delivery | Approve |
 |---|---|---|---|---|---|
 | `claude` (Claude Code) | ✅ | ✅ system prompt | ✅ hooks + terminal | ✅ verified | ✅ |
-| `codex` | ✅ | ✅ first prompt | ✅ terminal | ✅ verified | ✅ |
-| `opencode` | ✅ (no trust dialog) | ✅ first prompt | ✅ terminal | ✅ verified | ✅ |
+| `codex` | ✅ | ✅ first prompt | ✅ hooks + terminal | ✅ verified | ✅ |
+| `opencode` | ✅ (no trust dialog) | ✅ first prompt | ✅ hooks + terminal | ✅ verified | ✅ |
 | `deepcode` (Deep Code, DeepSeek) | ✅ (no trust dialog) | ✅ `-p` | ✅ terminal | ✅ verified | pending |
-| `gemini` | ✅ `--skip-trust` | ✅ first prompt | ✅ terminal | unverified¹ | — |
+| `gemini` | ✅ `--skip-trust` | ✅ first prompt | ✅ hooks + terminal | unverified¹ | — |
 | `aider` | — | first message | terminal, best effort | untested | — |
 | `shell` | — | none | terminal, best effort | — | — |
 

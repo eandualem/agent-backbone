@@ -190,11 +190,14 @@ def build_parser() -> argparse.ArgumentParser:
         ("uninstall", "remove the hooks"),
     ):
         hp = hsub.add_parser(name, help=help_text)
-        hp.add_argument("runtime", choices=["claude"], help="runtime to configure")
+        hp.add_argument(
+            "runtime", choices=["claude", "codex", "gemini"], help="runtime to configure"
+        )
         hp.add_argument(
             "--dir",
             default=None,
-            help="project directory (writes .claude/settings.json there); default: global",
+            help="project directory (writes the runtime's project settings there); "
+            "default: the user's global settings",
         )
     p.set_defaults(func=cmd_hooks)
 

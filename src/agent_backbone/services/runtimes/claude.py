@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
+from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes.base import Runtime
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,19 @@ class ClaudeCode(Runtime):
     brief_mode = "system_prompt"
     models = ("opus", "sonnet", "haiku")  # Claude Code's own aliases
 
+    hook_script = "claude_hook.py"
+    # An empty matcher means every tool; None omits the matcher.
+    hook_events = (
+        ("SessionStart", None),
+        ("SessionEnd", None),
+        ("UserPromptSubmit", None),
+        ("Stop", None),
+        ("Notification", None),
+        ("PreToolUse", "ExitPlanMode|AskUserQuestion"),
+        ("PostToolUse", ""),
+    )
+    hook_timeout = 10  # seconds
+
     prompt_prefixes = ("❯",)
     prompt_suffixes = ("$", "%")
     runtime_markers = ("claude code", "claude max", "/effort", "shift+tab to cycle")
@@ -83,25 +97,32 @@ class ClaudeCode(Runtime):
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_directory(directory)
 
+    def hook_settings_path(self, project_dir: Path | None) -> Path:
+        if project_dir is not None:
+            return Path(project_dir).expanduser() / ".claude" / "settings.json"
+        return Path("~/.claude/settings.json").expanduser()
+
     def hook_launch_args(
         self, data_dir: Path | str | None, state_dir: Path | str | None
     ) -> list[str]:
         """``--settings <data_dir>/hooks/claude-settings.json``.
 
         Claude Code accepts an additional settings file; the backbone keeps
-        one under ``<data_dir>/hooks/`` so every session it starts reports
-        state without the user configuring hooks per repository (or at all).
+        one under ``<data_dir>/hooks/``, regenerated on every start, so every
+        session it starts reports state without the user configuring hooks
+        per repository (or at all). Nothing outside ``<data_dir>/hooks/`` is
+        touched.
         """
         if data_dir is None or state_dir is None:
             return []
-        from agent_backbone.hooks.install import ensure_launch_settings
-
         try:
-            settings = ensure_launch_settings(Path(data_dir), Path(state_dir))
+            _, settings = self.hook_settings(data_dir, state_dir)
+            path = Path(data_dir) / "hooks" / "claude-settings.json"
+            save_settings(path, settings)
         except OSError as exc:
             log.warning("Could not write the launch hook settings: %s", exc)
             return []
-        return ["--settings", str(settings)]
+        return ["--settings", str(path)]
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args = super().launch_args(

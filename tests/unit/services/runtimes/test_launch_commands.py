@@ -26,8 +26,8 @@ class TestHookLaunchArgs:
         saved = json.loads(settings_path.read_text())
         assert "SessionStart" in saved["hooks"]
 
-    def test_other_runtimes_get_no_args(self, tmp_path):
-        assert RUNTIMES["codex"].hook_launch_args(tmp_path, tmp_path / "state") == []
+    def test_runtimes_without_hooks_get_no_args(self, tmp_path):
+        assert RUNTIMES["deepcode"].hook_launch_args(tmp_path, tmp_path / "state") == []
         assert RUNTIMES["shell"].hook_launch_args(tmp_path, tmp_path / "state") == []
 
     def test_missing_dirs_get_no_args(self, tmp_path):
@@ -36,7 +36,7 @@ class TestHookLaunchArgs:
 
     def test_unwritable_data_dir_degrades_to_no_args(self, tmp_path):
         with patch(
-            "agent_backbone.hooks.install.ensure_launch_settings",
+            "agent_backbone.hooks.install.install_hook_files",
             side_effect=OSError("read-only"),
         ):
             assert RUNTIMES["claude"].hook_launch_args(tmp_path, tmp_path / "state") == []

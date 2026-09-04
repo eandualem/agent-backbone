@@ -61,24 +61,34 @@ There is no configuration file. Settings have defaults and are changed with
 
 ## 3. State hooks — nothing to install
 
-With hooks, Claude Code tells the backbone the moment it becomes busy, idle,
-or waits for a person (plan approval, permission prompt, question). Without
-them the backbone reads the terminal, which works but is less precise.
+With hooks, the runtime tells the backbone the moment the agent becomes
+busy, idle, or waits for a person (plan approval, permission prompt,
+question). Without them the backbone reads the terminal, which works but
+is less precise.
 
-Every Claude Code session the backbone starts gets the hooks automatically:
-`agent start` launches `claude --settings <data_dir>/hooks/claude-settings.json`,
-a file the backbone owns and regenerates on every start. No repository and no
-`~/.claude/settings.json` is touched.
+Every session the backbone starts gets the hooks automatically, wired for
+that launch only — no repository and none of the CLI's own configuration
+is touched:
 
-For Claude Code sessions you start *outside* the backbone, an optional
-one-time global install adds the same hooks to `~/.claude/settings.json`:
+| Runtime | How the hooks reach the session |
+|---|---|
+| Claude Code | `--settings <data_dir>/hooks/claude-settings.json` |
+| Codex | `-c hooks.<Event>=…` overrides, with the hook-trust prompt bypassed for the backbone's own hooks |
+| Gemini CLI | `GEMINI_CLI_SYSTEM_SETTINGS_PATH=<data_dir>/hooks/gemini-settings.json` |
+| OpenCode | `OPENCODE_CONFIG_CONTENT` loading the `opencode_hook.js` plugin |
+
+The files under `<data_dir>/hooks/` are the backbone's and are regenerated
+on every start. Deep Code, Aider and `shell` are read from the terminal.
+
+For sessions you start *outside* the backbone, an optional one-time install
+adds the same hooks to the CLI's own settings:
 
 ```bash
-backbone hooks install claude              # global: ~/.claude/settings.json
+backbone hooks install claude                    # ~/.claude/settings.json
 backbone hooks install claude --dir ~/code/app   # or one project
+backbone hooks install codex                     # ~/.codex/hooks.json (then accept them once with /hooks)
+backbone hooks install gemini                    # ~/.gemini/settings.json
 ```
-
-Other runtimes are read from the terminal for now.
 
 ## 4. Run the backbone
 

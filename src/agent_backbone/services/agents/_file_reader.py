@@ -95,7 +95,13 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         started_at=float(started_at_raw) if started_at_raw is not None else None,
         plan_file=data.get("plan_file"),
         plan_title=data.get("plan_title"),
-        evidence=[f"hook state file {state_file.name}: {state.value}"],
+        session_id=data.get("session_id") or None,
+        last_message=data.get("last_message") or None,
+        event=data.get("event") or None,
+        evidence=[
+            f"hook state file {state_file.name}: {state.value}"
+            + (f" (event {data['event']})" if data.get("event") else "")
+        ],
     )
 
 

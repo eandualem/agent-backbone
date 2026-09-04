@@ -46,12 +46,47 @@ def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | Non
         return False
 
 
+def _toml_string(value: str) -> str:
+    # A JSON string is a valid TOML basic string for the escapes json emits.
+    return json.dumps(value)
+
+
+def _toml_entries(entries: list[dict]) -> str:
+    """The TOML inline form of one event's hook entries."""
+    parts = []
+    for entry in entries:
+        hooks = ", ".join(
+            f"{{type = {_toml_string(h['type'])}, command = {_toml_string(h['command'])}, "
+            f"timeout = {int(h['timeout'])}}}"
+            for h in entry["hooks"]
+        )
+        fields = []
+        if "matcher" in entry:
+            fields.append(f"matcher = {_toml_string(entry['matcher'])}")
+        fields.append(f"hooks = [{hooks}]")
+        parts.append("{" + ", ".join(fields) + "}")
+    return "[" + ", ".join(parts) + "]"
+
+
 class Codex(Runtime):
     id = "codex"
     display_name = "Codex"
     binary = "codex"
     brief_mode = "initial_prompt"
     models = ("gpt-5.6-sol",)  # as shown by codex 0.152's status line (live capture)
+
+    hook_script = "codex_hook.py"
+    hook_events = (
+        ("SessionStart", None),
+        ("SessionEnd", None),
+        ("UserPromptSubmit", None),
+        ("PermissionRequest", None),
+        ("PreToolUse", None),
+        ("PostToolUse", None),
+        ("Stop", None),
+        ("Interrupt", None),
+    )
+    hook_timeout = 10  # seconds
 
     prompt_prefixes = ("›",)
     runtime_markers = ("openai codex", "gpt-5.", "context left")
@@ -88,15 +123,49 @@ class Codex(Runtime):
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_codex_directory(directory)
 
-    def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
-        # `codex resume` is a subcommand; the resumed session keeps its model.
-        if resume:
-            return ["resume", "--last"]
+    def hook_settings_path(self, project_dir: Path | None) -> Path:
+        # Codex reads `hooks.json` from its home and from a trusted project's
+        # `.codex/`; entries there still need a one-time `/hooks` trust.
+        if project_dir is not None:
+            return Path(project_dir).expanduser() / ".codex" / "hooks.json"
+        return Path.home() / ".codex" / "hooks.json"
+
+    def hook_launch_args(
+        self, data_dir: Path | str | None, state_dir: Path | str | None
+    ) -> list[str]:
+        """``-c hooks.<Event>=[…]`` per event, plus ``--dangerously-bypass-hook-trust``.
+
+        Codex takes configuration overrides on the command line (dotted keys,
+        TOML values), so the hooks live only in this launch: nothing in
+        ``~/.codex`` or the repository is touched. Codex asks a person to trust
+        any hook it has not seen; these are the backbone's own scripts, wired
+        by the backbone, so the trust prompt is bypassed for this session.
+        Verified live against codex-cli 0.152.
+        """
+        if data_dir is None or state_dir is None:
+            return []
+        try:
+            _, settings = self.hook_settings(data_dir, state_dir)
+        except OSError as exc:
+            log.warning("Could not write the hook files: %s", exc)
+            return []
         args: list[str] = []
+        for event, entries in settings["hooks"].items():
+            args.extend(["-c", f"hooks.{event}={_toml_entries(entries)}"])
+        args.append("--dangerously-bypass-hook-trust")
+        return args
+
+    def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
+        hook = self.hook_launch_args(data_dir, state_dir)
+        # `codex resume` is a subcommand; the resumed session keeps its model.
+        # Both the TUI and `resume` take `-c` and the hook-trust flag.
+        if resume:
+            return ["resume", "--last", *hook]
+        args: list[str] = [*hook]
         if model:
             args.extend(["--model", model])
         if brief_file is not None and (brief := read_brief(brief_file)):
-            args.append(brief)  # positional initial prompt
+            args.append(brief)  # positional initial prompt, after every flag
         return args
 
 

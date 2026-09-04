@@ -173,7 +173,14 @@ async def start_agent(
         return StartResult(ok=False, evidence=(str(exc),))
 
     environment = launch_environment(
-        spec.name, rt.id, config.state_dir, {**spec.env, **rt.launch_env(effective_model)}
+        spec.name,
+        rt.id,
+        config.state_dir,
+        {
+            **spec.env,
+            **rt.launch_env(effective_model),
+            **rt.hook_launch_env(config.data_dir, config.state_dir),
+        },
     )
     # `starting` lives in its own marker file, written before the launch: a
     # hook write newer than the marker outranks it, ``wait_until_ready``

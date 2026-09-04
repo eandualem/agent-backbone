@@ -134,7 +134,10 @@ async def get_agent_state(
         stale_threshold = _fresh_window(push, stale_threshold)
 
     if push and push_age is not None and push_age < stale_threshold:
-        push.evidence = [f"hook state '{push.state.value}' written {push_age:.0f}s ago (fresh)"]
+        via = f", {push.event}" if push.event else ""
+        push.evidence = [
+            f"hook state '{push.state.value}' written {push_age:.0f}s ago (fresh{via})"
+        ]
         if push.reason:
             push.evidence.append(f"reason: {push.reason}")
         if push.state == AgentState.IDLE:

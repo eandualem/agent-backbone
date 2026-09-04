@@ -49,6 +49,12 @@ class StateSnapshot:
     started_at: float | None = None
     plan_file: str | None = None
     plan_title: str | None = None
+    session_id: str | None = None
+    """The runtime's own session id, when its hook reports one."""
+    last_message: str | None = None
+    """The agent's last reply (clipped), when its hook reports one."""
+    event: str | None = None
+    """The hook event that produced a push snapshot."""
     evidence: list[str] = field(default_factory=list)
 
     @property

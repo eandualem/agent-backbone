@@ -420,27 +420,30 @@ def cmd_reply(args: argparse.Namespace) -> int:
 
 
 def cmd_hooks(args: argparse.Namespace) -> int:
-    from agent_backbone.hooks import install as hooks
+    """Hooks for sessions started *outside* the backbone (its own get them at launch)."""
+    from agent_backbone.services.runtimes import get_runtime
 
     config = bootstrap_config()
-    if args.runtime != "claude":
-        print(f"hooks are only available for 'claude' right now (got {args.runtime!r})")
-        return 1
+    rt = get_runtime(args.runtime)
     project_dir = Path(args.dir).expanduser() if args.dir else None
     if args.hooks_command == "install":
-        settings_path, command = hooks.install_claude(
-            config.data_dir,
-            config.state_dir,
-            project_dir=project_dir,
-            python=hooks.default_python(),
-        )
-        print(f"installed Claude Code hooks in {settings_path}")
+        installed = rt.install_hooks(config.data_dir, config.state_dir, project_dir=project_dir)
+        if installed is None:
+            print(f"{rt.display_name} has no settings file the backbone edits")
+            return 1
+        settings_path, command = installed
+        print(f"installed {rt.display_name} hooks in {settings_path}")
         print(f"  command: {command}")
         print(f"  state:   {config.state_dir}")
-        print("Restart running Claude Code sessions for the hooks to take effect.")
+        print(f"Restart running {rt.display_name} sessions for the hooks to take effect.")
+        if rt.id == "codex":
+            print("Codex asks once to trust new hooks: run /hooks in a session and accept them.")
         return 0
     if args.hooks_command == "uninstall":
-        settings_path = hooks.uninstall_claude(project_dir=project_dir)
+        settings_path = rt.uninstall_hooks(project_dir=project_dir)
+        if settings_path is None:
+            print(f"{rt.display_name} has no settings file the backbone edits")
+            return 1
         print(f"removed agent-backbone hooks from {settings_path}")
         return 0
     return 1
