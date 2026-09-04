@@ -300,6 +300,7 @@ class TestGetAgentState:
         assert result.source == "pull"
         assert any("fresh" in line for line in result.evidence)
         assert any("beats the hook" in line for line in result.evidence)
+        assert result.timestamp > 0  # the observation time is kept for the database
 
     async def test_fresh_idle_push_stands_when_the_terminal_shows_a_prompt(self, tmp_path):
         state_file = tmp_path / "ike.json"

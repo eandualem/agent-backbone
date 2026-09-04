@@ -148,6 +148,7 @@ async def get_agent_state(
                 runtime = detect_runtime(pane_content)
             if pane_content and runtime.detect_active_dialog(pane_content):
                 dialog = _dialog_snapshot(runtime, pane_content, prefix=push.evidence)
+                dialog.timestamp = time.time()
                 dialog.current_issue = push.current_issue
                 dialog.evidence.append("the dialog on screen beats the hook's idle")
                 return dialog

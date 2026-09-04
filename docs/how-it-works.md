@@ -31,7 +31,7 @@ This page follows real requests through the system. Read
    prompt, the "resume from summary" picker on `--resume`), `start` returns
    `waiting_for_human` with the question shown instead of guessing, and
    `backbone agent approve` answers it. A dialog is recognised by its
-   furniture — numbered options with a selection cursor — so one the
+   furniture — numbered options with a selection cursor — so a dialog the
    backbone has never seen still counts. The wait always ends in one of
    `ready`, `waiting_for_human`, `exited` or `timeout`.
 5. Broadcast a fresh snapshot on Socket.IO `/sessions`.
