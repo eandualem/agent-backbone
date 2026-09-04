@@ -32,6 +32,12 @@ class AgentState(StrEnum):
             return cls.UNKNOWN
 
 
+def prompt_id(timestamp: float) -> str:
+    """The identity of one prompt: the waiting state's timestamp, as a
+    Telegram button carries it and as the callback checks it."""
+    return f"{timestamp:.3f}"
+
+
 WORKING_STATES = frozenset({AgentState.STARTING, AgentState.BUSY, AgentState.BLOCKED})
 """States in which the agent is occupied and will come back by itself."""
 

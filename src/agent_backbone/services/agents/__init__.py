@@ -29,7 +29,7 @@ from agent_backbone.services.agents.launch import (
     stop_agent,
     wait_until_ready,
 )
-from agent_backbone.services.agents.models import AgentState, StateSnapshot
+from agent_backbone.services.agents.models import AgentState, StateSnapshot, prompt_id
 from agent_backbone.services.agents.store import AgentStore
 
 __all__ = [
@@ -47,6 +47,7 @@ __all__ = [
     "has_commented_on_issue",
     "infer_state_from_pane",
     "plan_control",
+    "prompt_id",
     "read_plan",
     "read_state_file",
     "record_answer",

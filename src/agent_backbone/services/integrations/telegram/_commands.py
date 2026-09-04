@@ -16,6 +16,7 @@ from agent_backbone.services.agents import (
     approve_agent,
     deny_agent,
     plan_control,
+    prompt_id,
     read_plan,
     read_state_file,
     record_answer,
@@ -317,8 +318,6 @@ def _who(update: Update) -> tuple[str, str]:
 
 def _prompt_matches(bot: TelegramService, agent: str, action: str, ref: str) -> bool:
     """Whether the prompt the button was raised for is still the one waiting."""
-    from agent_backbone.services.jobs.escalation import prompt_id
-
     snapshot = read_state_file(bot.config.state_dir, agent)
     if snapshot is None or snapshot.state != AgentState.WAITING_FOR_HUMAN:
         return False
