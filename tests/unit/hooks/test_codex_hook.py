@@ -65,11 +65,11 @@ class TestDerive:
         ],
     )
     def test_comment_actions(self, tool_input, issue):
-        record, action = hook.derive(
+        record, actions = hook.derive(
             _payload("PostToolUse", tool_name="Bash", tool_input=tool_input), None
         )
         assert record is None
-        assert (action["issue"] if action else None) == issue
+        assert (actions[0]["issue"] if actions else None) == issue
 
     def test_unknown_events_write_nothing(self):
         assert hook.derive(_payload("SubagentStart"), None) == (None, None)

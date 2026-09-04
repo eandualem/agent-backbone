@@ -12,6 +12,7 @@ from agent_backbone.services.agents import (
     AgentState,
     agent_state,
     find_outgoing_comment,
+    find_outgoing_pull_request,
     get_agent_state,
     has_commented_on_issue,
     infer_state_from_pane,
@@ -121,6 +122,7 @@ class TestWaitingForHuman:
             "idle",
             "busy",
             "waiting_for_human",
+            "blocked",
             "unknown",
         }
 
@@ -644,3 +646,56 @@ def test_rotation_tolerates_invalid_utf8(tmp_path):
     path.write_bytes(lines + b"\xff\xfe not json\n")
     assert rotate_action_log(path, keep_lines=5) == 16
     assert len(path.read_text(errors="replace").splitlines()) == 5
+
+
+class TestFindOutgoingPullRequest:
+    def _log(self, tmp_path, *entries: dict):
+        path = tmp_path / "actions.jsonl"
+        path.write_text("".join(json.dumps(e) + "\n" for e in entries))
+        return path
+
+    def test_matches_head_repository_and_branch(self, tmp_path):
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time(),
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "head_repo": "forker/app",
+                "branch": "feat/x",
+            },
+        )
+        assert find_outgoing_pull_request("forker/app", "feat/x", action_log=log) == "app"
+        # the same branch name from another fork, or the base repository, is not it
+        assert find_outgoing_pull_request("other/app", "feat/x", action_log=log) is None
+        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) is None
+        assert find_outgoing_pull_request("forker/app", "feat/other", action_log=log) is None
+
+    def test_an_older_entry_without_head_repo_matches_on_repo(self, tmp_path):
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time(),
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "branch": "feat/x",
+            },
+        )
+        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) == "app"
+
+    def test_old_entries_and_missing_fields_do_not_match(self, tmp_path):
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time() - 3600,
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "branch": "feat/x",
+            },
+            {"ts": time.time(), "session": "app", "action": "pull_request", "repo": "acme/app"},
+        )
+        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) is None
+        assert find_outgoing_pull_request("", "feat/x", action_log=log) is None

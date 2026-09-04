@@ -25,6 +25,7 @@ STATE_IDLE = bb.STATE_IDLE
 STATE_BUSY = bb.STATE_BUSY
 STATE_WAITING = bb.STATE_WAITING
 STATE_UNKNOWN = bb.STATE_UNKNOWN
+STATE_BLOCKED = bb.STATE_BLOCKED
 REASON_PLAN = bb.REASON_PLAN
 REASON_PERMISSION = bb.REASON_PERMISSION
 REASON_QUESTION = bb.REASON_QUESTION
@@ -52,10 +53,17 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
             STATE_IDLE, last_message=bb.clip_message(payload.get("last_assistant_message"))
         ), None
     if event == "Notification":
-        message = (payload.get("message", "") or "").lower()
-        if "permission" in message:
+        kind = (payload.get("notification_type") or "").lower()
+        message = payload.get("message", "") or ""
+        if kind.startswith("quota_auto_resume"):
+            # The usage limit: Claude Code pauses and resumes on its own.
+            if kind in ("quota_auto_resume_fired", "quota_auto_resume_stale_resumed"):
+                return state(STATE_BUSY), None
+            return state(bb.STATE_BLOCKED, bb.REASON_QUOTA, detail=bb.clip_message(message)), None
+        lowered = message.lower()
+        if "permission" in lowered:
             return state(STATE_WAITING, REASON_PERMISSION), None
-        if "waiting for your input" in message:
+        if "waiting for your input" in lowered:
             return state(STATE_IDLE), None
         return None, None
     if event == "PreToolUse":
@@ -74,7 +82,8 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
         if tool in ("ExitPlanMode", "AskUserQuestion"):
             return state(STATE_BUSY), None
         if tool == "Bash":
-            return None, bb.comment_action_from_command(tool_input.get("command", "") or "", now)
+            command = tool_input.get("command", "") or ""
+            return None, bb.shell_actions(command, payload.get("cwd"), now)
         return None, bb.comment_action_from_mcp(tool, tool_input, now)
     return None, None
 

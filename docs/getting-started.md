@@ -344,13 +344,17 @@ Agents are tmux sessions, so a reboot ends them:
 
 ```bash
 backbone agent start app web      # the agents you want, by name
+backbone agent start --always-on --resume   # or every agent marked always_on, resumed
 backbone status                   # confirm
 ```
 
-There is deliberately no "start everything ever registered" — start the
-agents you need, or keep a one-liner for the group you usually run
-(e.g. `alias work-agents='ab agent start app web orch'`). Without the
-service, `backbone up --detach` starts the backbone by hand.
+`--resume` reopens the session the backbone last saw through the runtime's
+hook (its session id is recorded), or the runtime's own "last
+conversation" when there is none. There is deliberately no "start
+everything ever registered" — start the agents you need, mark the ones
+that should always be up (`backbone agent set app always_on=true`), or
+keep a one-liner for the group you usually run. Without the service,
+`backbone up --detach` starts the backbone by hand.
 
 ## Upgrading
 

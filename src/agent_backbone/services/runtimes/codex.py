@@ -116,8 +116,10 @@ class Codex(Runtime):
         "press enter to continue",
         "press enter to confirm",
     )
-    # "› 1. Yes, proceed (y)" is preselected; "Press enter to confirm" (0.152).
+    # "› 1. Yes, proceed (y)" is preselected; "Press enter to confirm" (0.152);
+    # "3. No, and tell Codex what to do differently (esc)".
     approve_keys = ("Enter",)
+    deny_keys = ("Escape",)
     interrupt_queued_delivery = True
 
     def pre_trust(self, directory: Path | str) -> None:
@@ -160,7 +162,8 @@ class Codex(Runtime):
         # `codex resume` is a subcommand; the resumed session keeps its model.
         # Both the TUI and `resume` take `-c` and the hook-trust flag.
         if resume:
-            return ["resume", "--last", *hook]
+            target = resume if isinstance(resume, str) else "--last"
+            return ["resume", target, *hook]
         args: list[str] = [*hook]
         if model:
             args.extend(["--model", model])

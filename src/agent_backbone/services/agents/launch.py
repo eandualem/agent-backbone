@@ -159,10 +159,23 @@ async def start_agent(
     brief = Path(brief_file) if brief_file else None
     if brief is None and section.inject_brief and rt.brief_mode != "none":
         brief = agent_brief_file(spec.name, spec.repo, config.data_dir)
+    resume_target: bool | str = resume
+    resume_evidence: list[str] = []
+    if resume:
+        last = read_state_file(config.state_dir, spec.name)
+        # A session id is only meaningful to the runtime whose hook wrote it.
+        if last is not None and last.session_id and last.runtime == rt.id:
+            resume_target = last.session_id
+            resume_evidence.append(f"resuming the session the backbone last saw: {last.session_id}")
+        elif last is not None and last.session_id:
+            resume_evidence.append(
+                f"last session id belongs to {last.runtime or 'another runtime'}; "
+                f"using {rt.id}'s own resume"
+            )
     try:
         command = rt.build_command(
             model=effective_model,
-            resume=resume,
+            resume=resume_target,
             brief_file=brief,
             pre_trust=section.pre_trust,
             data_dir=config.data_dir,
@@ -215,7 +228,7 @@ async def start_agent(
     # first message, delivered by the monitor once the agent is at its prompt.
     if rt.brief_mode == "message" and brief is not None and not resume and ready != "exited":
         await _queue_brief(db, spec.name, brief)
-    return StartResult(ok=True, ready=ready, evidence=tuple(evidence))
+    return StartResult(ok=True, ready=ready, evidence=tuple(resume_evidence + evidence))
 
 
 async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:
@@ -343,6 +356,32 @@ async def approve_agent(
     verdict = "prompt cleared" if cleared else "prompt still visible after answering"
     log.info("Approved a %s permission prompt on '%s' (%s)", rt.id, name, verdict)
     return "approved", [f"answered with {' '.join(rt.approve_keys)}; {verdict}", *tail]
+
+
+async def deny_agent(
+    name: str, *, runtime: str | None = None, settle_seconds: float = 1.0
+) -> tuple[str, list[str]]:
+    """Refuse the permission prompt an agent's runtime is showing right now.
+
+    The mirror of ``approve_agent`` with the runtime's refusing key
+    (``deny_keys``): ``denied``, ``not_waiting``, ``unsupported``, ``offline``
+    or ``failed``, with the same gate — only a dialog on screen is answered.
+    """
+    if not await session_exists(name):
+        return "offline", [f"no tmux session named '{name}'"]
+    pane = await capture_pane(name, lines=60)
+    rt = await resolve_runtime(name, hint=runtime, pane_content=pane)
+    if not rt.deny_keys:
+        return "unsupported", [f"no verified way to refuse a {rt.id} permission prompt"]
+    tail = [ln.strip() for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-8:]
+    if not rt.detect_active_dialog(pane):
+        return "not_waiting", ["terminal shows no active permission prompt:", *tail]
+    if not await rt.deny_prompt(name):
+        return "failed", ["tmux refused the keystroke"]
+    await asyncio.sleep(settle_seconds)
+    after = await capture_pane(name, lines=60)
+    cleared = "cleared" if not rt.detect_active_dialog(after) else "still visible"
+    return "denied", [f"sent {' '.join(rt.deny_keys)} to {rt.id}; dialog {cleared}", *tail]
 
 
 async def plan_control(

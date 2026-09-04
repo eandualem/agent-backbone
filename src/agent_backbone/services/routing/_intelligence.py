@@ -21,6 +21,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from agent_backbone.services.agents._file_reader import read_state_file
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.models import WORKING_STATES, AgentState
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
@@ -34,7 +35,7 @@ log = logging.getLogger(__name__)
 
 
 def _profile_current_issue(agent_state: AgentState, current_issue: int | None) -> int | None:
-    if agent_state in (AgentState.BUSY, AgentState.WAITING_FOR_HUMAN):
+    if agent_state in (AgentState.BUSY, AgentState.BLOCKED, AgentState.WAITING_FOR_HUMAN):
         return current_issue
     return None
 
@@ -49,9 +50,14 @@ async def get_session_intelligence(
 
     active = await list_sessions()
     if session_name not in active:
+        # What the hook last recorded survives the session: the id to
+        # resume and the last reply are still worth showing.
+        last = read_state_file(config.state_dir, session_name)
         return SessionProfile(
             session_name=session_name,
             intelligence=SessionIntelligence.OFFLINE,
+            session_id=last.session_id if last else None,
+            last_message=last.last_message if last else None,
             evidence=["no tmux session with that name"],
         )
 
@@ -85,12 +91,21 @@ async def get_session_intelligence(
             current_issue=_profile_current_issue(agent_state, state_snap.current_issue),
             current_repo=state_snap.current_repo,
             state_source=state_snap.source,
+            session_id=state_snap.session_id,
+            last_message=state_snap.last_message,
+            detail=state_snap.detail,
             evidence=evidence + list(extra),
         )
 
     if agent_state == AgentState.WAITING_FOR_HUMAN:
         return profile(SessionIntelligence.WAITING_FOR_HUMAN)
 
+    if agent_state == AgentState.BLOCKED:
+        detail = f": {state_snap.detail}" if state_snap.detail else ""
+        return profile(
+            SessionIntelligence.AGENT_WORKING,
+            f"blocked on its {state_snap.reason or 'runtime'}{detail}; it resumes on its own",
+        )
     if agent_state in WORKING_STATES:
         return profile(SessionIntelligence.AGENT_WORKING)
 

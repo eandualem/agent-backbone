@@ -9,6 +9,7 @@ import pytest
 from agent_backbone.config import AgentSpec, bootstrap_config
 from agent_backbone.services.agents import (
     approve_agent,
+    deny_agent,
     plan_control,
     read_state_file,
     start_agent,
@@ -76,7 +77,43 @@ class TestApproveAgent:
         keys.assert_not_called()
 
 
-class TestPlanControl:
+class TestDenyAgent:
+    DIALOG = " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n Esc to cancel\n"
+    IDLE = "❯ \n  ? for shortcuts\n"
+
+    async def test_refuses_only_a_visible_prompt(self):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[self.DIALOG, self.IDLE]),
+            patch(f"{_BASE}.send_keys", new_callable=AsyncMock, return_value=True) as keys,
+        ):
+            outcome, evidence = await deny_agent("ike", runtime="claude", settle_seconds=0)
+        assert outcome == "denied"
+        keys.assert_awaited_once_with("ike", "Escape")
+        assert evidence[0].startswith("sent Escape to claude; dialog cleared")
+
+    async def test_idle_prompt_is_never_typed_into(self):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value=self.IDLE),
+            patch(f"{_BASE}.send_keys", new_callable=AsyncMock) as keys,
+        ):
+            outcome, _ = await deny_agent("ike", runtime="claude")
+        assert outcome == "not_waiting"
+        keys.assert_not_called()
+
+    async def test_runtimes_without_a_verified_key_are_refused(self):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(
+                f"{_MOD}.capture_pane", return_value="│ Allow execution?\n│ ● 1. Yes, allow once\n"
+            ),
+            patch(f"{_BASE}.send_keys", new_callable=AsyncMock) as keys,
+        ):
+            outcome, _ = await deny_agent("ike", runtime="gemini")
+        assert outcome == "unsupported"
+        keys.assert_not_called()
+
     """Plan approve/reject go through the runtime's own keys, or nowhere."""
 
     async def test_claude_approve_sends_shift_tab(self):
@@ -292,6 +329,61 @@ class TestStartingState:
         assert outcome == "waiting_for_human"
         assert evidence[0].startswith("hook reported idle, but the terminal shows a dialog")
         assert any("Resume from summary" in line for line in evidence)
+
+
+class TestResumeBySessionId:
+    async def test_the_session_the_backbone_last_saw_is_reopened(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {"state": "unknown", "ts": 1.0, "session_id": "01a0-sess", "runtime": "claude"},
+        )
+        spec = AgentSpec(name="ike", dir=str(project), runtime="claude")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/claude"),
+        ):
+            result = await start_agent(spec, config, resume=True, wait=False)
+        command = start.await_args.kwargs["command"]
+        assert command[command.index("--resume") + 1] == "01a0-sess"
+        assert any("01a0-sess" in line for line in result.evidence)
+
+    async def test_another_runtimes_session_id_is_not_handed_over(self, tmp_path):
+        """The agent was switched from Claude to Codex: Claude's id means nothing to Codex."""
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {"state": "unknown", "ts": 1.0, "session_id": "claude-sess", "runtime": "claude"},
+        )
+        spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+        ):
+            result = await start_agent(spec, config, resume=True, wait=False)
+        assert start.await_args.kwargs["command"][1:3] == ["resume", "--last"]
+        assert any("belongs to claude" in line for line in result.evidence)
+
+    async def test_without_a_known_session_the_runtimes_own_resume_is_used(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+        ):
+            await start_agent(spec, config, resume=True, wait=False)
+        assert start.await_args.kwargs["command"][1:3] == ["resume", "--last"]
 
 
 class TestHookWiringReachesTheSession:

@@ -90,7 +90,7 @@ For an issue in repository R:
 | Comment | `for:` targets ∪ `from:` opener ∪ sole owner, minus the commenter and `routing.ignore_targets` | comment notice |
 | Issue closed | each target gets its **next** issue; the `from:` opener is told it was closed | |
 | All sub-issues of a parent closed | the parent's targets | "Dependencies resolved" |
-| Pull request opened in R | owners and watchers of R | informational |
+| Pull request opened in R | owners and watchers of R, minus the agent that opened it | informational; the issues it closes count as acknowledged by the opener |
 | Review submitted on a pull request | as for a comment, minus the reviewer when it is an agent | review notice: verdict, summary preview, link (one per review, not per inline comment; webhook intake only) |
 
 The `from:` sender never receives its own issue. Editing an existing issue

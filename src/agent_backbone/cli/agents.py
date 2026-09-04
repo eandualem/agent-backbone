@@ -44,8 +44,25 @@ def _print_start_result(data: dict) -> None:
         print(f"  answer it there: tmux attach -t {name}")
 
 
+def always_on_names(config) -> list[str]:
+    """The agents expected to stay up — what ``agent start --always-on`` brings back."""
+    return [spec.name for spec in config.agents if spec.always_on]
+
+
 async def _agent_start(args: argparse.Namespace) -> int:
     boot = await _common.client_config()
+    if getattr(args, "always_on", False):
+        if args.names or args.dir:
+            print("--always-on selects the always_on agents itself; do not pass names or --dir")
+            return 1
+        names = always_on_names(await _common.load_config())
+        if not names:
+            print("no always_on agents (set one with `backbone agent set NAME always_on=true`)")
+            return 0
+        print(f"starting always_on agents: {', '.join(names)}")
+        args = argparse.Namespace(**{**vars(args), "names": names, "always_on": False})
+        if len(names) == 1:
+            return await _agent_start(argparse.Namespace(**{**vars(args), "group": True}))
     if len(args.names) > 1:
         if args.dir or args.watch:
             print("--dir/--watch apply to a single agent; start a group by name only")
@@ -243,7 +260,14 @@ async def _agent(args: argparse.Namespace) -> int:
                     else ""
                 )
                 print(f"  state:    {data['state']}{reason}{issue}{age}")
+                if data.get("detail"):
+                    print(f"  detail:   {data['detail']}")
                 print(f"  delivery: {data['delivery']}")
+                if data.get("session_id"):
+                    print(f"  session:  {data['session_id']}")
+                if data.get("last_message"):
+                    reply = " ".join(data["last_message"].split())
+                    print(f"  last reply: {reply[:200]}{'…' if len(reply) > 200 else ''}")
                 print("  evidence:")
                 for line in data["evidence"]:
                     print(f"    - {line}")

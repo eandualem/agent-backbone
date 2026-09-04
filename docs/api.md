@@ -23,8 +23,11 @@ with live state. Cached for 5 s.
 }], "total": 1}
 ```
 
-`state` is `offline`, `starting`, `idle`, `busy`, `waiting_for_human` or
-`unknown`; `reason` is `plan`, `permission` or `question` when waiting.
+`state` is `offline`, `starting`, `idle`, `busy`, `waiting_for_human`,
+`blocked` or `unknown`; `reason` is `plan`, `permission` or `question` when
+waiting, `quota` when blocked. `GET /api/agents/{name}/inspect` also carries
+`session_id` (the runtime's own) and `last_message` (the agent's last reply,
+clipped) when the runtime's hook reports them.
 
 ### `POST /api/agents/start`
 

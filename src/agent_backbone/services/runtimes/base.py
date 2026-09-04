@@ -104,6 +104,9 @@ class Runtime:
     """tmux key names that accept the runtime's permission prompt as shown
     (verified against a live capture of that dialog). Empty: the backbone
     does not know how to answer this runtime and refuses to guess."""
+    deny_keys: tuple[str, ...] = ()
+    """tmux key names that refuse the permission prompt as shown (same rule:
+    verified live, or empty and refused)."""
     plan_approve_keys: tuple[str, ...] = ()
     """tmux key names that accept the plan the runtime is presenting (Claude
     Code: Shift+Tab). Empty: the runtime has no plan mode the backbone can
@@ -214,25 +217,32 @@ class Runtime:
         self,
         *,
         model: str | None,
-        resume: bool,
+        resume: bool | str,
         brief_file: Path | None,
         pre_trust: bool,
         data_dir: Path | str | None,
         state_dir: Path | str | None,
     ) -> list[str]:
-        """Arguments after the binary. The default: ``--model``, ``--resume``."""
+        """Arguments after the binary. The default: ``--model``, ``--resume``.
+
+        ``resume`` is ``True`` for the runtime's own notion of "the last
+        conversation", or a session id the backbone saw through the hook;
+        a runtime that cannot address a session by id treats it as ``True``.
+        """
         args: list[str] = []
         if model:
             args.extend(["--model", model])
         if resume:
             args.append("--resume")
+            if isinstance(resume, str):
+                args.append(resume)  # claude --resume <session id>
         return args
 
     def build_command(
         self,
         *,
         model: str | None = None,
-        resume: bool = False,
+        resume: bool | str = False,
         brief_file: Path | str | None = None,
         pre_trust: bool = False,
         data_dir: Path | str | None = None,
@@ -428,6 +438,15 @@ class Runtime:
         if not self.approve_keys:
             return False
         for key in self.approve_keys:
+            if not await send_keys(session_name, key):
+                return False
+        return True
+
+    async def deny_prompt(self, session_name: str) -> bool:
+        """Send the refusing answer to the permission prompt on screen."""
+        if not self.deny_keys:
+            return False
+        for key in self.deny_keys:
             if not await send_keys(session_name, key):
                 return False
         return True
