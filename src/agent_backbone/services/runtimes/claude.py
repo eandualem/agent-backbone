@@ -87,8 +87,10 @@ class ClaudeCode(Runtime):
         "yes, and don't ask again",
         "would you like to proceed",
     )
-    # "❯ 1. Yes" is preselected in the permission dialog (live capture, 2.1.x).
+    # "❯ 1. Yes" is preselected in the permission dialog (live capture, 2.1.x);
+    # its footer says "Esc to cancel".
     approve_keys = ("Enter",)
+    deny_keys = ("Escape",)
     # Plan mode: Shift+Tab (sent as Escape then "[Z") accepts the plan;
     # Escape leaves plan mode so feedback can follow as a message.
     plan_approve_keys = ("Escape", "[Z")

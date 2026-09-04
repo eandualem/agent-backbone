@@ -116,8 +116,10 @@ class Codex(Runtime):
         "press enter to continue",
         "press enter to confirm",
     )
-    # "› 1. Yes, proceed (y)" is preselected; "Press enter to confirm" (0.152).
+    # "› 1. Yes, proceed (y)" is preselected; "Press enter to confirm" (0.152);
+    # "3. No, and tell Codex what to do differently (esc)".
     approve_keys = ("Enter",)
+    deny_keys = ("Escape",)
     interrupt_queued_delivery = True
 
     def pre_trust(self, directory: Path | str) -> None:

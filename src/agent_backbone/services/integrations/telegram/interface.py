@@ -22,6 +22,7 @@ import httpx
 from telegram import Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -45,12 +46,30 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-async def _send(token: str, chat_id: int, text: str, *, thread_id: int | None = None) -> bool:
+def inline_keyboard(actions: list[tuple[str, str]] | None) -> dict | None:
+    """Telegram's ``reply_markup`` for ``(label, callback data)`` buttons, one row."""
+    if not actions:
+        return None
+    row = [{"text": label, "callback_data": data} for label, data in actions]
+    return {"inline_keyboard": [row]}
+
+
+async def _send(
+    token: str,
+    chat_id: int,
+    text: str,
+    *,
+    thread_id: int | None = None,
+    actions: list[tuple[str, str]] | None = None,
+) -> bool:
     """One sendMessage through the HTTP API (no bot instance needed)."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload: dict = {"chat_id": chat_id, "text": text}
     if thread_id is not None:
         payload["message_thread_id"] = thread_id
+    markup = inline_keyboard(actions)
+    if markup is not None:
+        payload["reply_markup"] = markup
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, json=payload, timeout=10)
@@ -63,12 +82,19 @@ async def _send(token: str, chat_id: int, text: str, *, thread_id: int | None = 
         return False
 
 
-async def notify_static(config: BackboneConfig, text: str, *, agent: str | None = None) -> bool:
+async def notify_static(
+    config: BackboneConfig,
+    text: str,
+    *,
+    agent: str | None = None,
+    actions: list[tuple[str, str]] | None = None,
+) -> bool:
     """Config-driven alert for callers without the bot instance (scheduler jobs).
 
     Goes into the agent's topic when it has one and the group is known,
-    otherwise to ``telegram.notification_chat_id``. False when Telegram is
-    not configured for either.
+    otherwise to ``telegram.notification_chat_id``. ``actions`` become an
+    inline keyboard the bot answers in ``on_callback``. False when Telegram
+    is not configured for either destination.
     """
     token = config.telegram_token
     if not token:
@@ -78,11 +104,11 @@ async def notify_static(config: BackboneConfig, text: str, *, agent: str | None 
         group = effective_group_chat_id(config, discovery)
         thread_id = agent_topic(config, discovery, agent)
         if group and thread_id is not None:
-            return await _send(token, group, text, thread_id=thread_id)
+            return await _send(token, group, text, thread_id=thread_id, actions=actions)
     chat_id = config.telegram.notification_chat_id
     if not chat_id:
         return False
-    return await _send(token, chat_id, text)
+    return await _send(token, chat_id, text, actions=actions)
 
 
 class TelegramService(Integration):
@@ -115,8 +141,14 @@ class TelegramService(Integration):
             return False
         return await _send(self.config.telegram_token, group, text, thread_id=thread_id)
 
-    async def notify(self, text: str, *, agent: str | None = None) -> bool:
-        return await notify_static(self.config, text, agent=agent)
+    async def notify(
+        self,
+        text: str,
+        *,
+        agent: str | None = None,
+        actions: list[tuple[str, str]] | None = None,
+    ) -> bool:
+        return await notify_static(self.config, text, agent=agent, actions=actions)
 
     async def sync_agents(self) -> None:
         """One forum topic per registered agent (see ``_topics``)."""
@@ -201,6 +233,10 @@ class TelegramService(Integration):
 
     async def cmd_approve(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _commands.cmd_approve(self, update, context)
+
+    async def on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """A button on an alert: Allow / Deny a permission prompt, Approve / Reject a plan."""
+        await _commands.on_callback(self, update, context)
 
     async def handle_topic_message(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -290,6 +326,7 @@ class TelegramService(Integration):
         self._app.add_handler(CommandHandler("identify", self.cmd_identify))
         self._app.add_handler(CommandHandler("viewplan", self.cmd_viewplan))
         self._app.add_handler(CommandHandler("approve", self.cmd_approve))
+        self._app.add_handler(CallbackQueryHandler(self.on_callback))
         self._app.add_handler(
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND & filters.IS_TOPIC_MESSAGE,

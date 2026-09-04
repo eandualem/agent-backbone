@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -39,6 +38,7 @@ from agent_backbone.services.agents import (
     agent_state,
     approve_agent,
     read_state_file,
+    record_answer,
     write_state_file,
 )
 from agent_backbone.services.agents.operations import StartRequest, resolve_agent, start_resolved
@@ -272,17 +272,9 @@ async def approve_agent_prompt(
             status_code=_APPROVE_STATUS.get(outcome, 500),
             detail={"outcome": outcome, "evidence": evidence},
         )
-    dialog = next((ln for ln in evidence[1:] if ln), "")
-    event_id = await db.events.record(
-        delivery_id=f"approval:{uuid.uuid4().hex}",
-        source="backbone",
-        event_type="approval",
-        sender=approved_by,
-        summary=f"{approved_by} approved a {spec.runtime} permission prompt on {name}: {dialog}",
+    await record_answer(
+        db, agent=name, runtime=spec.runtime, verb="approved", by=approved_by, evidence=evidence
     )
-    if event_id is not None:
-        await db.events.mark_processed(event_id, "approved")
-    log.info("Permission prompt on '%s' approved by %s", name, approved_by)
     await feed.refresh_and_emit()
     return AgentApproveResponse(
         ok=True, session=name, outcome=outcome, evidence=evidence, approved_by=approved_by

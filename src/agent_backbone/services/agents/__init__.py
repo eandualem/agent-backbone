@@ -19,9 +19,11 @@ from agent_backbone.services.agents.acknowledgement import (
     has_commented_on_issue,
     rotate_action_log,
 )
+from agent_backbone.services.agents.audit import record_answer
 from agent_backbone.services.agents.launch import (
     StartResult,
     approve_agent,
+    deny_agent,
     plan_control,
     start_agent,
     stop_agent,
@@ -38,6 +40,7 @@ __all__ = [
     "agent_state",
     "approve_agent",
     "clear_starting_marker",
+    "deny_agent",
     "find_outgoing_comment",
     "find_outgoing_pull_request",
     "get_agent_state",
@@ -46,6 +49,7 @@ __all__ = [
     "plan_control",
     "read_plan",
     "read_state_file",
+    "record_answer",
     "rotate_action_log",
     "start_agent",
     "stop_agent",

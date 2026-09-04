@@ -104,6 +104,9 @@ class Runtime:
     """tmux key names that accept the runtime's permission prompt as shown
     (verified against a live capture of that dialog). Empty: the backbone
     does not know how to answer this runtime and refuses to guess."""
+    deny_keys: tuple[str, ...] = ()
+    """tmux key names that refuse the permission prompt as shown (same rule:
+    verified live, or empty and refused)."""
     plan_approve_keys: tuple[str, ...] = ()
     """tmux key names that accept the plan the runtime is presenting (Claude
     Code: Shift+Tab). Empty: the runtime has no plan mode the backbone can
@@ -435,6 +438,15 @@ class Runtime:
         if not self.approve_keys:
             return False
         for key in self.approve_keys:
+            if not await send_keys(session_name, key):
+                return False
+        return True
+
+    async def deny_prompt(self, session_name: str) -> bool:
+        """Send the refusing answer to the permission prompt on screen."""
+        if not self.deny_keys:
+            return False
+        for key in self.deny_keys:
             if not await send_keys(session_name, key):
                 return False
         return True

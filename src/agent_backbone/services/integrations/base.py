@@ -83,8 +83,15 @@ class Integration:
         """Post ``text`` into the agent's surface. False when it has none here."""
         return False
 
-    async def notify(self, text: str, *, agent: str | None = None) -> bool:
-        """Push an alert to the humans, into ``agent``'s surface when it has one."""
+    async def notify(
+        self,
+        text: str,
+        *,
+        agent: str | None = None,
+        actions: list[tuple[str, str]] | None = None,
+    ) -> bool:
+        """Push an alert to the humans, into ``agent``'s surface when it has one.
+        ``actions`` are ``(label, callback data)`` buttons a channel may offer."""
         return False
 
     async def sync_agents(self) -> None:

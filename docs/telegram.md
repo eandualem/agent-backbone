@@ -41,6 +41,7 @@ command and message from an unlisted chat is ignored silently.
 | `/digest` | Sessions, pending deliveries, tracked agent states |
 | `/viewplan <agent>` | Show the plan an agent is waiting to have approved |
 | `/approve <agent>` | Approve it — only when `security.allow_remote_plan_control` is on, and only for runtimes with a plan mode the backbone can drive (Claude Code) |
+| *buttons on alerts* | A permission alert carries **Allow** / **Deny**, a plan alert **Approve plan** / **Reject plan** (see below). A button is bound to the prompt it was raised for: once the agent has moved on it answers nothing. Pressing one is answered once; the alert is edited with the outcome and who pressed it (name and Telegram user id), and a successful answer is recorded under the user id |
 | `/identify` | Print this chat/topic id and its current mapping |
 | `/help` | Command list |
 
@@ -103,7 +104,9 @@ Posted into the agent's topic when it has one, otherwise to
 `telegram.notification_chat_id`. Swarm members never get a topic: a swarm
 is internal to the agent that runs it, and you talk to that agent.
 
-- **Plan waiting** — `📋 Plan waiting — app / Title: … / /viewplan app / /approve app`, once per plan.
+- **Plan waiting** — `📋 Plan waiting — app / Title: … / /viewplan app / /approve app`, once per plan, with **Approve plan** / **Reject plan** buttons when `security.allow_remote_plan_control` is on.
+- **Permission prompt** — `🔐 Permission prompt — app`, once per prompt, with **Allow** / **Deny** buttons when `security.allow_remote_approval` is on (the default). Allow sends the runtime's affirmative key, Deny its refusing key (Escape, verified for Claude Code and Codex; refused as unsupported elsewhere), only while the dialog is on screen, and every answer is recorded with who pressed it. Not sent while the tmux session is attached — someone is already looking at the dialog.
+- **Question** — a dialog the backbone cannot answer for you (an `AskUserQuestion`, an unknown picker): the alert says which terminal to attach to, without buttons.
 - **Agent went offline unexpectedly** — an `always_on` agent's session died; it was not restarted.
 - **Agent is offline with N queued messages** — messages are waiting for an agent that is not running (agents without `always_on`, which were not reported when they died; once per `timing.escalation_dedup_seconds`); it was not restarted.
 - **Agent is blocked on its usage limit** — the runtime paused for its

@@ -9,6 +9,7 @@ import pytest
 from agent_backbone.config import AgentSpec, bootstrap_config
 from agent_backbone.services.agents import (
     approve_agent,
+    deny_agent,
     plan_control,
     read_state_file,
     start_agent,
@@ -76,7 +77,43 @@ class TestApproveAgent:
         keys.assert_not_called()
 
 
-class TestPlanControl:
+class TestDenyAgent:
+    DIALOG = " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n Esc to cancel\n"
+    IDLE = "❯ \n  ? for shortcuts\n"
+
+    async def test_refuses_only_a_visible_prompt(self):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[self.DIALOG, self.IDLE]),
+            patch(f"{_BASE}.send_keys", new_callable=AsyncMock, return_value=True) as keys,
+        ):
+            outcome, evidence = await deny_agent("ike", runtime="claude", settle_seconds=0)
+        assert outcome == "denied"
+        keys.assert_awaited_once_with("ike", "Escape")
+        assert evidence[0].startswith("sent Escape to claude; dialog cleared")
+
+    async def test_idle_prompt_is_never_typed_into(self):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value=self.IDLE),
+            patch(f"{_BASE}.send_keys", new_callable=AsyncMock) as keys,
+        ):
+            outcome, _ = await deny_agent("ike", runtime="claude")
+        assert outcome == "not_waiting"
+        keys.assert_not_called()
+
+    async def test_runtimes_without_a_verified_key_are_refused(self):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(
+                f"{_MOD}.capture_pane", return_value="│ Allow execution?\n│ ● 1. Yes, allow once\n"
+            ),
+            patch(f"{_BASE}.send_keys", new_callable=AsyncMock) as keys,
+        ):
+            outcome, _ = await deny_agent("ike", runtime="gemini")
+        assert outcome == "unsupported"
+        keys.assert_not_called()
+
     """Plan approve/reject go through the runtime's own keys, or nowhere."""
 
     async def test_claude_approve_sends_shift_tab(self):

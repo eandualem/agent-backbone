@@ -17,6 +17,7 @@ from agent_backbone.services.agents import StateSnapshot, agent_state
 from agent_backbone.services.jobs.copy_mode import handle_copy_mode_recovery
 from agent_backbone.services.jobs.escalation import (
     check_blocked,
+    check_permission_waiting,
     check_plan_waiting,
     handle_offline,
     handle_stalls,
@@ -108,6 +109,11 @@ async def monitor_agents(
             await check_blocked(config, states)
         except Exception:
             log.exception("Blocked-agent notification failed (non-fatal)")
+
+        try:
+            await check_permission_waiting(config, states)
+        except Exception:
+            log.exception("Permission-waiting notification failed (non-fatal)")
 
         try:
             await handle_copy_mode_recovery(config, active_sessions)

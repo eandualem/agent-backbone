@@ -192,6 +192,80 @@ class TestOffline:
         assert await esc.check_for_unexpected_offline(config, {"ike"}, db, AsyncMock()) == []
 
 
+class TestPermissionWaiting:
+    @pytest.fixture(autouse=True)
+    def _fresh(self):
+        esc._permission_notified.clear()
+        yield
+        esc._permission_notified.clear()
+
+    async def test_alert_with_buttons_once_per_prompt(self, config):
+        states = {"ike": _snap(_WAITING, reason="permission"), "leo": _snap(AgentState.BUSY)}
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+        ):
+            await esc.check_permission_waiting(config, states)
+            await esc.check_permission_waiting(config, states)
+        tg.assert_awaited_once()
+        assert "Permission prompt — ike" in tg.await_args.args[1]
+        ref = f"{states['ike'].timestamp:.3f}"
+        assert tg.await_args.kwargs["actions"] == [
+            ("Allow", f"approve:ike:{ref}"),
+            ("Deny", f"deny:ike:{ref}"),
+        ]
+        assert tg.await_args.kwargs["agent"] == "ike"
+
+    async def test_a_new_prompt_is_a_new_alert(self, config):
+        first = _snap(_WAITING, reason="permission", age=30)
+        second = _snap(_WAITING, reason="permission")
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+        ):
+            await esc.check_permission_waiting(config, {"ike": first})
+            await esc.check_permission_waiting(config, {"ike": second})
+        assert tg.await_count == 2
+
+    async def test_not_while_someone_is_at_the_terminal(self, config):
+        states = {"ike": _snap(_WAITING, reason="permission")}
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=True),
+        ):
+            await esc.check_permission_waiting(config, states)
+        tg.assert_not_called()
+
+    async def test_buttons_off_when_remote_approval_is_off(self, config):
+        from agent_backbone.config import SecurityConfig
+
+        config = replace(config, security=SecurityConfig(allow_remote_approval=False))
+        states = {"ike": _snap(_WAITING, reason="permission")}
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+        ):
+            await esc.check_permission_waiting(config, states)
+        assert tg.await_args.kwargs["actions"] is None
+        assert "allow_remote_approval" in tg.await_args.args[1]
+
+    async def test_a_question_has_no_buttons(self, config):
+        states = {"ike": _snap(_WAITING, reason="question")}
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+        ):
+            await esc.check_permission_waiting(config, states)
+        assert tg.await_args.kwargs["actions"] is None
+        assert "Question — ike" in tg.await_args.args[1]
+
+    async def test_plans_are_left_to_the_plan_check(self, config):
+        states = {"ike": _snap(_WAITING, reason="plan", plan_file="/p.md", plan_title="T")}
+        with patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg:
+            await esc.check_permission_waiting(config, states)
+        tg.assert_not_called()
+
+
 class TestBlocked:
     async def test_notifies_once_with_the_runtimes_detail(self, config):
         states = {
@@ -243,6 +317,7 @@ class TestPlanWaiting:
         tg.assert_awaited_once()
         assert "/approve ike" in tg.await_args.args[1]
         assert tg.await_args.kwargs["agent"] == "ike"  # lands in the agent's own topic
+        assert tg.await_args.kwargs["actions"] is None  # plan control is off by default
         d.assert_awaited_once()
         assert d.await_args.args[0] == "leo"
         assert "created a plan" in d.await_args.args[1]

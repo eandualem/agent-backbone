@@ -23,6 +23,7 @@ from agent_backbone.services.routing import (
     outcome_queues,
     safe_deliver,
 )
+from agent_backbone.services.terminal import query_format_vars
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -37,6 +38,83 @@ _escalated = RecentKeys(1800)
 """(session, event) pairs escalated within ``timing.escalation_dedup_seconds``."""
 _plan_notified = RecentKeys(_PLAN_NOTIFY_DEDUP_SECONDS)
 """(session, plan ref) pairs the humans / escalation target were told about."""
+_permission_notified = RecentKeys(_PLAN_NOTIFY_DEDUP_SECONDS)
+"""(session, state timestamp) pairs of permission prompts the humans were told about."""
+
+
+async def _attended(session: str) -> bool:
+    """Whether someone is at that terminal (the tmux session is attached)."""
+    try:
+        vars_ = await query_format_vars(session, "attached=#{session_attached}")
+    except Exception:
+        return False
+    return vars_.get("attached", "0") not in ("", "0")
+
+
+def prompt_id(timestamp: float) -> str:
+    """The identity of one prompt: the state's timestamp, as the button carries it."""
+    return f"{timestamp:.3f}"
+
+
+def permission_actions(
+    config: BackboneConfig, agent: str, timestamp: float
+) -> list[tuple[str, str]] | None:
+    """Allow / Deny bound to *this* prompt: a button pressed after the agent
+    moved on must not answer whatever is on screen then."""
+    if not config.security.allow_remote_approval:
+        return None
+    ref = prompt_id(timestamp)
+    return [("Allow", f"approve:{agent}:{ref}"), ("Deny", f"deny:{agent}:{ref}")]
+
+
+def plan_actions(
+    config: BackboneConfig, agent: str, timestamp: float
+) -> list[tuple[str, str]] | None:
+    if not config.security.allow_remote_plan_control:
+        return None
+    ref = prompt_id(timestamp)
+    return [
+        ("Approve plan", f"plan_approve:{agent}:{ref}"),
+        ("Reject plan", f"plan_reject:{agent}:{ref}"),
+    ]
+
+
+async def check_permission_waiting(config: BackboneConfig, states: AgentStates) -> None:
+    """Tell the humans about a permission prompt, with Allow / Deny buttons.
+
+    Once per prompt (the state's timestamp), and not while someone is at
+    that terminal: an attached tmux session means the dialog is being
+    looked at. A ``question`` (a dialog the backbone cannot answer for a
+    person) is reported without buttons.
+    """
+    for name, snapshot in states.items():
+        if snapshot.state != AgentState.WAITING_FOR_HUMAN or snapshot.is_plan_waiting:
+            continue
+        key = (name, f"{snapshot.reason}:{snapshot.timestamp:.3f}")
+        if _permission_notified.seen(key):
+            continue
+        if await _attended(name):
+            continue
+        if snapshot.reason == "permission":
+            text = (
+                f"\U0001f510 Permission prompt — {name}\n"
+                "The runtime is asking to run a tool. Allow or deny it here, or in the "
+                f"terminal: tmux attach -t {name}"
+            )
+            actions = permission_actions(config, name, snapshot.timestamp)
+            if actions is None:
+                text += (
+                    "\n\nButtons are off: backbone config set security.allow_remote_approval true"
+                )
+        else:
+            text = (
+                f"\u2753 Question — {name}\n"
+                f"The runtime is asking something only you can answer: tmux attach -t {name}"
+            )
+            actions = None
+        if await notify_humans(config, text, agent=name, actions=actions):
+            _permission_notified.mark(key)
+            log.info("Sent permission-waiting notification for %s", name)
 
 
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
@@ -286,7 +364,9 @@ async def check_plan_waiting(
                 f"\U0001f4cb Plan waiting — {name}\nTitle: {plan_title}\n\n"
                 f"/viewplan {name}\n/approve {name}"
             )
-            if await notify_humans(config, msg, agent=name):
+            if await notify_humans(
+                config, msg, agent=name, actions=plan_actions(config, name, plan_timestamp)
+            ):
                 _record_plan_notification(name, human_ref)
                 log.info("Sent plan-waiting notification for %s", name)
 

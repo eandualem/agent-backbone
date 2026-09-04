@@ -358,6 +358,32 @@ async def approve_agent(
     return "approved", [f"answered with {' '.join(rt.approve_keys)}; {verdict}", *tail]
 
 
+async def deny_agent(
+    name: str, *, runtime: str | None = None, settle_seconds: float = 1.0
+) -> tuple[str, list[str]]:
+    """Refuse the permission prompt an agent's runtime is showing right now.
+
+    The mirror of ``approve_agent`` with the runtime's refusing key
+    (``deny_keys``): ``denied``, ``not_waiting``, ``unsupported``, ``offline``
+    or ``failed``, with the same gate — only a dialog on screen is answered.
+    """
+    if not await session_exists(name):
+        return "offline", [f"no tmux session named '{name}'"]
+    pane = await capture_pane(name, lines=60)
+    rt = await resolve_runtime(name, hint=runtime, pane_content=pane)
+    if not rt.deny_keys:
+        return "unsupported", [f"no verified way to refuse a {rt.id} permission prompt"]
+    tail = [ln.strip() for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-8:]
+    if not rt.detect_active_dialog(pane):
+        return "not_waiting", ["terminal shows no active permission prompt:", *tail]
+    if not await rt.deny_prompt(name):
+        return "failed", ["tmux refused the keystroke"]
+    await asyncio.sleep(settle_seconds)
+    after = await capture_pane(name, lines=60)
+    cleared = "cleared" if not rt.detect_active_dialog(after) else "still visible"
+    return "denied", [f"sent {' '.join(rt.deny_keys)} to {rt.id}; dialog {cleared}", *tail]
+
+
 async def plan_control(
     name: str, action: str, *, runtime: str | None = None
 ) -> tuple[str, list[str]]:
