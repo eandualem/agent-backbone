@@ -100,6 +100,18 @@ class QueueRepo(Repo):
                 return EnqueueResult("already_queued")
             return EnqueueResult("inserted", row._mapping["id"])
 
+    async def pending_count(self, session_name: str) -> int:
+        """How many messages are waiting for one session."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM message_queue "
+                    "WHERE session_name = :session AND status = 'pending'"
+                ),
+                {"session": session_name},
+            )
+            return int(result.scalar_one())
+
     async def sessions_with_pending(self) -> list[str]:
         async with self._tx() as conn:
             result = await conn.execute(

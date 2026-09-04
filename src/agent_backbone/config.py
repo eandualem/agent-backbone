@@ -262,10 +262,26 @@ class AgentSpec:
     tags: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     description: str = ""
+    always_on: bool = False
+    """Expected to stay up: a dead session is reported the moment it is
+    noticed. Off by default — agents come and go, and the humans hear about
+    an absent agent only when messages are waiting for it."""
 
     @property
     def path(self) -> Path:
         return Path(self.dir).expanduser()
+
+    @property
+    def swarm(self) -> str | None:
+        """The swarm this agent belongs to (its ``swarm:<name>`` tag), else None.
+
+        Swarm members are internal to the agent that runs the swarm: no
+        Telegram topic, no human-facing surface of their own.
+        """
+        for tag in self.tags:
+            if tag.startswith("swarm:"):
+                return tag[len("swarm:") :]
+        return None
 
     @property
     def repos(self) -> tuple[str, ...]:
@@ -693,5 +709,6 @@ def agents_from_rows(rows: list[dict]) -> AgentsConfig:
             tags=tuple(row.get("tags") or ()),
             env=dict(row.get("env") or {}),
             description=row.get("description") or "",
+            always_on=bool(row.get("always_on")),
         )
     return AgentsConfig(specs=specs)

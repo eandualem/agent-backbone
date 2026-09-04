@@ -38,6 +38,8 @@ class AgentORM(Base):
     tags: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
     env: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
     description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    always_on: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    """1 when a dead session must be reported at once (``AgentSpec.always_on``)."""
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     last_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)

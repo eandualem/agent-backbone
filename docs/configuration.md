@@ -84,14 +84,14 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | `telegram.allowed_chat_ids` | `[]` | **Required to enable the bot.** Chat ids (users or groups) allowed to issue commands |
 | `telegram.notification_chat_id` | — | Where plan-waiting, dead-session and copy-mode alerts go |
 | `telegram.group_chat_id` | — | Forum group where each agent gets a topic (learned from the first message in the group if omitted) |
-| `telegram.auto_topics` | `true` | Create a forum topic per registered agent in that group, close it when the agent is forgotten, reopen it if it returns. Needs the bot as an administrator with *Manage Topics*. `false` to manage topics yourself |
+| `telegram.auto_topics` | `true` | Create a forum topic per registered agent in that group (swarm members excepted: a `swarm:<name>` tag means no topic), close it when the agent is forgotten, reopen it if it returns. Needs the bot as an administrator with *Manage Topics*. `false` to manage topics yourself |
 | `telegram.topic_routes` | `{}` | Explicit `{"thread_id": "agent"}` mappings on top of the automatic ones (never closed automatically); `"agents"` is the catch-all topic |
 
 ### `escalation.*`
 
 | Key | Default | Meaning |
 |---|---|---|
-| `escalation.target` | — | Agent that receives stall / dead-session / plan-waiting messages. Empty disables agent escalation (Telegram alerts still happen) |
+| `escalation.target` | — | Agent that receives stall / offline / plan-waiting messages. Empty disables agent escalation (Telegram alerts still happen) |
 
 ### `priority.*` — "which issue is next"
 
@@ -124,7 +124,8 @@ Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
 | `model` | `--model` / `agent set` | Passed as `--model` to the runtime |
 | `repo` | `git remote origin` / `agent set` | `owner/name` the agent owns |
 | `watches` | `agent watch` | Repositories it also hears about |
-| `tags`, `description` | `agent set` | Free-form, returned by the API |
+| `tags`, `description` | `agent set` | Free-form, returned by the API. A `swarm:<name>` tag marks a swarm member: internal to the agent running the swarm, no Telegram topic |
+| `always_on` | `agent set NAME always_on=true` | Expected to stay up: a dead session is reported at once. Off by default — an absent agent is reported only when messages are queued for it |
 | `env` | `agent set env='{"K":"V"}'` | Extra environment exported into the session (e.g. an API key). Values are stored with the agent record — treat them like `.env` contents |
 
 Exported into every session the backbone starts: `BACKBONE_RUNTIME`,

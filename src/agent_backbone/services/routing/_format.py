@@ -100,6 +100,15 @@ def format_unexpected_offline_notification(session: str, entity: str, pending_co
     )
 
 
+def format_offline_queue_notification(session: str, queued: int) -> str:
+    """Messages are waiting for an agent that is not running."""
+    word = "message" if queued == 1 else "messages"
+    return (
+        f"[via:backbone] Agent {session} is offline with {queued} queued {word}. "
+        f"It was not restarted; `backbone agent start {session}` delivers them."
+    )
+
+
 def format_plan_notification(
     session: str,
     entity: str,

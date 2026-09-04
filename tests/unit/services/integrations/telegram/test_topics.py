@@ -83,6 +83,21 @@ class TestSyncTopics:
         assert set(result["created"]) == set(rest)
         assert explicit not in fake.created and discovered not in fake.created
 
+    async def test_swarm_members_get_no_topic_and_a_stale_one_is_closed(self, config, tmp_path):
+        """A swarm is internal to the agent that runs it; humans talk to that agent."""
+        from agent_backbone.config import AgentsConfig
+
+        worker = replace(config.agents.get("ada"), tags=("swarm:review", "role:worker"))
+        coordinator = replace(config.agents.get("bell"), tags=("swarm:review", "role:coordinator"))
+        specs = {**config.agents.specs, "ada": worker, "bell": coordinator}
+        cfg = replace(config, agents=AgentsConfig(specs))
+        d = TopicDiscovery(topic_routes={7: "ada"})  # left over from before the swarm
+        bot, fake = _running_bot(cfg, tmp_path, discovery=d)
+        result = await _topics.sync_topics(bot)
+        assert "ada" not in fake.created and "bell" not in fake.created
+        assert result["closed"] == ["ada"] and fake.closed == [7]
+        assert set(fake.created) == set(config.agents.names) - {"ada", "bell"}
+
     async def test_forgotten_agent_topic_is_closed_then_reopened_on_return(self, config, tmp_path):
         d = TopicDiscovery(topic_routes={5: "gone", 6: "agents"})
         bot, fake = _running_bot(config, tmp_path, discovery=d)

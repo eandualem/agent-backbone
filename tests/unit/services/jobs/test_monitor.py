@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.config import EscalationConfig, TelegramConfig
+from agent_backbone.config import AgentsConfig, EscalationConfig, TelegramConfig
 from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.jobs import escalation as esc
@@ -131,9 +131,14 @@ class TestHandleStalls:
         d.assert_not_called()
 
 
+def _always_on(config, name: str):
+    spec = replace(config.agents.get(name), always_on=True)
+    return replace(config, agents=AgentsConfig({**config.agents.specs, name: spec}))
+
+
 class TestOffline:
     async def test_detects_and_clears_offline_agent(self, config, db):
-        config = replace(config, escalation=EscalationConfig(target="leo"))
+        config = _always_on(replace(config, escalation=EscalationConfig(target="leo")), "ike")
         await db.states.set("ike", "busy", current_issue=3)
         gh = AsyncMock()
         gh.list_issues = AsyncMock(return_value=[_issue(3)])
@@ -143,6 +148,43 @@ class TestOffline:
         assert "offline unexpectedly" in d.await_args.args[1]
         assert "1 pending issue" in d.await_args.args[1]
         assert (await db.states.get("ike"))["state"] == "unknown"
+
+    async def test_an_ordinary_agent_going_offline_is_not_reported(self, config, db):
+        """Agents are not expected to stay up; the state is cleared quietly."""
+        config = replace(config, escalation=EscalationConfig(target="leo"))
+        await db.states.set("ike", "busy", current_issue=3)
+        gh = AsyncMock()
+        gh.list_issues = AsyncMock(return_value=[_issue(3)])
+        with (
+            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+        ):
+            await esc.handle_offline(config, {"leo"}, db, gh)
+        d.assert_not_called()
+        tg.assert_not_called()
+        assert (await db.states.get("ike"))["state"] == "unknown"
+
+    async def test_queued_messages_for_an_offline_agent_are_reported_once(self, config, db):
+        config = replace(config, escalation=EscalationConfig(target="leo"))
+        await db.queue.enqueue(session_name="ike", message="[via:backbone from:leo] hi")
+        await db.queue.enqueue(session_name="ike", message="[via:backbone from:ada] hey")
+        with (
+            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+        ):
+            await esc.handle_offline(config, {"leo"}, db, AsyncMock())
+            await esc.handle_offline(config, {"leo"}, db, AsyncMock())
+        tg.assert_awaited_once()
+        assert "ike is offline with 2 queued messages" in tg.await_args.args[1]
+        assert tg.await_args.kwargs["agent"] == "ike"
+        d.assert_awaited_once()
+        assert d.await_args.args[0] == "leo"
+        assert "2 queued messages" in d.await_args.args[1]
+
+    async def test_no_queued_messages_no_report(self, config, db):
+        with patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg:
+            await esc.handle_offline(config, set(), db, AsyncMock())
+        tg.assert_not_called()
 
     async def test_active_or_unknown_not_flagged(self, config, db):
         await db.states.set("ike", "busy")

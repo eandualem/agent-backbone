@@ -15,6 +15,7 @@ from agent_backbone.recent import RecentKeys
 from agent_backbone.services.agents import AgentState
 from agent_backbone.services.integrations import notify_humans
 from agent_backbone.services.routing import (
+    format_offline_queue_notification,
     format_plan_notification,
     format_stall_notification,
     format_unexpected_offline_notification,
@@ -154,9 +155,19 @@ async def handle_stalls(config: BackboneConfig, states: AgentStates, db: Backbon
 async def handle_offline(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB, gh: GitHubClient | None
 ) -> None:
-    """Report dead sessions (never restart them) and clear their recorded state."""
+    """Report dead sessions (never restart them) and clear their recorded state.
+
+    Agents are not expected to stay up. Only one marked ``always_on`` is
+    reported the moment its session is gone; for every other agent the
+    humans hear about it when messages are waiting for it
+    (``report_offline_queues``).
+    """
     for agent in await check_for_unexpected_offline(config, active_sessions, db, gh):
-        if _should_escalate(agent["session"], "offline", config.timing.escalation_dedup_seconds):
+        spec = config.agents.get(agent["session"])
+        expected_up = spec is not None and spec.always_on
+        if expected_up and _should_escalate(
+            agent["session"], "offline", config.timing.escalation_dedup_seconds
+        ):
             escalation_session = _escalation_session(config, agent["session"])
             if escalation_session and escalation_session in active_sessions:
                 msg = format_unexpected_offline_notification(
@@ -177,12 +188,53 @@ async def handle_offline(
                 agent=agent["session"],
             )
             log.warning("Agent offline unexpectedly: %s", agent["entity"])
+        elif not expected_up:
+            log.info("Agent %s is offline (not always_on; not reported)", agent["entity"])
         try:
             await db.states.set(session_name=agent["session"], state="unknown", current_issue=None)
         except Exception:
             log.exception(
                 "Failed to clear DB state for offline agent %s (non-fatal)", agent["session"]
             )
+    await report_offline_queues(config, active_sessions, db)
+
+
+async def report_offline_queues(
+    config: BackboneConfig, active_sessions: set[str], db: BackboneDB
+) -> None:
+    """Tell the humans (and the escalation target) about messages waiting for
+    an agent that is not running — the consequence of an absence, not the
+    absence itself. ``always_on`` agents were already reported when they died."""
+    for spec in config.agents:
+        if spec.name in active_sessions or spec.always_on:
+            continue
+        try:
+            queued = await db.queue.pending_count(spec.name)
+        except Exception:
+            log.exception("Failed to count queued messages for %s", spec.name)
+            continue
+        if queued == 0 or not _should_escalate(
+            spec.name, "offline_queued", config.timing.escalation_dedup_seconds
+        ):
+            continue
+        msg = format_offline_queue_notification(spec.name, queued)
+        escalation_session = _escalation_session(config, spec.name)
+        if escalation_session and escalation_session in active_sessions:
+            await safe_deliver(
+                escalation_session,
+                msg,
+                config,
+                db=db,
+                priority=True,
+                delivery_kind="escalation",
+            )
+        word = "message" if queued == 1 else "messages"
+        await notify_humans(
+            config,
+            f"Agent {spec.name} is offline with {queued} queued {word}. It was not restarted.",
+            agent=spec.name,
+        )
+        log.info("Agent %s is offline with %d queued message(s)", spec.name, queued)
 
 
 async def check_plan_waiting(

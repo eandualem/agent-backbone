@@ -292,7 +292,8 @@ async def update_agent(
     body: AgentUpdateRequest,
     store: AgentStore = Depends(get_agent_store),
 ):
-    """Change an agent's recorded settings (dir, runtime, model, repo, tags, env, description)."""
+    """Change an agent's recorded settings (dir, runtime, model, repo, tags,
+    env, description, always_on)."""
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
     try:
         spec = await store.update(name, **changes)

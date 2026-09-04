@@ -59,7 +59,9 @@ nothing to address. The bot creates and maintains those topics itself:
 3. Within a moment there is a topic per registered agent. New agents get a
    topic when they are registered (`backbone agent start` in a new
    directory); a forgotten agent's topic is **closed**, not deleted, and is
-   reopened if the agent comes back under the same name.
+   reopened if the agent comes back under the same name. Swarm members
+   (agents tagged `swarm:<name>`) never get one: a swarm is internal to the
+   agent that runs it, and you talk to that agent.
 
 In an agent's topic, plain text is delivered to that agent through the
 normal readiness checks (`[via:telegram from:<you>] …`), and the bot
@@ -98,10 +100,12 @@ posted into its topic too when it has one; otherwise they go to
 ## Notifications you receive
 
 Posted into the agent's topic when it has one, otherwise to
-`telegram.notification_chat_id`:
+`telegram.notification_chat_id`. Swarm members never get a topic: a swarm
+is internal to the agent that runs it, and you talk to that agent.
 
 - **Plan waiting** — `📋 Plan waiting — app / Title: … / /viewplan app / /approve app`, once per plan.
-- **Agent went offline unexpectedly** — a session died; it was not restarted.
+- **Agent went offline unexpectedly** — an `always_on` agent's session died; it was not restarted.
+- **Agent is offline with N queued messages** — messages are waiting for an agent that is not running (agents without `always_on`, which were not reported when they died; once per `timing.escalation_dedup_seconds`); it was not restarted.
 - **Copy mode stuck** — a pane sits in tmux copy mode and the automatic
   cancel did not clear it.
 
