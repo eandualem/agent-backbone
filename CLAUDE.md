@@ -43,8 +43,8 @@ Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way
   API hands it callbacks. `services/swarm` sits beside `jobs`. `api` and
   `cli` are the top. `tests/unit/test_imports.py` asserts this graph two
   ways: statically over every import edge (function-local ones included;
-  `_RANK` is the table) and in a fresh interpreter per entry module; a new
-  cross-package import must pass both.
+  `_ALLOWED` is the per-package table) and in a fresh interpreter per entry
+  module; a new cross-package import must pass both.
 - The database is the only source of configuration. New settings go in
   `SETTINGS_DEFAULTS` in `config.py` (with `SETTINGS_HELP` text) and in
   `docs/configuration.md`. Secrets never go in the database — `.env` only.

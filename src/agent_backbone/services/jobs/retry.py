@@ -53,9 +53,7 @@ async def drain_message_queue(
                 len(expired),
                 config.timing.queue_expiry_minutes,
             )
-            summary["queue_expired"] = len(expired)
-            for row in expired:
-                await _record_expiry(db, row)
+            summary["queue_expired"] = len(expired)  # each left a delivery row (same transaction)
     except Exception:
         log.exception("Failed to expire stale messages (non-fatal)")
 
@@ -113,25 +111,6 @@ async def drain_message_queue(
                     await db.queue.release(leased["id"])
                 break
     return summary
-
-
-async def _record_expiry(db: BackboneDB, row: dict) -> None:
-    """A dropped message leaves a delivery row with outcome ``expired``, so
-    ``agent inspect`` and the sender can see which message never arrived."""
-    try:
-        message = row.get("message") or ""
-        await db.deliveries.record(
-            issue_number=row.get("issue_number"),
-            target_entity=row.get("target_entity") or row.get("session_name") or "",
-            session_name=row.get("session_name") or "",
-            outcome=DeliveryOutcome.EXPIRED.value,
-            source=row.get("source") or "queue",
-            repo=row.get("repo") or "",
-            kind=row.get("delivery_kind") or "issue",
-            preview=message[:120],
-        )
-    except Exception:
-        log.exception("Failed to record an expired message (non-fatal)")
 
 
 async def retry_delivery(

@@ -213,18 +213,30 @@ class TestDeliveryRetryQueueDrain:
         # the row went back to pending for the next drain
         assert await db.queue.pending_count("ike") == 1
 
-    async def test_expired_messages_leave_a_delivery_record(self, db, config):
-        expired_row = {
-            "id": 7,
-            "session_name": "ike",
-            "message": "[via:backbone from:leo] are you there?",
-            "issue_number": None,
-            "target_entity": "ike",
-            "delivery_kind": "direct_message",
-            "source": "backbone",
-            "repo": "",
-        }
-        db.queue.expire_pending = AsyncMock(return_value=[expired_row])
+    async def test_expired_messages_leave_a_delivery_record_in_the_same_transaction(
+        self, db, config
+    ):
+        from sqlalchemy import text
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="[via:backbone from:leo] are you there?",
+            delivery_kind="direct_message",
+            source="backbone",
+        )
+        async with db.queue._tx() as conn:  # age the row past the expiry
+            await conn.execute(
+                text("UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00+00:00'")
+            )
+        expired = await db.queue.expire_pending(max_age_minutes=30)
+        assert len(expired) == 1 and expired[0]["session_name"] == "ike"
+        rows = await db.deliveries.query(session_name="ike", limit=5, kind="direct_message")
+        assert rows and rows[0]["outcome"] == "expired"
+        assert rows[0]["preview"].startswith("[via:backbone from:leo]")
+        assert await db.queue.pending_count("ike") == 0
+
+    async def test_the_drain_counts_expiries(self, db, config):
+        db.queue.expire_pending = AsyncMock(return_value=[{"id": 7, "session_name": "ike"}])
         db.queue.expire_stale_leases = AsyncMock(return_value=0)
         db.queue.sessions_with_pending = AsyncMock(return_value=[])
         with patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock):
@@ -232,9 +244,6 @@ class TestDeliveryRetryQueueDrain:
                 config=config, db=db, gh=None, active_sessions=set()
             )
         assert summary["queue_expired"] == 1
-        rows = await db.deliveries.query(session_name="ike", limit=5, kind="direct_message")
-        assert rows and rows[0]["outcome"] == "expired"
-        assert rows[0]["preview"].startswith("[via:backbone from:leo]")
 
     async def test_drain_calls_expire_stale_leases(self, db, config):
         db.queue.expire_stale_leases = AsyncMock(return_value=0)

@@ -76,11 +76,12 @@ async def create_worktree(repo_dir: Path, swarm: str) -> tuple[Path, str]:
     return worktree, branch
 
 
-async def is_registered(repo_dir: Path, worktree: Path) -> bool:
-    """Whether git still lists ``worktree`` (files present or not)."""
+async def is_registered(repo_dir: Path, worktree: Path) -> bool | None:
+    """Whether git still lists ``worktree`` (files present or not);
+    ``None`` when git could not be asked — never mistaken for "gone"."""
     rc, out, _ = await run_git(repo_dir, "worktree", "list", "--porcelain")
     if rc != 0:
-        return False
+        return None
     target = str(worktree.resolve())
     return any(
         line.startswith("worktree ") and line[9:].strip() == target for line in out.splitlines()
@@ -100,7 +101,7 @@ async def remove_worktree(repo_dir: Path, worktree: Path) -> bool:
         return True
     if not worktree.exists():
         await run_git(repo_dir, "worktree", "prune")
-        if not await is_registered(repo_dir, worktree):
+        if await is_registered(repo_dir, worktree) is False:  # confirmed gone, not unknown
             log.info("Pruned the registration of the missing swarm worktree %s", worktree)
             return True
     log.warning("git worktree remove failed for %s: %s", worktree, err)

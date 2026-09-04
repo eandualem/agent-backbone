@@ -64,6 +64,26 @@ async def test_a_missing_and_still_registered_worktree_does_not_block_creation(r
     assert again.is_dir()
 
 
+async def test_a_git_failure_never_reads_as_unregistered(repo: Path, monkeypatch):
+    """`worktree list` failing must not let teardown claim the registration is gone."""
+    from agent_backbone.services.swarm import _worktree
+
+    worktree, _ = await create_worktree(repo, "sw")
+    shutil.rmtree(worktree)
+
+    async def _broken(directory, *args, **kwargs):
+        # `remove` fails (as it does for a corrupted registration) and the
+        # listing that would confirm the prune fails too.
+        if args[:2] in (("worktree", "list"), ("worktree", "remove")):
+            return 128, "", "fatal: git broke"
+        return await _worktree_run_git(directory, *args, **kwargs)
+
+    _worktree_run_git = _worktree.run_git
+    monkeypatch.setattr(_worktree, "run_git", _broken)
+    assert await is_registered(repo, worktree) is None
+    assert await remove_worktree(repo, worktree) is False
+
+
 async def test_a_real_git_error_is_still_reported(repo: Path, tmp_path: Path):
     stranger = tmp_path / "not-a-worktree"
     stranger.mkdir()

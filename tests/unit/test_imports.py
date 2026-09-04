@@ -116,35 +116,49 @@ def _loaded(module: str) -> list[str]:
     return result.stdout.split()
 
 
-# The layering CLAUDE.md describes, as ranks: a module may import a package
-# of the same or a lower rank, never a higher one. Function-local imports
-# count (they are still edges); imports under ``if TYPE_CHECKING:`` do not.
-_RANK: dict[str, int] = {
-    "__init__": 0,
-    "base": 0,
-    "config": 0,
-    "fs": 0,
-    "git": 0,
-    "help": 0,
-    "hooks": 0,
-    "models": 0,
-    "recent": 0,
-    "release": 0,
-    "templates": 0,
-    "services": 0,  # the package itself
-    "services.scheduler": 1,
-    "services.terminal": 1,
-    "services.runtimes": 2,
-    "services.database": 2,
-    "services.github": 2,
-    "services.agents": 3,
-    "services.routing": 4,
-    "services.integrations": 5,
-    "services.jobs": 6,
-    "services.swarm": 6,
-    "api": 7,
-    "cli": 8,
+# The layering CLAUDE.md describes, as an allowed-import set per package.
+# Function-local imports count (they are still edges); imports under
+# ``if TYPE_CHECKING:`` do not. A package may always import itself.
+_LEAVES = {
+    "__init__",
+    "base",
+    "config",
+    "fs",
+    "git",
+    "help",
+    "hooks",
+    "models",
+    "recent",
+    "release",
+    "templates",
+    "services",
 }
+_ALLOWED: dict[str, set[str]] = {
+    **{leaf: set(_LEAVES) for leaf in _LEAVES},
+    "services.scheduler": set(_LEAVES),
+    "services.terminal": set(_LEAVES),
+    "services.runtimes": _LEAVES | {"services.terminal"},
+    "services.database": set(_LEAVES),
+    "services.github": set(_LEAVES),
+    "services.agents": _LEAVES | {"services.terminal", "services.runtimes", "services.database"},
+    "services.routing": _LEAVES
+    | {
+        "services.terminal",
+        "services.runtimes",
+        "services.database",
+        "services.github",
+        "services.agents",
+    },
+}
+_ALLOWED["services.integrations"] = _ALLOWED["services.routing"] | {"services.routing"}
+_ALLOWED["services.swarm"] = _ALLOWED["services.integrations"] | {"services.integrations"}
+_ALLOWED["services.jobs"] = _ALLOWED["services.swarm"] | {"services.swarm"}
+_ALLOWED["api"] = _ALLOWED["services.jobs"] | {
+    "services.jobs",
+    "services.swarm",
+    "services.scheduler",
+}
+_ALLOWED["cli"] = _ALLOWED["api"] | {"api"}
 
 
 def _package_of(module: str) -> str:
@@ -158,8 +172,22 @@ def _package_of(module: str) -> str:
     return parts[1]
 
 
-def _import_edges(path: Path, module: str) -> list[tuple[int, str]]:
-    """``(line, imported module)`` for every runtime import of ``agent_backbone.*``."""
+def _is_module(root: Path, dotted: str) -> bool:
+    """Whether ``agent_backbone.<…>`` names a module or package on disk."""
+    parts = dotted.split(".")[1:]
+    if not parts:
+        return True
+    candidate = root.joinpath(*parts)
+    return candidate.with_suffix(".py").is_file() or (candidate / "__init__.py").is_file()
+
+
+def _import_edges(path: Path, module: str, root: Path) -> list[tuple[int, str]]:
+    """``(line, imported module)`` for every runtime import of ``agent_backbone.*``.
+
+    ``from agent_backbone.services import routing`` loads the ``routing``
+    package: the edge is to the submodule when the alias names one, and to
+    the base package when it names an exported symbol.
+    """
     import ast
 
     tree = ast.parse(path.read_text(), filename=str(path))
@@ -186,8 +214,11 @@ def _import_edges(path: Path, module: str) -> list[tuple[int, str]]:
                 target = f"{base}.{node.module}" if node.module else base
             else:
                 target = node.module or ""
-            if target.startswith("agent_backbone"):
-                edges.append((node.lineno, target))
+            if not target.startswith("agent_backbone"):
+                continue
+            for alias in node.names:
+                child = f"{target}.{alias.name}"
+                edges.append((node.lineno, child if _is_module(root, child) else target))
     return edges
 
 
@@ -200,11 +231,11 @@ def test_every_module_imports_only_from_its_layer_or_below():
         parts = rel.parent.parts if rel.name == "__init__" else rel.parts
         module = "agent_backbone" + ("." + ".".join(parts) if parts else "")
         source = _package_of(module)
-        for line, target in _import_edges(path, module):
+        for line, target in _import_edges(path, module, root):
             dest = _package_of(target)
-            assert source in _RANK, f"{source} has no rank in test_imports._RANK"
-            assert dest in _RANK, f"{dest} has no rank in test_imports._RANK"
-            if _RANK[dest] > _RANK[source]:
+            assert source in _ALLOWED, f"{source} has no entry in test_imports._ALLOWED"
+            assert dest in _ALLOWED, f"{dest} has no entry in test_imports._ALLOWED"
+            if dest != source and dest not in _ALLOWED[source]:
                 where = f"{path.relative_to(root)}:{line}"
                 violations.append(f"{where} imports {target} ({source} -> {dest})")
     assert not violations, "\n".join(violations)
