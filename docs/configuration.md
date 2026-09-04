@@ -91,7 +91,7 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 
 | Key | Default | Meaning |
 |---|---|---|
-| `escalation.target` | — | Agent that receives stall / dead-session / plan-waiting messages. Empty disables agent escalation (Telegram alerts still happen) |
+| `escalation.target` | — | Agent that receives stall / offline / plan-waiting messages. Empty disables agent escalation (Telegram alerts still happen) |
 
 ### `priority.*` — "which issue is next"
 
@@ -124,7 +124,8 @@ Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
 | `model` | `--model` / `agent set` | Passed as `--model` to the runtime |
 | `repo` | `git remote origin` / `agent set` | `owner/name` the agent owns |
 | `watches` | `agent watch` | Repositories it also hears about |
-| `tags`, `description` | `agent set` | Free-form, returned by the API |
+| `tags`, `description` | `agent set` | Free-form, returned by the API. A `swarm:<name>` tag marks a swarm member: internal to the agent running the swarm, no Telegram topic |
+| `always_on` | `agent set NAME always_on=true` | Expected to stay up: a dead session is reported at once. Off by default — an absent agent is reported only when messages are queued for it |
 | `env` | `agent set env='{"K":"V"}'` | Extra environment exported into the session (e.g. an API key). Values are stored with the agent record — treat them like `.env` contents |
 
 Exported into every session the backbone starts: `BACKBONE_RUNTIME`,

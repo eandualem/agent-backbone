@@ -19,6 +19,7 @@ from agent_backbone.services.routing._delivery import (
 from agent_backbone.services.routing._dependencies import sync_dependencies
 from agent_backbone.services.routing._format import (
     format_next_issue_notification,
+    format_offline_queue_notification,
     format_plan_notification,
     format_stall_notification,
     format_unexpected_offline_notification,
@@ -37,6 +38,7 @@ __all__ = [
     "deliver",
     "dispatch_event",
     "format_next_issue_notification",
+    "format_offline_queue_notification",
     "format_plan_notification",
     "format_stall_notification",
     "format_unexpected_offline_notification",

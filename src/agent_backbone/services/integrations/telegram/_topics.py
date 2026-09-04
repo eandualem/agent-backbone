@@ -69,7 +69,8 @@ async def sync_topics(bot: TelegramService) -> dict:
 
     tg = bot._app.bot
     discovery = bot._discovery
-    registered = set(config.agents.names)
+    # Swarm members are internal to the agent running the swarm: no topic.
+    registered = {spec.name for spec in config.agents if spec.swarm is None}
     changed = False
     try:
         for name in sorted(registered):

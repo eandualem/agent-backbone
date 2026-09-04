@@ -98,10 +98,12 @@ posted into its topic too when it has one; otherwise they go to
 ## Notifications you receive
 
 Posted into the agent's topic when it has one, otherwise to
-`telegram.notification_chat_id`:
+`telegram.notification_chat_id`. Swarm members never get a topic: a swarm
+is internal to the agent that runs it, and you talk to that agent.
 
 - **Plan waiting** — `📋 Plan waiting — app / Title: … / /viewplan app / /approve app`, once per plan.
-- **Agent went offline unexpectedly** — a session died; it was not restarted.
+- **Agent went offline unexpectedly** — an `always_on` agent's session died; it was not restarted.
+- **Agent is offline with N queued messages** — messages are waiting for an agent that is not running (any agent, once per `timing.escalation_dedup_seconds`); it was not restarted.
 - **Copy mode stuck** — a pane sits in tmux copy mode and the automatic
   cancel did not clear it.
 

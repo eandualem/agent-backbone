@@ -157,7 +157,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="who is approving, for the audit trail (default: $BACKBONE_AGENT or $USER)",
     )
     pse = asub.add_parser(
-        "set", help="change agent fields: runtime=… model=… repo=… dir=… description=…"
+        "set",
+        help="change agent fields: runtime=… model=… repo=… dir=… description=… always_on=true",
     )
     pse.add_argument("name")
     pse.add_argument("assignments", nargs="+", metavar="key=value")

@@ -669,3 +669,18 @@ class TestSwarmNameConflict:
         await db.swarms.set_status("s", "done")
         await db.swarms.create("s", **{**fields, "issue_number": 3})  # a finished name is reusable
         assert (await db.swarms.get("s"))["issue_number"] == 3
+
+
+class TestAgentAlwaysOn:
+    async def test_always_on_round_trips_and_defaults_off(self, db):
+        from agent_backbone.config import agents_from_rows
+
+        common = {"dir": "/tmp/a", "runtime": "claude", "model": None, "repo": "", "tags": [], "env": {}}
+        await db.agents.upsert("quiet", description="", **common)
+        await db.agents.upsert("vital", description="", always_on=True, **common)
+        rows = await db.agents.list()
+        by_name = {row["name"]: row for row in rows}
+        assert by_name["quiet"]["always_on"] is False
+        assert by_name["vital"]["always_on"] is True
+        agents = agents_from_rows(rows)
+        assert agents.get("vital").always_on and not agents.get("quiet").always_on
