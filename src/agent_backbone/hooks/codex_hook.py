@@ -48,8 +48,8 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
         command = tool_input.get("command", "")
         if isinstance(command, list):
             command = " ".join(str(part) for part in command)
-        action = bb.shell_action(command or "", payload.get("cwd"), now)
-        return None, action or bb.comment_action_from_mcp(tool, tool_input, now)
+        actions = bb.shell_actions(command or "", payload.get("cwd"), now)
+        return None, actions or bb.comment_action_from_mcp(tool, tool_input, now)
     if event in ("Stop", "Interrupt"):
         return state(
             bb.STATE_IDLE, last_message=bb.clip_message(payload.get("last_assistant_message"))

@@ -83,7 +83,7 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
             return state(STATE_BUSY), None
         if tool == "Bash":
             command = tool_input.get("command", "") or ""
-            return None, bb.shell_action(command, payload.get("cwd"), now)
+            return None, bb.shell_actions(command, payload.get("cwd"), now)
         return None, bb.comment_action_from_mcp(tool, tool_input, now)
     return None, None
 

@@ -163,9 +163,15 @@ async def start_agent(
     resume_evidence: list[str] = []
     if resume:
         last = read_state_file(config.state_dir, spec.name)
-        if last is not None and last.session_id:
+        # A session id is only meaningful to the runtime whose hook wrote it.
+        if last is not None and last.session_id and last.runtime == rt.id:
             resume_target = last.session_id
             resume_evidence.append(f"resuming the session the backbone last saw: {last.session_id}")
+        elif last is not None and last.session_id:
+            resume_evidence.append(
+                f"last session id belongs to {last.runtime or 'another runtime'}; "
+                f"using {rt.id}'s own resume"
+            )
     try:
         command = rt.build_command(
             model=effective_model,

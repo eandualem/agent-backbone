@@ -256,6 +256,8 @@ async def _agent(args: argparse.Namespace) -> int:
                     else ""
                 )
                 print(f"  state:    {data['state']}{reason}{issue}{age}")
+                if data.get("detail"):
+                    print(f"  detail:   {data['detail']}")
                 print(f"  delivery: {data['delivery']}")
                 if data.get("session_id"):
                     print(f"  session:  {data['session_id']}")

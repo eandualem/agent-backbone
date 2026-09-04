@@ -299,11 +299,13 @@ class TestStartAgent:
                 agent_state=AgentState.IDLE,
                 session_id="01a0-sess",
                 last_message="Shipped it.",
+                detail="resets at 3 PM",
             )
             resp = await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
         assert resp.status_code == 200, resp.text
         assert resp.json()["session_id"] == "01a0-sess"
         assert resp.json()["last_message"] == "Shipped it."
+        assert resp.json()["detail"] == "resets at 3 PM"
 
     async def test_patch_watch_and_forget(self, api_client, auth_headers, tmux_svc):
         resp = await api_client.patch(

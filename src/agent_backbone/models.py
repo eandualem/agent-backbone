@@ -155,6 +155,8 @@ class IssueData(BaseModel):
     """The issue or pull request body (a pull request's ``Closes #N`` lives here)."""
     head_ref: str = ""
     """A pull request's head branch — how the backbone recognises one an agent opened."""
+    head_repo: str = ""
+    """The repository the head branch lives in (a fork, or the base repository)."""
 
     def linked_issues(self) -> list[int]:
         """Issues this body closes (``Closes #N``, ``Fixes #N``, ``Resolves #N``)."""
@@ -221,6 +223,7 @@ class IssueEvent(BaseModel):
             repo_full_name=repository.get("full_name", ""),
             body=issue_data.get("body") or "",
             head_ref=((issue_data.get("head") or {}).get("ref") or ""),
+            head_repo=(((issue_data.get("head") or {}).get("repo") or {}).get("full_name") or ""),
         )
 
         comment = None

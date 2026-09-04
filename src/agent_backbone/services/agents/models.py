@@ -56,6 +56,8 @@ class StateSnapshot:
     plan_title: str | None = None
     session_id: str | None = None
     """The runtime's own session id, when its hook reports one."""
+    runtime: str | None = None
+    """The runtime whose hook wrote the record (a session id is only good for that runtime)."""
     last_message: str | None = None
     """The agent's last reply (clipped), when its hook reports one."""
     event: str | None = None

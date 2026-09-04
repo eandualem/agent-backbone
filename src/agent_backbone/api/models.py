@@ -138,6 +138,8 @@ class AgentInspectResponse(BaseModel):
     """The runtime's own session id, when its hook reports one."""
     last_message: str | None = None
     """The agent's last reply (clipped), when its hook reports one."""
+    detail: str | None = None
+    """What the runtime said about a ``blocked`` state (when its limit resets)."""
     evidence: list[str] = Field(default_factory=list)
     tmux: dict = Field(default_factory=dict)
     pane_tail: list[str] = Field(default_factory=list)

@@ -236,6 +236,7 @@ class TestIssueDispatcher:
             title="feat: x",
             body="Does things.\n\nCloses #3 and fixes #5.",
             head_ref="feat/x",
+            head_repo="acme/backbone",
         )
         event = IssueEvent(event_type=EventType.PULL_REQUEST_OPENED, issue=issue)
         with (
@@ -251,6 +252,28 @@ class TestIssueDispatcher:
         assert deliver.await_count == 1
         recorded = sorted(call.args[:2] for call in mock_db.acks.record.await_args_list)
         assert recorded == [(3, "backbone"), (5, "backbone")]
+
+    async def test_a_fork_pull_request_is_matched_on_its_head_repository(self, tmp_path, mock_db):
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={"backbone": AgentSpec(name="backbone", dir="/x", repo="acme/backbone")}
+            ),
+        )
+        issue = IssueData(
+            number=9, repo_full_name="acme/backbone", head_ref="feat/x", head_repo="forker/backbone"
+        )
+        event = IssueEvent(event_type=EventType.PULL_REQUEST_OPENED, issue=issue)
+        with (
+            _patch_safe_deliver(),
+            patch(
+                "agent_backbone.services.routing._router.find_outgoing_pull_request",
+                return_value=None,
+            ) as opener,
+        ):
+            result = await issue_dispatcher(event, config, mock_db)
+        assert opener.call_args.args[:2] == ("forker/backbone", "feat/x")
+        assert result.delivered == ["backbone"]
 
     async def test_a_pull_request_nobody_logged_reaches_everyone(self, tmp_path, mock_db):
         config = make_config(

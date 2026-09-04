@@ -33,24 +33,45 @@ function git(cwd, args) {
   }
 }
 
-function shellAction(command, cwd) {
+function shellActions(command, cwd) {
+  const actions = [];
   const comment = GH_COMMENT.exec(command);
   if (comment) {
     const action = { ts: Date.now() / 1000, action: "comment", issue: Number(comment[1]) };
     const repo = GH_REPO.exec(command);
     if (repo) action.repo = repo[1];
-    return action;
+    actions.push(action);
   }
-  if (!GH_PR_CREATE.test(command)) return null;
-  const action = { ts: Date.now() / 1000, action: "pull_request" };
-  const repoFlag = GH_REPO.exec(command);
-  const remote = repoFlag ? null : REMOTE.exec(git(cwd, ["remote", "get-url", "origin"]) ?? "");
-  const repo = repoFlag ? repoFlag[1] : remote ? remote[1] : null;
-  const headFlag = GH_HEAD.exec(command);
-  const branch = headFlag ? headFlag[1] : git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (repo) action.repo = repo;
-  if (branch) action.branch = branch;
-  return action;
+  if (GH_PR_CREATE.test(command)) {
+    // Same identity the Python hooks record: the head repository (the
+    // checkout's origin, or the owner named by --head owner:branch) and branch.
+    const action = { ts: Date.now() / 1000, action: "pull_request" };
+    const remote = REMOTE.exec(git(cwd, ["remote", "get-url", "origin"]) ?? "");
+    const origin = remote ? remote[1] : null;
+    const repoFlag = GH_REPO.exec(command);
+    const repo = repoFlag ? repoFlag[1] : origin;
+    let headRepo = origin;
+    let branch;
+    const headFlag = GH_HEAD.exec(command);
+    if (headFlag) {
+      const value = headFlag[1];
+      const colon = value.lastIndexOf(":");
+      if (colon > 0) {
+        const baseName = (repo ?? origin ?? "").split("/").pop();
+        headRepo = baseName ? `${value.slice(0, colon)}/${baseName}` : null;
+        branch = value.slice(colon + 1);
+      } else {
+        branch = value;
+      }
+    } else {
+      branch = git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    }
+    if (repo) action.repo = repo;
+    if (headRepo) action.head_repo = headRepo;
+    if (branch) action.branch = branch;
+    actions.push(action);
+  }
+  return actions;
 }
 
 function target() {
@@ -163,8 +184,7 @@ export const AgentBackbone = async ({ directory } = {}) => {
       if (isChild(input?.sessionID)) return;
       const command = output?.args?.command;
       if (typeof command !== "string") return;
-      const action = shellAction(command, directory ?? process.cwd());
-      if (action) appendAction(t, action);
+      for (const action of shellActions(command, directory ?? process.cwd())) appendAction(t, action);
     },
   };
 };

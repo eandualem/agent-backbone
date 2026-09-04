@@ -201,7 +201,7 @@ async def _dispatch_pull_request(
     the pull request closes count as acknowledged instead."""
     repo = event.issue.repo_full_name
     opener = find_outgoing_pull_request(
-        repo, event.issue.head_ref, action_log=config.action_log_path
+        event.issue.head_repo or repo, event.issue.head_ref, action_log=config.action_log_path
     )
     if opener:
         for number in event.issue.linked_issues():

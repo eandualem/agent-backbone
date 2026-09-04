@@ -206,6 +206,16 @@ class TestBlocked:
         assert "ike is blocked on its usage limit (resets at 3 PM)" in text
         assert tg.await_args.kwargs["agent"] == "ike"
 
+    async def test_an_alert_nobody_accepted_is_retried_next_cycle(self, config):
+        states = {"ike": _snap(AgentState.BLOCKED, reason="quota")}
+        with patch(
+            f"{_ESC}.notify_humans", new_callable=AsyncMock, side_effect=[False, True, True]
+        ) as tg:
+            await esc.check_blocked(config, states)
+            await esc.check_blocked(config, states)
+            await esc.check_blocked(config, states)
+        assert tg.await_count == 2  # the first attempt reached nobody; the second did
+
 
 class TestPlanWaiting:
     async def test_notifies_telegram_and_target_once(self, config, db):

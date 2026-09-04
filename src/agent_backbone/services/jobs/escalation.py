@@ -251,12 +251,14 @@ async def check_blocked(config: BackboneConfig, states: AgentStates) -> None:
         reason = snapshot.reason or "its runtime"
         detail = f" ({snapshot.detail})" if snapshot.detail else ""
         what = "its usage limit" if reason == "quota" else reason
-        await notify_humans(
+        sent = await notify_humans(
             config,
             f"Agent {name} is blocked on {what}{detail}. It resumes on its own; "
             "messages for it are queued meanwhile.",
             agent=name,
         )
+        if not sent:
+            _escalated.forget((name, "blocked"))  # nobody heard it: try again next cycle
         log.info("Agent %s is blocked on %s%s", name, what, detail)
 
 

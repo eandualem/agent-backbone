@@ -46,7 +46,7 @@ _GH_REPO_RE = re.compile(r"(?:--repo|-R)[\s=]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
 _ISSUE_NUMBER_RE = re.compile(r"(?:^|[\s#])(\d{1,7})\b")
 _ISSUE_REF_RE = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d{1,7})\b")
 
-Derive = Callable[[dict, "dict | None"], "tuple[dict | None, dict | None]"]
+Derive = Callable[[dict, "dict | None"], "tuple[dict | None, dict | list[dict] | None]"]
 
 
 def resolve_agent(explicit: str | None) -> str | None:
@@ -144,34 +144,48 @@ def _git_output(cwd: str | None, *args: str) -> str | None:
 def pull_request_action_from_command(command: str, cwd: str | None, now: float) -> dict | None:
     """A ``gh pr create`` in a shell command: the backbone should not announce
     that pull request back to the agent that opened it, and the issues it
-    closes count as acknowledged. Records the repository and head branch, the
-    two things the pull request event will carry."""
+    closes count as acknowledged.
+
+    Records what identifies the pull request in GitHub's event: the **head**
+    repository (the checkout's ``origin`` — a fork when working from one;
+    ``--head owner:branch`` names the owner) and the head branch. ``repo``
+    is the base repository when ``--repo`` names one, else the origin.
+    """
     if not _GH_PR_CREATE_RE.search(command or ""):
         return None
+    remote = _git_output(cwd, "remote", "get-url", "origin")
+    found = _REMOTE_RE.search(remote or "")
+    origin = found.group(1) if found else None
     repo_match = _GH_REPO_RE.search(command)
-    repo = repo_match.group(1) if repo_match else None
-    if repo is None:
-        remote = _git_output(cwd, "remote", "get-url", "origin")
-        found = _REMOTE_RE.search(remote or "")
-        repo = found.group(1) if found else None
+    repo = repo_match.group(1) if repo_match else origin
     head_match = _GH_HEAD_RE.search(command)
+    head_repo = origin
     if head_match:
-        branch = head_match.group(1)
+        owner, colon, branch = head_match.group(1).rpartition(":")
+        if colon and owner:
+            # gh's "owner:branch" form: that owner's fork, same repository name.
+            base_name = (repo or origin or "").rsplit("/", 1)[-1]
+            head_repo = f"{owner}/{base_name}" if base_name else None
     else:
         branch = _git_output(cwd, "rev-parse", "--abbrev-ref", "HEAD")
     action = {"ts": now, "action": "pull_request"}
     if repo:
         action["repo"] = repo
+    if head_repo:
+        action["head_repo"] = head_repo
     if branch:
         action["branch"] = branch
     return action
 
 
-def shell_action(command: str, cwd: str | None, now: float) -> dict | None:
-    """Whatever a shell command tells the backbone: a comment, or a pull request."""
-    return comment_action_from_command(command, now) or pull_request_action_from_command(
-        command, cwd, now
-    )
+def shell_actions(command: str, cwd: str | None, now: float) -> list[dict]:
+    """Everything a shell command tells the backbone: a comment, a pull
+    request, or both (``gh issue comment … && gh pr create …``)."""
+    actions = [
+        comment_action_from_command(command, now),
+        pull_request_action_from_command(command, cwd, now),
+    ]
+    return [action for action in actions if action]
 
 
 def plan_title(plan: str) -> str:
@@ -189,6 +203,7 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
     now = time.time()
     current = current or {}
     session_id = payload.get("session_id") or current.get("session_id")
+    runtime = os.environ.get("BACKBONE_RUNTIME", "").strip() or current.get("runtime")
 
     def state(new_state: str, reason: str | None = None, **extra) -> dict:
         record = {
@@ -202,6 +217,8 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
         }
         if session_id:
             record["session_id"] = session_id
+        if runtime:
+            record["runtime"] = runtime
         if current.get("last_message") is not None:
             record["last_message"] = current["last_message"]
         record.update(extra)
@@ -279,8 +296,8 @@ def run_hook(derive: Derive, argv: list[str] | None = None) -> int:
         record, action = derive(payload, read_current(state_dir, agent))
         if record is not None:
             write_state(state_dir, agent, record)
-        if action is not None:
-            append_action(state_dir, agent, action)
+        for entry in action if isinstance(action, list) else ([action] if action else []):
+            append_action(state_dir, agent, entry)
     except Exception:  # a hook must never make the CLI fail
         # An unexpected payload shape or an unwritable state dir: the
         # backbone falls back to the terminal; the agent is not disturbed.

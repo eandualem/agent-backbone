@@ -24,12 +24,13 @@ class TestFromWebhook:
                 "state": "open",
                 "labels": [],
                 "body": "Closes #4",
-                "head": {"ref": "feat/x"},
+                "head": {"ref": "feat/x", "repo": {"full_name": "forker/app"}},
             },
         }
         event = IssueEvent.from_webhook("pull_request", "opened", payload, "d-1")
         assert event.event_type == EventType.PULL_REQUEST_OPENED
         assert event.issue.head_ref == "feat/x"
+        assert event.issue.head_repo == "forker/app"
         assert event.issue.linked_issues() == [4]
 
     def test_an_issue_without_a_body_is_fine(self):

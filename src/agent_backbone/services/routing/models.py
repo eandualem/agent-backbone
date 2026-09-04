@@ -49,4 +49,5 @@ class SessionProfile:
     state_source: str = "default"
     session_id: str | None = None
     last_message: str | None = None
+    detail: str | None = None
     evidence: list[str] = field(default_factory=list)

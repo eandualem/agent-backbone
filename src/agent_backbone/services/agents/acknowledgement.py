@@ -75,25 +75,30 @@ def find_outgoing_comment(
 
 
 def find_outgoing_pull_request(
-    repo: str,
+    head_repo: str,
     head_ref: str,
     action_log: str | Path | None = None,
     max_lines: int = 200,
     recency_seconds: float = 900.0,
 ) -> str | None:
-    """Session that recently ran ``gh pr create`` for this repository and branch.
+    """Session that recently ran ``gh pr create`` from this head repository and branch.
 
     Log format: ``{"ts": …, "session": "app", "action": "pull_request",
-    "repo": "owner/name", "branch": "feat/x"}``. Both repository and branch
-    must match: the pull request event carries exactly those two.
+    "repo": "owner/name", "head_repo": "forker/name", "branch": "feat/x"}``.
+    The head repository *and* the branch must match: two forks may use the
+    same branch name, and the event names the head repository exactly.
+    An older entry without ``head_repo`` is matched on ``repo`` instead.
     """
-    if not repo or not head_ref:
+    if not head_repo or not head_ref:
         return None
     now = time.time()
     for entry in _read_tail(action_log, max_lines):
         if entry.get("action") != "pull_request":
             continue
-        if not _repo_matches(entry, repo) or (entry.get("branch") or "") != head_ref:
+        entry_head = entry.get("head_repo") or entry.get("repo") or ""
+        if entry_head.casefold() != head_repo.casefold():
+            continue
+        if (entry.get("branch") or "") != head_ref:
             continue
         if now - float(entry.get("ts", 0)) <= recency_seconds:
             return entry.get("session")

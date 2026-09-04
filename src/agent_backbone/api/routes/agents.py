@@ -136,6 +136,7 @@ async def inspect_agent(
         delivery=profile.intelligence.value,
         session_id=profile.session_id,
         last_message=profile.last_message,
+        detail=profile.detail,
         evidence=list(profile.evidence),
         tmux=tmux_vars,
         pane_tail=pane_tail,

@@ -22,7 +22,11 @@ _IDLE_SNAP = StateSnapshot(state=AgentState.IDLE, source="push")
 _BUSY_SNAP = StateSnapshot(state=AgentState.BUSY, source="push")
 _STARTING_SNAP = StateSnapshot(state=AgentState.STARTING, source="push")
 _BLOCKED_SNAP = StateSnapshot(
-    state=AgentState.BLOCKED, reason="quota", detail="resets at 3 PM", source="push"
+    state=AgentState.BLOCKED,
+    reason="quota",
+    detail="resets at 3 PM",
+    current_issue=42,
+    source="push",
 )
 _PLAN_SNAP = StateSnapshot(state=AgentState.WAITING_FOR_HUMAN, reason="plan", source="push")
 _PERMISSION_SNAP = StateSnapshot(
@@ -620,3 +624,29 @@ class TestDeliveryReport:
         with _online(), _patch_send_message(True):
             report = await deliver("ike", "hi", config, delivery_kind="direct_message")
         assert report.outcome == "delivered" and report.queue is None and not report.queued
+
+
+class TestBlockedAndOfflineMetadata:
+    async def test_a_blocked_agent_keeps_its_issue_and_detail(self, config):
+        with (
+            patch(f"{_INTEL}.list_sessions", new_callable=AsyncMock, return_value=["ike"]),
+            patch(f"{_INTEL}.capture_pane", new_callable=AsyncMock, return_value="❯ "),
+            patch(f"{_INTEL}.get_agent_state", new_callable=AsyncMock, return_value=_BLOCKED_SNAP),
+            patch(f"{_INTEL}.clear_copy_mode", new_callable=AsyncMock, return_value=(False, False)),
+        ):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.AGENT_WORKING
+        assert profile.current_issue == 42 and profile.detail == "resets at 3 PM"
+
+    async def test_an_offline_agent_still_shows_what_its_hook_recorded(self, config):
+        from agent_backbone.services.agents import write_state_file
+
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {"state": "unknown", "ts": 1.0, "session_id": "sess-1", "last_message": "bye"},
+        )
+        with patch(f"{_INTEL}.list_sessions", new_callable=AsyncMock, return_value=[]):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.OFFLINE
+        assert profile.session_id == "sess-1" and profile.last_message == "bye"

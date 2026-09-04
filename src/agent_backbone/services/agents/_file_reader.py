@@ -96,6 +96,7 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         plan_file=data.get("plan_file"),
         plan_title=data.get("plan_title"),
         session_id=data.get("session_id") or None,
+        runtime=data.get("runtime") or None,
         last_message=data.get("last_message") or None,
         event=data.get("event") or None,
         detail=data.get("detail") or None,

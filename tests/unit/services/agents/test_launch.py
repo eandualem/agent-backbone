@@ -300,7 +300,9 @@ class TestResumeBySessionId:
         project = tmp_path / "project"
         project.mkdir()
         write_state_file(
-            config.state_dir, "ike", {"state": "unknown", "ts": 1.0, "session_id": "01a0-sess"}
+            config.state_dir,
+            "ike",
+            {"state": "unknown", "ts": 1.0, "session_id": "01a0-sess", "runtime": "claude"},
         )
         spec = AgentSpec(name="ike", dir=str(project), runtime="claude")
         with (
@@ -312,6 +314,26 @@ class TestResumeBySessionId:
         command = start.await_args.kwargs["command"]
         assert command[command.index("--resume") + 1] == "01a0-sess"
         assert any("01a0-sess" in line for line in result.evidence)
+
+    async def test_another_runtimes_session_id_is_not_handed_over(self, tmp_path):
+        """The agent was switched from Claude to Codex: Claude's id means nothing to Codex."""
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {"state": "unknown", "ts": 1.0, "session_id": "claude-sess", "runtime": "claude"},
+        )
+        spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+        ):
+            result = await start_agent(spec, config, resume=True, wait=False)
+        assert start.await_args.kwargs["command"][1:3] == ["resume", "--last"]
+        assert any("belongs to claude" in line for line in result.evidence)
 
     async def test_without_a_known_session_the_runtimes_own_resume_is_used(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")

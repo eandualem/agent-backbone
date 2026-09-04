@@ -654,7 +654,25 @@ class TestFindOutgoingPullRequest:
         path.write_text("".join(json.dumps(e) + "\n" for e in entries))
         return path
 
-    def test_matches_repository_and_branch(self, tmp_path):
+    def test_matches_head_repository_and_branch(self, tmp_path):
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time(),
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "head_repo": "forker/app",
+                "branch": "feat/x",
+            },
+        )
+        assert find_outgoing_pull_request("forker/app", "feat/x", action_log=log) == "app"
+        # the same branch name from another fork, or the base repository, is not it
+        assert find_outgoing_pull_request("other/app", "feat/x", action_log=log) is None
+        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) is None
+        assert find_outgoing_pull_request("forker/app", "feat/other", action_log=log) is None
+
+    def test_an_older_entry_without_head_repo_matches_on_repo(self, tmp_path):
         log = self._log(
             tmp_path,
             {
@@ -666,8 +684,6 @@ class TestFindOutgoingPullRequest:
             },
         )
         assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) == "app"
-        assert find_outgoing_pull_request("acme/app", "feat/other", action_log=log) is None
-        assert find_outgoing_pull_request("acme/other", "feat/x", action_log=log) is None
 
     def test_old_entries_and_missing_fields_do_not_match(self, tmp_path):
         log = self._log(
