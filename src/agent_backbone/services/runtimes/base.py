@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from agent_backbone.services.runtimes._pane import (
+    DIALOG_CURSOR_RE,
     DIALOG_OPTION_RE,
     ENVELOPE_PREFIX,
     is_box_line,
@@ -210,6 +211,8 @@ class Runtime:
                 continue
             if self._is_status_chrome_line(stripped):
                 continue
+            if DIALOG_CURSOR_RE.match(stripped):
+                break  # "❯ 1. …" is a dialog's selected option, not the input prompt
             if self._matches_prompt_line(stripped):
                 return raw_candidate.strip()
             break
@@ -229,12 +232,32 @@ class Runtime:
         return any(marker in lowered for marker in self.busy_markers)
 
     def detect_waiting_for_human(self, pane_content: str) -> bool:
-        """Whether the runtime is visibly blocked on a question to the human."""
+        """Whether the runtime is visibly blocked on a question to the human.
+
+        Either a known question (``prompt_markers``) or, whatever the
+        question says, a dialog's own chrome (``detect_dialog_chrome``).
+        """
+        if self.detect_dialog_chrome(pane_content):
+            return True
         if not self.prompt_markers:
             return False
         tail = sanitize_pane_content(pane_content).strip().splitlines()[-15:]
         lowered = "\n".join(line.lower() for line in tail)
         return any(marker in lowered for marker in self.prompt_markers)
+
+    def detect_dialog_chrome(self, pane_content: str) -> bool:
+        """Whether the tail shows a numbered-option block with a selection cursor.
+
+        Every CLI dialog — permission, folder trust, Claude Code's "resume
+        from summary" picker, a model picker — draws the same furniture:
+        two or more numbered options, one carrying the cursor. Recognising
+        the furniture instead of the wording means a dialog the backbone has
+        never seen still reads as ``waiting_for_human`` rather than as an
+        idle prompt to paste into.
+        """
+        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).strip().splitlines()]
+        options = [ln for ln in lines[-15:] if DIALOG_OPTION_RE.match(ln)]
+        return len(options) >= 2 and any(DIALOG_CURSOR_RE.match(ln) for ln in options)
 
     def detect_active_dialog(self, pane_content: str) -> bool:
         """Whether a permission dialog is on screen *right now*.
@@ -247,13 +270,14 @@ class Runtime:
         an input prompt (empty or with typed text), a placeholder or status
         chrome — only the dialog's own numbered options and hints.
         """
-        if not self.prompt_markers:
-            return False
         lines = [ln.strip() for ln in sanitize_pane_content(pane_content).strip().splitlines()]
         lines = lines[-15:]
+        chrome = self.detect_dialog_chrome(pane_content)
         last_marker = None
         for i, line in enumerate(lines):
-            if any(marker in line.lower() for marker in self.prompt_markers):
+            if any(marker in line.lower() for marker in self.prompt_markers) or (
+                chrome and DIALOG_CURSOR_RE.match(line)
+            ):
                 last_marker = i
         if last_marker is None:
             return False

@@ -262,6 +262,14 @@ async def wait_until_ready(
         snapshot = read_state_file(state_path, name)
         if snapshot and snapshot.timestamp >= wall_started:
             if snapshot.state == AgentState.IDLE:
+                # Claude Code fires SessionStart with its resume picker still
+                # on screen: a dialog the terminal shows beats the hook's idle.
+                pane = await capture_pane(name, lines=60)
+                if pane and rt.detect_active_dialog(pane):
+                    return "waiting_for_human", [
+                        "hook reported idle, but the terminal shows a dialog:",
+                        *_pane_tail(pane),
+                    ]
                 return "ready", [f"hook reported idle {time.time() - snapshot.timestamp:.0f}s ago"]
             if snapshot.state == AgentState.WAITING_FOR_HUMAN:
                 return "waiting_for_human", [f"hook reported waiting_for_human ({snapshot.reason})"]
@@ -271,8 +279,10 @@ async def wait_until_ready(
             last_pane = pane
             if rt.detect_waiting_for_human(pane):
                 clear_starting_marker(state_path, name)
-                tail = [ln for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-6:]
-                return "waiting_for_human", ["terminal shows a question for the human:", *tail]
+                return "waiting_for_human", [
+                    "terminal shows a question for the human:",
+                    *_pane_tail(pane),
+                ]
             if rt.detect_idle(pane):
                 clear_starting_marker(state_path, name)
                 return "ready", ["terminal shows an empty prompt"]
@@ -281,6 +291,10 @@ async def wait_until_ready(
             tail = [ln for ln in last_pane.strip().splitlines() if ln.strip()][-3:]
             return "timeout", [f"no prompt after {timeout:.0f}s; last lines: {tail}"]
         await asyncio.sleep(poll_interval)
+
+
+def _pane_tail(pane: str, lines: int = 6) -> list[str]:
+    return [ln for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-lines:]
 
 
 async def approve_agent(

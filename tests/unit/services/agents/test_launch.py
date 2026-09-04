@@ -262,11 +262,36 @@ class TestStartingState:
         state_dir = tmp_path / "state"
         launched = 1_000.0
         write_state_file(state_dir, "ike", {"state": "idle", "ts": launched + 2})
-        with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.capture_pane", new_callable=AsyncMock, return_value="❯ \n"),
+        ):
             outcome, evidence = await wait_until_ready(
                 "ike", state_dir=state_dir, runtime="claude", timeout=1, since=launched
             )
         assert outcome == "ready" and evidence[0].startswith("hook reported idle")
+
+    async def test_a_dialog_on_screen_beats_the_hooks_idle(self, tmp_path):
+        """`claude --resume` fires SessionStart with its picker still up; start
+        must report the question, not `ready`."""
+        state_dir = tmp_path / "state"
+        launched = 1_000.0
+        write_state_file(state_dir, "ike", {"state": "idle", "ts": launched + 2})
+        picker = (
+            "  ❯ 1. Resume from summary (recommended)\n"
+            "    2. Resume full session as-is\n"
+            "  Enter to confirm · Esc to cancel\n"
+        )
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.capture_pane", new_callable=AsyncMock, return_value=picker),
+        ):
+            outcome, evidence = await wait_until_ready(
+                "ike", state_dir=state_dir, runtime="claude", timeout=1, since=launched
+            )
+        assert outcome == "waiting_for_human"
+        assert evidence[0].startswith("hook reported idle, but the terminal shows a dialog")
+        assert any("Resume from summary" in line for line in evidence)
 
 
 class TestLaunchEnvFromRuntime:

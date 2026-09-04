@@ -283,6 +283,35 @@ class TestGetAgentState:
         assert result.source == "push"
         capture.assert_not_called()
 
+    async def test_fresh_idle_push_is_vetoed_by_a_dialog_on_screen(self, tmp_path):
+        """Claude Code's resume picker shows after SessionStart already said idle."""
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(json.dumps({"state": "idle", "ts": time.time()}))
+        picker = (
+            "  We recommend resuming from a summary.\n"
+            "  ❯ 1. Resume from summary (recommended)\n"
+            "    2. Resume full session as-is\n"
+            "  Enter to confirm · Esc to cancel\n"
+        )
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value=picker):
+            result = await get_agent_state(tmp_path, "ike", runtime_hint="claude")
+        assert result.state == AgentState.WAITING_FOR_HUMAN
+        assert result.reason == "question"
+        assert result.source == "pull"
+        assert any("fresh" in line for line in result.evidence)
+        assert any("beats the hook" in line for line in result.evidence)
+        assert result.timestamp > 0  # the observation time is kept for the database
+
+    async def test_fresh_idle_push_stands_when_the_terminal_shows_a_prompt(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(json.dumps({"state": "idle", "ts": time.time()}))
+        with patch(
+            f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="❯ \n  ? for shortcuts\n"
+        ):
+            result = await get_agent_state(tmp_path, "ike", runtime_hint="claude")
+        assert result.state == AgentState.IDLE
+        assert result.source == "push"
+
     async def test_fresh_processing_push_is_trusted(self, tmp_path):
         state_file = tmp_path / "ike.json"
         state_file.write_text(json.dumps({"state": "busy", "issue": 42, "ts": time.time()}))
