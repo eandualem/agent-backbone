@@ -8,7 +8,7 @@ import os
 import signal
 from collections.abc import Sequence
 
-from agent_backbone.services.terminal._core import _run_tmux, session_exists
+from agent_backbone.services.terminal._core import _run_tmux, exact_target, session_exists
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}"
 async def query_environment_var(session_name: str, key: str) -> str | None:
     """Read one variable from a session's tmux environment."""
     rc, stdout, _ = await _run_tmux(
-        "show-environment", "-t", session_name, key, capture_stdout=True
+        "show-environment", "-t", exact_target(session_name), key, capture_stdout=True
     )
     if rc != 0:
         return None
@@ -98,7 +98,9 @@ async def start_session(
     for key in removals:
         # -r: remove the variable from the environment before starting a
         # process, so a new pane in this session never sees it either.
-        rc, _, stderr = await _run_tmux("set-environment", "-t", session_name, "-r", key)
+        rc, _, stderr = await _run_tmux(
+            "set-environment", "-t", exact_target(session_name), "-r", key
+        )
         if rc != 0:
             log.error(
                 "Could not scrub '%s' from session '%s' (%s); killing the session",
@@ -106,7 +108,7 @@ async def start_session(
                 session_name,
                 stderr.decode().strip(),
             )
-            await _run_tmux("kill-session", "-t", session_name)
+            await _run_tmux("kill-session", "-t", exact_target(session_name))
             return False
     return True
 
@@ -116,7 +118,7 @@ async def stop_session(session_name: str) -> bool:
     if not await session_exists(session_name):
         log.info("Session '%s' does not exist", session_name)
         return True
-    rc, _, stderr = await _run_tmux("kill-session", "-t", session_name)
+    rc, _, stderr = await _run_tmux("kill-session", "-t", exact_target(session_name))
     if rc != 0:
         log.error("Failed to stop session '%s': %s", session_name, stderr.decode())
         return False
@@ -137,7 +139,7 @@ async def query_format_vars(
 ) -> dict[str, str]:
     """``key=value`` lines from ``tmux display-message -p`` for a session."""
     rc, stdout, _ = await _run_tmux(
-        "display-message", "-p", "-t", session_name, format_str, capture_stdout=True
+        "display-message", "-p", "-t", exact_target(session_name), format_str, capture_stdout=True
     )
     if rc != 0:
         return {}

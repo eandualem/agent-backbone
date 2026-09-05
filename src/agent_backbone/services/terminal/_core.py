@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import uuid
 
 log = logging.getLogger(__name__)
 
@@ -58,15 +59,21 @@ async def _run_tmux(
         return proc.returncode, stdout or b"", stderr or b""
 
 
+def exact_target(session_name: str) -> str:
+    """The tmux target for exactly this session: ``-t name`` also accepts a
+    prefix, so an offline ``app`` would resolve to ``app-2``."""
+    return f"={session_name}"
+
+
 async def session_exists(session_name: str) -> bool:
     """Check if a tmux session exists."""
-    rc, _, _ = await _run_tmux("has-session", "-t", session_name)
+    rc, _, _ = await _run_tmux("has-session", "-t", exact_target(session_name))
     return rc == 0
 
 
 async def press_submit(session_name: str) -> bool:
     """Send Enter to submit the currently buffered prompt input."""
-    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, "Enter")
+    rc, _, stderr = await _run_tmux("send-keys", "-t", exact_target(session_name), "Enter")
     if rc != 0:
         log.error("tmux send-keys Enter failed for '%s': %s", session_name, stderr.decode())
         return False
@@ -75,7 +82,7 @@ async def press_submit(session_name: str) -> bool:
 
 async def press_escape(session_name: str) -> bool:
     """Send Escape to interrupt active work and expose queued input."""
-    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, "Escape")
+    rc, _, stderr = await _run_tmux("send-keys", "-t", exact_target(session_name), "Escape")
     if rc != 0:
         log.error("tmux send-keys Escape failed for '%s': %s", session_name, stderr.decode())
         return False
@@ -88,7 +95,11 @@ async def paste_message(session_name: str, message: str) -> bool:
         log.warning("tmux session '%s' not found — notification dropped", session_name)
         return False
 
-    rc, _, stderr = await _run_tmux("load-buffer", "-", stdin_data=message.encode())
+    # A named buffer per paste: the unnamed buffer is server-global, so two
+    # deliveries to different sessions could load A, load B, paste A's target
+    # with B's body.
+    buffer = f"backbone-{uuid.uuid4().hex}"
+    rc, _, stderr = await _run_tmux("load-buffer", "-b", buffer, "-", stdin_data=message.encode())
     if rc != 0:
         log.error("tmux load-buffer failed for '%s': %s", session_name, stderr.decode())
         return False
@@ -96,9 +107,12 @@ async def paste_message(session_name: str, message: str) -> bool:
     # -p uses bracketed paste when the pane's program enabled it (Claude Code,
     # zsh, …): a multi-line message then arrives as ONE paste instead of each
     # newline acting as Enter and shredding the message line by line.
-    rc, _, stderr = await _run_tmux("paste-buffer", "-p", "-t", session_name, "-d")
+    rc, _, stderr = await _run_tmux(
+        "paste-buffer", "-p", "-b", buffer, "-t", exact_target(session_name), "-d"
+    )
     if rc != 0:
         log.error("tmux paste-buffer failed for '%s': %s", session_name, stderr.decode())
+        await _run_tmux("delete-buffer", "-b", buffer)
         return False
     return True
 
@@ -109,7 +123,7 @@ async def send_keys(session_name: str, keys: str) -> bool:
         log.warning("tmux session '%s' not found — key send dropped", session_name)
         return False
 
-    rc, _, stderr = await _run_tmux("send-keys", "-t", session_name, keys)
+    rc, _, stderr = await _run_tmux("send-keys", "-t", exact_target(session_name), keys)
     if rc != 0:
         log.error("tmux send-keys failed for '%s': %s", session_name, stderr.decode())
         return False
@@ -130,7 +144,7 @@ async def resize_window(session_name: str, cols: int, rows: int) -> bool:
     rc, _, stderr = await _run_tmux(
         "resize-window",
         "-t",
-        session_name,
+        exact_target(session_name),
         "-x",
         str(cols),
         "-y",
@@ -150,7 +164,7 @@ async def set_window_size_mode(session_name: str, mode: str) -> bool:
     rc, _, stderr = await _run_tmux(
         "set-window-option",
         "-t",
-        session_name,
+        exact_target(session_name),
         "window-size",
         mode,
     )
@@ -170,7 +184,7 @@ async def active_pane_size(session_name: str) -> tuple[int, int] | None:
     rc, stdout, _ = await _run_tmux(
         "display-message",
         "-t",
-        session_name,
+        exact_target(session_name),
         "-p",
         "#{pane_width} #{pane_height}",
         capture_stdout=True,
@@ -193,7 +207,7 @@ async def capture_pane(session_name: str, lines: int = 50) -> str:
     rc, stdout, _ = await _run_tmux(
         "capture-pane",
         "-t",
-        session_name,
+        exact_target(session_name),
         "-p",  # output to stdout
         "-e",  # include escape sequences (colors, formatting)
         "-S",

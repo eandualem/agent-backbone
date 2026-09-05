@@ -195,3 +195,31 @@ class TestGitHubPoller:
         since = gh.list_issues_since.await_args.args[1]
         # A little before the stored event, never the full lookback window
         assert since.endswith("Z") and since >= "2020"
+
+
+class TestHydrationFailure:
+    async def test_comment_whose_issue_cannot_be_fetched_keeps_the_cursor(
+        self, config, db, dispatch
+    ):
+        # S1-1: C1 fails to hydrate, C2 succeeds; the cursor must not move past C1.
+        gh = AsyncMock()
+        gh.list_issues_since = AsyncMock(return_value=[])
+        gh.list_comments_since = AsyncMock(
+            return_value=[
+                _comment(9, 1, "first", updated="2026-08-31T10:00:00Z"),
+                _comment(10, 2, "second", updated="2026-08-31T10:01:00Z"),
+            ]
+        )
+
+        async def raw(number, repo):
+            if number == 1:
+                raise RuntimeError("boom")
+            return _issue(2)
+
+        gh.get_issue_raw = AsyncMock(side_effect=raw)
+        poller = GitHubPoller(lambda: config, db, gh)
+        poller._since[TEST_REPO] = "2026-08-31T09:00:00Z"
+
+        await poller.run()
+
+        assert poller._since[TEST_REPO] == "2026-08-31T09:00:00Z"

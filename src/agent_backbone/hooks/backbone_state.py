@@ -43,7 +43,7 @@ LAST_MESSAGE_CHARS = 500
 
 _GH_COMMENT_RE = re.compile(r"\bgh\s+issue\s+comment\s+(?:\S+\s+)*?(\d+)\b")
 _GH_REPO_RE = re.compile(r"(?:--repo|-R)[\s=]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
-_ISSUE_NUMBER_RE = re.compile(r"(?:^|[\s#])(\d{1,7})\b")
+_ISSUE_NUMBER_RE = re.compile(r"(?:#|\bissue[\s:#]*)(\d{1,7})\b", re.IGNORECASE)
 _ISSUE_REF_RE = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d{1,7})\b")
 
 Derive = Callable[[dict, "dict | None"], "tuple[dict | None, dict | list[dict] | None]"]

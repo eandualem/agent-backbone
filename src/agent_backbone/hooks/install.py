@@ -13,6 +13,7 @@ runtime's own business (``services/runtimes/<cli>.py``).
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 import sys
@@ -43,9 +44,13 @@ def install_hook_files(data_dir: Path) -> Path:
     hooks_dir.mkdir(parents=True, exist_ok=True)
     for name in HOOK_FILES:
         target = hooks_dir / name
-        shutil.copyfile(hook_source(name), target)
+        # Every agent launch re-installs; a running agent's hook may fire
+        # mid-copy, so the live file is only ever replaced whole.
+        tmp = hooks_dir / f".{name}.{os.getpid()}.tmp"
+        shutil.copyfile(hook_source(name), tmp)
         if name.endswith(".py"):
-            target.chmod(0o755)
+            tmp.chmod(0o755)
+        os.replace(tmp, target)
     return hooks_dir
 
 

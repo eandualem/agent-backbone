@@ -19,7 +19,6 @@ from agent_backbone.services.agents import (
     plan_control,
     prompt_id,
     read_plan,
-    read_state_file,
     record_answer,
     start_agent,
 )
@@ -277,7 +276,7 @@ async def cmd_viewplan(
         return
 
     agent = context.args[0]
-    snapshot = read_state_file(bot.config.state_dir, agent)
+    snapshot = await agent_state(bot.config, agent)
 
     if not snapshot or not snapshot.is_plan_waiting:
         state_str = snapshot.state.value if snapshot else "unknown"
@@ -423,7 +422,7 @@ async def cmd_approve(
     if bot.config.agents.get(agent) is None:
         await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
         return
-    snapshot = read_state_file(bot.config.state_dir, agent)
+    snapshot = await agent_state(bot.config, agent)
 
     if not snapshot or not snapshot.is_plan_waiting:
         state_str = snapshot.state.value if snapshot else "unknown"

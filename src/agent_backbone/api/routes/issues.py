@@ -123,7 +123,7 @@ async def get_issue_dependencies(
     db: BackboneDB = Depends(get_db),
 ):
     """Get sub-issues and parent issues for an issue."""
-    sub_issues = await gh.get_sub_issues(number, repo_full_name=repo)
+    sub_issues = await gh.get_sub_issues(number, repo_full_name=repo) or []
     parents = await db.dependencies.parents(number, repo=repo)
     return IssueDependencies(
         sub_issues=[_issue_to_response(s, config) for s in sub_issues],

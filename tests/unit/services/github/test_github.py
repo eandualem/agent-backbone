@@ -222,14 +222,15 @@ class TestGetSubIssues:
         assert subs[1].state == "open"
 
     @respx.mock
-    async def test_404_returns_empty(self, config):
+    async def test_404_is_a_failed_fetch_not_an_empty_answer(self, config):
+        # An empty list clears dependency edges; a failed fetch must keep them.
         url = f"{API_BASE}/repos/eandualem/orchestration/issues/99/sub_issues"
         respx.get(url).respond(status_code=404)
 
         async with GitHubClient(config) as gh:
             subs = await gh.get_sub_issues(99, repo_full_name=REPO)
 
-        assert subs == []
+        assert subs is None
 
     @respx.mock
     async def test_empty_sub_issues(self, config):
@@ -240,3 +241,25 @@ class TestGetSubIssues:
             subs = await gh.get_sub_issues(10, repo_full_name=REPO)
 
         assert subs == []
+
+
+class TestPagination:
+    """S1-2: a listing longer than one page is followed to the end."""
+
+    @respx.mock
+    async def test_comments_since_follow_the_next_link(self, config):
+        base = f"{API_BASE}/repos/eandualem/orchestration/issues/comments"
+        second = f"{base}?page=2"
+        # Exact URLs: a path-only route would also catch page 2 and serve the
+        # next link again forever.
+        respx.get(url__eq=second).mock(return_value=httpx.Response(200, json=[{"id": 2}]))
+        respx.get(url__startswith=base).mock(
+            return_value=httpx.Response(
+                200, json=[{"id": 1}], headers={"Link": f'<{second}>; rel="next"'}
+            )
+        )
+
+        async with GitHubClient(config) as gh:
+            items = await gh.list_comments_since(REPO, "2026-01-01T00:00:00Z")
+
+        assert [i["id"] for i in items] == [1, 2]

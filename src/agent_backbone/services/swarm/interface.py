@@ -205,10 +205,10 @@ async def create_swarm(
         raise SwarmError(f"could not register swarm '{name}': {exc}") from exc
 
     briefs_dir = config.data_dir / "swarms" / name
-    briefs_dir.mkdir(parents=True, exist_ok=True)
     started: list[str] = []
     default_runtime = config.launch.default_runtime
     try:
+        briefs_dir.mkdir(parents=True, exist_ok=True)
         for agent_name, spec in named:
             runtime = spec.runtime or default_runtime
             facts = _facts(
@@ -248,13 +248,17 @@ async def create_swarm(
     except Exception:
         # Best-effort rollback so a half-started swarm doesn't linger.
         for agent_name in started:
-            await stop_session(agent_name)
+            try:
+                await stop_session(agent_name)
+            except Exception:
+                log.warning("rollback: could not stop %s", agent_name)
         for agent_name, _ in named:
             try:
                 await store.forget(agent_name)
             except Exception:
                 log.debug("rollback: could not forget %s", agent_name)
-        await remove_worktree(repo_dir, worktree)
+        if not await remove_worktree(repo_dir, worktree):
+            log.warning("rollback: worktree %s still exists; remove it by hand", worktree)
         await db.swarms.set_status(name, "disbanded")
         raise
 

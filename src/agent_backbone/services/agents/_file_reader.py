@@ -75,16 +75,21 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         return _starting_snapshot(state_dir, session, newer_than=0.0)
     try:
         data = json.loads(state_file.read_text())
-    except (json.JSONDecodeError, OSError) as e:
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+        hook_ts = float(data.get("ts", 0))
+        started_at_raw = data.get("started_at")
+        started_at = float(started_at_raw) if started_at_raw is not None else None
+    except (json.JSONDecodeError, OSError, TypeError, ValueError) as e:
+        # Valid JSON of the wrong shape must degrade to the terminal exactly
+        # like unreadable JSON, not crash every consumer of this agent's state.
         log.warning("Failed to read state file for %s: %s", session, e)
         return None
 
-    hook_ts = float(data.get("ts", 0))
     starting = _starting_snapshot(state_dir, session, newer_than=hook_ts)
     if starting is not None:
         return starting
     state = AgentState.parse(data.get("state"))
-    started_at_raw = data.get("started_at")
     return StateSnapshot(
         state=state,
         reason=data.get("reason") or None,
@@ -92,7 +97,7 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         current_repo=data.get("repo") or None,
         timestamp=hook_ts,
         source="push",
-        started_at=float(started_at_raw) if started_at_raw is not None else None,
+        started_at=started_at,
         plan_file=data.get("plan_file"),
         plan_title=data.get("plan_title"),
         session_id=data.get("session_id") or None,

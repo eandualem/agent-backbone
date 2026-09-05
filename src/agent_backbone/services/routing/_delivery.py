@@ -108,7 +108,9 @@ def _comment_matches_active_issue(
 ) -> bool:
     if issue_number is None or current_issue is None or issue_number != current_issue:
         return False
-    return not repo or not current_repo or repo.casefold() == current_repo.casefold()
+    # An unknown repository on either side is not a match: other/repo#42 must
+    # not slip past busy protection because the agent works on own/repo#42.
+    return bool(repo and current_repo and repo.casefold() == current_repo.casefold())
 
 
 async def is_acknowledged(
