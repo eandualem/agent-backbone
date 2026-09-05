@@ -323,3 +323,14 @@ class TestRebindGroup:
         assert d.group_chat_id == -200
         assert d.topic_routes == {9: "ike"}  # old id 5 gone, new id 9 learned
         assert load_discovery(path).topic_routes == {9: "ike"}
+
+    def test_other_group_does_not_rebind_or_report_an_unsaved_change(self, tmp_path):
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={5: "leo"})
+        path = tmp_path / "t.json"
+        save_discovery(d, path)
+        other = _make_update(chat_id=-300, thread_id=9, forum_topic_name="Ike")
+        assert not process_message_for_discovery(other, config, d, path)
+        assert d == load_discovery(path)
+        assert d.group_chat_id == -100
+        assert effective_routes(config, d) == {}

@@ -91,6 +91,15 @@ class SwarmORM(Base):
     )
 
 
+class PollCursorORM(Base):
+    """Replay boundary per repository, independent of event receipt times."""
+
+    __tablename__ = "poll_cursors"
+
+    repo: Mapped[str] = mapped_column(Text, primary_key=True)
+    since: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class EventORM(Base):
     """Every inbound event (webhook, poll, telegram, api) before/after routing."""
 

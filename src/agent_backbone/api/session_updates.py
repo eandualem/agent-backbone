@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents import agent_state
+from agent_backbone.services.agents import agent_state, get_agent_state
 from agent_backbone.services.runtimes import RUNTIME_ENV_KEY
 from agent_backbone.services.terminal import list_sessions_rich, query_environment_var
 
@@ -36,8 +36,19 @@ async def build_enriched_agent(
 ) -> EnrichedAgent:
     """Build an EnrichedAgent for a session (configured agent or ad-hoc session)."""
     online = session in active_sessions
-    snapshot = await agent_state(config, session)
     spec = config.agents.get(session)
+    if online:
+        snapshot = await agent_state(config, session)
+    else:
+        # The shared tmux listing already proved the session absent. Reconcile
+        # saved metadata without trying to capture a terminal that cannot exist.
+        snapshot = await get_agent_state(
+            config.state_dir,
+            session,
+            config.timing.stale_threshold_seconds,
+            runtime_hint=spec.runtime if spec else None,
+            pane_content="",
+        )
 
     tmux_created = None
     tmux_attached = False
@@ -124,7 +135,7 @@ class SessionFeed:
         self._sio = sio
         self._ttl = ttl_seconds
         self._cache: list[EnrichedAgent] = []
-        self._cached_at = 0.0
+        self._cached_at: float | None = None
         self._lock = asyncio.Lock()
         self._emit_lock = asyncio.Lock()
         self._last_signature: str | None = None
@@ -149,13 +160,13 @@ class SessionFeed:
             return self._cache
 
     def _fresh(self) -> bool:
-        return bool(self._cache) and time.monotonic() - self._cached_at < self._ttl
+        return self._cached_at is not None and time.monotonic() - self._cached_at < self._ttl
 
     async def invalidate(self) -> None:
         """Forget the cached snapshot (an agent was started, stopped or edited)."""
         async with self._lock:
             self._cache = []
-            self._cached_at = 0.0
+            self._cached_at = None
 
     async def emit(self, *, only_if_changed: bool = False) -> bool:
         """Rebuild the snapshot and broadcast it to ``/sessions`` subscribers.

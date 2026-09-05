@@ -63,11 +63,6 @@ def install_hook_files(data_dir: Path) -> Path:
     return hooks_dir
 
 
-def install_hook_script(data_dir: Path) -> Path:
-    """The Claude script's path once the hook files are installed."""
-    return install_hook_files(data_dir) / "claude_hook.py"
-
-
 _TAG_ARG = f"--tag {HOOK_MARKER}"
 
 

@@ -165,7 +165,6 @@ class Runtime:
     Codex, milliseconds for Gemini CLI)."""
 
     # --- paste behaviour ---------------------------------------------------
-    auto_submit: bool = False
     submit_attempts: int = 2
     interrupt_queued_delivery: bool = False
     paste_settle_seconds: float = 0.2
@@ -626,7 +625,7 @@ class Runtime:
         if self.paste_settle_seconds > 0:
             await asyncio.sleep(self.paste_settle_seconds)
 
-        state = "submitted" if self.auto_submit else await self._submit(session_name)
+        state = await self._submit(session_name)
 
         if state == "submitted" or (state == "queued" and not self.interrupt_queued_delivery):
             log.info(

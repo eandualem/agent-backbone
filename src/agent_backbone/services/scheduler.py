@@ -37,6 +37,7 @@ class _Job:
     interval: float
     fn: JobFn
     run_immediately: bool
+    once: bool = False
     status: JobStatus = field(init=False)
     task: asyncio.Task | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -58,13 +59,14 @@ class PeriodicScheduler:
         fn: JobFn,
         *,
         run_immediately: bool = False,
+        once: bool = False,
     ) -> None:
-        """Register a job. Must be called before ``start()``."""
+        """Register a job before start; ``once`` finishes after its first attempt."""
         if name in self._jobs:
             raise ValueError(f"Job already registered: {name}")
-        if interval_seconds <= 0:
+        if interval_seconds < 0 or (interval_seconds == 0 and not once):
             raise ValueError(f"Job {name}: interval must be positive")
-        self._jobs[name] = _Job(name, float(interval_seconds), fn, run_immediately)
+        self._jobs[name] = _Job(name, float(interval_seconds), fn, run_immediately, once)
 
     @property
     def jobs(self) -> list[JobStatus]:
@@ -88,7 +90,19 @@ class PeriodicScheduler:
             job.task = None
 
     async def health_check(self) -> dict:
-        alive = all(job.task is not None and not job.task.done() for job in self._jobs.values())
+        alive = all(
+            job.task is not None
+            and (
+                not job.task.done()
+                or (
+                    job.once
+                    and not job.task.cancelled()
+                    and job.task.exception() is None
+                    and job.status.last_error is None
+                )
+            )
+            for job in self._jobs.values()
+        )
         return {
             "healthy": alive or not self._jobs,
             "service": "scheduler",
@@ -110,6 +124,8 @@ class PeriodicScheduler:
             await asyncio.sleep(job.interval)
         while True:
             await self._run_once(job)
+            if job.once:
+                return
             await asyncio.sleep(job.interval)
 
     async def _run_once(self, job: _Job) -> None:

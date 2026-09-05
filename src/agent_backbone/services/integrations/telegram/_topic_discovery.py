@@ -186,13 +186,12 @@ def process_message_for_discovery(
     chat_type = getattr(chat, "type", None) if chat is not None else None
     chat_id = getattr(chat, "id", None) if chat is not None else None
     observed = chat_id if chat_type == "supergroup" and chat_id is not None else None
-    if rebind_group(config, discovery, observed):
-        changed = True
     selected = config.telegram.group_chat_id or discovery.group_chat_id
     if observed is not None and selected is not None and observed != selected:
         # Another allowed group: its thread ids belong to it, not to the
         # selected group — learn nothing, not even the group id.
-        return changed
+        return False
+    changed = rebind_group(config, discovery, observed)
 
     # Discover topic mapping from forum_topic_created
     thread_id = getattr(message, "message_thread_id", None)

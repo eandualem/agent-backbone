@@ -12,7 +12,14 @@ There is no configuration file. The **data directory** is the configuration:
 
 - **Settings** are keys with built-in defaults, stored in the database and
   edited with `backbone config set KEY VALUE` (or `PUT /api/config/{key}`).
-  The running backbone applies a change immediately.
+  The running backbone publishes the new configuration immediately. Routing
+  and delivery thresholds use it on their next operation. Restart the backbone
+  after changing server bindings (`backbone.host`, `backbone.port`,
+  `backbone.cors_origins`), GitHub intake/backfill mode, or job periods
+  (`github.poll_interval_seconds`, `timing.monitor_interval_seconds`,
+  `timing.retry_interval_seconds`): listeners and scheduled jobs are constructed
+  at startup. Enabling an integration that was disabled at startup also requires
+  a restart.
 - **Agents** are discovered by `backbone agent start` and edited with
   `backbone agent set|watch|unwatch|forget`.
 - **Secrets** come from `<data_dir>/.env` (read at startup into the config
@@ -56,7 +63,7 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | `github.intake` | `auto` | `auto` (webhook if `GITHUB_WEBHOOK_SECRET` is set, else poll), `webhook` (falls back to poll, with a startup warning, when the secret is missing), `poll`, `off` |
 | `github.poll_interval_seconds` | `60` | Poll frequency in poll intake (must be positive) |
 | `github.backfill_on_start` | `true` | Webhook intake: run one poll at startup to catch missed events |
-| `github.backfill_lookback_hours` | `24` | How far back the first poll looks for a repository with no stored events |
+| `github.backfill_lookback_hours` | `24` | How far back the first poll looks for a repository with no durable poll cursor (including the first start after upgrading to cursor storage) |
 
 ### `routing.*`
 
@@ -70,14 +77,14 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | Key | Default | Meaning |
 |---|---|---|
 | `timing.stale_threshold_seconds` | `300` | Hook state older than this is verified against the terminal |
-| `timing.grace_period_seconds` | `5` | Settle time after an agent becomes idle before delivering (`settling`) |
+| `timing.grace_period_seconds` | `5` | Settle time from the hook-written idle timestamp before delivering (`settling`); terminal-only idle readings have no transition timestamp |
 | `timing.queue_expiry_minutes` | `30` | Queued messages older than this are expired |
 | `timing.stall_threshold_seconds` | `5400` | Busy on one issue for longer than this is a stall |
 | `timing.escalation_dedup_seconds` | `1800` | Do not repeat the same escalation within this window |
 | `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period (must be positive) |
 | `timing.retry_interval_seconds` | `300` | `delivery-retry` job period (must be positive) |
 | `timing.start_timeout_seconds` | `60` | How long `agent start` waits for the prompt |
-| `timing.delivery_retention_days` | `30` | Deliveries and events older than this are pruned (every 6 h) |
+| `timing.delivery_retention_days` | `30` | Deliveries, events and completed queue messages are pruned every 6 h; queue age is measured from completion, and pending/leased messages are retained |
 
 ### `telegram.*`
 

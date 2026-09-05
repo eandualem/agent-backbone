@@ -10,6 +10,28 @@ from agent_backbone.services.scheduler import PeriodicScheduler
 
 
 class TestPeriodicScheduler:
+    @pytest.mark.parametrize("fail", [False, True])
+    async def test_one_shot_finishes_after_one_attempt_and_reports_health(self, fail):
+        scheduler = PeriodicScheduler()
+        calls = 0
+
+        async def backfill():
+            nonlocal calls
+            calls += 1
+            if fail:
+                raise RuntimeError("backfill failed")
+
+        scheduler.add("backfill", 0, backfill, run_immediately=True, once=True)
+        await scheduler.start()
+        try:
+            await asyncio.wait_for(asyncio.shield(scheduler._jobs["backfill"].task), timeout=1)
+            assert calls == 1
+            assert scheduler.jobs[0].runs == 1
+            assert scheduler.jobs[0].failures == int(fail)
+            assert (await scheduler.health_check())["healthy"] is not fail
+        finally:
+            await scheduler.stop()
+
     async def test_runs_jobs_on_interval(self):
         scheduler = PeriodicScheduler()
         calls: list[int] = []
