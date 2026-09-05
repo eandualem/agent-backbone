@@ -138,6 +138,16 @@ class TestEffectiveRoutes:
         discovery = TopicDiscovery(group_chat_id=-100, topic_routes={8: "leo"})
         assert effective_routes(_make_config(), discovery) == {8: "leo"}
 
+    def test_unknown_origin_ignored_beside_an_explicit_group(self):
+        # Until a rebind adopts and resets them, unknown-origin routes
+        # never apply under an explicit group; explicit config still does.
+        config = _make_config(
+            telegram=TelegramConfig(group_chat_id=-200, topic_routes={7: "feynman"})
+        )
+        discovery = TopicDiscovery(topic_routes={7: "ike", 8: "leo"})
+        assert effective_routes(config, discovery) == {7: "feynman"}
+        assert agent_topic(config, discovery, "ike") is None
+
 
 class TestAgentTopic:
     def test_discovery_hit(self):
@@ -256,14 +266,16 @@ class TestClosedTopics:
 
 
 class TestRebindGroup:
-    def test_adopts_selected_group_without_resetting_unscoped_routes(self):
-        # Routes that predate group tracking have no old group to be stale
-        # against: bind, don't wipe.
+    def test_unknown_origin_routes_are_discarded_on_binding(self):
+        # The real legacy shape: old sync_topics wrote routes under the
+        # configured group without recording it. Adopting them into a
+        # (possibly different) selected group would reuse unrelated
+        # thread ids — discard, then rediscover.
         config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
         d = TopicDiscovery(topic_routes={9: "ike"}, topic_names={9: "Ike"})
         assert rebind_group(config, d) is True
         assert d.group_chat_id == -200
-        assert d.topic_routes == {9: "ike"}
+        assert d.topic_routes == {} and d.topic_names == {}
 
     def test_changed_group_resets_learned_state(self):
         config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
@@ -301,3 +313,13 @@ class TestRebindGroup:
         assert load_discovery(path).topic_routes == {9: "ike"}
         assert effective_routes(config, d) == {9: "ike"}
         assert agent_topic(config, d, "ike") == 9
+
+    def test_legacy_shape_resets_then_relearns_in_the_configured_group(self, tmp_path):
+        path = tmp_path / "t.json"
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery(topic_routes={5: "leo"}, topic_names={5: "Leo"})
+        update = _make_update(chat_id=-200, thread_id=9, forum_topic_name="Ike")
+        assert process_message_for_discovery(update, config, d, path) is True
+        assert d.group_chat_id == -200
+        assert d.topic_routes == {9: "ike"}  # old id 5 gone, new id 9 learned
+        assert load_discovery(path).topic_routes == {9: "ike"}

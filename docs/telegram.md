@@ -92,8 +92,9 @@ when set, otherwise the first group that speaks. Messages from any other
 allowed group teach no routes, and a topic thread from another group
 never delivers into this group's agent. If you move the bot to a new
 group, set `telegram.group_chat_id` to it — discoveries learned in the
-old group are ignored and cleared (thread ids are per-group), while explicit
-`telegram.topic_routes` keep applying. The bot then re-learns and
+old group are discarded and rediscovered (thread ids are per-group, and
+threads learned before the bot tracked groups have no known origin), while
+explicit `telegram.topic_routes` keep applying. The bot then re-learns and
 re-provisions topics in the new group; old thread ids are never closed,
 reopened or posted into there.
 
