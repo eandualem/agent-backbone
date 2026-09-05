@@ -329,19 +329,30 @@ class AgentsConfig:
         return list(self.specs)
 
     def owners(self, repo_full_name: str) -> list[AgentSpec]:
-        """Agents whose directory *is* the repository."""
+        """Agents whose directory *is* the repository.
+
+        Swarm members are not owners: they carry the repository for their
+        worktree and pull request, not for routing — a swarm must not turn a
+        sole owner into a multi-owner repository, nor hear about every issue.
+        """
         key = repo_full_name.casefold()
         if not key:
             return []
-        return [spec for spec in self.specs.values() if spec.repo.casefold() == key]
+        return [
+            spec
+            for spec in self.specs.values()
+            if spec.repo.casefold() == key and spec.swarm is None
+        ]
 
     def watchers(self, repo_full_name: str) -> list[AgentSpec]:
-        """Agents that watch a repository without owning it."""
+        """Agents that watch a repository without owning it (never swarm members)."""
         key = repo_full_name.casefold()
         return [
             spec
             for spec in self.specs.values()
-            if spec.repo.casefold() != key and any(w.casefold() == key for w in spec.watches)
+            if spec.swarm is None
+            and spec.repo.casefold() != key
+            and any(w.casefold() == key for w in spec.watches)
         ]
 
     @property

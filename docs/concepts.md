@@ -52,7 +52,7 @@ Four relationships decide routing for an issue in repository R:
 
 | Relationship | How it comes about | Effect |
 |---|---|---|
-| **owner** | the agent's directory is R | unlabelled issues are its work (sole owner) or are announced to all owners |
+| **owner** | the agent's directory is R (swarm members excepted: their worktree is R, but they are not owners) | unlabelled issues are its work (sole owner) or are announced to all owners |
 | **`for:<agent>`** | a label on the issue | goes to that agent's queue |
 | **`from:<agent>`** | a label on the issue | comments and the close are reported back to the opener |
 | **watch** | `backbone agent watch` | informational notice about new issues; `for:` labels in R route to it |

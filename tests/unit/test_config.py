@@ -235,5 +235,22 @@ class TestAgents:
         )
         assert [s.name for s in agents.owners("ACME/app")] == ["a", "b"]
         assert [s.name for s in agents.watchers("acme/app")] == ["orch"]
+
         assert agents.repos == ["acme/app", "acme/orch"]
         assert "orch" in agents
+
+    def test_swarm_members_are_neither_owners_nor_watchers(self):
+        agents = AgentsConfig(
+            specs={
+                "app": AgentSpec(name="app", dir="/app", repo="acme/app"),
+                "audit-scout-1": AgentSpec(
+                    name="audit-scout-1",
+                    dir="/app/.backbone/swarms/audit",
+                    repo="acme/app",
+                    watches=("acme/other",),
+                    tags=("swarm:audit", "role:scout"),
+                ),
+            }
+        )
+        assert [s.name for s in agents.owners("acme/app")] == ["app"]
+        assert agents.watchers("acme/other") == []
