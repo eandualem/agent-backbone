@@ -108,9 +108,13 @@ async def drain_message_queue(
                 queue_scope=scope,
                 delivery_kind=record.get("delivery_kind", "issue"),
                 sender=record.get("sender") or "",
-                # A blocked re-offer must fold into this leased row, not add a
-                # second one: hand back the identity it was stored under.
                 source_key=_source_key_of(record),
+                # This row *is* the stored copy. A blocked re-offer must not be
+                # stored again: the text offered carries the queued-age stamp,
+                # so it would land as a new row under a new text key, and the
+                # next drain would re-offer both — one more copy per minute
+                # (seen live: nine rows, three deliveries of one message).
+                requeue=False,
             )
             if outcome in _QUEUE_DONE:
                 await db.queue.mark_delivered(record["id"])
