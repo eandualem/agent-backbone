@@ -36,7 +36,11 @@ a swarm costs several times the tokens.
    ```
 
    Leave the suffix off and the CLI's own default applies, which may be
-   its cheapest level. Roles with shipped briefs:
+   its cheapest level. OpenCode names models `provider/model`
+   (`scout@opencode/google/gemini-3-flash-preview`): the runtime is the
+   word after `@`, the model everything after the first `/`; `backbone
+   runtimes` lists no ids for it — read `opencode models`. Roles with
+   shipped briefs:
    `coordinator` (added automatically; at most one), `scout` (read-only
    research), `coder` (implements an owned slice), `reviewer` (verifies
    by running). Any other role gets a generic brief. 3–5 members total

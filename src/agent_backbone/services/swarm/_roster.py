@@ -12,7 +12,10 @@ from dataclasses import dataclass
 _SPEC_RE = re.compile(
     r"^(?P<role>[a-z][a-z0-9-]*)"
     r"(?:\*(?P<count>\d{1,2}))?"
-    r"(?:@(?P<runtime>[a-z]+)(?:/(?P<model>[A-Za-z0-9._:-]+))?)?$"
+    # The model may itself contain "/" (OpenCode names models provider/model):
+    # the runtime is the letters right after "@", the model everything after
+    # the first "/".
+    r"(?:@(?P<runtime>[a-z]+)(?:/(?P<model>[A-Za-z0-9._:/-]+))?)?$"
 )
 
 COORDINATOR_ROLE = "coordinator"
@@ -30,7 +33,7 @@ class MemberSpec:
 
 def parse_member_spec(raw: str) -> MemberSpec:
     """Parse ``role[*N][@runtime[/model[:effort]]]`` (e.g. ``scout*3@claude/sonnet``,
-    ``coordinator@codex/gpt-6-astra:high``)."""
+    ``coordinator@codex/gpt-6-astra:high``, ``scout@opencode/google/gemini-3.8-flash``)."""
     match = _SPEC_RE.match(raw.strip())
     if not match:
         raise ValueError(
