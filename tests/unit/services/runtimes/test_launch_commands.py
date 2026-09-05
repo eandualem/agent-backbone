@@ -88,7 +88,14 @@ class TestBuildCommand:
         brief.write_text("You are agent x.")
         with _resolve("/bin/codex"):
             command = RUNTIMES["codex"].build_command(model="gpt-5.2", brief_file=brief)
-        assert command == ["/bin/codex", *_NET, "--model", "gpt-5.2", "You are agent x."]
+        assert command == [
+            "/bin/codex",
+            *_NET,
+            "--no-alt-screen",
+            "--model",
+            "gpt-5.2",
+            "You are agent x.",
+        ]
 
     def test_codex_resume_is_a_subcommand(self):
         with _resolve("/bin/codex"):
@@ -97,6 +104,7 @@ class TestBuildCommand:
                 "resume",
                 "--last",
                 *_NET,
+                "--no-alt-screen",
             ]
 
     def test_codex_sandbox_can_reach_the_backbone_api(self):
@@ -112,7 +120,7 @@ class TestBuildCommand:
     def test_codex_unreadable_brief_degrades(self, tmp_path):
         with _resolve("/bin/codex"):
             command = RUNTIMES["codex"].build_command(brief_file=tmp_path / "missing.md")
-        assert command == ["/bin/codex", *_NET]
+        assert command == ["/bin/codex", *_NET, "--no-alt-screen"]
 
     def test_gemini_flags(self, tmp_path):
         brief = tmp_path / "brief.md"
@@ -333,6 +341,7 @@ class TestEffort:
             "-c",
             "model_reasoning_effort=high",
             *_NET,
+            "--no-alt-screen",
             "--model",
             "gpt-6-astra",
         ]
@@ -347,6 +356,7 @@ class TestEffort:
             assert RUNTIMES["codex"].build_command(model="gpt-6-astra") == [
                 "/bin/codex",
                 *_NET,
+                "--no-alt-screen",
                 "--model",
                 "gpt-6-astra",
             ]
@@ -381,6 +391,28 @@ class TestEffort:
 class TestUnattended:
     """``unattended`` adds the CLI's own no-approval switch — or refuses."""
 
+    @pytest.mark.parametrize("resume", [False, "sess-1"])
+    def test_codex_auto_review_and_unattended_are_exclusive(self, resume):
+        with _resolve("/bin/codex"):
+            reviewed = RUNTIMES["codex"].build_command(auto_review=True, resume=resume)
+            unattended = RUNTIMES["codex"].build_command(
+                auto_review=True, unattended=True, resume=resume
+            )
+            manual = RUNTIMES["codex"].build_command(resume=resume)
+        assert "--approve-for-me" in reviewed
+        assert "--approve-for-me" not in unattended
+        assert "never" in unattended and "workspace-write" in unattended
+        assert "--approve-for-me" not in manual
+        assert "--no-alt-screen" in reviewed and "--no-alt-screen" in unattended
+
+    @pytest.mark.parametrize("runtime", ["claude", "opencode", "gemini", "shell"])
+    def test_auto_review_leaves_unsupported_runtimes_alone(self, runtime):
+        with _resolve("/bin/runtime"):
+            assert (
+                RUNTIMES[runtime].build_command(auto_review=True)
+                == RUNTIMES[runtime].build_command()
+            )
+
     def test_codex_never_asks_and_keeps_its_sandbox(self, tmp_path):
         brief = tmp_path / "brief.md"
         brief.write_text("You are a scout.")
@@ -394,6 +426,7 @@ class TestUnattended:
             "model_reasoning_effort=high",
             *_NEVER_ASK,
             *_NET,
+            "--no-alt-screen",
             "--model",
             "gpt-6-astra",
             "You are a scout.",

@@ -315,11 +315,39 @@ class TestStartAgentBrief:
             assert (await start_agent(spec, config, db=AsyncMock())).ok
         command = started.await_args.kwargs["command"]
         assert command[1:3] == ["--add-dir", str(main_git)]
-        # A plain checkout keeps .git inside its own directory: nothing to open.
+        # A directory with no Git metadata has nothing to open.
         plain = self._spec(tmp_path, "codex")
         with exists, start as started, _cmd, _trust, _wait:
             assert (await start_agent(plain, config, db=AsyncMock())).ok
         assert "--add-dir" not in started.await_args.kwargs["command"]
+
+    @pytest.mark.parametrize("unattended", [False, True])
+    async def test_a_plain_checkout_explicitly_opens_git_metadata(self, tmp_path, unattended):
+        config = bootstrap_config(tmp_path / "data")
+        spec = replace(self._spec(tmp_path, "codex"), unattended=unattended)
+        (spec.path / ".git").mkdir()
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            assert (await start_agent(spec, config, db=AsyncMock())).ok
+        command = started.await_args.kwargs["command"]
+        grant = command.index("--add-dir")
+        assert command[grant + 1] == str((spec.path / ".git").resolve())
+
+    @pytest.mark.parametrize("runtime", ["codex", "claude", "shell"])
+    async def test_mouse_scrolling_follows_the_runtime(self, tmp_path, runtime):
+        config = bootstrap_config(tmp_path / "data")
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            assert (await start_agent(self._spec(tmp_path, runtime), config, db=AsyncMock())).ok
+        assert started.await_args.kwargs["mouse"] is (runtime == "codex")
+
+    async def test_auto_review_setting_reaches_the_runtime(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        config = replace(config, launch=replace(config.launch, auto_review=True))
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            assert (await start_agent(self._spec(tmp_path, "codex"), config, db=AsyncMock())).ok
+        assert "--approve-for-me" in started.await_args.kwargs["command"]
 
     @pytest.mark.parametrize(
         ("runtime", "setting", "never_asks"),

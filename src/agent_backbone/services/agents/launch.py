@@ -194,6 +194,7 @@ async def start_agent(
             state_dir=config.state_dir,
             unattended=unattended,
             writable_dirs=_writable_dirs(spec.path, section.writable_dirs),
+            auto_review=section.auto_review,
         )
     except RuntimeError as exc:
         log.error("Cannot start agent '%s': %s", spec.name, exc)
@@ -221,6 +222,7 @@ async def start_agent(
         command=command,
         environment=environment,
         scrub=session_secret_keys(config.data_dir),
+        mouse=rt.mouse_scroll,
     )
     if not ok:
         clear_starting_marker(config.state_dir, spec.name)
@@ -250,14 +252,17 @@ async def start_agent(
 def _writable_dirs(agent_dir: Path, configured: tuple[str, ...]) -> tuple[str, ...]:
     """The directories a sandboxed runtime may write outside ``agent_dir``.
 
-    The configured list (``agents.writable_dirs``), plus the git directory a
-    worktree shares with its main checkout: ``<main>/.git`` holds the
+    The configured list (``agents.writable_dirs``), plus the repository's
+    git directory. A worktree shares it with its main checkout: ``<main>/.git`` holds the
     worktree's index, HEAD and every object and ref, so without it a member
     in a swarm worktree can edit but never ``git add`` or ``commit``
     ("Operation not permitted" on ``index.lock``, seen live). A plain
-    checkout keeps its ``.git`` inside ``agent_dir`` and needs nothing.
+    checkout needs an explicit grant too: workspace-write protects ``.git``
+    even inside a writable root. No other protected directory is opened.
     """
     common = worktree_git_dir(agent_dir)
+    if common is None and (agent_dir / ".git").is_dir():
+        common = (agent_dir / ".git").resolve()
     if common is None or str(common) in configured:
         return configured
     return (*configured, str(common))

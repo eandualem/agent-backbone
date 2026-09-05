@@ -157,6 +157,37 @@ If the agent is busy you get `"outcome": "agent_working"` and the message
 is queued; the monitor delivers it when the agent is idle (within a
 minute). Watch it happen: `tmux attach -t app`.
 
+### Codex permissions and scrolling
+
+The backbone explicitly opens the repository's `.git` directory for Codex,
+including the shared Git directory of a linked worktree. Codex normally
+protects `.git` even inside a writable checkout; opening this directory lets
+ordinary `git add` and `git commit` run inside the sandbox. Source files,
+configured tooling directories (`agents.writable_dirs`) and the network are
+also available. `.codex`, `.agents` and unrelated directories keep their
+existing protection. See [Codex's protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).
+
+To have Codex review remaining permission requests automatically:
+
+```bash
+backbone config set agents.auto_review true
+```
+
+This selects Codex's `--approve-for-me` mode with its workspace sandbox.
+Requests needing extra permission go to Codex's reviewer, which can approve
+routine actions or refuse them. It does not guarantee every request will
+run. Set the setting to `false` to use your own Codex approval configuration.
+Unattended agents keep their no-prompt policy; other runtimes are unaffected.
+The change applies on the next start or resume, including for an existing
+conversation. See [automatic approval reviews](https://learn.chatgpt.com/docs/agent-approvals-security#automatic-approval-reviews).
+
+Codex launches in inline mode (`--no-alt-screen`) with tmux mouse handling
+enabled for its session. The wheel scrolls terminal history instead of
+recalling earlier prompts. Press `q` to leave tmux copy mode and return to
+input. Other runtimes retain your tmux mouse setting. For an already running
+Codex session, enable mouse handling with
+`tmux set-option -t '=NAME:' mouse on` (replace `NAME` with the agent name).
+
 ### The thing worth trying first
 
 The queue is the whole point, so provoke it deliberately. Give the agent

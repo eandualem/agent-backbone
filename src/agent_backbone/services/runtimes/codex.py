@@ -97,6 +97,10 @@ class Codex(Runtime):
     # before `resume`.
     unattended_args = ("-a", "never", "-s", "workspace-write")
     sandboxed = True
+    mouse_scroll = True
+    # Codex 0.153.4: on-request approvals go to its automatic reviewer,
+    # with workspace-write enforced by this switch (verified with --help).
+    auto_review_args = ("--approve-for-me",)
 
     hook_script = "codex_hook.py"
     hook_events = (
@@ -208,8 +212,10 @@ class Codex(Runtime):
         # Both the TUI and `resume` take `-c` and the hook-trust flag.
         if resume:
             target = resume if isinstance(resume, str) else "--last"
-            return ["resume", target, *_LOCAL_API_ACCESS, *hook]
-        args: list[str] = [*_LOCAL_API_ACCESS, *hook]
+            return ["resume", target, *_LOCAL_API_ACCESS, "--no-alt-screen", *hook]
+        # Inline output gives tmux scrollback to display; session mouse
+        # handling keeps the wheel from becoming Up/Down in the composer.
+        args: list[str] = [*_LOCAL_API_ACCESS, "--no-alt-screen", *hook]
         if model:
             args.extend(["--model", model])
         if brief_file is not None and (brief := read_brief(brief_file)):
