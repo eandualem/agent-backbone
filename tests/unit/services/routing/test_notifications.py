@@ -70,9 +70,9 @@ class TestFormatCommentNotification:
         comment = CommentData(body=long_body, user_login="test")
         msg = format_comment_notification(sample_issue, comment)
         assert "..." in msg
-        # The preview should be 500 chars + "..."
-        assert "x" * 500 in msg
-        assert "x" * 501 not in msg
+        # The preview is 500 characters including the ellipsis: 497 of body.
+        assert "x" * 497 + "..." in msg
+        assert "x" * 498 not in msg
 
     def test_newline_replacement(self, sample_issue):
         comment = CommentData(body="line1\nline2\nline3", user_login="test")
@@ -215,3 +215,75 @@ class TestFormatPlanNotification:
             "agent-backbone", "bell", "/tmp/plan.md", "Add feature X", issue_number=99
         )
         assert "\n" not in msg
+
+
+class TestReviewAnchorsAndPreviews:
+    """#132: a review names its commit; previews carry text, not HTML comments."""
+
+    def test_review_names_the_commit_it_looked_at(self):
+        from agent_backbone.models import IssueData, ParsedLabels, ReviewData
+        from agent_backbone.services.routing._format import format_review_notification
+
+        issue = IssueData(
+            number=131, title="effort", labels=ParsedLabels(), repo_full_name="acme/app"
+        )
+        review = ReviewData(
+            id=1,
+            body="Actionable comments posted: 2",
+            user_login="coderabbitai[bot]",
+            state="commented",
+            commit_id="3d460d10e43d9cedd77da1fcd905c387ef164b60",
+        )
+        text = format_review_notification(issue, review)
+        assert "(commented) of 3d460d1:" in text
+
+    def test_preview_skips_html_comments_and_whitespace(self):
+        from agent_backbone.models import CommentData, IssueData, ParsedLabels
+        from agent_backbone.services.routing._format import format_comment_notification
+
+        body = (
+            "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n"
+            "<!-- review_stack_entry_start -->\n\n"
+            "No actionable comments were generated in the recent review.\n\n"
+            "<details><summary>Run configuration</summary>x</details>"
+        )
+        issue = IssueData(number=1, title="t", labels=ParsedLabels(), repo_full_name="acme/app")
+        text = format_comment_notification(issue, CommentData(id=1, body=body, user_login="bot"))
+        assert "<!--" not in text
+        assert text.index("No actionable comments") < text.index("<details>")
+
+    def test_review_parsed_from_the_webhook_carries_the_commit(self):
+        from agent_backbone.models import IssueEvent
+
+        payload = {
+            "action": "submitted",
+            "pull_request": {"number": 7, "title": "t", "state": "open", "labels": []},
+            "review": {
+                "id": 5,
+                "body": "",
+                "state": "APPROVED",
+                "user": {"login": "rev"},
+                "commit_id": "abc1234def",
+                "submitted_at": "2026-09-05T05:19:28Z",
+            },
+        }
+        event = IssueEvent.from_webhook("pull_request_review", "submitted", payload, "d1")
+        assert event.review is not None
+        assert event.review.commit_id == "abc1234def"
+        assert event.review.submitted_at == "2026-09-05T05:19:28Z"
+
+    def test_a_truncated_preview_never_exceeds_the_cap(self):
+        from agent_backbone.services.routing._format import _preview
+
+        assert len(_preview("x" * 501)) == 500 and _preview("x" * 501).endswith("...")
+        assert _preview("x" * 500) == "x" * 500
+
+    def test_stacked_unterminated_openers_are_linear(self):
+        import time
+
+        from agent_backbone.services.routing._format import _preview
+
+        started = time.perf_counter()
+        assert _preview("<!--" * 20000 + " tail") == ""
+        assert _preview("<!-- a --> kept <!-- b --> too") == "kept too"
+        assert time.perf_counter() - started < 1.0

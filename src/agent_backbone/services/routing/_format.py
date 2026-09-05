@@ -42,6 +42,37 @@ def format_pull_request_notification(issue: IssueData) -> str:
     )
 
 
+_PREVIEW_CHARS = 500
+
+
+def _strip_html_comments(text: str) -> str:
+    """``text`` without ``<!-- … -->`` blocks, in one pass: a regex with a
+    lazy ``.*?`` rescans to the end for every unterminated opener, which a
+    hostile comment body could stack by the thousand."""
+    out: list[str] = []
+    i = 0
+    while True:
+        start = text.find("<!--", i)
+        if start < 0:
+            out.append(text[i:])
+            break
+        out.append(text[i:start])
+        end = text.find("-->", start + 4)
+        if end < 0:
+            break  # unterminated: the rest is comment, as a browser reads it
+        i = end + 3
+    return "".join(out)
+
+
+def _preview(body: str) -> str:
+    """The first 500 characters that mean something: HTML comments (bots
+    open with several) and runs of whitespace carry nothing to an agent."""
+    text = " ".join(_strip_html_comments(body).split())
+    if len(text) <= _PREVIEW_CHARS:
+        return text
+    return text[: _PREVIEW_CHARS - 3] + "..."  # the ellipsis counts toward the cap
+
+
 def format_comment_notification(
     issue: IssueData,
     comment: CommentData,
@@ -54,9 +85,7 @@ def format_comment_notification(
         idx = body.index("]") + 1
         body = body[idx:].lstrip()
 
-    preview = body[:500].replace("\n", " ")
-    if len(body) > 500:
-        preview += "..."
+    preview = _preview(body)
 
     attribution = commenter_entity if commenter_entity else comment.user_login
 
@@ -117,7 +146,8 @@ _REVIEW_STATES = {
 
 
 def format_review_notification(issue: IssueData, review: ReviewData) -> str:
-    """A pull request review: verdict, summary preview (500 chars) and link.
+    """A pull request review: verdict, the reviewed commit, summary preview
+    (500 chars) and link.
 
     Inline comments are not relayed; the link points at the review.
     """
@@ -125,16 +155,17 @@ def format_review_notification(issue: IssueData, review: ReviewData) -> str:
     tag = parse_from_tag(body)
     if tag:
         body = body[body.index("]") + 1 :].lstrip()
-    preview = body[:500].replace("\n", " ")
-    if len(body) > 500:
-        preview += "..."
+    preview = _preview(body)
     verdict = _REVIEW_STATES.get(review.state, review.state or "review")
     summary = f'"{preview}"' if preview else "(no summary; see the inline comments)"
     attribution = tag or review.user_login
     link = review.html_url or issue.html_url
+    # The commit is what lets the agent tell a review of its latest push
+    # from one of an earlier commit arriving late.
+    anchor = f" of {review.commit_id[:7]}" if review.commit_id else ""
     return (
         f"[via:github pr:{issue.number}] "
-        f'Review on {_issue_ref(issue)} "{issue.title}" from {attribution} ({verdict}): '
+        f'Review on {_issue_ref(issue)} "{issue.title}" from {attribution} ({verdict}){anchor}: '
         f"{summary} Link: {link}"
     ).rstrip()
 

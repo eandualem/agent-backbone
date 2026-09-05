@@ -192,6 +192,10 @@ class ReviewData(BaseModel):
     state: str = ""
     """``approved``, ``changes_requested`` or ``commented`` (GitHub's spelling)."""
     html_url: str = ""
+    commit_id: str = ""
+    """The commit the review looked at — what makes a late or replayed review
+    recognisable as one of an earlier push."""
+    submitted_at: str = ""
 
 
 class IssueEvent(BaseModel):
@@ -248,6 +252,8 @@ class IssueEvent(BaseModel):
                 user_login=(review_data.get("user") or {}).get("login", "unknown"),
                 state=(review_data.get("state") or "").lower(),
                 html_url=review_data.get("html_url", ""),
+                commit_id=review_data.get("commit_id") or "",
+                submitted_at=review_data.get("submitted_at") or "",
             )
 
         return cls(
