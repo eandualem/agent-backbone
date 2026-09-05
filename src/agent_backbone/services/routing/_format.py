@@ -52,7 +52,9 @@ def _preview(body: str) -> str:
     """The first 500 characters that mean something: HTML comments (bots
     open with several) and runs of whitespace carry nothing to an agent."""
     text = " ".join(_HTML_COMMENT_RE.sub("", body).split())
-    return text if len(text) <= _PREVIEW_CHARS else text[:_PREVIEW_CHARS] + "..."
+    if len(text) <= _PREVIEW_CHARS:
+        return text
+    return text[: _PREVIEW_CHARS - 3] + "..."  # the ellipsis counts toward the cap
 
 
 def format_comment_notification(

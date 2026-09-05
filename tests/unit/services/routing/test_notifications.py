@@ -271,3 +271,9 @@ class TestReviewAnchorsAndPreviews:
         assert event.review is not None
         assert event.review.commit_id == "abc1234def"
         assert event.review.submitted_at == "2026-09-05T05:19:28Z"
+
+    def test_a_truncated_preview_never_exceeds_the_cap(self):
+        from agent_backbone.services.routing._format import _preview
+
+        assert len(_preview("x" * 501)) == 500 and _preview("x" * 501).endswith("...")
+        assert _preview("x" * 500) == "x" * 500
