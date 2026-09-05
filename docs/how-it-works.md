@@ -37,6 +37,15 @@ This page follows real requests through the system. Read
    `ready`, `waiting_for_human`, `exited` or `timeout`.
 5. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
+The running backbone serializes registration, edits, watches, start, stop and
+forget for each agent. Edits update only the supplied database fields, so two
+concurrent edits keep both changes. A start checks its resolved record again
+before launching: if the agent was forgotten or changed meanwhile, it fails
+with that reason. Forget waits for an active start and refuses to remove a
+running session. Swarm startup and teardown use the same per-agent locks.
+If startup rollback cannot finish cleanup, the swarm stays active so `swarm
+disband` can retry it; cleanup errors do not hide the original startup failure.
+
 The backbone keeps no process handle; tmux owns the session. If the
 backbone restarts, sessions keep running and are rediscovered. Sessions
 you start by hand appear in `backbone status` with `configured: false`.

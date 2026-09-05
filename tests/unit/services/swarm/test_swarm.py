@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -10,7 +11,7 @@ import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.agents import StartResult
+from agent_backbone.services.agents import AgentStore, StartResult
 from agent_backbone.services.swarm import (
     SwarmError,
     create_swarm,
@@ -19,6 +20,7 @@ from agent_backbone.services.swarm import (
     parse_roster,
     render_brief,
     teardown_for_issue,
+    teardown_swarm,
 )
 from agent_backbone.services.swarm._roster import MemberSpec, member_names
 from tests.conftest import make_config
@@ -330,7 +332,9 @@ class TestCreateSwarm:
         else:
             mock_rm.assert_awaited_once()
             assert store.registered == []  # all rolled back
-        assert (await db.swarms.get("research"))["status"] == "disbanded"
+        assert (await db.swarms.get("research"))["status"] == (
+            "active" if occupied else "disbanded"
+        )
 
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
@@ -406,7 +410,92 @@ class TestCreateSwarm:
         mock_start.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "failure", ["remove_false", "remove_error", "status_error", "forget_error"]
+)
+async def test_incomplete_startup_rollback_remains_retryable(db, tmp_path, failure):
+    config, repo_dir = _swarm_config(tmp_path)
+    worktree = repo_dir / ".backbone" / "swarms" / "research"
+    store = _FakeStore(config)
+    gh = AsyncMock()
+    gh.get_issue.return_value = AsyncMock(state="open", title="task")
+    if failure == "forget_error":
+        store.forget = AsyncMock(side_effect=OSError("forget failed"))
+    status = db.swarms.set_status
+    with (
+        patch(f"{_IFACE}.is_git_repo", AsyncMock(return_value=True)),
+        patch(f"{_IFACE}.current_branch", AsyncMock(return_value="develop")),
+        patch(f"{_IFACE}.create_worktree", AsyncMock(return_value=(worktree, "swarm/research"))),
+        patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_IFACE}.start_agent", AsyncMock(return_value=_FAILED)),
+        patch(
+            f"{_IFACE}.remove_worktree",
+            AsyncMock(
+                return_value=failure != "remove_false",
+                side_effect=OSError("remove failed") if failure == "remove_error" else None,
+            ),
+        ),
+        patch.object(
+            db.swarms,
+            "set_status",
+            AsyncMock(
+                side_effect=OSError("status failed") if failure == "status_error" else status,
+            ),
+        ),
+        pytest.raises(SwarmError, match="failed to start member"),
+    ):
+        await create_swarm(
+            config,
+            db,
+            store,
+            gh,
+            name="research",
+            issue_ref="acme/app#7",
+            member_specs=["scout"],
+            initiator="simon",
+        )
+    assert (await db.swarms.get("research"))["status"] == "active"
+
+
 class TestTeardown:
+    async def test_teardown_holds_member_lock_through_removal_and_forget(self, db, tmp_path):
+        config, repo_dir = _swarm_config(tmp_path)
+        worktree = repo_dir / ".backbone" / "swarms" / "research"
+        store = AgentStore(db, tmp_path)
+        await store.start()
+        await store.register(
+            AgentSpec(name="research-scout", dir=str(worktree), tags=("swarm:research",))
+        )
+        removing, release = asyncio.Event(), asyncio.Event()
+
+        async def remove(*args):
+            removing.set()
+            await release.wait()
+            return True
+
+        with (
+            patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+            patch(f"{_IFACE}.remove_worktree", side_effect=remove),
+        ):
+            teardown = asyncio.create_task(
+                teardown_swarm(
+                    config,
+                    db,
+                    store,
+                    {"name": "research", "worktree_dir": str(worktree)},
+                    status="done",
+                )
+            )
+            await asyncio.wait_for(removing.wait(), 2)
+            update = asyncio.create_task(store.update("research-scout", model="late"))
+            await asyncio.sleep(0)
+            assert not update.done()
+            release.set()
+            assert await asyncio.wait_for(teardown, 2) == ["research-scout"]
+            with pytest.raises(KeyError):
+                await asyncio.wait_for(update, 2)
+        assert store.agents.get("research-scout") is None
+
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=True)

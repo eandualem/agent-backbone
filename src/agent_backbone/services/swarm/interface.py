@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import logging
 import re
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import AgentSpec
-from agent_backbone.services.agents import start_agent
+from agent_backbone.services.agents import lifecycle_lock, start_agent
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
@@ -247,46 +248,77 @@ async def create_swarm(
         # peer addressable first, then start the coordinator after its members.
         for agent, brief_file in sorted(launches, key=lambda launch: launch[0].name == coordinator):
             agent_name = agent.name
-            # The role brief replaces the common backbone brief: at launch
-            # where the runtime takes one, else as the first delivered message.
-            result = await start_agent(agent, config, brief_file=brief_file, db=db)
-            if result.already_running:
-                occupied.append(agent_name)
-                raise SwarmError(f"member '{agent_name}' became occupied during startup")
-            if not result.ok:
-                raise SwarmError(f"failed to start member '{agent_name}'")
-            started.append(agent_name)
-            await store.touch_started(agent_name)
-            if result.ready == "exited":
-                raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
+            async with lifecycle_lock(agent_name):
+                current = store.agents.get(agent_name)
+                if current != agent:
+                    if current is not None:
+                        occupied.append(agent_name)
+                    raise SwarmError(
+                        f"member '{agent_name}' changed or was forgotten before startup"
+                    )
+                # The runtime chooses launch injection or a queued first message.
+                result = await start_agent(agent, config, brief_file=brief_file, db=db)
+                if result.already_running:
+                    occupied.append(agent_name)
+                    raise SwarmError(f"member '{agent_name}' became occupied during startup")
+                if not result.ok:
+                    raise SwarmError(f"failed to start member '{agent_name}'")
+                started.append(agent_name)
+                await store.touch_started(agent_name)
+                if result.ready == "exited":
+                    raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
     except Exception:
         # Best-effort rollback so a half-started swarm doesn't linger.
-        unstopped = occupied.copy()
-        for agent_name in started:
-            try:
-                stopped = await stop_session(agent_name)
-            except Exception:
-                stopped = False
-            if not stopped:
-                unstopped.append(agent_name)
-        # Existing sessions and sessions that would not die keep their records
-        # and worktree; rollback must not stop or strand an unowned session.
-        for agent_name, _ in named:
-            if agent_name in unstopped:
-                continue
-            try:
-                await store.forget(agent_name)
-            except Exception:
-                log.debug("rollback: could not forget %s", agent_name)
-        if unstopped:
-            log.warning(
-                "rollback: %s still running; stop them and remove %s by hand",
-                ", ".join(unstopped),
-                worktree,
-            )
-        elif not await remove_worktree(repo_dir, worktree):
-            log.warning("rollback: worktree %s still exists; remove it by hand", worktree)
-        await db.swarms.set_status(name, "disbanded")
+        async with AsyncExitStack() as stack:
+            for agent_name, _ in sorted(named):
+                await stack.enter_async_context(lifecycle_lock(agent_name))
+            unstopped = occupied.copy()
+            planned = {agent.name: agent for agent, _ in launches}
+            for agent_name, _ in named:
+                current = store.agents.get(agent_name)
+                if current is not None and current != planned.get(agent_name):
+                    unstopped.append(agent_name)
+            for agent_name in started:
+                if agent_name in unstopped:
+                    continue
+                try:
+                    stopped = await stop_session(agent_name)
+                except Exception:
+                    stopped = False
+                if not stopped:
+                    unstopped.append(agent_name)
+            # Existing sessions and sessions that would not die keep their records
+            # and worktree; rollback must not stop or strand an unowned session.
+            cleaned = not unstopped
+            for agent_name, _ in named:
+                if agent_name in unstopped:
+                    continue
+                try:
+                    await store.forget(agent_name)
+                except Exception:
+                    cleaned = False
+                    log.debug("rollback: could not forget %s", agent_name)
+            if unstopped:
+                log.warning(
+                    "rollback: %s still present; disband '%s' to retry cleanup of %s",
+                    ", ".join(unstopped),
+                    name,
+                    worktree,
+                )
+            else:
+                try:
+                    removed = await remove_worktree(repo_dir, worktree)
+                    cleaned = cleaned and removed
+                    if not removed:
+                        log.warning("rollback: worktree %s remains; retry disband", worktree)
+                except Exception:
+                    cleaned = False
+                    log.exception("rollback: worktree %s cleanup failed; retry disband", worktree)
+            if cleaned:
+                try:
+                    await db.swarms.set_status(name, "disbanded")
+                except Exception:
+                    log.exception("rollback: could not mark '%s' disbanded; retry disband", name)
         raise
 
     kickoff = (
@@ -330,35 +362,40 @@ async def teardown_swarm(
     """Stop members, remove the worktree, forget the agents. Returns member names."""
     name = swarm["name"]
     members = await _members_of(store, name)
-    failed_stops: list[str] = []
-    for member in members:
-        if await session_exists(member.name) and not await stop_session(member.name):
-            failed_stops.append(member.name)
-    if failed_stops:
-        raise SwarmError(
-            "could not stop swarm member session(s): "
-            f"{', '.join(failed_stops)} — the worktree was left in place"
-        )
-    worktree = Path(swarm["worktree_dir"])
-    # The worktree lives at <repo_dir>/.backbone/swarms/<name>.
-    repo_dir = worktree.parent.parent.parent
-    # A missing directory is still registered with git until removed; a
-    # repository that is gone entirely has nothing left to remove.
-    if repo_dir.is_dir() and not await remove_worktree(repo_dir, worktree):
-        # Stop here so the worktree is not silently orphaned: the members are
-        # stopped, nothing is forgotten, and teardown can be retried.
-        raise SwarmError(
-            f"could not remove worktree {worktree} — resolve the git error and "
-            f"disband '{name}' again"
-        )
-    for member in members:
-        try:
-            await store.forget(member.name)
-        except Exception:
-            log.warning("Could not forget swarm member %s", member.name)
-    await db.swarms.set_status(name, status)
-    log.info("Swarm '%s' torn down (%s): %d members", name, status, len(members))
-    return [m.name for m in members]
+    async with AsyncExitStack() as stack:
+        for member in sorted(members, key=lambda member: member.name):
+            await stack.enter_async_context(lifecycle_lock(member.name))
+        if any(store.agents.get(member.name) != member for member in members):
+            raise SwarmError("swarm membership changed before teardown; retry disband")
+        failed_stops: list[str] = []
+        for member in members:
+            if await session_exists(member.name) and not await stop_session(member.name):
+                failed_stops.append(member.name)
+        if failed_stops:
+            raise SwarmError(
+                "could not stop swarm member session(s): "
+                f"{', '.join(failed_stops)} — the worktree was left in place"
+            )
+        worktree = Path(swarm["worktree_dir"])
+        # The worktree lives at <repo_dir>/.backbone/swarms/<name>.
+        repo_dir = worktree.parent.parent.parent
+        # A missing directory is still registered with git until removed; a
+        # repository that is gone entirely has nothing left to remove.
+        if repo_dir.is_dir() and not await remove_worktree(repo_dir, worktree):
+            # Stop here so the worktree is not silently orphaned: the members are
+            # stopped, nothing is forgotten, and teardown can be retried.
+            raise SwarmError(
+                f"could not remove worktree {worktree} — resolve the git error and "
+                f"disband '{name}' again"
+            )
+        for member in members:
+            try:
+                await store.forget(member.name)
+            except Exception:
+                log.warning("Could not forget swarm member %s", member.name)
+        await db.swarms.set_status(name, status)
+        log.info("Swarm '%s' torn down (%s): %d members", name, status, len(members))
+        return [m.name for m in members]
 
 
 async def teardown_for_issue(

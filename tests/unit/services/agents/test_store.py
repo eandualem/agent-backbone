@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -69,3 +70,58 @@ class TestFlagsFromText:
             await store.update("app", unattended="maybe")
         with pytest.raises(ValueError, match="always_on must be true or false"):
             await store.update("app", always_on="sometimes")
+
+
+async def test_concurrent_updates_preserve_fields_even_from_stale_stores(db, tmp_path):
+    first = await _store(db, tmp_path)
+    second = AgentStore(db, tmp_path)
+    await second.start()
+    await asyncio.gather(
+        first.update(name="app", model="new-model"),
+        second.update(name="app", description="new-description"),
+    )
+    await first.refresh()
+    spec = first.agents.get("app")
+    assert (spec.model, spec.description, spec.unattended) == ("new-model", "new-description", True)
+
+
+async def test_update_from_stale_snapshot_never_recreates_a_forgotten_agent(db, tmp_path):
+    first = await _store(db, tmp_path)
+    second = AgentStore(db, tmp_path)
+    await second.start()
+    await first.forget("app")
+    with pytest.raises(KeyError, match="app"):
+        await second.update("app", description="late update")
+    with pytest.raises(KeyError, match="app"):
+        await second.watch("app", "acme/app")
+    assert "app" not in {row["name"] for row in await db.agents.list()}
+
+
+@pytest.mark.parametrize("separate_stores", [False, True])
+async def test_concurrent_discovery_reserves_distinct_names(db, tmp_path, separate_stores):
+    store = AgentStore(db, tmp_path)
+    await store.start()
+    second = AgentStore(db, tmp_path) if separate_stores else store
+    await second.start()
+    paths = [tmp_path / parent / "project" for parent in ("one", "two")]
+    for path in paths:
+        path.mkdir(parents=True)
+    with patch(_DETECT_REPO, AsyncMock(return_value="")):
+        specs = await asyncio.gather(
+            store.register_directory(paths[0]), second.register_directory(paths[1])
+        )
+    assert {spec.name for spec in specs} == {"project", "project-2"}
+    assert {spec.path for spec in specs} == set(paths)
+
+
+async def test_rediscovery_preserves_update_while_waiting_for_agent_lock(db, tmp_path):
+    from agent_backbone.services.agents import lifecycle_lock
+
+    store = await _store(db, tmp_path)
+    with patch(_DETECT_REPO, AsyncMock(return_value="")):
+        async with lifecycle_lock("app"):
+            rediscover = asyncio.create_task(store.register_directory(tmp_path / "app"))
+            await asyncio.sleep(0)
+            await store.update("app", description="keep this", model="keep-model")
+        spec = await asyncio.wait_for(rediscover, 2)
+    assert (spec.description, spec.model) == ("keep this", "keep-model")

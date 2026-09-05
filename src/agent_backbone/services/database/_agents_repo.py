@@ -88,6 +88,41 @@ class AgentRepo(Repo):
                 },
             )
 
+    async def update_fields(self, name: str, changes: dict) -> bool:
+        """Update only supplied fields, without recreating a forgotten agent."""
+        allowed = {
+            "dir",
+            "runtime",
+            "model",
+            "repo",
+            "tags",
+            "env",
+            "description",
+            "always_on",
+            "unattended",
+        }
+        if changes.keys() - allowed:
+            raise ValueError("unknown agent fields")
+        values = dict(changes)
+        for key in ("tags", "env"):
+            if key in values:
+                values[key] = json.dumps(values[key])
+        for key in ("always_on", "unattended"):
+            if key in values:
+                values[key] = int(values[key])
+        assignments = [f"{key} = :{key}" for key in changes]
+        if "runtime" in changes and "unattended" not in changes:
+            assignments.append(
+                "unattended = CASE WHEN runtime != :runtime THEN 0 ELSE unattended END"
+            )
+        assignments.append("updated_at = :now")
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(f"UPDATE agents SET {', '.join(assignments)} WHERE name = :name"),
+                {**values, "name": name, "now": now_iso()},
+            )
+            return bool(result.rowcount)
+
     async def touch_started(self, name: str) -> None:
         async with self._tx() as conn:
             await conn.execute(
