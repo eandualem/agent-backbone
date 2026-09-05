@@ -129,9 +129,9 @@ async def create_swarm(
     """Create and start a swarm on an existing issue.
 
     Steps: validate, verify the issue is open, create the shared worktree
-    and branch in the initiator's repository checkout, register + start
-    each member with its role brief, then deliver the kickoff to the
-    coordinator.
+    and branch in the initiator's repository checkout, register the full
+    roster, start members with their role briefs (coordinator last), then
+    deliver the kickoff to the coordinator.
     """
     if not _NAME_RE.match(name):
         raise SwarmError(f"invalid swarm name {name!r} (lowercase, digits, dashes)")
@@ -206,6 +206,7 @@ async def create_swarm(
 
     briefs_dir = config.data_dir / "swarms" / name
     started: list[str] = []
+    launches: list[tuple[AgentSpec, Path]] = []
     default_runtime = config.launch.default_runtime
     try:
         briefs_dir.mkdir(parents=True, exist_ok=True)
@@ -239,6 +240,12 @@ async def create_swarm(
                 tags=(f"swarm:{name}", f"role:{spec.role}"),
             )
             await store.register(agent)
+            launches.append((agent, brief_file))
+
+        # Initial-prompt runtimes can act as soon as they start. Make every
+        # peer addressable first, then start the coordinator after its members.
+        for agent, brief_file in sorted(launches, key=lambda launch: launch[0].name == coordinator):
+            agent_name = agent.name
             # The role brief replaces the common backbone brief: at launch
             # where the runtime takes one, else as the first delivered message.
             result = await start_agent(agent, config, brief_file=brief_file, db=db)

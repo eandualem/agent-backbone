@@ -24,13 +24,14 @@ That single command:
    branch `swarm/research`, inside the repository checkout of the
    initiating agent (`--initiator`, defaulting to `$BACKBONE_AGENT`, or
    the repo's owner agent),
-3. registers and starts each member in that worktree — here a
+3. registers the whole roster in that worktree, then starts members with
+   the coordinator last — here a
    `research-coordinator` (added automatically), `research-scout-1..3`
    on Sonnet, and a `research-coder` on Opus — each with a **role brief**
    injected as a system prompt (Claude Code) or first message (other
    runtimes); nothing is ever written into the repository,
-4. delivers the kickoff to the coordinator, which reads the issue and
-   starts assigning work.
+4. delivers the kickoff to the coordinator. Its brief tells it to wait for
+   this message before assigning work, so assignments cannot race registration.
 
 ## The communication model
 

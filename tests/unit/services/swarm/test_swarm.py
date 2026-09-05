@@ -124,6 +124,11 @@ class TestBriefs:
         brief = render_brief("cartographer", {"role": "cartographer"})
         assert "Your role: cartographer" in brief
 
+    def test_coordinator_waits_for_kickoff(self):
+        brief = render_brief("coordinator", {"swarm_name": "research"})
+        assert "Before assigning work, wait for" in brief
+        assert "[via:backbone swarm:research] Your\nswarm is live" in brief
+
     def test_data_dir_override_wins(self, tmp_path):
         override = tmp_path / "swarm-templates"
         override.mkdir()
@@ -203,6 +208,16 @@ class TestCreateSwarm:
         gh = AsyncMock()
         gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="Do the research"))
 
+        async def start_with_registered_roster(*args, **kwargs):
+            assert {s.name for s in store.registered} == {
+                "research-coordinator",
+                "research-scout-1",
+                "research-scout-2",
+            }
+            return _STARTED
+
+        mock_start.side_effect = start_with_registered_roster
+
         result = await create_swarm(
             config,
             db,
@@ -223,8 +238,13 @@ class TestCreateSwarm:
         # Members registered in the shared worktree with swarm tags.
         assert all(s.dir == str(worktree) for s in store.registered)
         assert "swarm:research" in store.registered[0].tags
+        assert [call.args[0].name for call in mock_start.await_args_list] == [
+            "research-scout-1",
+            "research-scout-2",
+            "research-coordinator",
+        ]
         # Every member is started with its role brief.
-        launch = mock_start.await_args_list[0].kwargs
+        launch = mock_start.await_args_list[-1].kwargs
         assert launch["brief_file"] is not None
         brief = Path(launch["brief_file"]).read_text()
         assert "research-coordinator" in brief and "acme/app" in brief
@@ -297,6 +317,7 @@ class TestCreateSwarm:
             )
 
         mock_rm.assert_awaited_once()
+        mock_stop.assert_awaited_once_with("research-scout")
         assert store.registered == []  # all rolled back
         assert (await db.swarms.get("research"))["status"] == "disbanded"
 
