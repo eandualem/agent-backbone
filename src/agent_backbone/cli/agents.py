@@ -449,8 +449,10 @@ async def _reply(args: argparse.Namespace) -> int:
         print(f"error: unexpected response from the backbone API: {data!r}"[:500])
         return 1
     if not data.get("ok"):
-        # A 200 that reports nothing posted (every surface failed) is a
-        # failure, not a blank "posted to " with exit 0.
+        # The server fails posts as nonzero (502/404/503), so a 200
+        # reporting ok:false is a foreign/proxied body, not a server
+        # failure mode — still a failure to the user, never a blank
+        # "posted to " with exit 0.
         print(f"not posted: {data}")
         return 1
     posted = ", ".join(name for name, ok in data.get("posted", {}).items() if ok)
