@@ -167,7 +167,8 @@ ordinary `git add` and `git commit` run inside the sandbox. Source files,
 configured tooling directories (`agents.writable_dirs`) and the network are
 also available. Git hooks and configuration, `.codex`, `.agents`, and unrelated
 directories keep their existing protection. A `.git` symlink or unverified
-worktree pointer receives no automatic Git grant. See [Codex's protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).
+worktree pointer receives no automatic Git grant. Directory resolution errors
+(including symlink loops) also yield no automatic grant. See [Codex's protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).
 
 To have Codex review remaining permission requests automatically:
 
