@@ -149,3 +149,10 @@ in the evidence, and `backbone agent approve <member>` answers it — the
 runtime's affirmative key, sent only while the dialog is on screen, and
 recorded as an `approval` event. The coordinator's brief tells it to do
 this instead of reaching into tmux directly.
+
+Codex's sandbox has no network by default, which would make every
+`backbone tell` from a member fail against the API on `127.0.0.1` and
+raise a dialog per message. The backbone therefore launches Codex with
+`sandbox_workspace_write.network_access` enabled, so members talk to
+their control plane without a prompt; the sandbox's file-system limits
+are unchanged.

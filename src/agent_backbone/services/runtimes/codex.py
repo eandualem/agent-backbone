@@ -68,6 +68,14 @@ def _toml_entries(entries: list[dict]) -> str:
     return "[" + ", ".join(parts) + "]"
 
 
+# Codex's workspace-write sandbox has no network, so `backbone tell` from a
+# member cannot reach the backbone API on 127.0.0.1 — every message to a peer
+# fails, Codex escalates, and a person has to answer a dialog per message.
+# This override lets the sandbox reach the network; verified live against
+# codex-cli 0.153 (API probe: 000 without it, 401 with it).
+_LOCAL_API_ACCESS = ("-c", "sandbox_workspace_write.network_access=true")
+
+
 class Codex(Runtime):
     id = "codex"
     display_name = "Codex"
@@ -174,8 +182,8 @@ class Codex(Runtime):
         # Both the TUI and `resume` take `-c` and the hook-trust flag.
         if resume:
             target = resume if isinstance(resume, str) else "--last"
-            return ["resume", target, *hook]
-        args: list[str] = [*hook]
+            return ["resume", target, *_LOCAL_API_ACCESS, *hook]
+        args: list[str] = [*_LOCAL_API_ACCESS, *hook]
         if model:
             args.extend(["--model", model])
         if brief_file is not None and (brief := read_brief(brief_file)):

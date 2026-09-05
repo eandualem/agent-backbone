@@ -13,6 +13,8 @@ from agent_backbone.services.runtimes.claude import pre_trust_directory
 from agent_backbone.services.runtimes.codex import pre_trust_codex_directory
 
 _BASE = "agent_backbone.services.runtimes.base"
+# Every Codex launch opens the sandbox to the network so members reach the API.
+_NET = ["-c", "sandbox_workspace_write.network_access=true"]
 
 
 def _resolve(binary: str):
@@ -82,7 +84,7 @@ class TestBuildCommand:
         brief.write_text("You are agent x.")
         with _resolve("/bin/codex"):
             command = RUNTIMES["codex"].build_command(model="gpt-5.2", brief_file=brief)
-        assert command == ["/bin/codex", "--model", "gpt-5.2", "You are agent x."]
+        assert command == ["/bin/codex", *_NET, "--model", "gpt-5.2", "You are agent x."]
 
     def test_codex_resume_is_a_subcommand(self):
         with _resolve("/bin/codex"):
@@ -90,12 +92,23 @@ class TestBuildCommand:
                 "/bin/codex",
                 "resume",
                 "--last",
+                *_NET,
             ]
+
+    def test_codex_sandbox_can_reach_the_backbone_api(self):
+        # `backbone tell` from a member must reach 127.0.0.1; the sandbox has
+        # no network by default. A resumed session gets it too, after the
+        # subcommand like the other `-c` overrides.
+        with _resolve("/bin/codex"):
+            fresh = RUNTIMES["codex"].build_command(model="gpt-6-astra")
+            resumed = RUNTIMES["codex"].build_command(resume="sess-1")
+        assert fresh[1:3] == _NET
+        assert resumed[1:3] == ["resume", "sess-1"] and resumed[3:5] == _NET
 
     def test_codex_unreadable_brief_degrades(self, tmp_path):
         with _resolve("/bin/codex"):
             command = RUNTIMES["codex"].build_command(brief_file=tmp_path / "missing.md")
-        assert command == ["/bin/codex"]
+        assert command == ["/bin/codex", *_NET]
 
     def test_gemini_flags(self, tmp_path):
         brief = tmp_path / "brief.md"
@@ -315,6 +328,7 @@ class TestEffort:
             "/bin/codex",
             "-c",
             "model_reasoning_effort=high",
+            *_NET,
             "--model",
             "gpt-6-astra",
         ]
@@ -328,6 +342,7 @@ class TestEffort:
         with _resolve("/bin/codex"):
             assert RUNTIMES["codex"].build_command(model="gpt-6-astra") == [
                 "/bin/codex",
+                *_NET,
                 "--model",
                 "gpt-6-astra",
             ]
