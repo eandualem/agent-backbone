@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -28,15 +28,11 @@ def _plan_snapshot(plan_file: str | None = None) -> StateSnapshot:
 
 @pytest.fixture(autouse=True)
 def state_svc():
-    """The two state reads the plan routes make: reconciled, and the raw hook file."""
+    """The one state read the plan routes make: the reconciled state."""
     mocks = SimpleNamespace(
         get_state=AsyncMock(return_value=StateSnapshot(state=AgentState.IDLE)),
-        read_state=MagicMock(return_value=None),
     )
-    with (
-        patch(f"{_PLANS}.agent_state", mocks.get_state),
-        patch(f"{_PLANS}.read_state_file", mocks.read_state),
-    ):
+    with patch(f"{_PLANS}.agent_state", mocks.get_state):
         yield mocks
 
 
@@ -70,7 +66,7 @@ class TestGetPlan:
         plans_dir.mkdir(parents=True, exist_ok=True)
         plan = plans_dir / "ike.md"
         plan.write_text("# The plan")
-        state_svc.read_state.return_value = _plan_snapshot(str(plan))
+        state_svc.get_state.return_value = _plan_snapshot(str(plan))
         resp = await api_client.get("/api/plans/ike", headers=auth_headers)
         assert resp.json()["content"] == "# The plan"
 
@@ -81,7 +77,7 @@ class TestGetPlan:
         # anywhere else on the machine must not be served back.
         secret = tmp_path / "secret.txt"
         secret.write_text("hunter2")
-        state_svc.read_state.return_value = _plan_snapshot(str(secret))
+        state_svc.get_state.return_value = _plan_snapshot(str(secret))
         resp = await api_client.get("/api/plans/ike", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json()["content"] is None
@@ -96,7 +92,7 @@ class TestGetPlan:
         outside = Path(sneaky).resolve()
         outside.write_text("nope")  # the traversal target really exists...
         assert not outside.is_relative_to(plans_dir.resolve())  # ...and is outside
-        state_svc.read_state.return_value = _plan_snapshot(sneaky)
+        state_svc.get_state.return_value = _plan_snapshot(sneaky)
         resp = await api_client.get("/api/plans/ike", headers=auth_headers)
         assert resp.json()["content"] is None
 
@@ -139,7 +135,7 @@ class TestPlanControl:
         self, api_client, auth_headers, api_app, state_svc
     ):
         _enable_plan_control(api_app)
-        state_svc.read_state.return_value = _plan_snapshot()
+        state_svc.get_state.return_value = _plan_snapshot()
         with patch(
             f"{_PLANS}.plan_control",
             new_callable=AsyncMock,
@@ -153,7 +149,7 @@ class TestPlanControl:
         self, api_client, auth_headers, api_app, state_svc
     ):
         _enable_plan_control(api_app)
-        state_svc.read_state.return_value = _plan_snapshot()
+        state_svc.get_state.return_value = _plan_snapshot()
         refusal = ("unsupported", ["Codex has no plan mode; nothing was sent"])
         with (
             patch(f"{_PLANS}.plan_control", new_callable=AsyncMock, return_value=refusal),
@@ -168,7 +164,7 @@ class TestPlanControl:
         self, api_client, auth_headers, api_app, state_svc
     ):
         _enable_plan_control(api_app)
-        state_svc.read_state.return_value = _plan_snapshot()
+        state_svc.get_state.return_value = _plan_snapshot()
         with (
             patch(
                 f"{_PLANS}.plan_control",
@@ -201,7 +197,7 @@ class TestPlanControl:
         self, api_client, auth_headers, api_app, state_svc
     ):
         _enable_plan_control(api_app)
-        state_svc.read_state.return_value = _plan_snapshot()
+        state_svc.get_state.return_value = _plan_snapshot()
         with patch(
             f"{_PLANS}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED
         ) as deliver:
@@ -216,7 +212,7 @@ class TestPlanControl:
         self, api_client, auth_headers, api_app, state_svc
     ):
         _enable_plan_control(api_app)
-        state_svc.read_state.return_value = _plan_snapshot()
+        state_svc.get_state.return_value = _plan_snapshot()
         with patch(
             f"{_PLANS}.safe_deliver",
             new_callable=AsyncMock,

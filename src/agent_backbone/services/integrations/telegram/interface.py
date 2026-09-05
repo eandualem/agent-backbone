@@ -139,7 +139,10 @@ class TelegramService(Integration):
         thread_id = agent_topic(self.config, self._discovery, agent)
         if not group or thread_id is None:
             return False
-        return await _send(self.config.telegram_token, group, text, thread_id=thread_id)
+        if not await _send(self.config.telegram_token, group, text, thread_id=thread_id):
+            # The registry reports False as "no surface"; an outage is "failed".
+            raise RuntimeError(f"Telegram could not post to {agent}'s topic")
+        return True
 
     async def notify(
         self,

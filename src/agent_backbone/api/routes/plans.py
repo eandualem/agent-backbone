@@ -26,7 +26,7 @@ from agent_backbone.api.models import (
 from agent_backbone.api.session_updates import listable_sessions
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.agents import agent_state, plan_control, read_plan, read_state_file
+from agent_backbone.services.agents import agent_state, plan_control, read_plan
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.terminal import list_sessions
 
@@ -46,8 +46,10 @@ def _require_plan_control(config: BackboneConfig) -> None:
         )
 
 
-def _require_plan_waiting(config: BackboneConfig, session: str) -> None:
-    snapshot = read_state_file(config.state_dir, session)
+async def _require_plan_waiting(config: BackboneConfig, session: str) -> None:
+    # The reconciled state: a stale hook file that still says "plan" while
+    # the pane is busy must not let approval keys through.
+    snapshot = await agent_state(config, session)
     if not snapshot or not snapshot.is_plan_waiting:
         raise HTTPException(
             status_code=409, detail=f"Session '{session}' is not waiting for plan approval"
@@ -112,8 +114,8 @@ async def list_pending_plans(config: BackboneConfig = Depends(get_config)):
 @router.get("/plans/{session}", response_model=PlanDetail)
 async def get_plan_detail(session: str, config: BackboneConfig = Depends(get_config)):
     """Get plan details including file content for a specific session."""
-    snapshot = read_state_file(config.state_dir, session)
-    if not snapshot or not snapshot.is_plan_waiting:
+    snapshot = await agent_state(config, session)
+    if not snapshot.is_plan_waiting:
         raise HTTPException(status_code=404, detail=f"No pending plan for session '{session}'")
 
     return PlanDetail(
@@ -130,7 +132,7 @@ async def approve_pending_plan(session: str, config: BackboneConfig = Depends(ge
     """Approve a pending plan with the agent's runtime's own keys."""
     _require_plan_control(config)
     registered_agent_or_404(config, session)
-    _require_plan_waiting(config, session)
+    await _require_plan_waiting(config, session)
     evidence = await _run_plan_control(config, session, "approve")
     return {"ok": True, "session": session, "action": "plan_approved", "evidence": evidence}
 
@@ -150,7 +152,7 @@ async def reject_plan(
     """
     _require_plan_control(config)
     registered_agent_or_404(config, session)
-    _require_plan_waiting(config, session)
+    await _require_plan_waiting(config, session)
     await _run_plan_control(config, session, "reject")
     outcome = await safe_deliver(
         session,
@@ -180,7 +182,7 @@ async def respond_to_plan(
     """Send input to a plan-waiting session (option selection or free text)."""
     _require_plan_control(config)
     registered_agent_or_404(config, session)
-    _require_plan_waiting(config, session)
+    await _require_plan_waiting(config, session)
     await _deliver_plan_response(config, db, session, body.input)
 
     log.info("Plan response sent to %s: %s", session, body.input[:80])

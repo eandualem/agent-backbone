@@ -219,6 +219,10 @@ def validate_setting(key: str, value: Any) -> Any:
     if isinstance(default, list):
         if not isinstance(value, list):
             raise ValueError(f"{key}: expected a JSON list")
+        if all(isinstance(d, str) for d in default) and not all(isinstance(v, str) for v in value):
+            # build_config() turns these into frozensets of names; one stored
+            # dict member would fail every refresh and the next start.
+            raise ValueError(f"{key}: expected a JSON list of strings")
         return value
     if isinstance(default, dict):
         if not isinstance(value, dict):

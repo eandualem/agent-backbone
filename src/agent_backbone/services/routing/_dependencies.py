@@ -25,7 +25,7 @@ async def check_parent_resolved(
     config: BackboneConfig, parent_number: int, gh: GitHubClient, *, repo: str = ""
 ) -> dict | None:
     """Parent issue + targets if every sub-issue is closed, else None."""
-    sub_issues = await gh.get_sub_issues(parent_number, repo_full_name=repo)
+    sub_issues = await gh.get_sub_issues(parent_number, repo_full_name=repo) or []
     if not sub_issues or not all(si.state == "closed" for si in sub_issues):
         return None
     parent = await gh.get_issue(parent_number, repo_full_name=repo)
@@ -92,7 +92,7 @@ async def sync_dependencies(
                 continue
             checked.add(key)
             subs = await gh.get_sub_issues(issue.number, repo_full_name=issue.repo_full_name)
-            if subs:
+            if subs is not None:  # an empty answer clears stale edges; a failed fetch keeps them
                 await db.dependencies.sync(
                     issue.number, [s.number for s in subs], repo=issue.repo_full_name
                 )

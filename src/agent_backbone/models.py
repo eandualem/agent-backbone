@@ -7,7 +7,9 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-_FROM_TAG_PATTERN = re.compile(r"^\[from:([a-z][a-z0-9-]*)\]", re.IGNORECASE)
+# The same vocabulary as ``sanitize_name``: an agent called app_test or 1st-desk
+# must be able to acknowledge.
+_FROM_TAG_PATTERN = re.compile(r"^\[from:([A-Za-z0-9][A-Za-z0-9_.-]*)\]")
 
 ISSUE_TYPE_WEIGHTS: dict[str, float] = {
     "spec-gap": 100.0,

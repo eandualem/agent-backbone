@@ -459,7 +459,7 @@ class TestPlans:
             state=AgentState.WAITING_FOR_HUMAN, reason="plan", plan_file="/p.md"
         )
         with (
-            patch(f"{_CMD}.read_state_file", return_value=snapshot),
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=snapshot),
             patch(f"{_CMD}.session_exists", new_callable=AsyncMock, return_value=True),
             patch(
                 f"{_CMD}.plan_control",
@@ -483,7 +483,7 @@ class TestPlans:
         )
         refusal = ("unsupported", ["Codex has no plan mode; nothing was sent"])
         with (
-            patch(f"{_CMD}.read_state_file", return_value=snapshot),
+            patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=snapshot),
             patch(f"{_CMD}.session_exists", new_callable=AsyncMock, return_value=True),
             patch(f"{_CMD}.plan_control", new_callable=AsyncMock, return_value=refusal),
         ):
@@ -503,7 +503,7 @@ class TestPlans:
             plan_file=str(plan),
             plan_title="Big plan",
         )
-        with patch(f"{_CMD}.read_state_file", return_value=snapshot):
+        with patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=snapshot):
             await bot.cmd_viewplan(update, _context(["ike"]))
         text = update.message.reply_text.await_args.args[0]
         assert "Big plan" in text and "# plan body" in text
@@ -517,7 +517,7 @@ class TestPlans:
         snapshot = StateSnapshot(
             state=AgentState.WAITING_FOR_HUMAN, reason="plan", plan_file=str(secret)
         )
-        with patch(f"{_CMD}.read_state_file", return_value=snapshot):
+        with patch(f"{_CMD}.agent_state", new_callable=AsyncMock, return_value=snapshot):
             await bot.cmd_viewplan(update, _context(["ike"]))
         text = update.message.reply_text.await_args.args[0]
         assert "hunter2" not in text and "no readable plan" in text

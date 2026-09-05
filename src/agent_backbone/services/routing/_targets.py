@@ -54,6 +54,9 @@ def route_issue(issue: IssueData, event_type: EventType, config: BackboneConfig)
     watchers = [s.name for s in agents.watchers(repo)]
 
     explicit = [t for t in issue.labels.targets if t not in ignore and t in agents]
+    # `for:` labels that name a person (ignored) or an unknown agent still mean
+    # the issue is addressed — it must not fall back to the owner as if unlabelled.
+    addressed = bool(issue.labels.targets)
     if event_type == EventType.PULL_REQUEST_OPENED:
         routing.watch = [n for n in owners + watchers if n not in explicit]
         routing.queue = explicit
@@ -62,7 +65,7 @@ def route_issue(issue: IssueData, event_type: EventType, config: BackboneConfig)
     if explicit:
         # Explicit always wins; targets that own or watch the repo go first.
         routing.queue = sorted(explicit, key=lambda t: not agent_knows_repo(agents.get(t), repo))
-    elif event_type == EventType.ISSUE_OPENED:
+    elif event_type == EventType.ISSUE_OPENED and not addressed:
         if len(owners) == 1:
             routing.queue = owners
         elif owners:

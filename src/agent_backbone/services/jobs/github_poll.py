@@ -146,6 +146,8 @@ class GitHubPoller:
                     events.append(event)
                 newest = max(newest, item.get("updated_at", ""))
 
+            had_errors = False
+
             for comment in comments:
                 number = issue_number_from_url(comment.get("issue_url", ""))
                 if number is None:
@@ -155,13 +157,15 @@ class GitHubPoller:
                     try:
                         issue = await self._gh.get_issue_raw(number, repo)
                     except Exception:
-                        log.warning("Could not fetch %s#%d for comment (skipped)", repo, number)
+                        # Not an event this poll; the cursor must not move past
+                        # it or the comment is never fetched again.
+                        log.warning("Could not fetch %s#%d for comment (retried)", repo, number)
+                        had_errors = True
                         continue
                     issue_cache[number] = issue
                 events.append(comment_event_from_api(comment, issue, repo))
                 newest = max(newest, comment.get("updated_at", comment.get("created_at", "")))
 
-            had_errors = False
             for event in events:
                 try:
                     outcome = await dispatch_event(

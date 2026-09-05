@@ -19,6 +19,7 @@ from agent_backbone.config import (
     bootstrap_config,
     env_file_keys,
 )
+from agent_backbone.services.database.engine import redact_url
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ def cmd_init(args: argparse.Namespace) -> int:
             pass
 
     asyncio.run(_migrate())
-    print(f"database ready: {config.database_url}")
+    print(f"database ready: {redact_url(config.database_url)}")
 
     print("\nNext steps:")
     print("  1. backbone doctor")
@@ -118,7 +119,11 @@ def _write_env_value_locked(env_path: Path, key: str, value: str | None) -> str:
         out.append(f"{key}={value}")
     env_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = env_path.with_name(f".env.{os.getpid()}.tmp")
-    tmp.write_text("\n".join(out) + ("\n" if out else ""))
+    # Created 0600: write_text() would honour the umask and leave the secrets
+    # world-readable until the chmod below.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write("\n".join(out) + ("\n" if out else ""))
     os.chmod(tmp, 0o600)
     os.replace(tmp, env_path)
     os.chmod(env_path, 0o600)
@@ -213,9 +218,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         try:
             async with _common.Direct(boot) as direct:
                 config = direct.config
-                check(f"database reachable: {config.database_url}", True)
+                check(f"database reachable: {redact_url(config.database_url)}", True)
         except Exception as exc:
-            check(f"database reachable: {boot.database_url}", False, f"{exc}; run `backbone init`")
+            check(
+                f"database reachable: {redact_url(boot.database_url)}",
+                False,
+                f"{exc}; run `backbone init`",
+            )
             return 1
 
         print("Agents")

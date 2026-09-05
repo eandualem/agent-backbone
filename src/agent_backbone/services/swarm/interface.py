@@ -205,10 +205,10 @@ async def create_swarm(
         raise SwarmError(f"could not register swarm '{name}': {exc}") from exc
 
     briefs_dir = config.data_dir / "swarms" / name
-    briefs_dir.mkdir(parents=True, exist_ok=True)
     started: list[str] = []
     default_runtime = config.launch.default_runtime
     try:
+        briefs_dir.mkdir(parents=True, exist_ok=True)
         for agent_name, spec in named:
             runtime = spec.runtime or default_runtime
             facts = _facts(
@@ -247,14 +247,31 @@ async def create_swarm(
                 raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
     except Exception:
         # Best-effort rollback so a half-started swarm doesn't linger.
+        unstopped: list[str] = []
         for agent_name in started:
-            await stop_session(agent_name)
+            try:
+                stopped = await stop_session(agent_name)
+            except Exception:
+                stopped = False
+            if not stopped:
+                unstopped.append(agent_name)
+        # A session that would not die keeps its record — forgetting it would
+        # leave a running agent nobody can address — and the worktree it runs in.
         for agent_name, _ in named:
+            if agent_name in unstopped:
+                continue
             try:
                 await store.forget(agent_name)
             except Exception:
                 log.debug("rollback: could not forget %s", agent_name)
-        await remove_worktree(repo_dir, worktree)
+        if unstopped:
+            log.warning(
+                "rollback: %s still running; stop them and remove %s by hand",
+                ", ".join(unstopped),
+                worktree,
+            )
+        elif not await remove_worktree(repo_dir, worktree):
+            log.warning("rollback: worktree %s still exists; remove it by hand", worktree)
         await db.swarms.set_status(name, "disbanded")
         raise
 

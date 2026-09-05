@@ -120,7 +120,9 @@ queue stays blocked on it (`awaiting_ack`) until a comment appears. Watch
 
 `for:<agent>` issues in every repository the agent owns or watches, plus —
 if it is the sole owner of its repository — that repository's unlabelled
-open issues. Ordered `blocking` first; then type weight (`spec-gap` 100,
+open issues. "Unlabelled" means no `for:` label at all: an issue addressed
+to a person (`routing.ignore_targets`) or to a name the backbone does not
+know is not the owner's. Ordered `blocking` first; then type weight (`spec-gap` 100,
 `bug` 90, `task` 50, `question` 20, `optimization` 10); then number of
 dependents; then oldest first. Tune with `priority.*` settings.
 

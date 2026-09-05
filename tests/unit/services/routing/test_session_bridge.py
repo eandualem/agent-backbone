@@ -33,10 +33,22 @@ _PERMISSION_SNAP = StateSnapshot(
     state=AgentState.WAITING_FOR_HUMAN, reason="permission", source="push"
 )
 _UNKNOWN_SNAP = StateSnapshot(state=AgentState.UNKNOWN, source="default")
-_BUSY_ISSUE_42_SNAP = StateSnapshot(state=AgentState.BUSY, current_issue=42, source="push")
-_BUSY_ISSUE_99_SNAP = StateSnapshot(state=AgentState.BUSY, current_issue=99, source="push")
+_REPO = "example/orchestration"
+_BUSY_ISSUE_42_SNAP = StateSnapshot(
+    state=AgentState.BUSY, current_issue=42, current_repo=_REPO, source="push"
+)
+_BUSY_ISSUE_99_SNAP = StateSnapshot(
+    state=AgentState.BUSY, current_issue=99, current_repo=_REPO, source="push"
+)
 _PLAN_ISSUE_42_SNAP = StateSnapshot(
-    state=AgentState.WAITING_FOR_HUMAN, reason="plan", current_issue=42, source="push"
+    state=AgentState.WAITING_FOR_HUMAN,
+    reason="plan",
+    current_issue=42,
+    current_repo=_REPO,
+    source="push",
+)
+_BUSY_ISSUE_42_UNKNOWN_REPO_SNAP = StateSnapshot(
+    state=AgentState.BUSY, current_issue=42, source="push"
 )
 
 _INTEL = "agent_backbone.services.routing._intelligence"
@@ -502,6 +514,16 @@ class TestSafeDeliver:
                 "ike", "Comment", config, db=mock_db, delivery_kind="comment", **_issue_kwargs()
             )
         assert result == "delivered"
+
+    async def test_comment_on_same_number_in_unknown_repo_does_not_bypass(self, config):
+        # other/repo#42 must not slip past busy protection because the agent
+        # works on #42 of a repository the hook did not name.
+        mock_db = AsyncMock()
+        with _online(snap=_BUSY_ISSUE_42_UNKNOWN_REPO_SNAP):
+            result = await safe_deliver(
+                "ike", "Comment", config, db=mock_db, delivery_kind="comment", **_issue_kwargs()
+            )
+        assert result == "agent_working"
 
     async def test_comment_on_other_issue_is_queued_while_busy(self, config):
         mock_db = AsyncMock()

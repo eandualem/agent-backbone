@@ -124,6 +124,8 @@ async def get_issue_dependencies(
 ):
     """Get sub-issues and parent issues for an issue."""
     sub_issues = await gh.get_sub_issues(number, repo_full_name=repo)
+    if sub_issues is None:
+        raise HTTPException(status_code=502, detail=f"GitHub did not answer for {repo}#{number}")
     parents = await db.dependencies.parents(number, repo=repo)
     return IssueDependencies(
         sub_issues=[_issue_to_response(s, config) for s in sub_issues],

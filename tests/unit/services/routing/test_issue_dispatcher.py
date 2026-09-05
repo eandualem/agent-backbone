@@ -18,6 +18,7 @@ from agent_backbone.models import (
     parse_from_tag,
 )
 from agent_backbone.services.routing._router import issue_dispatcher
+from agent_backbone.services.routing._targets import route_issue
 from tests.conftest import TEST_REPO, make_config
 
 OTHER_REPO = "acme/app"
@@ -127,8 +128,11 @@ class TestParseFromTag:
     def test_leading_whitespace_stripped(self):
         assert parse_from_tag("  [from:ike]") == "ike"
 
-    def test_invalid_name_starts_with_digit(self):
-        assert parse_from_tag("[from:123]") is None
+    def test_names_use_the_registration_vocabulary(self):
+        # sanitize_name allows digits first, underscores and dots: such an
+        # agent must be able to acknowledge.
+        assert parse_from_tag("[from:123-agent]") == "123-agent"
+        assert parse_from_tag("[from:app_test.v2]") == "app_test.v2"
 
 
 class TestIssueDispatcher:
@@ -463,3 +467,28 @@ class TestCommentRouting:
         with _patch_safe_deliver(DeliveryOutcome.DELIVERED), _patch_find_outgoing(None):
             result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == ["backbone"]
+
+
+class TestAddressedIssues:
+    def test_issue_addressed_to_someone_the_backbone_does_not_route_is_not_the_owners(
+        self, tmp_path
+    ):
+        # S1-5: `for:nobody` (a person, or an unknown name) is still addressed;
+        # the sole owner must not receive it as if it were unlabelled.
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={"backbone": AgentSpec(name="backbone", dir="/x", repo="acme/backbone")}
+            ),
+        )
+        addressed = IssueData(
+            number=1,
+            title="t",
+            labels=ParsedLabels(targets=["nobody"]),
+            repo_full_name="acme/backbone",
+        )
+        unlabelled = IssueData(
+            number=2, title="t", labels=ParsedLabels(), repo_full_name="acme/backbone"
+        )
+        assert route_issue(addressed, EventType.ISSUE_OPENED, config).queue == []
+        assert route_issue(unlabelled, EventType.ISSUE_OPENED, config).queue == ["backbone"]
