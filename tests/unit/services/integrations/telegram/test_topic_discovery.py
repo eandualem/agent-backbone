@@ -14,6 +14,7 @@ from agent_backbone.services.integrations.telegram._topic_discovery import (
     effective_routes,
     load_discovery,
     process_message_for_discovery,
+    rebind_group,
     resolve_topic_name,
     save_discovery,
 )
@@ -228,7 +229,7 @@ class TestProcessMessageForDiscovery:
         d = TopicDiscovery()
         update = _make_update(chat_id=-200, thread_id=42, forum_topic_name="Leo")
         assert process_message_for_discovery(update, config, d, tmp_path / "t.json")
-        assert d.group_chat_id is None  # config wins; nothing to persist
+        assert d.group_chat_id == -200  # adopted the selected group on first learn
         assert d.topic_routes[42] == "leo"
         other = _make_update(chat_id=-300, thread_id=43, forum_topic_name="Ike")
         assert not process_message_for_discovery(other, config, d, tmp_path / "t.json")
@@ -252,3 +253,51 @@ class TestClosedTopics:
         assert loaded.closed_topics == {5} and loaded.topic_routes == {5: "gone"}
         path.write_text(json.dumps({"topic_routes": {"5": "gone"}}))  # older file
         assert load_discovery(path).closed_topics == set()
+
+
+class TestRebindGroup:
+    def test_adopts_selected_group_without_resetting_unscoped_routes(self):
+        # Routes that predate group tracking have no old group to be stale
+        # against: bind, don't wipe.
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery(topic_routes={9: "ike"}, topic_names={9: "Ike"})
+        assert rebind_group(config, d) is True
+        assert d.group_chat_id == -200
+        assert d.topic_routes == {9: "ike"}
+
+    def test_changed_group_resets_learned_state(self):
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery(
+            group_chat_id=-100,
+            topic_routes={7: "ike"},
+            topic_names={7: "Ike"},
+            closed_topics={5},
+        )
+        assert rebind_group(config, d) is True
+        assert d.group_chat_id == -200
+        assert d.topic_routes == {} and d.topic_names == {} and d.closed_topics == set()
+
+    def test_aligned_group_is_a_noop(self):
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-100))
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={7: "ike"})
+        assert rebind_group(config, d) is False
+        assert d.topic_routes == {7: "ike"}
+
+    def test_no_selected_group_is_a_noop(self):
+        d = TopicDiscovery()
+        assert rebind_group(_make_config(), d) is False
+
+    def test_new_group_learning_persists_and_is_effective(self, tmp_path):
+        # The reported bug: the new group was accepted but the discovery
+        # stayed on the old group, so effective_routes discarded every
+        # newly learned route forever.
+        path = tmp_path / "t.json"
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={5: "leo"})
+        update = _make_update(chat_id=-200, thread_id=9, forum_topic_name="Ike")
+        assert process_message_for_discovery(update, config, d, path) is True
+        assert d.group_chat_id == -200
+        assert d.topic_routes == {9: "ike"}
+        assert load_discovery(path).topic_routes == {9: "ike"}
+        assert effective_routes(config, d) == {9: "ike"}
+        assert agent_topic(config, d, "ike") == 9

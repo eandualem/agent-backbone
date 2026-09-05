@@ -114,6 +114,31 @@ def effective_group_chat_id(config: BackboneConfig, discovery: TopicDiscovery) -
     return config.telegram.group_chat_id or discovery.group_chat_id
 
 
+def rebind_group(config: BackboneConfig, discovery: TopicDiscovery) -> bool:
+    """Align discovery's group with the selected group before learning.
+
+    Thread ids are per-group: when the configured group differs from the
+    group the discoveries were learned in, the learned routes, names and
+    closed ids are stale and must go — provisioning or closing with old
+    thread ids in the new group would spam a stranger's threads. A
+    discovery with no recorded group simply adopts the selected one and
+    keeps its routes (they predate group tracking). True when mutated.
+    """
+    selected = config.telegram.group_chat_id or discovery.group_chat_id
+    if selected is None:
+        return False
+    if discovery.group_chat_id is None:
+        discovery.group_chat_id = selected
+        return True
+    if discovery.group_chat_id != selected:
+        discovery.group_chat_id = selected
+        discovery.topic_routes.clear()
+        discovery.topic_names.clear()
+        discovery.closed_topics.clear()
+        return True
+    return False
+
+
 def agent_topic(config: BackboneConfig, discovery: TopicDiscovery, agent: str) -> int | None:
     """The forum thread mapped to ``agent`` (explicit config wins over discovery), or None.
 
@@ -154,6 +179,8 @@ def process_message_for_discovery(
         return False
 
     changed = False
+    if rebind_group(config, discovery):
+        changed = True
 
     # Discover group_chat_id from supergroup
     chat = getattr(message, "chat", None)

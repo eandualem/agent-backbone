@@ -26,6 +26,7 @@ from agent_backbone.recent import RecentKeys
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     agent_topic,
+    rebind_group,
     save_discovery,
 )
 
@@ -72,6 +73,10 @@ async def sync_topics(bot: TelegramService) -> dict:
     # Swarm members are internal to the agent running the swarm: no topic.
     registered = {spec.name for spec in config.agents if spec.swarm is None}
     changed = False
+    if rebind_group(config, discovery):
+        # The group changed: learned threads belong to the old one and are
+        # already cleared — provision fresh, never close/reopen old ids here.
+        changed = True
     try:
         for name in sorted(registered):
             thread_id = agent_topic(config, discovery, name)

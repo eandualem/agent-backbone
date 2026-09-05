@@ -153,6 +153,33 @@ class TestSyncTopics:
         assert fake.created == sorted(config.agents.names)
 
 
+class TestGroupChange:
+    async def test_changed_group_provisions_fresh_and_touches_no_old_thread(self, config, tmp_path):
+        # Old learned threads belong to the old group: none are closed or
+        # reopened in the new one, and every agent is provisioned fresh.
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={5: "ike"}, closed_topics={6})
+        bot, fake = _running_bot(config, tmp_path, group_chat_id=-200, discovery=d)
+        result = await _topics.sync_topics(bot)
+        assert d.group_chat_id == -200
+        assert 5 not in fake.closed and fake.reopened == []
+        assert set(result["created"]) == set(config.agents.names)
+        assert 5 not in d.topic_routes  # stale ids never sent to the new group
+        # second pass: the fresh threads are known — nothing duplicated.
+        again = await _topics.sync_topics(bot)
+        assert again["created"] == [] and len(fake.created) == len(config.agents.names)
+
+    async def test_explicit_config_routes_survive_a_group_change(self, config, tmp_path):
+        d = TopicDiscovery(group_chat_id=-100)
+        bot, fake = _running_bot(
+            config, tmp_path, group_chat_id=-200, topic_routes={7: "ike"}, discovery=d
+        )
+        await _topics.sync_topics(bot)
+        assert "ike" not in fake.created
+        from agent_backbone.services.integrations.telegram._topic_discovery import agent_topic
+
+        assert agent_topic(bot.config, d, "ike") == 7  # explicit mapping still answers
+
+
 class TestSyncSerialized:
     async def test_overlapping_syncs_create_each_topic_once(self, config, tmp_path):
         import asyncio
