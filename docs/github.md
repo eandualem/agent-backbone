@@ -230,16 +230,21 @@ For configured accounts, comments on pull requests are lifecycle-only and are
 not delivered separately; their comments on ordinary issues remain deliverable.
 This is an explicit account policy, not a guess based on a bot's prose.
 
-An in-progress GitHub check with a start timestamp and commit emits **review
-started**. A submitted review emits **review finished**, with its verdict,
+An in-progress GitHub check with a start timestamp and commit, or a pending
+commit status from that reviewer, emits **review started**. A pending status
+means queued or running; CodeRabbit currently uses this older status API. A submitted review emits **review finished**, with its verdict,
 commit, submission time, summary and link. Current-head metadata identifies
 older commits. A completed check never implies a finished review or zero
 findings. Fast reviews can finish between polls without an observed start.
 Reviewers that publish no check get finished notices only. Findings are retained
 in the review preview/link; the backbone does not infer a count from prose.
 
-Poll intake lists open PRs, their head checks and submitted reviews for configured
-accounts. Webhook intake needs **Check runs** and **Pull request reviews** events;
+Poll intake lists open PRs, their head statuses/checks and submitted reviews for
+configured accounts at most once per `github.review_poll_interval_seconds` (300
+by default). Its separate durable cursor preserves events between metadata polls
+and across restarts. A review-read failure leaves the cursor unchanged while
+ordinary issues and comments still dispatch. PR update time alone is not used
+to skip status-only activity. Webhook intake needs **Check runs**, **Commit statuses**, and **Pull request reviews** events;
 tokens/apps need read access to checks and PRs. GitHub may omit PR associations
 from fork check webhooks; poll intake can read checks via the PR head reference.
 [GitHub check-run API](https://docs.github.com/en/rest/checks/runs) and

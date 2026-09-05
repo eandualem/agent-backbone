@@ -15,15 +15,43 @@ class OutboxRepo(Repo):
         """Persist the entire audience atomically before the first delivery."""
         async with self._tx() as conn:
             for delivery in deliveries:
+                source_key = delivery.get("source_key") or ""
+                status = "pending"
+                if source_key.startswith("review-start:"):
+                    # Materialize and write-lock the lifecycle row. Completion
+                    # and plan creation serialize on this row on PostgreSQL;
+                    # SQLite serializes the transaction's writes.
+                    await conn.execute(
+                        text(
+                            "INSERT INTO review_lifecycle (source_key, finished_at) "
+                            "VALUES (:key, '') "
+                            "ON CONFLICT (source_key) DO NOTHING"
+                        ),
+                        {"key": source_key},
+                    )
+                    await conn.execute(
+                        text(
+                            "UPDATE review_lifecycle SET source_key = source_key "
+                            "WHERE source_key = :key"
+                        ),
+                        {"key": source_key},
+                    )
+                    finished = await conn.execute(
+                        text("SELECT finished_at FROM review_lifecycle WHERE source_key = :key"),
+                        {"key": source_key},
+                    )
+                    if finished.scalar_one():
+                        status = "skipped"
                 await conn.execute(
                     text(
                         "INSERT INTO event_outbox "
                         "(event_id, recipient, delivery, status, updated_at) "
-                        "VALUES (:event_id, :recipient, :delivery, 'pending', :now) "
+                        "VALUES (:event_id, :recipient, :delivery, :status, :now) "
                         "ON CONFLICT (event_id, recipient) DO NOTHING"
                     ),
                     {
                         "event_id": event_id,
+                        "status": status,
                         "recipient": delivery["session_name"],
                         "delivery": json.dumps(delivery),
                         "now": now_iso(),
@@ -79,7 +107,9 @@ class OutboxRepo(Repo):
             )
             return bool(result.rowcount)
 
-    async def discard_issue(self, repo: str, issue_number: int) -> None:
+    async def discard_issue(
+        self, repo: str, issue_number: int, *, keep_event_id: int | None = None
+    ) -> None:
         """Retire pending notifications when their issue or PR closes."""
         async with self._tx() as conn:
             await conn.execute(
@@ -87,7 +117,7 @@ class OutboxRepo(Repo):
                     "UPDATE event_outbox SET status = 'skipped', updated_at = :now "
                     "WHERE status IN ('pending', 'failed') AND event_id IN "
                     "(SELECT id FROM events WHERE repo = :repo AND issue_number = :issue "
-                    "AND event_type != 'issue_closed')"
+                    "AND (:keep IS NULL OR id != :keep))"
                 ),
-                {"repo": repo, "issue": issue_number, "now": now_iso()},
+                {"repo": repo, "issue": issue_number, "now": now_iso(), "keep": keep_event_id},
             )

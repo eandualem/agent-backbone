@@ -179,3 +179,44 @@ async def test_close_replay_keeps_queued_receipt_when_event_mark_failed(config, 
     assert await db.queue.pending_count("leo") == 1
     deliver.assert_awaited_once()
     assert finish is not None
+
+
+async def test_start_plan_after_completion_is_skipped_atomically(db):
+    started = _review(EventType.REVIEW_STARTED)
+    key = review_source_key(started.issue, started.review)
+    event_id = await db.events.record(delivery_id=key, source="poll", event_type="review_started")
+    await db.events.finish_review(key)
+    await db.outbox.plan(event_id, [{"session_name": "a", "source_key": key}])
+    assert (await db.outbox.entries(event_id))[0]["status"] == "skipped"
+
+
+async def test_start_plan_before_completion_is_retired(db):
+    started = _review(EventType.REVIEW_STARTED)
+    key = review_source_key(started.issue, started.review)
+    event_id = await db.events.record(delivery_id=key, source="poll", event_type="review_started")
+    await db.outbox.plan(event_id, [{"session_name": "a", "source_key": key}])
+    assert not await db.events.review_finished(key)
+    await db.events.finish_review(key)
+    assert (await db.outbox.entries(event_id))[0]["status"] == "skipped"
+
+
+async def test_new_close_retires_old_failed_close_outbox(db):
+    first = await db.events.record(
+        delivery_id="close1",
+        source="poll",
+        event_type="issue_closed",
+        repo="acme/app",
+        issue_number=1,
+    )
+    second = await db.events.record(
+        delivery_id="close2",
+        source="poll",
+        event_type="issue_closed",
+        repo="acme/app",
+        issue_number=1,
+    )
+    for event_id in (first, second):
+        await db.outbox.plan(event_id, [{"session_name": "a"}])
+    await db.outbox.discard_issue("acme/app", 1, keep_event_id=second)
+    assert (await db.outbox.entries(first))[0]["status"] == "skipped"
+    assert (await db.outbox.entries(second))[0]["status"] == "pending"

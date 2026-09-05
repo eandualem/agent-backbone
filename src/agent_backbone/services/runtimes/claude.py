@@ -160,6 +160,8 @@ class ClaudeCode(Runtime):
                 options.append(line)
             else:
                 break
+        if any(re.match(r"\s*(?:❯\s*)?\d+[.)]\s", line) for line in options):
+            return False
         return len(options) >= 2 and sum("❯" in line for line in options) == 1
 
     def detect_dialog_chrome(self, pane_content: str) -> bool:

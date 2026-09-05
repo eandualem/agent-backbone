@@ -397,6 +397,7 @@ async def test_review_poll_fetches_commit_anchored_lifecycle(config, db):
     gh = AsyncMock()
     pull = {"number": 1, "head": {"sha": "new-head"}, "labels": []}
     gh.list_pulls_raw.return_value = [pull]
+    gh.list_commit_statuses.return_value = []
     gh.list_check_runs.return_value = [
         {
             "id": 10,
@@ -421,3 +422,55 @@ async def test_review_poll_fetches_commit_anchored_lifecycle(config, db):
     assert [e.event_type for e in events] == [EventType.REVIEW_STARTED, EventType.REVIEW_SUBMITTED]
     assert events[0].review.commit_id == "new-head"
     assert events[1].review.commit_id == "old-head" and events[1].review.head_sha == "new-head"
+
+
+async def test_commit_status_reviewers_use_latest_status_per_context(config, db):
+    config = replace(config, github=replace(config.github, reviewers=("coderabbitai",)))
+    gh = AsyncMock()
+    gh.list_pulls_raw.return_value = [{"number": 1, "head": {"sha": "abc"}}]
+    gh.list_check_runs.return_value = []
+    gh.list_reviews_raw.return_value = []
+    status = {
+        "id": 1,
+        "context": "CodeRabbit",
+        "state": "pending",
+        "creator": {"login": "coderabbitai[bot]"},
+        "created_at": "2026-09-05T18:42:43Z",
+    }
+    gh.list_commit_statuses.return_value = [status]
+    poller = GitHubPoller(config, db, gh)
+    events = await poller._review_events(TEST_REPO, "2026-09-05T18:00:00Z", config)
+    assert len(events) == 1 and events[0].review.commit_id == "abc"
+    assert "queued or running" in events[0].review.body
+    gh.list_commit_statuses.return_value = [{**status, "id": 2, "state": "success"}, status]
+    assert await poller._review_events(TEST_REPO, "2026-09-05T18:00:00Z", config) == []
+
+
+async def test_review_failure_keeps_issue_intake_and_replay_cursor(config, db, dispatch):
+    config = replace(config, github=replace(config.github, reviewers=("reviewer",)))
+    gh = AsyncMock()
+    gh.list_issues_since.return_value = [_issue(1, labels=["for:ike"])]
+    gh.list_comments_since.return_value = []
+    gh.list_pulls_raw.side_effect = RuntimeError("missing checks permission")
+    poller = GitHubPoller(config, db, gh)
+    summary = {}
+    await poller._poll_repo(TEST_REPO, config, summary)
+    dispatch.issue_dispatcher.assert_awaited_once()
+    first = await db.events.poll_cursor(TEST_REPO)
+    await poller._poll_repo(TEST_REPO, config, summary)
+    assert await db.events.poll_cursor(TEST_REPO) == first
+
+
+async def test_review_cadence_uses_independent_durable_cursor(config, db):
+    config = replace(config, github=replace(config.github, reviewers=("reviewer",)))
+    gh = AsyncMock()
+    gh.list_issues_since.return_value = []
+    gh.list_comments_since.return_value = []
+    gh.list_pulls_raw.return_value = []
+    await GitHubPoller(config, db, gh)._poll_repo(TEST_REPO, config, {})
+    saved = await db.events.poll_cursor(f"reviews:{TEST_REPO}")
+    assert saved is not None
+    # A fresh poller (restart) must not reset the metadata cadence.
+    await GitHubPoller(config, db, gh)._poll_repo(TEST_REPO, config, {})
+    gh.list_pulls_raw.assert_awaited_once()
+    assert await db.events.poll_cursor(f"reviews:{TEST_REPO}") == saved

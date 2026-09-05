@@ -80,6 +80,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "agents.writable_dirs": [],
     "agents.auto_review": False,
     "github.reviewers": [],
+    "github.review_poll_interval_seconds": 300,
     "github.intake": "auto",  # auto | webhook | poll | off
     "github.poll_interval_seconds": 60,
     "github.backfill_on_start": True,
@@ -139,6 +140,7 @@ SETTINGS_HELP: dict[str, str] = {
         "Directories outside an agent's own that a sandboxed runtime (Codex) may also "
         "write to, e.g. a package cache such as ~/.cache/uv (JSON list)"
     ),
+    "github.review_poll_interval_seconds": "Reviewer metadata poll period per repo",
     "github.reviewers": (
         "Reviewer accounts/app slugs whose PR comments become commit-anchored lifecycle notices"
     ),
@@ -191,6 +193,7 @@ _INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids"})
 _POSITIVE_SETTINGS = frozenset(
     {
         "github.poll_interval_seconds",
+        "github.review_poll_interval_seconds",
         "timing.monitor_interval_seconds",
         "timing.retry_interval_seconds",
     }
@@ -453,6 +456,7 @@ class GitHubConfig:
     """``github.*`` — intake settings (non-secret). Credentials come from the environment."""
 
     reviewers: tuple[str, ...] = ()
+    review_poll_interval_seconds: int = 300
     intake: str = "auto"
     poll_interval_seconds: int = 60
     backfill_on_start: bool = True
@@ -738,6 +742,7 @@ def build_config(
         ),
         github=GitHubConfig(
             reviewers=tuple(s["github.reviewers"]),
+            review_poll_interval_seconds=s["github.review_poll_interval_seconds"],
             intake=s["github.intake"],
             poll_interval_seconds=s["github.poll_interval_seconds"],
             backfill_on_start=s["github.backfill_on_start"],

@@ -62,6 +62,7 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 
 | Key | Default | Meaning |
 |---|---|---|
+| `github.review_poll_interval_seconds` | `300` | Minimum interval between review metadata polls per repo, with a separate durable cursor; positive seconds |
 | `github.reviewers` | `[]` | Reviewer logins or GitHub App slugs (with or without `[bot]`); replace their PR comments with commit-anchored review lifecycle notices. Enables review polling; see [GitHub](github.md#review-lifecycle) |
 | `github.intake` | `auto` | `auto` (webhook if `GITHUB_WEBHOOK_SECRET` is set, else poll), `webhook` (falls back to poll, with a startup warning, when the secret is missing), `poll`, `off` |
 | `github.poll_interval_seconds` | `60` | Poll frequency in poll intake (must be positive) |

@@ -109,22 +109,25 @@ class TestOnIssueClosed:
         event = make_close_event(["feynman"], repo_full_name="acme/agent-shell")
         mock_gh = AsyncMock()
         mock_gh.list_issues = AsyncMock(return_value=[])
+        mock_db = AsyncMock()
         with (
             _patch_session_exists(True),
             _patch_find_next(_next_issue()) as mock_find,
             _patch_deliver(),
             patch(f"{_LC}.on_dependency_resolved", new_callable=AsyncMock) as mock_deps,
         ):
-            result = await on_issue_closed(event, config, mock_gh, db=AsyncMock())
+            result = await on_issue_closed(event, config, mock_gh, db=mock_db)
 
         assert result["feynman"] == "delivered_#11"
         assert mock_find.await_args.kwargs["exclude"] == ("acme/agent-shell", 10)
+        snapshot = mock_deps.await_args.args[4]
+        assert snapshot.client is mock_gh
         mock_deps.assert_awaited_once_with(
             10,
             "acme/agent-shell",
             config,
-            mock_deps.await_args.args[3],
-            mock_deps.await_args.args[4],
+            mock_db,
+            snapshot,
         )
 
     async def test_default_repo_runs_dependency_hooks(self, config):

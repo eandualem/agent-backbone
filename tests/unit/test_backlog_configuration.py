@@ -183,3 +183,17 @@ async def test_integration_enable_disable_is_serialized(config):
     channel.allowed = False
     await integrations.reconcile()
     assert channel.stops == 1
+
+
+async def test_numbered_claude_dialog_with_modern_footer_can_be_approved():
+    pane = "Do you want to proceed?\n ❯ 1. Yes\n   2. No\n Enter to confirm · Esc to cancel"
+    rt = RUNTIMES["claude"]
+    assert rt.detect_active_dialog(pane) and not rt.detect_choice_dialog(pane)
+    with (
+        patch("agent_backbone.services.agents.launch.session_exists", return_value=True),
+        patch("agent_backbone.services.agents.launch.capture_pane", side_effect=[pane, "❯ "]),
+        patch("agent_backbone.services.runtimes.base.send_keys", return_value=True) as keys,
+    ):
+        outcome, _ = await approve_agent("app", runtime="claude", settle_seconds=0)
+    assert outcome == "approved"
+    keys.assert_awaited_once()

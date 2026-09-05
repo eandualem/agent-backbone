@@ -12,7 +12,10 @@ class EventRepo(Repo):
     async def review_finished(self, source_key: str) -> bool:
         async with self._tx() as conn:
             result = await conn.execute(
-                text("SELECT 1 FROM review_lifecycle WHERE source_key = :key"), {"key": source_key}
+                text(
+                    "SELECT 1 FROM review_lifecycle WHERE source_key = :key AND finished_at != ''"
+                ),
+                {"key": source_key},
             )
             return result.scalar_one_or_none() is not None
 

@@ -189,7 +189,9 @@ def format_review_notification(issue: IssueData, review: ReviewData) -> str:
         anchor += f" at {review.submitted_at}"
     phase = "started" if review.state == "started" else "finished"
     if review.state == "started":
-        summary = "Await the submitted review; check completion alone is not a review verdict."
+        summary = (
+            f"{preview} Await the submitted review; check completion alone is not a review verdict."
+        ).strip()
     return (
         f"[via:github pr:{issue.number}] "
         f'Review {phase} on {_issue_ref(issue)} "{issue.title}" '

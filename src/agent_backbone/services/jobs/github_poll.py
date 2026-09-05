@@ -25,7 +25,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from agent_backbone.models import IssueEvent
-from agent_backbone.services.github import review_started_event
+from agent_backbone.services.github import review_started_event, review_status_event
 from agent_backbone.services.routing import IssueClosedHook, dispatch_event
 
 if TYPE_CHECKING:
@@ -164,15 +164,33 @@ class GitHubPoller:
 
         issue_cache = {int(item["number"]): item for item in issues if "number" in item}
         events: list[IssueEvent] = []
+        had_errors = False
+        review_boundary = None
+        review_cursor_key = f"reviews:{repo}"
         if config.github.reviewers:
-            events.extend(await self._review_events(repo, since, config))
+            try:
+                saved = await self._db.events.poll_cursor(review_cursor_key)
+                if saved is None:
+                    saved = since
+                    await self._db.events.save_poll_cursor(review_cursor_key, saved)
+                    due = True
+                else:
+                    due = (
+                        poll_started - _parse(saved)
+                    ).total_seconds() >= config.github.review_poll_interval_seconds
+                if due:
+                    events.extend(
+                        await self._review_events(repo, _iso(_parse(saved) - _OVERLAP), config)
+                    )
+                    review_boundary = _iso(poll_started)
+            except Exception:
+                log.exception("Review poll failed for %s (issues/comments continue)", repo)
+                had_errors = True
         for item in issues:
             event = issue_event_from_api(item, repo, since)
             if event is not None:
                 events.append(event)
             newest = max(newest, item.get("updated_at", ""))
-
-        had_errors = False
 
         for comment in comments:
             number = issue_number_from_url(comment.get("issue_url", ""))
@@ -214,6 +232,8 @@ class GitHubPoller:
         # idle window: old events must leave it before dedup retention expires.
         # A failed batch instead replays its prior window after restart.
         if not had_errors:
+            if review_boundary is not None:
+                await self._db.events.save_poll_cursor(review_cursor_key, review_boundary)
             boundary = max(
                 since,
                 _iso(poll_started - _OVERLAP),
@@ -230,6 +250,23 @@ class GitHubPoller:
         for pull in await self._gh.list_pulls_raw(repo):
             sha = (pull.get("head") or {}).get("sha")
             if sha:
+                contexts = set()
+                for status in await self._gh.list_commit_statuses(sha, repo):
+                    context = status.get("context", "").casefold()
+                    if context in contexts:
+                        continue
+                    contexts.add(context)  # REST returns newest first.
+                    reviewer = (status.get("creator") or {}).get("login", "")
+                    if (
+                        not config.github.is_reviewer(reviewer)
+                        or (status.get("created_at") or "") < since
+                    ):
+                        continue
+                    event = review_status_event(
+                        status, sha, pull, repo, f"poll:status:{status['id']}"
+                    )
+                    if event is not None:
+                        events.append(event)
                 for check in await self._gh.list_check_runs(sha, repo):
                     if not config.github.is_reviewer((check.get("app") or {}).get("slug", "")):
                         continue

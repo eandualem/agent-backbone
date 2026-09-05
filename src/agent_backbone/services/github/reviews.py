@@ -27,3 +27,32 @@ def review_started_event(check: dict, pull: dict, repo: str, delivery_id: str) -
         html_url=check.get("html_url") or "",
     )
     return event
+
+
+def review_status_event(
+    status: dict, sha: str, pull: dict, repo: str, delivery_id: str
+) -> IssueEvent | None:
+    """Pending commit statuses are the older equivalent of an active check.
+
+    GitHub pending includes queued work; do not infer a verdict or parse a
+    particular review vendor's description.
+    """
+    if status.get("state") != "pending":
+        return None
+    reviewer = (status.get("creator") or status.get("sender") or {}).get("login", "unknown")
+    event = review_started_event(
+        {
+            "id": status.get("id", 0),
+            "status": "in_progress",
+            "head_sha": sha,
+            "started_at": status.get("created_at"),
+            "app": {"slug": reviewer},
+            "html_url": status.get("target_url") or "",
+        },
+        pull,
+        repo,
+        delivery_id,
+    )
+    if event is not None:
+        event.review.body = "Reviewer status is pending (queued or running)."
+    return event

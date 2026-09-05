@@ -82,7 +82,16 @@ async def flush_outbox(
                     closure = (delivery.get("source_key") or "").startswith("closed:")
                     if (
                         (issue.state == "closed" and not closure)
-                        or (closure and issue.state != "closed")
+                        or (
+                            closure
+                            and (
+                                issue.state != "closed"
+                                or (
+                                    issue.closed_at
+                                    and not source_key.endswith(f"@{issue.closed_at}")
+                                )
+                            )
+                        )
                         or (
                             delivery["delivery_kind"] == "issue"
                             and target

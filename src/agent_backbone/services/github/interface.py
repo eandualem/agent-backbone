@@ -302,6 +302,11 @@ class GitHubClient:
             f"/pulls/{number}/reviews", repo_full_name=repo_full_name, params={"per_page": 100}
         )
 
+    async def list_commit_statuses(self, sha: str, repo_full_name: str) -> list[dict]:
+        return await self._request_all(
+            f"/commits/{sha}/statuses", repo_full_name=repo_full_name, params={"per_page": 100}
+        )
+
     async def list_check_runs(self, sha: str, repo_full_name: str) -> list[dict]:
         items = []
         page = 1
