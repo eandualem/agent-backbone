@@ -6,12 +6,11 @@ when it is not; both paths call these functions so the two never drift.
 
 from __future__ import annotations
 
-import asyncio
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import launch
+from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents.launch import StartResult
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.terminal import session_exists
@@ -50,12 +49,9 @@ async def resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     name nor a directory was given.
     """
     if req.directory:
-        spec = await store.discover(
-            req.directory, name=req.name, runtime=req.runtime, model=req.model
+        return await store.register_directory(
+            req.directory, name=req.name, runtime=req.runtime, model=req.model, watches=req.watch
         )
-        if req.watch:
-            spec = spec.with_watches(*req.watch)
-        return await store.register(spec)
 
     if not req.name:
         raise ValueError("name or dir is required")
@@ -74,20 +70,13 @@ async def resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     return spec
 
 
-_lifecycle_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-"""One lock per agent name: a start and a forget never interleave."""
-
-
-def lifecycle_lock(name: str) -> asyncio.Lock:
-    return _lifecycle_locks[name]
-
-
 async def stop_agent_session(config: BackboneConfig, name: str) -> bool:
     """Stop an agent's tmux session. The backbone's own session is refused
     (``ValueError``) on every surface — API, CLI, Telegram — from here."""
     if name == config.backbone.session_name:
         raise ValueError("refusing to stop the backbone's own session")
-    return await launch.stop_agent(name)
+    async with lifecycle_lock(name):
+        return await launch.stop_agent(name)
 
 
 async def forget_agent(store: AgentStore, name: str) -> bool:
@@ -119,6 +108,11 @@ async def start_resolved(
     if not spec.path.is_dir():
         raise ValueError(f"Directory does not exist: {spec.path}")
     async with lifecycle_lock(spec.name):
+        current = store.agents.get(spec.name)
+        if current is None:
+            raise ValueError(f"Agent '{spec.name}' was forgotten before startup")
+        if current != spec:
+            raise ValueError(f"Agent '{spec.name}' changed before startup; retry the start")
         result = await launch.start_agent(
             spec,
             config,

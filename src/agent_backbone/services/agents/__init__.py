@@ -13,6 +13,7 @@ from agent_backbone.services.agents._inference import (
     get_agent_state,
     infer_state_from_pane,
 )
+from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents.acknowledgement import (
     find_outgoing_comment,
     find_outgoing_pull_request,
@@ -46,6 +47,7 @@ __all__ = [
     "get_agent_state",
     "has_commented_on_issue",
     "infer_state_from_pane",
+    "lifecycle_lock",
     "plan_control",
     "prompt_id",
     "read_plan",

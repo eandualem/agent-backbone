@@ -25,6 +25,7 @@ from agent_backbone.config import (
     validate_setting,
 )
 from agent_backbone.git import detect_repo
+from agent_backbone.services.agents._locks import lifecycle_lock, serialized_mutation
 
 if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
@@ -81,6 +82,7 @@ class AgentStore:
         self._settings: dict = {}
         self._config: BackboneConfig | None = None
         self._lock = asyncio.Lock()
+        self._discovery_lock = asyncio.Lock()
 
     # --- LifecycleAware ---
 
@@ -171,6 +173,20 @@ class AgentStore:
             ),
         )
 
+    async def register_directory(
+        self, directory: str | Path, *, watches: tuple[str, ...] = (), **options
+    ) -> AgentSpec:
+        """Reserve discovery's chosen name through registration, preserving live updates."""
+        async with self._discovery_lock:
+            while True:
+                spec = await self.discover(directory, **options)
+                async with lifecycle_lock(spec.name):
+                    current = await self.discover(directory, **options)
+                    if current.name != spec.name:
+                        continue
+                    return await self.register(current.with_watches(*watches))
+
+    @serialized_mutation
     async def register(self, spec: AgentSpec) -> AgentSpec:
         """Insert or update an agent and publish the new snapshot."""
         await self._db.agents.upsert(
@@ -190,12 +206,10 @@ class AgentStore:
         await self.refresh()
         return self._agents.get(spec.name) or spec
 
+    @serialized_mutation
     async def update(self, name: str, **changes) -> AgentSpec:
         """Change fields on a known agent (dir, runtime, model, repo, tags, env,
         description, always_on, unattended)."""
-        current = self._agents.get(name)
-        if current is None:
-            raise KeyError(name)
         allowed = {
             "dir",
             "runtime",
@@ -210,38 +224,26 @@ class AgentStore:
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}")
-        merged = {
-            "dir": current.dir,
-            "runtime": current.runtime,
-            "model": current.model,
-            "repo": current.repo,
-            "tags": tuple(current.tags),
-            "env": dict(current.env),
-            "description": current.description,
-            "always_on": current.always_on,
-            "unattended": current.unattended,
-        }
-        merged.update(changes)
         if "tags" in changes:
-            merged["tags"] = tuple(changes["tags"])
+            changes["tags"] = tuple(changes["tags"])
         for flag in ("always_on", "unattended"):
             if flag in changes:
-                merged[flag] = _flag(flag, changes[flag])
-        # `unattended` was granted with a runtime in mind (Codex's sandbox);
-        # a new runtime starts attended unless the same call says otherwise.
-        if (
-            changes.get("runtime", current.runtime) != current.runtime
-            and "unattended" not in changes
-        ):
-            merged["unattended"] = False
-        spec = AgentSpec(name=name, watches=current.watches, **merged)
-        return await self.register(spec)
+                changes[flag] = _flag(flag, changes[flag])
+        if not await self._db.agents.update_fields(name, changes):
+            raise KeyError(name)
+        await self.refresh()
+        current = self._agents.get(name)
+        if current is None:
+            raise KeyError(name)
+        return current
 
+    @serialized_mutation
     async def forget(self, name: str) -> bool:
         removed = await self._db.agents.delete(name)
         await self.refresh()
         return removed
 
+    @serialized_mutation
     async def watch(self, name: str, repo: str) -> AgentSpec:
         if name not in self._agents:
             raise KeyError(name)
@@ -249,11 +251,13 @@ class AgentStore:
         await self.refresh()
         return self._agents.get(name)  # type: ignore[return-value]
 
+    @serialized_mutation
     async def unwatch(self, name: str, repo: str) -> bool:
         removed = await self._db.agents.remove_watch(name, repo)
         await self.refresh()
         return removed
 
+    @serialized_mutation
     async def touch_started(self, name: str) -> None:
         await self._db.agents.touch_started(name)
 
