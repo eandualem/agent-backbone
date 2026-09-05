@@ -62,7 +62,10 @@ members like any other agent.
 ## When a member is stuck on a permission prompt
 
 Codex, OpenCode and Claude Code (outside auto mode) stop on approval
-dialogs. `backbone agent inspect <member>` shows it as
+dialogs. Codex members are launched with their sandbox open to the
+network (`sandbox_workspace_write.network_access`), so `backbone tell`
+reaches the API without a dialog; a dialog for a `backbone` command on a
+Codex member means it was started some other way. `backbone agent inspect <member>` shows it as
 `waiting_for_human (permission)` with the prompt in the evidence;
 `backbone agent approve <member>` answers it. The backbone sends the
 runtime's affirmative key only while the dialog is actually on screen and
