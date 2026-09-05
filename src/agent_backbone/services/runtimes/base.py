@@ -123,6 +123,12 @@ class Runtime:
     a sandbox, ``unattended`` means free inside a wall; without one it means
     free on the machine — which is why a swarm only makes sandboxed members
     unattended by default."""
+    mouse_scroll: bool = False
+    """Enable tmux mouse handling for this runtime's session so wheel events
+    scroll terminal history. False leaves the user's tmux setting alone."""
+    auto_review_args: tuple[str, ...] = ()
+    """Opt into the runtime's permission reviewer while retaining its sandbox.
+    Empty means no support; unattended mode takes precedence."""
 
     # --- pane recognition -------------------------------------------------
     prompt_prefixes: tuple[str, ...] = ()
@@ -332,6 +338,7 @@ class Runtime:
         state_dir: Path | str | None = None,
         unattended: bool = False,
         writable_dirs: tuple[str, ...] = (),
+        auto_review: bool = False,
     ) -> list[str] | None:
         """The launch command, or None for a plain shell.
 
@@ -365,7 +372,7 @@ class Runtime:
         return [
             resolved,
             *self.effort_args(effort),
-            *(self.unattended_args if unattended else ()),
+            *(self.unattended_args if unattended else self.auto_review_args if auto_review else ()),
             *self.writable_dir_args(writable_dirs),
             *self.launch_args(
                 model=model_id,

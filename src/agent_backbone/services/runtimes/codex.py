@@ -90,13 +90,17 @@ class Codex(Runtime):
     # (a `sandbox_mode = "danger-full-access"` in the user's config.toml
     # would otherwise silently take the wall away): the agent's directory,
     # temp, the network opened below, and the `--add-dir`s from
-    # `writable_dir_args` (a worktree's shared `.git` among them — without it
-    # `git commit` fails on `index.lock`, seen live); a write anywhere else
+    # `writable_dir_args` (validated shared/private Git commit paths among
+    # them; hooks and config stay protected); a write anywhere else
     # fails with "Operation not permitted" and the model is told so.
     # codex-cli 0.153: both are global options, valid before the TUI and
     # before `resume`.
     unattended_args = ("-a", "never", "-s", "workspace-write")
     sandboxed = True
+    mouse_scroll = True
+    # Codex 0.153.4: on-request approvals go to its automatic reviewer,
+    # with workspace-write enforced by this switch (verified with --help).
+    auto_review_args = ("--approve-for-me",)
 
     hook_script = "codex_hook.py"
     hook_events = (
@@ -153,8 +157,8 @@ class Codex(Runtime):
         pre_trust_codex_directory(directory)
 
     def writable_dir_args(self, dirs: tuple[str, ...]) -> list[str]:
-        """``--add-dir <dir>`` per directory: "additional directories that
-        should be writable alongside the primary workspace". What a project's
+        """``--add-dir <path>`` per writable root, including Git bookkeeping
+        files and their locks. What a project's
         tooling keeps outside the checkout — uv's cache under `~/.cache`, the
         one wall a member hit live — is opened here, nothing else."""
         args: list[str] = []
@@ -208,8 +212,10 @@ class Codex(Runtime):
         # Both the TUI and `resume` take `-c` and the hook-trust flag.
         if resume:
             target = resume if isinstance(resume, str) else "--last"
-            return ["resume", target, *_LOCAL_API_ACCESS, *hook]
-        args: list[str] = [*_LOCAL_API_ACCESS, *hook]
+            return ["resume", target, *_LOCAL_API_ACCESS, "--no-alt-screen", *hook]
+        # Inline output gives tmux scrollback to display; session mouse
+        # handling keeps the wheel from becoming Up/Down in the composer.
+        args: list[str] = [*_LOCAL_API_ACCESS, "--no-alt-screen", *hook]
         if model:
             args.extend(["--model", model])
         if brief_file is not None and (brief := read_brief(brief_file)):

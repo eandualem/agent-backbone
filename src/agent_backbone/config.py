@@ -72,6 +72,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "agents.pre_trust": True,
     "agents.inject_brief": True,
     "agents.writable_dirs": [],
+    "agents.auto_review": False,
     "github.intake": "auto",  # auto | webhook | poll | off
     "github.poll_interval_seconds": 60,
     "github.backfill_on_start": True,
@@ -118,6 +119,10 @@ SETTINGS_HELP: dict[str, str] = {
     "agents.default_runtime": "Runtime used by `agent start` when none is given",
     "agents.pre_trust": (
         "Answer the runtime's folder-trust dialog before starting (claude, codex, gemini)"
+    ),
+    "agents.auto_review": (
+        "Use the runtime's automatic permission reviewer when available (currently Codex). "
+        "Keeps its sandbox; unattended agents still never ask. Applies at the next start/resume."
     ),
     "agents.inject_brief": (
         "Give each agent the backbone's brief at launch (system prompt or initial prompt)"
@@ -416,6 +421,7 @@ class LaunchConfig:
     pre_trust: bool = True
     inject_brief: bool = True
     writable_dirs: tuple[str, ...] = ()
+    auto_review: bool = False
 
 
 @dataclass(frozen=True)
@@ -697,6 +703,7 @@ def build_config(
             pre_trust=s["agents.pre_trust"],
             inject_brief=s["agents.inject_brief"],
             writable_dirs=tuple(str(d) for d in s["agents.writable_dirs"]),
+            auto_review=s["agents.auto_review"],
         ),
         github=GitHubConfig(
             intake=s["github.intake"],

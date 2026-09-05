@@ -48,6 +48,7 @@ async def start_session(
     command: list[str] | None = None,
     environment: dict[str, str] | None = None,
     scrub: Sequence[str] | None = None,
+    mouse: bool = False,
 ) -> bool:
     """Start a detached tmux session running ``command`` (or a shell).
 
@@ -67,6 +68,8 @@ async def start_session(
     configured ``env`` wins over the scrub.
 
     Returns True when the session exists afterwards.
+    ``mouse`` enables mouse handling only for this session; False preserves
+    the user's setting. Inline programs then scroll through tmux history.
     """
     if await session_exists(session_name):
         log.info("Session '%s' already exists", session_name)
@@ -110,6 +113,14 @@ async def start_session(
             )
             await _run_tmux("kill-session", "-t", exact_target(session_name))
             return False
+    if mouse:
+        rc, _, stderr = await _run_tmux(
+            "set-option", "-t", exact_target(session_name), "mouse", "on"
+        )
+        if rc != 0:
+            log.warning(
+                "Could not enable mouse scrolling for '%s': %s", session_name, stderr.decode()
+            )
     return True
 
 

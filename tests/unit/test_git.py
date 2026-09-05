@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_backbone.git import parse_github_remote, worktree_git_dir
+from agent_backbone.git import git_write_paths, parse_github_remote
 
 
 @pytest.mark.parametrize(
@@ -28,37 +28,71 @@ def test_parse_github_remote(url, expected):
     assert parse_github_remote(url) == expected
 
 
-class TestWorktreeGitDir:
-    """A linked worktree's git metadata lives under the main checkout's .git."""
-
-    def test_linked_worktree_points_at_the_main_git_dir(self, tmp_path):
-        main_git = tmp_path / "main" / ".git"
-        (main_git / "worktrees" / "wt").mkdir(parents=True)
+class TestGitWritePaths:
+    def _worktree(self, tmp_path):
+        common = tmp_path / "main" / ".git"
+        private = common / "worktrees" / "wt"
+        private.mkdir(parents=True)
         wt = tmp_path / "wt"
         wt.mkdir()
-        (wt / ".git").write_text(f"gitdir: {main_git / 'worktrees' / 'wt'}\n")
-        assert worktree_git_dir(wt) == main_git
+        (wt / ".git").write_text(f"gitdir: {private}\n")
+        (private / "gitdir").write_text(str(wt / ".git"))
+        (private / "commondir").write_text("../..\n")
+        return wt, common, private
 
-    def test_relative_gitdir_is_resolved_against_the_worktree(self, tmp_path):
-        main_git = tmp_path / "main" / ".git"
-        (main_git / "worktrees" / "wt").mkdir(parents=True)
-        wt = tmp_path / "wt"
-        wt.mkdir()
-        (wt / ".git").write_text("gitdir: ../main/.git/worktrees/wt\n")
-        assert worktree_git_dir(wt) == main_git.resolve()
+    @pytest.mark.parametrize("relative", [False, True])
+    def test_validated_worktree_keeps_shared_objects_and_private_index(self, tmp_path, relative):
+        wt, common, private = self._worktree(tmp_path)
+        if relative:
+            (wt / ".git").write_text("gitdir: ../main/.git/worktrees/wt\n")
+        paths = git_write_paths(wt)
+        assert str(common / "objects") in paths
+        assert str(common / "refs") in paths
+        assert str(private / "index.lock") in paths
+        assert str(private / "HEAD") in paths
+        assert str(common) not in paths and str(private) not in paths
+        assert not any("config" in p or "hooks" in p for p in paths)
 
-    def test_plain_checkout_and_non_repo_have_nothing_to_open(self, tmp_path):
-        plain = tmp_path / "plain"
-        (plain / ".git").mkdir(parents=True)
-        assert worktree_git_dir(plain) is None
-        assert worktree_git_dir(tmp_path / "nowhere") is None
+    def test_plain_checkout_opens_commit_paths_only(self, tmp_path):
+        gitdir = tmp_path / ".git"
+        gitdir.mkdir()
+        paths = git_write_paths(tmp_path)
+        assert str(gitdir / "index.lock") in paths
+        assert str(gitdir / "AUTO_MERGE.lock") in paths
+        assert str(gitdir / "MERGE_RR.lock") in paths
+        assert str(gitdir / "objects") in paths
+        assert str(gitdir) not in paths
+        assert not any("config" in p or "hooks" in p for p in paths)
 
-    def test_unexpected_pointer_is_ignored(self, tmp_path):
-        # A submodule's .git file points at <super>/.git/modules/<name>: not a
-        # worktree, and not a directory the backbone should open.
-        sub = tmp_path / "sub"
-        sub.mkdir()
-        (sub / ".git").write_text("gitdir: /elsewhere/.git/modules/sub\n")
-        assert worktree_git_dir(sub) is None
-        (sub / ".git").write_text("not a pointer\n")
-        assert worktree_git_dir(sub) is None
+    @pytest.mark.parametrize("metadata", ["gitdir", "commondir"])
+    def test_worktree_without_reciprocal_metadata_is_rejected(self, tmp_path, metadata):
+        wt, _, private = self._worktree(tmp_path)
+        (private / metadata).write_text("/unrelated\n")
+        assert git_write_paths(wt) == ()
+
+    def test_forged_absolute_pointer_is_rejected(self, tmp_path):
+        (tmp_path / ".git").write_text("gitdir: /sensitive/worktrees/name\n")
+        assert git_write_paths(tmp_path) == ()
+
+    def test_external_git_symlink_is_rejected(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (repo / ".git").symlink_to(outside, target_is_directory=True)
+        assert git_write_paths(repo) == ()
+
+    def test_a_granted_path_cannot_alias_git_config(self, tmp_path):
+        gitdir = tmp_path / ".git"
+        gitdir.mkdir()
+        (gitdir / "config").write_text("")
+        (gitdir / "index").symlink_to(gitdir / "config")
+        paths = git_write_paths(tmp_path)
+        assert str(gitdir / "index") not in paths
+        assert str(gitdir / "config") not in paths
+
+    @pytest.mark.parametrize("pointer", [None, "not a pointer", "gitdir: /super/.git/modules/sub"])
+    def test_non_repositories_and_unexpected_pointers_have_no_grants(self, tmp_path, pointer):
+        if pointer is not None:
+            (tmp_path / ".git").write_text(pointer)
+        assert git_write_paths(tmp_path) == ()
