@@ -252,6 +252,7 @@ async def safe_deliver(
     delivery_kind: str = "issue",
     sender: str = "",
     source_key: str | None = None,
+    requeue: bool = True,
 ) -> DeliveryOutcome:
     """``deliver`` for callers that only act on the outcome."""
     report = await deliver(
@@ -270,6 +271,7 @@ async def safe_deliver(
         delivery_kind=delivery_kind,
         sender=sender,
         source_key=source_key,
+        requeue=requeue,
     )
     return report.outcome
 
@@ -291,6 +293,7 @@ async def deliver(
     delivery_kind: str = "issue",
     sender: str = "",
     source_key: str | None = None,
+    requeue: bool = True,
 ) -> DeliveryReport:
     """Deliver ``message`` to ``session_name`` if the agent can take it, else queue it.
 
@@ -298,6 +301,11 @@ async def deliver(
     ``api-messages``, …). ``sender`` is who is speaking (``from_entity``) and
     ``source_key`` the identity of the originating event when there is one;
     together they decide what counts as *the same* queued message.
+    ``requeue=False`` is for a caller that already holds the message in the
+    queue (the drain re-offering a leased row): a blocked attempt is then
+    reported and nothing is stored, so the row it came from stays the one
+    copy — storing the re-offer would add a second row with a different
+    text (the queued-age stamp) and, next drain, a third.
     """
     kind = delivery_kind
     trackable_issue = db is not None and issue_number is not None and target_entity is not None
@@ -399,9 +407,9 @@ async def deliver(
             queue = kind != "issue" or intel == SessionIntelligence.OFFLINE
             if intel == SessionIntelligence.SETTLING and kind == "issue":
                 queue = False
-            return await finish(DeliveryOutcome(intel.value), queue=queue)
+            return await finish(DeliveryOutcome(intel.value), queue=queue and requeue)
 
     # 4. Paste + submit
     if await send_message(session_name, message, runtime_hint=profile.runtime):
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
-    return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)
+    return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=requeue)

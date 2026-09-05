@@ -380,6 +380,58 @@ class TestDrainKeepsTheRowIdentity:
         await db.queue.release(first.id)
         assert len(await db.queue.dequeue("ike")) == 1
 
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
+    @patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock)
+    async def test_the_drain_never_asks_for_its_row_to_be_stored_again(
+        self, mock_list_sessions, mock_deliver, db, config
+    ):
+        await db.queue.enqueue(session_name="ike", message="hi", delivery_kind="direct_message")
+        mock_list_sessions.return_value = ["ike"]
+        mock_deliver.return_value = "agent_working"
+        await delivery_retry(config, db, None)
+        assert mock_deliver.await_args.kwargs["requeue"] is False
+
+    @patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock)
+    async def test_a_blocked_direct_message_stays_one_unstamped_row(
+        self, mock_list_sessions, db, config
+    ):
+        """Seen live: the re-offer carried a '(queued N min ago)' stamp, so it was
+        stored as a *new* row under a new text key; the next drain re-offered
+        both, and one more copy appeared per minute — nine rows, three
+        deliveries of one message. The leased row is the stored copy."""
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import text
+
+        from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+        result = await db.queue.enqueue(
+            session_name="ike",
+            message="[via:backbone from:leo] hello",
+            delivery_kind="direct_message",
+        )
+        # Old enough for the offered text to carry the age stamp.
+        long_ago = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+        async with db.engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE message_queue SET enqueued_at = :t WHERE id = :id"),
+                {"t": long_ago, "id": result.id},
+            )
+        mock_list_sessions.return_value = ["ike"]
+        busy = SessionProfile("ike", SessionIntelligence.AGENT_WORKING)
+        with patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            new_callable=AsyncMock,
+            return_value=busy,
+        ):
+            await delivery_retry(config, db, None)
+            await delivery_retry(config, db, None)
+
+        assert await db.queue.pending_count("ike") == 1
+        row = await queue_row(db, result.id)
+        assert row["status"] == "pending"
+        assert row["message"] == "[via:backbone from:leo] hello"  # never stamped in storage
+
 
 class TestPurgePendingForIssue:
     async def test_purges_pending_messages_for_issue(self, db):
