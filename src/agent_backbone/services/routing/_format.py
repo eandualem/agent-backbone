@@ -8,8 +8,6 @@ the envelope is untrusted input from the tracker.
 
 from __future__ import annotations
 
-import re
-
 from agent_backbone.models import CommentData, IssueData, ReviewData, parse_from_tag
 
 
@@ -44,14 +42,32 @@ def format_pull_request_notification(issue: IssueData) -> str:
     )
 
 
-_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 _PREVIEW_CHARS = 500
+
+
+def _strip_html_comments(text: str) -> str:
+    """``text`` without ``<!-- … -->`` blocks, in one pass: a regex with a
+    lazy ``.*?`` rescans to the end for every unterminated opener, which a
+    hostile comment body could stack by the thousand."""
+    out: list[str] = []
+    i = 0
+    while True:
+        start = text.find("<!--", i)
+        if start < 0:
+            out.append(text[i:])
+            break
+        out.append(text[i:start])
+        end = text.find("-->", start + 4)
+        if end < 0:
+            break  # unterminated: the rest is comment, as a browser reads it
+        i = end + 3
+    return "".join(out)
 
 
 def _preview(body: str) -> str:
     """The first 500 characters that mean something: HTML comments (bots
     open with several) and runs of whitespace carry nothing to an agent."""
-    text = " ".join(_HTML_COMMENT_RE.sub("", body).split())
+    text = " ".join(_strip_html_comments(body).split())
     if len(text) <= _PREVIEW_CHARS:
         return text
     return text[: _PREVIEW_CHARS - 3] + "..."  # the ellipsis counts toward the cap

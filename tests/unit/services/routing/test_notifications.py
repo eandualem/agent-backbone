@@ -277,3 +277,13 @@ class TestReviewAnchorsAndPreviews:
 
         assert len(_preview("x" * 501)) == 500 and _preview("x" * 501).endswith("...")
         assert _preview("x" * 500) == "x" * 500
+
+    def test_stacked_unterminated_openers_are_linear(self):
+        import time
+
+        from agent_backbone.services.routing._format import _preview
+
+        started = time.perf_counter()
+        assert _preview("<!--" * 20000 + " tail") == ""
+        assert _preview("<!-- a --> kept <!-- b --> too") == "kept too"
+        assert time.perf_counter() - started < 1.0
