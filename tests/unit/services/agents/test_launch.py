@@ -309,12 +309,16 @@ class TestStartAgentBrief:
         worktree = tmp_path / "wt"
         worktree.mkdir()
         (worktree / ".git").write_text(f"gitdir: {main_git / 'worktrees' / 'wt'}\n")
+        (main_git / "worktrees" / "wt" / "gitdir").write_text(str(worktree / ".git"))
+        (main_git / "worktrees" / "wt" / "commondir").write_text("../..")
         spec = AgentSpec(name="ike", dir=str(worktree), runtime="codex", repo="acme/app")
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
             assert (await start_agent(spec, config, db=AsyncMock())).ok
         command = started.await_args.kwargs["command"]
-        assert command[1:3] == ["--add-dir", str(main_git)]
+        assert command[1:3] == ["--add-dir", str(main_git / "objects")]
+        assert str(main_git / "worktrees" / "wt" / "index.lock") in command
+        assert str(main_git) not in command
         # A directory with no Git metadata has nothing to open.
         plain = self._spec(tmp_path, "codex")
         with exists, start as started, _cmd, _trust, _wait:
@@ -331,7 +335,9 @@ class TestStartAgentBrief:
             assert (await start_agent(spec, config, db=AsyncMock())).ok
         command = started.await_args.kwargs["command"]
         grant = command.index("--add-dir")
-        assert command[grant + 1] == str((spec.path / ".git").resolve())
+        assert command[grant + 1] == str((spec.path / ".git" / "objects").resolve())
+        assert str(spec.path / ".git" / "index.lock") in command
+        assert str(spec.path / ".git") not in command
 
     @pytest.mark.parametrize("runtime", ["codex", "claude", "shell"])
     async def test_mouse_scrolling_follows_the_runtime(self, tmp_path, runtime):

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import session_secret_keys
-from agent_backbone.git import worktree_git_dir
+from agent_backbone.git import git_write_paths
 from agent_backbone.help import render_agent_brief
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
@@ -250,22 +250,8 @@ async def start_agent(
 
 
 def _writable_dirs(agent_dir: Path, configured: tuple[str, ...]) -> tuple[str, ...]:
-    """The directories a sandboxed runtime may write outside ``agent_dir``.
-
-    The configured list (``agents.writable_dirs``), plus the repository's
-    git directory. A worktree shares it with its main checkout: ``<main>/.git`` holds the
-    worktree's index, HEAD and every object and ref, so without it a member
-    in a swarm worktree can edit but never ``git add`` or ``commit``
-    ("Operation not permitted" on ``index.lock``, seen live). A plain
-    checkout needs an explicit grant too: workspace-write protects ``.git``
-    even inside a writable root. No other protected directory is opened.
-    """
-    common = worktree_git_dir(agent_dir)
-    if common is None and (agent_dir / ".git").is_dir():
-        common = (agent_dir / ".git").resolve()
-    if common is None or str(common) in configured:
-        return configured
-    return (*configured, str(common))
+    """Explicit tooling roots and validated Git commit paths, without hooks/config."""
+    return tuple(dict.fromkeys((*configured, *git_write_paths(agent_dir))))
 
 
 async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:

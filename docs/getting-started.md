@@ -159,13 +159,15 @@ minute). Watch it happen: `tmux attach -t app`.
 
 ### Codex permissions and scrolling
 
-The backbone explicitly opens the repository's `.git` directory for Codex,
-including the shared Git directory of a linked worktree. Codex normally
-protects `.git` even inside a writable checkout; opening this directory lets
+The backbone grants Codex access to Git commit data: objects, refs, logs,
+the index, and commit bookkeeping files and locks. For linked worktrees, it
+validates Git's reciprocal pointers before opening shared and private commit
+paths. Codex normally protects `.git` even inside a writable checkout; these grants let
 ordinary `git add` and `git commit` run inside the sandbox. Source files,
 configured tooling directories (`agents.writable_dirs`) and the network are
-also available. `.codex`, `.agents` and unrelated directories keep their
-existing protection. See [Codex's protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).
+also available. Git hooks and configuration, `.codex`, `.agents`, and unrelated
+directories keep their existing protection. A `.git` symlink or unverified
+worktree pointer receives no automatic Git grant. See [Codex's protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).
 
 To have Codex review remaining permission requests automatically:
 
