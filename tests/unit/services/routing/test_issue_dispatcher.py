@@ -492,3 +492,57 @@ class TestAddressedIssues:
         )
         assert route_issue(addressed, EventType.ISSUE_OPENED, config).queue == []
         assert route_issue(unlabelled, EventType.ISSUE_OPENED, config).queue == ["backbone"]
+
+
+class TestSwarmCoordinatorIsAParty:
+    async def test_comment_on_the_swarm_issue_reaches_the_coordinator(self, tmp_path, mock_db):
+        # Members are not owners (#137); the coordinator still hears its own issue.
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={
+                    "backbone": AgentSpec(name="backbone", dir="/x", repo="acme/backbone"),
+                    "audit-coordinator": AgentSpec(
+                        name="audit-coordinator",
+                        dir="/x/.backbone/swarms/audit",
+                        repo="acme/backbone",
+                        tags=("swarm:audit", "role:coordinator"),
+                    ),
+                }
+            ),
+        )
+        issue = IssueData(
+            number=133, title="Audit", labels=ParsedLabels(), repo_full_name="acme/backbone"
+        )
+        event = IssueEvent(
+            event_type=EventType.COMMENT_CREATED,
+            issue=issue,
+            comment=CommentData(id=1, body="how is it going?", user_login="elias"),
+        )
+        mock_db.swarms.active_for_issue = AsyncMock(
+            return_value={"name": "audit", "coordinator": "audit-coordinator"}
+        )
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
+            result = await issue_dispatcher(event, config, mock_db)
+        assert "audit-coordinator" in result.delivered
+        assert "backbone" in result.delivered  # the sole owner is a party too
+
+    async def test_no_swarm_means_no_extra_party(self, tmp_path, mock_db):
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={"backbone": AgentSpec(name="backbone", dir="/x", repo="acme/backbone")}
+            ),
+        )
+        issue = IssueData(
+            number=5, title="t", labels=ParsedLabels(), repo_full_name="acme/backbone"
+        )
+        event = IssueEvent(
+            event_type=EventType.COMMENT_CREATED,
+            issue=issue,
+            comment=CommentData(id=2, body="hi", user_login="elias"),
+        )
+        mock_db.swarms.active_for_issue = AsyncMock(return_value=None)
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
+            result = await issue_dispatcher(event, config, mock_db)
+        assert result.delivered == ["backbone"]

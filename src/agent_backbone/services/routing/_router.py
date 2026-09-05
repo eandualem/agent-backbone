@@ -124,12 +124,27 @@ async def _deliver(
     log.info("Decision: %s#%d → %s (%s) = %s", repo, event.issue.number, target, kind, outcome)
 
 
+async def _swarm_coordinator(db: BackboneDB, repo: str, issue_number: int) -> str | None:
+    """The coordinator of the swarm active on ``(repo, issue)``, if any."""
+    try:
+        swarm = await db.swarms.active_for_issue(repo, issue_number)
+    except Exception:
+        log.debug("Could not look up a swarm for %s#%d", repo, issue_number)
+        return None
+    return swarm.get("coordinator") if isinstance(swarm, dict) else None
+
+
 async def _dispatch_comment(
     event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
 ) -> None:
     repo = event.issue.repo_full_name
     commenter = _resolve_commenter_entity(event, config)
     audience = comment_audience(event.issue, commenter, config)
+    # A swarm's coordinator is a party to the swarm's own issue — it is not
+    # an owner (members never are), so it would otherwise hear nothing.
+    coordinator = await _swarm_coordinator(db, repo, event.issue.number)
+    if coordinator and coordinator != commenter and coordinator not in audience:
+        audience.append(coordinator)
     message = format_comment_notification(event.issue, event.comment, commenter_entity=commenter)
 
     commenter_session: str | None = None

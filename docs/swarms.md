@@ -42,6 +42,12 @@ That single command:
   may also `tell` the initiating agent directly.
 - **You ↔ swarm**: `backbone tell research "..."` — a swarm's name
   resolves to its coordinator.
+- **GitHub ↔ swarm**: members are registered with the repository for
+  their worktree and pull request, but they are **not** its owners or
+  watchers for routing — a swarm does not turn a sole owner into a
+  multi-owner repository, and members do not hear about unrelated issues
+  or pull requests. The coordinator is a party to the swarm's own issue:
+  comments there reach it like any `for:` target.
 
 ## The lifecycle
 
