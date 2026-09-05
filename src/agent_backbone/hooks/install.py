@@ -20,6 +20,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from agent_backbone.fs import atomic_write_text
+
 HOOK_MARKER = "agent-backbone"
 
 HOOK_FILES = (
@@ -129,7 +131,7 @@ def load_settings(path: Path) -> dict:
 
 def save_settings(path: Path, settings: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2) + "\n")
+    atomic_write_text(path, json.dumps(settings, indent=2) + "\n")
 
 
 def default_python() -> str:

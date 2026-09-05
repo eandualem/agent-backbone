@@ -4,14 +4,143 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import json
 import logging
 import os
 import signal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from agent_backbone.services.terminal import PtyManager, PtySession
 
 _PTY = "agent_backbone.services.terminal._pty"
+
+
+def _identity(pid=12345, birth="Sat Sep 05 10:20:30 2026", command=None):
+    return {
+        "pid": pid,
+        "birth": birth,
+        "command": command or ["tmux", "attach-session", "-t", "=app:"],
+    }
+
+
+class TestOrphanIdentity:
+    def test_matching_identity_is_signalled_and_record_cleared(self, tmp_path):
+        saved = _identity()
+        path = tmp_path / "pty-pids.txt"
+        path.write_text(json.dumps(saved) + "\n")
+        with (
+            patch(f"{_PTY}._process_identity", return_value=saved),
+            patch(f"{_PTY}.os.kill") as kill,
+        ):
+            PtyManager(path)
+        kill.assert_called_once_with(saved["pid"], signal.SIGTERM)
+        assert path.read_text() == ""
+
+    @pytest.mark.parametrize(
+        "current",
+        [
+            None,
+            _identity(birth="Sat Sep 05 10:20:31 2026"),
+            _identity(command=["tmux", "attach-session", "-t", "other"]),
+            _identity(command=["python", "worker.py"]),
+        ],
+    )
+    def test_reused_missing_or_changed_process_never_signalled(self, tmp_path, current):
+        path = tmp_path / "pty-pids.txt"
+        path.write_text(json.dumps(_identity()) + "\n")
+        with (
+            patch(f"{_PTY}._process_identity", return_value=current),
+            patch(f"{_PTY}.os.kill") as kill,
+        ):
+            PtyManager(path)
+        kill.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "12345",
+            "garbage",
+            "[]",
+            "null",
+            "{}",
+            json.dumps(_identity(pid=0)),
+            json.dumps(_identity(pid=-1)),
+            json.dumps(_identity(pid=True)),
+            json.dumps(_identity(birth="")),
+            json.dumps(_identity(command=["python", "attach-session", "-t", "app"])),
+        ],
+    )
+    def test_legacy_and_malformed_records_never_inspected_or_signalled(self, tmp_path, line):
+        path = tmp_path / "pty-pids.txt"
+        path.write_text(line + "\n")
+        with (
+            patch(f"{_PTY}._process_identity") as inspect,
+            patch(f"{_PTY}.os.kill") as kill,
+        ):
+            PtyManager(path)
+        inspect.assert_not_called()
+        kill.assert_not_called()
+
+    def test_bad_line_does_not_hide_valid_record(self, tmp_path):
+        saved = _identity()
+        path = tmp_path / "pty-pids.txt"
+        path.write_text("broken\n12345\n" + json.dumps(saved) + "\n")
+        with (
+            patch(f"{_PTY}._process_identity", return_value=saved),
+            patch(f"{_PTY}.os.kill", side_effect=ProcessLookupError) as kill,
+        ):
+            PtyManager(path)
+        kill.assert_called_once_with(saved["pid"], signal.SIGTERM)
+
+    def test_record_and_unrecord_keep_other_process_identity(self, tmp_path):
+        from agent_backbone.services.terminal._pty import _record_pid, _unrecord_pid
+
+        path = tmp_path / "pty-pids.txt"
+        with patch(f"{_PTY}._process_identity", side_effect=[_identity(), _identity(pid=12346)]):
+            _record_pid(path, 12345, "app")
+            _record_pid(path, 12346, "app")
+        assert json.loads(path.read_text().splitlines()[0]) == _identity()
+        _unrecord_pid(path, 12345)
+        assert json.loads(path.read_text()) == _identity(pid=12346)
+
+    @pytest.mark.parametrize("identity", [None, _identity()])
+    def test_unverified_spawn_is_not_recorded(self, tmp_path, identity):
+        from agent_backbone.services.terminal._pty import _record_pid
+
+        path = tmp_path / "pty-pids.txt"
+        with patch(f"{_PTY}._process_identity", return_value=identity):
+            _record_pid(path, 12345, "different-session")
+        assert not path.exists()
+
+    def test_ps_reads_birth_and_full_attach_command(self):
+        from agent_backbone.services.terminal._pty import _process_identity
+
+        result = MagicMock(
+            returncode=0, stdout=" Sat Sep  5 10:20:30 2026 tmux attach-session -t =app:\n"
+        )
+        with patch(f"{_PTY}.subprocess.run", return_value=result) as run:
+            assert _process_identity(12345) == _identity(birth="Sat Sep 5 10:20:30 2026")
+        assert run.call_args.kwargs["timeout"] == 2
+        assert run.call_args.kwargs["env"]["LC_ALL"] == "C"
+        assert run.call_args.kwargs["env"]["TZ"] == "UTC"
+
+    @pytest.mark.parametrize("output", ["", "invalid", "Sat Sep 5 10:20:30 2026 tmux: client"])
+    def test_unverifiable_ps_output_is_ignored(self, output):
+        from agent_backbone.services.terminal._pty import _process_identity
+
+        with patch(f"{_PTY}.subprocess.run", return_value=MagicMock(returncode=0, stdout=output)):
+            assert _process_identity(12345) is None
+
+    def test_ps_failure_is_ignored(self):
+        from subprocess import TimeoutExpired
+
+        from agent_backbone.services.terminal._pty import _process_identity
+
+        for error in (OSError("no ps"), TimeoutExpired("ps", 2)):
+            with patch(f"{_PTY}.subprocess.run", side_effect=error):
+                assert _process_identity(12345) is None
 
 
 class TestPtySession:
@@ -53,7 +182,7 @@ class TestPtySession:
 
                         # Verify tmux attach command
                         call_args = mock_popen.call_args
-                        assert call_args[0][0] == ["tmux", "attach-session", "-t", "test-session"]
+                        assert call_args[0][0] == ["tmux", "attach-session", "-t", "=test-session:"]
                         assert call_args[1]["env"]["TERM"] == "xterm-256color"
 
                         # Cleanup runs _terminate_process in executor
@@ -148,6 +277,45 @@ class TestPtySession:
         PtySession._terminate_process(proc)
         proc.send_signal.assert_called_once_with(signal.SIGTERM)
         proc.kill.assert_called_once()
+
+
+class TestConcurrentPtyLifecycle:
+    @pytest.mark.parametrize("operation", ["create", "remove", "cleanup_all"])
+    async def test_replacement_cleanup_serializes_same_key_operations(self, operation):
+        manager = PtyManager()
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def paused_cleanup():
+            entered.set()
+            await release.wait()
+
+        old = MagicMock(cleanup=AsyncMock(side_effect=paused_cleanup))
+        manager._sessions[("sid", "app")] = old
+        created = []
+
+        def new_session(*args):
+            session = MagicMock(cleanup=AsyncMock())
+            created.append(session)
+            return session
+
+        with patch(f"{_PTY}.PtySession", side_effect=new_session):
+            first = asyncio.create_task(manager.create("sid", "app"))
+            await entered.wait()
+            action = getattr(manager, operation)
+            second = asyncio.create_task(
+                action() if operation == "cleanup_all" else action("sid", "app")
+            )
+            await asyncio.sleep(0)
+            assert not second.done()
+            assert not created
+            release.set()
+            await asyncio.gather(first, second)
+
+        created[0].cleanup.assert_awaited_once()
+        if operation == "create":
+            assert manager.get("sid", "app") is created[1]
+        else:
+            assert manager.get("sid", "app") is None
 
 
 class TestPtySessionReadLoop:

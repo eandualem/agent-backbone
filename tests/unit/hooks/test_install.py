@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
+
+import pytest
 
 from agent_backbone.hooks import install
 
@@ -53,6 +56,29 @@ class TestMerge:
 
 
 class TestHookFiles:
+    @pytest.mark.parametrize("fail", [False, True])
+    def test_shared_settings_remain_complete_until_atomic_replacement(self, tmp_path, fail):
+        path = tmp_path / "settings.json"
+        old, new = {"hooks": {"old": []}}, {"hooks": {"new": []}}
+        install.save_settings(path, old)
+        replace = install.os.replace
+
+        def inspect_before_replace(source, target):
+            assert json.loads(path.read_text()) == old
+            assert json.loads(source.read_text()) == new
+            if fail:
+                raise OSError("replacement failed")
+            replace(source, target)
+
+        with patch("agent_backbone.fs.os.replace", side_effect=inspect_before_replace):
+            if fail:
+                with pytest.raises(OSError):
+                    install.save_settings(path, new)
+            else:
+                install.save_settings(path, new)
+        assert json.loads(path.read_text()) == (old if fail else new)
+        assert list(tmp_path.iterdir()) == [path]
+
     def test_every_hook_file_is_copied_and_scripts_are_executable(self, tmp_path):
         hooks_dir = install.install_hook_files(tmp_path)
         assert hooks_dir == tmp_path / "hooks"

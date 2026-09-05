@@ -109,6 +109,7 @@ function record(t, event, state, reason, extra = {}) {
   const current = readCurrent(t);
   const now = Date.now() / 1000;
   const out = {
+    runtime: "opencode",
     state,
     reason: reason ?? null,
     issue: current.issue ?? null,

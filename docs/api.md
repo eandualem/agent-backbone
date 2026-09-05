@@ -16,7 +16,6 @@ with live state. Cached for 5 s.
   "name": "app", "session": "app", "configured": true,
   "runtime": "claude", "model": null, "dir": "/Users/me/code/app",
   "repo": "acme/app", "watches": ["acme/web"], "tags": [], "description": "",
-  "always_on": false, "unattended": false,
   "state": "busy", "reason": null, "current_issue": 42, "current_repo": "acme/app",
   "online": true, "plan_file": null, "plan_title": null,
   "tmux_created": "2026-08-31T12:00:00+00:00", "tmux_attached": false, "tmux_windows": 1,
@@ -29,6 +28,7 @@ with live state. Cached for 5 s.
 waiting, `quota` when blocked. `GET /api/agents/{name}/inspect` also carries
 `session_id` (the runtime's own) and `last_message` (the agent's last reply,
 clipped) when the runtime's hook reports them.
+The `always_on` and `unattended` settings are exposed by `GET /api/config/agents`.
 
 ### `POST /api/agents/start`
 
@@ -279,6 +279,15 @@ emits nothing (the monitor job re-checks once a minute).
 | `error` | `{message}` |
 
 There is deliberately no `input` event.
+
+On restart, orphaned terminal viewer processes are signalled only when their
+PID, recorded process start time and full tmux attach command still match.
+Legacy PID-only records, malformed records and processes whose identity cannot
+be read are skipped. The portable process check uses second-resolution start
+times; it is not an atomic process handle across the check and signal.
+Attachments use exact session names; an offline `app` never resolves to
+`app-2`. Replacing or removing the same viewer attachment waits for its
+previous PTY cleanup to finish.
 
 ```js
 const sio = io("http://127.0.0.1:7120/sessions", { auth: { api_key: KEY } });

@@ -437,7 +437,8 @@ class TestResumeBySessionId:
         command = start.await_args.kwargs["command"]
         assert command[command.index("--resume") + 1] == "01a0-old"
 
-    async def test_another_runtimes_session_id_is_not_handed_over(self, tmp_path):
+    @pytest.mark.parametrize("previous_runtime", ["claude", "opencode"])
+    async def test_another_runtimes_session_id_is_not_handed_over(self, tmp_path, previous_runtime):
         """The agent was switched from Claude to Codex: Claude's id means nothing to Codex."""
         config = bootstrap_config(tmp_path / "data")
         project = tmp_path / "project"
@@ -445,7 +446,7 @@ class TestResumeBySessionId:
         write_state_file(
             config.state_dir,
             "ike",
-            {"state": "unknown", "ts": 1.0, "session_id": "claude-sess", "runtime": "claude"},
+            {"state": "unknown", "ts": 1.0, "session_id": "old-sess", "runtime": previous_runtime},
         )
         spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
         with (
@@ -455,7 +456,7 @@ class TestResumeBySessionId:
         ):
             result = await start_agent(spec, config, resume=True, wait=False)
         assert start.await_args.kwargs["command"][1:3] == ["resume", "--last"]
-        assert any("belongs to claude" in line for line in result.evidence)
+        assert any(f"belongs to {previous_runtime}" in line for line in result.evidence)
 
     async def test_without_a_known_session_the_runtimes_own_resume_is_used(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
@@ -469,6 +470,40 @@ class TestResumeBySessionId:
         ):
             await start_agent(spec, config, resume=True, wait=False)
         assert start.await_args.kwargs["command"][1:3] == ["resume", "--last"]
+
+
+class TestStartupHookAuthority:
+    @pytest.mark.parametrize("state", ["busy", "blocked"])
+    async def test_fresh_working_hook_beats_visible_input_prompt(self, tmp_path, state):
+        write_state_file(tmp_path, "app", {"state": state, "ts": 100})
+        with (
+            patch(f"{_MOD}.session_exists", AsyncMock(return_value=True)),
+            patch(f"{_MOD}.capture_pane", AsyncMock(return_value="❯")),
+        ):
+            outcome, _ = await wait_until_ready(
+                "app", state_dir=tmp_path, runtime="claude", since=90, timeout=0
+            )
+        assert outcome == "timeout"
+
+    async def test_busy_then_idle_hook_completes_start(self, tmp_path):
+        from agent_backbone.services.agents.models import StateSnapshot
+
+        with (
+            patch(f"{_MOD}.session_exists", AsyncMock(return_value=True)),
+            patch(f"{_MOD}.capture_pane", AsyncMock(return_value="❯")),
+            patch(
+                f"{_MOD}.read_state_file",
+                side_effect=[
+                    StateSnapshot(AgentState.BUSY, timestamp=100),
+                    StateSnapshot(AgentState.IDLE, timestamp=101),
+                ],
+            ) as read,
+        ):
+            outcome, _ = await wait_until_ready(
+                "app", state_dir=tmp_path, runtime="claude", since=90, poll_interval=0
+            )
+        assert outcome == "ready"
+        assert read.call_count == 2
 
 
 class TestHookWiringReachesTheSession:

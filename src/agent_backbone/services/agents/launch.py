@@ -295,6 +295,11 @@ async def wait_until_ready(
         # from a quickly-restarted session would otherwise report ready before
         # the new runtime has emitted anything.
         snapshot = read_state_file(state_path, name)
+        hook_working = bool(
+            snapshot
+            and snapshot.timestamp >= wall_started
+            and snapshot.state in (AgentState.BUSY, AgentState.BLOCKED)
+        )
         if snapshot and snapshot.timestamp >= wall_started:
             if snapshot.state == AgentState.IDLE:
                 # Claude Code fires SessionStart with its resume picker still
@@ -310,7 +315,7 @@ async def wait_until_ready(
                 return "waiting_for_human", [f"hook reported waiting_for_human ({snapshot.reason})"]
 
         pane = await capture_pane(name, lines=60)
-        if pane:
+        if pane and not hook_working:
             last_pane = pane
             if rt.detect_waiting_for_human(pane):
                 clear_starting_marker(state_path, name)

@@ -521,8 +521,10 @@ class Runtime:
             return False
         return self.detect_prompt(pane_content) is not None
 
-    def prompt_has_pending_input(self, pane_content: str) -> bool:
-        """Whether the prompt currently contains buffered user input."""
+    def prompt_has_pending_input(
+        self, pane_content: str, *, include_envelope: bool = False
+    ) -> bool:
+        """Buffered input; delivery verification also counts backbone envelopes."""
         prompt_line = self.detect_prompt(pane_content)
         if not prompt_line:
             return False
@@ -555,7 +557,7 @@ class Runtime:
             if sanitized.startswith(prefix):
                 remainder = sanitized[len(prefix) :].lstrip()
                 break
-        return not remainder.startswith(ENVELOPE_PREFIX)
+        return include_envelope or not remainder.startswith(ENVELOPE_PREFIX)
 
     def _matches_prompt_line(self, line: str) -> bool:
         lowered = line.lower()
@@ -673,7 +675,7 @@ class Runtime:
         lowered = sanitize_pane_content(pane_content).lower()
         if any(marker in lowered for marker in self.queue_markers):
             return "queued"
-        if self.prompt_has_pending_input(pane_content):
+        if self.prompt_has_pending_input(pane_content, include_envelope=True):
             # Input left in the box while the runtime is working is queued by
             # runtimes that support it; otherwise it is simply unsent.
             if self.detect_busy(pane_content):
