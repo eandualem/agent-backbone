@@ -80,6 +80,7 @@ backbone swarm disband research  # manual teardown
 | `reviewer` | one reviewer on the default runtime |
 | `coordinator@claude/opus` | the coordinator (at most one; added automatically if omitted) |
 | `coordinator@codex/gpt-6-astra:high` | the coordinator on Codex at `high` reasoning effort |
+| `scout@opencode/google/gemini-3-flash-preview` | one scout on OpenCode; its models are named `provider/model`, and the runtime is what follows `@` |
 
 The effort rides on the model, so a roster can spend where the judgement
 is and stay cheap elsewhere — a coordinator that validates and implements

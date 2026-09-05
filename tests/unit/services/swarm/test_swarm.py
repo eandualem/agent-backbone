@@ -39,6 +39,12 @@ class TestRoster:
     def test_runtime_without_model(self):
         assert parse_member_spec("coder@codex") == MemberSpec(role="coder", runtime="codex")
 
+    def test_model_may_be_a_provider_path(self):
+        # OpenCode names models provider/model; the runtime is what follows "@".
+        assert parse_member_spec("scout@opencode/google/gemini-3.8-flash") == MemberSpec(
+            role="scout", runtime="opencode", model="google/gemini-3.8-flash"
+        )
+
     def test_model_may_carry_an_effort(self):
         # The roster keeps the spec whole; the runtime splits it at launch.
         assert parse_member_spec("coordinator@codex/gpt-6-astra:high") == MemberSpec(
