@@ -4,7 +4,7 @@ In-process tests share import state, so a circular import between two
 packages only shows up when one of them is imported first — exactly what a
 CLI entry point does. Spawn a fresh interpreter per entry module and read
 back which ``agent_backbone`` modules it pulled in: that is the layering
-CLAUDE.md describes, made executable.
+AGENTS.md describes, made executable.
 """
 
 from __future__ import annotations
@@ -116,7 +116,7 @@ def _loaded(module: str) -> list[str]:
     return result.stdout.split()
 
 
-# The layering CLAUDE.md describes, as an allowed-import set per package.
+# The layering AGENTS.md describes, as an allowed-import set per package.
 # Function-local imports count (they are still edges); imports under
 # ``if TYPE_CHECKING:`` do not. A package may always import itself.
 _LEAVES = {

@@ -18,6 +18,10 @@ coverage_html/
 *.db
 *.db-journal
 
+# Backbone-local, never shared: swarm worktrees and the agents' shared memory
+# (.backbone/memory — see AGENTS.md)
+.backbone/
+
 # Editors / OS
 .idea/
 .vscode/
