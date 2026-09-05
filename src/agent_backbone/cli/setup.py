@@ -185,16 +185,26 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
         installed = "installed" if rt.available() else "not found"
         models = ", ".join(rt.models) if rt.models else "use the CLI's own model picker"
         efforts = ", ".join(rt.efforts) if rt.efforts else "-"
+        if rt.unattended_args:
+            wall = "sandboxed" if rt.sandboxed else "no sandbox"
+            unattended = f"{' '.join(rt.unattended_args)} ({wall})"
+        else:
+            unattended = "-"
         print(
             f"  {rt.id:<10s} {rt.display_name:<12s} {installed:<10s} "
             f"state: {rt.reports_state:<17s} models: {models}"
         )
         print(f"  {'':<10s} {'':<12s} {'':<10s} effort: {efforts}")
+        print(f"  {'':<10s} {'':<12s} {'':<10s} unattended: {unattended}")
     print("\nA plain model id is passed to the CLI verbatim; these are examples, not a")
     print("complete list. Effort rides on the model as `model:effort` (e.g.")
     print("`gpt-6-astra:high`), so every surface that names a model can name an effort:")
     print("`--model`, `agent set model=…`, and a roster entry `coordinator@codex/…:high`.")
     print("Such a spec is split: the CLI gets the bare model plus its own effort switch.")
+    print("`unattended` is the switch an `unattended=true` agent is launched with (its")
+    print("runtime then never asks a person). `sandboxed` means an OS sandbox still")
+    print("confines it to its directory; `no sandbox` means trust on the machine. `-`:")
+    print("the backbone refuses to start that runtime unattended rather than guess.")
     return 0
 
 

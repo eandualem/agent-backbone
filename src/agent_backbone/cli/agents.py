@@ -310,7 +310,8 @@ async def _agent(args: argparse.Namespace) -> int:
                 print(f"expected key=value, got {item!r}")
                 return 1
             key, raw = item.split("=", 1)
-            changes[key] = _common.parse_value(raw) if key in ("tags", "env", "always_on") else raw
+            json_keys = ("tags", "env", "always_on", "unattended")
+            changes[key] = _common.parse_value(raw) if key in json_keys else raw
         if api_up:
             result = await _common.api(boot, "PATCH", f"/api/agents/{args.name}", json_body=changes)
             if result and result[0] == 200:

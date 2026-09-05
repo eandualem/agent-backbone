@@ -52,6 +52,11 @@ class ClaudeCode(Runtime):
     # `claude --effort <level>`; levels as Claude Code itself lists them when
     # it rejects an unknown one (live capture).
     efforts = ("low", "medium", "high", "xhigh", "max")
+    # "--dangerously-skip-permissions  Bypass all permission checks." No OS
+    # sandbox behind it: trust on the machine. Claude Code asks once per
+    # machine to accept bypass mode; that first dialog shows as
+    # `waiting_for_human` and is answered by hand.
+    unattended_args = ("--dangerously-skip-permissions",)
 
     hook_script = "claude_hook.py"
     # An empty matcher means every tool; None omits the matcher.

@@ -71,6 +71,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "agents.default_runtime": "claude",
     "agents.pre_trust": True,
     "agents.inject_brief": True,
+    "agents.writable_dirs": [],
     "github.intake": "auto",  # auto | webhook | poll | off
     "github.poll_interval_seconds": 60,
     "github.backfill_on_start": True,
@@ -99,6 +100,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "security.allow_remote_plan_control": False,
     "security.allow_remote_approval": True,
     "security.allow_unauthenticated": False,
+    "swarm.unattended_members": True,
 }
 
 SETTINGS_HELP: dict[str, str] = {
@@ -119,6 +121,10 @@ SETTINGS_HELP: dict[str, str] = {
     ),
     "agents.inject_brief": (
         "Give each agent the backbone's brief at launch (system prompt or initial prompt)"
+    ),
+    "agents.writable_dirs": (
+        "Directories outside an agent's own that a sandboxed runtime (Codex) may also "
+        "write to, e.g. a package cache such as ~/.cache/uv (JSON list)"
     ),
     "github.intake": "auto | webhook | poll | off — how GitHub events arrive",
     "github.poll_interval_seconds": "Poll frequency when intake resolves to poll",
@@ -152,6 +158,10 @@ SETTINGS_HELP: dict[str, str] = {
         "Allow `agent approve` to answer a visible permission prompt via the API"
     ),
     "security.allow_unauthenticated": "Serve the API without an API key (dev only)",
+    "swarm.unattended_members": (
+        "Register members on a sandboxed runtime (Codex) as unattended: free inside "
+        "their worktree, never a permission dialog; members without a sandbox keep asking"
+    ),
 }
 
 
@@ -275,6 +285,14 @@ class AgentSpec:
     """Expected to stay up: a dead session is reported the moment it is
     noticed. Off by default — agents come and go, and the humans hear about
     an absent agent only when messages are waiting for it."""
+    unattended: bool = False
+    """Launched with the runtime's own no-approval switch, so it never parks
+    on a permission dialog. Behind a sandbox (Codex: ``-a never``, the
+    workspace-write sandbox kept) that is freedom inside its directory;
+    without one (OpenCode ``--auto``, Claude Code
+    ``--dangerously-skip-permissions``, Gemini ``--approval-mode yolo``) it
+    is trust on the machine. Off by default; sandboxed swarm members get it
+    from ``swarm.unattended_members``."""
 
     @property
     def path(self) -> Path:
@@ -397,6 +415,7 @@ class LaunchConfig:
     default_runtime: str = "claude"
     pre_trust: bool = True
     inject_brief: bool = True
+    writable_dirs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -471,6 +490,14 @@ class SecurityConfig:
     allow_unauthenticated: bool = False
 
 
+@dataclass(frozen=True)
+class SwarmConfig:
+    """``swarm.*`` — how swarm members are registered."""
+
+    unattended_members: bool = True
+    """Members on a sandboxed runtime never ask; the rest keep their dialogs."""
+
+
 # ---------------------------------------------------------------------------
 # Top-level
 # ---------------------------------------------------------------------------
@@ -499,6 +526,7 @@ class BackboneConfig:
     priority: PriorityConfig = field(default_factory=PriorityConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    swarm: SwarmConfig = field(default_factory=SwarmConfig)
     database_url_override: str = ""
     """``BACKBONE_DATABASE_URL`` when set (PostgreSQL); empty means SQLite in the data dir."""
     settings: dict[str, Any] = field(default_factory=dict)
@@ -668,6 +696,7 @@ def build_config(
             default_runtime=s["agents.default_runtime"],
             pre_trust=s["agents.pre_trust"],
             inject_brief=s["agents.inject_brief"],
+            writable_dirs=tuple(str(d) for d in s["agents.writable_dirs"]),
         ),
         github=GitHubConfig(
             intake=s["github.intake"],
@@ -713,6 +742,7 @@ def build_config(
                 or bool(s["security.allow_unauthenticated"])
             ),
         ),
+        swarm=SwarmConfig(unattended_members=bool(s["swarm.unattended_members"])),
         settings=s,
     )
 
@@ -732,5 +762,6 @@ def agents_from_rows(rows: list[dict]) -> AgentsConfig:
             env=dict(row.get("env") or {}),
             description=row.get("description") or "",
             always_on=bool(row.get("always_on")),
+            unattended=bool(row.get("unattended")),
         )
     return AgentsConfig(specs=specs)

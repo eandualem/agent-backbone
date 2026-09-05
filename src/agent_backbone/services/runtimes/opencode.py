@@ -34,6 +34,10 @@ class OpenCode(Runtime):
     # with "Allow once" preselected (live capture, 1.18).
     prompt_markers = ("permission required", "allow once", "allow always")
     approve_keys = ("Enter",)
+    # "--auto  auto-approve permissions that are not explicitly denied"
+    # (opencode 1.18 TUI); a `permission` deny in the user's config still
+    # holds. OpenCode has no OS sandbox: this is trust on the machine.
+    unattended_args = ("--auto",)
 
     def hook_settings(self, data_dir, state_dir, *, python=None):
         raise RuntimeError("OpenCode state comes from a plugin, not a command hook")

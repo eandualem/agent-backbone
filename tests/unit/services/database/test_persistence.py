@@ -691,3 +691,24 @@ class TestAgentAlwaysOn:
         assert by_name["vital"]["always_on"] is True
         agents = agents_from_rows(rows)
         assert agents.get("vital").always_on and not agents.get("quiet").always_on
+
+    async def test_unattended_round_trips_and_defaults_off(self, db):
+        from agent_backbone.config import agents_from_rows
+
+        common = {
+            "dir": "/tmp/a",
+            "runtime": "codex",
+            "model": None,
+            "repo": "",
+            "tags": [],
+            "env": {},
+            "description": "",
+        }
+        await db.agents.upsert("asks", **common)
+        await db.agents.upsert("free", unattended=True, **common)
+        rows = await db.agents.list()
+        by_name = {row["name"]: row for row in rows}
+        assert by_name["asks"]["unattended"] is False
+        assert by_name["free"]["unattended"] is True
+        agents = agents_from_rows(rows)
+        assert agents.get("free").unattended and not agents.get("asks").unattended

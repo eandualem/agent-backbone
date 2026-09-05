@@ -140,6 +140,7 @@ class AgentStore:
             env=dict(existing.env) if existing else {},
             description=existing.description if existing else "",
             always_on=existing.always_on if existing else False,
+            unattended=existing.unattended if existing else False,
         )
 
     async def register(self, spec: AgentSpec) -> AgentSpec:
@@ -154,6 +155,7 @@ class AgentStore:
             env=dict(spec.env),
             description=spec.description,
             always_on=spec.always_on,
+            unattended=spec.unattended,
         )
         for repo in spec.watches:
             await self._db.agents.add_watch(spec.name, repo)
@@ -162,11 +164,21 @@ class AgentStore:
 
     async def update(self, name: str, **changes) -> AgentSpec:
         """Change fields on a known agent (dir, runtime, model, repo, tags, env,
-        description, always_on)."""
+        description, always_on, unattended)."""
         current = self._agents.get(name)
         if current is None:
             raise KeyError(name)
-        allowed = {"dir", "runtime", "model", "repo", "tags", "env", "description", "always_on"}
+        allowed = {
+            "dir",
+            "runtime",
+            "model",
+            "repo",
+            "tags",
+            "env",
+            "description",
+            "always_on",
+            "unattended",
+        }
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}")
@@ -179,12 +191,14 @@ class AgentStore:
             "env": dict(current.env),
             "description": current.description,
             "always_on": current.always_on,
+            "unattended": current.unattended,
         }
         merged.update(changes)
         if "tags" in changes:
             merged["tags"] = tuple(changes["tags"])
-        if "always_on" in changes:
-            merged["always_on"] = bool(changes["always_on"])
+        for flag in ("always_on", "unattended"):
+            if flag in changes:
+                merged[flag] = bool(changes[flag])
         spec = AgentSpec(name=name, watches=current.watches, **merged)
         return await self.register(spec)
 

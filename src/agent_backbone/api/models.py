@@ -94,6 +94,7 @@ class AgentUpdateRequest(BaseModel):
     env: dict[str, str] | None = None
     description: str | None = None
     always_on: bool | None = None
+    unattended: bool | None = None
 
 
 class WatchRequest(BaseModel):
@@ -436,6 +437,7 @@ class AgentConfigResponse(BaseModel):
     tags: list[str] = Field(default_factory=list)
     description: str = ""
     always_on: bool = False
+    unattended: bool = False
 
     @classmethod
     def from_spec(cls, spec: AgentSpec) -> AgentConfigResponse:
@@ -449,4 +451,5 @@ class AgentConfigResponse(BaseModel):
             tags=list(spec.tags),
             description=spec.description,
             always_on=spec.always_on,
+            unattended=spec.unattended,
         )

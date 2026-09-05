@@ -16,6 +16,7 @@ def _row_to_agent(row, watches: list[str]) -> dict:
     data["env"] = json.loads(data.get("env") or "{}")
     data["watches"] = watches
     data["always_on"] = bool(data.get("always_on"))
+    data["unattended"] = bool(data.get("unattended"))
     return data
 
 
@@ -48,6 +49,7 @@ class AgentRepo(Repo):
         env: dict[str, str],
         description: str,
         always_on: bool = False,
+        unattended: bool = False,
     ) -> None:
         async with self._tx() as conn:
             now = now_iso()
@@ -55,9 +57,9 @@ class AgentRepo(Repo):
                 text(
                     """INSERT INTO agents
                        (name, dir, runtime, model, repo, tags, env, description,
-                        always_on, created_at, updated_at)
+                        always_on, unattended, created_at, updated_at)
                        VALUES (:name, :dir, :runtime, :model, :repo, :tags, :env,
-                               :description, :always_on, :now, :now)
+                               :description, :always_on, :unattended, :now, :now)
                        ON CONFLICT(name) DO UPDATE SET
                          dir = excluded.dir,
                          runtime = excluded.runtime,
@@ -67,6 +69,7 @@ class AgentRepo(Repo):
                          env = excluded.env,
                          description = excluded.description,
                          always_on = excluded.always_on,
+                         unattended = excluded.unattended,
                          updated_at = excluded.updated_at"""
                 ),
                 {
@@ -79,6 +82,7 @@ class AgentRepo(Repo):
                     "env": json.dumps(dict(env)),
                     "description": description,
                     "always_on": 1 if always_on else 0,
+                    "unattended": 1 if unattended else 0,
                     "now": now,
                 },
             )

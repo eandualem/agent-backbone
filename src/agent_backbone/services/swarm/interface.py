@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from agent_backbone.config import AgentSpec
 from agent_backbone.services.agents import start_agent
 from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
     member_names,
@@ -45,6 +46,12 @@ _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
 
 class SwarmError(Exception):
     """A swarm operation failed for a reason the caller should show verbatim."""
+
+
+def _sandboxed(runtime: str) -> bool:
+    """Whether ``runtime`` confines its commands to the agent's directory."""
+    rt = RUNTIMES.get(runtime)
+    return rt is not None and rt.sandboxed
 
 
 @dataclass
@@ -234,6 +241,11 @@ async def create_swarm(
                 model=spec.model,
                 repo=repo,
                 tags=(f"swarm:{name}", f"role:{spec.role}"),
+                # A member parked on a dialog stalls the whole swarm, so a
+                # member whose runtime confines it to the worktree never asks.
+                # One without a sandbox keeps asking: unattended there would
+                # be trust on the machine, the owner's call per agent.
+                unattended=config.swarm.unattended_members and _sandboxed(runtime),
             )
             await store.register(agent)
             # The role brief replaces the common backbone brief: at launch

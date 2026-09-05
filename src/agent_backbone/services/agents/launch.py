@@ -182,6 +182,8 @@ async def start_agent(
             pre_trust=section.pre_trust,
             data_dir=config.data_dir,
             state_dir=config.state_dir,
+            unattended=spec.unattended,
+            writable_dirs=section.writable_dirs,
         )
     except RuntimeError as exc:
         log.error("Cannot start agent '%s': %s", spec.name, exc)
@@ -214,6 +216,8 @@ async def start_agent(
         clear_starting_marker(config.state_dir, spec.name)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
     extra = f", model: {effective_model}" if effective_model else ""
+    if spec.unattended:
+        extra += ", unattended"
     log.info("Agent '%s' started (runtime: %s%s)", spec.name, rt.id, extra)
 
     ready, evidence = "not_waited", []
