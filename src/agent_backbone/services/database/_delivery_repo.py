@@ -185,6 +185,24 @@ class DeliveryRepo(Repo):
             )
             return [dict(row._mapping) for row in result.fetchall()]
 
+    async def retire(self, delivery_id: int, outcome: str) -> None:
+        """Keep a failure's history but remove terminal work from the retry window.
+
+        Only retryable attempts can change; an overlapping successful delivery
+        or another retirement must never be overwritten.
+        """
+        if outcome not in {"acknowledged", "no_repo", "issue_closed", "no_longer_targeted"}:
+            raise ValueError(f"Not a terminal retry outcome: {outcome}")
+        placeholders = ",".join(f"'{o.value}'" for o in sorted(RETRYABLE_OUTCOMES))
+        async with self._tx() as conn:
+            await conn.execute(
+                text(
+                    f"UPDATE deliveries SET outcome = :outcome "
+                    f"WHERE id = :id AND kind = 'issue' AND outcome IN ({placeholders})"
+                ),
+                {"id": delivery_id, "outcome": outcome},
+            )
+
     async def prune(
         self,
         retention_days: int = 30,

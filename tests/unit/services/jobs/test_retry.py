@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from agent_backbone.config import AgentsConfig, AgentSpec
+from agent_backbone.models import IssueData, ParsedLabels
 from agent_backbone.services.jobs.retry import delivery_retry, drain_message_queue, retry_delivery
 from tests.conftest import TEST_REPO, make_config
 from tests.support import queue_row
@@ -56,7 +59,9 @@ class TestRetryDeliveryAckCheck:
             outcome="offline",
             repo=TEST_REPO,
         )
-        mock_issue = MagicMock(state="open", repo_full_name=TEST_REPO)
+        mock_issue = IssueData(
+            number=154, title="Work", repo_full_name=TEST_REPO, labels=ParsedLabels(targets=["ike"])
+        )
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
         mock_deliver.return_value = "delivered"
@@ -98,10 +103,10 @@ class TestRetryDeliveryAckCheck:
             outcome="offline",
             repo="acme/backbone",
         )
-        mock_issue = MagicMock(state="open", repo_full_name="acme/backbone")
+        mock_issue = IssueData(number=77, title="Work", repo_full_name="acme/backbone")
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
-        mock_gh.list_issues = AsyncMock(return_value=[MagicMock(number=77)])
+        mock_gh.list_issues = AsyncMock(return_value=[mock_issue])
         mock_deliver.return_value = "delivered"
         delivery = {
             "session_name": "backbone",
@@ -116,7 +121,14 @@ class TestRetryDeliveryAckCheck:
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_retry_maps_busy_outcomes(self, mock_deliver, db, config):
         mock_gh = AsyncMock()
-        mock_gh.get_issue = AsyncMock(return_value=MagicMock(state="open", repo_full_name=""))
+        mock_gh.get_issue = AsyncMock(
+            return_value=IssueData(
+                number=88,
+                title="Work",
+                repo_full_name=TEST_REPO,
+                labels=ParsedLabels(targets=["ike"]),
+            )
+        )
         delivery = {
             "session_name": "ike",
             "issue_number": 88,
@@ -331,9 +343,181 @@ class TestDeliveryRetryQueueDrain:
 
 
 class TestDrainKeepsTheRowIdentity:
+    async def test_aged_blocked_direct_message_keeps_one_row_then_delivers_once(self, config, db):
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import text
+
+        from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+        original = "[via:backbone from:alice] status?"
+        await db.queue.enqueue(
+            session_name="ike", message=original, delivery_kind="direct_message", sender="alice"
+        )
+        profile = SessionProfile(session_name="ike", intelligence=SessionIntelligence.AGENT_WORKING)
+        with patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=profile),
+        ):
+            for minutes in (3, 4, 5):
+                async with db.engine.begin() as conn:
+                    await conn.execute(
+                        text("UPDATE message_queue SET enqueued_at = :t"),
+                        {"t": (datetime.now(UTC) - timedelta(minutes=minutes)).isoformat()},
+                    )
+                await drain_message_queue(config, db, None, active_sessions={"ike"})
+                assert await db.queue.pending_count("ike") == 1
+                assert (await queue_row(db, 1))["message"] == original
+        ready = SessionProfile(session_name="ike", intelligence=SessionIntelligence.READY)
+        with (
+            patch(
+                "agent_backbone.services.routing._delivery.get_session_intelligence",
+                AsyncMock(return_value=ready),
+            ),
+            patch(
+                "agent_backbone.services.routing._delivery.send_message",
+                AsyncMock(return_value=True),
+            ) as send,
+        ):
+            await drain_message_queue(config, db, None, active_sessions={"ike"})
+            await drain_message_queue(config, db, None, active_sessions={"ike"})
+        send.assert_awaited_once()
+        assert "(queued 5 min ago)" in send.await_args.args[1]
+
+    async def test_concurrent_drains_do_not_pass_a_blocked_batch(self, config, db):
+        import asyncio
+
+        entered, release = asyncio.Event(), asyncio.Event()
+        for number in range(6):
+            await db.queue.enqueue(
+                session_name="ike", message=str(number), delivery_kind="direct_message"
+            )
+
+        async def blocked(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return "agent_working"
+
+        with patch(
+            "agent_backbone.services.jobs.retry.safe_deliver", AsyncMock(side_effect=blocked)
+        ) as send:
+            first = asyncio.create_task(
+                drain_message_queue(config, db, None, active_sessions={"ike"})
+            )
+            await entered.wait()
+            try:
+                await asyncio.wait_for(
+                    drain_message_queue(config, db, None, active_sessions={"ike"}), timeout=1
+                )
+                send.assert_awaited_once()
+            finally:
+                release.set()
+                await first
+        assert await db.queue.pending_count("ike") == 6
+
+    async def test_cancelled_drain_releases_its_batch(self, config, db):
+        import asyncio
+
+        entered = asyncio.Event()
+        await db.queue.enqueue(session_name="ike", message="first", delivery_kind="direct_message")
+
+        async def blocked(*args, **kwargs):
+            entered.set()
+            await asyncio.Event().wait()
+
+        with patch(
+            "agent_backbone.services.jobs.retry.safe_deliver", AsyncMock(side_effect=blocked)
+        ):
+            task = asyncio.create_task(
+                drain_message_queue(config, db, None, active_sessions={"ike"})
+            )
+            await entered.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert await db.queue.pending_count("ike") == 1
+        with patch(
+            "agent_backbone.services.jobs.retry.safe_deliver", AsyncMock(return_value="delivered")
+        ):
+            assert (await drain_message_queue(config, db, None, active_sessions={"ike"}))[
+                "queue_delivered"
+            ] == 1
+
+    @pytest.mark.parametrize(
+        "state, targets, sender",
+        [
+            ("open", ["feynman"], "leo"),
+            ("closed", ["ike"], "leo"),
+            ("open", ["ike"], "ike"),
+        ],
+    )
+    async def test_stale_issue_is_cleared_on_retry_and_drain(
+        self, config, db, state, targets, sender
+    ):
+        await db.queue.enqueue(
+            session_name="ike",
+            message="Old work",
+            repo=TEST_REPO,
+            issue_number=7,
+            target_entity="ike",
+            delivery_kind="issue",
+        )
+        gh = AsyncMock()
+        gh.get_issue.return_value = IssueData(
+            number=7,
+            title="Current work",
+            state=state,
+            repo_full_name=TEST_REPO,
+            labels=ParsedLabels(targets=targets, sender=sender),
+        )
+        with patch("agent_backbone.services.jobs.retry.safe_deliver", AsyncMock()) as send:
+            status = await retry_delivery(
+                config,
+                {
+                    "session_name": "ike",
+                    "target_entity": "ike",
+                    "repo": TEST_REPO,
+                    "issue_number": 7,
+                },
+                db,
+                gh,
+            )
+            summary = await drain_message_queue(config, db, gh, active_sessions={"ike"})
+        assert status == ("issue_closed" if state == "closed" else "no_longer_targeted")
+        assert summary == {"queue_cleared": 1}
+        send.assert_not_awaited()
+        assert await db.queue.pending_count("ike") == 0
+
+    async def test_explicit_target_outside_tracked_queue_is_still_retried(self, config, db):
+        gh = AsyncMock()
+        gh.get_issue.return_value = IssueData(
+            number=7,
+            title="External work",
+            repo_full_name="elsewhere/repo",
+            labels=ParsedLabels(targets=["ike"]),
+        )
+        gh.list_issues.return_value = []
+        with patch(
+            "agent_backbone.services.jobs.retry.safe_deliver", AsyncMock(return_value="delivered")
+        ):
+            assert (
+                await retry_delivery(
+                    config,
+                    {
+                        "session_name": "ike",
+                        "target_entity": "ike",
+                        "repo": "elsewhere/repo",
+                        "issue_number": 7,
+                    },
+                    db,
+                    gh,
+                )
+                == "retried"
+            )
+
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     @patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock)
-    async def test_blocked_comment_is_reoffered_under_its_comment_id(
+    async def test_blocked_comment_keeps_its_existing_row(
         self, mock_list_sessions, mock_deliver, db, config
     ):
         """A leased comment row that is still blocked must fold back into itself —
@@ -355,7 +539,8 @@ class TestDrainKeepsTheRowIdentity:
 
         kwargs = mock_deliver.await_args.kwargs
         assert kwargs["sender"] == "leo"
-        assert kwargs["source_key"] == f"comment:{TEST_REPO}#7:100"
+        assert kwargs["requeue"] is False
+        assert await db.queue.pending_count("ike") == 1
 
     async def test_reoffer_of_a_leased_row_never_adds_a_second_one(self, db):
         first = await db.queue.enqueue(
@@ -515,23 +700,7 @@ class TestIssueRedeliveryRegression:
         assert 300 not in [r["issue_number"] for r in await db.deliveries.failed()]
 
 
-class TestOutcomeQueues:
-    def test_direct_message_queues_on_every_block(self):
-        from agent_backbone.services.routing._delivery import outcome_queues
-
-        blocked = ("offline", "waiting_for_human", "agent_working", "human_typing", "settling")
-        for outcome in blocked:
-            assert outcome_queues(outcome, "direct_message") is True
-        assert outcome_queues("delivery_failed", "direct_message") is True
-        assert outcome_queues("delivered", "direct_message") is False
-
-    def test_issue_kind_queues_only_offline(self):
-        from agent_backbone.services.routing._delivery import outcome_queues
-
-        assert outcome_queues("offline", "issue") is True
-        assert outcome_queues("agent_working", "issue") is False
-        assert outcome_queues("already_delivered", "issue") is False
-
+class TestQueuedAge:
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_a_long_queued_message_is_delivered_with_its_age(self, mock_deliver, db, config):
         await db.queue.enqueue(

@@ -348,8 +348,13 @@ class GitHubClient:
         per_page: int = 50,
         *,
         repo_full_name: str,
+        all_pages: bool = False,
     ) -> list[IssueData]:
-        """Issues (PRs excluded) filtered by state and labels, in GitHub's order."""
+        """Issues (PRs excluded) in GitHub's order; one page unless ``all_pages``.
+
+        Internal work queues need every page before sorting and filtering;
+        interactive callers keep the bounded default.
+        """
         params: dict[str, str | int] = {
             "state": state,
             "sort": "created",
@@ -359,10 +364,16 @@ class GitHubClient:
         if labels:
             params["labels"] = ",".join(labels)
 
-        resp = await self._request("GET", "/issues", repo_full_name=repo_full_name, params=params)
+        if all_pages:
+            items = await self._request_all("/issues", repo_full_name=repo_full_name, params=params)
+        else:
+            resp = await self._request(
+                "GET", "/issues", repo_full_name=repo_full_name, params=params
+            )
+            items = resp.json()
         return [
             self._build_issue(item, repo_full_name=repo_full_name)
-            for item in resp.json()
+            for item in items
             if "pull_request" not in item
         ]
 
