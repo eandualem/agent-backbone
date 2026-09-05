@@ -124,6 +124,11 @@ class TestBriefs:
         brief = render_brief("cartographer", {"role": "cartographer"})
         assert "Your role: cartographer" in brief
 
+    def test_coordinator_waits_for_kickoff(self):
+        brief = render_brief("coordinator", {"swarm_name": "research"})
+        assert "Before assigning work, wait for" in brief
+        assert "[via:backbone swarm:research] Your\nswarm is live" in brief
+
     def test_data_dir_override_wins(self, tmp_path):
         override = tmp_path / "swarm-templates"
         override.mkdir()
@@ -203,6 +208,16 @@ class TestCreateSwarm:
         gh = AsyncMock()
         gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="Do the research"))
 
+        async def start_with_registered_roster(*args, **kwargs):
+            assert {s.name for s in store.registered} == {
+                "research-coordinator",
+                "research-scout-1",
+                "research-scout-2",
+            }
+            return _STARTED
+
+        mock_start.side_effect = start_with_registered_roster
+
         result = await create_swarm(
             config,
             db,
@@ -223,8 +238,13 @@ class TestCreateSwarm:
         # Members registered in the shared worktree with swarm tags.
         assert all(s.dir == str(worktree) for s in store.registered)
         assert "swarm:research" in store.registered[0].tags
+        assert [call.args[0].name for call in mock_start.await_args_list] == [
+            "research-scout-1",
+            "research-scout-2",
+            "research-coordinator",
+        ]
         # Every member is started with its role brief.
-        launch = mock_start.await_args_list[0].kwargs
+        launch = mock_start.await_args_list[-1].kwargs
         assert launch["brief_file"] is not None
         brief = Path(launch["brief_file"]).read_text()
         assert "research-coordinator" in brief and "acme/app" in brief
@@ -258,12 +278,13 @@ class TestCreateSwarm:
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
-    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, side_effect=[_STARTED, _FAILED])
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock)
     @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
     @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
+    @pytest.mark.parametrize("occupied", [False, True])
     async def test_failed_member_start_rolls_back(
         self,
         _git,
@@ -276,6 +297,7 @@ class TestCreateSwarm:
         mock_rm,
         db,
         tmp_path,
+        occupied,
     ):
         config, repo_dir = _swarm_config(tmp_path)
         worktree = repo_dir / ".backbone" / "swarms" / "research"
@@ -284,7 +306,11 @@ class TestCreateSwarm:
         gh = AsyncMock()
         gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
 
-        with pytest.raises(SwarmError, match="failed to start"):
+        _start.side_effect = [
+            _STARTED,
+            StartResult(ok=True, already_running=True) if occupied else _FAILED,
+        ]
+        with pytest.raises(SwarmError, match="became occupied" if occupied else "failed to start"):
             await create_swarm(
                 config,
                 db,
@@ -296,8 +322,14 @@ class TestCreateSwarm:
                 initiator="simon",
             )
 
-        mock_rm.assert_awaited_once()
-        assert store.registered == []  # all rolled back
+        mock_stop.assert_awaited_once_with("research-scout")
+        _deliver.assert_not_awaited()
+        if occupied:
+            mock_rm.assert_not_awaited()
+            assert [agent.name for agent in store.registered] == ["research-coordinator"]
+        else:
+            mock_rm.assert_awaited_once()
+            assert store.registered == []  # all rolled back
         assert (await db.swarms.get("research"))["status"] == "disbanded"
 
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
