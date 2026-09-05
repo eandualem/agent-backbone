@@ -318,6 +318,10 @@ class Runtime:
         if self.brief_mode in ("message", "none"):
             brief = None
         model_id, effort = split_model_effort(model)
+        if effort and not model_id:
+            # `:high` would otherwise pass validation and launch the CLI's
+            # default model — a spec that names an effort must name a model.
+            raise RuntimeError(f"model spec '{model}' names an effort but no model")
         self.check_effort(effort)
         return [
             resolved,

@@ -185,10 +185,11 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
             f"state: {rt.reports_state:<17s} models: {models}"
         )
         print(f"  {'':<10s} {'':<12s} {'':<10s} effort: {efforts}")
-    print("\n`--model` is passed to the CLI verbatim; these are examples, not a complete list.")
-    print("Effort rides on the model as `model:effort` (e.g. `gpt-6-astra:high`), so every")
-    print("surface that names a model can name an effort: `--model`, `agent set model=…`,")
-    print("and a swarm roster entry `coordinator@codex/gpt-6-astra:high`.")
+    print("\nA plain model id is passed to the CLI verbatim; these are examples, not a")
+    print("complete list. Effort rides on the model as `model:effort` (e.g.")
+    print("`gpt-6-astra:high`), so every surface that names a model can name an effort:")
+    print("`--model`, `agent set model=…`, and a roster entry `coordinator@codex/…:high`.")
+    print("Such a spec is split: the CLI gets the bare model plus its own effort switch.")
     return 0
 
 

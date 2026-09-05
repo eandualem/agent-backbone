@@ -342,6 +342,11 @@ class TestEffort:
                 model="gpt-6-astra:ultra"
             )
 
+    def test_an_effort_without_a_model_is_refused(self):
+        # ":high" would otherwise launch the CLI's own default model.
+        with _resolve("/bin/codex"), pytest.raises(RuntimeError, match="no model"):
+            RUNTIMES["codex"].build_command(model=":high")
+
     def test_a_runtime_without_an_effort_setting_refuses_rather_than_dropping_it(self):
         with _resolve("/bin/gemini"), pytest.raises(RuntimeError, match="no effort setting"):
             RUNTIMES["gemini"].build_command(model="gemini-3-pro:high")
