@@ -324,7 +324,9 @@ class GitHubClient:
         empty list is a real answer and callers act on it)."""
         url = f"/issues/{issue_number}/sub_issues"
         try:
-            resp = await self._request("GET", url, repo_full_name=repo_full_name)
+            items = await self._request_all(
+                url, repo_full_name=repo_full_name, params={"per_page": 100}
+            )
         except httpx.HTTPStatusError as exc:
             log.warning("Failed to fetch sub-issues for #%d: %s", issue_number, exc)
             return None
@@ -332,7 +334,7 @@ class GitHubClient:
             log.warning("Timeout fetching sub-issues for #%d", issue_number)
             return None
 
-        return [self._build_issue(item, repo_full_name=repo_full_name) for item in resp.json()]
+        return [self._build_issue(item, repo_full_name=repo_full_name) for item in items]
 
     async def get_issue(self, issue_number: int, repo_full_name: str) -> IssueData:
         """Get a single issue by number."""

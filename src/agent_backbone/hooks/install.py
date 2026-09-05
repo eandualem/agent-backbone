@@ -17,6 +17,7 @@ import os
 import shlex
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 HOOK_MARKER = "agent-backbone"
@@ -46,11 +47,17 @@ def install_hook_files(data_dir: Path) -> Path:
         target = hooks_dir / name
         # Every agent launch re-installs; a running agent's hook may fire
         # mid-copy, so the live file is only ever replaced whole.
-        tmp = hooks_dir / f".{name}.{os.getpid()}.tmp"
-        shutil.copyfile(hook_source(name), tmp)
-        if name.endswith(".py"):
-            tmp.chmod(0o755)
-        os.replace(tmp, target)
+        fd, tmp_name = tempfile.mkstemp(dir=hooks_dir, prefix=f".{name}.")
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "wb") as out, open(hook_source(name), "rb") as src:
+                shutil.copyfileobj(src, out)
+            if name.endswith(".py"):
+                tmp.chmod(0o755)
+            os.replace(tmp, target)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
     return hooks_dir
 
 

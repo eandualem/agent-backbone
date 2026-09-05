@@ -77,3 +77,10 @@ class TestPasteBuffer:
             run.side_effect = lambda *a, **k: next(answers)
             assert await paste_message("ike", "hello") is False
         assert run.await_args_list[-1].args[0] == "delete-buffer"
+
+
+class TestNonFiniteTimestamps:
+    @pytest.mark.parametrize("ts", ['"inf"', '"-inf"', '"nan"'])
+    def test_are_rejected(self, tmp_path, ts):
+        (tmp_path / "ike.json").write_text(f'{{"state": "busy", "ts": {ts}}}')
+        assert read_state_file(tmp_path, "ike") is None

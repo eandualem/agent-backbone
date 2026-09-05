@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
@@ -80,6 +81,8 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         hook_ts = float(data.get("ts", 0))
         started_at_raw = data.get("started_at")
         started_at = float(started_at_raw) if started_at_raw is not None else None
+        if not math.isfinite(hook_ts) or (started_at is not None and not math.isfinite(started_at)):
+            raise ValueError("non-finite timestamp")  # "inf" would stay fresh forever
     except (json.JSONDecodeError, OSError, TypeError, ValueError) as e:
         # Valid JSON of the wrong shape must degrade to the terminal exactly
         # like unreadable JSON, not crash every consumer of this agent's state.

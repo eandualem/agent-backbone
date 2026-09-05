@@ -247,17 +247,30 @@ async def create_swarm(
                 raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
     except Exception:
         # Best-effort rollback so a half-started swarm doesn't linger.
+        unstopped: list[str] = []
         for agent_name in started:
             try:
-                await stop_session(agent_name)
+                stopped = await stop_session(agent_name)
             except Exception:
-                log.warning("rollback: could not stop %s", agent_name)
+                stopped = False
+            if not stopped:
+                unstopped.append(agent_name)
+        # A session that would not die keeps its record — forgetting it would
+        # leave a running agent nobody can address — and the worktree it runs in.
         for agent_name, _ in named:
+            if agent_name in unstopped:
+                continue
             try:
                 await store.forget(agent_name)
             except Exception:
                 log.debug("rollback: could not forget %s", agent_name)
-        if not await remove_worktree(repo_dir, worktree):
+        if unstopped:
+            log.warning(
+                "rollback: %s still running; stop them and remove %s by hand",
+                ", ".join(unstopped),
+                worktree,
+            )
+        elif not await remove_worktree(repo_dir, worktree):
             log.warning("rollback: worktree %s still exists; remove it by hand", worktree)
         await db.swarms.set_status(name, "disbanded")
         raise

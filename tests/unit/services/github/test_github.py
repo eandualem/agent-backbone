@@ -263,3 +263,21 @@ class TestPagination:
             items = await gh.list_comments_since(REPO, "2026-01-01T00:00:00Z")
 
         assert [i["id"] for i in items] == [1, 2]
+
+    @respx.mock
+    async def test_sub_issues_follow_the_next_link(self, config):
+        base = f"{API_BASE}/repos/eandualem/orchestration/issues/7/sub_issues"
+        second = f"{base}?page=2"
+        respx.get(url__eq=second).mock(
+            return_value=httpx.Response(200, json=[{"number": 9, "title": "b", "labels": []}])
+        )
+        respx.get(url__startswith=base).mock(
+            return_value=httpx.Response(
+                200,
+                json=[{"number": 8, "title": "a", "labels": []}],
+                headers={"Link": f'<{second}>; rel="next"'},
+            )
+        )
+        async with GitHubClient(config) as gh:
+            subs = await gh.get_sub_issues(7, repo_full_name=REPO)
+        assert [s.number for s in subs] == [8, 9]
