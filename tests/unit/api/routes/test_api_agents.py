@@ -469,6 +469,9 @@ class TestDeny:
         data = resp.json()
         assert data["ok"] and data["outcome"] == "denied" and data["denied_by"] == "orch"
         deny.assert_awaited_once()
+        events = await api_app.state.db.events.query(limit=5)
+        assert events and events[0]["event_type"] == "denial"
+        assert "orch denied a claude permission prompt on ike" in events[0]["summary"]
 
     async def test_a_choice_dialog_cannot_be_approved(self, api_client, auth_headers, api_app):
         with patch(

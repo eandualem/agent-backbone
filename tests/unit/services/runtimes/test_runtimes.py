@@ -416,3 +416,20 @@ class TestChoiceDialogs:
         long = "\n".join(["x" * 80] * 8) + "\n" + _CODEX_PERMISSION
         summary = RUNTIMES["codex"].dialog_summary(long, limit=120)
         assert len(summary) <= 120 and summary.endswith("starting'")
+
+    def test_stale_output_above_a_real_prompt_is_not_a_choice(self):
+        # "switch to gpt-" scrolled past earlier; the active dialog is a permission.
+        pane = (
+            "• Earlier: the user said switch to gpt-5.6-luna maybe\n"
+            + "\n".join(f"output line {i}" for i in range(12))
+            + "\n"
+            + _CODEX_PERMISSION
+        )
+        rt = RUNTIMES["codex"]
+        assert rt.detect_active_dialog(pane)
+        assert not rt.detect_choice_dialog(pane)
+
+    def test_summary_honours_tiny_limits(self):
+        rt = RUNTIMES["codex"]
+        assert len(rt.dialog_summary(_CODEX_PERMISSION, limit=1)) <= 1
+        assert rt.dialog_summary(_CODEX_PERMISSION, limit=0) == ""

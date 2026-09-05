@@ -79,6 +79,8 @@ async def _dialog_text(config: BackboneConfig, name: str) -> str:
         if not pane:
             return ""
         rt = await resolve_runtime(name, hint=spec.runtime if spec else None, pane_content=pane)
+        if not rt.detect_active_dialog(pane):
+            return ""  # a dialog left above an idle prompt is history, not the ask
         return rt.dialog_summary(pane)
     except Exception:
         log.debug("Could not read %s's dialog for the notification", name)

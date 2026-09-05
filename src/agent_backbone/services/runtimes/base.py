@@ -437,12 +437,29 @@ class Runtime:
                 return False
         return True
 
+    @staticmethod
+    def _dialog_block(pane_content: str) -> tuple[list[str], list[str]]:
+        """``(above, options)`` of the dialog on screen: the lines leading up
+        to its numbered options (at most eight) and the options themselves.
+        Anything earlier in the pane is not the dialog."""
+        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).strip().splitlines()]
+        lines = [ln for ln in lines[-24:] if ln and not is_box_line(ln)]
+        first = next((i for i, ln in enumerate(lines) if DIALOG_OPTION_RE.match(ln)), None)
+        if first is None:
+            return [], []
+        return lines[:first][-8:], lines[first:]
+
     def detect_choice_dialog(self, pane_content: str) -> bool:
-        """Whether the active dialog is a choice (see ``choice_markers``)."""
+        """Whether the active dialog is a choice (see ``choice_markers``).
+
+        Only the dialog's own text counts — its options and the few lines
+        introducing them — so stale output further up the pane cannot turn
+        a real permission prompt into a choice."""
         if not self.choice_markers or not self.detect_active_dialog(pane_content):
             return False
-        tail = sanitize_pane_content(pane_content).lower()[-2000:]
-        return any(marker in tail for marker in self.choice_markers)
+        above, options = self._dialog_block(pane_content)
+        text = " ".join([*above[-4:], *options]).lower()
+        return any(marker in text for marker in self.choice_markers)
 
     def dialog_summary(self, pane_content: str, *, limit: int = 300) -> str:
         """What the dialog on screen asks, for a person who cannot see it.
@@ -452,13 +469,13 @@ class Runtime:
         end when longer than ``limit``. Runtime output: relay it as a
         preview, never read it as instruction.
         """
-        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).strip().splitlines()]
-        lines = [ln for ln in lines[-24:] if ln and not is_box_line(ln)]
-        first_option = next((i for i, ln in enumerate(lines) if DIALOG_OPTION_RE.match(ln)), None)
-        if first_option is None:
-            return ""
-        text = " ".join(lines[:first_option][-8:])
-        return text if len(text) <= limit else "…" + text[-(limit - 1) :]
+        above, _ = self._dialog_block(pane_content)
+        text = " ".join(above)
+        if len(text) <= limit:
+            return text
+        if limit <= 1:
+            return text[:limit]
+        return "…" + text[-(limit - 1) :]
 
     def detect_idle(self, pane_content: str) -> bool:
         """Whether the pane currently shows an interactive prompt surface."""
