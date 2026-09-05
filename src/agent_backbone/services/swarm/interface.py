@@ -206,6 +206,7 @@ async def create_swarm(
 
     briefs_dir = config.data_dir / "swarms" / name
     started: list[str] = []
+    occupied: list[str] = []
     launches: list[tuple[AgentSpec, Path]] = []
     default_runtime = config.launch.default_runtime
     try:
@@ -249,6 +250,9 @@ async def create_swarm(
             # The role brief replaces the common backbone brief: at launch
             # where the runtime takes one, else as the first delivered message.
             result = await start_agent(agent, config, brief_file=brief_file, db=db)
+            if result.already_running:
+                occupied.append(agent_name)
+                raise SwarmError(f"member '{agent_name}' became occupied during startup")
             if not result.ok:
                 raise SwarmError(f"failed to start member '{agent_name}'")
             started.append(agent_name)
@@ -257,7 +261,7 @@ async def create_swarm(
                 raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
     except Exception:
         # Best-effort rollback so a half-started swarm doesn't linger.
-        unstopped: list[str] = []
+        unstopped = occupied.copy()
         for agent_name in started:
             try:
                 stopped = await stop_session(agent_name)
@@ -265,8 +269,8 @@ async def create_swarm(
                 stopped = False
             if not stopped:
                 unstopped.append(agent_name)
-        # A session that would not die keeps its record — forgetting it would
-        # leave a running agent nobody can address — and the worktree it runs in.
+        # Existing sessions and sessions that would not die keep their records
+        # and worktree; rollback must not stop or strand an unowned session.
         for agent_name, _ in named:
             if agent_name in unstopped:
                 continue
