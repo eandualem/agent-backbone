@@ -516,7 +516,7 @@ class TestCommentRouting:
             ),
         ):
             result = await issue_dispatcher(event, config, mock_db)
-        assert "ike" not in result.delivered
+        assert result.delivered == ["leo"]
         mock_db.acks.record.assert_not_awaited()
 
     async def test_unknown_commenter_notifies_everyone(self, config, mock_db):

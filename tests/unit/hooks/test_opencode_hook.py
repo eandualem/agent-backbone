@@ -49,7 +49,10 @@ const { AgentBackbone } = await import(process.argv[1]);
 const hook = await AgentBackbone();
 const before = hook["tool.execute.before"], after = hook["tool.execute.after"];
 const command = "gh issue comment 5 -R acme/app -b done";
+let timerFired = false;
+setTimeout(() => { timerFired = true; }, 0);
 await before({tool: "bash"}, {args: {command: 'echo "gh issue comment 6 -R acme/app"'}});
+if (!timerFired) throw new Error("parser blocked the plugin event loop");
 await before({tool: "bash"}, {args: {command}});
 await after({tool: "bash", args: {command}}, {metadata: {exit: 1}});
 await after({tool: "bash", args: {command: "gh issue comment 7 -R acme/app -b done"}},

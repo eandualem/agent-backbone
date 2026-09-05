@@ -14,20 +14,24 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 
 const STATE_IDLE = "idle";
 const STATE_BUSY = "busy";
 const STATE_WAITING = "waiting_for_human";
 const REASON_PERMISSION = "permission";
-function shellActions(command, cwd, phase) {
+async function shellActions(command, cwd, phase) {
   // Reuse the shipped stdlib parser; never interpret quoted examples as commands.
   try {
     const helper = fileURLToPath(new URL("backbone_state.py", import.meta.url));
-    return JSON.parse(execFileSync("python3", [helper, "--shell-actions"], {
-      input: JSON.stringify({ command, cwd, phase }),
-      encoding: "utf8", timeout: 15000, stdio: ["pipe", "pipe", "pipe"],
-    }));
+    const stdout = await new Promise((resolve, reject) => {
+      const child = execFile("python3", [helper, "--shell-actions"], {
+        encoding: "utf8", timeout: 15000,
+      }, (error, output) => error ? reject(error) : resolve(output));
+      child.stdin.on("error", reject);
+      child.stdin.end(JSON.stringify({ command, cwd, phase }));
+    });
+    return JSON.parse(stdout);
   } catch {
     return []; // Hook failures must not stop the agent.
   }
@@ -144,14 +148,14 @@ export const AgentBackbone = async ({ directory } = {}) => {
       if (isChild(input?.sessionID) || input?.tool !== "bash") return;
       const command = output?.args?.command;
       if (typeof command !== "string") return;
-      for (const action of shellActions(command, directory ?? process.cwd(), "intent")) appendAction(t, action);
+      for (const action of await shellActions(command, directory ?? process.cwd(), "intent")) appendAction(t, action);
     },
     "tool.execute.after": async (input, output) => {
       if (isChild(input?.sessionID) || input?.tool !== "bash") return;
       if (output?.metadata?.exit !== 0 || output?.metadata?.timeout) return;
       const command = input?.args?.command;
       if (typeof command !== "string") return;
-      for (const action of shellActions(command, directory ?? process.cwd(), "succeeded")) appendAction(t, action);
+      for (const action of await shellActions(command, directory ?? process.cwd(), "succeeded")) appendAction(t, action);
     },
   };
 };
