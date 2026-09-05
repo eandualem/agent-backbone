@@ -20,7 +20,12 @@ from agent_backbone.services.runtimes import (
     shell,
 )
 from agent_backbone.services.runtimes._pane import GENERIC_BUSY_FRAGMENTS, sanitize_pane_content
-from agent_backbone.services.runtimes.base import Runtime, read_brief, resolve_command
+from agent_backbone.services.runtimes.base import (
+    Runtime,
+    read_brief,
+    resolve_command,
+    split_model_effort,
+)
 from agent_backbone.services.terminal import capture_pane, query_environment_var
 
 RUNTIME_ENV_KEY = "BACKBONE_RUNTIME"
@@ -129,4 +134,5 @@ __all__ = [
     "resolve_runtime",
     "sanitize_pane_content",
     "send_message",
+    "split_model_effort",
 ]

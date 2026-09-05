@@ -179,11 +179,16 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
     for rt in REGISTRY.values():
         installed = "installed" if rt.available() else "not found"
         models = ", ".join(rt.models) if rt.models else "use the CLI's own model picker"
+        efforts = ", ".join(rt.efforts) if rt.efforts else "-"
         print(
             f"  {rt.id:<10s} {rt.display_name:<12s} {installed:<10s} "
             f"state: {rt.reports_state:<17s} models: {models}"
         )
+        print(f"  {'':<10s} {'':<12s} {'':<10s} effort: {efforts}")
     print("\n`--model` is passed to the CLI verbatim; these are examples, not a complete list.")
+    print("Effort rides on the model as `model:effort` (e.g. `gpt-6-astra:high`), so every")
+    print("surface that names a model can name an effort: `--model`, `agent set model=…`,")
+    print("and a swarm roster entry `coordinator@codex/gpt-6-astra:high`.")
     return 0
 
 

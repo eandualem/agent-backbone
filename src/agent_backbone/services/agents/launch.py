@@ -28,6 +28,7 @@ from agent_backbone.services.runtimes import (
     read_brief,
     resolve_runtime,
     sanitize_pane_content,
+    split_model_effort,
 )
 from agent_backbone.services.terminal import (
     capture_pane,
@@ -192,7 +193,7 @@ async def start_agent(
         config.state_dir,
         {
             **spec.env,
-            **rt.launch_env(effective_model),
+            **rt.launch_env(split_model_effort(effective_model)[0]),
             **rt.hook_launch_env(config.data_dir, config.state_dir),
         },
     )

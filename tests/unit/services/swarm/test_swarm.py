@@ -39,6 +39,12 @@ class TestRoster:
     def test_runtime_without_model(self):
         assert parse_member_spec("coder@codex") == MemberSpec(role="coder", runtime="codex")
 
+    def test_model_may_carry_an_effort(self):
+        # The roster keeps the spec whole; the runtime splits it at launch.
+        assert parse_member_spec("coordinator@codex/gpt-6-astra:high") == MemberSpec(
+            role="coordinator", runtime="codex", model="gpt-6-astra:high"
+        )
+
     def test_invalid_spec_rejected(self):
         with pytest.raises(ValueError):
             parse_member_spec("Scout One")
