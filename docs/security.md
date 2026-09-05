@@ -28,14 +28,9 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   judge the command — whoever holds the key (a person or a coordinator
   agent) does. Plan approval, which can run a whole plan unattended, stays
   off by default (`security.allow_remote_plan_control`).
-- **An `unattended` agent asks nobody; the sandbox decides what that
-  means.** The flag launches the runtime with its own no-approval switch.
-  Behind Codex's sandbox (`-a never`, the workspace-write sandbox kept) the
-  agent is free only inside its directory, temp and the network — a write
-  elsewhere fails and the model is told. OpenCode, Claude Code and Gemini
-  have no sandbox, so unattended there is trust on the whole machine with
-  your credentials. Off by default; a swarm sets it only for its sandboxed
-  members (`swarm.unattended_members`), never for the rest.
+- **Unattended operation depends on the runtime's sandbox.** See
+  [Unattended agents and writable directories](#unattended-agents-and-writable-directories)
+  for the permission boundaries and cache options.
 - **Provenance is convention, not authentication.** `from_entity` in
   `POST /messages` and the resulting `[via:backbone from:X]` envelope are
   whatever the caller says; the `[from:<agent>]` prefix on GitHub is the
@@ -49,6 +44,51 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   exported into its session. Treat them like `.env` contents.
 - **Agents do not hold the backbone's keys.** An agent session gets the
   launch contract and nothing else; see below.
+
+## Unattended agents and writable directories
+
+An agent's `unattended` flag selects its runtime's no-approval switch. It is
+off by default for ordinary agents. With `swarm.unattended_members` enabled
+(the default), sandboxed swarm members run unattended; this is decided at
+each launch from the current setting and runtime, not persisted on the member.
+
+**Codex** uses `-a never -s workspace-write`: its workspace sandbox is pinned,
+and its working directory, temporary directories and network are available.
+Validated Git commit paths (objects, refs, logs, index and bookkeeping files
+and locks) are also writable, including linked-worktree commit state. Git
+hooks and configuration stay protected. The backbone validates reciprocal
+worktree metadata and rejects `.git` symlinks, unverified pointers and directory
+resolution failures. A write outside the allowed paths fails and is reported
+to the model. See [Codex setup](getting-started.md#codex-permissions-and-scrolling)
+for automatic review of permission requests in attended sessions.
+
+**OpenCode, Claude Code and Gemini** have no OS sandbox supplied by these
+launch modes. Their unattended switches (`--auto`,
+`--dangerously-skip-permissions`, and `--approval-mode yolo`) trust the agent
+with the machine and its credentials. This remains an explicit per-agent
+choice; a swarm leaves these members asking for approval. Claude Code also
+requires its one-time bypass acceptance, with *No, exit* preselected; the
+backbone reports that dialog and leaves it for a human to answer.
+
+`agents.writable_dirs` is machine-wide by design and applies to every Codex
+agent the backbone starts. Use it for deliberately shared tooling directories:
+
+```bash
+backbone config set agents.writable_dirs '["~/.cache/uv"]'
+```
+
+Other agents and your own tools share the contents of that writable cache.
+For a project-specific cache, leave the shared list empty and place the cache
+inside that agent's worktree instead:
+
+```bash
+backbone agent set NAME env='{"UV_CACHE_DIR": ".uv-cache"}'
+```
+
+Directory grants and environment changes take effect on the next start or
+resume. Setting a new `runtime` clears an agent's explicit `unattended` flag
+unless the same command sets it again. Runtimes without a supported
+no-approval switch (`deepcode`, `aider`, `shell`) refuse unattended startup.
 
 ## What an agent session inherits
 

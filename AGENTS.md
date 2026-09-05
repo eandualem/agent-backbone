@@ -129,6 +129,9 @@ reach installed databases.
   released branch and only receives merges from `develop`. Never push to
   `main` or `develop` directly. Merges are squash merges titled
   `<type>: <subject> (#N)`.
+- A PR that fully implements an issue includes `Closes #N`. After review and
+  merge, verify GitHub closed the issue; otherwise link the merged PR and close
+  it manually. Partial fixes use `Refs #N` and state the remaining work.
 - Docs are part of a change: update the page that describes the behaviour
   you touched. User-visible strings use the vocabulary from
   `docs/concepts.md` (states, delivery conditions, kinds).
@@ -150,9 +153,12 @@ reach installed databases.
 Use a scratch data dir (`BACKBONE_DATA_DIR=...`) so the real one at
 `~/.local/share/agent-backbone` is untouched. Shell-runtime agents are the
 safe way to observe deliveries. After any change under `services/terminal`,
-send one real `backbone tell` to a live agent before merging — unit tests
-mock tmux and cannot see target-syntax mistakes (see the shared-memory note
-on the 2026-09-05 tmux incident). Label test issues clearly and close them.
+run `make smoke` and send one real `backbone tell` to a live agent before
+merging. The smoke command checks paste, keys, capture and display against a
+real tmux session, then removes it; it needs tmux but no backbone service or
+model. Unit tests mock tmux and cannot see target-syntax mistakes (see the
+shared-memory note on the 2026-09-05 tmux incident). Label test issues clearly
+and close them.
 
 The installed `backbone` CLI on the owner's machine is an editable install
 of this checkout, and the running backbone restarts itself when the

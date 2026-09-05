@@ -223,6 +223,8 @@ async def api_app(config):
             tags=list(spec.tags),
             env=dict(spec.env),
             description=spec.description,
+            always_on=spec.always_on,
+            unattended=spec.unattended,
         )
         for repo in spec.watches:
             await db.agents.add_watch(spec.name, repo)

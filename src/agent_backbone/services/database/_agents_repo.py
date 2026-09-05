@@ -49,8 +49,9 @@ class AgentRepo(Repo):
         env: dict[str, str],
         description: str,
         always_on: bool = False,
-        unattended: bool = False,
+        unattended: bool,
     ) -> None:
+        """Replace an agent's fields; the caller must choose unattended explicitly."""
         async with self._tx() as conn:
             now = now_iso()
             await conn.execute(

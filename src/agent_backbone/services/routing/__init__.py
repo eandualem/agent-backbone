@@ -33,7 +33,11 @@ from agent_backbone.services.routing._ingest import (
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing._priority import compute_priority_score
 from agent_backbone.services.routing._resolution import validate_issue_targets
-from agent_backbone.services.routing._targets import list_open_queue_for_target, queue_scope
+from agent_backbone.services.routing._targets import (
+    list_open_queue_for_target,
+    queue_scope,
+    route_issue,
+)
 
 __all__ = [
     "DeliveryReport",
@@ -53,6 +57,7 @@ __all__ = [
     "list_open_queue_for_target",
     "queue_detail",
     "queue_scope",
+    "route_issue",
     "routing_in_flight",
     "safe_deliver",
     "stamp_queued_age",

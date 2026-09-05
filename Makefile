@@ -1,4 +1,4 @@
-.PHONY: help install dev up down status doctor lint format format-check fix test test-file cov check build clean \
+.PHONY: help install dev up down status doctor lint format format-check fix test test-file smoke cov check build clean \
         db-up db-down db-upgrade db-migrate db-history db-current db-downgrade
 
 .DEFAULT_GOAL := help
@@ -57,6 +57,9 @@ test: ## Run all tests (SQLite in-memory, no services needed)
 
 test-file: ## Run a single test file (FILE=tests/unit/test_foo.py)
 	uv run pytest $(FILE) -v
+
+smoke: ## Check real tmux paste, keys, capture and display in a disposable session
+	uv run python tests/smoke_tmux.py
 
 cov: ## Run tests with coverage
 	uv run pytest --cov=src --cov-report=term-missing
