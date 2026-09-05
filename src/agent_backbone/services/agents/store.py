@@ -181,6 +181,7 @@ class AgentStore:
             while True:
                 spec = await self.discover(directory, **options)
                 async with lifecycle_lock(spec.name):
+                    await self.refresh()
                     current = await self.discover(directory, **options)
                     if current.name != spec.name:
                         continue
@@ -245,6 +246,7 @@ class AgentStore:
 
     @serialized_mutation
     async def watch(self, name: str, repo: str) -> AgentSpec:
+        await self.refresh()
         if name not in self._agents:
             raise KeyError(name)
         await self._db.agents.add_watch(name, repo)

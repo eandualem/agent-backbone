@@ -289,22 +289,36 @@ async def create_swarm(
                     unstopped.append(agent_name)
             # Existing sessions and sessions that would not die keep their records
             # and worktree; rollback must not stop or strand an unowned session.
+            cleaned = not unstopped
             for agent_name, _ in named:
                 if agent_name in unstopped:
                     continue
                 try:
                     await store.forget(agent_name)
                 except Exception:
+                    cleaned = False
                     log.debug("rollback: could not forget %s", agent_name)
             if unstopped:
                 log.warning(
-                    "rollback: %s still running; stop them and remove %s by hand",
+                    "rollback: %s still present; disband '%s' to retry cleanup of %s",
                     ", ".join(unstopped),
+                    name,
                     worktree,
                 )
-            elif not await remove_worktree(repo_dir, worktree):
-                log.warning("rollback: worktree %s still exists; remove it by hand", worktree)
-            await db.swarms.set_status(name, "disbanded")
+            else:
+                try:
+                    removed = await remove_worktree(repo_dir, worktree)
+                    cleaned = cleaned and removed
+                    if not removed:
+                        log.warning("rollback: worktree %s remains; retry disband", worktree)
+                except Exception:
+                    cleaned = False
+                    log.exception("rollback: worktree %s cleanup failed; retry disband", worktree)
+            if cleaned:
+                try:
+                    await db.swarms.set_status(name, "disbanded")
+                except Exception:
+                    log.exception("rollback: could not mark '%s' disbanded; retry disband", name)
         raise
 
     kickoff = (

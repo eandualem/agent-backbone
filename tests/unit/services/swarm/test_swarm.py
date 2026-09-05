@@ -332,7 +332,9 @@ class TestCreateSwarm:
         else:
             mock_rm.assert_awaited_once()
             assert store.registered == []  # all rolled back
-        assert (await db.swarms.get("research"))["status"] == "disbanded"
+        assert (await db.swarms.get("research"))["status"] == (
+            "active" if occupied else "disbanded"
+        )
 
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
@@ -406,6 +408,53 @@ class TestCreateSwarm:
 
         mock_rm.assert_awaited_once_with(repo_dir, worktree)
         mock_start.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "failure", ["remove_false", "remove_error", "status_error", "forget_error"]
+)
+async def test_incomplete_startup_rollback_remains_retryable(db, tmp_path, failure):
+    config, repo_dir = _swarm_config(tmp_path)
+    worktree = repo_dir / ".backbone" / "swarms" / "research"
+    store = _FakeStore(config)
+    gh = AsyncMock()
+    gh.get_issue.return_value = AsyncMock(state="open", title="task")
+    if failure == "forget_error":
+        store.forget = AsyncMock(side_effect=OSError("forget failed"))
+    status = db.swarms.set_status
+    with (
+        patch(f"{_IFACE}.is_git_repo", AsyncMock(return_value=True)),
+        patch(f"{_IFACE}.current_branch", AsyncMock(return_value="develop")),
+        patch(f"{_IFACE}.create_worktree", AsyncMock(return_value=(worktree, "swarm/research"))),
+        patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_IFACE}.start_agent", AsyncMock(return_value=_FAILED)),
+        patch(
+            f"{_IFACE}.remove_worktree",
+            AsyncMock(
+                return_value=failure != "remove_false",
+                side_effect=OSError("remove failed") if failure == "remove_error" else None,
+            ),
+        ),
+        patch.object(
+            db.swarms,
+            "set_status",
+            AsyncMock(
+                side_effect=OSError("status failed") if failure == "status_error" else status,
+            ),
+        ),
+        pytest.raises(SwarmError, match="failed to start member"),
+    ):
+        await create_swarm(
+            config,
+            db,
+            store,
+            gh,
+            name="research",
+            issue_ref="acme/app#7",
+            member_specs=["scout"],
+            initiator="simon",
+        )
+    assert (await db.swarms.get("research"))["status"] == "active"
 
 
 class TestTeardown:

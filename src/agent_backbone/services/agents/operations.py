@@ -108,6 +108,7 @@ async def start_resolved(
     if not spec.path.is_dir():
         raise ValueError(f"Directory does not exist: {spec.path}")
     async with lifecycle_lock(spec.name):
+        await store.refresh()
         current = store.agents.get(spec.name)
         if current is None:
             raise ValueError(f"Agent '{spec.name}' was forgotten before startup")

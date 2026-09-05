@@ -50,14 +50,19 @@ async def registered_store(db, tmp_path):
 
 
 @pytest.mark.parametrize("mutation", ["forget", "update"])
-async def test_start_rejects_a_spec_changed_after_resolution(db, tmp_path, mutation):
+@pytest.mark.parametrize("separate_store", [False, True])
+async def test_start_rejects_a_spec_changed_after_resolution(
+    db, tmp_path, mutation, separate_store
+):
     store = await registered_store(db, tmp_path)
     req = StartRequest(name="app")
     spec = await resolve_agent(store, req)
+    writer = AgentStore(db, tmp_path) if separate_store else store
+    await writer.start()
     if mutation == "forget":
-        await store.forget("app")
+        await writer.forget("app")
     else:
-        await store.update("app", description="changed after resolution")
+        await writer.update("app", description="changed after resolution")
     with patch(f"{_OPS}.launch.start_agent", AsyncMock()) as launch:
         with pytest.raises(ValueError, match="before startup"):
             await start_resolved(store, store.config, spec, req, db=db)

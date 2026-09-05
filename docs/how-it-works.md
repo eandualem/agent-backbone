@@ -43,6 +43,8 @@ concurrent edits keep both changes. A start checks its resolved record again
 before launching: if the agent was forgotten or changed meanwhile, it fails
 with that reason. Forget waits for an active start and refuses to remove a
 running session. Swarm startup and teardown use the same per-agent locks.
+If startup rollback cannot finish cleanup, the swarm stays active so `swarm
+disband` can retry it; cleanup errors do not hide the original startup failure.
 
 The backbone keeps no process handle; tmux owns the session. If the
 backbone restarts, sessions keep running and are rediscovered. Sessions

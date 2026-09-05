@@ -92,17 +92,24 @@ async def test_update_from_stale_snapshot_never_recreates_a_forgotten_agent(db, 
     await first.forget("app")
     with pytest.raises(KeyError, match="app"):
         await second.update("app", description="late update")
+    with pytest.raises(KeyError, match="app"):
+        await second.watch("app", "acme/app")
     assert "app" not in {row["name"] for row in await db.agents.list()}
 
 
-async def test_concurrent_discovery_reserves_distinct_names(db, tmp_path):
+@pytest.mark.parametrize("separate_stores", [False, True])
+async def test_concurrent_discovery_reserves_distinct_names(db, tmp_path, separate_stores):
     store = AgentStore(db, tmp_path)
     await store.start()
+    second = AgentStore(db, tmp_path) if separate_stores else store
+    await second.start()
     paths = [tmp_path / parent / "project" for parent in ("one", "two")]
     for path in paths:
         path.mkdir(parents=True)
     with patch(_DETECT_REPO, AsyncMock(return_value="")):
-        specs = await asyncio.gather(*(store.register_directory(path) for path in paths))
+        specs = await asyncio.gather(
+            store.register_directory(paths[0]), second.register_directory(paths[1])
+        )
     assert {spec.name for spec in specs} == {"project", "project-2"}
     assert {spec.path for spec in specs} == set(paths)
 
