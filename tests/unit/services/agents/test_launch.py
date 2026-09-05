@@ -300,6 +300,27 @@ class TestStartAgentBrief:
         command = started.await_args.kwargs["command"]
         assert command[1:7] == ["-a", "never", "-s", "workspace-write", "--add-dir", "/cache"]
 
+    async def test_a_worktree_member_can_reach_its_shared_git_dir(self, tmp_path):
+        # A swarm worktree's index and refs live under <main>/.git — outside
+        # the sandbox's writable root — so that directory is opened for it.
+        config = bootstrap_config(tmp_path / "data")
+        main_git = tmp_path / "main" / ".git"
+        (main_git / "worktrees" / "wt").mkdir(parents=True)
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        (worktree / ".git").write_text(f"gitdir: {main_git / 'worktrees' / 'wt'}\n")
+        spec = AgentSpec(name="ike", dir=str(worktree), runtime="codex", repo="acme/app")
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            assert (await start_agent(spec, config, db=AsyncMock())).ok
+        command = started.await_args.kwargs["command"]
+        assert command[1:3] == ["--add-dir", str(main_git)]
+        # A plain checkout keeps .git inside its own directory: nothing to open.
+        plain = self._spec(tmp_path, "codex")
+        with exists, start as started, _cmd, _trust, _wait:
+            assert (await start_agent(plain, config, db=AsyncMock())).ok
+        assert "--add-dir" not in started.await_args.kwargs["command"]
+
     @pytest.mark.parametrize(
         ("runtime", "setting", "never_asks"),
         [("codex", True, True), ("codex", False, False), ("opencode", True, False)],

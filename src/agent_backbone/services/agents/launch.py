@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import session_secret_keys
+from agent_backbone.git import worktree_git_dir
 from agent_backbone.help import render_agent_brief
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
@@ -192,7 +193,7 @@ async def start_agent(
             data_dir=config.data_dir,
             state_dir=config.state_dir,
             unattended=unattended,
-            writable_dirs=section.writable_dirs,
+            writable_dirs=_writable_dirs(spec.path, section.writable_dirs),
         )
     except RuntimeError as exc:
         log.error("Cannot start agent '%s': %s", spec.name, exc)
@@ -244,6 +245,22 @@ async def start_agent(
     if rt.brief_mode == "message" and brief is not None and not resume and ready != "exited":
         await _queue_brief(db, spec.name, brief)
     return StartResult(ok=True, ready=ready, evidence=tuple(resume_evidence + evidence))
+
+
+def _writable_dirs(agent_dir: Path, configured: tuple[str, ...]) -> tuple[str, ...]:
+    """The directories a sandboxed runtime may write outside ``agent_dir``.
+
+    The configured list (``agents.writable_dirs``), plus the git directory a
+    worktree shares with its main checkout: ``<main>/.git`` holds the
+    worktree's index, HEAD and every object and ref, so without it a member
+    in a swarm worktree can edit but never ``git add`` or ``commit``
+    ("Operation not permitted" on ``index.lock``, seen live). A plain
+    checkout keeps its ``.git`` inside ``agent_dir`` and needs nothing.
+    """
+    common = worktree_git_dir(agent_dir)
+    if common is None or str(common) in configured:
+        return configured
+    return (*configured, str(common))
 
 
 async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:
