@@ -101,7 +101,9 @@ def _dialog_snapshot(runtime, pane_content: str, prefix: list[str] | None = None
         marker in sanitize_pane_content(pane_content).lower()[-2000:]
         for marker in runtime.prompt_markers
     )
-    if known:
+    if runtime.detect_choice_dialog(pane_content):
+        reason, seen = REASON_QUESTION, "a choice dialog (Enter would pick, not allow)"
+    elif known:
         reason, seen = REASON_PERMISSION, "a permission prompt"
     else:
         reason, seen = REASON_QUESTION, "a dialog with numbered options"
@@ -168,6 +170,22 @@ async def get_agent_state(
                 dialog.timestamp = time.time()
                 dialog.current_issue = push.current_issue
                 dialog.evidence.append("the dialog on screen beats the hook's idle")
+                return dialog
+        if push.state == AgentState.WAITING_FOR_HUMAN and push.reason == REASON_PERMISSION:
+            # The hook said "permission", but the runtime may since have drawn
+            # a dialog of its own on top (Codex's rate-limit model switch),
+            # where the affirmative key chooses: the screen wins.
+            if pane_content is None:
+                pane_content = await capture_pane(session)
+            runtime = get_runtime(runtime_hint)
+            if runtime is UNKNOWN and pane_content:
+                runtime = detect_runtime(pane_content)
+            if pane_content and runtime.detect_choice_dialog(pane_content):
+                dialog = _dialog_snapshot(runtime, pane_content, prefix=push.evidence)
+                dialog.timestamp = time.time()
+                dialog.current_issue = push.current_issue
+                dialog.current_repo = push.current_repo
+                dialog.evidence.append("the choice dialog on screen beats the hook's permission")
                 return dialog
         return push
 

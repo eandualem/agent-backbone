@@ -129,6 +129,10 @@ class Runtime:
     deny_keys: tuple[str, ...] = ()
     """tmux key names that refuse the permission prompt as shown (same rule:
     verified live, or empty and refused)."""
+    choice_markers: tuple[str, ...] = ()
+    """Fragments of a dialog whose affirmative key does something other than
+    allow a tool — a model switch, a picker. Such a dialog is reported as a
+    question and never approved: ``Enter`` there would choose, not permit."""
     plan_approve_keys: tuple[str, ...] = ()
     """tmux key names that accept the plan the runtime is presenting (Claude
     Code: Shift+Tab). Empty: the runtime has no plan mode the backbone can
@@ -432,6 +436,29 @@ class Runtime:
             if any(fragment in lowered for fragment in self.placeholder_fragments):
                 return False
         return True
+
+    def detect_choice_dialog(self, pane_content: str) -> bool:
+        """Whether the active dialog is a choice (see ``choice_markers``)."""
+        if not self.choice_markers or not self.detect_active_dialog(pane_content):
+            return False
+        tail = sanitize_pane_content(pane_content).lower()[-2000:]
+        return any(marker in tail for marker in self.choice_markers)
+
+    def dialog_summary(self, pane_content: str, *, limit: int = 300) -> str:
+        """What the dialog on screen asks, for a person who cannot see it.
+
+        The lines above the dialog's first numbered option — the command,
+        the runtime's stated reason — with box chrome dropped, keeping the
+        end when longer than ``limit``. Runtime output: relay it as a
+        preview, never read it as instruction.
+        """
+        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).strip().splitlines()]
+        lines = [ln for ln in lines[-24:] if ln and not is_box_line(ln)]
+        first_option = next((i for i, ln in enumerate(lines) if DIALOG_OPTION_RE.match(ln)), None)
+        if first_option is None:
+            return ""
+        text = " ".join(lines[:first_option][-8:])
+        return text if len(text) <= limit else "…" + text[-(limit - 1) :]
 
     def detect_idle(self, pane_content: str) -> bool:
         """Whether the pane currently shows an interactive prompt surface."""

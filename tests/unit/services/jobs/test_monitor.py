@@ -216,6 +216,22 @@ class TestPermissionWaiting:
         ]
         assert tg.await_args.kwargs["agent"] == "ike"
 
+    async def test_the_alert_says_what_is_being_approved(self, config):
+        states = {"ike": _snap(_WAITING, reason="permission")}
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+            patch(
+                f"{_ESC}._dialog_text",
+                new_callable=AsyncMock,
+                return_value="Reason: send findings $ backbone tell orch 'done'",
+            ),
+        ):
+            await esc.check_permission_waiting(config, states)
+        text = tg.await_args.args[1]
+        assert "$ backbone tell orch 'done'" in text
+        assert "asking to run a tool" not in text
+
     async def test_a_terminal_read_prompt_alerts_once_not_every_tick(self, config):
         """A runtime without hooks is stamped at every poll: the identity must
         not move, or the humans would be alerted every minute."""

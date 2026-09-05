@@ -131,6 +131,10 @@ class Codex(Runtime):
     # "3. No, and tell Codex what to do differently (esc)".
     approve_keys = ("Enter",)
     deny_keys = ("Escape",)
+    # "Approaching rate limits — Switch to gpt-5.6-luna?" with Switch
+    # preselected (live capture, 0.153): Enter changes the model, Escape
+    # ("go back") keeps it.
+    choice_markers = ("keep current model", "switch to gpt-")
     interrupt_queued_delivery = True
 
     def pre_trust(self, directory: Path | str) -> None:

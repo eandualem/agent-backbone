@@ -174,6 +174,21 @@ class AgentApproveResponse(BaseModel):
     approved_by: str = ""
 
 
+class AgentDenyResponse(BaseModel):
+    """Result of refusing a permission prompt.
+
+    ``outcome`` is ``denied`` (the refusing key sent — the evidence says whether the
+    dialog cleared), ``not_waiting``, ``unsupported``, ``offline`` or
+    ``failed``. Nothing is typed unless the prompt is on screen.
+    """
+
+    ok: bool
+    session: str
+    outcome: str
+    evidence: list[str] = []
+    denied_by: str = ""
+
+
 class AgentStateDetail(BaseModel):
     """Detailed agent state snapshot."""
 

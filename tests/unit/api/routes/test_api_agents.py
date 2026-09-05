@@ -453,3 +453,29 @@ class TestPostAgentState:
             "/api/agents/stray/state", json={"state": "busy"}, headers=auth_headers
         )
         assert resp.status_code == 404
+
+
+class TestDeny:
+    async def test_denies_and_records_an_event(self, api_client, auth_headers, api_app):
+        with patch(
+            f"{_ROUTE}.deny_agent",
+            new_callable=AsyncMock,
+            return_value=("denied", ["answered with Escape; prompt cleared", "Switch to gpt-"]),
+        ) as deny:
+            resp = await api_client.post(
+                "/api/agents/ike/deny", json={"from_entity": "orch"}, headers=auth_headers
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["ok"] and data["outcome"] == "denied" and data["denied_by"] == "orch"
+        deny.assert_awaited_once()
+
+    async def test_a_choice_dialog_cannot_be_approved(self, api_client, auth_headers, api_app):
+        with patch(
+            f"{_ROUTE}.approve_agent",
+            new_callable=AsyncMock,
+            return_value=("not_permission", ["the dialog on screen is a choice"]),
+        ):
+            resp = await api_client.post("/api/agents/ike/approve", headers=auth_headers)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["outcome"] == "not_permission"

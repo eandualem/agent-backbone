@@ -327,8 +327,10 @@ async def approve_agent(
     Returns ``(outcome, evidence)``: ``approved`` (keys sent; evidence says
     whether the dialog cleared), ``not_waiting`` (the terminal shows no
     permission prompt — nothing is sent, so a stale hook state or an idle
-    prompt with typed text can never be "approved"), ``unsupported`` (no
-    verified answer sequence for this runtime), ``offline`` or ``failed``.
+    prompt with typed text can never be "approved"), ``not_permission`` (a
+    choice dialog such as a model switch — ``Enter`` would pick, not allow),
+    ``unsupported`` (no verified answer sequence for this runtime),
+    ``offline`` or ``failed``.
     The backbone answers only what is on screen: it never guesses.
 
     The gate is ``detect_active_dialog`` (the dialog must be the runtime's
@@ -350,6 +352,12 @@ async def approve_agent(
     tail = [ln.strip() for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-8:]
     if not rt.detect_active_dialog(pane):
         return "not_waiting", ["terminal shows no active permission prompt:", *tail]
+    if rt.detect_choice_dialog(pane):
+        return "not_permission", [
+            "the dialog on screen is a choice, not a permission prompt — Enter would pick "
+            f"its first option; answer it in the terminal: tmux attach -t {name}",
+            *tail,
+        ]
     if not await rt.approve_prompt(name):
         return "failed", ["tmux refused the keys", *tail]
     await asyncio.sleep(settle_seconds)

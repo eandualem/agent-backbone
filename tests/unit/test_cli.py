@@ -391,6 +391,13 @@ class TestAgentApproveParser:
         ns = build_parser().parse_args(["agent", "approve", "scout", "--from", "elias"])
         assert ns.sender == "elias"
 
+    def test_deny_mirrors_approve(self, monkeypatch):
+        from agent_backbone.cli import build_parser
+
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        ns = build_parser().parse_args(["agent", "deny", "scout"])
+        assert ns.agent_command == "deny" and ns.name == "scout" and ns.sender == "orch"
+
 
 class TestSecrets:
     def test_set_fills_the_init_placeholder_and_keeps_0600(self, _isolated_data_dir, capsys):
