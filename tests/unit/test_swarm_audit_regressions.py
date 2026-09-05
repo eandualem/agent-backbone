@@ -62,14 +62,16 @@ class TestPasteBuffer:
     """S2-1: each paste uses its own tmux buffer; S2-2: targets are exact."""
 
     async def test_named_buffer_is_loaded_pasted_and_target_exact(self):
+        # `=ike:` not `=ike`: tmux 3.7 takes the bare form only for session
+        # commands and answers "can't find pane" for paste-buffer (live).
         with patch(f"{_CORE}._run_tmux", new_callable=AsyncMock) as run:
             run.return_value = (0, b"", b"")
             assert await paste_message("ike", "hello") is True
         calls = [c.args for c in run.await_args_list]
-        assert calls[0] == ("has-session", "-t", "=ike")
+        assert calls[0] == ("has-session", "-t", "=ike:")
         load, paste = calls[1], calls[2]
         assert load[:3] == ("load-buffer", "-b", load[2]) and load[2].startswith("backbone-")
-        assert paste == ("paste-buffer", "-p", "-b", load[2], "-t", "=ike", "-d")
+        assert paste == ("paste-buffer", "-p", "-b", load[2], "-t", "=ike:", "-d")
 
     async def test_failed_paste_deletes_its_buffer(self):
         answers = iter([(0, b"", b""), (0, b"", b""), (1, b"", b"nope"), (0, b"", b"")])

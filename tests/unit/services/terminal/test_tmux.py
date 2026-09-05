@@ -37,7 +37,7 @@ class TestSessionExists:
             "tmux",
             "has-session",
             "-t",
-            "=ike",
+            "=ike:",
             stdout=-3,  # DEVNULL
             stderr=-1,  # PIPE
         )
