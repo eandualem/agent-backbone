@@ -409,6 +409,12 @@ async def _tell(args: argparse.Namespace) -> int:
     if status != 200:
         print(f"error {status}: {data}")
         return 1
+    if not isinstance(data, dict):
+        # A 200 whose body is not JSON-object (a proxy page massaged by the
+        # API client) has no outcome to report — tracebacking on .get helps
+        # nobody.
+        print(f"error: unexpected response from the backbone API: {data!r}"[:500])
+        return 1
     print(json.dumps(data))
     if data.get("detail"):
         print(data["detail"])
@@ -438,6 +444,9 @@ async def _reply(args: argparse.Namespace) -> int:
     if status != 200:
         detail = data.get("detail") if isinstance(data, dict) else data
         print(f"not posted: {detail}")
+        return 1
+    if not isinstance(data, dict):
+        print(f"error: unexpected response from the backbone API: {data!r}"[:500])
         return 1
     posted = ", ".join(name for name, ok in data.get("posted", {}).items() if ok)
     print(f"posted to {posted} as {agent}")

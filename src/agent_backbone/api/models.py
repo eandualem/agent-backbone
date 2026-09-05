@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import math
+import time
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from agent_backbone.config import AgentSpec
+from agent_backbone.services.agents import AgentState
 
 T = TypeVar("T")
 
@@ -206,6 +209,10 @@ class AgentStateDetail(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+_MAX_TS_SKEW_SECONDS = 86400.0
+"""How far ahead of now a pushed state timestamp may be (clock skew); more is rejected."""
+
+
 class StateUpdateRequest(BaseModel):
     """Request body for updating agent state via API (used by runtime hooks)."""
 
@@ -216,6 +223,37 @@ class StateUpdateRequest(BaseModel):
     ts: float = 0.0
     plan_file: str | None = None
     plan_title: str | None = None
+
+    @field_validator("state")
+    @classmethod
+    def _state_must_be_known(cls, value: str) -> str:
+        """An unknown state string would degrade to ``unknown`` on read and
+        silently discard the writer's intent — reject it at the door."""
+        try:
+            AgentState(value)
+        except ValueError:
+            known = ", ".join(s.value for s in AgentState)
+            raise ValueError(f"unknown state {value!r} (expected one of: {known})") from None
+        return value
+
+    @field_validator("issue")
+    @classmethod
+    def _issue_must_be_non_negative(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError(f"issue must be >= 0, got {value}")
+        return value
+
+    @field_validator("ts")
+    @classmethod
+    def _ts_must_be_plausible(cls, value: float) -> float:
+        """A non-finite ``ts`` would stay "fresh" forever and make the pushed
+        state permanently authoritative; a far-future one nearly so. ``0``
+        keeps its legacy meaning (no known time — the terminal decides)."""
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"ts must be a finite timestamp >= 0, got {value!r}")
+        if value > time.time() + _MAX_TS_SKEW_SECONDS:
+            raise ValueError(f"ts {value!r} is implausibly far in the future")
+        return value
 
 
 class RuntimeInfo(BaseModel):
@@ -330,6 +368,21 @@ class MessageRequest(BaseModel):
     from_entity: str
     message: str
     priority: bool = False
+
+    @field_validator("from_entity")
+    @classmethod
+    def _sender_must_fit_the_envelope(cls, value: str) -> str:
+        """The sender is interpolated into ``[via:backbone from:<sender>]``,
+        so it must not contain the envelope's delimiters or a newline that
+        would forge a second envelope. This bounds parsing ambiguity — it
+        does not authenticate the sender (the API key does that)."""
+        if not value.strip():
+            raise ValueError("from_entity must not be empty")
+        if len(value) > 64:
+            raise ValueError("from_entity must be at most 64 characters")
+        if any(c in value for c in "[]\n\r"):
+            raise ValueError("from_entity must not contain newlines or [ ]")
+        return value
 
 
 class MessageResponse(BaseModel):

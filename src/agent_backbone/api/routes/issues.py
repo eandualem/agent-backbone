@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from agent_backbone.api.deps import get_config, get_db, get_github
@@ -97,6 +98,10 @@ async def get_issue(
     """Get a single issue by number with priority score."""
     try:
         issue = await gh.get_issue(number, repo_full_name=repo)
+    except httpx.HTTPError as e:
+        # An outage, a bad token or a rate limit is not "not found": a 404
+        # would tell automation the issue is gone.
+        raise HTTPException(status_code=502, detail=f"GitHub request failed: {e}") from e
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Issue #{number} not found") from e
     return _issue_to_response(issue, config)

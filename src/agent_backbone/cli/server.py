@@ -91,7 +91,9 @@ async def _down(config: BackboneConfig) -> int:
     if not await session_exists(session):
         print("backbone is not running in tmux")
         return 0
-    await graceful_close(session, timeout=15.0)
+    if not await graceful_close(session, timeout=15.0):
+        print(f"failed to stop backbone session '{session}'")
+        return 1
     print("backbone stopped")
     return 0
 
@@ -220,6 +222,10 @@ async def _config_cmd(args: argparse.Namespace) -> int:
             if result and result[0] == 200:
                 print(f"{args.key} reset to default")
                 return 0
+            # The daemon is up and owns the live value: a failed API call
+            # must not fall through to the database and claim success.
+            print(f"API error: {result[1] if result else 'unreachable'}")
+            return 1
         async with _common.Direct(boot) as direct:
             await direct.db.settings.delete(args.key)
         print(f"{args.key} reset to default")

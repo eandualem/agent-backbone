@@ -3,8 +3,8 @@
 `backbone --help` lists everything; `ab` is the same command under a short
 name; `-v` enables debug logging. Commands go
 through the running backbone's API when it is up and fall back to the
-database (and tmux) directly when it is not — except `agent approve` and
-`tell`, which only work through the API so that every keystroke into an
+database (and tmux) directly when it is not — except `agent approve`,
+`agent deny` and `tell`, which only work through the API so that every keystroke into an
 agent is audited.
 
 ## `backbone init [--data-dir DIR] [--force]`

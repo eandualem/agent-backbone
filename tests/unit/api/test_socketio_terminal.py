@@ -45,3 +45,31 @@ class TestTerminalJoin:
             await ns.on_join("sid1", {"session": "ike", "cols": 80, "rows": 24})
         ns._attach_subscription_client.assert_awaited_once_with("sid1", "ike", 80, 24)
         ns.emit.assert_not_awaited()
+
+
+class TestTerminalMalformedPayloads:
+    async def test_non_dict_payloads_never_raise(self, config):
+        # Socket.IO payloads are client input: null, a string or a list must
+        # be ignored, never an AttributeError that leaks a subscription.
+        ns = _namespace(config)
+        for bad in (None, "ike", ["ike"], 7):
+            await ns.on_leave("sid1", bad)
+            await ns.on_resize("sid1", bad)
+            await ns.on_release_dims("sid1", bad)
+            await ns.on_pause("sid1", bad)
+            await ns.on_resume("sid1", bad)
+        ns.emit.assert_not_awaited()
+        ns._attach_subscription_client.assert_not_awaited()
+        assert ns._subscriptions == {}
+
+    async def test_non_string_session_is_ignored(self, config):
+        ns = _namespace(config)
+        for bad in ({"session": ["ike"]}, {"session": 7}, {"session": None}):
+            await ns.on_leave("sid1", bad)
+            await ns.on_resize("sid1", bad)
+            await ns.on_release_dims("sid1", bad)
+            await ns.on_pause("sid1", bad)
+            await ns.on_resume("sid1", bad)
+        ns.emit.assert_not_awaited()
+        ns._attach_subscription_client.assert_not_awaited()
+        assert ns._subscriptions == {}

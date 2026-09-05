@@ -212,11 +212,25 @@ class TerminalNamespace(_AuthenticatedNamespace):
 
         log.info("sid=%s joined session '%s' (read-only stream)", sid, session_name)
 
+    def _session_of(self, data: dict | object) -> str:
+        """The ``session`` in a client payload, or "" when it is malformed.
+
+        Socket.IO payloads are client input: ``null``, a string or a list
+        must not reach ``dict.get`` (``AttributeError``) and leak the
+        subscription the handler was about to clean up.
+        """
+        if not isinstance(data, dict):
+            return ""
+        session = data.get("session", "")
+        return session if isinstance(session, str) else ""
+
     async def on_leave(self, sid: str, data: dict) -> None:
-        await self._cleanup_session(sid, data.get("session", ""))
+        await self._cleanup_session(sid, self._session_of(data))
 
     async def on_resize(self, sid: str, data: dict) -> None:
-        session_name = data.get("session", "")
+        if not isinstance(data, dict):
+            return
+        session_name = self._session_of(data)
         cols = data.get("cols")
         rows = data.get("rows")
         if not session_name or not cols or not rows:
@@ -243,18 +257,18 @@ class TerminalNamespace(_AuthenticatedNamespace):
         await _restore_dynamic_window_size(session_name)
 
     async def on_release_dims(self, sid: str, data: dict) -> None:
-        session_name = data.get("session", "")
+        session_name = self._session_of(data)
         if not session_name or session_name not in self._subscriptions.get(sid, {}):
             return
         await self._detach_subscription_client(sid, session_name)
 
     async def on_pause(self, sid: str, data: dict) -> None:
-        pty_session = get_pty_manager().get(sid, data.get("session", ""))
+        pty_session = get_pty_manager().get(sid, self._session_of(data))
         if pty_session:
             pty_session.pause()
 
     async def on_resume(self, sid: str, data: dict) -> None:
-        pty_session = get_pty_manager().get(sid, data.get("session", ""))
+        pty_session = get_pty_manager().get(sid, self._session_of(data))
         if pty_session:
             pty_session.resume()
 

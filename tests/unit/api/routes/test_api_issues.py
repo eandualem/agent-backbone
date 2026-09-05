@@ -78,6 +78,13 @@ class TestGetIssue:
         resp = await api_client.get(f"/api/issues/999?repo={TEST_REPO}", headers=auth_headers)
         assert resp.status_code == 404
 
+    async def test_github_outage_is_502_not_404(self, api_client, auth_headers, gh):
+        import httpx
+
+        gh.get_issue.side_effect = httpx.ConnectError("connection refused")
+        resp = await api_client.get(f"/api/issues/1?repo={TEST_REPO}", headers=auth_headers)
+        assert resp.status_code == 502
+
 
 class TestComments:
     async def test_lists_comments_with_from_tag(self, api_client, auth_headers, gh):

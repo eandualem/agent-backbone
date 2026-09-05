@@ -335,8 +335,26 @@ class TestStopAgent:
         assert resp.json() == {"ok": True, "session": "ike"}
         tmux_svc.stop_session.assert_awaited_once_with("ike")
 
-    async def test_refuses_to_stop_backbone_session(self, api_client, auth_headers):
-        resp = await api_client.post("/api/agents/backbone/stop", headers=auth_headers)
+    async def test_unregistered_tmux_session_is_out_of_reach(
+        self, api_client, auth_headers, tmux_svc
+    ):
+        # The API key is a backbone credential, not a shell: stopping an
+        # arbitrary tmux session through a registered-looking path is a 404
+        # and never reaches tmux.
+        resp = await api_client.post("/api/agents/stray/stop", headers=auth_headers)
+        assert resp.status_code == 404
+        assert "not a registered agent" in resp.json()["detail"]
+        tmux_svc.stop_session.assert_not_awaited()
+
+    async def test_refuses_to_stop_backbone_session(self, api_client, auth_headers, api_app):
+        from dataclasses import replace
+
+        from agent_backbone.config import BackboneSection
+
+        api_app.state.config = replace(
+            api_app.state.config, backbone=BackboneSection(session_name="ike")
+        )
+        resp = await api_client.post("/api/agents/ike/stop", headers=auth_headers)
         assert resp.status_code == 400
 
 
@@ -453,6 +471,44 @@ class TestPostAgentState:
             "/api/agents/stray/state", json={"state": "busy"}, headers=auth_headers
         )
         assert resp.status_code == 404
+
+    async def test_unknown_state_is_rejected_not_silently_unknown(
+        self, api_client, auth_headers, api_app
+    ):
+        from agent_backbone.services.agents import read_state_file
+
+        resp = await api_client.post(
+            "/api/agents/leo/state", json={"state": "napping"}, headers=auth_headers
+        )
+        assert resp.status_code == 422
+        assert read_state_file(api_app.state.config.state_dir, "leo") is None
+
+    async def test_negative_issue_is_rejected(self, api_client, auth_headers):
+        resp = await api_client.post(
+            "/api/agents/ike/state",
+            json={"state": "busy", "issue": -5},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+
+    async def test_far_future_ts_is_rejected(self, api_client, auth_headers):
+        # A ts that stays "fresh" forever would make the push permanently
+        # authoritative over the terminal.
+        resp = await api_client.post(
+            "/api/agents/ike/state",
+            json={"state": "idle", "ts": 9999999999},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+
+    async def test_legacy_zero_ts_still_accepted(self, api_client, auth_headers, api_app):
+        from agent_backbone.services.agents import read_state_file
+
+        resp = await api_client.post(
+            "/api/agents/ike/state", json={"state": "busy", "ts": 0}, headers=auth_headers
+        )
+        assert resp.status_code == 200
+        assert read_state_file(api_app.state.config.state_dir, "ike") is not None
 
 
 class TestDeny:
