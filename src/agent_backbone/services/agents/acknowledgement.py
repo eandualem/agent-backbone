@@ -57,6 +57,7 @@ def find_outgoing_comment(
     recency_seconds: float = 30.0,
     *,
     repo: str = "",
+    include_intent: bool = True,
 ) -> str | None:
     """Session that recently commented on an issue according to the hook action log.
 
@@ -66,6 +67,8 @@ def find_outgoing_comment(
     now = time.time()
     for entry in _read_tail(action_log, max_lines):
         if entry.get("action") != "comment" or entry.get("issue") != issue_number:
+            continue
+        if not include_intent and entry.get("phase") != "succeeded":
             continue
         if not _repo_matches(entry, repo):
             continue
@@ -82,6 +85,7 @@ def find_outgoing_pull_request(
     recency_seconds: float = 900.0,
     *,
     base_repo: str = "",
+    include_intent: bool = True,
 ) -> str | None:
     """Session that recently ran ``gh pr create`` from this head repository and branch.
 
@@ -102,6 +106,8 @@ def find_outgoing_pull_request(
     now = time.time()
     for entry in _read_tail(action_log, max_lines):
         if entry.get("action") != "pull_request":
+            continue
+        if not include_intent and entry.get("phase") != "succeeded":
             continue
         entry_head = (entry.get("head_repo") or "").casefold()
         entry_base = (entry.get("repo") or "").casefold()
@@ -129,6 +135,7 @@ def has_commented_on_issue(
     for entry in _read_tail(action_log, max_lines):
         if (
             entry.get("action") == "comment"
+            and entry.get("phase") == "succeeded"
             and entry.get("issue") == issue_number
             and entry.get("session") == session
             and _repo_matches(entry, repo)

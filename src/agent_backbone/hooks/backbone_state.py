@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -41,10 +42,6 @@ REASON_QUOTA = "quota"
 
 LAST_MESSAGE_CHARS = 500
 
-# `gh pr comment` is the same acknowledgement on a pull request — GitHub
-# delivers both as issue comments, so both are the agent's own words.
-_GH_COMMENT_RE = re.compile(r"\bgh\s+(?:issue|pr)\s+comment\s+(?:\S+\s+)*?(\d+)\b")
-_GH_REPO_RE = re.compile(r"(?:--repo|-R)[\s=]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
 _ISSUE_NUMBER_RE = re.compile(r"(?:#|\bissue[\s:#]*)(\d{1,7})\b", re.IGNORECASE)
 _ISSUE_REF_RE = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d{1,7})\b")
 
@@ -96,16 +93,142 @@ def issue_from_prompt(prompt: str, current: dict) -> tuple[int | None, str | Non
     return issue, repo
 
 
-def comment_action_from_command(command: str, now: float) -> dict | None:
-    """A ``gh issue comment N`` (or ``gh pr comment N``) in a shell command is an
-    acknowledgement worth logging."""
-    match = _GH_COMMENT_RE.search(command or "")
-    if not match:
+def command_argv(command: str | list[str]) -> list[list[str]]:
+    """Parse direct commands and success-chained commands without evaluating shell text.
+
+    Ambiguous shell control flow/expansion is left to GitHub confirmation. Quoted
+    operators stay arguments; argv lists retain their original argument boundaries.
+    """
+    if isinstance(command, list):
+        if not all(isinstance(part, str) for part in command):
+            return []
+        if (
+            len(command) == 3
+            and Path(command[0]).name in {"sh", "bash", "zsh"}
+            and command[1] in {"-c", "-lc"}
+        ):
+            return command_argv(command[2])
+        return [command] if command else []
+    if not isinstance(command, str):
+        return []
+    parts, start, quote, escaped = [], 0, "", False
+    index = 0
+    command = command.strip()
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = ""
+            elif quote == '"' and char in "$`":
+                return []
+        elif char in "\"'":
+            quote = char
+        elif command[index : index + 2] == "&&":
+            parts.append(command[start:index])
+            index += 1
+            start = index + 1
+        elif char in ";|&()<>\n$`#":
+            return []
+        index += 1
+    parts.append(command[start:])
+    try:
+        parsed = [shlex.split(part) for part in parts]
+    except ValueError:
+        return []
+    control = {
+        "exit",
+        "return",
+        "exec",
+        "eval",
+        "source",
+        ".",
+        "break",
+        "continue",
+        "command",
+        "builtin",
+        "trap",
+        "alias",
+        "unalias",
+        "shopt",
+        "set",
+    }
+    return parsed if all(argv and argv[0] not in control for argv in parsed) else []
+
+
+def _gh_arguments(argv: list[str]) -> tuple[list[str], dict[str, str]] | None:
+    """Separate supported gh operands from option values (a body may contain numbers)."""
+    values = {
+        "-R": "repo",
+        "--repo": "repo",
+        "-b": "body",
+        "--body": "body",
+        "-F": "body-file",
+        "--body-file": "body-file",
+        "-H": "head",
+        "--head": "head",
+        "-B": "base",
+        "--base": "base",
+        "-t": "title",
+        "--title": "title",
+        "-a": "assignee",
+        "--assignee": "assignee",
+        "-l": "label",
+        "--label": "label",
+        "-p": "project",
+        "--project": "project",
+        "-r": "reviewer",
+        "--reviewer": "reviewer",
+        "-T": "template",
+        "--template": "template",
+        "--recover": "recover",
+    }
+    flags = {
+        "--draft",
+        "-d",
+        "--fill",
+        "--fill-first",
+        "--fill-verbose",
+        "--edit-last",
+        "--create-if-none",
+    }
+    positional, options = [], {}
+    args = iter(argv)
+    for arg in args:
+        key, separator, value = arg.partition("=")
+        if key in values:
+            value = value if separator else next(args, None)
+            if value is None:
+                return None
+            options[values[key]] = value
+        elif arg in flags:
+            continue
+        elif arg.startswith("-"):
+            return None
+        else:
+            positional.append(arg)
+    return positional, options
+
+
+def comment_action_from_argv(argv: list[str], now: float) -> dict | None:
+    if (
+        len(argv) < 3
+        or Path(argv[0]).name != "gh"
+        or argv[1:3] not in (["issue", "comment"], ["pr", "comment"])
+    ):
         return None
-    action = {"ts": now, "action": "comment", "issue": int(match.group(1))}
-    repo_match = _GH_REPO_RE.search(command)
-    if repo_match:
-        action["repo"] = repo_match.group(1)
+    parsed = _gh_arguments(argv[3:])
+    if parsed is None:
+        return None
+    operands, options = parsed
+    if len(operands) != 1 or not operands[0].isdigit():
+        return None
+    action = {"ts": now, "action": "comment", "issue": int(operands[0])}
+    if options.get("repo"):
+        action["repo"] = options["repo"]
     return action
 
 
@@ -127,8 +250,6 @@ def comment_action_from_mcp(tool: str, tool_input: dict, now: float) -> dict | N
     return action
 
 
-_GH_PR_CREATE_RE = re.compile(r"\bgh\s+pr\s+create\b")
-_GH_HEAD_RE = re.compile(r"(?:--head|-H)[\s=]+(\S+)")
 _REMOTE_RE = re.compile(r"github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 
 
@@ -144,7 +265,7 @@ def _git_output(cwd: str | None, *args: str) -> str | None:
     return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
 
 
-def pull_request_action_from_command(command: str, cwd: str | None, now: float) -> dict | None:
+def pull_request_action_from_argv(argv: list[str], cwd: str | None, now: float) -> dict | None:
     """A ``gh pr create`` in a shell command: the backbone should not announce
     that pull request back to the agent that opened it, and the issues it
     closes count as acknowledged.
@@ -154,17 +275,20 @@ def pull_request_action_from_command(command: str, cwd: str | None, now: float) 
     ``--head owner:branch`` names the owner) and the head branch. ``repo``
     is the base repository when ``--repo`` names one, else the origin.
     """
-    if not _GH_PR_CREATE_RE.search(command or ""):
+    if len(argv) < 3 or Path(argv[0]).name != "gh" or argv[1:3] != ["pr", "create"]:
         return None
+    parsed = _gh_arguments(argv[3:])
+    if parsed is None or parsed[0]:
+        return None
+    options = parsed[1]
     remote = _git_output(cwd, "remote", "get-url", "origin")
     found = _REMOTE_RE.search(remote or "")
     origin = found.group(1) if found else None
-    repo_match = _GH_REPO_RE.search(command)
-    repo = repo_match.group(1) if repo_match else origin
-    head_match = _GH_HEAD_RE.search(command)
+    repo = options.get("repo") or origin
+    head = options.get("head")
     head_repo = origin
-    if head_match:
-        owner, colon, branch = head_match.group(1).rpartition(":")
+    if head:
+        owner, colon, branch = head.rpartition(":")
         if colon and owner:
             # gh's "owner:branch" form: that owner's fork, same repository name.
             base_name = (repo or origin or "").rsplit("/", 1)[-1]
@@ -181,31 +305,64 @@ def pull_request_action_from_command(command: str, cwd: str | None, now: float) 
     return action
 
 
-def tool_actions(
-    tool: str, tool_input: dict, cwd: str | None, now: float
-) -> list[dict] | dict | None:
-    """The outgoing GitHub actions one tool call carries: a shell command's
-    (``Bash``, or Codex's list form) or the GitHub MCP server's comment."""
+def tool_actions(tool: str, tool_input: dict, cwd: str | None, now: float) -> list[dict]:
+    """Parse only shell tool arguments or the GitHub MCP comment operation."""
     if not isinstance(tool_input, dict):
-        return None
-    command = tool_input.get("command", "")
-    if isinstance(command, list):
-        command = " ".join(str(part) for part in command)
-    if command:
-        return shell_actions(str(command), cwd, now) or comment_action_from_mcp(
-            tool, tool_input, now
+        return []
+    mcp = comment_action_from_mcp(tool, tool_input, now)
+    if mcp:
+        return [mcp]
+    if tool not in {"Bash", "shell", "shell_command", "exec_command", "run_shell_command"}:
+        return []
+    return shell_actions(tool_input.get("command", tool_input.get("cmd", "")), cwd, now)
+
+
+def shell_actions(command: str | list[str], cwd: str | None, now: float) -> list[dict]:
+    actions = []
+    for argv in command_argv(command):
+        action = comment_action_from_argv(argv, now) or pull_request_action_from_argv(
+            argv, cwd, now
         )
-    return comment_action_from_mcp(tool, tool_input, now)
+        if action:
+            if not action.get("repo"):
+                remote = _git_output(cwd, "remote", "get-url", "origin")
+                found = _REMOTE_RE.search(remote or "")
+                if found:
+                    action["repo"] = found.group(1)
+            actions.append(action)
+        elif argv and argv[0] == "cd":
+            # Later gh commands run elsewhere; never infer repo/branch from the old cwd.
+            if len(argv) != 2 or cwd is None:
+                return []
+            cwd = str((Path(cwd) / argv[1]).resolve())
+    return actions
 
 
-def shell_actions(command: str, cwd: str | None, now: float) -> list[dict]:
-    """Everything a shell command tells the backbone: a comment, a pull
-    request, or both (``gh issue comment … && gh pr create …``)."""
-    actions = [
-        comment_action_from_command(command, now),
-        pull_request_action_from_command(command, cwd, now),
+def action_records(payload: dict, now: float, *, phase: str) -> list[dict]:
+    """Stamp intent or confirmed success separately so only success acknowledges."""
+    return [
+        {**action, "phase": phase}
+        for action in tool_actions(
+            payload.get("tool_name", "") or "",
+            payload.get("tool_input") or {},
+            payload.get("cwd"),
+            now,
+        )
     ]
-    return [action for action in actions if action]
+
+
+def response_succeeded(response: object) -> bool:
+    """Require explicit completion evidence; missing/streaming/error output is unknown."""
+    if not isinstance(response, dict):
+        return False
+    if any(response.get(key) for key in ("isError", "is_error", "error", "interrupted")):
+        return False
+    if response.get("success") is False:
+        return False
+    for key in ("exit_code", "exitCode"):
+        if key in response:
+            return type(response[key]) is int and response[key] == 0
+    return response.get("success") is True or response.get("isError") is False
 
 
 def plan_title(plan: str) -> str:
@@ -323,3 +480,21 @@ def run_hook(derive: Derive, argv: list[str] | None = None) -> int:
         # backbone falls back to the terminal; the agent is not disturbed.
         return 0
     return 0
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--shell-actions"]:
+    # The OpenCode plugin delegates parsing without importing the package.
+    request = json.load(sys.stdin)
+    phase = request.get("phase")
+    if phase not in {"intent", "succeeded"}:
+        raise ValueError("unknown action phase")
+    print(
+        json.dumps(
+            [
+                {**action, "phase": phase}
+                for action in shell_actions(
+                    request.get("command", ""), request.get("cwd"), time.time()
+                )
+            ]
+        )
+    )

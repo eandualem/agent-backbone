@@ -110,20 +110,29 @@ shared vocabulary:
 | `permission.asked` / `permission.replied` | `waiting_for_human` / `permission`, then `busy` |
 | `session.error` | `idle` |
 
-Each hook also appends a `gh issue comment N` it sees in a shell command to
-the action log (the acknowledgement signal), and a `gh pr create` with the
-repository and head branch — so the pull request is not announced back to
-the agent that opened it, and the issues it closes count as acknowledged. How the hooks reach a session
-is the runtime's business ([Getting started §3](getting-started.md#3-state-hooks--nothing-to-install)).
+The hooks parse actual `gh issue comment`, `gh pr comment` and `gh pr create`
+commands into `<data_dir>/state/actions.jsonl`, with repository and branch
+metadata. Claude, Codex and OpenCode record **intent** before execution to suppress a fast
+self-notification. Only a **successful completion** acknowledges work; a failed
+command or a quoted example cannot remove an issue from the agent's queue.
+Legacy action records without completion evidence no longer acknowledge work.
+
+Direct commands, argv lists and `&&` chains are supported. Ambiguous shell
+control flow, expansion, background execution and unknown completion output
+are left to GitHub confirmation through the agent's `[from:NAME]` comment.
+Claude's [completion hook](https://code.claude.com/docs/en/hooks#posttooluse)
+is distinct from its failure hook; Codex's
+[completion hook](https://learn.chatgpt.com/docs/hooks#posttooluse) also fires
+for nonzero exits, so its result is checked explicitly.
+How hooks reach a session is the runtime's business
+([Getting started §3](getting-started.md#3-state-hooks--nothing-to-install)).
 
 A fresh hook state is **authoritative**: these CLIs keep their input box
 on screen while working, so the terminal alone would say "idle" while
 they are busy. The one exception is a dialog the runtime draws itself: Claude
 Code fires `SessionStart` with its resume picker still on screen, so a
 fresh `idle` is checked against the terminal and a dialog there wins
-(`waiting_for_human` / `question`, with the evidence saying so). The hook also appends `gh issue comment …` calls (with the
-repository when `--repo` is given) to `<data_dir>/state/actions.jsonl`;
-that is how acknowledgements are detected without a spoofable text tag.
+(`waiting_for_human` / `question`, with the evidence saying so).
 
 **Terminal reading** is the fallback. Each runtime's module (`services/runtimes/<cli>.py`) knows its prompt
 character, its status chrome (lines to ignore), its busy indicator

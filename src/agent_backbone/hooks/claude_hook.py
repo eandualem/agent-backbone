@@ -75,18 +75,28 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
             ), None
         if tool == "AskUserQuestion":
             return state(STATE_WAITING, REASON_QUESTION), None
-        # Outgoing GitHub actions are logged twice: here, *before* the
-        # command runs, because the webhook for a `gh pr create` can arrive
-        # before a compound command finishes and the backbone would announce
-        # the agent's own pull request back to it; and again after it ran
-        # (below), with the branch as it actually was. A duplicate entry is
-        # harmless; a missing one is not.
-        return None, bb.tool_actions(tool, payload.get("tool_input") or {}, payload.get("cwd"), now)
+        return None, bb.action_records(payload, now, phase="intent")
     if event == "PostToolUse":
         tool = payload.get("tool_name", "")
         if tool in ("ExitPlanMode", "AskUserQuestion"):
             return state(STATE_BUSY), None
-        return None, bb.tool_actions(tool, payload.get("tool_input") or {}, payload.get("cwd"), now)
+        # Claude sends failures to PostToolUseFailure. Still reject explicit
+        # failure/interruption and background handles in successful tool output.
+        response = payload.get("tool_response")
+        if (
+            not isinstance(response, dict)
+            or not response
+            or any(
+                response.get(key) for key in ("isError", "error", "interrupted", "backgroundTaskId")
+            )
+        ):
+            return None, []
+        for key in ("exit_code", "exitCode"):
+            if key in response and response[key] != 0:
+                return None, []
+        if response.get("success") is False:
+            return None, []
+        return None, bb.action_records(payload, now, phase="succeeded")
     return None, None
 
 

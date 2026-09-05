@@ -63,10 +63,30 @@ class TestDerive:
                 "AfterTool",
                 tool_name="run_shell_command",
                 tool_input={"command": "gh issue comment 3 -R acme/app -b ok"},
+                tool_response={
+                    "llmContent": "Output: created\nProcess Group PGID: 42",
+                    "display": {"name": "Shell"},
+                    "returnDisplay": "created",
+                },
             ),
             None,
         )
         assert actions[0]["issue"] == 3 and actions[0]["repo"] == "acme/app"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {
+                "llmContent": "Output: failed\nExit Code: 1",
+                "data": {"exitCode": 1, "isError": True},
+            },
+            {"llmContent": "Command moved to background", "data": {"pid": 42}},
+            {"llmContent": "Command was cancelled by user before it could complete."},
+            {"error": {"message": "failed"}},
+        ],
+    )
+    def test_failed_or_unfinished_shell_does_not_acknowledge(self, response):
+        assert not hook.tool_succeeded({"tool_response": response})
 
 
 class TestMainWritesStateTheBackboneReads:
