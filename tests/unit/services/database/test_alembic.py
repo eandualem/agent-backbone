@@ -21,6 +21,7 @@ _EXPECTED_TABLES = {
     "issue_dependencies",
     "message_queue",
     "poll_cursors",
+    "review_lifecycle",
     "settings",
     "swarms",
 }

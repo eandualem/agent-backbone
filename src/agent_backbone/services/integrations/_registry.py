@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
+from importlib import import_module
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import BackboneConfig
@@ -16,6 +18,31 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class IntegrationDescriptor:
+    name: str
+    module: str
+    service: str
+    notifier: str
+
+    def build(self, config, db):
+        return getattr(import_module(self.module), self.service)(config, db=db)
+
+    async def notify(self, config, text, agent, actions):
+        send = getattr(import_module(self.module), self.notifier)
+        return await send(config, text, agent=agent, actions=actions)
+
+
+DESCRIPTORS = (
+    IntegrationDescriptor(
+        "telegram",
+        "agent_backbone.services.integrations.telegram.interface",
+        "TelegramService",
+        "notify_static",
+    ),
+)
+
+
 def build_integrations(
     config: Callable[[], BackboneConfig], db: BackboneDB | None = None
 ) -> Integrations:
@@ -24,9 +51,7 @@ def build_integrations(
     Unconfigured ones stay inert (``enabled`` False, ``start`` a no-op) so
     health and status can still list them.
     """
-    from agent_backbone.services.integrations.telegram import TelegramService
-
-    return Integrations([TelegramService(config, db=db)])
+    return Integrations([descriptor.build(config, db) for descriptor in DESCRIPTORS])
 
 
 class Integrations:
@@ -35,6 +60,10 @@ class Integrations:
     def __init__(self, items: list[Integration]) -> None:
         self._items = list(items)
         self._background: set[asyncio.Task] = set()
+        self._lifecycle_lock = asyncio.Lock()
+        self._stopping = False
+        self._resync_requested = False
+        self._startup_keys: dict[str, object] = {}
 
     def __iter__(self):
         return iter(self._items)
@@ -73,6 +102,45 @@ class Integrations:
                 results[integration.name] = "failed"
         return results
 
+    async def reconcile(self) -> None:
+        """Serialize enable/disable transitions without restarting running services."""
+        async with self._lifecycle_lock:
+            if self._stopping:
+                return
+            for integration in self._items:
+                try:
+                    key = integration.startup_key
+                    if integration.running and (
+                        not integration.can_start or self._startup_keys.get(integration.name) != key
+                    ):
+                        await integration.stop()
+                    if integration.can_start and not integration.running:
+                        await integration.start()
+                        if integration.running:
+                            self._startup_keys[integration.name] = key
+                except Exception:
+                    log.exception("%s lifecycle reconciliation failed", integration.name)
+            await self.sync_agents()
+
+    async def stop(self) -> None:
+        self._stopping = True
+        for task in self._background:
+            task.cancel()
+        await asyncio.gather(*self._background, return_exceptions=True)
+        async with self._lifecycle_lock:
+            for integration in reversed(self._items):
+                await integration.stop()
+
+    async def start(self) -> None:
+        self._stopping = False
+        await self.reconcile()
+
+    async def health_check(self) -> dict:
+        return {
+            "healthy": all(i.running or not i.enabled for i in self._items),
+            "integrations": self.health(),
+        }
+
     async def sync_agents(self) -> None:
         """Let every enabled integration re-provision its per-agent surfaces."""
         for integration in self.enabled:
@@ -83,10 +151,19 @@ class Integrations:
 
     def schedule_sync(self) -> None:
         """Fire-and-forget ``sync_agents`` from a synchronous callback (config publish)."""
+        self._resync_requested = True
+        if self._stopping or any(not t.done() for t in self._background):
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        task = loop.create_task(self.sync_agents(), name="integrations-sync")
+
+        async def drain_changes():
+            while self._resync_requested and not self._stopping:
+                self._resync_requested = False
+                await self.reconcile()
+
+        task = loop.create_task(drain_changes(), name="integrations-sync")
         self._background.add(task)
         task.add_done_callback(self._background.discard)

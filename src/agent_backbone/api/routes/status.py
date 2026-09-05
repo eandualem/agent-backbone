@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends
@@ -44,10 +45,15 @@ async def get_system_status(
     active = await list_sessions()
     active_set = set(active)
 
-    agents: list[EnrichedAgent] = [
-        await build_enriched_agent(session, config, active_set)
-        for session in listable_sessions(config, active_set)
-    ]
+    limit = asyncio.Semaphore(8)
+
+    async def enrich(session):
+        async with limit:
+            return await build_enriched_agent(session, config, active_set)
+
+    agents: list[EnrichedAgent] = await asyncio.gather(
+        *(enrich(session) for session in listable_sessions(config, active_set))
+    )
 
     failed_rows = await db.deliveries.failed(limit=1000)
 
@@ -68,9 +74,16 @@ async def get_system_status(
     pending_issues: int | None = None
     if gh is not None and repos:
         try:
-            pending_issues = 0
-            for repo in config.agents.repos:
-                pending_issues += len(await gh.list_issues(state="open", repo_full_name=repo))
+
+            async def count(repo):
+                async with limit:
+                    return len(
+                        await gh.list_issues(state="open", repo_full_name=repo, all_pages=True)
+                    )
+
+            pending_issues = sum(
+                await asyncio.gather(*(count(repo) for repo in config.agents.repos))
+            )
         except Exception:
             log.warning("Failed to fetch pending issues from GitHub")
             pending_issues = None

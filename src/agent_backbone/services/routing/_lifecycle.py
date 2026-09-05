@@ -7,6 +7,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import DeliveryOutcome, EventType, IssueData, IssueEvent
+from agent_backbone.services.github import QueueSnapshot
 from agent_backbone.services.routing._dedup import is_recent_notification
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._dependencies import on_dependency_resolved
@@ -14,6 +15,7 @@ from agent_backbone.services.routing._format import (
     format_closed_notification,
     format_next_issue_notification,
 )
+from agent_backbone.services.routing._outbox import flush_outbox
 from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import (
     list_open_queue_for_target,
@@ -37,9 +39,11 @@ async def find_next_issue(
     entity: str,
     gh: GitHubClient,
     exclude: tuple[str, int] | None = None,
+    *,
+    db=None,
 ) -> IssueData | None:
     """Highest-priority open issue in an agent's queue, excluding the just-closed one."""
-    issues = await list_open_queue_for_target(config, entity, gh)
+    issues = await list_open_queue_for_target(config, entity, gh, db=db)
     if exclude is not None:
         issues = [
             i
@@ -76,9 +80,12 @@ async def on_issue_closed(
     config: BackboneConfig,
     gh: GitHubClient,
     db: BackboneDB | None = None,
+    *,
+    event_id: int | None = None,
 ) -> dict:
     """Handle an issue_closed event."""
     result: dict[str, str] = {}
+    gh = QueueSnapshot(gh)
     repo = event.issue.repo_full_name
     closed = (repo, event.issue.number)
 
@@ -103,7 +110,7 @@ async def on_issue_closed(
             result[target] = "offline"
             continue
 
-        next_issue = await find_next_issue(config, target, gh, exclude=closed)
+        next_issue = await find_next_issue(config, target, gh, exclude=closed, db=db)
         if not next_issue:
             result[target] = "queue_empty"
             continue
@@ -133,18 +140,25 @@ async def on_issue_closed(
     if sender and sender in config.agents and sender not in targets:
         session_name = resolve_entity_session(sender, config)
         if session_name:
-            outcome = await safe_deliver(
-                session_name,
-                format_closed_notification(event.issue),
-                config,
-                db=db,
-                repo=repo,
-                issue_number=event.issue.number,
-                target_entity=sender,
-                source=SOURCE,
-                delivery_kind="watch",
-            )
-            result[f"opener:{sender}"] = outcome.value
+            closed_at = event.issue.closed_at or event.delivery_id
+            delivery = {
+                "session_name": session_name,
+                "message": format_closed_notification(event.issue),
+                "repo": repo,
+                "issue_number": event.issue.number,
+                "target_entity": sender,
+                "delivery_kind": "watch",
+                "enforce_issue_queue": False,
+                "source_key": f"closed:{repo.casefold()}#{event.issue.number}@{closed_at}",
+            }
+            if db is not None and event_id is not None:
+                receipt = await flush_outbox(event_id, config, db, gh, plan=[delivery])
+                result[f"opener:{sender}"] = (
+                    "delivered" if receipt.delivered else "pending_or_recorded"
+                )
+            else:
+                outcome = await safe_deliver(**delivery, config=config, db=db, source=SOURCE)
+                result[f"opener:{sender}"] = outcome.value
 
     if db is not None:
         try:

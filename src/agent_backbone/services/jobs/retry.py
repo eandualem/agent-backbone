@@ -105,7 +105,7 @@ async def _drain_session(config, db, gh, session_name, summary) -> None:
                         continue
                     if issue is None:
                         raise RuntimeError("Current issue could not be verified")
-                    scope = queue_scope(await list_open_queue_for_target(config, target, gh))
+                    scope = queue_scope(await list_open_queue_for_target(config, target, gh, db=db))
                 except Exception:
                     # Without the open queue the acknowledgement gate would
                     # widen to every historical delivery (closed issues
@@ -193,7 +193,7 @@ async def retry_delivery(
     target = delivery["target_entity"]
     repo = delivery.get("repo") or ""
 
-    scope = queue_scope(await list_open_queue_for_target(config, target, gh))
+    scope = queue_scope(await list_open_queue_for_target(config, target, gh, db=db))
     outcome = await safe_deliver(
         session_name,
         format_next_issue_notification(issue),

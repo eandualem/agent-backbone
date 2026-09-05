@@ -390,3 +390,34 @@ class TestDurableBoundary:
         gh.list_comments_since.return_value = []
         await GitHubPoller(config, db, gh).run()
         gh.list_issues_since.assert_awaited_once()
+
+
+async def test_review_poll_fetches_commit_anchored_lifecycle(config, db):
+    config = replace(config, github=replace(config.github, reviewers=("reviewer",)))
+    gh = AsyncMock()
+    pull = {"number": 1, "head": {"sha": "new-head"}, "labels": []}
+    gh.list_pulls_raw.return_value = [pull]
+    gh.list_check_runs.return_value = [
+        {
+            "id": 10,
+            "status": "in_progress",
+            "head_sha": "new-head",
+            "started_at": "2026-09-05T15:00:00Z",
+            "app": {"slug": "reviewer"},
+        }
+    ]
+    gh.list_reviews_raw.return_value = [
+        {
+            "id": 20,
+            "state": "commented",
+            "commit_id": "old-head",
+            "submitted_at": "2026-09-05T15:01:00Z",
+            "user": {"login": "reviewer[bot]"},
+        }
+    ]
+    events = await GitHubPoller(config, db, gh)._review_events(
+        TEST_REPO, "2026-09-05T14:00:00Z", config
+    )
+    assert [e.event_type for e in events] == [EventType.REVIEW_STARTED, EventType.REVIEW_SUBMITTED]
+    assert events[0].review.commit_id == "new-head"
+    assert events[1].review.commit_id == "old-head" and events[1].review.head_sha == "new-head"

@@ -21,7 +21,7 @@ from agent_backbone.api.deps import get_config, get_db, get_issue_closed_hooks, 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import IssueEvent
 from agent_backbone.services.database import BackboneDB
-from agent_backbone.services.github import GitHubClient
+from agent_backbone.services.github import GitHubClient, review_started_event
 from agent_backbone.services.routing import IssueClosedHook, dispatch_event
 
 log = logging.getLogger(__name__)
@@ -65,6 +65,20 @@ async def _handle(
     if event_type_str == "ping":
         return Response(content="pong", status_code=200)
     action = payload.get("action", "")
+
+    if event_type_str == "check_run":
+        check = payload.get("check_run") or {}
+        reviewer = (check.get("app") or {}).get("slug", "")
+        if gh is None or not config.github.is_reviewer(reviewer):
+            return Response(content="ignored: check is not a configured reviewer")
+        repo = payload.get("repository", {}).get("full_name", "")
+        outcomes = []
+        for linked in check.get("pull_requests", []):
+            pull = await gh.get_pull_raw(linked["number"], repo)
+            event = review_started_event(check, pull, repo, delivery_id)
+            if event is not None:
+                outcomes.append(await dispatch_event(event, config, db, gh))
+        return Response(content="; ".join(outcomes) or "ignored: check has no PR/start metadata")
 
     event = IssueEvent.from_webhook(event_type_str, action, payload, delivery_id)
     log.info(

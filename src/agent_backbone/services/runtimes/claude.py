@@ -4,13 +4,35 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks.install import save_settings
+from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes.base import Runtime
 
 log = logging.getLogger(__name__)
+
+
+def pre_accept_bypass(*, claude_config: Path | None = None) -> bool:
+    """Record the owner's explicit unattended choice; never enable bypass mode.
+
+    Claude 2.1.261 still reads this legacy consent field and migrates it to
+    skipDangerousModePermissionPrompt. The launch flag remains the mode gate.
+    """
+    config_file = claude_config or (Path.home() / ".claude.json")
+    try:
+        data = json.loads(config_file.read_text()) if config_file.is_file() else {}
+        if not isinstance(data, dict):
+            return False
+        if data.get("bypassPermissionsModeAccepted") is not True:
+            data["bypassPermissionsModeAccepted"] = True
+            atomic_write_text(config_file, json.dumps(data, indent=2))
+        return True
+    except (OSError, ValueError):
+        log.warning("Could not record bypass consent; the launch dialog will appear")
+        return False
 
 
 def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = None) -> bool:
@@ -44,6 +66,7 @@ def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = N
 
 class ClaudeCode(Runtime):
     id = "claude"
+    fallback_prompts = ("❯",)
     display_name = "Claude Code"
     aliases = ("claude-code", "claude code")
     binary = "claude"
@@ -54,11 +77,10 @@ class ClaudeCode(Runtime):
     efforts = ("low", "medium", "high", "xhigh", "max")
     # "--dangerously-skip-permissions  Bypass all permission checks." No OS
     # sandbox behind it: trust on the machine. Claude Code asks once per
-    # machine to accept bypass mode (see prompt_markers): the backbone shows
-    # the dialog and never answers it — a person does, once.
+    # machine to accept bypass mode; only an explicit unattended launch
+    # records consent before starting.
     unattended_args = ("--dangerously-skip-permissions",)
 
-    hook_script = "claude_hook.py"
     # An empty matcher means every tool; None omits the matcher.
     hook_events = (
         ("SessionStart", None),
@@ -103,8 +125,7 @@ class ClaudeCode(Runtime):
         # Yes, I accept" (live capture, 2.1.x, first unattended start). Without
         # this marker its unnumbered "❯ No, exit" reads as an idle prompt with
         # typed text; with it the agent is waiting_for_human. Its options
-        # carry no numbers, so it is never an answerable dialog: `agent
-        # approve` types nothing (Enter would exit), a person answers it once.
+        # carry no numbers: `agent approve` types nothing (Enter would exit).
         "bypass permissions mode",
     )
     # "❯ 1. Yes" is preselected in the permission dialog (live capture, 2.1.x);
@@ -118,6 +139,44 @@ class ClaudeCode(Runtime):
 
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_directory(directory)
+
+    def prepare_unattended(self) -> None:
+        pre_accept_bypass()
+
+    @staticmethod
+    def _unnumbered_dialog(pane_content: str) -> bool:
+        lines = sanitize_pane_content(pane_content).rstrip().splitlines()[-24:]
+        if not lines or not re.fullmatch(
+            r"\s*Enter to confirm\s*[·•]\s*Esc to cancel\s*", lines[-1]
+        ):
+            return False
+        options = []
+        for line in reversed(lines[:-1]):
+            if not line.strip():
+                if options:
+                    break
+                continue
+            if re.match(r"\s*❯\s+\S", line) or re.match(r"\s{2,}\S", line):
+                options.append(line)
+            else:
+                break
+        return len(options) >= 2 and sum("❯" in line for line in options) == 1
+
+    def detect_dialog_chrome(self, pane_content: str) -> bool:
+        return self._unnumbered_dialog(pane_content) or super().detect_dialog_chrome(pane_content)
+
+    def detect_active_dialog(self, pane_content: str) -> bool:
+        return self._unnumbered_dialog(pane_content) or super().detect_active_dialog(pane_content)
+
+    def detect_choice_dialog(self, pane_content: str) -> bool:
+        # Unknown pickers and negative selections need a person. No verified
+        # affirmative key sequence exists for the unnumbered form yet.
+        if self._unnumbered_dialog(pane_content):
+            return True
+        selected = re.findall(r"(?m)^\s*❯\s*\d+[.)]\s*(.+)$", sanitize_pane_content(pane_content))
+        if selected and self.detect_active_dialog(pane_content):
+            return not bool(re.match(r"(?:yes|allow|approve)\b", selected[-1], re.I))
+        return super().detect_choice_dialog(pane_content)
 
     def hook_settings_path(self, project_dir: Path | None) -> Path:
         if project_dir is not None:

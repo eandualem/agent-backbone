@@ -21,7 +21,9 @@ backbone picks it up on its next refresh.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -41,9 +43,12 @@ def sqlite_url(data_dir: Path) -> str:
     return f"sqlite+aiosqlite:///{data_dir / SQLITE_FILENAME}"
 
 
-RUNTIMES: tuple[str, ...] = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "shell")
-"""The ``agents.default_runtime`` vocabulary. ``services.runtimes`` registers
-exactly these ids (asserted at import); the knowledge about each lives there."""
+# Declarative data is read without importing the runtime service into this leaf.
+RUNTIME_METADATA = tuple(
+    json.loads((Path(__file__).parent / "services" / "runtimes" / "catalog.json").read_text())
+)
+RUNTIMES: tuple[str, ...] = tuple(entry["id"] for entry in RUNTIME_METADATA)
+
 
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "BACKBONE_API_KEY",
@@ -71,8 +76,10 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "agents.default_runtime": "claude",
     "agents.pre_trust": True,
     "agents.inject_brief": True,
+    "agents.shared_policy": [],
     "agents.writable_dirs": [],
     "agents.auto_review": False,
+    "github.reviewers": [],
     "github.intake": "auto",  # auto | webhook | poll | off
     "github.poll_interval_seconds": 60,
     "github.backfill_on_start": True,
@@ -127,9 +134,13 @@ SETTINGS_HELP: dict[str, str] = {
     "agents.inject_brief": (
         "Give each agent the backbone's brief at launch (system prompt or initial prompt)"
     ),
+    "agents.shared_policy": "Ordered policy names from <data_dir>/policies/<name>.md (JSON list)",
     "agents.writable_dirs": (
         "Directories outside an agent's own that a sandboxed runtime (Codex) may also "
         "write to, e.g. a package cache such as ~/.cache/uv (JSON list)"
+    ),
+    "github.reviewers": (
+        "Reviewer accounts/app slugs whose PR comments become commit-anchored lifecycle notices"
     ),
     "github.intake": "auto | webhook | poll | off — how GitHub events arrive",
     "github.poll_interval_seconds": "Poll frequency when intake resolves to poll",
@@ -194,6 +205,18 @@ def validate_setting(key: str, value: Any) -> Any:
     if key in _SETTING_CHOICES:
         if not isinstance(value, str) or value not in _SETTING_CHOICES[key]:
             raise ValueError(f"{key}: expected one of {', '.join(_SETTING_CHOICES[key])}")
+        return value
+    if key == "agents.shared_policy":
+        if (
+            not isinstance(value, list)
+            or not all(
+                isinstance(v, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,40}", v) for v in value
+            )
+            or len(set(value)) != len(value)
+        ):
+            raise ValueError(
+                f"{key}: expected unique policy names (lowercase letters, digits, hyphens)"
+            )
         return value
     if key in _INT_LIST_SETTINGS:
         if not isinstance(value, list):
@@ -420,6 +443,7 @@ class LaunchConfig:
     default_runtime: str = "claude"
     pre_trust: bool = True
     inject_brief: bool = True
+    shared_policy: tuple[str, ...] = ()
     writable_dirs: tuple[str, ...] = ()
     auto_review: bool = False
 
@@ -428,10 +452,16 @@ class LaunchConfig:
 class GitHubConfig:
     """``github.*`` — intake settings (non-secret). Credentials come from the environment."""
 
+    reviewers: tuple[str, ...] = ()
     intake: str = "auto"
     poll_interval_seconds: int = 60
     backfill_on_start: bool = True
     backfill_lookback_hours: int = 24
+
+    def is_reviewer(self, login: str) -> bool:
+        return login.casefold().removesuffix("[bot]") in {
+            name.casefold().removesuffix("[bot]") for name in self.reviewers
+        }
 
 
 @dataclass(frozen=True)
@@ -702,10 +732,12 @@ def build_config(
             default_runtime=s["agents.default_runtime"],
             pre_trust=s["agents.pre_trust"],
             inject_brief=s["agents.inject_brief"],
+            shared_policy=tuple(s["agents.shared_policy"]),
             writable_dirs=tuple(str(d) for d in s["agents.writable_dirs"]),
             auto_review=s["agents.auto_review"],
         ),
         github=GitHubConfig(
+            reviewers=tuple(s["github.reviewers"]),
             intake=s["github.intake"],
             poll_interval_seconds=s["github.poll_interval_seconds"],
             backfill_on_start=s["github.backfill_on_start"],

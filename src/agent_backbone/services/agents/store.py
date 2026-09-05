@@ -13,6 +13,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,6 +27,7 @@ from agent_backbone.config import (
 )
 from agent_backbone.git import detect_repo
 from agent_backbone.services.agents._locks import lifecycle_lock, serialized_mutation
+from agent_backbone.services.agents._validation import validate_agent_spec, validate_repo
 
 if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
@@ -190,6 +192,7 @@ class AgentStore:
     @serialized_mutation
     async def register(self, spec: AgentSpec) -> AgentSpec:
         """Insert or update an agent and publish the new snapshot."""
+        validate_agent_spec(spec)
         await self._db.agents.upsert(
             spec.name,
             dir=spec.dir,
@@ -225,11 +228,16 @@ class AgentStore:
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}")
-        if "tags" in changes:
-            changes["tags"] = tuple(changes["tags"])
         for flag in ("always_on", "unattended"):
             if flag in changes:
                 changes[flag] = _flag(flag, changes[flag])
+        await self.refresh()
+        current = self._agents.get(name)
+        if current is None:
+            raise KeyError(name)
+        if changes.get("runtime", current.runtime) != current.runtime:
+            changes.setdefault("unattended", False)
+        validate_agent_spec(replace(current, **changes))
         if not await self._db.agents.update_fields(name, changes):
             raise KeyError(name)
         await self.refresh()
@@ -246,6 +254,7 @@ class AgentStore:
 
     @serialized_mutation
     async def watch(self, name: str, repo: str) -> AgentSpec:
+        validate_repo(repo)
         await self.refresh()
         if name not in self._agents:
             raise KeyError(name)

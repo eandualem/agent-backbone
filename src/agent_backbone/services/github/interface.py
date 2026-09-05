@@ -283,7 +283,40 @@ class GitHubClient:
             labels=labels,
             html_url=item.get("html_url", ""),
             repo_full_name=repo_full_name,
+            created_at=item.get("created_at") or "",
+            closed_at=item.get("closed_at") or "",
+            is_pull_request="pull_request" in item,
         )
+
+    async def get_pull_raw(self, number: int, repo_full_name: str) -> dict:
+        resp = await self._request("GET", f"/pulls/{number}", repo_full_name=repo_full_name)
+        return resp.json()
+
+    async def list_pulls_raw(self, repo_full_name: str) -> list[dict]:
+        return await self._request_all(
+            "/pulls", repo_full_name=repo_full_name, params={"state": "open", "per_page": 100}
+        )
+
+    async def list_reviews_raw(self, number: int, repo_full_name: str) -> list[dict]:
+        return await self._request_all(
+            f"/pulls/{number}/reviews", repo_full_name=repo_full_name, params={"per_page": 100}
+        )
+
+    async def list_check_runs(self, sha: str, repo_full_name: str) -> list[dict]:
+        items = []
+        page = 1
+        while True:
+            resp = await self._request(
+                "GET",
+                f"/commits/{sha}/check-runs",
+                repo_full_name=repo_full_name,
+                params={"per_page": 100, "page": page},
+            )
+            batch = resp.json().get("check_runs", [])
+            items.extend(batch)
+            if "next" not in resp.links:
+                return items
+            page += 1
 
     # --- Raw listing (used by the poller) ---
 

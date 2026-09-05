@@ -30,11 +30,15 @@ This page follows real requests through the system. Read
    without hooks. A fresh busy or blocked hook keeps startup waiting even if
    the terminal shows an empty prompt. If the runtime is asking a question (Claude's folder-trust
    prompt, the "resume from summary" picker on `--resume`), `start` returns
-   `waiting_for_human` with the question shown instead of guessing, and
-   `backbone agent approve` answers it. A dialog is recognised by its
-   furniture — numbered options with a selection cursor — so a dialog the
-   backbone has never seen still counts. The wait always ends in one of
+   `waiting_for_human` with the question shown. `backbone agent approve` answers
+   verified permission prompts; Claude Code's unnumbered pickers and a selected
+   negative answer require a person in the terminal. Numbered options with a
+   selection cursor are recognized generically; Claude also recognizes its
+   unnumbered option block with the Enter/Esc footer. Startup always ends as
    `ready`, `waiting_for_human`, `exited` or `timeout`.
+   An explicitly unattended Claude launch pre-records bypass consent in
+   `~/.claude.json`; ordinary launches never do. The runtime's bypass flag still
+   controls its mode. Folder trust remains controlled by `agents.pre_trust`.
 5. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
 The running backbone serializes registration, edits, watches, start, stop and
@@ -267,9 +271,8 @@ An agent's **queue** is the union of `for:<agent>` issues in every
 repository it owns or watches plus, if it is the sole owner of its
 repository, that repository's unlabelled open issues. Swarm members are not
 repository owners. The queue excludes the issue's sender and uses the complete
-open listing before scoring. The current score combines the blocking bonus,
-type weight and an issue-number age proxy; dependent counts are not yet wired
-into queue scoring (see [GitHub](github.md#the-agents-queue-and-its-order)).
+open listing before scoring. The score combines the blocking bonus,
+type weight, recorded dependent counts and age in days from GitHub creation time (see [GitHub](github.md#the-agents-queue-and-its-order)).
 
 ### A comment is added
 
@@ -284,8 +287,9 @@ opener and the sole owner), minus the reviewer when it is an agent
 (`[from:X]` in the review body). One message per review — verdict,
 summary preview, reviewed commit and current head, link — not one per inline comment: every inline comment
 belongs to a review, and the agent reads them on GitHub. A review on a
-closed pull request notifies nobody. Reviews arrive through the webhook
-intake; the poll intake lists issues and comments only.
+closed pull request notifies nobody. Reviews arrive through webhooks; configured reviewer accounts are also polled.
+Their PR comments are suppressed in favor of started/finished lifecycle notices
+anchored to the reviewed commit. See [review lifecycle](github.md#review-lifecycle).
 
 ### An issue is closed — close-then-next
 
@@ -367,3 +371,9 @@ caught up on restart: poll intake resumes from its durable per-repository cursor
 webhook intake runs its startup backfill. The `agent-monitor` job runs
 its first tick immediately, so hook state for every running session is
 re-read and missed plan-waiting notifications fire right after a restart.
+
+Queue lists and sub-issue reads share one complete repository snapshot within a
+monitor tick or close event. Each tick/request starts a new snapshot; a failed
+read stays failed within that snapshot. Status fans out with at most eight
+concurrent reads. Terminal readiness and individual issue retirement checks stay
+fresh at delivery time.

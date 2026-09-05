@@ -18,7 +18,6 @@ class Gemini(Runtime):
     binary = "gemini"
     brief_mode = "initial_prompt"
 
-    hook_script = "gemini_hook.py"
     hook_events = (
         ("SessionStart", None),
         ("SessionEnd", None),

@@ -182,10 +182,18 @@ def format_review_notification(issue: IssueData, review: ReviewData) -> str:
     link = review.html_url or issue.html_url
     # The commit is what lets the agent tell a review of its latest push
     # from one of an earlier commit arriving late.
-    anchor = f" of {review.commit_id[:7]}" if review.commit_id else ""
+    anchor = f" of {review.commit_id[:7]}" if review.commit_id else " of unknown commit"
+    if review.head_sha and review.head_sha != review.commit_id:
+        anchor += f" (current head {review.head_sha[:7]}; earlier commit)"
+    if review.submitted_at:
+        anchor += f" at {review.submitted_at}"
+    phase = "started" if review.state == "started" else "finished"
+    if review.state == "started":
+        summary = "Await the submitted review; check completion alone is not a review verdict."
     return (
         f"[via:github pr:{issue.number}] "
-        f'Review on {_issue_ref(issue)} "{issue.title}" from {attribution} ({verdict}){anchor}: '
+        f'Review {phase} on {_issue_ref(issue)} "{issue.title}" '
+        f"from {attribution} ({verdict}){anchor}: "
         f"{summary} Link: {link}"
     ).rstrip()
 

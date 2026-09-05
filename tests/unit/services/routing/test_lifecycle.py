@@ -120,7 +120,11 @@ class TestOnIssueClosed:
         assert result["feynman"] == "delivered_#11"
         assert mock_find.await_args.kwargs["exclude"] == ("acme/agent-shell", 10)
         mock_deps.assert_awaited_once_with(
-            10, "acme/agent-shell", config, mock_deps.await_args.args[3], mock_gh
+            10,
+            "acme/agent-shell",
+            config,
+            mock_deps.await_args.args[3],
+            mock_deps.await_args.args[4],
         )
 
     async def test_default_repo_runs_dependency_hooks(self, config):

@@ -70,6 +70,7 @@ async def list_issues(
     repo: str = Query(..., description="owner/name"),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
+    db: BackboneDB = Depends(get_db),
 ):
     """List issues in a repository with filtering. Enriched with priority scores."""
     labels: list[str] = []
@@ -83,7 +84,11 @@ async def list_issues(
         labels.append(label)
 
     issues = await gh.list_issues(state=state, labels=labels, repo_full_name=repo)
-    items = [_issue_to_response(i, config) for i in issues]
+    counts = await db.dependencies.counts()
+    items = [
+        _issue_to_response(i, config, counts.get((i.repo_full_name.casefold(), i.number), 0))
+        for i in issues
+    ]
     items.sort(key=lambda item: (-item.priority_score, item.number))
     return ListEnvelope(items=items, total=len(items))
 
@@ -94,6 +99,7 @@ async def get_issue(
     repo: str = Query(..., description="owner/name"),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
+    db: BackboneDB = Depends(get_db),
 ):
     """Get a single issue by number with priority score."""
     try:
@@ -110,7 +116,10 @@ async def get_issue(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error") from e
-    return _issue_to_response(issue, config)
+    counts = await db.dependencies.counts()
+    return _issue_to_response(
+        issue, config, counts.get((issue.repo_full_name.casefold(), issue.number), 0)
+    )
 
 
 @router.get("/issues/{number}/comments", response_model=ListEnvelope[IssueCommentResponse])

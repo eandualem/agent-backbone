@@ -67,8 +67,10 @@ launch modes. Their unattended switches (`--auto`,
 `--dangerously-skip-permissions`, and `--approval-mode yolo`) trust the agent
 with the machine and its credentials. This remains an explicit per-agent
 choice; a swarm leaves these members asking for approval. Claude Code also
-requires its one-time bypass acceptance, with *No, exit* preselected; the
-backbone reports that dialog and leaves it for a human to answer.
+requires its one-time bypass acceptance. An explicitly unattended launch
+pre-records that consent in `~/.claude.json`; ordinary launches never do.
+If the dialog still appears with *No, exit* preselected, `agent approve`
+refuses to confirm it and a person must answer in the terminal.
 
 `agents.writable_dirs` is machine-wide by design and applies to every Codex
 agent the backbone starts. Use it for deliberately shared tooling directories:

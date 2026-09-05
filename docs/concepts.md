@@ -179,3 +179,8 @@ Background loops inside the backbone process:
   protocol.
 - **Who may talk to whom.** Any agent can message any agent through the API.
 - **Whether to restart a dead agent.** It reports; it never restarts.
+
+Runtime registration is declared in `services/runtimes/catalog.json`: IDs,
+detection order and hook files feed configuration, the runtime registry and
+hook installation from the same data. Runtime behavior remains in each runtime's
+module; shipped hook scripts stay standalone.

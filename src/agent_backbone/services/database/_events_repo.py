@@ -9,6 +9,38 @@ from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 
 class EventRepo(Repo):
+    async def review_finished(self, source_key: str) -> bool:
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text("SELECT 1 FROM review_lifecycle WHERE source_key = :key"), {"key": source_key}
+            )
+            return result.scalar_one_or_none() is not None
+
+    async def finish_review(self, source_key: str) -> None:
+        async with self._tx() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO review_lifecycle (source_key, finished_at) VALUES (:key, :now) "
+                    "ON CONFLICT (source_key) DO UPDATE SET finished_at = excluded.finished_at"
+                ),
+                {"key": source_key, "now": now_iso()},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET status = 'delivered', delivered_at = :now "
+                    "WHERE dedup_key = :key AND status IN ('pending', 'in_progress')"
+                ),
+                {"key": f"src:{source_key}", "now": now_iso()},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE event_outbox SET status = 'skipped', updated_at = :now "
+                    "WHERE status IN ('pending', 'failed') AND event_id IN "
+                    "(SELECT id FROM events WHERE delivery_id = :key)"
+                ),
+                {"key": source_key, "now": now_iso()},
+            )
+
     async def poll_cursor(self, repo: str) -> str | None:
         """The persisted GitHub replay boundary, not an event receipt time."""
         async with self._tx() as conn:
@@ -124,6 +156,13 @@ class EventRepo(Repo):
             params = {"cutoff": cutoff_iso(days=retention_days)}
             await conn.execute(
                 text(f"DELETE FROM event_outbox WHERE event_id IN ({expired})"), params
+            )
+            await conn.execute(
+                text(
+                    "DELETE FROM review_lifecycle WHERE finished_at < :cutoff AND NOT EXISTS "
+                    "(SELECT 1 FROM events WHERE delivery_id = review_lifecycle.source_key)"
+                ),
+                params,
             )
             result = await conn.execute(text(f"DELETE FROM events WHERE id IN ({expired})"), params)
             return result.rowcount

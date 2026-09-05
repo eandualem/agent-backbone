@@ -83,11 +83,28 @@ def get_topic(name: str, data_dir: Path | None = None) -> str | None:
     return load_template(name, _TOPICS_DIR, _override_dir(data_dir))
 
 
-def render_agent_brief(facts: dict[str, str], data_dir: Path | None = None) -> str:
+def render_agent_brief(
+    facts: dict[str, str], data_dir: Path | None = None, *, policy_names: tuple[str, ...] = ()
+) -> str:
     """The common brief injected into every backbone-started agent.
 
     Complements the project's own instructions (CLAUDE.md still loads);
     ``<data_dir>/agent-brief.md`` overrides the shipped template.
     """
     template = load_template("agent-brief", Path(__file__).parent, data_dir)
-    return render(template or "", facts)
+    brief = render(template or "", facts)
+    # Full overrides keep their original meaning, including control over policy.
+    if data_dir is not None and (data_dir / "agent-brief.md").is_file():
+        return brief
+    for name in policy_names:
+        if data_dir is None or not _NAME_RE.fullmatch(name):
+            raise ValueError(f"Invalid shared policy name: {name!r}")
+        path = data_dir / "policies" / f"{name}.md"
+        try:
+            policy = path.read_text().strip()
+        except OSError as exc:
+            raise ValueError(f"Cannot read configured shared policy {name!r}: {path}") from exc
+        if not policy:
+            raise ValueError(f"Configured shared policy {name!r} is empty: {path}")
+        brief += f"\n\n## Shared policy: {name}\n\n{policy}\n"
+    return brief

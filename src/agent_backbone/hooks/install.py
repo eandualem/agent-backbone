@@ -20,16 +20,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+from agent_backbone.config import RUNTIME_METADATA
 from agent_backbone.fs import atomic_write_text
 
 HOOK_MARKER = "agent-backbone"
 
 HOOK_FILES = (
     "backbone_state.py",
-    "claude_hook.py",
-    "codex_hook.py",
-    "gemini_hook.py",
-    "opencode_hook.js",
+    *(entry["hook_script"] for entry in RUNTIME_METADATA if entry["hook_script"]),
 )
 """Everything ``<data_dir>/hooks/`` receives; the runtime names its own script."""
 

@@ -53,6 +53,13 @@ async def flush_outbox(
                 result.skipped.append(recipient)
                 continue
             delivery = dict(row["delivery"])
+            source_key = delivery.get("source_key") or ""
+            if source_key.startswith("review-start:") and await db.events.review_finished(
+                source_key
+            ):
+                await db.outbox.set_status(event_id, recipient, "skipped")
+                result.skipped.append(recipient)
+                continue
             target = delivery["target_entity"]
             session = resolve_entity_session(target, config)
             if session is None:
@@ -72,16 +79,22 @@ async def flush_outbox(
                         await db.outbox.set_status(event_id, recipient, "skipped")
                         result.skipped.append(recipient)
                         continue
-                    if issue.state == "closed" or (
-                        delivery["delivery_kind"] == "issue"
-                        and target not in route_issue(issue, EventType.ISSUE_OPENED, config).queue
+                    closure = (delivery.get("source_key") or "").startswith("closed:")
+                    if (
+                        (issue.state == "closed" and not closure)
+                        or (closure and issue.state != "closed")
+                        or (
+                            delivery["delivery_kind"] == "issue"
+                            and target
+                            not in route_issue(issue, EventType.ISSUE_OPENED, config).queue
+                        )
                     ):
                         await db.outbox.set_status(event_id, recipient, "skipped")
                         result.skipped.append(recipient)
                         continue
                     if delivery["enforce_issue_queue"]:
                         delivery["queue_scope"] = queue_scope(
-                            await list_open_queue_for_target(config, target, gh)
+                            await list_open_queue_for_target(config, target, gh, db=db)
                         )
 
                 async def receipt(report: DeliveryReport, recipient: str = recipient) -> None:

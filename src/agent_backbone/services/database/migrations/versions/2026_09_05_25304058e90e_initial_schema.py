@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: ae5b23d0cd4c
+Revision ID: 25304058e90e
 Revises:
-Create Date: 2026-09-05 17:04:27.548280
+Create Date: 2026-09-05 20:17:57.427126
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "ae5b23d0cd4c"
+revision: str = "25304058e90e"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -201,6 +201,12 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("repo", name=op.f("pk_poll_cursors")),
     )
     op.create_table(
+        "review_lifecycle",
+        sa.Column("source_key", sa.Text(), nullable=False),
+        sa.Column("finished_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("source_key", name=op.f("pk_review_lifecycle")),
+    )
+    op.create_table(
         "settings",
         sa.Column("key", sa.Text(), nullable=False),
         sa.Column("value", sa.Text(), nullable=False),
@@ -244,6 +250,7 @@ def downgrade() -> None:
 
     op.drop_table("swarms")
     op.drop_table("settings")
+    op.drop_table("review_lifecycle")
     op.drop_table("poll_cursors")
     with op.batch_alter_table("message_queue", schema=None) as batch_op:
         batch_op.drop_index(

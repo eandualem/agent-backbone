@@ -86,7 +86,8 @@ class OutboxRepo(Repo):
                 text(
                     "UPDATE event_outbox SET status = 'skipped', updated_at = :now "
                     "WHERE status IN ('pending', 'failed') AND event_id IN "
-                    "(SELECT id FROM events WHERE repo = :repo AND issue_number = :issue)"
+                    "(SELECT id FROM events WHERE repo = :repo AND issue_number = :issue "
+                    "AND event_type != 'issue_closed')"
                 ),
                 {"repo": repo, "issue": issue_number, "now": now_iso()},
             )

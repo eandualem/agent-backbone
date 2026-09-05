@@ -5,7 +5,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from agent_backbone.models import DeliveryOutcome, EventType, IssueEvent, parse_from_tag
+from agent_backbone.models import (
+    DeliveryOutcome,
+    EventType,
+    IssueEvent,
+    parse_from_tag,
+    review_source_key,
+)
 from agent_backbone.services.agents.acknowledgement import (
     find_outgoing_comment,
     find_outgoing_pull_request,
@@ -80,6 +86,8 @@ def _source_key(event: IssueEvent, kind: str) -> str | None:
     repo = event.issue.repo_full_name
     if kind == "comment" and event.comment and event.comment.id:
         return f"comment:{repo}#{event.issue.number}:{event.comment.id}"
+    if kind == "review" and event.review and event.event_type == EventType.REVIEW_STARTED:
+        return review_source_key(event.issue, event.review)
     if kind == "review" and event.review and event.review.id:
         return f"review:{repo}#{event.issue.number}:{event.review.id}"
     return None
@@ -305,7 +313,7 @@ async def _dispatch_issue(
         scope: set[tuple[str, int]] | None = None
         if gh is not None:
             try:
-                scope = queue_scope(await list_open_queue_for_target(config, target, gh))
+                scope = queue_scope(await list_open_queue_for_target(config, target, gh, db=db))
             except Exception:
                 log.exception("Failed to load queue scope for %s (non-fatal)", target)
         await _deliver(
@@ -348,7 +356,9 @@ async def issue_dispatcher(
     result = DispatchResult(plan=[] if event_id is not None else None)
     if event.event_type == EventType.COMMENT_CREATED and event.comment:
         await _dispatch_comment(event, config, db, result)
-    elif event.event_type == EventType.REVIEW_SUBMITTED and event.review:
+    elif (
+        event.event_type in {EventType.REVIEW_SUBMITTED, EventType.REVIEW_STARTED} and event.review
+    ):
         await _dispatch_review(event, config, db, result)
     elif event.event_type == EventType.PULL_REQUEST_OPENED:
         await _dispatch_pull_request(event, config, db, result)

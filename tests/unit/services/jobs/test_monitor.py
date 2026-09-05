@@ -626,5 +626,7 @@ class TestMonitorAgents:
         ):
             assert await monitor_agents(config, db, gh) == {}
 
-        offline.assert_awaited_once_with(config, set(), db, gh)
+        snapshot = offline.await_args.args[3]
+        assert snapshot.client is gh
+        offline.assert_awaited_once_with(config, set(), db, snapshot)
         drain.assert_awaited_once()

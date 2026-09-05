@@ -24,8 +24,6 @@ class OpenCode(Runtime):
     binary = "opencode"
     brief_mode = "initial_prompt"
 
-    hook_script = "opencode_hook.js"  # a plugin, not a command hook
-
     runtime_markers = ("opencode", "ask anything...", "tab agents")
     placeholder_fragments = ("ask anything...", "ctrl+p commands")
     status_fragments = ("tab agents", "ctrl+p commands")

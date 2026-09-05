@@ -77,6 +77,7 @@ class EventType(StrEnum):
     COMMENT_CREATED = "comment_created"
     PULL_REQUEST_OPENED = "pull_request_opened"
     REVIEW_SUBMITTED = "review_submitted"
+    REVIEW_STARTED = "review_started"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -155,6 +156,9 @@ class IssueData(BaseModel):
     state: str = "open"
     labels: ParsedLabels = Field(default_factory=ParsedLabels)
     html_url: str = ""
+    created_at: str = ""
+    closed_at: str = ""
+    is_pull_request: bool = False
     body: str = ""
     """The issue or pull request body (a pull request's ``Closes #N`` lives here)."""
     head_ref: str = ""
@@ -196,6 +200,13 @@ class ReviewData(BaseModel):
     """The commit the review looked at — what makes a late or replayed review
     recognisable as one of an earlier push."""
     submitted_at: str = ""
+    head_sha: str = ""
+
+
+def review_source_key(issue: IssueData, review: ReviewData) -> str:
+    reviewer = review.user_login.casefold().removesuffix("[bot]")
+    prefix = f"review-start:{issue.repo_full_name.casefold()}#{issue.number}"
+    return f"{prefix}:{reviewer}:{review.commit_id}"
 
 
 class IssueEvent(BaseModel):
@@ -230,6 +241,9 @@ class IssueEvent(BaseModel):
             html_url=issue_data.get("html_url", ""),
             repo_full_name=repository.get("full_name", ""),
             body=issue_data.get("body") or "",
+            created_at=issue_data.get("created_at") or "",
+            closed_at=issue_data.get("closed_at") or "",
+            is_pull_request=issue_key == "pull_request" or "pull_request" in issue_data,
             head_ref=((issue_data.get("head") or {}).get("ref") or ""),
             head_repo=(((issue_data.get("head") or {}).get("repo") or {}).get("full_name") or ""),
         )
@@ -254,6 +268,7 @@ class IssueEvent(BaseModel):
                 html_url=review_data.get("html_url", ""),
                 commit_id=review_data.get("commit_id") or "",
                 submitted_at=review_data.get("submitted_at") or "",
+                head_sha=(issue_data.get("head") or {}).get("sha") or "",
             )
 
         return cls(

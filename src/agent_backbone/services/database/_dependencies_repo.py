@@ -20,6 +20,34 @@ class DependencyRepo(Repo):
             )
             return [row._mapping["parent_number"] for row in result.fetchall()]
 
+    async def counts(self) -> dict[tuple[str, int], int]:
+        """Number of recorded parent issues depending on each sub-issue."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT repo, sub_issue_number, COUNT(*) AS n FROM issue_dependencies "
+                    "GROUP BY repo, sub_issue_number"
+                )
+            )
+            return {(row.repo.casefold(), row.sub_issue_number): row.n for row in result}
+
+    async def retain_parents(self, repo: str, open_parents: set[int]) -> None:
+        """Remove dependency edges whose parent no longer appears in a complete open list."""
+        async with self._tx() as conn:
+            rows = await conn.execute(
+                text("SELECT DISTINCT parent_number FROM issue_dependencies WHERE repo = :repo"),
+                {"repo": repo},
+            )
+            for parent in rows.scalars():
+                if parent not in open_parents:
+                    await conn.execute(
+                        text(
+                            "DELETE FROM issue_dependencies "
+                            "WHERE repo = :repo AND parent_number = :parent"
+                        ),
+                        {"repo": repo, "parent": parent},
+                    )
+
     async def sync(self, parent: int, sub_issues: list[int], *, repo: str = "") -> None:
         async with self._tx() as conn:
             now = now_iso()

@@ -223,6 +223,9 @@ class Runtime:
     def pre_trust(self, directory: Path | str) -> None:
         """Answer the runtime's folder-trust dialog ahead of launch, if it has one."""
 
+    def prepare_unattended(self) -> None:
+        """Record any consent needed for an explicitly unattended launch."""
+
     def launch_env(self, model: str | None) -> dict[str, str]:
         """Extra environment the session needs (runtimes that take the model from a variable)."""
         return {}
@@ -421,6 +424,8 @@ class Runtime:
         ]
 
     # --- pane recognition ----------------------------------------------------
+
+    fallback_prompts: tuple[str, ...] = ()
 
     def matches(self, pane_content: str) -> bool:
         """Whether the pane appears to belong to this runtime."""
