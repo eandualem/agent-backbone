@@ -70,9 +70,9 @@ class TestFormatCommentNotification:
         comment = CommentData(body=long_body, user_login="test")
         msg = format_comment_notification(sample_issue, comment)
         assert "..." in msg
-        # The preview should be 500 chars + "..."
-        assert "x" * 500 in msg
-        assert "x" * 501 not in msg
+        # The preview is 500 characters including the ellipsis: 497 of body.
+        assert "x" * 497 + "..." in msg
+        assert "x" * 498 not in msg
 
     def test_newline_replacement(self, sample_issue):
         comment = CommentData(body="line1\nline2\nline3", user_login="test")
