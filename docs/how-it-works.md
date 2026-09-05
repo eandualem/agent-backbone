@@ -273,7 +273,8 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
    → reported to `escalation.target` and Telegram, once; state reset.
    Never restarted.
 5. **Plan waiting**: Telegram notification (`/viewplan`, `/approve`) and a
-   message to `escalation.target`, once per plan.
+   message to `escalation.target`, once per plan after delivery or successful
+   queue storage. A failed queue write is retried on the next monitor tick.
 6. **Copy mode**: cancelled in every managed session; Telegram alert if it
    will not clear.
 7. Socket.IO `/sessions` snapshot if anything changed.

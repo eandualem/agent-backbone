@@ -14,6 +14,7 @@ from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.jobs import escalation as esc
 from agent_backbone.services.jobs.monitor import monitor_agents, read_states, sync_states
 from agent_backbone.services.jobs.pending import deliver_pending_issues
+from agent_backbone.services.routing import DeliveryReport
 
 _ESC = "agent_backbone.services.jobs.escalation"
 _PEND = "agent_backbone.services.jobs.pending"
@@ -342,9 +343,9 @@ class TestPlanWaiting:
         with (
             patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver",
                 new_callable=AsyncMock,
-                return_value=DeliveryOutcome.DELIVERED,
+                return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
             ) as d,
         ):
             await esc.check_plan_waiting(config, states, db=db)
@@ -357,6 +358,27 @@ class TestPlanWaiting:
         d.assert_awaited_once()
         assert d.await_args.args[0] == "leo"
         assert "created a plan" in d.await_args.args[1]
+
+    @pytest.mark.parametrize("queue", ["stored", "already_queued"])
+    async def test_suppresses_only_after_queue_accepts_plan_alert(self, config, db, queue):
+        config = replace(config, escalation=EscalationConfig(target="leo"))
+        states = {
+            "ike": _snap(_WAITING, reason="plan", plan_file="/p.md"),
+            "leo": _snap(AgentState.BUSY),
+        }
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=False),
+            patch(
+                f"{_ESC}.deliver",
+                side_effect=[
+                    DeliveryReport(DeliveryOutcome.AGENT_WORKING, "failed"),
+                    DeliveryReport(DeliveryOutcome.AGENT_WORKING, queue),
+                ],
+            ) as send,
+        ):
+            for _ in range(3):
+                await esc.check_plan_waiting(config, states, db=db)
+        assert send.await_count == 2
 
     async def test_new_plan_timestamp_renotifies(self, config, db):
         config = replace(
@@ -375,7 +397,7 @@ class TestPlanWaiting:
         states = {"ike": _snap(_WAITING, reason="plan")}
         with (
             patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=False) as tg,
-            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.deliver", new_callable=AsyncMock) as d,
         ):
             await esc.check_plan_waiting(config, states, db=db)
             await esc.check_plan_waiting(config, states, db=db)
@@ -385,7 +407,7 @@ class TestPlanWaiting:
     async def test_real_notify_humans_is_false_when_nothing_is_configured(self, config, db):
         states = {"ike": _snap(_WAITING, reason="plan")}
         with (
-            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.deliver", new_callable=AsyncMock) as d,
             patch(f"{_ESC}._record_plan_notification") as recorded,
         ):
             await esc.check_plan_waiting(config, states, db=db)

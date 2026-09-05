@@ -15,12 +15,12 @@ from agent_backbone.recent import RecentKeys
 from agent_backbone.services.agents import AgentState, prompt_id
 from agent_backbone.services.integrations import notify_humans
 from agent_backbone.services.routing import (
+    deliver,
     format_offline_queue_notification,
     format_plan_notification,
     format_stall_notification,
     format_unexpected_offline_notification,
     list_open_queue_for_target,
-    outcome_queues,
     safe_deliver,
 )
 from agent_backbone.services.runtimes import resolve_runtime
@@ -398,7 +398,7 @@ async def check_plan_waiting(
                 orch_msg = format_plan_notification(
                     name, name, plan_file, plan_title, issue_number=snapshot.current_issue
                 )
-                outcome = await safe_deliver(
+                report = await deliver(
                     escalation_session,
                     orch_msg,
                     config,
@@ -406,10 +406,13 @@ async def check_plan_waiting(
                     priority=True,
                     delivery_kind="escalation",
                 )
-                # A queued notification will reach the target when it frees up,
-                # so record it either way and do not enqueue it again next run.
-                if outcome == DeliveryOutcome.DELIVERED or outcome_queues(outcome, "escalation"):
+                # Only suppress another attempt when the message arrived or a
+                # durable queue row exists. A failed write must retry next tick.
+                if report.outcome == DeliveryOutcome.DELIVERED or report.queued:
                     _record_plan_notification(name, orch_ref)
                     log.info(
-                        "Plan notification for %s -> %s (%s)", name, escalation_session, outcome
+                        "Plan notification for %s -> %s (%s)",
+                        name,
+                        escalation_session,
+                        report.outcome,
                     )
