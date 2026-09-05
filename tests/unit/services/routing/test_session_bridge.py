@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 from dataclasses import replace
@@ -54,6 +55,105 @@ _BUSY_ISSUE_42_UNKNOWN_REPO_SNAP = StateSnapshot(
 _INTEL = "agent_backbone.services.routing._intelligence"
 _DELIV = "agent_backbone.services.routing._delivery"
 _COPY = "agent_backbone.services.terminal._copy_mode"
+
+
+class TestDeliverySerialization:
+    async def test_same_session_gate_waits_for_recording_but_other_sessions_continue(
+        self, config, db
+    ):
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def send(session, message, **kwargs):
+            if message == "first":
+                entered.set()
+                await release.wait()
+            return True
+
+        profile = SessionProfile(session_name="ike", intelligence=SessionIntelligence.READY)
+        with (
+            patch(f"{_DELIV}.get_session_intelligence", AsyncMock(return_value=profile)),
+            patch(f"{_DELIV}.send_message", AsyncMock(side_effect=send)) as paste,
+        ):
+            first = asyncio.create_task(
+                deliver(
+                    "ike",
+                    "first",
+                    config,
+                    db=db,
+                    repo=_REPO,
+                    issue_number=1,
+                    target_entity="ike",
+                    enforce_issue_queue=True,
+                )
+            )
+            await entered.wait()
+            second = asyncio.create_task(
+                deliver(
+                    "ike",
+                    "second",
+                    config,
+                    db=db,
+                    repo=_REPO,
+                    issue_number=2,
+                    target_entity="ike",
+                    enforce_issue_queue=True,
+                )
+            )
+            try:
+                other = await asyncio.wait_for(
+                    deliver("leo", "other", config, delivery_kind="direct_message"), timeout=1
+                )
+                assert other.outcome == "delivered"
+                assert not second.done()
+            finally:
+                release.set()
+                results = await asyncio.gather(first, second)
+        assert [result.outcome for result in results] == ["delivered", "awaiting_ack"]
+        assert [call.args[1] for call in paste.await_args_list] == ["first", "other"]
+
+    async def test_cancelling_waiter_and_holder_leaves_session_usable(self, config):
+        entered = asyncio.Event()
+
+        async def send(session, message, **kwargs):
+            if message == "first":
+                entered.set()
+                await asyncio.Event().wait()
+            return True
+
+        profile = SessionProfile(session_name="ike", intelligence=SessionIntelligence.READY)
+        with (
+            patch(f"{_DELIV}.get_session_intelligence", AsyncMock(return_value=profile)),
+            patch(f"{_DELIV}.send_message", AsyncMock(side_effect=send)),
+        ):
+            first = asyncio.create_task(
+                deliver("ike", "first", config, delivery_kind="direct_message")
+            )
+            await entered.wait()
+            waiter = asyncio.create_task(
+                deliver("ike", "waiting", config, delivery_kind="direct_message")
+            )
+            await asyncio.sleep(0)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            result = await asyncio.wait_for(
+                deliver("ike", "after cancellation", config, delivery_kind="direct_message"),
+                timeout=1,
+            )
+        assert result.outcome == "delivered"
+
+    async def test_finished_deliveries_do_not_retain_session_locks(self, config):
+        from agent_backbone.services.routing._delivery import _session_locks
+
+        profile = SessionProfile(session_name="unused", intelligence=SessionIntelligence.OFFLINE)
+        with patch(f"{_DELIV}.get_session_intelligence", AsyncMock(return_value=profile)):
+            for number in range(20):
+                name = f"temporary-{number}"
+                await deliver(name, "hello", config, delivery_kind="direct_message")
+                assert name not in _session_locks
 
 
 @pytest.fixture(autouse=True)
@@ -228,6 +328,37 @@ class TestGetSessionIntelligence:
             profile = await get_session_intelligence(
                 "ike", config, idle_since=time.monotonic() - 10
             )
+        assert profile.intelligence == SessionIntelligence.READY
+
+    async def test_hook_idle_timestamp_starts_grace(self, config):
+        # A freshly hook-reported idle (wall-clock transition time) settles;
+        # no explicit idle_since needed — the push timestamp is the source.
+        from agent_backbone.services.agents import StateSnapshot as Snap
+
+        config = replace(config, timing=TimingConfig(grace_period_seconds=60))
+        snap = Snap(state=AgentState.IDLE, source="push", timestamp=time.time() - 1)
+        with _online(snap=snap):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.SETTLING
+
+    async def test_hook_idle_beyond_grace_is_ready(self, config):
+        from agent_backbone.services.agents import StateSnapshot as Snap
+
+        config = replace(config, timing=TimingConfig(grace_period_seconds=60))
+        snap = Snap(state=AgentState.IDLE, source="push", timestamp=time.time() - 3600)
+        with _online(snap=snap):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.READY
+
+    async def test_terminal_idle_carries_no_grace(self, config):
+        # A terminal reading is stamped at read time: deriving grace from it
+        # would reset the window on every read and settle forever.
+        from agent_backbone.services.agents import StateSnapshot as Snap
+
+        config = replace(config, timing=TimingConfig(grace_period_seconds=3600))
+        snap = Snap(state=AgentState.IDLE, source="pull", timestamp=time.time())
+        with _online(snap=snap):
+            profile = await get_session_intelligence("ike", config)
         assert profile.intelligence == SessionIntelligence.READY
 
 

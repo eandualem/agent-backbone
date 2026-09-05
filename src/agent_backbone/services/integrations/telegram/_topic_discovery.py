@@ -95,10 +95,18 @@ def resolve_topic_name(name: str, config: BackboneConfig) -> str | None:
 
 
 def effective_routes(config: BackboneConfig, discovery: TopicDiscovery) -> dict[int, str]:
-    """Merge discovered routes with manual config. Config wins on conflict."""
-    merged = dict(discovery.topic_routes)
-    merged.update(config.telegram.topic_routes)
-    return merged
+    """Merge discovered routes with manual config. Config wins on conflict.
+
+    Discovered threads belong to the group they were learned in: when the
+    configured group differs from the discovery's group, the discoveries
+    are stale (a new group reuses thread ids) and only config applies.
+    """
+    routes: dict[int, str] = {}
+    configured = config.telegram.group_chat_id
+    if not (configured and discovery.group_chat_id and configured != discovery.group_chat_id):
+        routes = dict(discovery.topic_routes)
+    routes.update(config.telegram.topic_routes)
+    return routes
 
 
 def effective_group_chat_id(config: BackboneConfig, discovery: TopicDiscovery) -> int | None:
@@ -107,12 +115,17 @@ def effective_group_chat_id(config: BackboneConfig, discovery: TopicDiscovery) -
 
 
 def agent_topic(config: BackboneConfig, discovery: TopicDiscovery, agent: str) -> int | None:
-    """The forum thread mapped to ``agent`` (explicit config wins over discovery), or None."""
+    """The forum thread mapped to ``agent`` (explicit config wins over discovery), or None.
+
+    Resolved through the merged mapping: a thread the config remapped to
+    someone else no longer answers for the agent discovery once named.
+    """
     if agent == CATCH_ALL_TOPIC:
         return None
+    merged = effective_routes(config, discovery)
     for routes in (config.telegram.topic_routes, discovery.topic_routes):
         for thread_id, session in routes.items():
-            if session == agent:
+            if session == agent and merged.get(thread_id) == agent:
                 return thread_id
     return None
 
@@ -130,6 +143,11 @@ def process_message_for_discovery(
     - topic routes from forum_topic_created in reply_to_message
 
     Returns True if state was mutated (and saved).
+
+    Discovery binds to one group: the configured ``telegram.group_chat_id``
+    when set, else the first group that spoke. A message from any other
+    (allowed) group teaches nothing — its thread ids belong to that group,
+    and must neither rebind the group nor overwrite its threads.
     """
     message = getattr(update, "message", None)
     if message is None:
@@ -142,9 +160,13 @@ def process_message_for_discovery(
     if chat is not None:
         chat_type = getattr(chat, "type", None)
         chat_id = getattr(chat, "id", None)
-        if chat_type == "supergroup" and chat_id is not None and discovery.group_chat_id != chat_id:
-            discovery.group_chat_id = chat_id
-            changed = True
+        if chat_type == "supergroup" and chat_id is not None:
+            selected = config.telegram.group_chat_id or discovery.group_chat_id
+            if selected is None:
+                discovery.group_chat_id = chat_id
+                changed = True
+            elif chat_id != selected:
+                return changed
 
     # Discover topic mapping from forum_topic_created
     thread_id = getattr(message, "message_thread_id", None)

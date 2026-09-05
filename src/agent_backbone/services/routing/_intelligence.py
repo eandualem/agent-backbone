@@ -136,6 +136,17 @@ async def get_session_intelligence(
                     SessionIntelligence.SETTLING,
                     f"idle for {elapsed:.1f}s < grace {config.timing.grace_period_seconds}s",
                 )
+        elif state_snap.source == "push":
+            # The hook wrote a wall-clock transition time: grace counts from
+            # when the agent became idle, not from this read. A terminal
+            # reading is stamped at read time, so it carries no grace —
+            # deriving one from it would reset the window on every read.
+            idle_for = max(0.0, time.time() - state_snap.timestamp)
+            if idle_for < config.timing.grace_period_seconds:
+                return profile(
+                    SessionIntelligence.SETTLING,
+                    f"idle for {idle_for:.1f}s < grace {config.timing.grace_period_seconds}s",
+                )
         return profile(SessionIntelligence.READY, "prompt is empty")
 
     return profile(SessionIntelligence.UNKNOWN)

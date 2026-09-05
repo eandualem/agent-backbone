@@ -192,11 +192,25 @@ class TelegramService(Integration):
 
     @staticmethod
     def _sender_tag(update: Update) -> str:
-        """Extract sender name from Telegram update for [via:telegram from:X] tag."""
+        """Readable sender name for the [via:telegram from:X] envelope."""
         user = getattr(update, "effective_user", None)
         if user:
             return (user.first_name or user.username or "unknown").lower()
         return "unknown"
+
+    @staticmethod
+    def _sender_id(update: Update) -> str:
+        """Stable queue identity for the Telegram user: ``telegram:<id>``.
+
+        First names collide — two users named Alice were one sender under
+        the display tag, so one's text deduplicated the other's. The user
+        id does not collide; the envelope keeps the readable name.
+        """
+        user = getattr(update, "effective_user", None)
+        user_id = getattr(user, "id", None) if user is not None else None
+        if not isinstance(user_id, int):
+            return "telegram:unknown"
+        return f"telegram:{user_id}"
 
     def _is_authorized(self, chat_id: int) -> bool:
         """Only chats on the allowlist may control the backbone."""

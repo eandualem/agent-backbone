@@ -9,6 +9,7 @@ from agent_backbone.config import BackboneConfig, TelegramConfig
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     TopicDiscovery,
+    agent_topic,
     effective_group_chat_id,
     effective_routes,
     load_discovery,
@@ -123,6 +124,41 @@ class TestEffectiveRoutes:
             20: "ike",
         }
 
+    def test_stale_discovery_is_dropped_when_the_configured_group_changes(self):
+        # Thread ids are per-group: discoveries from the old group must not
+        # route in the new one, while explicit config still applies.
+        config = _make_config(
+            telegram=TelegramConfig(group_chat_id=-200, topic_routes={7: "feynman"})
+        )
+        discovery = TopicDiscovery(group_chat_id=-100, topic_routes={7: "ike", 8: "leo"})
+        assert effective_routes(config, discovery) == {7: "feynman"}
+
+    def test_discovery_routes_survive_without_a_configured_group(self):
+        discovery = TopicDiscovery(group_chat_id=-100, topic_routes={8: "leo"})
+        assert effective_routes(_make_config(), discovery) == {8: "leo"}
+
+
+class TestAgentTopic:
+    def test_discovery_hit(self):
+        config = _make_config()
+        assert agent_topic(config, TopicDiscovery(topic_routes={7: "ike"}), "ike") == 7
+
+    def test_config_override_wins_outbound(self):
+        # Thread 7 was discovered for ike but config remapped it to
+        # feynman: ike has no topic (no stale post), feynman has thread 7.
+        config = _make_config(telegram=TelegramConfig(topic_routes={7: "feynman"}))
+        discovery = TopicDiscovery(topic_routes={7: "ike"})
+        assert agent_topic(config, discovery, "ike") is None
+        assert agent_topic(config, discovery, "feynman") == 7
+
+    def test_config_thread_preferred_when_both_name_the_agent(self):
+        config = _make_config(telegram=TelegramConfig(topic_routes={8: "ike"}))
+        discovery = TopicDiscovery(topic_routes={7: "ike"})
+        assert agent_topic(config, discovery, "ike") == 8
+
+    def test_catch_all_has_no_topic(self):
+        assert agent_topic(_make_config(), TopicDiscovery(), CATCH_ALL_TOPIC) is None
+
 
 class TestEffectiveGroupChatId:
     def test_config_wins(self):
@@ -179,6 +215,24 @@ class TestProcessMessageForDiscovery:
         update = _make_update(chat_id=-100, thread_id=42)
         assert not process_message_for_discovery(update, _make_config(), d, tmp_path / "t.json")
         assert 42 not in d.topic_routes
+
+    def test_message_from_another_group_teaches_nothing(self, tmp_path):
+        d = TopicDiscovery(group_chat_id=-100)
+        update = _make_update(chat_id=-200, thread_id=42, forum_topic_name="Leo")
+        assert not process_message_for_discovery(update, _make_config(), d, tmp_path / "t.json")
+        assert d.group_chat_id == -100
+        assert d.topic_routes == {}
+
+    def test_configured_group_is_not_overwritten_by_discovery(self, tmp_path):
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery()
+        update = _make_update(chat_id=-200, thread_id=42, forum_topic_name="Leo")
+        assert process_message_for_discovery(update, config, d, tmp_path / "t.json")
+        assert d.group_chat_id is None  # config wins; nothing to persist
+        assert d.topic_routes[42] == "leo"
+        other = _make_update(chat_id=-300, thread_id=43, forum_topic_name="Ike")
+        assert not process_message_for_discovery(other, config, d, tmp_path / "t.json")
+        assert 43 not in d.topic_routes
 
 
 class TestLoadDiscoveryShapes:
