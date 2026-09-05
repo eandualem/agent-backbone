@@ -13,6 +13,7 @@ from agent_backbone.services.routing import (
     is_acknowledged,
     list_open_queue_for_target,
     queue_scope,
+    retry_outbox,
     route_issue,
     safe_deliver,
     stamp_queued_age,
@@ -225,6 +226,11 @@ async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: GitHubClien
             summary["attempts_reclaimed"] = reclaimed
     except Exception:
         log.exception("Failed to reclaim stale attempts (non-fatal)")
+
+    try:
+        summary.update(await retry_outbox(config, db, gh))
+    except Exception:
+        log.exception("Could not load pending outbox events (other retries continue)")
 
     if gh is not None:
         try:

@@ -16,6 +16,7 @@ from agent_backbone.services.database._agents_repo import AgentRepo
 from agent_backbone.services.database._delivery_repo import DeliveryRepo
 from agent_backbone.services.database._dependencies_repo import DependencyRepo
 from agent_backbone.services.database._events_repo import EventRepo
+from agent_backbone.services.database._outbox_repo import OutboxRepo
 from agent_backbone.services.database._queue_repo import QueueRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
 from agent_backbone.services.database._state_repo import StateRepo
@@ -191,6 +192,7 @@ class BackboneDB:
         self.acks = AcknowledgementRepo(engine)
         self.dependencies = DependencyRepo(engine)
         self.events = EventRepo(engine)
+        self.outbox = OutboxRepo(engine)
         self.settings = SettingRepo(engine)
         self.agents = AgentRepo(engine)
         self.swarms = SwarmRepo(engine)

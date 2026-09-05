@@ -115,13 +115,15 @@ async def _store_route_mark(event, key, config, db, gh, issue_closed_hooks) -> s
             if event_id is None:
                 return f"deduped: event {event.delivery_id} already stored"
         except Exception:
-            log.warning("Failed to persist event %s (continuing)", event.delivery_id)
+            log.exception("Failed to persist event %s", event.delivery_id)
+            raise
 
-    outcome = await _route(event, config, db, gh, issue_closed_hooks)
+    outcome = await _route(event, config, db, gh, issue_closed_hooks, event_id=event_id)
 
     if event_id is not None:
         try:
-            await db.events.mark_processed(event_id, outcome)
+            if not await db.outbox.finish_event(event_id, outcome):
+                return f"deferred: outbox recipients pending; {outcome}"
         except Exception:
             log.debug("Failed to mark event processed (non-fatal)")
     return outcome
@@ -138,8 +140,9 @@ _DISPATCHED = frozenset(
 )
 
 
-async def _route(event, config, db, gh, issue_closed_hooks) -> str:
+async def _route(event, config, db, gh, issue_closed_hooks, *, event_id=None) -> str:
     if event.event_type == EventType.ISSUE_CLOSED:
+        await db.outbox.discard_issue(event.issue.repo_full_name, event.issue.number)
         if gh is None:
             return "ignored: github client not configured"
         result = await on_issue_closed(event, config, gh, db)
@@ -156,7 +159,7 @@ async def _route(event, config, db, gh, issue_closed_hooks) -> str:
         return f"ignored: review on closed pull request #{event.issue.number}"
 
     if event.event_type in _DISPATCHED:
-        result = await issue_dispatcher(event, config, db, gh)
+        result = await issue_dispatcher(event, config, db, gh, event_id=event_id)
         return (
             f"dispatch: {len(result.delivered)} delivered, "
             f"{len(result.offline)} offline, "

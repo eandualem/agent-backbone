@@ -20,6 +20,7 @@ from agent_backbone.services.routing._format import (
     format_unassigned_notification,
     format_watch_notification,
 )
+from agent_backbone.services.routing._outbox import flush_outbox
 from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import (
     comment_audience,
@@ -98,11 +99,32 @@ async def _deliver(
         log.warning("No session for target '%s'", target)
         result.skipped.append(target)
         return
-    if kind == "issue" and is_recent_notification(
-        repo, event.issue.number, target, config.routing.notification_dedup_seconds
+    if (
+        result.plan is None
+        and kind == "issue"
+        and is_recent_notification(
+            repo, event.issue.number, target, config.routing.notification_dedup_seconds
+        )
     ):
         log.info("Deduped %s#%d → %s (announced moments ago)", repo, event.issue.number, target)
         result.skipped.append(target)
+        return
+    if result.plan is not None:
+        result.plan.append(
+            {
+                "session_name": session,
+                "message": message,
+                "repo": repo,
+                "issue_number": event.issue.number,
+                "target_entity": target,
+                "priority": priority,
+                "enforce_issue_queue": enforce_issue_queue,
+                "queue_scope": sorted(scope) if scope is not None else None,
+                "delivery_kind": kind,
+                "sender": _event_sender(event),
+                "source_key": _source_key(event, kind),
+            }
+        )
         return
     outcome = await safe_deliver(
         session,
@@ -299,9 +321,13 @@ async def issue_dispatcher(
     config: BackboneConfig,
     db: BackboneDB,
     gh: GitHubClient | None = None,
+    *,
+    event_id: int | None = None,
 ) -> DispatchResult:
     """Dispatch an issue / comment / pull-request event to its audiences."""
-    result = DispatchResult()
+    if event_id is not None and await db.outbox.entries(event_id):
+        return await flush_outbox(event_id, config, db, gh)
+    result = DispatchResult(plan=[] if event_id is not None else None)
     if event.event_type == EventType.COMMENT_CREATED and event.comment:
         await _dispatch_comment(event, config, db, result)
     elif event.event_type == EventType.REVIEW_SUBMITTED and event.review:
@@ -313,6 +339,11 @@ async def issue_dispatcher(
     else:
         log.info("Ignoring event type: %s", event.event_type)
         return result
+
+    if result.plan is not None:
+        delivered = await flush_outbox(event_id, config, db, gh, plan=result.plan)
+        delivered.skipped.extend(result.skipped)
+        result = delivered
 
     log.info(
         "Dispatch %s#%d: %d delivered, %d skipped, %d offline, %d deferred",

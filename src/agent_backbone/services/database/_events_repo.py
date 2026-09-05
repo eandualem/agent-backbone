@@ -115,8 +115,15 @@ class EventRepo(Repo):
 
     async def prune(self, retention_days: int = 30) -> int:
         async with self._tx() as conn:
-            result = await conn.execute(
-                text("DELETE FROM events WHERE received_at < :cutoff"),
-                {"cutoff": cutoff_iso(days=retention_days)},
+            # Keep unresolved fan-outs regardless of event-feed retention.
+            expired = (
+                "SELECT id FROM events WHERE received_at < :cutoff AND NOT EXISTS "
+                "(SELECT 1 FROM event_outbox WHERE event_id = events.id "
+                "AND status IN ('pending', 'failed'))"
             )
+            params = {"cutoff": cutoff_iso(days=retention_days)}
+            await conn.execute(
+                text(f"DELETE FROM event_outbox WHERE event_id IN ({expired})"), params
+            )
+            result = await conn.execute(text(f"DELETE FROM events WHERE id IN ({expired})"), params)
             return result.rowcount

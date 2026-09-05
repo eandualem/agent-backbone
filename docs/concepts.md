@@ -146,9 +146,11 @@ routed, with what the backbone did about it. That table is the activity
 feed (`GET /api/events`, `backbone status` shows the last event per
 repository) and the dedup record used by overlapping polls. A separate durable
 cursor per repository preserves an incomplete batch across restarts, independent
-of event retention. Event deduplication does not supply per-recipient delivery
-receipts: queue storage failures during GitHub fan-out remain a known limitation
-([audit report](reviews/2026-09-05-audit-2.md#recommendations-ranked)).
+of event retention. A durable outbox records every eligible recipient before
+the first delivery, then records delivered or queued receipts. A failed queue
+write leaves that recipient pending; replay and the retry job resume only
+unresolved recipients. See [delivery receipts](github.md#delivery-receipts-and-retries)
+for retention and the external-terminal crash boundary.
 
 ## Settings
 

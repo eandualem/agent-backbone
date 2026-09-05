@@ -193,7 +193,9 @@ sequenceDiagram
 
 Tracked repositories = every repository any agent owns or watches. Both
 paths produce the same event, which is stored in the `events` table
-(deduplicated by delivery id) and then routed.
+(deduplicated by delivery id). The full recipient plan is then stored in
+`event_outbox` before delivery. Each completed delivery or durable queue write
+gets a receipt; only unresolved recipients are retried after failure or restart.
 
 ### An issue is opened
 
@@ -292,9 +294,10 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 9. **Pending issues**: every idle agent with an empty in-flight slot gets
    the highest-priority unacknowledged open issue from its queue.
 
-Every `timing.retry_interval_seconds` (5 min), `delivery-retry` re-attempts
-issue deliveries that ended `offline`/`delivery_failed`/`agent_working`
-and drains the queue again. Issue retries and queued issue deliveries re-check
+Every `timing.retry_interval_seconds` (5 min), `delivery-retry` resumes pending
+GitHub outbox recipients, re-attempts older issue delivery records that ended
+`offline`/`delivery_failed`/`agent_working`, and drains the queue again.
+Issue retries and queued issue deliveries re-check
 the current issue: acknowledged, closed or no-longer-targeted work, and records without
 repository metadata, are retired so it cannot occupy the oldest retry slots forever. A failure
 in one record or session does not stop the others.

@@ -58,6 +58,37 @@ _COPY = "agent_backbone.services.terminal._copy_mode"
 
 
 class TestDeliverySerialization:
+    def test_contended_session_can_be_used_from_a_new_event_loop(self, config):
+        from agent_backbone.services.routing._delivery import _session_locks
+
+        retained = []
+
+        async def run():
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def send(*args, **kwargs):
+                entered.set()
+                await release.wait()
+                return True
+
+            profile = SessionProfile("ike", SessionIntelligence.READY)
+            with (
+                patch(f"{_DELIV}.get_session_intelligence", AsyncMock(return_value=profile)),
+                patch(f"{_DELIV}.send_message", AsyncMock(side_effect=send)),
+            ):
+                first = asyncio.create_task(deliver("ike", "one", config))
+                await entered.wait()
+                second = asyncio.create_task(deliver("ike", "two", config))
+                await asyncio.sleep(0)
+                # Model delayed garbage collection of locks retained by waiters.
+                retained.extend(_session_locks.values())
+                release.set()
+                results = await asyncio.gather(first, second)
+                assert all(result.outcome == "delivered" for result in results)
+
+        asyncio.run(run())
+        asyncio.run(run())
+
     async def test_same_session_gate_waits_for_recording_but_other_sessions_continue(
         self, config, db
     ):
@@ -153,7 +184,7 @@ class TestDeliverySerialization:
             for number in range(20):
                 name = f"temporary-{number}"
                 await deliver(name, "hello", config, delivery_kind="direct_message")
-                assert name not in _session_locks
+                assert not any(key[1] == name for key in _session_locks)
 
 
 @pytest.fixture(autouse=True)

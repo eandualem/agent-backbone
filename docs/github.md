@@ -85,6 +85,28 @@ without any tunnel, `gh webhook forward --repo=acme/app
 --url=http://127.0.0.1:7120/webhooks/github --secret=$GITHUB_WEBHOOK_SECRET`
 also works.
 
+## Delivery receipts and retries
+
+Before sending a GitHub event to its recipients, the backbone stores the full
+delivery plan in `event_outbox` in one transaction. Each recipient gets a
+receipt after delivery or durable queue storage. The event is marked handled
+only when every recipient is resolved. If event or plan storage fails, no
+messages are sent; the request fails so intake can retry it.
+
+A queue-write failure leaves that recipient pending. Replaying the event or
+running the delivery-retry job resumes unresolved recipients and skips those
+already delivered or queued, including after a process restart. The retry job
+uses this outbox for GitHub events; older delivery records still use the
+existing retry path. Closing an issue retires pending notifications; retries
+also check for closed/deleted issues and changed issue targets. Unresolved
+outbox rows survive event-feed retention; completed rows are pruned with their
+event.
+
+The database cannot transact with a terminal paste. A process crash after a
+paste succeeds but before its receipt is saved can still cause a repeated
+notification. Once the receipt is saved, a later crash during delivery to
+another recipient does not repeat the completed recipient.
+
 ## Who hears about what
 
 For an issue in repository R:
