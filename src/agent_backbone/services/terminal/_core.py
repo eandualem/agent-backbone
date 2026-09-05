@@ -61,8 +61,15 @@ async def _run_tmux(
 
 def exact_target(session_name: str) -> str:
     """The tmux target for exactly this session: ``-t name`` also accepts a
-    prefix, so an offline ``app`` would resolve to ``app-2``."""
-    return f"={session_name}"
+    prefix, so an offline ``app`` would resolve to ``app-2``.
+
+    ``=name`` alone is only a *session* target: tmux 3.7 resolves it for
+    ``has-session`` and ``kill-session`` but answers ``can't find pane`` for
+    ``paste-buffer``, ``send-keys``, ``capture-pane`` and ``display-message``
+    (measured live). ``=name:`` — exact session, its current window and pane —
+    is accepted by every command the backbone runs, so it is the one spelling.
+    """
+    return f"={session_name}:"
 
 
 async def session_exists(session_name: str) -> bool:

@@ -80,7 +80,7 @@ class TestSessionExistsDelegatesToRunTmux:
             result = await session_exists("test-session")
 
         assert result is True
-        mock_run.assert_called_once_with("has-session", "-t", "=test-session")
+        mock_run.assert_called_once_with("has-session", "-t", "=test-session:")
 
 
 class TestResizeWindowDelegatesToRunTmux:
@@ -91,7 +91,7 @@ class TestResizeWindowDelegatesToRunTmux:
             result = await resize_window("ike", 160, 35)
 
         assert result is True
-        mock_run.assert_called_once_with("resize-window", "-t", "=ike", "-x", "160", "-y", "35")
+        mock_run.assert_called_once_with("resize-window", "-t", "=ike:", "-x", "160", "-y", "35")
 
     async def test_resize_window_failure(self):
         """resize_window returns False on tmux error."""
@@ -113,7 +113,7 @@ class TestSetWindowSizeMode:
         mock_run.assert_called_once_with(
             "set-window-option",
             "-t",
-            "=ike",
+            "=ike:",
             "window-size",
             "latest",
         )
@@ -147,7 +147,7 @@ class TestCapturePaneDelegatesToRunTmux:
         mock_run.assert_called_once_with(
             "capture-pane",
             "-t",
-            "=test-session",
+            "=test-session:",
             "-p",
             "-e",
             "-S",
