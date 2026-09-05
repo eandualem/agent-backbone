@@ -155,6 +155,18 @@ coupled work, one agent is faster and cheaper. Start with 3–5 members.
 
 ## Members, permissions and the sandbox
 
+`backbone swarm list` shows each member's state, reason and provider error.
+If session availability cannot be queried, members show `unknown`, not `offline`.
+Capacity and quota failures appear as `blocked (provider)`; messages stay queued,
+including priority messages. The monitor alerts the coordinator, initiator and
+configured escalation target, deduplicated separately for each recipient. Failed
+notification delivery is retried; a stored queue receipt counts as accepted.
+
+For a short retry interval, the coordinator waits up to five minutes and inspects
+the member again. A long quota reset or persistent capacity failure calls for
+notifying the initiator and reassigning ownership to an available member. The
+backbone reports the failure and never restarts the blocked agent.
+
 With `swarm.unattended_members` enabled (the default), sandboxed Codex
 members run without permission prompts. Other runtimes retain their approval
 policy. The setting is evaluated at each member's next launch.

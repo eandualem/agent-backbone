@@ -84,6 +84,11 @@ class ClaudeCode(Runtime):
         "shift+tab to cycle",
     )
     busy_markers = ("esc to interrupt",)
+    provider_error_patterns = (
+        r"^you(?:'ve| have) hit your (?:usage )?limit\b",
+        r"^API Error:\s*(?:429|529)\b",
+        r"^(?:error:\s*)?(?:credit balance is too low|rate limit (?:reached|exceeded))\b",
+    )
     prompt_markers = (
         "do you want to proceed?",
         "do you want to make this edit",

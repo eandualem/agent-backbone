@@ -134,6 +134,13 @@ class Codex(Runtime):
         "press esc to interrupt and send immediately",
     )
     busy_markers = ("esc to interrupt",)
+    provider_error_patterns = (
+        r"^(?:error:\s*)?selected model is at capacity\b",
+        r"^(?:error:\s*)?you(?:'ve| have) hit your usage limit\b",
+        r"^(?:error:\s*)?rate limit (?:reached|exceeded)\b",
+        r"^(?:error:\s*)?(?:too many requests|insufficient_quota)\b",
+    )
+    provider_error_prefixes = ("■",)
     prompt_markers = (
         "approve this command",
         "allow command",

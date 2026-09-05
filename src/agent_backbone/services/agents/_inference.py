@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -66,6 +67,14 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
     if runtime is UNKNOWN:
         runtime = detect_runtime(pane_content)
 
+    if detail := runtime.provider_failure(pane_content):
+        return StateSnapshot(
+            state=AgentState.BLOCKED,
+            reason="provider",
+            detail=detail,
+            source="pull",
+            evidence=[f"terminal shows a provider failure ({runtime.id}): {detail}"],
+        )
     if runtime.detect_busy(pane_content):
         return StateSnapshot(
             state=AgentState.BUSY,
@@ -165,6 +174,19 @@ async def get_agent_state(
             runtime = get_runtime(runtime_hint)
             if runtime is UNKNOWN and pane_content:
                 runtime = detect_runtime(pane_content)
+            if pane_content and (detail := runtime.provider_failure(pane_content)):
+                return replace(
+                    push,
+                    state=AgentState.BLOCKED,
+                    reason="provider",
+                    detail=detail,
+                    source="pull",
+                    timestamp=time.time(),
+                    evidence=[
+                        *push.evidence,
+                        f"terminal shows a provider failure ({runtime.id}): {detail}",
+                    ],
+                )
             if pane_content and runtime.detect_active_dialog(pane_content):
                 dialog = _dialog_snapshot(runtime, pane_content, prefix=push.evidence)
                 dialog.timestamp = time.time()
@@ -202,6 +224,10 @@ async def get_agent_state(
         else:
             pull.evidence.insert(0, "no hook state file — reading terminal")
         if pull.state != AgentState.UNKNOWN:
+            if push and pull.state == AgentState.BLOCKED:
+                pull.current_issue = push.current_issue
+                pull.current_repo = push.current_repo
+                pull.session_id = push.session_id
             return pull
         if push and _trust_stale_push(push):
             push.evidence = [

@@ -327,32 +327,57 @@ async def report_offline_queues(
         log.info("Agent %s is offline with %d queued message(s)", spec.name, queued)
 
 
-async def check_blocked(config: BackboneConfig, states: AgentStates) -> None:
-    """Tell the humans once when an agent is blocked on its usage limit.
-
-    Nothing to approve: the runtime resumes on its own. The message is
-    what the runtime said (when the limit resets), deduplicated per agent
-    for ``timing.escalation_dedup_seconds``."""
+async def check_blocked(
+    config: BackboneConfig, states: AgentStates, db: BackboneDB | None = None
+) -> None:
+    """Report provider/usage blocks to humans and the responsible agents, once per recipient."""
     for name, snapshot in states.items():
         if snapshot.state != AgentState.BLOCKED:
-            continue
-        if not _should_escalate(name, "blocked", config.timing.escalation_dedup_seconds):
             continue
         reason = snapshot.reason or "its runtime"
         detail = f" ({snapshot.detail})" if snapshot.detail else ""
         what = "its usage limit" if reason == "quota" else reason
-        sent = await notify_humans(
-            config,
-            f"Agent {name} is blocked on {what}{detail}. It resumes on its own; "
-            "messages for it are queued meanwhile.",
-            agent=name,
+        message = (
+            f"Agent {name} is blocked on {what}{detail}. Messages for it remain queued. "
+            "Check the retry/reset time or reassign its work; the backbone does not restart it."
         )
-        if sent:
-            log.info("Agent %s is blocked on %s%s", name, what, detail)
-        else:
-            # Nobody heard it (no integration, or a transient failure): try
-            # again next cycle, and say nothing until it lands.
-            _escalated.forget((name, "blocked"))
+        if _should_escalate(name, "blocked", config.timing.escalation_dedup_seconds):
+            try:
+                accepted = await notify_humans(config, message, agent=name)
+            except Exception:
+                accepted = False
+                log.exception("Could not report blocked agent %s to humans", name)
+            if not accepted:
+                _escalated.forget((name, "blocked"))
+
+        if db is None:
+            continue
+        recipients = {_escalation_session(config, name)}
+        spec = config.agents.get(name)
+        for tag in spec.tags if spec else ():
+            if not tag.startswith("swarm:"):
+                continue
+            swarm = await db.swarms.get(tag.split(":", 1)[1])
+            if swarm and swarm["status"] == "active":
+                recipients.update((swarm["coordinator"], swarm["initiator"]))
+        for recipient in sorted(r for r in recipients if r and r != name and r in config.agents):
+            key = f"blocked:{recipient}"
+            if not _should_escalate(name, key, config.timing.escalation_dedup_seconds):
+                continue
+            try:
+                report = await deliver(
+                    recipient,
+                    f"[via:backbone event:provider-blocked] {message}",
+                    config,
+                    db=db,
+                    priority=True,
+                    delivery_kind="escalation",
+                )
+                if report.outcome != DeliveryOutcome.DELIVERED and not report.queued:
+                    _escalated.forget((name, key))
+            except Exception:
+                _escalated.forget((name, key))
+                log.exception("Could not report blocked agent %s to %s", name, recipient)
 
 
 async def check_plan_waiting(

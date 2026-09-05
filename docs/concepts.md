@@ -67,7 +67,7 @@ What an agent is doing, in a vocabulary shared by every runtime:
 | `idle` | At the prompt, nothing running |
 | `busy` | Working on a prompt |
 | `waiting_for_human` | Blocked on a person — `reason` is `plan` (plan approval), `permission` (tool permission prompt) or `question` (`AskUserQuestion`, or any dialog seen on the terminal) |
-| `blocked` | Waiting on something that is not a person and resumes on its own — `reason` is `quota` (the runtime's usage limit; `detail` says what the runtime said, e.g. when it resets) |
+| `blocked` | Waiting on a usage limit (`reason: quota`) or a provider capacity/rate-limit failure (`reason: provider`). `detail` preserves the error and retry/reset time. Recovery may require waiting or choosing another model. |
 | `unknown` | No trustworthy signal |
 | `offline` | No tmux session (reported by the API; not a stored state) |
 
@@ -90,7 +90,7 @@ Derived from the state plus the terminal, right before anything is pasted:
 |---|---|---|
 | `offline` | no session | no — queued |
 | `waiting_for_human` | agent is asking a person something | no — queued |
-| `agent_working` | starting, busy, or blocked on its usage limit | no — queued (never bypassed) |
+| `agent_working` | starting, busy, or blocked on a usage limit or provider failure | no — queued (never bypassed) |
 | `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
 | `settling` | hook reported idle less than `timing.grace_period_seconds` ago | not yet, unless `priority` |
 | `ready` | idle, empty prompt | **yes** |

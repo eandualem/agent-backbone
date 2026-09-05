@@ -413,6 +413,25 @@ class TestTell:
 
 
 class TestSwarmList:
+    def test_status_shows_provider_error(self, capsys):
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        member = {
+            "name": "scout",
+            "state": "blocked",
+            "reason": "provider",
+            "detail": "Selected model is at capacity",
+        }
+        with patch(
+            "agent_backbone.cli._common.api",
+            new_callable=AsyncMock,
+            return_value=(200, {"items": [{"name": "s1", "members": [member]}]}),
+        ):
+            assert _run(["swarm", "status", "s1"]) == 0
+        output = capsys.readouterr().out
+        assert "blocked (provider)" in output
+        assert member["detail"] in output
+
     def test_malformed_200_items_are_an_error(self, capsys):
         assert _run(["init"]) == 0
         capsys.readouterr()

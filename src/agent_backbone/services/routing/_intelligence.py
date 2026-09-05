@@ -104,7 +104,7 @@ async def get_session_intelligence(
         detail = f": {state_snap.detail}" if state_snap.detail else ""
         return profile(
             SessionIntelligence.AGENT_WORKING,
-            f"blocked on its {state_snap.reason or 'runtime'}{detail}; it resumes on its own",
+            f"blocked on its {state_snap.reason or 'runtime'}{detail}; messages remain queued",
         )
     if agent_state in WORKING_STATES:
         return profile(SessionIntelligence.AGENT_WORKING)

@@ -26,6 +26,11 @@ finishing; the kickoff confirms the roster has been registered and launched.
    A `question` (a model-switch or other choice dialog) is never approved;
    `deny` keeps the current model. Approving is your decision; the
    backbone only types it.
+   A member in `blocked (provider)` cannot take more work. Read its evidence:
+   wait for a short retry/reset window (up to five minutes), then inspect again.
+   For exhausted quota, a longer reset, or continued capacity failure, tell the
+   initiator and reassign the task to an available member. Preserve file ownership
+   before reassigning. Do not keep sending assignments or restart the blocked member.
 4. **Report outward**: you are the swarm's only voice to the outside.
    Post progress and questions as comments on issue {repo}#{issue_number}
    (`gh issue comment {issue_number} --repo {repo}`), and you may also

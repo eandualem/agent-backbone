@@ -30,6 +30,11 @@ class OpenCode(Runtime):
     placeholder_fragments = ("ask anything...", "ctrl+p commands")
     status_fragments = ("tab agents", "ctrl+p commands")
     busy_markers = ("esc interrupt",)
+    provider_error_patterns = (
+        r"^(?:error:\s*)?you exceeded your current quota\b",
+        r"^(?:error:\s*)?(?:rate limit (?:reached|exceeded)|resource_exhausted)\b",
+        r"^(?:error:\s*)?selected model is at capacity\b",
+    )
     # "△ Permission required … Allow once  Allow always  Reject … enter confirm"
     # with "Allow once" preselected (live capture, 1.18).
     prompt_markers = ("permission required", "allow once", "allow always")

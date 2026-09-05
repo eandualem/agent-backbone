@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Literal
@@ -47,6 +48,37 @@ _FALLBACK_DIRS = (
 )
 
 BriefMode = Literal["system_prompt", "initial_prompt", "message", "none"]
+
+
+def _error_foreground(raw: str) -> bool:
+    """Whether visible text has a red foreground (ANSI, palette or true color)."""
+    red = False
+    for part in re.split(r"(\x1b\[[0-9;]*m)", raw):
+        if not part.startswith("\x1b["):
+            if red and any(ch.isalpha() for ch in part):
+                return True
+            continue
+        codes = [int(value or 0) for value in part[2:-1].split(";")]
+        i = 0
+        while i < len(codes):
+            code = codes[i]
+            if code in (0, 39) or 30 <= code <= 37 or 90 <= code <= 97:
+                red = code in (31, 91)
+            elif code in (38, 48) and codes[i + 1 : i + 2] == [2] and i + 4 < len(codes):
+                r, g, b = codes[i + 2 : i + 5]
+                if code == 38:
+                    red = r > 100 and r > g * 1.3 and r > b * 1.3
+                i += 4
+            elif code in (38, 48) and codes[i + 1 : i + 2] == [5] and i + 2 < len(codes):
+                color = codes[i + 2]
+                if code == 38:
+                    cube = color - 16
+                    red = color in (1, 9) or (
+                        16 <= color <= 231 and cube // 36 > max(cube // 6 % 6, cube % 6)
+                    )
+                i += 2
+            i += 1
+    return False
 
 
 def resolve_command(name: str) -> str | None:
@@ -139,6 +171,10 @@ class Runtime:
     queue_markers: tuple[str, ...] = ()
     busy_markers: tuple[str, ...] = ()
     """Fragments shown only while the runtime is working (e.g. a spinner line)."""
+    provider_error_patterns: tuple[str, ...] = ()
+    """Anchored error-banner patterns for provider capacity, quota or rate limits."""
+    provider_error_prefixes: tuple[str, ...] = ()
+    """Runtime error glyphs distinguish banners from ordinary response text."""
     prompt_markers: tuple[str, ...] = ()
     """Fragments shown when the runtime is asking the human a yes/no question."""
     approve_keys: tuple[str, ...] = ()
@@ -418,6 +454,34 @@ class Runtime:
         tail = sanitize_pane_content(pane_content).strip().splitlines()[-12:]
         lowered = "\n".join(line.lower() for line in tail)
         return any(marker in lowered for marker in self.busy_markers)
+
+    def provider_failure(self, pane_content: str) -> str | None:
+        """Current provider error, excluding quoted examples and superseded output."""
+        lines = pane_content.splitlines()[-25:]
+        detail: list[str] = []
+        for raw in reversed(lines):
+            line = sanitize_pane_content(raw).strip()
+            if not line or is_box_line(line) or self._is_status_chrome_line(line):
+                continue
+            if line in self.prompt_prefixes or line.lower() in self.placeholder_fragments:
+                continue
+            text = line.lstrip("│┃■●✕✖! ").strip()
+            if any(
+                re.match(pattern, text, re.IGNORECASE) for pattern in self.provider_error_patterns
+            ):
+                # The words alone may be a final answer quoting an error. Require
+                # the runtime's banner glyph or red error foreground as well.
+                if not line.startswith(self.provider_error_prefixes) and not _error_foreground(raw):
+                    return None
+                return "\n".join([text, *reversed(detail)])[:500]
+            if re.match(
+                r"(?:please retry|try again|retrying|resets? (?:at|in)|https://)", text, re.I
+            ):
+                detail.append(text)
+                continue
+            # A later response/tool output means the earlier error is history.
+            return None
+        return None
 
     def detect_waiting_for_human(self, pane_content: str) -> bool:
         """Whether the runtime is visibly blocked on a question to the human.

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import AgentSpec
-from agent_backbone.services.agents import lifecycle_lock, start_agent
+from agent_backbone.services.agents import agent_state, lifecycle_lock, start_agent
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
@@ -31,7 +31,7 @@ from agent_backbone.services.swarm._worktree import (
     is_git_repo,
     remove_worktree,
 )
-from agent_backbone.services.terminal import session_exists, stop_session
+from agent_backbone.services.terminal import list_sessions, session_exists, stop_session
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -412,6 +412,11 @@ async def teardown_for_issue(
 async def swarm_overview(db: BackboneDB, store: AgentStore) -> list[dict]:
     """All swarms with their member rosters."""
     swarms = await db.swarms.list()
+    try:
+        active = set(await list_sessions(strict=True))
+    except (OSError, RuntimeError):
+        log.exception("Could not query swarm session availability")
+        active = None
     for swarm in swarms:
         members = await _members_of(store, swarm["name"])
         swarm["members"] = [
@@ -423,4 +428,25 @@ async def swarm_overview(db: BackboneDB, store: AgentStore) -> list[dict]:
             }
             for m in members
         ]
+        for member in swarm["members"]:
+            if active is None:
+                member.update(
+                    state="unknown",
+                    reason=None,
+                    detail=None,
+                    evidence=["tmux session availability could not be queried"],
+                )
+                continue
+            if member["name"] not in active:
+                member.update(
+                    state="offline", reason=None, detail=None, evidence=["no tmux session"]
+                )
+                continue
+            snapshot = await agent_state(store.config, member["name"])
+            member.update(
+                state=snapshot.state.value,
+                reason=snapshot.reason,
+                detail=snapshot.detail,
+                evidence=snapshot.evidence,
+            )
     return swarms

@@ -11,7 +11,7 @@ import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.agents import AgentStore, StartResult
+from agent_backbone.services.agents import AgentState, AgentStore, StartResult, StateSnapshot
 from agent_backbone.services.swarm import (
     SwarmError,
     create_swarm,
@@ -19,6 +19,7 @@ from agent_backbone.services.swarm import (
     parse_member_spec,
     parse_roster,
     render_brief,
+    swarm_overview,
     teardown_for_issue,
     teardown_swarm,
 )
@@ -28,6 +29,47 @@ from tests.conftest import make_config
 _IFACE = "agent_backbone.services.swarm.interface"
 _STARTED = StartResult(ok=True, ready="ready")
 _FAILED = StartResult(ok=False)
+
+
+async def test_overview_exposes_provider_block_and_offline_member(db, tmp_path):
+    store = AgentStore(db, tmp_path)
+    await store.start()
+    for name in ("scout", "coordinator"):
+        await store.register(
+            AgentSpec(name=name, dir=str(tmp_path / name), tags=("swarm:research", f"role:{name}"))
+        )
+    await db.swarms.create(
+        "research",
+        repo="acme/app",
+        issue_number=42,
+        initiator="owner",
+        coordinator="coordinator",
+        branch="swarm/research",
+        worktree_dir=str(tmp_path),
+    )
+    snapshot = StateSnapshot(
+        state=AgentState.BLOCKED,
+        reason="provider",
+        detail="Selected model is at capacity",
+        source="pull",
+        evidence=["terminal shows a provider failure"],
+    )
+    with (
+        patch(f"{_IFACE}.list_sessions", return_value=["scout"]),
+        patch(f"{_IFACE}.agent_state", return_value=snapshot) as state,
+    ):
+        result = await swarm_overview(db, store)
+    members = {m["name"]: m for m in result[0]["members"]}
+    assert members["scout"]["state"] == "blocked"
+    assert members["scout"]["reason"] == "provider"
+    assert members["scout"]["detail"] == snapshot.detail
+    assert members["scout"]["evidence"] == snapshot.evidence
+    assert members["coordinator"]["state"] == "offline"
+    state.assert_awaited_once_with(store.config, "scout")
+    with patch(f"{_IFACE}.list_sessions", side_effect=RuntimeError("query failed")):
+        unavailable = await swarm_overview(db, store)
+    assert {m["state"] for m in unavailable[0]["members"]} == {"unknown"}
+    assert "could not be queried" in unavailable[0]["members"][0]["evidence"][0]
 
 
 class TestRoster:
