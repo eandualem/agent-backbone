@@ -137,10 +137,16 @@ async def stop_session(session_name: str) -> bool:
     return True
 
 
-async def list_sessions() -> list[str]:
-    """Names of every active tmux session."""
-    rc, stdout, _ = await _run_tmux("list-sessions", "-F", "#{session_name}", capture_stdout=True)
+async def list_sessions(*, strict: bool = False) -> list[str]:
+    """Names of active sessions; strict callers distinguish unavailable from empty."""
+    rc, stdout, stderr = await _run_tmux(
+        "list-sessions", "-F", "#{session_name}", capture_stdout=True
+    )
     if rc != 0:
+        if strict:
+            raise RuntimeError(
+                f"tmux session query failed: {stderr.decode(errors='replace').strip()}"
+            )
         return []
     return [s.strip() for s in stdout.decode().splitlines() if s.strip()]
 

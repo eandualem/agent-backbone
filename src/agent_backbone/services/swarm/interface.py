@@ -412,7 +412,11 @@ async def teardown_for_issue(
 async def swarm_overview(db: BackboneDB, store: AgentStore) -> list[dict]:
     """All swarms with their member rosters."""
     swarms = await db.swarms.list()
-    active = set(await list_sessions())
+    try:
+        active = set(await list_sessions(strict=True))
+    except (OSError, RuntimeError):
+        log.exception("Could not query swarm session availability")
+        active = None
     for swarm in swarms:
         members = await _members_of(store, swarm["name"])
         swarm["members"] = [
@@ -425,6 +429,14 @@ async def swarm_overview(db: BackboneDB, store: AgentStore) -> list[dict]:
             for m in members
         ]
         for member in swarm["members"]:
+            if active is None:
+                member.update(
+                    state="unknown",
+                    reason=None,
+                    detail=None,
+                    evidence=["tmux session availability could not be queried"],
+                )
+                continue
             if member["name"] not in active:
                 member.update(
                     state="offline", reason=None, detail=None, evidence=["no tmux session"]

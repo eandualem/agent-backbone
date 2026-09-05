@@ -140,6 +140,7 @@ class Codex(Runtime):
         r"^(?:error:\s*)?rate limit (?:reached|exceeded)\b",
         r"^(?:error:\s*)?(?:too many requests|insufficient_quota)\b",
     )
+    provider_error_prefixes = ("■",)
     prompt_markers = (
         "approve this command",
         "allow command",

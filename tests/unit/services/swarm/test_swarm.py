@@ -66,6 +66,10 @@ async def test_overview_exposes_provider_block_and_offline_member(db, tmp_path):
     assert members["scout"]["evidence"] == snapshot.evidence
     assert members["coordinator"]["state"] == "offline"
     state.assert_awaited_once_with(store.config, "scout")
+    with patch(f"{_IFACE}.list_sessions", side_effect=RuntimeError("query failed")):
+        unavailable = await swarm_overview(db, store)
+    assert {m["state"] for m in unavailable[0]["members"]} == {"unknown"}
+    assert "could not be queried" in unavailable[0]["members"][0]["evidence"][0]
 
 
 class TestRoster:

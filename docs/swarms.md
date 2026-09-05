@@ -156,6 +156,7 @@ coupled work, one agent is faster and cheaper. Start with 3–5 members.
 ## Members, permissions and the sandbox
 
 `backbone swarm list` shows each member's state, reason and provider error.
+If session availability cannot be queried, members show `unknown`, not `offline`.
 Capacity and quota failures appear as `blocked (provider)`; messages stay queued,
 including priority messages. The monitor alerts the coordinator, initiator and
 configured escalation target, deduplicated separately for each recipient. Failed

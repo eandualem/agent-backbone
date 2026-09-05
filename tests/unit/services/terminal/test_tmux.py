@@ -52,6 +52,18 @@ class TestSessionExists:
 
 
 class TestListSessions:
+    @pytest.mark.parametrize("returncode", [0, 1])
+    async def test_strict_query_distinguishes_empty_from_failure(self, mock_subprocess, returncode):
+        proc = AsyncMock()
+        proc.returncode = returncode
+        proc.communicate = AsyncMock(return_value=(b"", b"query failed"))
+        mock_subprocess.return_value = proc
+        if returncode:
+            with pytest.raises(RuntimeError, match="query failed"):
+                await list_sessions(strict=True)
+        else:
+            assert await list_sessions(strict=True) == []
+
     async def test_list_sessions(self, mock_subprocess):
         proc = AsyncMock()
         proc.returncode = 0
