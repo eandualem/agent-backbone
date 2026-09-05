@@ -138,10 +138,19 @@ How hooks reach a session is the runtime's business
 
 A fresh hook state is **authoritative**: these CLIs keep their input box
 on screen while working, so the terminal alone would say "idle" while
-they are busy. The one exception is a dialog the runtime draws itself: Claude
+they are busy. A fresh `idle` is checked for dialogs and current provider errors
+drawn by the runtime itself: Claude
 Code fires `SessionStart` with its resume picker still on screen, so a
 fresh `idle` is checked against the terminal and a dialog there wins
 (`waiting_for_human` / `question`, with the evidence saying so).
+
+Runtime-specific capacity, quota and rate-limit banners produce `blocked`
+with `reason: provider`, preserving the error and retry/reset detail. This
+overrides an idle hook or stale terminal fallback; fresh busy hooks remain
+authoritative. Later response/tool output clears terminal-only failure evidence.
+Messages stay queued, including priority messages. The monitor alerts humans,
+the escalation target and active swarm coordinator/initiator, deduplicating
+each recipient and retrying failed notification delivery.
 
 **Terminal reading** is the fallback. Each runtime's module (`services/runtimes/<cli>.py`) knows its prompt
 character, its status chrome (lines to ignore), its busy indicator

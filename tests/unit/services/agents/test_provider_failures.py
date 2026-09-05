@@ -1,0 +1,90 @@
+"""Provider failures are visible, queue deliveries, and disappear after recovery."""
+
+from __future__ import annotations
+
+import time
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from agent_backbone.services.agents import (
+    AgentState,
+    get_agent_state,
+    infer_state_from_pane,
+    write_state_file,
+)
+from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.runtimes import RUNTIMES
+
+CASES = [
+    ("codex", "Selected model is at capacity. Please try again later.", "›"),
+    (
+        "opencode",
+        "You exceeded your current quota: generate_content_free_tier_requests, limit: 20",
+        "Ask anything...",
+    ),
+    ("claude", "You've hit your limit · resets at 3 PM", "❯"),
+]
+
+
+@pytest.mark.parametrize("runtime,error,prompt", CASES)
+def test_current_provider_banner_is_blocked(runtime, error, prompt):
+    snapshot = infer_state_from_pane(f"{error}\nPlease retry in 49s\n{prompt}", runtime)
+    assert snapshot.state == AgentState.BLOCKED and snapshot.reason == "provider"
+    assert error in snapshot.detail and "49s" in snapshot.detail
+    assert error in " ".join(snapshot.evidence)
+
+
+@pytest.mark.parametrize("runtime,error,prompt", CASES)
+def test_old_errors_and_quoted_examples_do_not_block(runtime, error, prompt):
+    rt = RUNTIMES[runtime]
+    assert rt.provider_failure(f"{error}\nCompleted the requested change.\n{prompt}") is None
+    assert rt.provider_failure(f'Example: "{error}"\n{prompt}') is None
+    assert rt.provider_failure(f"{error}\nRunning tests now · esc to interrupt\n{prompt}") is None
+
+
+@pytest.mark.parametrize("state,age", [("busy", 600), ("idle", 0)])
+async def test_error_overrides_stale_busy_or_fresh_idle(tmp_path, state, age):
+    write_state_file(
+        tmp_path, "app", {"state": state, "ts": time.time() - age, "issue": 5, "repo": "acme/app"}
+    )
+    result = await get_agent_state(
+        tmp_path, "app", runtime_hint="codex", pane_content=CASES[0][1] + "\n›"
+    )
+    assert result.state == AgentState.BLOCKED and result.reason == "provider"
+    assert (result.current_issue, result.current_repo) == (5, "acme/app")
+    recovered = await get_agent_state(
+        tmp_path,
+        "app",
+        runtime_hint="codex",
+        pane_content=CASES[0][1] + "\nCompleted successfully.\n›",
+    )
+    assert recovered.state == AgentState.IDLE
+
+
+async def test_fresh_busy_hook_remains_authoritative(tmp_path):
+    write_state_file(tmp_path, "app", {"state": "busy", "ts": time.time()})
+    result = await get_agent_state(
+        tmp_path, "app", runtime_hint="codex", pane_content=CASES[0][1] + "\n›"
+    )
+    assert result.state == AgentState.BUSY
+
+
+async def test_provider_block_queues_even_priority_delivery(config, db):
+    intelligence = "agent_backbone.services.routing._intelligence"
+    with (
+        patch(f"{intelligence}.list_sessions", AsyncMock(return_value=["ike"])),
+        patch(f"{intelligence}.capture_pane", AsyncMock(return_value=CASES[0][1] + "\n›")),
+        patch(f"{intelligence}.resolve_runtime", AsyncMock(return_value=RUNTIMES["codex"])),
+        patch("agent_backbone.services.routing._delivery.send_message", AsyncMock()) as send,
+    ):
+        await safe_deliver(
+            "ike",
+            "new assignment",
+            config,
+            db=db,
+            priority=True,
+            delivery_kind="direct_message",
+        )
+    send.assert_not_awaited()
+    assert await db.queue.pending_count("ike") == 1

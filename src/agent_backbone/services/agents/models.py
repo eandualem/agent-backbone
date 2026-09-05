@@ -13,7 +13,8 @@ class AgentState(StrEnum):
     other question the runtime is blocking on; the detail is in
     ``StateSnapshot.reason`` (``plan``, ``permission``, ``question``).
     ``blocked`` is the runtime waiting on something that is not a person —
-    today its usage limit (``reason`` ``quota``); it resumes on its own.
+    a usage limit (``quota``) or model-provider failure (``provider``).
+    Recovery may require waiting or choosing another model.
     """
 
     STARTING = "starting"
@@ -49,7 +50,7 @@ def prompt_id(snapshot: StateSnapshot) -> str:
 
 
 WORKING_STATES = frozenset({AgentState.STARTING, AgentState.BUSY, AgentState.BLOCKED})
-"""States in which the agent is occupied and will come back by itself."""
+"""States in which the agent cannot accept another delivery."""
 
 REASON_PLAN = "plan"
 REASON_PERMISSION = "permission"

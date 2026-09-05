@@ -106,7 +106,7 @@ async def monitor_agents(
             log.exception("Plan-waiting notification failed (non-fatal)")
 
         try:
-            await check_blocked(config, states)
+            await check_blocked(config, states, db=db)
         except Exception:
             log.exception("Blocked-agent notification failed (non-fatal)")
 

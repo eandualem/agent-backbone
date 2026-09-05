@@ -304,6 +304,42 @@ class TestPermissionWaiting:
 
 
 class TestBlocked:
+    async def test_swarm_recipients_are_deduplicated_independently(self, config, db):
+        specs = dict(config.agents.specs)
+        specs["ike"] = replace(specs["ike"], tags=("swarm:research",))
+        config = replace(
+            config, agents=AgentsConfig(specs=specs), escalation=EscalationConfig(target="leo")
+        )
+        await db.swarms.create(
+            "research",
+            repo=_REPO,
+            issue_number=42,
+            initiator="ada",
+            coordinator="leo",
+            branch="swarm/research",
+            worktree_dir="/scratch/research",
+        )
+        states = {"ike": _snap(AgentState.BLOCKED, reason="provider", detail="Please retry in 49s")}
+        attempts = []
+
+        async def send(recipient, message, *args, **kwargs):
+            attempts.append(recipient)
+            assert "Please retry in 49s" in message
+            assert "remain queued" in message
+            assert kwargs["priority"] is True
+            if recipient == "ada" and attempts.count("ada") == 1:
+                return DeliveryReport(DeliveryOutcome.AGENT_WORKING, "failed")
+            return DeliveryReport(DeliveryOutcome.AGENT_WORKING, "stored")
+
+        with (
+            patch(f"{_ESC}.notify_humans", side_effect=[RuntimeError("offline"), True]) as human,
+            patch(f"{_ESC}.deliver", side_effect=send),
+        ):
+            for _ in range(3):
+                await esc.check_blocked(config, states, db)
+        assert attempts == ["ada", "leo", "ada"]
+        assert human.await_count == 2
+
     async def test_notifies_once_with_the_runtimes_detail(self, config):
         states = {
             "ike": _snap(AgentState.BLOCKED, reason="quota", detail="resets at 3 PM"),

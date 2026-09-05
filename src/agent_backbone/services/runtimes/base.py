@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Literal
@@ -139,6 +140,8 @@ class Runtime:
     queue_markers: tuple[str, ...] = ()
     busy_markers: tuple[str, ...] = ()
     """Fragments shown only while the runtime is working (e.g. a spinner line)."""
+    provider_error_patterns: tuple[str, ...] = ()
+    """Anchored error-banner patterns for provider capacity, quota or rate limits."""
     prompt_markers: tuple[str, ...] = ()
     """Fragments shown when the runtime is asking the human a yes/no question."""
     approve_keys: tuple[str, ...] = ()
@@ -418,6 +421,29 @@ class Runtime:
         tail = sanitize_pane_content(pane_content).strip().splitlines()[-12:]
         lowered = "\n".join(line.lower() for line in tail)
         return any(marker in lowered for marker in self.busy_markers)
+
+    def provider_failure(self, pane_content: str) -> str | None:
+        """Current provider error, excluding quoted examples and superseded output."""
+        lines = [line.strip() for line in sanitize_pane_content(pane_content).splitlines()[-25:]]
+        detail: list[str] = []
+        for line in reversed(lines):
+            if not line or is_box_line(line) or self._is_status_chrome_line(line):
+                continue
+            if line in self.prompt_prefixes or line.lower() in self.placeholder_fragments:
+                continue
+            text = line.lstrip("│┃■●✕✖! ").strip()
+            if any(
+                re.match(pattern, text, re.IGNORECASE) for pattern in self.provider_error_patterns
+            ):
+                return "\n".join([text, *reversed(detail)])[:500]
+            if re.match(
+                r"(?:please retry|try again|retrying|resets? (?:at|in)|https://)", text, re.I
+            ):
+                detail.append(text)
+                continue
+            # A later response/tool output means the earlier error is history.
+            return None
+        return None
 
     def detect_waiting_for_human(self, pane_content: str) -> bool:
         """Whether the runtime is visibly blocked on a question to the human.

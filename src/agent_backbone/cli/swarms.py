@@ -74,10 +74,15 @@ async def _swarm(args: argparse.Namespace) -> int:
                 if not isinstance(member, dict):
                     continue
                 model = f" ({member['model']})" if member.get("model") else ""
+                state = member.get("state", "unknown")
+                if member.get("reason"):
+                    state += f" ({member['reason']})"
                 print(
                     f"    {member.get('name', '?'):<28s} {member.get('role', '?'):<12s} "
-                    f"{member.get('runtime', '?')}{model}"
+                    f"{member.get('runtime', '?')}{model}  {state}"
                 )
+                if member.get("detail"):
+                    print(f"      {member['detail']}")
         return 0
 
     if sub == "disband":
