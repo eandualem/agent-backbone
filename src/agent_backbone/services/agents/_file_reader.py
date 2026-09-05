@@ -48,6 +48,8 @@ def _starting_snapshot(state_dir: Path, session: str, newer_than: float) -> Stat
         launched_at = float(json.loads(marker.read_text())["ts"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
+    if not math.isfinite(launched_at):
+        return None  # an "inf" marker would outrank every later hook state
     if launched_at <= newer_than:
         clear_starting_marker(state_dir, session)  # a hook has spoken since the launch
         return None

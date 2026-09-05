@@ -84,3 +84,8 @@ class TestNonFiniteTimestamps:
     def test_are_rejected(self, tmp_path, ts):
         (tmp_path / "ike.json").write_text(f'{{"state": "busy", "ts": {ts}}}')
         assert read_state_file(tmp_path, "ike") is None
+
+    @pytest.mark.parametrize("ts", ['"inf"', '"nan"'])
+    def test_a_non_finite_starting_marker_is_ignored(self, tmp_path, ts):
+        (tmp_path / "ike.starting").write_text(f'{{"ts": {ts}}}')
+        assert read_state_file(tmp_path, "ike") is None
