@@ -65,12 +65,12 @@ members like any other agent.
 
 ## Members and permission prompts
 
-Codex members never ask: Codex's sandbox confines them to the worktree
-(plus temp and the network, so `backbone tell` and `gh` work), and inside
-that wall the backbone launches them with `-a never`
-(`swarm.unattended_members`, on by default). A write outside fails and
-the model is told; what a project's tooling needs outside is opened once
-with `agents.writable_dirs` (this repository: `["~/.cache/uv"]`).
+With `swarm.unattended_members` (on by default) Codex members never ask:
+Codex's sandbox confines them to the worktree (plus temp and the network,
+so `backbone tell` and `gh` work), and inside that wall the backbone
+launches them with `-a never -s workspace-write`. A write outside fails
+and the model is told; what a project's tooling needs outside is opened
+once with `agents.writable_dirs` (this repository: `["~/.cache/uv"]`).
 
 Members on a runtime without a sandbox (OpenCode, Claude Code, Gemini)
 keep their dialogs — unattended there would be trust on the whole

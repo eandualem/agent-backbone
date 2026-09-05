@@ -16,6 +16,12 @@ decompose it, assign it, track it, and synthesize it.
    members are working, keep a periodic watchdog running (a background
    timer, every 10–15 minutes) so a stalled or failed member is noticed
    even if no message arrives; stop it when all work is done.
+   A member in `waiting_for_human (permission)` is waiting for **you**:
+   the evidence quotes what it wants to run — read it, then
+   `backbone agent approve <name>` or `backbone agent deny <name>`.
+   A `question` (a model-switch or other choice dialog) is never approved;
+   `deny` keeps the current model. Approving is your decision; the
+   backbone only types it.
 4. **Report outward**: you are the swarm's only voice to the outside.
    Post progress and questions as comments on issue {repo}#{issue_number}
    (`gh issue comment {issue_number} --repo {repo}`), and you may also

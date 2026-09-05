@@ -346,6 +346,7 @@ class Runtime:
         when the binary is missing, or when ``unattended`` is asked of a
         runtime without such a switch.
         """
+        self.check_unattended(unattended)  # a shell has no switch either
         if self.binary is None:
             return None
         resolved = resolve_command(self.binary)
@@ -362,7 +363,6 @@ class Runtime:
             # default model — a spec that names an effort must name a model.
             raise RuntimeError(f"model spec '{model}' names an effort but no model")
         self.check_effort(effort)
-        self.check_unattended(unattended)
         return [
             resolved,
             *self.effort_args(effort),

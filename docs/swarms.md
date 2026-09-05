@@ -163,14 +163,23 @@ and `gh` work; a write anywhere else fails with "Operation not
 permitted" and the model is told so. A git worktree commits normally —
 its git dir under the main checkout is reachable (measured with `codex
 sandbox`). Inside that wall there is nothing worth asking a person, so
-with `swarm.unattended_members` (the default) Codex members are
-registered `unattended` and launched with `-a never`: no approval dialog,
-ever. What a project's tooling keeps outside the checkout is declared
-once in `agents.writable_dirs` — for this repository `uv`'s cache:
+with `swarm.unattended_members` (the default) a Codex member is launched
+with `-a never -s workspace-write`: no approval dialog, ever, and the
+sandbox pinned. This is decided at each member start from the setting and
+the member's runtime, not stored on the member: flip the setting and the
+next restart follows; move a member to a runtime without a sandbox and it
+asks again. What a project's tooling keeps outside the checkout is
+declared once in `agents.writable_dirs` — for this repository `uv`'s
+cache:
 
 ```bash
 backbone config set agents.writable_dirs '["~/.cache/uv"]'
 ```
+
+That cache is shared with you and every other agent on the machine, so a
+member can write what your next `uv sync` installs. If you would rather
+not share it, leave the list empty and give the member a cache inside its
+worktree (`UV_CACHE_DIR` in its `env`, set with `agent set`).
 
 **Members without a sandbox keep asking.** OpenCode, Claude Code (outside
 auto mode) and Gemini have a no-approval switch too, but no wall behind

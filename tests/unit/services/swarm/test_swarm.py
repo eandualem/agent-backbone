@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import shutil
-from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.config import AgentsConfig, AgentSpec, SwarmConfig
+from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import StartResult
 from agent_backbone.services.swarm import (
@@ -235,40 +234,9 @@ class TestCreateSwarm:
         # Recorded as active.
         row = await db.swarms.get("research")
         assert row["status"] == "active" and row["issue_number"] == 7
-        # Claude Code has no sandbox: its members keep their dialogs.
+        # Whether a member asks is start_agent's call at each launch (from
+        # `swarm.unattended_members` and the runtime's sandbox), never stored.
         assert not any(s.unattended for s in store.registered)
-
-    @pytest.mark.parametrize("setting", [True, False])
-    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
-    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
-    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
-    @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
-    @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
-    @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
-    async def test_only_sandboxed_members_are_unattended(
-        self, _git, _branch, mock_wt, _exists, _start, _deliver, setting, db, tmp_path
-    ):
-        # A member confined to the worktree never asks (unless the setting is
-        # off); one without a sandbox always keeps its dialogs.
-        config, repo_dir = _swarm_config(tmp_path)
-        config = replace(config, swarm=SwarmConfig(unattended_members=setting))
-        mock_wt.return_value = (repo_dir / ".backbone" / "swarms" / "mix", "swarm/mix")
-        store = _FakeStore(config)
-        gh = AsyncMock()
-        gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
-        await create_swarm(
-            config,
-            db,
-            store,
-            gh,
-            name="mix",
-            issue_ref="acme/app#7",
-            member_specs=["coordinator@codex/gpt-6-astra:high", "scout@opencode/google/g"],
-            initiator="simon",
-        )
-        by_name = {s.name: s for s in store.registered}
-        assert by_name["mix-coordinator"].unattended is setting
-        assert by_name["mix-scout"].unattended is False
 
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)

@@ -95,6 +95,12 @@ Each line also prints the reasoning-effort levels that runtime accepts —
 for Codex, `-` for a CLI with no effort setting. Unlike model ids, these
 are checked: a level the runtime does not have is refused at start.
 
+The `unattended:` line is the switch an `unattended=true` agent is
+launched with, and whether a wall stands behind it: `-a never -s
+workspace-write (sandboxed)` for Codex, `--auto (no sandbox)` for
+OpenCode, `-` for a CLI the backbone cannot start unattended (refused, not
+launched attended). See [configuration](configuration.md#agents).
+
 ## `backbone status`
 
 API health per component, GitHub intake mode, every known agent with its

@@ -86,13 +86,15 @@ class Codex(Runtime):
     # gpt-6-astra reports them in codex 0.153 (`~/.codex/models_cache.json`).
     efforts = ("low", "medium", "high", "xhigh", "max", "ultra")
     # "never: Never ask for user approval. Execution failures are immediately
-    # returned to the model." The workspace-write sandbox stays: the agent's
-    # directory (a git worktree included — its git dir under the main
-    # checkout is reachable, measured with `codex sandbox`), temp, and the
-    # network opened below; a write anywhere else fails with "Operation not
-    # permitted" and the model is told so. codex-cli 0.153: a global option,
-    # valid before the TUI and before `resume`.
-    unattended_args = ("-a", "never")
+    # returned to the model." The workspace-write sandbox is pinned alongside
+    # (a `sandbox_mode = "danger-full-access"` in the user's config.toml
+    # would otherwise silently take the wall away): the agent's directory (a
+    # git worktree included — its git dir under the main checkout is
+    # reachable, measured with `codex sandbox`), temp, and the network opened
+    # below; a write anywhere else fails with "Operation not permitted" and
+    # the model is told so. codex-cli 0.153: both are global options, valid
+    # before the TUI and before `resume`.
+    unattended_args = ("-a", "never", "-s", "workspace-write")
     sandboxed = True
 
     hook_script = "codex_hook.py"

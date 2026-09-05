@@ -40,6 +40,30 @@ def sanitize_name(raw: str) -> str:
     return cleaned or "agent"
 
 
+_TRUE = frozenset({"true", "1", "yes", "on"})
+_FALSE = frozenset({"false", "0", "no", "off"})
+
+
+def _flag(name: str, value: object) -> bool:
+    """A boolean agent field from what the CLI or API handed over.
+
+    The CLI's direct path (backbone down) passes the raw ``key=value`` text,
+    and ``bool("False")`` is True — for ``unattended`` that would turn
+    machine-wide trust *on* while the owner is switching it off.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _TRUE:
+            return True
+        if lowered in _FALSE:
+            return False
+    raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
 class AgentStore:
     """Known agents + settings snapshot, with change notification."""
 
@@ -140,7 +164,11 @@ class AgentStore:
             env=dict(existing.env) if existing else {},
             description=existing.description if existing else "",
             always_on=existing.always_on if existing else False,
-            unattended=existing.unattended if existing else False,
+            # A freedom granted for one runtime does not follow the agent to
+            # another: behind a different CLI it may mean a different thing.
+            unattended=bool(
+                existing and existing.unattended and runtime in (None, existing.runtime)
+            ),
         )
 
     async def register(self, spec: AgentSpec) -> AgentSpec:
@@ -198,7 +226,14 @@ class AgentStore:
             merged["tags"] = tuple(changes["tags"])
         for flag in ("always_on", "unattended"):
             if flag in changes:
-                merged[flag] = bool(changes[flag])
+                merged[flag] = _flag(flag, changes[flag])
+        # `unattended` was granted with a runtime in mind (Codex's sandbox);
+        # a new runtime starts attended unless the same call says otherwise.
+        if (
+            changes.get("runtime", current.runtime) != current.runtime
+            and "unattended" not in changes
+        ):
+            merged["unattended"] = False
         spec = AgentSpec(name=name, watches=current.watches, **merged)
         return await self.register(spec)
 

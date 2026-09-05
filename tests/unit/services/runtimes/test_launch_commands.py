@@ -17,6 +17,8 @@ _BASE = "agent_backbone.services.runtimes.base"
 _HOME = Path.home()
 # Every Codex launch opens the sandbox to the network so members reach the API.
 _NET = ["-c", "sandbox_workspace_write.network_access=true"]
+# Unattended Codex: never ask, and pin the sandbox the promise rests on.
+_NEVER_ASK = ["-a", "never", "-s", "workspace-write"]
 
 
 def _resolve(binary: str):
@@ -390,8 +392,7 @@ class TestUnattended:
             "/bin/codex",
             "-c",
             "model_reasoning_effort=high",
-            "-a",
-            "never",
+            *_NEVER_ASK,
             *_NET,
             "--model",
             "gpt-6-astra",
@@ -407,7 +408,7 @@ class TestUnattended:
                 resume="sess-1", unattended=True, writable_dirs=("~/.cache/uv",)
             )
         cache = str(_HOME / ".cache/uv")
-        assert command[:6] == ["/bin/codex", "-a", "never", "--add-dir", cache, "resume"]
+        assert command[:8] == ["/bin/codex", *_NEVER_ASK, "--add-dir", cache, "resume"]
 
     def test_writable_dirs_open_only_a_sandbox(self):
         # A runtime without a sandbox has nothing to open: everything already is.
@@ -441,10 +442,8 @@ class TestUnattended:
         with _resolve("/bin/codex"):
             assert "-a" not in RUNTIMES["codex"].build_command(model="gpt-6-astra")
 
-    @pytest.mark.parametrize("runtime", ["deepcode", "aider"])
+    @pytest.mark.parametrize("runtime", ["deepcode", "aider", "shell"])
     def test_a_runtime_without_a_known_switch_is_refused_not_launched_attended(self, runtime):
+        # The shell included: it would otherwise start silently as a plain shell.
         with _resolve("/bin/x"), pytest.raises(RuntimeError, match="no unattended switch"):
             RUNTIMES[runtime].build_command(unattended=True)
-
-    def test_a_shell_has_nothing_to_approve(self):
-        assert RUNTIMES["shell"].build_command(unattended=True) is None
