@@ -23,7 +23,8 @@ from agent_backbone.services.routing import (
     outcome_queues,
     safe_deliver,
 )
-from agent_backbone.services.terminal import query_format_vars
+from agent_backbone.services.runtimes import resolve_runtime
+from agent_backbone.services.terminal import capture_pane, query_format_vars
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -70,6 +71,22 @@ def plan_actions(config: BackboneConfig, agent: str, ref: str) -> list[tuple[str
     ]
 
 
+async def _dialog_text(config: BackboneConfig, name: str) -> str:
+    """What the agent's dialog asks, for the person deciding from their phone."""
+    spec = config.agents.get(name)
+    try:
+        pane = await capture_pane(name, lines=40)
+        if not pane:
+            return ""
+        rt = await resolve_runtime(name, hint=spec.runtime if spec else None, pane_content=pane)
+        if not rt.detect_active_dialog(pane):
+            return ""  # a dialog left above an idle prompt is history, not the ask
+        return rt.dialog_summary(pane)
+    except Exception:
+        log.debug("Could not read %s's dialog for the notification", name)
+        return ""
+
+
 async def check_permission_waiting(config: BackboneConfig, states: AgentStates) -> None:
     """Tell the humans about a permission prompt, with Allow / Deny buttons.
 
@@ -86,11 +103,14 @@ async def check_permission_waiting(config: BackboneConfig, states: AgentStates) 
             continue
         if await _attended(name):
             continue
+        # The dialog's own words (the command, the runtime's reason), so the
+        # person can see what they are answering; runtime output, previewed.
+        asked = await _dialog_text(config, name)
         if snapshot.reason == "permission":
             text = (
                 f"\U0001f510 Permission prompt — {name}\n"
-                "The runtime is asking to run a tool. Allow or deny it here, or in the "
-                f"terminal: tmux attach -t {name}"
+                + (f"{asked}\n" if asked else "The runtime is asking to run a tool. ")
+                + f"Allow or deny it here, or in the terminal: tmux attach -t {name}"
             )
             actions = permission_actions(config, name, prompt_id(snapshot))
             if actions is None:
@@ -100,7 +120,8 @@ async def check_permission_waiting(config: BackboneConfig, states: AgentStates) 
         else:
             text = (
                 f"\u2753 Question — {name}\n"
-                f"The runtime is asking something only you can answer: tmux attach -t {name}"
+                + (f"{asked}\n" if asked else "")
+                + f"The runtime is asking something only you can answer: tmux attach -t {name}"
             )
             actions = None
         if await notify_humans(config, text, agent=name, actions=actions):

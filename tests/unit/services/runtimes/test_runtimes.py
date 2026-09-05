@@ -363,3 +363,73 @@ class TestPlanControlCapability:
         assert type(approved) is int and approved == 0  # a count, not a bool
         assert type(rejected) is int and rejected == 0
         keys.assert_not_awaited()
+
+
+_CODEX_MODEL_SWITCH = """\
+  Approaching rate limits
+  Switch to gpt-5.6-luna for lower credit usage?
+› 1. Switch to gpt-5.6-luna                 Fast and affordable agentic coding
+                                            model.
+  2. Keep current model
+  3. Keep current model (never show again)  Hide future rate limit reminders
+                                            about switching models.
+  Press enter to confirm or esc to go back
+"""
+
+_CODEX_PERMISSION = """\
+• Running backbone tell audit-coordinator 'Read issue and docs; starting'
+  Would you like to run the following command?
+  Environment: local
+  Reason: Allow the scout to send audit findings to the local swarm coordinator?
+  $ backbone tell audit-coordinator 'Read issue and docs; starting'
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `backbone tell` (p)
+  3. No, and tell Codex what to do differently (esc)
+  Press enter to confirm or esc to cancel
+"""
+
+
+class TestChoiceDialogs:
+    """A dialog whose Enter chooses (a model switch) is not a permission prompt."""
+
+    def test_codex_model_switch_is_a_choice(self):
+        rt = RUNTIMES["codex"]
+        assert rt.detect_active_dialog(_CODEX_MODEL_SWITCH)
+        assert rt.detect_choice_dialog(_CODEX_MODEL_SWITCH)
+
+    def test_codex_permission_prompt_is_not(self):
+        rt = RUNTIMES["codex"]
+        assert rt.detect_active_dialog(_CODEX_PERMISSION)
+        assert not rt.detect_choice_dialog(_CODEX_PERMISSION)
+
+    def test_summary_carries_the_command_and_the_reason(self):
+        summary = RUNTIMES["codex"].dialog_summary(_CODEX_PERMISSION)
+        assert "$ backbone tell audit-coordinator" in summary
+        assert "Reason: Allow the scout" in summary
+        assert "1. Yes, proceed" not in summary
+
+    def test_summary_of_a_choice_names_the_choice(self):
+        summary = RUNTIMES["codex"].dialog_summary(_CODEX_MODEL_SWITCH)
+        assert "Switch to gpt-5.6-luna" in summary
+
+    def test_summary_keeps_the_end_when_long(self):
+        long = "\n".join(["x" * 80] * 8) + "\n" + _CODEX_PERMISSION
+        summary = RUNTIMES["codex"].dialog_summary(long, limit=120)
+        assert len(summary) <= 120 and summary.endswith("starting'")
+
+    def test_stale_output_above_a_real_prompt_is_not_a_choice(self):
+        # "switch to gpt-" scrolled past earlier; the active dialog is a permission.
+        pane = (
+            "• Earlier: the user said switch to gpt-5.6-luna maybe\n"
+            + "\n".join(f"output line {i}" for i in range(12))
+            + "\n"
+            + _CODEX_PERMISSION
+        )
+        rt = RUNTIMES["codex"]
+        assert rt.detect_active_dialog(pane)
+        assert not rt.detect_choice_dialog(pane)
+
+    def test_summary_honours_tiny_limits(self):
+        rt = RUNTIMES["codex"]
+        assert len(rt.dialog_summary(_CODEX_PERMISSION, limit=1)) <= 1
+        assert rt.dialog_summary(_CODEX_PERMISSION, limit=0) == ""

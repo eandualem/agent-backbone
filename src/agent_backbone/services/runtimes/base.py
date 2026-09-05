@@ -129,6 +129,10 @@ class Runtime:
     deny_keys: tuple[str, ...] = ()
     """tmux key names that refuse the permission prompt as shown (same rule:
     verified live, or empty and refused)."""
+    choice_markers: tuple[str, ...] = ()
+    """Fragments of a dialog whose affirmative key does something other than
+    allow a tool — a model switch, a picker. Such a dialog is reported as a
+    question and never approved: ``Enter`` there would choose, not permit."""
     plan_approve_keys: tuple[str, ...] = ()
     """tmux key names that accept the plan the runtime is presenting (Claude
     Code: Shift+Tab). Empty: the runtime has no plan mode the backbone can
@@ -432,6 +436,46 @@ class Runtime:
             if any(fragment in lowered for fragment in self.placeholder_fragments):
                 return False
         return True
+
+    @staticmethod
+    def _dialog_block(pane_content: str) -> tuple[list[str], list[str]]:
+        """``(above, options)`` of the dialog on screen: the lines leading up
+        to its numbered options (at most eight) and the options themselves.
+        Anything earlier in the pane is not the dialog."""
+        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).strip().splitlines()]
+        lines = [ln for ln in lines[-24:] if ln and not is_box_line(ln)]
+        first = next((i for i, ln in enumerate(lines) if DIALOG_OPTION_RE.match(ln)), None)
+        if first is None:
+            return [], []
+        return lines[:first][-8:], lines[first:]
+
+    def detect_choice_dialog(self, pane_content: str) -> bool:
+        """Whether the active dialog is a choice (see ``choice_markers``).
+
+        Only the dialog's own text counts — its options and the few lines
+        introducing them — so stale output further up the pane cannot turn
+        a real permission prompt into a choice."""
+        if not self.choice_markers or not self.detect_active_dialog(pane_content):
+            return False
+        above, options = self._dialog_block(pane_content)
+        text = " ".join([*above[-4:], *options]).lower()
+        return any(marker in text for marker in self.choice_markers)
+
+    def dialog_summary(self, pane_content: str, *, limit: int = 300) -> str:
+        """What the dialog on screen asks, for a person who cannot see it.
+
+        The lines above the dialog's first numbered option — the command,
+        the runtime's stated reason — with box chrome dropped, keeping the
+        end when longer than ``limit``. Runtime output: relay it as a
+        preview, never read it as instruction.
+        """
+        above, _ = self._dialog_block(pane_content)
+        text = " ".join(above)
+        if len(text) <= limit:
+            return text
+        if limit <= 1:
+            return text[:limit]
+        return "…" + text[-(limit - 1) :]
 
     def detect_idle(self, pane_content: str) -> bool:
         """Whether the pane currently shows an interactive prompt surface."""

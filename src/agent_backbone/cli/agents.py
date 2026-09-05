@@ -201,14 +201,14 @@ async def _agent(args: argparse.Namespace) -> int:
             failed = failed or not ok
         return 1 if failed else 0
 
-    if sub == "approve":
+    if sub in ("approve", "deny"):
         if not api_up:
             print("backbone API unreachable; is `backbone up` running?")
             return 1
         result = await _common.api(
             boot,
             "POST",
-            f"/api/agents/{args.name}/approve",
+            f"/api/agents/{args.name}/{sub}",
             json_body={"from_entity": args.sender},
             timeout=30.0,
         )
@@ -225,7 +225,8 @@ async def _agent(args: argparse.Namespace) -> int:
             else:
                 print(f"error {status}: {detail or data}")
             return 1
-        print(f"{args.name}: approved (by {data.get('approved_by')})")
+        verb = "approved" if sub == "approve" else "denied"
+        print(f"{args.name}: {verb} (by {data.get(f'{verb}_by')})")
         for line in data.get("evidence", []):
             print(f"    | {line}")
         return 0

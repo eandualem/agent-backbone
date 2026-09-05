@@ -177,6 +177,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("BACKBONE_AGENT") or os.environ.get("USER", "cli"),
         help="who is approving, for the audit trail (default: $BACKBONE_AGENT or $USER)",
     )
+    pad = asub.add_parser("deny", help="refuse the permission prompt an agent's runtime is showing")
+    pad.add_argument("name")
+    pad.add_argument(
+        "--from",
+        dest="sender",
+        default=os.environ.get("BACKBONE_AGENT") or os.environ.get("USER", "cli"),
+        help="who is refusing, for the audit trail (default: $BACKBONE_AGENT or $USER)",
+    )
     pse = asub.add_parser(
         "set",
         help="change agent fields: runtime=… model=… repo=… dir=… description=… always_on=true",

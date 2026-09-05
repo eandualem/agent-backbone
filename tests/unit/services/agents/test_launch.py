@@ -38,6 +38,27 @@ class TestApproveAgent:
         assert evidence[0] == "answered with Enter; prompt cleared"
         assert "Do you want to proceed?" in evidence  # the dialog is quoted for the audit
 
+    MODEL_SWITCH = (
+        "  Approaching rate limits\n"
+        "  Switch to gpt-5.6-luna for lower credit usage?\n"
+        "› 1. Switch to gpt-5.6-luna\n"
+        "  2. Keep current model\n"
+        "  3. Keep current model (never show again)\n"
+        "  Press enter to confirm or esc to go back\n"
+    )
+
+    async def test_a_choice_dialog_is_not_approved(self):
+        # Enter on Codex's rate-limit dialog switches the model; nothing is typed.
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value=self.MODEL_SWITCH),
+            patch(f"{_BASE}.send_keys") as keys,
+        ):
+            outcome, evidence = await approve_agent("ike", runtime="codex", settle_seconds=0)
+        assert outcome == "not_permission"
+        assert "choice, not a permission prompt" in evidence[0]
+        keys.assert_not_called()
+
     async def test_idle_prompt_is_never_typed_into(self):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),

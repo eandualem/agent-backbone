@@ -18,6 +18,7 @@ from agent_backbone.api.models import (
     AgentApproveRequest,
     AgentApproveResponse,
     AgentConfigResponse,
+    AgentDenyResponse,
     AgentInspectResponse,
     AgentStartRequest,
     AgentStartResponse,
@@ -37,6 +38,7 @@ from agent_backbone.services.agents import (
     AgentStore,
     agent_state,
     approve_agent,
+    deny_agent,
     read_state_file,
     record_answer,
     write_state_file,
@@ -247,7 +249,13 @@ async def stop_agent(
     return AgentStopResponse(ok=ok, session=session)
 
 
-_APPROVE_STATUS = {"not_waiting": 409, "unsupported": 400, "offline": 404, "failed": 502}
+_APPROVE_STATUS = {
+    "not_waiting": 409,
+    "not_permission": 409,
+    "unsupported": 400,
+    "offline": 404,
+    "failed": 502,
+}
 
 
 @router.post("/agents/{name}/approve", response_model=AgentApproveResponse)
@@ -286,6 +294,46 @@ async def approve_agent_prompt(
     await feed.refresh_and_emit()
     return AgentApproveResponse(
         ok=True, session=name, outcome=outcome, evidence=evidence, approved_by=approved_by
+    )
+
+
+@router.post("/agents/{name}/deny", response_model=AgentDenyResponse)
+async def deny_agent_prompt(
+    name: str,
+    body: AgentApproveRequest | None = None,
+    config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
+    feed: SessionFeed = Depends(get_feed),
+):
+    """Refuse the permission prompt a registered agent's runtime is showing.
+
+    The mirror of approve with the runtime's refusing key — on a choice
+    dialog (a Codex model switch) this is the answer that keeps things as
+    they are. Same gate: only a dialog on screen is answered, and every
+    denial is recorded as a ``denial`` event.
+    """
+    if not config.security.allow_remote_approval:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Remote approval is disabled. Run "
+                "`backbone config set security.allow_remote_approval true` to enable."
+            ),
+        )
+    spec = registered_agent_or_404(config, name)
+    denied_by = (body.from_entity if body else "") or "api"
+    outcome, evidence = await deny_agent(name, runtime=spec.runtime)
+    if outcome != "denied":
+        raise HTTPException(
+            status_code=_APPROVE_STATUS.get(outcome, 500),
+            detail={"outcome": outcome, "evidence": evidence},
+        )
+    await record_answer(
+        db, agent=name, runtime=spec.runtime, verb="denied", by=denied_by, evidence=evidence
+    )
+    await feed.refresh_and_emit()
+    return AgentDenyResponse(
+        ok=True, session=name, outcome=outcome, evidence=evidence, denied_by=denied_by
     )
 
 

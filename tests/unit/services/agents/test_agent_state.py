@@ -762,3 +762,27 @@ class TestFindOutgoingPullRequest:
         )
         assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) is None
         assert find_outgoing_pull_request("", "feat/x", action_log=log) is None
+
+
+class TestChoiceDialogBeatsHookPermission:
+    async def test_fresh_permission_hook_with_a_model_switch_on_screen_is_a_question(
+        self, tmp_path
+    ):
+        import json
+        import time
+
+        from agent_backbone.services.agents import get_agent_state
+
+        (tmp_path / "ike.json").write_text(
+            json.dumps({"state": "waiting_for_human", "reason": "permission", "ts": time.time()})
+        )
+        pane = (
+            "  Approaching rate limits\n"
+            "  Switch to gpt-5.6-luna for lower credit usage?\n"
+            "› 1. Switch to gpt-5.6-luna\n"
+            "  2. Keep current model\n"
+            "  Press enter to confirm or esc to go back\n"
+        )
+        snap = await get_agent_state(tmp_path, "ike", runtime_hint="codex", pane_content=pane)
+        assert snap.state.value == "waiting_for_human" and snap.reason == "question"
+        assert any("choice dialog on screen beats" in e for e in snap.evidence)
