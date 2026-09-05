@@ -88,12 +88,13 @@ class Codex(Runtime):
     # "never: Never ask for user approval. Execution failures are immediately
     # returned to the model." The workspace-write sandbox is pinned alongside
     # (a `sandbox_mode = "danger-full-access"` in the user's config.toml
-    # would otherwise silently take the wall away): the agent's directory (a
-    # git worktree included — its git dir under the main checkout is
-    # reachable, measured with `codex sandbox`), temp, and the network opened
-    # below; a write anywhere else fails with "Operation not permitted" and
-    # the model is told so. codex-cli 0.153: both are global options, valid
-    # before the TUI and before `resume`.
+    # would otherwise silently take the wall away): the agent's directory,
+    # temp, the network opened below, and the `--add-dir`s from
+    # `writable_dir_args` (a worktree's shared `.git` among them — without it
+    # `git commit` fails on `index.lock`, seen live); a write anywhere else
+    # fails with "Operation not permitted" and the model is told so.
+    # codex-cli 0.153: both are global options, valid before the TUI and
+    # before `resume`.
     unattended_args = ("-a", "never", "-s", "workspace-write")
     sandboxed = True
 
