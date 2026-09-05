@@ -61,8 +61,8 @@ def git_write_paths(directory: Path | str) -> tuple[str, ...]:
     ``.git``. Absolute pointers are normal Git output and remain supported.
     Symlinks cannot redirect an automatic grant to another resource.
     """
-    pointer = Path(directory).expanduser().resolve() / ".git"
     try:
+        pointer = Path(directory).expanduser().resolve() / ".git"
         if pointer.is_symlink():
             return ()
         if pointer.is_dir():

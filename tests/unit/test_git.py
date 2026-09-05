@@ -29,6 +29,11 @@ def test_parse_github_remote(url, expected):
 
 
 class TestGitWritePaths:
+    def test_directory_symlink_loop_has_no_grants(self, tmp_path):
+        loop = tmp_path / "loop"
+        loop.symlink_to(loop, target_is_directory=True)
+        assert git_write_paths(loop) == ()
+
     def _worktree(self, tmp_path):
         common = tmp_path / "main" / ".git"
         private = common / "worktrees" / "wt"
