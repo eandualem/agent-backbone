@@ -41,7 +41,9 @@ REASON_QUOTA = "quota"
 
 LAST_MESSAGE_CHARS = 500
 
-_GH_COMMENT_RE = re.compile(r"\bgh\s+issue\s+comment\s+(?:\S+\s+)*?(\d+)\b")
+# `gh pr comment` is the same acknowledgement on a pull request — GitHub
+# delivers both as issue comments, so both are the agent's own words.
+_GH_COMMENT_RE = re.compile(r"\bgh\s+(?:issue|pr)\s+comment\s+(?:\S+\s+)*?(\d+)\b")
 _GH_REPO_RE = re.compile(r"(?:--repo|-R)[\s=]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
 _ISSUE_NUMBER_RE = re.compile(r"(?:#|\bissue[\s:#]*)(\d{1,7})\b", re.IGNORECASE)
 _ISSUE_REF_RE = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d{1,7})\b")
@@ -95,7 +97,8 @@ def issue_from_prompt(prompt: str, current: dict) -> tuple[int | None, str | Non
 
 
 def comment_action_from_command(command: str, now: float) -> dict | None:
-    """A ``gh issue comment N`` in a shell command is an acknowledgement worth logging."""
+    """A ``gh issue comment N`` (or ``gh pr comment N``) in a shell command is an
+    acknowledgement worth logging."""
     match = _GH_COMMENT_RE.search(command or "")
     if not match:
         return None
@@ -176,6 +179,23 @@ def pull_request_action_from_command(command: str, cwd: str | None, now: float) 
     if branch:
         action["branch"] = branch
     return action
+
+
+def tool_actions(
+    tool: str, tool_input: dict, cwd: str | None, now: float
+) -> list[dict] | dict | None:
+    """The outgoing GitHub actions one tool call carries: a shell command's
+    (``Bash``, or Codex's list form) or the GitHub MCP server's comment."""
+    if not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command", "")
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    if command:
+        return shell_actions(str(command), cwd, now) or comment_action_from_mcp(
+            tool, tool_input, now
+        )
+    return comment_action_from_mcp(tool, tool_input, now)
 
 
 def shell_actions(command: str, cwd: str | None, now: float) -> list[dict]:

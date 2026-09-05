@@ -40,16 +40,16 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
     if event == "PermissionRequest":
         return state(bb.STATE_WAITING, bb.REASON_PERMISSION), None
     if event == "PreToolUse":
-        # A tool runs: any permission dialog is behind us.
-        return state(bb.STATE_BUSY), None
+        # A tool runs: any permission dialog is behind us. Outgoing GitHub
+        # actions are logged here, before the command runs, so the webhook
+        # for the agent's own comment or pull request cannot beat the log —
+        # and again after it ran, with the branch as it actually was.
+        tool = payload.get("tool_name", "") or ""
+        actions = bb.tool_actions(tool, payload.get("tool_input") or {}, payload.get("cwd"), now)
+        return state(bb.STATE_BUSY), actions
     if event == "PostToolUse":
         tool = payload.get("tool_name", "") or ""
-        tool_input = payload.get("tool_input") or {}
-        command = tool_input.get("command", "")
-        if isinstance(command, list):
-            command = " ".join(str(part) for part in command)
-        actions = bb.shell_actions(command or "", payload.get("cwd"), now)
-        return None, actions or bb.comment_action_from_mcp(tool, tool_input, now)
+        return None, bb.tool_actions(tool, payload.get("tool_input") or {}, payload.get("cwd"), now)
     if event in ("Stop", "Interrupt"):
         return state(
             bb.STATE_IDLE, last_message=bb.clip_message(payload.get("last_assistant_message"))

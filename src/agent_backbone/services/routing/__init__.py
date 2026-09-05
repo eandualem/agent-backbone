@@ -24,6 +24,7 @@ from agent_backbone.services.routing._format import (
     format_review_notification,
     format_stall_notification,
     format_unexpected_offline_notification,
+    stamp_queued_age,
 )
 from agent_backbone.services.routing._ingest import (
     IssueClosedHook,
@@ -56,6 +57,7 @@ __all__ = [
     "queue_scope",
     "routing_in_flight",
     "safe_deliver",
+    "stamp_queued_age",
     "sync_dependencies",
     "validate_issue_targets",
 ]

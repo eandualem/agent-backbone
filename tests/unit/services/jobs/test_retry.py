@@ -531,3 +531,26 @@ class TestOutcomeQueues:
         assert outcome_queues("offline", "issue") is True
         assert outcome_queues("agent_working", "issue") is False
         assert outcome_queues("already_delivered", "issue") is False
+
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
+    async def test_a_long_queued_message_is_delivered_with_its_age(self, mock_deliver, db, config):
+        await db.queue.enqueue(
+            session_name="ike",
+            message="[via:github pr:138] Review on acme/app#138",
+            delivery_kind="review",
+            source="github",
+        )
+        # Backdate the row: it waited twenty minutes while the agent was busy.
+        from datetime import UTC, datetime, timedelta
+
+        old = (datetime.now(UTC) - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        async with db.queue._tx() as conn:
+            from sqlalchemy import text
+
+            await conn.execute(text("UPDATE message_queue SET enqueued_at = :t"), {"t": old})
+        mock_deliver.return_value = "delivered"
+
+        await drain_message_queue(config, db, AsyncMock(), active_sessions={"ike"})
+
+        delivered = mock_deliver.await_args.args[1]
+        assert delivered.startswith("[via:github pr:138] (queued 20 min ago) Review on")

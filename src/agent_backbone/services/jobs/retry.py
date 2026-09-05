@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import BLOCKED_OUTCOMES, DeliveryOutcome
@@ -13,6 +14,7 @@ from agent_backbone.services.routing import (
     list_open_queue_for_target,
     queue_scope,
     safe_deliver,
+    stamp_queued_age,
 )
 from agent_backbone.services.terminal import list_sessions
 
@@ -26,6 +28,18 @@ log = logging.getLogger(__name__)
 _BUSY_OUTCOMES = BLOCKED_OUTCOMES - {DeliveryOutcome.OFFLINE}
 _QUEUE_DONE = frozenset({DeliveryOutcome.DELIVERED, DeliveryOutcome.ALREADY_DELIVERED})
 SOURCE = "delivery-retry"
+
+
+def _waited_seconds(record: dict) -> float:
+    """How long a queued row has been waiting (its ``enqueued_at`` is ISO 8601)."""
+    raw = record.get("enqueued_at") or ""
+    try:
+        enqueued = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    if enqueued.tzinfo is None:
+        enqueued = enqueued.replace(tzinfo=UTC)
+    return max(0.0, (datetime.now(UTC) - enqueued).total_seconds())
 
 
 async def drain_message_queue(
@@ -83,7 +97,7 @@ async def drain_message_queue(
                     break
             outcome = await safe_deliver(
                 session_name,
-                record["message"],
+                stamp_queued_age(record["message"], _waited_seconds(record)),
                 config,
                 db=db,
                 repo=record.get("repo") or "",
