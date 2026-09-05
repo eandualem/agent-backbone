@@ -288,3 +288,12 @@ class TestMainWritesStateTheBackboneReads:
         with patch.object(hook.sys, "stdin", io.StringIO(json.dumps(_payload("Stop")))):
             assert hook.main(["--state-dir", str(tmp_path)]) == 0
         assert list(tmp_path.iterdir()) == []
+
+
+class TestActionsAreLoggedBeforeAndAfter:
+    def test_post_tool_use_logs_the_same_shell_actions(self):
+        payload = _payload(
+            "PostToolUse", tool_name="Bash", tool_input={"command": "gh pr comment 5 -b ok"}
+        )
+        _, actions = hook.derive(payload, None)
+        assert actions and actions[0]["issue"] == 5

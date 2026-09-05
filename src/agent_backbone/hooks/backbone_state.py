@@ -181,6 +181,23 @@ def pull_request_action_from_command(command: str, cwd: str | None, now: float) 
     return action
 
 
+def tool_actions(
+    tool: str, tool_input: dict, cwd: str | None, now: float
+) -> list[dict] | dict | None:
+    """The outgoing GitHub actions one tool call carries: a shell command's
+    (``Bash``, or Codex's list form) or the GitHub MCP server's comment."""
+    if not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command", "")
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    if command:
+        return shell_actions(str(command), cwd, now) or comment_action_from_mcp(
+            tool, tool_input, now
+        )
+    return comment_action_from_mcp(tool, tool_input, now)
+
+
 def shell_actions(command: str, cwd: str | None, now: float) -> list[dict]:
     """Everything a shell command tells the backbone: a comment, a pull
     request, or both (``gh issue comment … && gh pr create …``)."""

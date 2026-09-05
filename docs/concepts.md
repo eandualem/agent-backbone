@@ -120,10 +120,10 @@ One attempt to hand a message to a session, recorded with its **kind**
 messages included. A `plan_response` (an answer typed into a plan prompt)
 is the one kind that is **never queued**: it goes in only while the agent
 is waiting for a plan decision, and is refused as `not_waiting` otherwise. What cannot be delivered now is **queued** in the database and
-delivered by the background jobs — a message that waited more than two
-minutes is delivered with `(queued N min ago)` after its envelope, so a
-review or comment drained after a long busy stretch does not read as
-current; queued messages expire after
+delivered by the background jobs — a message that waited at least two
+minutes is delivered with `(queued N min ago)` (`N h` from two hours) after
+its envelope, so a review or comment drained after a long busy stretch
+does not read as current; queued messages expire after
 `timing.queue_expiry_minutes` (30), and an expired message leaves a
 delivery with outcome `expired` (kind, source and preview kept), so
 `agent inspect` shows what never arrived. The sender is told whether a row

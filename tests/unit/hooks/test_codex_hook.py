@@ -98,3 +98,12 @@ class TestMainWritesStateTheBackboneReads:
         assert snapshot.last_message == "Done."
         assert snapshot.event == "Stop"
         assert "event Stop" in snapshot.evidence[0]
+
+
+class TestActionsAreLoggedBeforeAndAfter:
+    def test_post_tool_use_logs_the_same_shell_actions(self):
+        payload = _payload(
+            "PostToolUse", tool_name="Bash", tool_input={"command": "gh issue comment 5 -b ok"}
+        )
+        record, actions = hook.derive(payload, None)
+        assert record is None and actions and actions[0]["issue"] == 5
