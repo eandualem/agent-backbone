@@ -160,9 +160,11 @@ the two kinds of runtime differently.
 working directory, temp, and (because the backbone opens it with
 `sandbox_workspace_write.network_access`) the network, so `backbone tell`
 and `gh` work; a write anywhere else fails with "Operation not
-permitted" and the model is told so. A git worktree commits normally —
-its git dir under the main checkout is reachable (measured with `codex
-sandbox`). Inside that wall there is nothing worth asking a person, so
+permitted" and the model is told so. A worktree's git metadata (index,
+HEAD, objects, refs) lives under the main checkout's `.git`, outside that
+wall, so the backbone opens that one directory to every member — without
+it `git commit` fails on `index.lock` (seen live). Inside that wall there
+is nothing worth asking a person, so
 with `swarm.unattended_members` (the default) a Codex member is launched
 with `-a never -s workspace-write`: no approval dialog, ever, and the
 sandbox pinned. This is decided at each member start from the setting and

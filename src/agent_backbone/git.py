@@ -50,3 +50,30 @@ async def detect_repo(directory: Path) -> str:
     """The GitHub ``owner/name`` of a directory's ``origin`` remote, if any."""
     rc, out, _ = await run_git(directory, "remote", "get-url", "origin", timeout=5)
     return parse_github_remote(out) if rc == 0 else ""
+
+
+def worktree_git_dir(directory: Path | str) -> Path | None:
+    """The main checkout's ``.git`` when ``directory`` is a linked worktree.
+
+    A worktree carries a ``.git`` *file* — ``gitdir: <main>/.git/worktrees/<name>``
+    — and everything git writes for it (index, HEAD, objects, refs) lives
+    under that ``<main>/.git``. Returns ``None`` for a plain checkout (``.git``
+    is a directory), a directory that is not a repository, or an unreadable
+    or unexpected pointer. No subprocess: read at every agent start.
+    """
+    pointer = Path(directory).expanduser() / ".git"
+    try:
+        if not pointer.is_file():
+            return None
+        text = pointer.read_text().strip()
+    except OSError:
+        return None
+    if not text.startswith("gitdir:"):
+        return None
+    gitdir = Path(text[len("gitdir:") :].strip())
+    if not gitdir.is_absolute():
+        gitdir = (pointer.parent / gitdir).resolve()
+    # <main>/.git/worktrees/<name> → <main>/.git
+    if gitdir.parent.name != "worktrees":
+        return None
+    return gitdir.parent.parent
