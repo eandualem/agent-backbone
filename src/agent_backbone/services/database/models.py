@@ -40,6 +40,8 @@ class AgentORM(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     always_on: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     """1 when a dead session must be reported at once (``AgentSpec.always_on``)."""
+    unattended: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    """1 when the runtime is launched with its no-approval switch (``AgentSpec.unattended``)."""
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     last_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)

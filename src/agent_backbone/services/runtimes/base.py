@@ -110,6 +110,19 @@ class Runtime:
     CLI spells them (verified live against that CLI). Empty means the CLI has
     no effort switch, and an effort asked of it is refused rather than
     silently dropped."""
+    unattended_args: tuple[str, ...] | None = None
+    """The CLI's own switch that stops it asking a person before acting — the
+    launch arguments for an ``unattended`` agent, as the CLI spells them
+    (verified live). ``None`` means the backbone knows no such switch for
+    this runtime, and an unattended start is refused rather than launched
+    attended: an agent that looks configured and is not would park on its
+    first dialog."""
+    sandboxed: bool = False
+    """Whether the CLI confines the commands it runs to the agent's directory
+    with an OS sandbox (Codex: Seatbelt on macOS, Landlock on Linux). Behind
+    a sandbox, ``unattended`` means free inside a wall; without one it means
+    free on the machine — which is why a swarm only makes sandboxed members
+    unattended by default."""
 
     # --- pane recognition -------------------------------------------------
     prompt_prefixes: tuple[str, ...] = ()
@@ -268,6 +281,22 @@ class Runtime:
                 f"{', '.join(self.efforts)}"
             )
 
+    def check_unattended(self, unattended: bool) -> None:
+        """Raise unless this runtime can be launched without approval prompts."""
+        if unattended and self.unattended_args is None:
+            raise RuntimeError(
+                f"Runtime '{self.id}' has no unattended switch the backbone knows — "
+                f"set unattended=false or pick a runtime that has one (`backbone runtimes`)"
+            )
+
+    def writable_dir_args(self, dirs: tuple[str, ...]) -> list[str]:
+        """Arguments that open ``dirs`` for writing inside the runtime's sandbox.
+
+        Only a sandboxed runtime has anything to open; for the others every
+        directory is already writable, so there is nothing to say.
+        """
+        return []
+
     def launch_args(
         self,
         *,
@@ -302,15 +331,22 @@ class Runtime:
         pre_trust: bool = False,
         data_dir: Path | str | None = None,
         state_dir: Path | str | None = None,
+        unattended: bool = False,
+        writable_dirs: tuple[str, ...] = (),
     ) -> list[str] | None:
         """The launch command, or None for a plain shell.
 
         ``brief_file`` is only handed over when ``brief_mode`` injects at
         launch; a resumed session already has its brief, so initial-prompt
         runtimes are not re-briefed on ``resume`` (a system prompt is
-        re-applied every launch). Raises RuntimeError when the binary is
-        missing.
+        re-applied every launch). ``unattended`` adds the runtime's own
+        no-approval switch (``unattended_args``) and ``writable_dirs`` the
+        directories a sandboxed runtime may write outside the agent's own,
+        both on a fresh start and on ``resume`` alike. Raises RuntimeError
+        when the binary is missing, or when ``unattended`` is asked of a
+        runtime without such a switch.
         """
+        self.check_unattended(unattended)  # a shell has no switch either
         if self.binary is None:
             return None
         resolved = resolve_command(self.binary)
@@ -330,6 +366,8 @@ class Runtime:
         return [
             resolved,
             *self.effort_args(effort),
+            *(self.unattended_args if unattended else ()),
+            *self.writable_dir_args(writable_dirs),
             *self.launch_args(
                 model=model_id,
                 resume=resume,

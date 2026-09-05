@@ -28,6 +28,14 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   judge the command — whoever holds the key (a person or a coordinator
   agent) does. Plan approval, which can run a whole plan unattended, stays
   off by default (`security.allow_remote_plan_control`).
+- **An `unattended` agent asks nobody; the sandbox decides what that
+  means.** The flag launches the runtime with its own no-approval switch.
+  Behind Codex's sandbox (`-a never`, the workspace-write sandbox kept) the
+  agent is free only inside its directory, temp and the network — a write
+  elsewhere fails and the model is told. OpenCode, Claude Code and Gemini
+  have no sandbox, so unattended there is trust on the whole machine with
+  your credentials. Off by default; a swarm sets it only for its sandboxed
+  members (`swarm.unattended_members`), never for the rest.
 - **Provenance is convention, not authentication.** `from_entity` in
   `POST /messages` and the resulting `[via:backbone from:X]` envelope are
   whatever the caller says; the `[from:<agent>]` prefix on GitHub is the
@@ -105,6 +113,7 @@ agents need it to find the same backbone you are running.
 | Telegram | Bot does not start without `telegram.allowed_chat_ids`; unlisted chats are ignored | — |
 | Remote plan approve/reject/respond | Off (they act on a waiting agent) — bounded: the runtime's own plan keys, refused for runtimes without a plan mode, feedback and responses through `safe_deliver` as recorded `plan_response` deliveries | `security.allow_remote_plan_control = true` |
 | Remote permission approval (`agent approve`, the Telegram **Allow** / **Deny** buttons) | On — bounded: the runtime's affirmative or refusing key only (Deny: Escape, verified for Claude Code and Codex, refused elsewhere), only while its dialog is on screen, only to a registered agent, every answer recorded as an `approval` / `denial` event with who asked (a Telegram button records `telegram:<user id>`, and is bound to the prompt it was raised for — a stale button answers nothing) | `security.allow_remote_approval = false` |
+| Unattended swarm members | On for members on a sandboxed runtime only (Codex, `-a never` inside its workspace-write sandbox: worktree, temp, network); members without a sandbox keep asking | `swarm.unattended_members = false` |
 | Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. **Exception:** per-agent `env` values are stored with the agent record and exported into that agent's session, so anything you put there needs the same care as `.env` | `backbone agent set app env='{"BACKBONE_API_KEY":"…"}'` for an agent that should call the API |
 | Secrets in agent sessions | Stripped: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | give the agent its own value with `agent set env=` |

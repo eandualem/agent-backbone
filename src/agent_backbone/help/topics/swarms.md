@@ -63,16 +63,24 @@ teardown. Everything a member does runs through the normal delivery and
 audit pipeline, so `backbone status` and `agent inspect` work on swarm
 members like any other agent.
 
-## When a member is stuck on a permission prompt
+## Members and permission prompts
 
-Codex, OpenCode and Claude Code (outside auto mode) stop on approval
-dialogs. Codex members are launched with their sandbox open to the
-network (`sandbox_workspace_write.network_access`), so `backbone tell`
-reaches the API without a dialog; a dialog for a `backbone` command on a
-Codex member means it was started some other way. `backbone agent inspect <member>` shows it as
-`waiting_for_human (permission)` with the prompt in the evidence;
-`backbone agent approve <member>` answers it. The backbone sends the
-runtime's affirmative key only while the dialog is actually on screen and
-records who approved what (`GET /api/events`). Coordinators should check
-what is being approved (the evidence quotes the command) — approving is
-your decision, the backbone just types it.
+With `swarm.unattended_members` (on by default) Codex members never ask:
+Codex's sandbox confines them to the worktree (plus temp and the network,
+so `backbone tell` and `gh` work), and inside that wall the backbone
+launches them with `-a never -s workspace-write`. A write outside fails
+and the model is told; what a project's tooling needs outside is opened
+once with `agents.writable_dirs` (this repository: `["~/.cache/uv"]`).
+
+Members on a runtime without a sandbox (OpenCode, Claude Code, Gemini)
+keep their dialogs — unattended there would be trust on the whole
+machine, the owner's explicit call per agent, never the swarm's.
+
+When a member does show one, `backbone agent inspect <member>` reports
+`waiting_for_human (permission)` with the prompt in the evidence and
+`backbone agent approve <member>` answers it: the runtime's affirmative
+key, only while the dialog is actually on screen, recorded with who
+approved (`GET /api/events`). Check what is being approved — the evidence
+quotes the command; approving is your decision, the backbone just types it.
+A *choice* dialog (Codex's rate-limit "switch model?") is never approved;
+`backbone agent deny <member>` keeps the model.

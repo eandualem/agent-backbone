@@ -233,6 +233,9 @@ async def create_swarm(
                 runtime=runtime,
                 model=spec.model,
                 repo=repo,
+                # Whether the member asks before acting is decided at each
+                # launch from `swarm.unattended_members` and its runtime's
+                # sandbox (``start_agent``), never persisted here.
                 tags=(f"swarm:{name}", f"role:{spec.role}"),
             )
             await store.register(agent)

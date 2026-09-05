@@ -85,6 +85,17 @@ class Codex(Runtime):
     # Codex has no effort flag; the level is a config override. Levels as
     # gpt-6-astra reports them in codex 0.153 (`~/.codex/models_cache.json`).
     efforts = ("low", "medium", "high", "xhigh", "max", "ultra")
+    # "never: Never ask for user approval. Execution failures are immediately
+    # returned to the model." The workspace-write sandbox is pinned alongside
+    # (a `sandbox_mode = "danger-full-access"` in the user's config.toml
+    # would otherwise silently take the wall away): the agent's directory (a
+    # git worktree included — its git dir under the main checkout is
+    # reachable, measured with `codex sandbox`), temp, and the network opened
+    # below; a write anywhere else fails with "Operation not permitted" and
+    # the model is told so. codex-cli 0.153: both are global options, valid
+    # before the TUI and before `resume`.
+    unattended_args = ("-a", "never", "-s", "workspace-write")
+    sandboxed = True
 
     hook_script = "codex_hook.py"
     hook_events = (
@@ -139,6 +150,16 @@ class Codex(Runtime):
 
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_codex_directory(directory)
+
+    def writable_dir_args(self, dirs: tuple[str, ...]) -> list[str]:
+        """``--add-dir <dir>`` per directory: "additional directories that
+        should be writable alongside the primary workspace". What a project's
+        tooling keeps outside the checkout — uv's cache under `~/.cache`, the
+        one wall a member hit live — is opened here, nothing else."""
+        args: list[str] = []
+        for directory in dirs:
+            args.extend(["--add-dir", str(Path(directory).expanduser())])
+        return args
 
     def effort_args(self, effort: str | None) -> list[str]:
         """``-c model_reasoning_effort=<level>``, Codex's config override.

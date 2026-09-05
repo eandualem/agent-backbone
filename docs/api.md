@@ -16,6 +16,7 @@ with live state. Cached for 5 s.
   "name": "app", "session": "app", "configured": true,
   "runtime": "claude", "model": null, "dir": "/Users/me/code/app",
   "repo": "acme/app", "watches": ["acme/web"], "tags": [], "description": "",
+  "always_on": false, "unattended": false,
   "state": "busy", "reason": null, "current_issue": 42, "current_repo": "acme/app",
   "online": true, "plan_file": null, "plan_title": null,
   "tmux_created": "2026-08-31T12:00:00+00:00", "tmux_attached": false, "tmux_windows": 1,
@@ -111,7 +112,11 @@ it (`ts` defaults to now). Only registered agents have a state file.
 
 ### `PATCH /api/agents/{name}`
 
-Change `dir`, `runtime`, `model`, `repo`, `tags`, `env`, `description`.
+Change `dir`, `runtime`, `model`, `repo`, `tags`, `env`, `description`,
+`always_on`, `unattended` (booleans; see [configuration](configuration.md#agents)).
+Changing `runtime` clears `unattended` unless the same request sets it: a
+freedom granted with one CLI's sandbox in mind does not follow the agent to
+another.
 
 ### `POST /api/agents/{name}/watch` · `/unwatch` `{"repo": "acme/web"}` · `DELETE /api/agents/{name}`
 

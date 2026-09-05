@@ -147,19 +147,54 @@ debugging, features whose pieces can be owned separately. A swarm costs
 a multiple of a single agent's tokens — for sequential or tightly
 coupled work, one agent is faster and cheaper. Start with 3–5 members.
 
-## Members stuck on permission prompts
+## Members, permissions and the sandbox
 
-Codex and OpenCode members (and Claude Code outside auto mode) stop on
-approval dialogs. The backbone shows this as `waiting_for_human
-(permission)` in `backbone agent inspect <member>` with the prompt quoted
-in the evidence, and `backbone agent approve <member>` answers it — the
-runtime's affirmative key, sent only while the dialog is on screen, and
-recorded as an `approval` event. The coordinator's brief tells it to do
-this instead of reaching into tmux directly.
+A member needs three things and nothing else: free rein over the files in
+its worktree, GitHub for its branch and its issue, and its peers through
+`backbone tell`. A member that stops to ask for any of those stalls the
+whole swarm, and a member that can reach past them is a liability. The
+line between the two is the runtime's **sandbox**, so the backbone treats
+the two kinds of runtime differently.
 
-Codex's sandbox has no network by default, which would make every
-`backbone tell` from a member fail against the API on `127.0.0.1` and
-raise a dialog per message. The backbone therefore launches Codex with
-`sandbox_workspace_write.network_access` enabled, so members talk to
-their control plane without a prompt; the sandbox's file-system limits
-are unchanged.
+**Codex members never ask.** Codex confines every command it runs to the
+working directory, temp, and (because the backbone opens it with
+`sandbox_workspace_write.network_access`) the network, so `backbone tell`
+and `gh` work; a write anywhere else fails with "Operation not
+permitted" and the model is told so. A git worktree commits normally —
+its git dir under the main checkout is reachable (measured with `codex
+sandbox`). Inside that wall there is nothing worth asking a person, so
+with `swarm.unattended_members` (the default) a Codex member is launched
+with `-a never -s workspace-write`: no approval dialog, ever, and the
+sandbox pinned. This is decided at each member start from the setting and
+the member's runtime, not stored on the member: flip the setting and the
+next restart follows; move a member to a runtime without a sandbox and it
+asks again. What a project's tooling keeps outside the checkout is
+declared once in `agents.writable_dirs` — for this repository `uv`'s
+cache:
+
+```bash
+backbone config set agents.writable_dirs '["~/.cache/uv"]'
+```
+
+That cache is shared with you and every other agent on the machine, so a
+member can write what your next `uv sync` installs. If you would rather
+not share it, leave the list empty and give the member a cache inside its
+worktree (`UV_CACHE_DIR` in its `env`, set with `agent set`).
+
+**Members without a sandbox keep asking.** OpenCode, Claude Code (outside
+auto mode) and Gemini have a no-approval switch too, but no wall behind
+it: unattended there means trust on the whole machine with your
+credentials. The swarm never makes that choice for you. Such a member
+stops on its approval dialog, shown as `waiting_for_human (permission)`
+in `backbone agent inspect <member>` with the prompt quoted in the
+evidence, and the coordinator answers with `backbone agent approve
+<member>` — the runtime's affirmative key, sent only while the dialog is
+on screen, recorded as an `approval` event. If you do accept machine-wide
+trust for one member, `backbone agent set <member> unattended=true` and
+restart it; that is your call per agent, documented in
+[configuration](configuration.md#agents).
+
+Either way a *choice* dialog — Codex's rate-limit "switch model?" — is a
+question, not a permission: nothing answers it automatically,
+`agent approve` refuses it, and `backbone agent deny <member>` keeps the
+model.

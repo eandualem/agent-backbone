@@ -95,6 +95,12 @@ Each line also prints the reasoning-effort levels that runtime accepts —
 for Codex, `-` for a CLI with no effort setting. Unlike model ids, these
 are checked: a level the runtime does not have is refused at start.
 
+The `unattended:` line is the switch an `unattended=true` agent is
+launched with, and whether a wall stands behind it: `-a never -s
+workspace-write (sandboxed)` for Codex, `--auto (no sandbox)` for
+OpenCode, `-` for a CLI the backbone cannot start unattended (refused, not
+launched attended). See [configuration](configuration.md#agents).
+
 ## `backbone status`
 
 API health per component, GitHub intake mode, every known agent with its
@@ -124,7 +130,7 @@ backbone config set escalation.target orch
 | `agent stop NAME…` | Kill the session(s) |
 | `agent approve NAME [--from WHO]` | Answer the permission prompt the agent's runtime is showing (Claude Code, Codex, OpenCode — each verified against a live dialog; other runtimes report `unsupported`). Checks the terminal at the moment of the call and types only if the dialog is on screen *then* — otherwise reports `not_waiting` with the terminal tail. (tmux has no check-and-send: a dialog a human answers in that same instant can receive one extra key at an empty prompt; the response says whether the dialog actually cleared.) Needs the backbone running (`backbone up`): there is no direct-tmux fallback, so every approval goes through the API and is recorded as an `approval` event. Disable with `security.allow_remote_approval false` |
 | `agent deny NAME [--from WHO]` | Refuse the prompt with the runtime's refusing key (Escape for Claude Code and Codex), under the same gate and audit as `approve`. The right answer to a *choice* dialog — Codex's rate-limit "switch to gpt-5.6-luna?" has Switch preselected, so `approve` refuses it (`not_permission`) and Escape keeps the model |
-| `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object), `always_on` (`true`/`false`) |
+| `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object), `always_on` and `unattended` (`true`/`false`; `unattended` launches the runtime with its own no-approval switch — see [configuration](configuration.md#agents)) |
 | `agent watch [NAME] REPO…` / `agent unwatch [NAME] REPO…` | Add / remove watched repositories. Inside an agent session `NAME` defaults to the agent itself (`$BACKBONE_AGENT`), so an agent can subscribe on its own |
 | `agent forget NAME` | Remove a stopped agent from the backbone (refuses while its session is still running) |
 

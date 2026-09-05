@@ -40,6 +40,30 @@ def sanitize_name(raw: str) -> str:
     return cleaned or "agent"
 
 
+_TRUE = frozenset({"true", "1", "yes", "on"})
+_FALSE = frozenset({"false", "0", "no", "off"})
+
+
+def _flag(name: str, value: object) -> bool:
+    """A boolean agent field from what the CLI or API handed over.
+
+    The CLI's direct path (backbone down) passes the raw ``key=value`` text,
+    and ``bool("False")`` is True — for ``unattended`` that would turn
+    machine-wide trust *on* while the owner is switching it off.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _TRUE:
+            return True
+        if lowered in _FALSE:
+            return False
+    raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
 class AgentStore:
     """Known agents + settings snapshot, with change notification."""
 
@@ -140,6 +164,11 @@ class AgentStore:
             env=dict(existing.env) if existing else {},
             description=existing.description if existing else "",
             always_on=existing.always_on if existing else False,
+            # A freedom granted for one runtime does not follow the agent to
+            # another: behind a different CLI it may mean a different thing.
+            unattended=bool(
+                existing and existing.unattended and runtime in (None, existing.runtime)
+            ),
         )
 
     async def register(self, spec: AgentSpec) -> AgentSpec:
@@ -154,6 +183,7 @@ class AgentStore:
             env=dict(spec.env),
             description=spec.description,
             always_on=spec.always_on,
+            unattended=spec.unattended,
         )
         for repo in spec.watches:
             await self._db.agents.add_watch(spec.name, repo)
@@ -162,11 +192,21 @@ class AgentStore:
 
     async def update(self, name: str, **changes) -> AgentSpec:
         """Change fields on a known agent (dir, runtime, model, repo, tags, env,
-        description, always_on)."""
+        description, always_on, unattended)."""
         current = self._agents.get(name)
         if current is None:
             raise KeyError(name)
-        allowed = {"dir", "runtime", "model", "repo", "tags", "env", "description", "always_on"}
+        allowed = {
+            "dir",
+            "runtime",
+            "model",
+            "repo",
+            "tags",
+            "env",
+            "description",
+            "always_on",
+            "unattended",
+        }
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}")
@@ -179,12 +219,21 @@ class AgentStore:
             "env": dict(current.env),
             "description": current.description,
             "always_on": current.always_on,
+            "unattended": current.unattended,
         }
         merged.update(changes)
         if "tags" in changes:
             merged["tags"] = tuple(changes["tags"])
-        if "always_on" in changes:
-            merged["always_on"] = bool(changes["always_on"])
+        for flag in ("always_on", "unattended"):
+            if flag in changes:
+                merged[flag] = _flag(flag, changes[flag])
+        # `unattended` was granted with a runtime in mind (Codex's sandbox);
+        # a new runtime starts attended unless the same call says otherwise.
+        if (
+            changes.get("runtime", current.runtime) != current.runtime
+            and "unattended" not in changes
+        ):
+            merged["unattended"] = False
         spec = AgentSpec(name=name, watches=current.watches, **merged)
         return await self.register(spec)
 

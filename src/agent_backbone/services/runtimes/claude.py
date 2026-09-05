@@ -52,6 +52,11 @@ class ClaudeCode(Runtime):
     # `claude --effort <level>`; levels as Claude Code itself lists them when
     # it rejects an unknown one (live capture).
     efforts = ("low", "medium", "high", "xhigh", "max")
+    # "--dangerously-skip-permissions  Bypass all permission checks." No OS
+    # sandbox behind it: trust on the machine. Claude Code asks once per
+    # machine to accept bypass mode (see prompt_markers): the backbone shows
+    # the dialog and never answers it — a person does, once.
+    unattended_args = ("--dangerously-skip-permissions",)
 
     hook_script = "claude_hook.py"
     # An empty matcher means every tool; None omits the matcher.
@@ -89,6 +94,13 @@ class ClaudeCode(Runtime):
         "yes, allow",
         "yes, and don't ask again",
         "would you like to proceed",
+        # "WARNING: Claude Code running in Bypass Permissions mode … ❯ No, exit /
+        # Yes, I accept" (live capture, 2.1.x, first unattended start). Without
+        # this marker its unnumbered "❯ No, exit" reads as an idle prompt with
+        # typed text; with it the agent is waiting_for_human. Its options
+        # carry no numbers, so it is never an answerable dialog: `agent
+        # approve` types nothing (Enter would exit), a person answers it once.
+        "bypass permissions mode",
     )
     # "❯ 1. Yes" is preselected in the permission dialog (live capture, 2.1.x);
     # its footer says "Esc to cancel".

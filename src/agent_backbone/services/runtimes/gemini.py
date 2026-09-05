@@ -56,6 +56,9 @@ class Gemini(Runtime):
     )
     # approve_keys stays empty until the dialog is captured live (README's
     # Gemini note): the backbone answers only what it has seen.
+    # "--approval-mode yolo  auto-approve all tools" (gemini-cli --help). No
+    # OS sandbox behind it: trust on the machine.
+    unattended_args = ("--approval-mode", "yolo")
 
     def hook_settings_path(self, project_dir: Path | None) -> Path:
         if project_dir is not None:

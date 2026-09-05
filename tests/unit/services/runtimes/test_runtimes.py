@@ -389,6 +389,18 @@ _CODEX_PERMISSION = """\
 """
 
 
+_CLAUDE_BYPASS_ACCEPT = """\
+  WARNING: Claude Code running in Bypass Permissions mode
+  In Bypass Permissions mode, Claude Code will not ask for your approval before running
+  potentially dangerous commands.
+  By proceeding, you accept all responsibility for actions taken while running in Bypass
+  Permissions mode.
+  ❯ No, exit
+    Yes, I accept
+  Enter to confirm · Esc to cancel
+"""
+
+
 class TestChoiceDialogs:
     """A dialog whose Enter chooses (a model switch) is not a permission prompt."""
 
@@ -401,6 +413,16 @@ class TestChoiceDialogs:
         rt = RUNTIMES["codex"]
         assert rt.detect_active_dialog(_CODEX_PERMISSION)
         assert not rt.detect_choice_dialog(_CODEX_PERMISSION)
+
+    def test_claude_bypass_mode_acceptance_waits_for_a_person_and_is_never_answered(self):
+        # Live capture (2.1.x): "No, exit" is preselected, so Enter would end
+        # the session. The dialog must read as waiting_for_human (not as an
+        # idle prompt with "No, exit" typed into it) and must not be
+        # answerable by `agent approve`.
+        rt = RUNTIMES["claude"]
+        assert rt.detect_waiting_for_human(_CLAUDE_BYPASS_ACCEPT)
+        assert not rt.detect_idle(_CLAUDE_BYPASS_ACCEPT)
+        assert not rt.detect_active_dialog(_CLAUDE_BYPASS_ACCEPT)
 
     def test_summary_carries_the_command_and_the_reason(self):
         summary = RUNTIMES["codex"].dialog_summary(_CODEX_PERMISSION)

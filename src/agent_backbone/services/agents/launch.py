@@ -157,6 +157,15 @@ async def start_agent(
     if section.pre_trust:
         rt.pre_trust(spec.path)
 
+    # The owner's explicit choice, or the swarm rule decided at this launch:
+    # a member whose runtime confines it to the worktree never asks. Decided
+    # here, not at registration, so flipping `swarm.unattended_members` or
+    # switching a member to a runtime without a sandbox takes effect at its
+    # next start instead of a persisted grant outliving the reason for it.
+    unattended = spec.unattended or (
+        spec.swarm is not None and config.swarm.unattended_members and rt.sandboxed
+    )
+
     brief = Path(brief_file) if brief_file else None
     if brief is None and section.inject_brief and rt.brief_mode != "none":
         brief = agent_brief_file(spec.name, spec.repo, config.data_dir)
@@ -182,6 +191,8 @@ async def start_agent(
             pre_trust=section.pre_trust,
             data_dir=config.data_dir,
             state_dir=config.state_dir,
+            unattended=unattended,
+            writable_dirs=section.writable_dirs,
         )
     except RuntimeError as exc:
         log.error("Cannot start agent '%s': %s", spec.name, exc)
@@ -214,6 +225,8 @@ async def start_agent(
         clear_starting_marker(config.state_dir, spec.name)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
     extra = f", model: {effective_model}" if effective_model else ""
+    if unattended:
+        extra += ", unattended"
     log.info("Agent '%s' started (runtime: %s%s)", spec.name, rt.id, extra)
 
     ready, evidence = "not_waited", []

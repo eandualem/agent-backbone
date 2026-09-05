@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -287,6 +288,50 @@ class TestStartAgentBrief:
             result = await start_agent(self._spec(tmp_path, "cursor"), config)
         assert result.ok is False
         assert result.evidence == ("unknown runtime: cursor",)
+
+    async def test_an_unattended_agent_gets_its_runtimes_switch_and_writable_dirs(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        config = replace(config, launch=replace(config.launch, writable_dirs=("/cache",)))
+        spec = replace(self._spec(tmp_path, "codex"), unattended=True)
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            result = await start_agent(spec, config, db=AsyncMock())
+        assert result.ok
+        command = started.await_args.kwargs["command"]
+        assert command[1:7] == ["-a", "never", "-s", "workspace-write", "--add-dir", "/cache"]
+
+    @pytest.mark.parametrize(
+        ("runtime", "setting", "never_asks"),
+        [("codex", True, True), ("codex", False, False), ("opencode", True, False)],
+    )
+    async def test_a_swarm_member_never_asks_only_behind_a_sandbox(
+        self, tmp_path, runtime, setting, never_asks
+    ):
+        # Decided at launch from the setting and the runtime — nothing stored
+        # on the member, so the rule follows setting flips and runtime changes.
+        from agent_backbone.config import SwarmConfig
+
+        config = bootstrap_config(tmp_path / "data")
+        config = replace(config, swarm=SwarmConfig(unattended_members=setting))
+        spec = replace(self._spec(tmp_path, runtime), tags=("swarm:audit", "role:scout"))
+        assert spec.swarm == "audit" and not spec.unattended
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            assert (await start_agent(spec, config, db=AsyncMock())).ok
+        command = started.await_args.kwargs["command"]
+        assert ("never" in command) is never_asks
+        assert "--auto" not in command  # OpenCode's switch is never the swarm's call
+
+    async def test_unattended_is_refused_for_a_runtime_without_a_switch(self, tmp_path):
+        # Refused, not launched attended: it would park on its first dialog.
+        config = bootstrap_config(tmp_path / "data")
+        spec = replace(self._spec(tmp_path, "aider"), unattended=True)
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            result = await start_agent(spec, config, db=AsyncMock())
+        assert result.ok is False
+        assert "no unattended switch" in result.evidence[0]
+        started.assert_not_awaited()
 
 
 class TestStartingState:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tomllib
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -13,8 +14,11 @@ from agent_backbone.services.runtimes.claude import pre_trust_directory
 from agent_backbone.services.runtimes.codex import pre_trust_codex_directory
 
 _BASE = "agent_backbone.services.runtimes.base"
+_HOME = Path.home()
 # Every Codex launch opens the sandbox to the network so members reach the API.
 _NET = ["-c", "sandbox_workspace_write.network_access=true"]
+# Unattended Codex: never ask, and pin the sandbox the promise rests on.
+_NEVER_ASK = ["-a", "never", "-s", "workspace-write"]
 
 
 def _resolve(binary: str):
@@ -372,3 +376,74 @@ class TestEffort:
             command = RUNTIMES["codex"].build_command(model="gpt-6-astra:max", resume=True)
         assert command[:3] == ["/bin/codex", "-c", "model_reasoning_effort=max"]
         assert "resume" in command
+
+
+class TestUnattended:
+    """``unattended`` adds the CLI's own no-approval switch — or refuses."""
+
+    def test_codex_never_asks_and_keeps_its_sandbox(self, tmp_path):
+        brief = tmp_path / "brief.md"
+        brief.write_text("You are a scout.")
+        with _resolve("/bin/codex"):
+            command = RUNTIMES["codex"].build_command(
+                model="gpt-6-astra:high", brief_file=brief, unattended=True
+            )
+        assert command == [
+            "/bin/codex",
+            "-c",
+            "model_reasoning_effort=high",
+            *_NEVER_ASK,
+            *_NET,
+            "--model",
+            "gpt-6-astra",
+            "You are a scout.",
+        ]
+        assert not any(arg.startswith("--dangerously-bypass") for arg in command)
+        assert RUNTIMES["codex"].sandboxed
+
+    def test_codex_switch_and_writable_dirs_survive_resume(self):
+        # Global options, valid before the `resume` subcommand like `-c`.
+        with _resolve("/bin/codex"):
+            command = RUNTIMES["codex"].build_command(
+                resume="sess-1", unattended=True, writable_dirs=("~/.cache/uv",)
+            )
+        cache = str(_HOME / ".cache/uv")
+        assert command[:8] == ["/bin/codex", *_NEVER_ASK, "--add-dir", cache, "resume"]
+
+    def test_writable_dirs_open_only_a_sandbox(self):
+        # A runtime without a sandbox has nothing to open: everything already is.
+        with _resolve("/bin/codex"):
+            codex = RUNTIMES["codex"].build_command(writable_dirs=("/a", "/b"))
+        assert codex[1:5] == ["--add-dir", "/a", "--add-dir", "/b"]
+        with _resolve("/bin/opencode"):
+            assert RUNTIMES["opencode"].build_command(writable_dirs=("/a",)) == ["/bin/opencode"]
+        assert not RUNTIMES["opencode"].sandboxed
+
+    def test_opencode_gemini_and_claude_have_their_own_switch(self):
+        with _resolve("/bin/opencode"):
+            assert RUNTIMES["opencode"].build_command(
+                model="google/gemini-3.8-flash", unattended=True
+            ) == ["/bin/opencode", "--auto", "--model", "google/gemini-3.8-flash"]
+        with _resolve("/bin/gemini"):
+            assert RUNTIMES["gemini"].build_command(unattended=True) == [
+                "/bin/gemini",
+                "--approval-mode",
+                "yolo",
+            ]
+        with _resolve("/bin/claude"):
+            assert RUNTIMES["claude"].build_command(model="opus", unattended=True) == [
+                "/bin/claude",
+                "--dangerously-skip-permissions",
+                "--model",
+                "opus",
+            ]
+
+    def test_attended_is_the_default_and_adds_nothing(self):
+        with _resolve("/bin/codex"):
+            assert "-a" not in RUNTIMES["codex"].build_command(model="gpt-6-astra")
+
+    @pytest.mark.parametrize("runtime", ["deepcode", "aider", "shell"])
+    def test_a_runtime_without_a_known_switch_is_refused_not_launched_attended(self, runtime):
+        # The shell included: it would otherwise start silently as a plain shell.
+        with _resolve("/bin/x"), pytest.raises(RuntimeError, match="no unattended switch"):
+            RUNTIMES[runtime].build_command(unattended=True)

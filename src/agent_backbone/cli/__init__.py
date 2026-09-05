@@ -187,7 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pse = asub.add_parser(
         "set",
-        help="change agent fields: runtime=… model=… repo=… dir=… description=… always_on=true",
+        help=(
+            "change agent fields: runtime=… model=… repo=… dir=… description=… "
+            "always_on=true unattended=true"
+        ),
     )
     pse.add_argument("name")
     pse.add_argument("assignments", nargs="+", metavar="key=value")

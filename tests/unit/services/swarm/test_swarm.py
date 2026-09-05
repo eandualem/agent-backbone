@@ -234,6 +234,9 @@ class TestCreateSwarm:
         # Recorded as active.
         row = await db.swarms.get("research")
         assert row["status"] == "active" and row["issue_number"] == 7
+        # Whether a member asks is start_agent's call at each launch (from
+        # `swarm.unattended_members` and the runtime's sandbox), never stored.
+        assert not any(s.unattended for s in store.registered)
 
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)

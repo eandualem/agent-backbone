@@ -46,6 +46,7 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 |---|---|---|
 | `agents.default_runtime` | `claude` | Runtime used by `agent start` when none is given |
 | `agents.pre_trust` | `true` | Answer the runtime's folder-trust dialog before starting, so it never blocks an unattended start: Claude Code and Codex get the same trust record their own dialog writes; Gemini is launched with `--skip-trust`. Starting an agent in a directory is treated as the trust decision; set `false` to answer the dialog yourself |
+| `agents.writable_dirs` | `[]` | Directories outside an agent's own that a sandboxed runtime may also write to, passed to Codex as `--add-dir` (JSON list, `~` allowed), for every Codex agent the backbone starts. What a project's tooling keeps outside the checkout goes here — `uv` fails inside the sandbox until its cache is listed: `backbone config set agents.writable_dirs '["~/.cache/uv"]'`. A listed directory is shared with you and every other agent: what one writes there, the next `uv sync` on this machine installs. If that matters, keep the cache inside the agent's directory instead — `agent set NAME env='{"UV_CACHE_DIR": ".uv-cache"}'` — and leave this list empty. Runtimes without a sandbox ignore it: everything is already writable there |
 | `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Codex, Gemini and OpenCode receive it as the session's initial prompt (not re-sent on `--resume`); `aider` receives it as its first delivered message; plain shells get none. Override the text with `<data_dir>/agent-brief.md` |
 
 ### `github.*`
@@ -113,6 +114,12 @@ Score = type weight + blocking bonus + dependents bonus + age tie-breaker.
 | `security.allow_remote_approval` | `true` | Let `agent approve` / `POST /api/agents/{name}/approve` answer a permission prompt. On by default because the action is bounded — a fixed affirmative key, sent only while the runtime's dialog is on screen, to a registered agent, recorded as an event — and because swarm coordinators need it to unblock members. Set `false` to keep every approval on a keyboard |
 | `security.allow_unauthenticated` | `false` | Serve the API without an API key. Dev boxes only |
 
+### `swarm.*`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `swarm.unattended_members` | `true` | Start swarm members on a **sandboxed** runtime (Codex) unattended: free inside their worktree, never a permission dialog, so no member stalls the swarm. Decided at every member start from this setting and the runtime, not stored on the member — flip it and the next (re)start of any member follows; a member moved to another runtime is judged by that runtime. Members on a runtime without a sandbox (OpenCode, Claude Code, Gemini) keep asking, and the coordinator answers with `agent approve` — making those unattended would be trust on the whole machine, which stays your explicit per-agent call (`unattended`, below). Set `false` to have every member ask |
+
 ## Agents
 
 Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
@@ -127,6 +134,7 @@ Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
 | `watches` | `agent watch` | Repositories it also hears about |
 | `tags`, `description` | `agent set` | Free-form, returned by the API. A `swarm:<name>` tag marks a swarm member: internal to the agent running the swarm, no Telegram topic |
 | `always_on` | `agent set NAME always_on=true` | Expected to stay up: a dead session is reported at once. Off by default — an absent agent is reported only when messages are queued for it |
+| `unattended` | `agent set NAME unattended=true` (sandboxed swarm members get the same at start from `swarm.unattended_members`, nothing stored) | Launched with the runtime's own no-approval switch, so it never shows a permission dialog. What that means depends on whether a sandbox stands behind the switch. **Codex** (`-a never -s workspace-write`, the sandbox pinned so a `sandbox_mode` in your own Codex config cannot loosen it): the agent's directory, temp and the network are open, a write anywhere else fails with "Operation not permitted" and the failure goes back to the model; a git worktree commits fine (its git dir is reachable), and `agents.writable_dirs` opens what a project's tooling needs outside. **OpenCode** `--auto`, **Claude Code** `--dangerously-skip-permissions`, **Gemini** `--approval-mode yolo`: no OS sandbox, so this is trust on the whole machine with your credentials — your explicit choice per agent, never a default. Claude Code asks once per machine to accept bypass mode with *No, exit* preselected; the backbone reports the agent as `waiting_for_human` and never answers that dialog (`agent approve` types nothing) — answer it by hand once. Changing the agent's `runtime` clears the flag unless you set it again in the same command. `deepcode`, `aider` and `shell` have no switch the backbone knows; starting one unattended is refused, not launched attended (`backbone runtimes` lists the switches and which are sandboxed). Off by default |
 | `env` | `agent set env='{"K":"V"}'` | Extra environment exported into the session (e.g. an API key). Values are stored with the agent record — treat them like `.env` contents |
 
 Exported into every session the backbone starts: `BACKBONE_RUNTIME`,
