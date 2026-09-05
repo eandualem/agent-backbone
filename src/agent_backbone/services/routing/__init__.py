@@ -31,6 +31,7 @@ from agent_backbone.services.routing._ingest import (
     routing_in_flight,
 )
 from agent_backbone.services.routing._intelligence import get_session_intelligence
+from agent_backbone.services.routing._outbox import retry_outbox
 from agent_backbone.services.routing._priority import compute_priority_score
 from agent_backbone.services.routing._resolution import validate_issue_targets
 from agent_backbone.services.routing._targets import (
@@ -57,6 +58,7 @@ __all__ = [
     "list_open_queue_for_target",
     "queue_detail",
     "queue_scope",
+    "retry_outbox",
     "route_issue",
     "routing_in_flight",
     "safe_deliver",

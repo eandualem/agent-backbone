@@ -56,6 +56,8 @@ class DeliveryReport:
 
     outcome: DeliveryOutcome
     queue: str | None = None
+    unconfirmed: bool = False
+    """A duplicate claim can still be in flight; it is not a delivery receipt."""
 
     @property
     def queued(self) -> bool:
@@ -63,7 +65,7 @@ class DeliveryReport:
         return self.queue in ("stored", "already_queued")
 
 
-_session_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+_session_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDictionary()
 
 
 def _serialized(fn: Callable[..., Awaitable[DeliveryReport]]):
@@ -75,7 +77,8 @@ def _serialized(fn: Callable[..., Awaitable[DeliveryReport]]):
 
     @wraps(fn)
     async def locked(session_name: str, *args, **kwargs) -> DeliveryReport:
-        lock = _session_locks.setdefault(session_name, asyncio.Lock())
+        key = (id(asyncio.get_running_loop()), session_name)
+        lock = _session_locks.setdefault(key, asyncio.Lock())
         async with lock:
             return await fn(session_name, *args, **kwargs)
 
@@ -255,8 +258,9 @@ async def safe_deliver(
     sender: str = "",
     source_key: str | None = None,
     requeue: bool = True,
+    on_report: Callable[[DeliveryReport], Awaitable[None]] | None = None,
 ) -> DeliveryOutcome:
-    """``deliver`` for callers that only act on the outcome."""
+    """Deliver safely, optionally persisting its detailed receipt before returning."""
     report = await deliver(
         session_name,
         message,
@@ -275,6 +279,8 @@ async def safe_deliver(
         source_key=source_key,
         requeue=requeue,
     )
+    if on_report is not None:
+        await on_report(report)
     return report.outcome
 
 
@@ -344,7 +350,7 @@ async def deliver(
             preview=preview,
         )
         if claim is None:
-            return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED)
+            return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, unconfirmed=True)
         claim_id = claim
 
     async def finish(outcome: DeliveryOutcome, *, queue: bool) -> DeliveryReport:

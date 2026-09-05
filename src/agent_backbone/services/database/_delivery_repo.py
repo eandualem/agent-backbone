@@ -168,7 +168,7 @@ class DeliveryRepo(Repo):
             result = await conn.execute(
                 text(
                     f"""SELECT d.* FROM deliveries d
-                       WHERE d.kind = 'issue'
+                       WHERE d.kind = 'issue' AND d.source != 'github-outbox'
                          AND d.issue_number IS NOT NULL
                          AND d.outcome IN ({placeholders})
                          AND NOT EXISTS (

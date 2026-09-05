@@ -16,6 +16,7 @@ class DispatchResult:
     skipped: list[str] = field(default_factory=list)
     offline: list[str] = field(default_factory=list)
     deferred: list[str] = field(default_factory=list)
+    plan: list[dict] | None = field(default=None, repr=False)
 
 
 class SessionIntelligence(StrEnum):

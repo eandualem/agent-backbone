@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 77253d1cd6b0
+Revision ID: ae5b23d0cd4c
 Revises:
-Create Date: 2026-09-05 13:39:57.984826
+Create Date: 2026-09-05 17:04:27.548280
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "77253d1cd6b0"
+revision: str = "ae5b23d0cd4c"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -97,6 +97,18 @@ def upgrade() -> None:
                 "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
             ),
         )
+
+    op.create_table(
+        "event_outbox",
+        sa.Column("event_id", sa.Integer(), nullable=False),
+        sa.Column("recipient", sa.Text(), nullable=False),
+        sa.Column("delivery", sa.Text(), nullable=False),
+        sa.Column("status", sa.Text(), server_default="pending", nullable=False),
+        sa.Column("updated_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("event_id", "recipient", name=op.f("pk_event_outbox")),
+    )
+    with op.batch_alter_table("event_outbox", schema=None) as batch_op:
+        batch_op.create_index("idx_outbox_pending", ["status", "updated_at"], unique=False)
 
     op.create_table(
         "events",
@@ -271,6 +283,10 @@ def downgrade() -> None:
         batch_op.drop_index("idx_events_received")
 
     op.drop_table("events")
+    with op.batch_alter_table("event_outbox", schema=None) as batch_op:
+        batch_op.drop_index("idx_outbox_pending")
+
+    op.drop_table("event_outbox")
     with op.batch_alter_table("deliveries", schema=None) as batch_op:
         batch_op.drop_index(
             "uq_deliveries_active_owner",

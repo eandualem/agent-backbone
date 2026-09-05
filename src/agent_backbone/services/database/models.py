@@ -124,6 +124,20 @@ class EventORM(Base):
     )
 
 
+class OutboxORM(Base):
+    """A durable delivery plan and receipt for each inbound event recipient."""
+
+    __tablename__ = "event_outbox"
+
+    event_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    recipient: Mapped[str] = mapped_column(Text, primary_key=True)
+    delivery: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (Index("idx_outbox_pending", "status", "updated_at"),)
+
+
 class DeliveryORM(Base):
     """Delivery tracking records (issue, comment, PR and direct messages)."""
 
