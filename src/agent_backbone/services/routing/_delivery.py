@@ -16,10 +16,13 @@ recorded with its kind, repository and outcome.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Collection
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
+from functools import wraps
 from typing import TYPE_CHECKING
+from weakref import WeakValueDictionary
 
 from agent_backbone.models import BLOCKED_OUTCOMES, SUCCESS_OUTCOMES, DeliveryOutcome
 from agent_backbone.services.routing._intelligence import get_session_intelligence
@@ -60,6 +63,25 @@ class DeliveryReport:
         return self.queue in ("stored", "already_queued")
 
 
+_session_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+
+
+def _serialized(fn: Callable[..., Awaitable[DeliveryReport]]):
+    """One gate/paste/record transaction per session; idle locks are released.
+
+    Each caller holds its lock strongly while waiting or delivering. The weak
+    cache keeps unrelated sessions concurrent without retaining forgotten names.
+    """
+
+    @wraps(fn)
+    async def locked(session_name: str, *args, **kwargs) -> DeliveryReport:
+        lock = _session_locks.setdefault(session_name, asyncio.Lock())
+        async with lock:
+            return await fn(session_name, *args, **kwargs)
+
+    return locked
+
+
 def queue_detail(report: DeliveryReport, session_name: str, expiry_minutes: int) -> str:
     """One plain sentence about what happened, for people and agents alike."""
     if report.outcome == DeliveryOutcome.DELIVERED:
@@ -81,26 +103,6 @@ def queue_detail(report: DeliveryReport, session_name: str, expiry_minutes: int)
             "could not be stored. Send it again later."
         )
     return f"Not delivered: {session_name} is {why}. This kind of message is not queued."
-
-
-def outcome_queues(outcome: DeliveryOutcome, kind: str) -> bool:
-    """Whether ``safe_deliver`` *tries* to queue a message with this blocked outcome.
-
-    Mirrors the queueing decision in ``deliver``: non-issue kinds are queued
-    on every blocking condition and on paste failure; issue deliveries rely
-    on the retry job except when the agent is offline. Whether a row was
-    actually stored is ``DeliveryReport.queue`` — use ``deliver`` when the
-    sender must be told the truth.
-    """
-    if kind == "plan_response":
-        return False  # answers to a plan prompt are never queued
-    if outcome == DeliveryOutcome.DELIVERY_FAILED:
-        return True
-    if outcome not in BLOCKED_OUTCOMES:
-        return False
-    if kind == "issue":
-        return outcome == DeliveryOutcome.OFFLINE
-    return True
 
 
 def _comment_matches_active_issue(
@@ -276,6 +278,7 @@ async def safe_deliver(
     return report.outcome
 
 
+@_serialized
 async def deliver(
     session_name: str,
     message: str,
@@ -301,11 +304,8 @@ async def deliver(
     ``api-messages``, …). ``sender`` is who is speaking (``from_entity``) and
     ``source_key`` the identity of the originating event when there is one;
     together they decide what counts as *the same* queued message.
-    ``requeue=False`` is for a caller that already holds the message in the
-    queue (the drain re-offering a leased row): a blocked attempt is then
-    reported and nothing is stored, so the row it came from stays the one
-    copy — storing the re-offer would add a second row with a different
-    text (the queued-age stamp) and, next drain, a third.
+    A queue drain sets ``requeue=False``: its existing leased row
+    already holds the message, even when the displayed text gains an age note.
     """
     kind = delivery_kind
     trackable_issue = db is not None and issue_number is not None and target_entity is not None
@@ -349,7 +349,7 @@ async def deliver(
 
     async def finish(outcome: DeliveryOutcome, *, queue: bool) -> DeliveryReport:
         stored: str | None = None
-        if queue:
+        if queue and requeue:
             stored = await _enqueue(
                 db,
                 session_name=session_name,
@@ -407,9 +407,9 @@ async def deliver(
             queue = kind != "issue" or intel == SessionIntelligence.OFFLINE
             if intel == SessionIntelligence.SETTLING and kind == "issue":
                 queue = False
-            return await finish(DeliveryOutcome(intel.value), queue=queue and requeue)
+            return await finish(DeliveryOutcome(intel.value), queue=queue)
 
     # 4. Paste + submit
     if await send_message(session_name, message, runtime_hint=profile.runtime):
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
-    return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=requeue)
+    return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import subprocess
 import sys
 
@@ -24,13 +25,25 @@ def _fresh_version() -> str:
     return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else "unknown"
 
 
-async def _generation(config: BackboneConfig) -> tuple[float | None, str] | None:
-    """``(started, version)`` of the process answering /health, or None when none does."""
+async def _generation(config: BackboneConfig) -> tuple[float, str] | None:
+    """``(started, version)`` of the process answering /health, or None when none does.
+
+    An answer without a parseable ``started`` (a proxy error page, a stale
+    cache) is not a generation — treating it as one would mistake it for
+    the new build.
+    """
     health = await _common.api(config, "GET", "/health", timeout=2.0)
     if health is None or health[0] != 200 or not isinstance(health[1], dict):
         return None
-    started = health[1].get("started")
-    return (float(started) if started is not None else None, str(health[1].get("version") or "?"))
+    try:
+        started = float(health[1]["started"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not math.isfinite(started) or started <= 0:
+        # NaN never equals the previous generation, so it would always look
+        # like a new build; a non-positive start time is no generation.
+        return None
+    return (started, str(health[1].get("version") or "?"))
 
 
 async def _wait_for_api(
@@ -63,7 +76,9 @@ async def restart_backbone(config: BackboneConfig) -> int:
         if rc:
             return rc
     elif await session_exists(config.backbone.session_name):
-        await server._down(config)
+        down_rc = await server._down(config)
+        if down_rc:
+            return down_rc
         rc = await server._up_detached(config)
         if rc:
             return rc

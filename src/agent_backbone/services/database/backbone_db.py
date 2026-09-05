@@ -282,18 +282,26 @@ class BackboneDB:
                 existing_app_tables = existing_tables & app_tables
 
                 alembic_cfg.attributes["connection"] = sync_conn
-                if has_alembic and existing_app_tables == app_tables:
+                if has_alembic and existing_app_tables:
                     # Pre-1.0 policy: one squashed migration. A regenerated
                     # squash changes the revision id, so a database stamped
-                    # with the old id must be re-stamped — its schema is
-                    # already complete (SQLite: create_all above; the stamp
-                    # is the entire migration history).
+                    # with the old id must be repaired and re-stamped. New
+                    # tables must also be created here: PostgreSQL does not
+                    # run create_all before migrations like SQLite does.
                     stored = sync_conn.execute(
                         text("SELECT version_num FROM alembic_version")
                     ).scalar()
                     script = ScriptDirectory.from_config(alembic_cfg)
                     known = {rev.revision for rev in script.walk_revisions()}
                     if stored not in known:
+                        metadata.create_all(
+                            sync_conn,
+                            tables=[
+                                table
+                                for table in metadata.sorted_tables
+                                if table.name not in existing_app_tables
+                            ],
+                        )
                         _repair_schema(sync_conn)
                         command.stamp(alembic_cfg, "head", purge=True)
                         return

@@ -47,6 +47,23 @@ def dedup_key_for(message: str, sender: str, source_key: str | None) -> str:
 
 
 class QueueRepo(Repo):
+    async def prune(self, retention_days: int = 30) -> int:
+        """Delete completed queue bodies after retention, measured from completion.
+
+        Pending and leased messages are never deleted; expiry is a separate
+        operation that records their outcome. Legacy rows without a completion
+        timestamp are retained because their age cannot be established.
+        """
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "DELETE FROM message_queue WHERE status IN ('delivered', 'expired')"
+                    " AND delivered_at < :cutoff"
+                ),
+                {"cutoff": cutoff_iso(days=retention_days)},
+            )
+            return result.rowcount
+
     async def enqueue(
         self,
         *,

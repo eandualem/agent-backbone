@@ -23,11 +23,12 @@ This page follows real requests through the system. Read
    `BACKBONE_STATE_DIR` and the agent's `env` exported into the session.
    For Claude Code the command also carries
    `--settings <data_dir>/hooks/claude-settings.json` — a backbone-owned
-   settings file, regenerated at every start, that wires the state hooks
+   settings file, replaced atomically at every start, that wires the state hooks
    without touching the repository or `~/.claude/settings.json`.
 4. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
    fresh hook-written `idle` state, or a visible empty prompt for runtimes
-   without hooks. If the runtime is asking a question (Claude's folder-trust
+   without hooks. A fresh busy or blocked hook keeps startup waiting even if
+   the terminal shows an empty prompt. If the runtime is asking a question (Claude's folder-trust
    prompt, the "resume from summary" picker on `--resume`), `start` returns
    `waiting_for_human` with the question shown instead of guessing, and
    `backbone agent approve` answers it. A dialog is recognised by its
@@ -38,8 +39,9 @@ This page follows real requests through the system. Read
 
 The backbone keeps no process handle; tmux owns the session. If the
 backbone restarts, sessions keep running and are rediscovered. Sessions
-you start by hand appear in `backbone status` with `configured: false` and
-can still receive messages.
+you start by hand appear in `backbone status` with `configured: false`.
+Register an agent with that session name before sending it messages through
+the backbone; unregistered sessions cannot receive API messages or be streamed.
 
 Stopping (`agent stop`) is `tmux kill-session`. The backbone refuses to
 stop its own session. A session that dies on its own is **reported** (to
@@ -159,18 +161,23 @@ sequenceDiagram
     B->>B: record the delivery (kind, repo, outcome, preview)
 ```
 
+- **One delivery per session at a time.** The server serializes the readiness
+  check, paste, verification and delivery record. Other sessions remain
+  independent.
 - **Envelope.** The API adds `[via:backbone from:<from_entity>] `; Telegram
   `[via:telegram from:<name>]`; GitHub events `[via:github issue:N]`.
 - **Paste, don't type.** Text goes in through tmux's paste buffer as one
   chunk, then Enter; the pane is re-read to confirm the text left the input
-  box. If the runtime queued it for its next turn (Claude does), that
+  box, including an envelope still buffered in the prompt. If the runtime queued it for its next turn (Claude does), that
   counts as delivered.
 - **Busy is never bypassed.** `priority: true` (and issues labelled
   `blocking`) only get through `human_typing` and `settling`.
 - **Comments on the issue the agent is working on** are delivered even
   while it is busy or waiting; comments on other issues wait.
 - **Queue hygiene.** Undelivered after `timing.queue_expiry_minutes` (30):
-  expired. Leased by a crashed drain: released after 5 min.
+  expired. Leased by a crashed drain: released after 5 min. A blocked drain
+  keeps the original row, including when displaying its age; completed rows
+  are pruned after `timing.delivery_retention_days` from completion.
 - **Everything is recorded**, direct messages included:
   `GET /api/deliveries`, `backbone agent inspect`.
 
@@ -180,7 +187,7 @@ sequenceDiagram
 
 | Intake | When | How |
 |---|---|---|
-| `poll` | `GITHUB_TOKEN` (or App credentials) and no webhook secret | every `github.poll_interval_seconds`, list issues and comments updated since the last stored event in each tracked repository |
+| `poll` | `GITHUB_TOKEN` (or App credentials) and no webhook secret | every `github.poll_interval_seconds`, list issues and comments from the durable replay cursor for each tracked repository |
 | `webhook` | `GITHUB_WEBHOOK_SECRET` is set | GitHub posts to `/webhooks/github`; signature verified; **one backfill poll at startup** catches what happened while the backbone was down |
 | `off` | no credentials, or `github.intake = off` | — |
 
@@ -227,8 +234,11 @@ the next poll.
 
 An agent's **queue** is the union of `for:<agent>` issues in every
 repository it owns or watches plus, if it is the sole owner of its
-repository, that repository's unlabelled open issues — ordered `blocking`
-first, then type weight, then dependents, then age.
+repository, that repository's unlabelled open issues. Swarm members are not
+repository owners. The queue excludes the issue's sender and uses the complete
+open listing before scoring. The current score combines the blocking bonus,
+type weight and an issue-number age proxy; dependent counts are not yet wired
+into queue scoring (see [GitHub](github.md#the-agents-queue-and-its-order)).
 
 ### A comment is added
 
@@ -241,7 +251,7 @@ acknowledgement is recorded; the targets' acknowledgements are cleared.
 Audience as for a comment (the pull request's `for:` targets, its `from:`
 opener and the sole owner), minus the reviewer when it is an agent
 (`[from:X]` in the review body). One message per review — verdict,
-summary preview, link — not one per inline comment: every inline comment
+summary preview, reviewed commit and current head, link — not one per inline comment: every inline comment
 belongs to a review, and the agent reads them on GitHub. A review on a
 closed pull request notifies nobody. Reviews arrive through the webhook
 intake; the poll intake lists issues and comments only.
@@ -273,7 +283,8 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
    → reported to `escalation.target` and Telegram, once; state reset.
    Never restarted.
 5. **Plan waiting**: Telegram notification (`/viewplan`, `/approve`) and a
-   message to `escalation.target`, once per plan.
+   message to `escalation.target`, once per plan after delivery or successful
+   queue storage. A failed queue write is retried on the next monitor tick.
 6. **Copy mode**: cancelled in every managed session; Telegram alert if it
    will not clear.
 7. Socket.IO `/sessions` snapshot if anything changed.
@@ -283,7 +294,10 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 
 Every `timing.retry_interval_seconds` (5 min), `delivery-retry` re-attempts
 issue deliveries that ended `offline`/`delivery_failed`/`agent_working`
-and drains the queue again.
+and drains the queue again. Issue retries and queued issue deliveries re-check
+the current issue: acknowledged, closed or no-longer-targeted work, and records without
+repository metadata, are retired so it cannot occupy the oldest retry slots forever. A failure
+in one record or session does not stop the others.
 
 ## 6. Integrations (Telegram)
 
@@ -317,7 +331,7 @@ See [API](api.md).
 
 Agents keep running — they are tmux sessions. API calls fail. Messages
 sent by other agents are lost (they should retry). GitHub events are
-caught up on restart: poll intake resumes from the last stored event;
+caught up on restart: poll intake resumes from its durable per-repository cursor;
 webhook intake runs its startup backfill. The `agent-monitor` job runs
 its first tick immediately, so hook state for every running session is
 re-read and missed plan-waiting notifications fire right after a restart.

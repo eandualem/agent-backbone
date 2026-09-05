@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import secrets
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -70,6 +71,12 @@ def cmd_init(args: argparse.Namespace) -> int:
     print("  2. backbone up --detach")
     print("  3. cd ~/code/my-app && backbone agent start")
     print(f"\nTokens (GitHub, Telegram) go in {env_path} — `backbone secrets set TELEGRAM_TOKEN`.")
+    if args.data_dir and os.environ.get("BACKBONE_DATA_DIR") != str(data_dir):
+        # Every other command finds this install through the environment, not
+        # the flag (only `init` takes --data-dir): say so now, or the next
+        # `secrets set` lands in the default directory's .env instead.
+        print("\nCustom data dir — export it before any other backbone command:")
+        print(f"  export BACKBONE_DATA_DIR={shlex.quote(str(data_dir))}")
     return 0
 
 
@@ -101,22 +108,32 @@ def _write_env_value(env_path: Path, key: str, value: str | None) -> str:
 def _write_env_value_locked(env_path: Path, key: str, value: str | None) -> str:
     lines = env_path.read_text().splitlines() if env_path.is_file() else []
     out: list[str] = []
-    action = "absent" if value is None else "added"
+    # One key means one value: the first occurrence (live or placeholder)
+    # becomes the assignment on set; every live duplicate is dropped on set
+    # and on unset, so a stale second line can never shadow the change.
+    wrote = False
+    saw_live = False
     for line in lines:
         stripped = line.strip()
         bare = stripped.lstrip("#").strip()
-        if bare.startswith(f"{key}=") and action in ("added", "absent"):
-            if value is None:
-                if not stripped.startswith("#"):
-                    action = "removed"
-                    continue
-            else:
-                action = "replaced" if not stripped.startswith("#") else "added"
-                out.append(f"{key}={value}")
-                continue
-        out.append(line)
-    if value is not None and action == "added" and not any(ln.startswith(f"{key}=") for ln in out):
+        if not bare.startswith(f"{key}="):
+            out.append(line)
+            continue
+        saw_live = saw_live or not stripped.startswith("#")
+        if value is None:
+            if stripped.startswith("#"):
+                out.append(line)  # a commented placeholder is not a value
+            continue
+        if not wrote:
+            out.append(f"{key}={value}")
+            wrote = True
+        # Later duplicates are dropped.
+    if value is not None and not wrote:
         out.append(f"{key}={value}")
+    if value is None:
+        action = "removed" if saw_live else "absent"
+    else:
+        action = "replaced" if saw_live else "added"
     env_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = env_path.with_name(f".env.{os.getpid()}.tmp")
     # Created 0600: write_text() would honour the umask and leave the secrets

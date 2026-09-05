@@ -77,7 +77,7 @@ class TestSyncTopics:
             config,
             tmp_path,
             topic_routes={7: explicit},
-            discovery=TopicDiscovery(topic_routes={9: discovered}),
+            discovery=TopicDiscovery(group_chat_id=-100, topic_routes={9: discovered}),
         )
         result = await _topics.sync_topics(bot)
         assert set(result["created"]) == set(rest)
@@ -91,7 +91,7 @@ class TestSyncTopics:
         coordinator = replace(config.agents.get("bell"), tags=("swarm:review", "role:coordinator"))
         specs = {**config.agents.specs, "ada": worker, "bell": coordinator}
         cfg = replace(config, agents=AgentsConfig(specs))
-        d = TopicDiscovery(topic_routes={7: "ada"})  # left over from before the swarm
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={7: "ada"})  # left over
         bot, fake = _running_bot(cfg, tmp_path, discovery=d)
         result = await _topics.sync_topics(bot)
         assert "ada" not in fake.created and "bell" not in fake.created
@@ -99,7 +99,7 @@ class TestSyncTopics:
         assert set(fake.created) == set(config.agents.names) - {"ada", "bell"}
 
     async def test_forgotten_agent_topic_is_closed_then_reopened_on_return(self, config, tmp_path):
-        d = TopicDiscovery(topic_routes={5: "gone", 6: "agents"})
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={5: "gone", 6: "agents"})
         bot, fake = _running_bot(config, tmp_path, discovery=d)
         result = await _topics.sync_topics(bot)
         assert result["closed"] == ["gone"]
@@ -119,7 +119,7 @@ class TestSyncTopics:
         assert "gone" not in fake.created
 
     async def test_explicitly_mapped_topics_are_the_users_and_never_closed(self, config, tmp_path):
-        d = TopicDiscovery(topic_routes={5: "gone"})
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={5: "gone"})
         bot, fake = _running_bot(config, tmp_path, topic_routes={5: "gone"}, discovery=d)
         await _topics.sync_topics(bot)
         assert fake.closed == []
@@ -151,6 +151,33 @@ class TestSyncTopics:
         bot, fake = _running_bot(config, tmp_path)
         await bot.sync_agents()
         assert fake.created == sorted(config.agents.names)
+
+
+class TestGroupChange:
+    async def test_changed_group_provisions_fresh_and_touches_no_old_thread(self, config, tmp_path):
+        # Old learned threads belong to the old group: none are closed or
+        # reopened in the new one, and every agent is provisioned fresh.
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={5: "ike"}, closed_topics={6})
+        bot, fake = _running_bot(config, tmp_path, group_chat_id=-200, discovery=d)
+        result = await _topics.sync_topics(bot)
+        assert d.group_chat_id == -200
+        assert 5 not in fake.closed and fake.reopened == []
+        assert set(result["created"]) == set(config.agents.names)
+        assert 5 not in d.topic_routes  # stale ids never sent to the new group
+        # second pass: the fresh threads are known — nothing duplicated.
+        again = await _topics.sync_topics(bot)
+        assert again["created"] == [] and len(fake.created) == len(config.agents.names)
+
+    async def test_explicit_config_routes_survive_a_group_change(self, config, tmp_path):
+        d = TopicDiscovery(group_chat_id=-100)
+        bot, fake = _running_bot(
+            config, tmp_path, group_chat_id=-200, topic_routes={7: "ike"}, discovery=d
+        )
+        await _topics.sync_topics(bot)
+        assert "ike" not in fake.created
+        from agent_backbone.services.integrations.telegram._topic_discovery import agent_topic
+
+        assert agent_topic(bot.config, d, "ike") == 7  # explicit mapping still answers
 
 
 class TestSyncSerialized:

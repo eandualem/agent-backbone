@@ -82,6 +82,12 @@ async def handle_topic_message(
     if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
         return
 
+    group = bot._effective_group_chat_id()
+    if group is not None and update.effective_chat.id != group:
+        # Topic threads belong to the selected group: a thread id from
+        # another allowed group must not deliver into this group's agent.
+        return
+
     thread_id = getattr(update.message, "message_thread_id", None)
     if thread_id is None:
         return
@@ -104,8 +110,8 @@ async def handle_topic_message(
     if not text:
         return
 
-    sender = bot._sender_tag(update)
-    tag = f"[via:telegram from:{sender}]"
+    sender = bot._sender_id(update)
+    tag = f"[via:telegram from:{bot._sender_tag(update)}]"
 
     if target == CATCH_ALL_TOPIC:
         # Parse "agent-name: message" or "agent-name message"

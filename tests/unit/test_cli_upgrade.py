@@ -137,6 +137,31 @@ class TestWaitForApi:
         ):
             assert await upgrade._wait_for_api(config, seconds=1) is None
 
+    async def test_malformed_started_is_not_a_generation(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        for body in (
+            {"healthy": True, "version": "0.1.1"},  # no started: a proxy page
+            {"healthy": True, "version": "?", "started": "bad"},
+            {"healthy": True, "version": "?", "started": None},
+            {"healthy": True, "version": "?", "started": "nan"},  # never equals before
+            {"healthy": True, "version": "?", "started": 0},
+            {"healthy": True, "version": "?", "started": -5.0},
+        ):
+            with patch(f"{_UP}._common.api", new_callable=AsyncMock, return_value=(200, body)):
+                assert await upgrade._generation(config) is None
+
+    async def test_error_page_is_never_the_new_build(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        with (
+            patch(
+                f"{_UP}._common.api",
+                new_callable=AsyncMock,
+                return_value=(200, {"detail": "Bad Gateway"}),
+            ),
+            patch(f"{_UP}.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            assert await upgrade._wait_for_api(config, seconds=1) is None
+
 
 class TestRestartBackbone:
     async def test_login_service_is_restarted_and_a_new_generation_awaited(self, tmp_path, capsys):
@@ -162,7 +187,9 @@ class TestRestartBackbone:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("agent_backbone.cli.server._down", new_callable=AsyncMock) as down,
+            patch(
+                "agent_backbone.cli.server._down", new_callable=AsyncMock, return_value=0
+            ) as down,
             patch(
                 "agent_backbone.cli.server._up_detached", new_callable=AsyncMock, return_value=0
             ) as up,
@@ -171,6 +198,24 @@ class TestRestartBackbone:
             assert await upgrade.restart_backbone(config) == 0
         down.assert_awaited_once()
         up.assert_awaited_once()
+
+    async def test_failed_down_aborts_the_restart(self, tmp_path, capsys):
+        config = bootstrap_config(tmp_path / "data")
+        with (
+            patch("agent_backbone.cli.service.state", return_value="not installed"),
+            patch(f"{_UP}._generation", new_callable=AsyncMock, return_value=None),
+            patch(
+                "agent_backbone.services.terminal.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("agent_backbone.cli.server._down", new_callable=AsyncMock, return_value=1),
+            patch("agent_backbone.cli.server._up_detached", new_callable=AsyncMock) as up,
+            patch(f"{_UP}._wait_for_api", new_callable=AsyncMock) as wait,
+        ):
+            assert await upgrade.restart_backbone(config) == 1
+        up.assert_not_awaited()
+        wait.assert_not_awaited()
 
     async def test_nothing_running_is_not_an_error(self, tmp_path, capsys):
         config = bootstrap_config(tmp_path / "data")

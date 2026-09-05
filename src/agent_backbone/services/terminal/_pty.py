@@ -14,15 +14,21 @@ import asyncio
 import codecs
 import contextlib
 import fcntl
+import json
 import logging
 import os
+import shlex
 import signal
 import struct
 import subprocess
 import termios
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
+from weakref import WeakValueDictionary
+
+from agent_backbone.services.terminal._core import exact_target
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +78,7 @@ class PtySession:
             env = {**os.environ, "TERM": "xterm-256color", "COLORTERM": "truecolor"}
             env.pop("TMUX", None)  # the backbone itself may run inside tmux
             self._process = subprocess.Popen(
-                ["tmux", "attach-session", "-t", self.session_name],
+                ["tmux", "attach-session", "-t", exact_target(self.session_name)],
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
@@ -88,7 +94,7 @@ class PtySession:
         os.close(slave_fd)
         self.master_fd = master_fd
 
-        _record_pid(self._pid_file, self._process.pid)
+        _record_pid(self._pid_file, self._process.pid, self.session_name)
 
         # Start background reader
         self._reader_task = asyncio.create_task(
@@ -239,8 +245,16 @@ class PtyManager:
 
     def __init__(self, pid_file: Path | None = None) -> None:
         self._sessions: dict[tuple[str, str], PtySession] = {}
+        self._locks: WeakValueDictionary[tuple[str, str], asyncio.Lock] = WeakValueDictionary()
         self._pid_file = pid_file
         self._cleanup_orphaned_processes()
+
+    def _lock(self, key: tuple[str, str]) -> asyncio.Lock:
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[key] = lock
+        return lock
 
     def _cleanup_orphaned_processes(self) -> None:
         pid_file = self._pid_file
@@ -250,9 +264,14 @@ class PtyManager:
             content = pid_file.read_text().strip()
             if not content:
                 return
-            pids = [int(p) for p in content.split("\n") if p.strip()]
             killed = 0
-            for pid in pids:
+            for line in content.splitlines():
+                saved = _parse_pid_record(line)
+                if saved is None:
+                    continue
+                pid = saved["pid"]
+                if _process_identity(pid) != saved:
+                    continue
                 try:
                     os.kill(pid, signal.SIGTERM)
                     killed += 1
@@ -278,15 +297,16 @@ class PtyManager:
         tmux attach-session process.
         """
         key = (sid, session_name)
-        # Clean up existing if present (e.g., double-join)
-        existing = self._sessions.pop(key, None)
-        if existing:
-            await existing.cleanup()
+        async with self._lock(key):
+            # Replacement and removal must wait for the old process to exit.
+            existing = self._sessions.pop(key, None)
+            if existing:
+                await existing.cleanup()
 
-        pty_session = PtySession(session_name, self._pid_file)
-        pty_session.start(cols, rows)
-        self._sessions[key] = pty_session
-        return pty_session
+            pty_session = PtySession(session_name, self._pid_file)
+            pty_session.start(cols, rows)
+            self._sessions[key] = pty_session
+            return pty_session
 
     def get(self, sid: str, session_name: str) -> PtySession | None:
         """Get existing PTY session or None."""
@@ -294,9 +314,11 @@ class PtyManager:
 
     async def remove(self, sid: str, session_name: str) -> None:
         """Remove and clean up a PTY session immediately."""
-        session = self._sessions.pop((sid, session_name), None)
-        if session:
-            await session.cleanup()
+        key = (sid, session_name)
+        async with self._lock(key):
+            session = self._sessions.pop(key, None)
+            if session:
+                await session.cleanup()
 
     async def cleanup_all(self) -> None:
         """Clean up all PTY sessions concurrently. Called from app lifespan shutdown.
@@ -304,22 +326,82 @@ class PtyManager:
         Uses asyncio.gather so that N sessions clean up in ~3s (worst case)
         instead of N * 3s sequentially — prevents SIGKILL on shutdown.
         """
-        if self._sessions:
+        keys = set(self._sessions) | set(self._locks)
+        if keys:
             await asyncio.gather(
-                *(s.cleanup() for s in self._sessions.values()),
+                *(self.remove(*key) for key in keys),
                 return_exceptions=True,
             )
-        self._sessions.clear()
         log.info("All PTY sessions cleaned up")
 
 
-def _record_pid(pid_file: Path | None, pid: int) -> None:
+def _parse_pid_record(line: str) -> dict | None:
+    """Legacy PID-only and malformed records cannot authorize a signal."""
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(record, dict) or set(record) != {"pid", "birth", "command"}:
+        return None
+    pid, birth, command = record["pid"], record["birth"], record["command"]
+    if type(pid) is not int or pid <= 1 or not isinstance(birth, str):
+        return None
+    if (
+        not isinstance(command, list)
+        or len(command) != 4
+        or not all(isinstance(arg, str) and arg for arg in command)
+        or Path(command[0]).name != "tmux"
+        or command[1:3] != ["attach-session", "-t"]
+    ):
+        return None
+    try:
+        datetime.strptime(birth, "%a %b %d %H:%M:%S %Y")
+    except ValueError:
+        return None
+    return record
+
+
+def _process_identity(pid: int) -> dict | None:
+    """Read process birth and full attach command on macOS and Linux.
+
+    Unavailable or rewritten process titles are unverifiable and skipped.
+    ps timestamps have second precision; this is a conservative identity
+    check, not an atomic process handle spanning the later signal.
+    """
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "lstart=", "-o", "args="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+        )
+        if result.returncode != 0:
+            return None
+        fields = result.stdout.strip().split(maxsplit=5)
+        if len(fields) != 6:
+            return None
+        record = {
+            "pid": pid,
+            "birth": " ".join(fields[:5]),
+            "command": shlex.split(fields[5]),
+        }
+        return _parse_pid_record(json.dumps(record))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _record_pid(pid_file: Path | None, pid: int, session_name: str) -> None:
     if pid_file is None:
+        return
+    record = _process_identity(pid)
+    if record is None or record["command"][3] != exact_target(session_name):
         return
     try:
         pid_file.parent.mkdir(parents=True, exist_ok=True)
         with pid_file.open("a") as f:
-            f.write(f"{pid}\n")
+            f.write(json.dumps(record) + "\n")
     except OSError:
         log.debug("Failed to record PID %d", pid)
 
@@ -331,7 +413,11 @@ def _unrecord_pid(pid_file: Path | None, pid: int) -> None:
         if not pid_file.exists():
             return
         lines = pid_file.read_text().strip().split("\n")
-        remaining = [ln for ln in lines if ln.strip() and ln.strip() != str(pid)]
+        remaining = [
+            ln
+            for ln in lines
+            if ln.strip() and (record := _parse_pid_record(ln)) is not None and record["pid"] != pid
+        ]
         pid_file.write_text("\n".join(remaining) + "\n" if remaining else "")
     except OSError:
         log.debug("Failed to unrecord PID %d", pid)

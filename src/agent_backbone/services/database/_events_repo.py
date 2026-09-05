@@ -9,6 +9,24 @@ from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 
 class EventRepo(Repo):
+    async def poll_cursor(self, repo: str) -> str | None:
+        """The persisted GitHub replay boundary, not an event receipt time."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text("SELECT since FROM poll_cursors WHERE repo = :repo"), {"repo": repo}
+            )
+            return result.scalar_one_or_none()
+
+    async def save_poll_cursor(self, repo: str, since: str) -> None:
+        async with self._tx() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO poll_cursors (repo, since) VALUES (:repo, :since) "
+                    "ON CONFLICT (repo) DO UPDATE SET since = excluded.since"
+                ),
+                {"repo": repo, "since": since},
+            )
+
     async def record(
         self,
         *,
@@ -85,7 +103,7 @@ class EventRepo(Repo):
             return [dict(row._mapping) for row in result.fetchall()]
 
     async def last_time_by_repo(self) -> dict[str, str]:
-        """Most recent ``received_at`` per repository (for status and backfill)."""
+        """Most recent ``received_at`` per repository (for status)."""
         async with self._tx() as conn:
             result = await conn.execute(
                 text(

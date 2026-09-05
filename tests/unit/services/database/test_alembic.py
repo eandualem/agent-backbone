@@ -19,6 +19,7 @@ _EXPECTED_TABLES = {
     "events",
     "issue_dependencies",
     "message_queue",
+    "poll_cursors",
     "settings",
     "swarms",
 }
@@ -141,6 +142,43 @@ async def test_unknown_stamped_revision_is_restamped_after_squash(tmp_path):
         stored = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
     assert stored != "deadbeef0000"
     await db2.stop()
+
+
+async def test_old_sqlite_schema_gains_cursor_table_on_restart(tmp_path):
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'before-cursors.db'}"
+    async with BackboneDB.connect(url) as db:
+        await db.events.record(delivery_id="kept", source="poll", event_type="test")
+        async with db.engine.begin() as conn:
+            await conn.execute(text("DROP TABLE poll_cursors"))
+            await conn.execute(text("UPDATE alembic_version SET version_num='pre_cursor_squash'"))
+    async with BackboneDB.connect(url) as db:
+        await db.events.save_poll_cursor("acme/a", "2026-01-01T00:00:00Z")
+        assert await db.events.poll_cursor("acme/a") == "2026-01-01T00:00:00Z"
+        assert len(await db.events.query()) == 1
+
+
+async def test_old_schema_gains_new_tables_without_startup_create_all(tmp_path):
+    """The PostgreSQL migration path: no SQLite startup create_all to fill gaps."""
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'old-direct.db'}"
+    async with BackboneDB.connect(url) as db:
+        await db.events.record(delivery_id="preserved", source="poll", event_type="test")
+        async with db.engine.begin() as conn:
+            await conn.execute(text("DROP TABLE poll_cursors"))
+            await conn.execute(text("UPDATE alembic_version SET version_num='old_squash'"))
+        # Invoke migrations directly, bypassing start() and its SQLite shortcut.
+        await db._run_migrations()
+        await db.events.save_poll_cursor("acme/a", "2026-01-01T00:00:00Z")
+        assert await db.events.poll_cursor("acme/a") == "2026-01-01T00:00:00Z"
+        assert (await db.events.query())[0]["delivery_id"] == "preserved"
+        async with db.engine.connect() as conn:
+            stamp = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
+        assert stamp != "old_squash"
+        # The repaired schema remains valid and idempotent on another run.
+        await db._run_migrations()
 
 
 async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_path):

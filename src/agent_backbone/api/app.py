@@ -65,6 +65,7 @@ def _register_jobs(app: FastAPI):
         return {
             "deliveries": await state.db.deliveries.prune(days),
             "events": await state.db.events.prune(days),
+            "queue": await state.db.queue.prune(days),
             "action_log_lines": rotate_action_log(state.config.action_log_path),
         }
 
@@ -106,7 +107,7 @@ def _register_jobs(app: FastAPI):
                 "github-poll", config.github.poll_interval_seconds, poller.run, run_immediately=True
             )
         elif config.github_intake == "webhook" and config.github.backfill_on_start:
-            scheduler.add("github-backfill", 24 * 3600, poller.run, run_immediately=True)
+            scheduler.add("github-backfill", 0, poller.run, run_immediately=True, once=True)
     return scheduler
 
 

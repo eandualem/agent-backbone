@@ -73,10 +73,28 @@ class TestGetIssue:
         assert resp.json()["number"] == 1
         assert resp.json()["labels"]["targets"] == ["ike"]
 
-    async def test_not_found(self, api_client, auth_headers, gh):
-        gh.get_issue.side_effect = RuntimeError("404")
+    async def test_unexpected_error_is_500_not_404(self, api_client, auth_headers, gh):
+        gh.get_issue.side_effect = RuntimeError("boom")
+        resp = await api_client.get(f"/api/issues/999?repo={TEST_REPO}", headers=auth_headers)
+        assert resp.status_code == 500
+
+    async def test_real_github_404_stays_404(self, api_client, auth_headers, gh):
+        import httpx
+
+        gh.get_issue.side_effect = httpx.HTTPStatusError(
+            "not found",
+            request=httpx.Request("GET", "https://api.github.com/repos/a/b/issues/999"),
+            response=httpx.Response(404),
+        )
         resp = await api_client.get(f"/api/issues/999?repo={TEST_REPO}", headers=auth_headers)
         assert resp.status_code == 404
+
+    async def test_github_outage_is_502_not_404(self, api_client, auth_headers, gh):
+        import httpx
+
+        gh.get_issue.side_effect = httpx.ConnectError("connection refused")
+        resp = await api_client.get(f"/api/issues/1?repo={TEST_REPO}", headers=auth_headers)
+        assert resp.status_code == 502
 
 
 class TestComments:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import respx
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import (
@@ -17,11 +18,113 @@ from agent_backbone.models import (
     ReviewData,
     parse_from_tag,
 )
+from agent_backbone.services.github import API_BASE, GitHubClient
+from agent_backbone.services.routing import list_open_queue_for_target
 from agent_backbone.services.routing._router import issue_dispatcher
 from agent_backbone.services.routing._targets import route_issue
 from tests.conftest import TEST_REPO, make_config
 
 OTHER_REPO = "acme/app"
+
+
+class TestCompleteWorkQueue:
+    async def test_swarm_member_only_receives_explicit_work(self, tmp_path):
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={
+                    "app": AgentSpec(name="app", dir="/app", repo=OTHER_REPO),
+                    "scout": AgentSpec(
+                        name="scout", dir="/swarm", repo=OTHER_REPO, tags=("swarm:audit",)
+                    ),
+                }
+            ),
+        )
+        unlabelled = IssueData(number=1, title="Owner work", repo_full_name=OTHER_REPO)
+        explicit = IssueData(
+            number=2,
+            title="Scout work",
+            repo_full_name=OTHER_REPO,
+            labels=ParsedLabels(targets=["scout"]),
+        )
+        gh = AsyncMock()
+
+        async def listing(**kwargs):
+            labels = kwargs.get("labels")
+            return (
+                [explicit]
+                if labels == ["for:scout"]
+                else ([] if labels else [unlabelled, explicit])
+            )
+
+        gh.list_issues.side_effect = listing
+        assert [i.number for i in await list_open_queue_for_target(config, "scout", gh)] == [2]
+        assert [i.number for i in await list_open_queue_for_target(config, "app", gh)] == [1]
+
+    @pytest.mark.parametrize("targets", [[], ["app"]])
+    async def test_self_created_issue_stays_suppressed_on_monitor_tick(self, tmp_path, db, targets):
+        from agent_backbone.services.agents import AgentState, StateSnapshot
+        from agent_backbone.services.jobs.pending import deliver_pending_issues
+
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={
+                    "app": AgentSpec(name="app", dir="/app", repo=OTHER_REPO),
+                }
+            ),
+        )
+        issue = IssueData(
+            number=1,
+            title="Own work",
+            repo_full_name=OTHER_REPO,
+            labels=ParsedLabels(sender="app", targets=targets),
+        )
+        gh = AsyncMock()
+        gh.list_issues.return_value = [issue]
+        with _patch_safe_deliver() as event_send:
+            await issue_dispatcher(
+                IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue), config, db, gh
+            )
+        event_send.assert_not_awaited()
+        with patch(
+            "agent_backbone.services.jobs.pending.safe_deliver", AsyncMock()
+        ) as pending_send:
+            result = await deliver_pending_issues(
+                config, {"app": StateSnapshot(state=AgentState.IDLE)}, db, gh
+            )
+        assert result == {"app": "no_pending"}
+        pending_send.assert_not_awaited()
+
+    @respx.mock
+    async def test_queue_sorts_blocking_issue_from_page_two(self, tmp_path):
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={
+                    "app": AgentSpec(name="app", dir="/app", watches=(OTHER_REPO,)),
+                }
+            ),
+        )
+        url = f"{API_BASE}/repos/{OTHER_REPO}/issues"
+        second = f"{url}?page=2"
+        respx.get(url__eq=second).respond(
+            json=[
+                {
+                    "number": 51,
+                    "title": "Urgent",
+                    "labels": [{"name": "for:app"}, {"name": "blocking"}],
+                }
+            ]
+        )
+        respx.get(url__startswith=url).respond(
+            json=[{"number": n, "labels": [{"name": "for:app"}]} for n in range(1, 51)],
+            headers={"Link": f'<{second}>; rel="next"'},
+        )
+        async with GitHubClient(config) as gh:
+            issues = await list_open_queue_for_target(config, "app", gh)
+        assert len(issues) == 51
+        assert issues[0].number == 51
 
 
 def _patch_safe_deliver(outcome: DeliveryOutcome = DeliveryOutcome.DELIVERED):

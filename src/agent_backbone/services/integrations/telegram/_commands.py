@@ -181,8 +181,8 @@ async def cmd_tell(
         await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
         return
     raw_message = " ".join(context.args[1:])
-    sender = bot._sender_tag(update)
-    message = f"[via:telegram from:{sender}] {raw_message}"
+    sender = bot._sender_id(update)
+    message = f"[via:telegram from:{bot._sender_tag(update)}] {raw_message}"
     report = await deliver(
         agent, message, bot.config, db=bot._db, delivery_kind="direct_message", sender=sender
     )

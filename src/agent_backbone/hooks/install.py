@@ -20,6 +20,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from agent_backbone.fs import atomic_write_text
+
 HOOK_MARKER = "agent-backbone"
 
 HOOK_FILES = (
@@ -59,11 +61,6 @@ def install_hook_files(data_dir: Path) -> Path:
             tmp.unlink(missing_ok=True)
             raise
     return hooks_dir
-
-
-def install_hook_script(data_dir: Path) -> Path:
-    """The Claude script's path once the hook files are installed."""
-    return install_hook_files(data_dir) / "claude_hook.py"
 
 
 _TAG_ARG = f"--tag {HOOK_MARKER}"
@@ -129,7 +126,7 @@ def load_settings(path: Path) -> dict:
 
 def save_settings(path: Path, settings: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2) + "\n")
+    atomic_write_text(path, json.dumps(settings, indent=2) + "\n")
 
 
 def default_python() -> str:

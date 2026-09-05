@@ -95,10 +95,23 @@ def resolve_topic_name(name: str, config: BackboneConfig) -> str | None:
 
 
 def effective_routes(config: BackboneConfig, discovery: TopicDiscovery) -> dict[int, str]:
-    """Merge discovered routes with manual config. Config wins on conflict."""
-    merged = dict(discovery.topic_routes)
-    merged.update(config.telegram.topic_routes)
-    return merged
+    """Merge discovered routes with manual config. Config wins on conflict.
+
+    Discovered threads belong to the group they were learned in: when the
+    configured group differs from the discovery's group — or the
+    discovery's group is unknown while an explicit group is set — the
+    discoveries are stale (a new group reuses thread ids; old files
+    predate group tracking) and only config applies, until a rebind
+    adopts the selected group and resets them.
+    """
+    routes: dict[int, str] = {}
+    configured = config.telegram.group_chat_id
+    if configured and discovery.group_chat_id is None:
+        pass  # unknown origin beside an explicit group: ignore until rebound
+    elif not (configured and discovery.group_chat_id and configured != discovery.group_chat_id):
+        routes = dict(discovery.topic_routes)
+    routes.update(config.telegram.topic_routes)
+    return routes
 
 
 def effective_group_chat_id(config: BackboneConfig, discovery: TopicDiscovery) -> int | None:
@@ -106,13 +119,41 @@ def effective_group_chat_id(config: BackboneConfig, discovery: TopicDiscovery) -
     return config.telegram.group_chat_id or discovery.group_chat_id
 
 
+def rebind_group(
+    config: BackboneConfig, discovery: TopicDiscovery, observed_chat_id: int | None = None
+) -> bool:
+    """Align discovery's group with the selected group before learning.
+
+    Thread ids are per-group: whenever binding sets a group different
+    from the recorded one — including adopting an unknown origin that
+    already holds learned threads (old files predate group tracking, so
+    those ids may belong to any group) — the learned routes, names and
+    closed ids are discarded. It is safer to provision again than to act
+    on unrelated thread ids. True when mutated.
+    """
+    selected = config.telegram.group_chat_id or discovery.group_chat_id or observed_chat_id
+    if selected is None or discovery.group_chat_id == selected:
+        return False
+    if discovery.topic_routes or discovery.topic_names or discovery.closed_topics:
+        discovery.topic_routes.clear()
+        discovery.topic_names.clear()
+        discovery.closed_topics.clear()
+    discovery.group_chat_id = selected
+    return True
+
+
 def agent_topic(config: BackboneConfig, discovery: TopicDiscovery, agent: str) -> int | None:
-    """The forum thread mapped to ``agent`` (explicit config wins over discovery), or None."""
+    """The forum thread mapped to ``agent`` (explicit config wins over discovery), or None.
+
+    Resolved through the merged mapping: a thread the config remapped to
+    someone else no longer answers for the agent discovery once named.
+    """
     if agent == CATCH_ALL_TOPIC:
         return None
+    merged = effective_routes(config, discovery)
     for routes in (config.telegram.topic_routes, discovery.topic_routes):
         for thread_id, session in routes.items():
-            if session == agent:
+            if session == agent and merged.get(thread_id) == agent:
                 return thread_id
     return None
 
@@ -130,21 +171,27 @@ def process_message_for_discovery(
     - topic routes from forum_topic_created in reply_to_message
 
     Returns True if state was mutated (and saved).
+
+    Discovery binds to one group: the configured ``telegram.group_chat_id``
+    when set, else the first group that spoke. A message from any other
+    (allowed) group teaches nothing — its thread ids belong to that group,
+    and must neither rebind the group nor overwrite its threads.
     """
     message = getattr(update, "message", None)
     if message is None:
         return False
 
     changed = False
-
-    # Discover group_chat_id from supergroup
     chat = getattr(message, "chat", None)
-    if chat is not None:
-        chat_type = getattr(chat, "type", None)
-        chat_id = getattr(chat, "id", None)
-        if chat_type == "supergroup" and chat_id is not None and discovery.group_chat_id != chat_id:
-            discovery.group_chat_id = chat_id
-            changed = True
+    chat_type = getattr(chat, "type", None) if chat is not None else None
+    chat_id = getattr(chat, "id", None) if chat is not None else None
+    observed = chat_id if chat_type == "supergroup" and chat_id is not None else None
+    selected = config.telegram.group_chat_id or discovery.group_chat_id
+    if observed is not None and selected is not None and observed != selected:
+        # Another allowed group: its thread ids belong to it, not to the
+        # selected group — learn nothing, not even the group id.
+        return False
+    changed = rebind_group(config, discovery, observed)
 
     # Discover topic mapping from forum_topic_created
     thread_id = getattr(message, "message_thread_id", None)

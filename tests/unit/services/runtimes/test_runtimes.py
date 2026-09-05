@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent_backbone.config import RUNTIMES as RUNTIME_IDS
 from agent_backbone.services.runtimes import (
     RUNTIMES,
@@ -108,6 +110,30 @@ class TestSendMessage:
 
 
 class TestRuntimePaste:
+    @pytest.mark.parametrize("consumed", [True, False])
+    async def test_buffered_envelope_is_verified_and_retried(self, consumed):
+        runtime = RUNTIMES["claude"]
+        envelope = "❯ [via:backbone from:sender] review this"
+        assert not runtime.prompt_has_pending_input(envelope)
+        with (
+            patch(
+                "agent_backbone.services.runtimes.base.paste_message", AsyncMock(return_value=True)
+            ),
+            patch(
+                "agent_backbone.services.runtimes.base.press_submit", AsyncMock(return_value=True)
+            ) as submit,
+            patch(
+                "agent_backbone.services.runtimes.base.capture_pane",
+                AsyncMock(side_effect=[envelope, "❯" if consumed else envelope]),
+            ),
+            patch("agent_backbone.services.runtimes.base.asyncio.sleep", AsyncMock()),
+        ):
+            assert (
+                await runtime.deliver_message("app", "[via:backbone from:sender] review this")
+                is consumed
+            )
+        assert submit.await_count == 2
+
     async def test_claude_adapter_submits_with_enter(self):
         runtime = RUNTIMES["claude"]
         with (

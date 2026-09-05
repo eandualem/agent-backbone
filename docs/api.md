@@ -9,14 +9,14 @@ running. Every route except `GET /health` and the webhook requires
 ### `GET /api/agents`
 
 Known agents plus any other live tmux session (except the backbone's own),
-with live state. Cached for 5 s.
+with live state. Cached for 5 s, including an empty result. Offline agents keep
+saved issue metadata without attempting a terminal capture.
 
 ```json
 {"items": [{
   "name": "app", "session": "app", "configured": true,
   "runtime": "claude", "model": null, "dir": "/Users/me/code/app",
   "repo": "acme/app", "watches": ["acme/web"], "tags": [], "description": "",
-  "always_on": false, "unattended": false,
   "state": "busy", "reason": null, "current_issue": 42, "current_repo": "acme/app",
   "online": true, "plan_file": null, "plan_title": null,
   "tmux_created": "2026-08-31T12:00:00+00:00", "tmux_attached": false, "tmux_windows": 1,
@@ -29,6 +29,7 @@ with live state. Cached for 5 s.
 waiting, `quota` when blocked. `GET /api/agents/{name}/inspect` also carries
 `session_id` (the runtime's own) and `last_message` (the agent's last reply,
 clipped) when the runtime's hook reports them.
+The `always_on` and `unattended` settings are exposed by `GET /api/config/agents`.
 
 ### `POST /api/agents/start`
 
@@ -55,6 +56,8 @@ Discovers (or re-registers) the agent for `dir`, starts it and — with
 Same body; starts a known agent (`dir` in the body registers it first).
 
 ### `POST /api/agents/{name}/stop`
+
+Stops a registered agent. An unregistered tmux session returns 404.
 
 ### `POST /api/agents/{name}/approve`
 
@@ -108,7 +111,9 @@ Push state from outside (same shape the hook writes): `{"state": "busy",
 "plan_file": "…", "plan_title": "…"}`. Use it for runtimes the backbone does
 not ship hooks for. It writes `<data_dir>/state/<name>.json` exactly as a
 hook would, so delivery decisions, the monitor and `agent inspect` all see
-it (`ts` defaults to now). Only registered agents have a state file.
+it (`ts` defaults to now; explicit `0` also means now). Only registered agents
+have a state file. Unknown state names, negative issue numbers, and non-finite,
+negative or more than 60 seconds future timestamps return 422.
 
 ### `PATCH /api/agents/{name}`
 
@@ -157,6 +162,10 @@ it and `queued` is true **only when a row for it exists**:
 reading the reply. Two senders with identical text are two messages; the
 same sender repeating the same text while the first copy waits is one.
 
+`from_entity` must be nonblank, at most 64 characters, and contain no square
+brackets, CR or LF; invalid senders return 422. The API key grants access, but
+the supplied sender name is not authenticated identity.
+
 This is the endpoint agents use to talk to each other.
 
 ## Config
@@ -164,7 +173,7 @@ This is the endpoint agents use to talk to each other.
 | Route | Purpose |
 |---|---|
 | `GET /api/config` | Every setting with value, default and help |
-| `GET /api/config/{key}` · `PUT /api/config/{key}` `{"value": …}` · `DELETE /api/config/{key}` | Read / set / reset one setting (applied live) |
+| `GET /api/config/{key}` · `PUT /api/config/{key}` `{"value": …}` · `DELETE /api/config/{key}` | Read / set / reset one setting (published live; startup-only consumers require [restart](configuration.md)) |
 | `GET /api/config/agents` | The known agents (non-secret) |
 
 ## Help and documentation
@@ -193,6 +202,9 @@ Every route takes `repo=owner/name`.
 
 `for:` labels are validated against known agents (400 otherwise). Without
 GitHub credentials these routes return 503.
+
+Issue lookup preserves an actual GitHub 404. Other upstream HTTP failures,
+including rate limits and outages, return a sanitized 502.
 
 ## Deliveries and events
 
@@ -278,7 +290,17 @@ emits nothing (the monitor job re-checks once a minute).
 | `data_dropped` | `{session}` — the client was too slow; redraw |
 | `error` | `{message}` |
 
-There is deliberately no `input` event.
+Malformed non-object payloads for terminal leave, resize, release, pause and
+resume are ignored. There is deliberately no `input` event.
+
+On restart, orphaned terminal viewer processes are signalled only when their
+PID, recorded process start time and full tmux attach command still match.
+Legacy PID-only records, malformed records and processes whose identity cannot
+be read are skipped. The portable process check uses second-resolution start
+times; it is not an atomic process handle across the check and signal.
+Attachments use exact session names; an offline `app` never resolves to
+`app-2`. Replacing or removing the same viewer attachment waits for its
+previous PTY cleanup to finish.
 
 ```js
 const sio = io("http://127.0.0.1:7120/sessions", { auth: { api_key: KEY } });

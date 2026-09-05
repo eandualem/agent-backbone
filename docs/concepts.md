@@ -74,7 +74,8 @@ What an agent is doing, in a vocabulary shared by every runtime:
 Where it comes from, in order: `agent start` writes `starting` when the
 session is created (trusted for two minutes at most; the first hook write
 replaces it, and a visible prompt clears it). **Hooks** the runtime itself
-runs (Claude Code today) write `<data_dir>/state/<agent>.json` on every
+runs (Claude Code, Codex, Gemini CLI and OpenCode) write
+`<data_dir>/state/<agent>.json` on every
 transition; a fresh hook state is authoritative. When there is no hook state or it is
 older than `timing.stale_threshold_seconds` (5 min), the backbone reads
 the **terminal** through the runtime's module (prompt visible, busy
@@ -91,7 +92,7 @@ Derived from the state plus the terminal, right before anything is pasted:
 | `waiting_for_human` | agent is asking a person something | no — queued |
 | `agent_working` | starting, busy, or blocked on its usage limit | no — queued (never bypassed) |
 | `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
-| `settling` | became idle less than `timing.grace_period_seconds` ago | not yet, unless `priority` |
+| `settling` | hook reported idle less than `timing.grace_period_seconds` ago | not yet, unless `priority` |
 | `ready` | idle, empty prompt | **yes** |
 | `unknown` | no signal either way | yes, best effort |
 
@@ -133,15 +134,21 @@ waiting (`already_queued`), or whether storing it failed (`failed`) —
 The same message means the same source event (a comment or review id) or
 the same sender with the same text; two senders with identical text are two
 messages. Issue deliveries are additionally
-**claimed** so two jobs can never deliver the same issue twice.
+**claimed** so concurrent jobs cannot deliver the same issue twice. Delivery
+checks and pastes are serialized per session within the running server;
+different sessions can proceed concurrently. A blocked queue drain retains its
+leased row instead of inserting an age-stamped copy.
 
 ## Event
 
 Every inbound GitHub event (webhook or poll) is stored before it is
 routed, with what the backbone did about it. That table is the activity
 feed (`GET /api/events`, `backbone status` shows the last event per
-repository) and the dedup record that makes restarts and overlapping
-polls safe.
+repository) and the dedup record used by overlapping polls. A separate durable
+cursor per repository preserves an incomplete batch across restarts, independent
+of event retention. Event deduplication does not supply per-recipient delivery
+receipts: queue storage failures during GitHub fan-out remain a known limitation
+([audit report](reviews/2026-09-05-audit-2.md#recommendations-ranked)).
 
 ## Settings
 
@@ -160,7 +167,7 @@ Background loops inside the backbone process:
 | `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
 | `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
 | `github-backfill` | once at startup | webhook intake only: catch up on what happened while the backbone was down |
-| `prune` | 6 h | delete old deliveries and events; rotate the hook action log |
+| `prune` | 6 h | delete old deliveries, events and completed queue bodies; rotate the hook action log |
 
 ## What the backbone does not decide
 

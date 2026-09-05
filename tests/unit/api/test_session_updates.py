@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agent_backbone.api.models import EnrichedAgent
@@ -10,7 +11,9 @@ from agent_backbone.api.session_updates import (
     SESSIONS_NAMESPACE,
     SESSIONS_UPDATE_EVENT,
     SessionFeed,
+    build_enriched_agent,
 )
+from agent_backbone.services.agents import write_state_file
 
 _BUILD = "agent_backbone.api.session_updates.build_session_snapshot"
 
@@ -24,6 +27,16 @@ def _feed(sio=None, **kwargs) -> SessionFeed:
 
 
 class TestSnapshot:
+    async def test_empty_snapshot_is_cached_until_invalidated(self):
+        feed = _feed()
+        with patch(_BUILD, AsyncMock(side_effect=[[], [_agent()]])) as build:
+            assert await feed.snapshot() == []
+            assert await feed.snapshot() == []
+            build.assert_awaited_once()
+            await feed.invalidate()
+            assert await feed.snapshot() == [_agent()]
+        assert build.await_count == 2
+
     async def test_ttl_hit_returns_cached_snapshot(self):
         feed = _feed()
         with patch(_BUILD, AsyncMock(side_effect=[[_agent()], [_agent("other")]])) as build:
@@ -88,6 +101,31 @@ class TestSnapshot:
             await rebuild
             await invalidate
         assert feed._cache == []
+
+
+class TestOfflineMetadata:
+    async def test_no_terminal_read_for_an_offline_agent(self, config):
+        with patch(
+            "agent_backbone.services.agents._inference.capture_pane", new_callable=AsyncMock
+        ) as capture:
+            result = await build_enriched_agent("ike", config, set())
+        assert result.state == "offline"
+        assert result.online is False
+        capture.assert_not_awaited()
+
+    async def test_offline_agent_keeps_saved_issue_metadata(self, config):
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {"state": "busy", "issue": 42, "repo": "acme/app", "ts": time.time() - 3600},
+        )
+        with patch(
+            "agent_backbone.services.agents._inference.capture_pane", new_callable=AsyncMock
+        ) as capture:
+            result = await build_enriched_agent("ike", config, set())
+        assert result.state == "offline"
+        assert result.current_issue == 42 and result.current_repo == "acme/app"
+        capture.assert_not_awaited()
 
 
 class TestEmit:

@@ -67,7 +67,10 @@ nothing to address. The bot creates and maintains those topics itself:
 In an agent's topic, plain text is delivered to that agent through the
 normal readiness checks (`[via:telegram from:<you>] …`), and the bot
 answers with the outcome (`Sent to app.` / `app is busy — queued.`). The
-agent replies into the same topic with `backbone reply "…"`, and alerts
+sender recorded for queueing is your stable Telegram user id
+(`telegram:<id>`), so two people with the same first name never share a
+queue identity; the envelope keeps the readable name. The agent replies
+into the same topic with `backbone reply "…"`, and alerts
 about it (plan waiting, session died) land there too.
 
 The **General** topic is for the whole system: `/status`, `/start
@@ -83,6 +86,17 @@ closed automatically). A topic mapped to `"agents"` is the old catch-all
 (`web: run the tests` routes to `web`). `backbone config set
 telegram.auto_topics false` turns provisioning off if you prefer to manage
 topics yourself.
+
+Discovery binds to one group: the configured `telegram.group_chat_id`
+when set, otherwise the first group that speaks. Messages from any other
+allowed group teach no routes, and a topic thread from another group
+never delivers into this group's agent. If you move the bot to a new
+group, set `telegram.group_chat_id` to it — discoveries learned in the
+old group are discarded and rediscovered (thread ids are per-group, and
+threads learned before the bot tracked groups have no known origin), while
+explicit `telegram.topic_routes` keep applying. The bot then re-learns and
+re-provisions topics in the new group; old thread ids are never closed,
+reopened or posted into there.
 
 Agents answer into their topic with `backbone reply "Done — PR #12 is
 green."` (inside the agent session; the agent name comes from

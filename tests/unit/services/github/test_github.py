@@ -246,6 +246,24 @@ class TestGetSubIssues:
 class TestPagination:
     """S1-2: a listing longer than one page is followed to the end."""
 
+    @pytest.mark.parametrize("all_pages, expected", [(False, [1]), (True, [1, 51])])
+    @respx.mock
+    async def test_issue_listing_is_bounded_unless_all_pages_requested(
+        self, config, issues_url, all_pages, expected
+    ):
+        second = f"{issues_url}?page=2"
+        if all_pages:
+            respx.get(url__eq=second).respond(
+                json=[{"number": 51}, {"number": 52, "pull_request": {}}]
+            )
+        respx.get(url__startswith=issues_url).respond(
+            json=[{"number": 1}], headers={"Link": f'<{second}>; rel="next"'}
+        )
+        async with GitHubClient(config) as gh:
+            issues = await gh.list_issues(repo_full_name=REPO, all_pages=all_pages)
+        assert [issue.number for issue in issues] == expected
+        assert len(respx.calls) == (2 if all_pages else 1)
+
     @respx.mock
     async def test_comments_since_follow_the_next_link(self, config):
         base = f"{API_BASE}/repos/eandualem/orchestration/issues/comments"

@@ -107,19 +107,28 @@ async def list_open_queue_for_target(
 
     def _add(items: list[IssueData]) -> None:
         for item in items:
+            if item.labels.sender == target:
+                continue  # the opener never receives its own work on a later monitor tick
             key = (item.repo_full_name.casefold(), item.number)
             if key not in seen:
                 seen.add(key)
                 issues.append(item)
 
     for repo in spec.repos:
-        _add(await gh.list_issues(state="open", labels=[f"for:{target}"], repo_full_name=repo))
+        _add(
+            await gh.list_issues(
+                state="open", labels=[f"for:{target}"], repo_full_name=repo, all_pages=True
+            )
+        )
 
-    if spec.repo and len(config.agents.owners(spec.repo)) == 1:
+    owners = config.agents.owners(spec.repo) if spec.repo else []
+    if len(owners) == 1 and owners[0].name == target:
         _add(
             [
                 item
-                for item in await gh.list_issues(state="open", repo_full_name=spec.repo)
+                for item in await gh.list_issues(
+                    state="open", repo_full_name=spec.repo, all_pages=True
+                )
                 if not item.labels.targets
             ]
         )

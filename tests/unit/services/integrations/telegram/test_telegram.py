@@ -31,6 +31,7 @@ def _update(text: str = "", chat_id: int = ALLOWED_CHAT, thread_id: int | None =
     update = MagicMock()
     update.effective_chat.id = chat_id
     update.effective_user.first_name = "Alice"
+    update.effective_user.id = 4242
     update.message.text = text
     update.message.message_thread_id = thread_id
     update.message.chat.type = "supergroup"
@@ -310,7 +311,7 @@ class TestTell:
             return_value=DeliveryReport(DeliveryOutcome.AGENT_WORKING, "already_queued"),
         ) as d:
             await bot.cmd_tell(update, _context(["ike", "hi"]))
-        assert d.await_args.kwargs["sender"] == "alice"
+        assert d.await_args.kwargs["sender"] == "telegram:4242"
         update.message.reply_text.assert_awaited_once_with(
             "The same message from you is already in the queue, waiting for `ike`.",
             parse_mode="Markdown",
@@ -331,6 +332,101 @@ class TestTell:
             await bot.cmd_tell(update, _context(["ike", "hi"]))
         d.assert_not_called()
         update.message.reply_text.assert_not_awaited()
+
+
+class TestSenderIdentity:
+    async def test_same_first_name_is_not_the_same_sender(self, config):
+        # Two users named Alice sending identical text are two queue
+        # identities; the envelope keeps the readable name for both.
+        bot = _bot(config)
+        senders, envelopes = [], []
+        for user_id in (1, 2):
+            update = _update()
+            update.effective_user.id = user_id
+            with patch(
+                f"{_CMD}.deliver",
+                new_callable=AsyncMock,
+                return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+            ) as d:
+                await bot.cmd_tell(update, _context(["ike", "status?"]))
+            senders.append(d.await_args.kwargs["sender"])
+            envelopes.append(d.await_args.args[1])
+        assert senders == ["telegram:1", "telegram:2"]
+        assert envelopes == ["[via:telegram from:alice] status?"] * 2
+
+    async def test_missing_user_id_is_unknown_not_a_crash(self, config):
+        bot = _bot(config)
+        update = _update()
+        update.effective_user.id = None
+        with patch(
+            f"{_CMD}.deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+        ) as d:
+            await bot.cmd_tell(update, _context(["ike", "hi"]))
+        assert d.await_args.kwargs["sender"] == "telegram:unknown"
+
+    async def test_topic_message_uses_the_stable_sender(self, config):
+        bot = _bot(config, topic_routes={42: "ike"})
+        update = _update("do the thing", thread_id=42)
+        with patch(
+            f"{_ROUTING}.deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+        ) as d:
+            await bot.handle_topic_message(update, MagicMock())
+        assert d.await_args.kwargs["sender"] == "telegram:4242"
+        assert d.await_args.args[1] == "[via:telegram from:alice] do the thing"
+
+
+class TestGroupScoping:
+    def _group_bot(self, config):
+        telegram = TelegramConfig(allowed_chat_ids=(ALLOWED_CHAT, 222), topic_routes={42: "ike"})
+        bot = TelegramService(replace(config, telegram=telegram), db=AsyncMock())
+        bot._discovery.group_chat_id = ALLOWED_CHAT
+        return bot
+
+    async def test_topic_message_from_another_allowed_group_is_ignored(self, config):
+        bot = self._group_bot(config)
+        update = _update("spill into ike", chat_id=222, thread_id=42)
+        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as d:
+            await bot.handle_topic_message(update, MagicMock())
+        d.assert_not_called()
+        # ... and it taught nothing: the selected group's discovery is intact.
+        assert bot._discovery.group_chat_id == ALLOWED_CHAT
+        assert bot._discovery.topic_routes == {}
+
+    async def test_topic_message_from_the_selected_group_routes(self, config):
+        bot = self._group_bot(config)
+        update = _update("do the thing", chat_id=ALLOWED_CHAT, thread_id=42)
+        with patch(
+            f"{_ROUTING}.deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+        ) as d:
+            await bot.handle_topic_message(update, MagicMock())
+        assert d.await_args.args[0] == "ike"
+
+    async def test_config_topic_override_wins_outbound(self, config):
+        # Discovery still names thread 7 for ike, but config remapped it to
+        # feynman: ike's replies must not land in feynman's topic.
+        bot = _bot(config, topic_routes={7: "feynman"})
+        bot._discovery.group_chat_id = ALLOWED_CHAT
+        bot._discovery.topic_routes = {7: "ike"}
+        with patch(
+            "agent_backbone.services.integrations.telegram.interface._send",
+            new_callable=AsyncMock,
+        ) as send:
+            assert await bot.reply_to_agent("ike", "hi") is False
+        send.assert_not_awaited()
+        with patch(
+            "agent_backbone.services.integrations.telegram.interface._send",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as send:
+            assert await bot.reply_to_agent("feynman", "hi") is True
+        send.assert_awaited_once()
+        assert send.await_args.kwargs.get("thread_id") == 7
 
 
 class TestTopicRouting:

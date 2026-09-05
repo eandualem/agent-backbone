@@ -187,6 +187,22 @@ class TestBuildConfig:
         config = replace(config, github_token="ghp")
         assert config.github_intake == "off"
 
+    def test_bad_port_env_falls_back_to_the_setting(self, tmp_path):
+        settings = effective_settings({"backbone.port": 7999})
+        config = build_config(
+            tmp_path, settings=settings, agents=AgentsConfig(), env={"BACKBONE_PORT": "abc"}
+        )
+        assert config.backbone.port == 7999
+
+    def test_port_env_overrides_the_setting(self, tmp_path):
+        config = build_config(
+            tmp_path,
+            settings=effective_settings({}),
+            agents=AgentsConfig(),
+            env={"BACKBONE_PORT": "7999"},
+        )
+        assert config.backbone.port == 7999
+
 
 class TestAgents:
     def test_agents_from_rows(self):

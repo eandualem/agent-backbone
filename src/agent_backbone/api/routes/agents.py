@@ -240,6 +240,7 @@ async def stop_agent(
     feed: SessionFeed = Depends(get_feed),
 ):
     """Stop an agent tmux session (never the backbone's own)."""
+    registered_agent_or_404(config, session)
     try:
         ok = await stop_agent_session(config, session)
     except ValueError as exc:

@@ -17,7 +17,7 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   do everything you can do through the API — hand it out deliberately, to
   agents whose instructions you control.
 - **Reach is limited to registered agents.** The API captures, streams and
-  types into *registered* agents only (`GET /sessions/{name}/terminal`,
+  types into *registered* agents only (`GET /api/sessions/{name}/terminal`,
   the `/terminal` namespace, `POST /messages`, plan control). Other tmux
   sessions of the same user are refused with 404, even though the process
   could reach them. `GET /plans/{name}` and Telegram `/viewplan` read plan
@@ -39,8 +39,10 @@ The backbone can type into your agents' terminals. Treat it accordingly.
 - **Provenance is convention, not authentication.** `from_entity` in
   `POST /messages` and the resulting `[via:backbone from:X]` envelope are
   whatever the caller says; the `[from:<agent>]` prefix on GitHub is the
-  same. They tell an agent who *claims* to be speaking. Anyone holding the
-  key can claim any name.
+   same. They tell an agent who *claims* to be speaking. Anyone holding the
+   key can claim any name. The sender must still fit the envelope (1–64
+   characters, no newlines or `[ ]`) so one message cannot forge a second
+   envelope — anything else is a 422.
 - **Per-agent `env` lives in the database.** "Secrets only in `.env`" is
   true for the backbone's own secrets; values you attach to an agent with
   `agent set env=` are stored with the agent record so they can be

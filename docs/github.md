@@ -69,7 +69,15 @@ Setting `GITHUB_WEBHOOK_SECRET` switches intake from poll to webhook
 (`github.intake` is `auto`). In webhook intake the backbone still runs
 **one poll at startup** (`github.backfill_on_start`) to catch what happened
 while it was down, and the monitor independently notices new open issues in
-agents' queues. All paths produce the same event; the `events` table
+agents' queues. Polling persists a replay cursor per repository before its
+first fetch. With no cursor, it starts at `github.backfill_lookback_hours`
+(including the first start after upgrading to cursor storage). A complete batch
+advances to the later of poll-start time and newest source timestamp, with two
+minutes of overlap. Fetch, hydration or dispatch failure retains the old boundary
+across restart; event retention does not remove cursors. Successful quiet polls
+also advance, so old events leave the replay window.
+
+All paths produce the same event; the `events` table
 deduplicates by delivery id and the per-issue delivery claim guarantees an
 issue reaches an agent once, so overlap is safe. For a quick real-time test
 without any tunnel, `gh webhook forward --repo=acme/app
@@ -120,11 +128,20 @@ queue stays blocked on it (`awaiting_ack`) until a comment appears. Watch
 
 `for:<agent>` issues in every repository the agent owns or watches, plus —
 if it is the sole owner of its repository — that repository's unlabelled
-open issues. "Unlabelled" means no `for:` label at all: an issue addressed
+open issues. Swarm members are not owners; their work queues contain explicitly
+targeted issues, and issues opened by the target itself are excluded.
+"Unlabelled" means no `for:` label at all: an issue addressed
 to a person (`routing.ignore_targets`) or to a name the backbone does not
-know is not the owner's. Ordered `blocking` first; then type weight (`spec-gap` 100,
-`bug` 90, `task` 50, `question` 20, `optimization` 10); then number of
-dependents; then oldest first. Tune with `priority.*` settings.
+know is not the owner's. Queue construction follows all result pages before
+ordering and acknowledgement checks.
+
+The current score adds the `blocking` bonus, type weight (`spec-gap` 100,
+`bug` 90, `task` 50, `question` 20, `optimization` 10), and an age proxy
+`max(0, 10000 - issue_number) * priority.age_tiebreaker_weight`. Lower issue
+numbers are favoured; this is not creation-time ordering across repositories.
+`priority.dependents_multiplier` is supported by the scoring helper but queue
+callers do not yet supply dependent counts. These two priority limitations are
+recorded in the [audit report](reviews/2026-09-05-audit-2.md).
 
 ## What the agent receives
 

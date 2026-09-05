@@ -12,7 +12,6 @@ from agent_backbone.services.routing._delivery import (
     DeliveryReport,
     deliver,
     is_acknowledged,
-    outcome_queues,
     queue_detail,
     safe_deliver,
 )
@@ -52,7 +51,6 @@ __all__ = [
     "get_session_intelligence",
     "is_acknowledged",
     "list_open_queue_for_target",
-    "outcome_queues",
     "queue_detail",
     "queue_scope",
     "routing_in_flight",

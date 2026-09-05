@@ -6,7 +6,7 @@ routed by four relationships for an issue in repository R:
 
 | Relationship | How | Effect |
 |---|---|---|
-| owner | your directory is a checkout of R | unlabelled issues are your work |
+| owner | your directory is a checkout of R (swarm members excepted: their worktree is R, but they are not owners) | unlabelled issues are your work |
 | `for:<agent>` | label on the issue | routes to that agent's queue |
 | `from:<agent>` | label on the issue | comments and the close are reported to the opener |
 | watch | `backbone agent watch R` | notified of new issues; `for:` labels route to you |
