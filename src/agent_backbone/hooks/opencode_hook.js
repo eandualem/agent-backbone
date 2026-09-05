@@ -13,65 +13,28 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
 
 const STATE_IDLE = "idle";
 const STATE_BUSY = "busy";
 const STATE_WAITING = "waiting_for_human";
 const REASON_PERMISSION = "permission";
-const GH_COMMENT = /\bgh\s+issue\s+comment\s+(?:\S+\s+)*?(\d+)\b/;
-const GH_REPO = /(?:--repo|-R)[\s=]+([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/;
-const GH_PR_CREATE = /\bgh\s+pr\s+create\b/;
-const GH_HEAD = /(?:--head|-H)[\s=]+(\S+)/;
-const REMOTE = /github\.com[:/]([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
-
-function git(cwd, args) {
+async function shellActions(command, cwd, phase) {
+  // Reuse the shipped stdlib parser; never interpret quoted examples as commands.
   try {
-    return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000 }).trim();
+    const helper = fileURLToPath(new URL("backbone_state.py", import.meta.url));
+    const stdout = await new Promise((resolve, reject) => {
+      const child = execFile("python3", [helper, "--shell-actions"], {
+        encoding: "utf8", timeout: 15000,
+      }, (error, output) => error ? reject(error) : resolve(output));
+      child.stdin.on("error", reject);
+      child.stdin.end(JSON.stringify({ command, cwd, phase }));
+    });
+    return JSON.parse(stdout);
   } catch {
-    return null;
+    return []; // Hook failures must not stop the agent.
   }
-}
-
-function shellActions(command, cwd) {
-  const actions = [];
-  const comment = GH_COMMENT.exec(command);
-  if (comment) {
-    const action = { ts: Date.now() / 1000, action: "comment", issue: Number(comment[1]) };
-    const repo = GH_REPO.exec(command);
-    if (repo) action.repo = repo[1];
-    actions.push(action);
-  }
-  if (GH_PR_CREATE.test(command)) {
-    // Same identity the Python hooks record: the head repository (the
-    // checkout's origin, or the owner named by --head owner:branch) and branch.
-    const action = { ts: Date.now() / 1000, action: "pull_request" };
-    const remote = REMOTE.exec(git(cwd, ["remote", "get-url", "origin"]) ?? "");
-    const origin = remote ? remote[1] : null;
-    const repoFlag = GH_REPO.exec(command);
-    const repo = repoFlag ? repoFlag[1] : origin;
-    let headRepo = origin;
-    let branch;
-    const headFlag = GH_HEAD.exec(command);
-    if (headFlag) {
-      const value = headFlag[1];
-      const colon = value.lastIndexOf(":");
-      if (colon > 0) {
-        const baseName = (repo ?? origin ?? "").split("/").pop();
-        headRepo = baseName ? `${value.slice(0, colon)}/${baseName}` : null;
-        branch = value.slice(colon + 1);
-      } else {
-        branch = value;
-      }
-    } else {
-      branch = git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    }
-    if (repo) action.repo = repo;
-    if (headRepo) action.head_repo = headRepo;
-    if (branch) action.branch = branch;
-    actions.push(action);
-  }
-  return actions;
 }
 
 function target() {
@@ -182,10 +145,17 @@ export const AgentBackbone = async ({ directory } = {}) => {
       }
     },
     "tool.execute.before": async (input, output) => {
-      if (isChild(input?.sessionID)) return;
+      if (isChild(input?.sessionID) || input?.tool !== "bash") return;
       const command = output?.args?.command;
       if (typeof command !== "string") return;
-      for (const action of shellActions(command, directory ?? process.cwd())) appendAction(t, action);
+      for (const action of await shellActions(command, directory ?? process.cwd(), "intent")) appendAction(t, action);
+    },
+    "tool.execute.after": async (input, output) => {
+      if (isChild(input?.sessionID) || input?.tool !== "bash") return;
+      if (output?.metadata?.exit !== 0 || output?.metadata?.timeout) return;
+      const command = input?.args?.command;
+      if (typeof command !== "string") return;
+      for (const action of await shellActions(command, directory ?? process.cwd(), "succeeded")) appendAction(t, action);
     },
   };
 };

@@ -13,7 +13,9 @@ Standard library only — it must run under any ``python3``.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 
 try:
@@ -21,6 +23,29 @@ try:
 except ImportError:  # copied next to backbone_state.py, outside the package
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import backbone_state as bb  # type: ignore[no-redef]
+
+
+def tool_succeeded(payload: dict) -> bool:
+    """Codex emits PostToolUse for failed Bash commands too; inspect its result."""
+    response = payload.get("tool_response")
+    if isinstance(response, str):
+        try:
+            response = json.loads(response)
+        except ValueError:
+            match = re.match(
+                r"\A(?:Chunk ID: [^\n]+\n)?Wall time: [^\n]+\n"
+                r"(?:Process exited with code|Exit code:) (\d+)\n(?:Final output|Output):",
+                response,
+            )
+            return bool(match and match.group(1) == "0")
+    if isinstance(response, dict):
+        if any(response.get(key) for key in ("isError", "is_error", "error", "interrupted")):
+            return False
+        if isinstance(response.get("metadata"), dict):
+            return bb.response_succeeded(response["metadata"])
+        if (payload.get("tool_name") or "").startswith("mcp__"):
+            return isinstance(response.get("content"), list)
+    return bb.response_succeeded(response)
 
 
 def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | None]:
@@ -40,16 +65,14 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
     if event == "PermissionRequest":
         return state(bb.STATE_WAITING, bb.REASON_PERMISSION), None
     if event == "PreToolUse":
-        # A tool runs: any permission dialog is behind us. Outgoing GitHub
-        # actions are logged here, before the command runs, so the webhook
-        # for the agent's own comment or pull request cannot beat the log —
-        # and again after it ran, with the branch as it actually was.
-        tool = payload.get("tool_name", "") or ""
-        actions = bb.tool_actions(tool, payload.get("tool_input") or {}, payload.get("cwd"), now)
-        return state(bb.STATE_BUSY), actions
+        # Intent suppresses a fast self-event, but does not acknowledge work.
+        actions = bb.action_records(payload, now, phase="intent")
+        return state(bb.STATE_BUSY), actions or None
     if event == "PostToolUse":
-        tool = payload.get("tool_name", "") or ""
-        return None, bb.tool_actions(tool, payload.get("tool_input") or {}, payload.get("cwd"), now)
+        actions = (
+            bb.action_records(payload, now, phase="succeeded") if tool_succeeded(payload) else []
+        )
+        return None, actions
     if event in ("Stop", "Interrupt"):
         return state(
             bb.STATE_IDLE, last_message=bb.clip_message(payload.get("last_assistant_message"))

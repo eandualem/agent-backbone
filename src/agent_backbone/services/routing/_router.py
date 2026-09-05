@@ -40,14 +40,19 @@ log = logging.getLogger(__name__)
 SOURCE = "issue-dispatcher"
 
 
-def _resolve_commenter_entity(event: IssueEvent, config: BackboneConfig) -> str | None:
+def _resolve_commenter_entity(
+    event: IssueEvent, config: BackboneConfig, *, include_intent: bool = True
+) -> str | None:
     """Who made the comment: ``[from:X]`` tag first, then the hook action log."""
     if event.comment and event.comment.body:
         entity = parse_from_tag(event.comment.body)
         if entity:
             return entity
     return find_outgoing_comment(
-        event.issue.number, action_log=config.action_log_path, repo=event.issue.repo_full_name
+        event.issue.number,
+        action_log=config.action_log_path,
+        repo=event.issue.repo_full_name,
+        include_intent=include_intent,
     )
 
 
@@ -172,8 +177,10 @@ async def _dispatch_comment(
     commenter_session: str | None = None
     if commenter:
         commenter_session = resolve_entity_session(commenter, config)
+    acknowledged = _resolve_commenter_entity(event, config, include_intent=False)
+    if acknowledged:
         try:
-            await db.acks.record(event.issue.number, commenter, repo=repo)
+            await db.acks.record(event.issue.number, acknowledged, repo=repo)
         except Exception:
             log.exception("Failed to record acknowledgment (non-fatal)")
 
@@ -243,10 +250,21 @@ async def _dispatch_pull_request(
         action_log=config.action_log_path,
         base_repo=repo,
     )
-    if opener:
+    confirmed = (
+        find_outgoing_pull_request(
+            event.issue.head_repo,
+            event.issue.head_ref,
+            action_log=config.action_log_path,
+            base_repo=repo,
+            include_intent=False,
+        )
+        if opener
+        else None
+    )
+    if confirmed:
         for number in event.issue.linked_issues():
             try:
-                await db.acks.record(number, opener, repo=repo)
+                await db.acks.record(number, confirmed, repo=repo)
             except Exception:
                 log.exception("Failed to record acknowledgment (non-fatal)")
     routing = route_issue(event.issue, event.event_type, config)

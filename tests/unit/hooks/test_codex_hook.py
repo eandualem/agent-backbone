@@ -103,7 +103,10 @@ class TestMainWritesStateTheBackboneReads:
 class TestActionsAreLoggedBeforeAndAfter:
     def test_post_tool_use_logs_the_same_shell_actions(self):
         payload = _payload(
-            "PostToolUse", tool_name="Bash", tool_input={"command": "gh issue comment 5 -b ok"}
+            "PostToolUse",
+            tool_name="Bash",
+            tool_input={"command": "gh issue comment 5 -b ok"},
+            tool_response={"exit_code": 0, "output": "created"},
         )
         record, actions = hook.derive(payload, None)
         assert record is None and actions and actions[0]["issue"] == 5

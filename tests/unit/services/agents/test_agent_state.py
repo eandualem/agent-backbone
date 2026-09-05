@@ -491,6 +491,7 @@ def _action_entry(session="ike", action="comment", issue=42, ts=None):
         "ts": ts if ts is not None else time.time(),
         "session": session,
         "action": action,
+        "phase": "succeeded",
         "issue": issue,
     }
 
@@ -560,7 +561,15 @@ class TestRotateActionLog:
         path = tmp_path / "actions.jsonl"
         path.write_text(
             "".join(
-                json.dumps({"ts": float(i), "session": "ike", "action": "comment", "issue": i})
+                json.dumps(
+                    {
+                        "ts": float(i),
+                        "session": "ike",
+                        "action": "comment",
+                        "issue": i,
+                        "phase": "succeeded",
+                    }
+                )
                 + "\n"
                 for i in range(lines)
             )

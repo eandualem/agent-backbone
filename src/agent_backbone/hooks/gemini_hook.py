@@ -14,6 +14,7 @@ Standard library only — it must run under any ``python3``.
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 try:
@@ -21,6 +22,27 @@ try:
 except ImportError:  # copied next to backbone_state.py, outside the package
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import backbone_state as bb  # type: ignore[no-redef]
+
+
+def tool_succeeded(payload: dict) -> bool:
+    """Gemini 0.46 omits a zero exit code but marks failures and background handles."""
+    response = payload.get("tool_response")
+    if not isinstance(response, dict) or response.get("error"):
+        return False
+    if bb.response_succeeded(response):
+        return True
+    data = response.get("data") or {}
+    if not isinstance(data, dict) or data.get("isError") or data.get("pid"):
+        return False
+    content = response.get("llmContent")
+    display = response.get("display") or {}
+    return (
+        isinstance(content, str)
+        and content.startswith("Output: ")
+        and isinstance(display, dict)
+        and display.get("name") == "Shell"
+        and not re.search(r"(?m)^(?:Error|Exit Code|Signal|Background PIDs):", content)
+    )
 
 
 def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | None]:
@@ -49,11 +71,9 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
         # A tool runs: any permission dialog is behind us.
         return state(bb.STATE_BUSY), None
     if event == "AfterTool":
-        tool = payload.get("tool_name", "") or ""
-        tool_input = payload.get("tool_input") or {}
-        command = tool_input.get("command", "") or ""
-        actions = bb.shell_actions(command, payload.get("cwd"), now)
-        return None, actions or bb.comment_action_from_mcp(tool, tool_input, now)
+        return None, (
+            bb.action_records(payload, now, phase="succeeded") if tool_succeeded(payload) else []
+        )
     return None, None
 
 

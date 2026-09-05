@@ -66,7 +66,7 @@ class ClaudeCode(Runtime):
         ("UserPromptSubmit", None),
         ("Stop", None),
         ("Notification", None),
-        ("PreToolUse", "ExitPlanMode|AskUserQuestion"),
+        ("PreToolUse", "ExitPlanMode|AskUserQuestion|Bash|mcp__.*__add_issue_comment"),
         ("PostToolUse", ""),
     )
     hook_timeout = 10  # seconds

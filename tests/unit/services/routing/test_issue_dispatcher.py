@@ -502,6 +502,23 @@ class TestIssueDispatcher:
 
 
 class TestCommentRouting:
+    async def test_intent_suppresses_echo_without_acknowledging(self, config, mock_db):
+        event = _comment_event(42, "leo", ["ike"], "comment arriving before the hook result")
+
+        def outgoing(*args, include_intent=True, **kwargs):
+            return "ike" if include_intent else None
+
+        with (
+            _patch_safe_deliver(DeliveryOutcome.DELIVERED),
+            patch(
+                "agent_backbone.services.routing._router.find_outgoing_comment",
+                side_effect=outgoing,
+            ),
+        ):
+            result = await issue_dispatcher(event, config, mock_db)
+        assert result.delivered == ["leo"]
+        mock_db.acks.record.assert_not_awaited()
+
     async def test_unknown_commenter_notifies_everyone(self, config, mock_db):
         event = _comment_event(4, "leo", ["ike"], "Test comment")
         with _patch_safe_deliver(DeliveryOutcome.DELIVERED), _patch_find_outgoing(None):
