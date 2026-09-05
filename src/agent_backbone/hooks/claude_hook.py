@@ -75,16 +75,20 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
             ), None
         if tool == "AskUserQuestion":
             return state(STATE_WAITING, REASON_QUESTION), None
-        return None, None
-    if event == "PostToolUse":
-        tool = payload.get("tool_name", "")
+        # Outgoing GitHub actions are logged *before* the command runs: the
+        # webhook for a `gh pr create` can arrive before a compound command
+        # finishes, and then the backbone announces the agent's own pull
+        # request back to it.
         tool_input = payload.get("tool_input") or {}
-        if tool in ("ExitPlanMode", "AskUserQuestion"):
-            return state(STATE_BUSY), None
         if tool == "Bash":
             command = tool_input.get("command", "") or ""
             return None, bb.shell_actions(command, payload.get("cwd"), now)
         return None, bb.comment_action_from_mcp(tool, tool_input, now)
+    if event == "PostToolUse":
+        tool = payload.get("tool_name", "")
+        if tool in ("ExitPlanMode", "AskUserQuestion"):
+            return state(STATE_BUSY), None
+        return None, None
     return None, None
 
 

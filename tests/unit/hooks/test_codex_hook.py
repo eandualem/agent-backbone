@@ -66,9 +66,9 @@ class TestDerive:
     )
     def test_comment_actions(self, tool_input, issue):
         record, actions = hook.derive(
-            _payload("PostToolUse", tool_name="Bash", tool_input=tool_input), None
+            _payload("PreToolUse", tool_name="Bash", tool_input=tool_input), None
         )
-        assert record is None
+        assert record["state"] == "busy"  # a tool is about to run
         assert (actions[0]["issue"] if actions else None) == issue
 
     def test_unknown_events_write_nothing(self):
@@ -77,7 +77,7 @@ class TestDerive:
 
 class TestAHookNeverFailsTheCli:
     def test_an_unexpected_payload_shape_exits_zero(self, tmp_path):
-        payload = _payload("PostToolUse", tool_name="Bash", tool_input=["not", "a", "dict"])
+        payload = _payload("PreToolUse", tool_name="Bash", tool_input=["not", "a", "dict"])
         with patch.object(bb.sys, "stdin", io.StringIO(json.dumps(payload))):
             assert hook.main(["--state-dir", str(tmp_path), "--agent", "cx"]) == 0
 

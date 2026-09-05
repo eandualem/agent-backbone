@@ -8,6 +8,8 @@ the envelope is untrusted input from the tracker.
 
 from __future__ import annotations
 
+import re
+
 from agent_backbone.models import CommentData, IssueData, ReviewData, parse_from_tag
 
 
@@ -43,6 +45,24 @@ def format_pull_request_notification(issue: IssueData) -> str:
 
 
 _PREVIEW_CHARS = 500
+_ENVELOPE_RE = re.compile(r"^\[via:[^\]]*\]")
+QUEUED_AGE_NOTED_AFTER = 120.0
+"""Seconds a message must have waited in the queue before its delivery says so."""
+
+
+def stamp_queued_age(message: str, waited_seconds: float) -> str:
+    """``message`` with ``(queued N min ago)`` after its envelope when it waited
+    long enough to matter: a review or comment drained after twenty minutes
+    reads as current otherwise, and the agent acts on stale news."""
+    if waited_seconds < QUEUED_AGE_NOTED_AFTER:
+        return message
+    minutes = int(waited_seconds // 60)
+    age = f"{minutes} min" if minutes < 120 else f"{minutes // 60} h"
+    note = f"(queued {age} ago)"
+    match = _ENVELOPE_RE.match(message)
+    if match:
+        return f"{message[: match.end()]} {note}{message[match.end() :]}"
+    return f"{note} {message}"
 
 
 def _strip_html_comments(text: str) -> str:

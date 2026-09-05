@@ -118,15 +118,14 @@ class TestDerive:
             ("Bash", {"command": "gh issue comment 17 --body 'done'"}, 17),
             ("Bash", {"command": "gh issue comment --repo a/b 9 -b x"}, 9),
             ("Bash", {"command": "gh issue comment 12 -R acme/app -b x"}, 12),
+            ("Bash", {"command": "gh pr comment 140 --repo acme/app --body x"}, 140),
             ("mcp__github__add_issue_comment", {"issue_number": 5}, 5),
             ("Bash", {"command": "ls"}, None),
             ("Edit", {"file_path": "x"}, None),
         ],
     )
     def test_comment_actions(self, tool, tool_input, issue):
-        _, action = hook.derive(
-            _payload("PostToolUse", tool_name=tool, tool_input=tool_input), None
-        )
+        _, action = hook.derive(_payload("PreToolUse", tool_name=tool, tool_input=tool_input), None)
         entries = action if isinstance(action, list) else ([action] if action else [])
         if issue is None:
             assert entries == []
@@ -138,7 +137,7 @@ class TestPullRequestActions:
     def test_gh_pr_create_with_explicit_repo_and_head_needs_no_git(self):
         _, actions = hook.derive(
             _payload(
-                "PostToolUse",
+                "PreToolUse",
                 tool_name="Bash",
                 tool_input={"command": "gh pr create --repo acme/app --head feat/x --title t"},
             ),
@@ -161,7 +160,7 @@ class TestPullRequestActions:
 
         with patch.object(bb.subprocess, "run", side_effect=_run):
             _, actions = hook.derive(
-                _payload("PostToolUse", tool_name="Bash", tool_input={"command": "gh pr create"}),
+                _payload("PreToolUse", tool_name="Bash", tool_input={"command": "gh pr create"}),
                 None,
             )
         (action,) = actions
@@ -171,7 +170,7 @@ class TestPullRequestActions:
     def test_a_compound_command_logs_both_actions(self):
         _, actions = hook.derive(
             _payload(
-                "PostToolUse",
+                "PreToolUse",
                 tool_name="Bash",
                 tool_input={"command": "gh issue comment 4 -b x && gh pr create --head b"},
             ),
@@ -194,7 +193,7 @@ class TestPullRequestActions:
         with patch.object(bb.subprocess, "run", side_effect=_run):
             _, actions = hook.derive(
                 _payload(
-                    "PostToolUse",
+                    "PreToolUse",
                     tool_name="Bash",
                     tool_input={"command": "gh pr create --repo acme/app --title t"},
                 ),
@@ -208,7 +207,7 @@ class TestPullRequestActions:
     def test_head_owner_colon_branch_names_the_fork(self):
         _, actions = hook.derive(
             _payload(
-                "PostToolUse",
+                "PreToolUse",
                 tool_name="Bash",
                 tool_input={"command": "gh pr create --repo acme/app --head forker:feat/q"},
             ),
@@ -272,7 +271,7 @@ class TestMainWritesStateTheBackboneReads:
 
     def test_action_log_appended(self, tmp_path):
         payload = _payload(
-            "PostToolUse", tool_name="Bash", tool_input={"command": "gh issue comment 8 -b ok"}
+            "PreToolUse", tool_name="Bash", tool_input={"command": "gh issue comment 8 -b ok"}
         )
         assert self._run(tmp_path, payload) == 0
         line = json.loads((tmp_path / "actions.jsonl").read_text().strip())

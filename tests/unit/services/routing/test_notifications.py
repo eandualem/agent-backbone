@@ -287,3 +287,21 @@ class TestReviewAnchorsAndPreviews:
         assert _preview("<!--" * 20000 + " tail") == ""
         assert _preview("<!-- a --> kept <!-- b --> too") == "kept too"
         assert time.perf_counter() - started < 1.0
+
+
+class TestQueuedAge:
+    """A drained delivery says how long it waited, after its envelope."""
+
+    def test_short_waits_are_silent(self):
+        from agent_backbone.services.routing import stamp_queued_age
+
+        assert stamp_queued_age("[via:github pr:1] Review", 30) == "[via:github pr:1] Review"
+
+    def test_long_waits_are_stated_after_the_envelope(self):
+        from agent_backbone.services.routing import stamp_queued_age
+
+        assert (
+            stamp_queued_age("[via:github pr:1] Review on x", 15 * 60)
+            == "[via:github pr:1] (queued 15 min ago) Review on x"
+        )
+        assert stamp_queued_age("no envelope", 3 * 3600).startswith("(queued 3 h ago) no")
