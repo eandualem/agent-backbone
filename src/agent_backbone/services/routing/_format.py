@@ -8,6 +8,8 @@ the envelope is untrusted input from the tracker.
 
 from __future__ import annotations
 
+import re
+
 from agent_backbone.models import CommentData, IssueData, ReviewData, parse_from_tag
 
 
@@ -42,6 +44,17 @@ def format_pull_request_notification(issue: IssueData) -> str:
     )
 
 
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+_PREVIEW_CHARS = 500
+
+
+def _preview(body: str) -> str:
+    """The first 500 characters that mean something: HTML comments (bots
+    open with several) and runs of whitespace carry nothing to an agent."""
+    text = " ".join(_HTML_COMMENT_RE.sub("", body).split())
+    return text if len(text) <= _PREVIEW_CHARS else text[:_PREVIEW_CHARS] + "..."
+
+
 def format_comment_notification(
     issue: IssueData,
     comment: CommentData,
@@ -54,9 +67,7 @@ def format_comment_notification(
         idx = body.index("]") + 1
         body = body[idx:].lstrip()
 
-    preview = body[:500].replace("\n", " ")
-    if len(body) > 500:
-        preview += "..."
+    preview = _preview(body)
 
     attribution = commenter_entity if commenter_entity else comment.user_login
 
@@ -117,7 +128,8 @@ _REVIEW_STATES = {
 
 
 def format_review_notification(issue: IssueData, review: ReviewData) -> str:
-    """A pull request review: verdict, summary preview (500 chars) and link.
+    """A pull request review: verdict, the reviewed commit, summary preview
+    (500 chars) and link.
 
     Inline comments are not relayed; the link points at the review.
     """
@@ -125,16 +137,17 @@ def format_review_notification(issue: IssueData, review: ReviewData) -> str:
     tag = parse_from_tag(body)
     if tag:
         body = body[body.index("]") + 1 :].lstrip()
-    preview = body[:500].replace("\n", " ")
-    if len(body) > 500:
-        preview += "..."
+    preview = _preview(body)
     verdict = _REVIEW_STATES.get(review.state, review.state or "review")
     summary = f'"{preview}"' if preview else "(no summary; see the inline comments)"
     attribution = tag or review.user_login
     link = review.html_url or issue.html_url
+    # The commit is what lets the agent tell a review of its latest push
+    # from one of an earlier commit arriving late.
+    anchor = f" of {review.commit_id[:7]}" if review.commit_id else ""
     return (
         f"[via:github pr:{issue.number}] "
-        f'Review on {_issue_ref(issue)} "{issue.title}" from {attribution} ({verdict}): '
+        f'Review on {_issue_ref(issue)} "{issue.title}" from {attribution} ({verdict}){anchor}: '
         f"{summary} Link: {link}"
     ).rstrip()
 
