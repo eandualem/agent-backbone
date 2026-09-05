@@ -216,8 +216,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
         """The ``session`` in a client payload, or "" when it is malformed.
 
         Socket.IO payloads are client input: ``null``, a string or a list
-        must not reach ``dict.get`` (``AttributeError``) and leak the
-        subscription the handler was about to clean up.
+        must not reach ``dict.get`` (``AttributeError``).
         """
         if not isinstance(data, dict):
             return ""

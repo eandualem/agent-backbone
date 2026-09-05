@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import secrets
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -75,7 +76,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         # the flag (only `init` takes --data-dir): say so now, or the next
         # `secrets set` lands in the default directory's .env instead.
         print("\nCustom data dir — export it before any other backbone command:")
-        print(f"  export BACKBONE_DATA_DIR={data_dir}")
+        print(f"  export BACKBONE_DATA_DIR={shlex.quote(str(data_dir))}")
     return 0
 
 

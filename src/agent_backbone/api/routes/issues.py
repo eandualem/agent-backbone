@@ -98,12 +98,18 @@ async def get_issue(
     """Get a single issue by number with priority score."""
     try:
         issue = await gh.get_issue(number, repo_full_name=repo)
-    except httpx.HTTPError as e:
-        # An outage, a bad token or a rate limit is not "not found": a 404
-        # would tell automation the issue is gone.
-        raise HTTPException(status_code=502, detail=f"GitHub request failed: {e}") from e
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            # GitHub itself says the issue is gone — that 404 is real.
+            raise HTTPException(status_code=404, detail=f"Issue #{number} not found") from e
+        # Anything else HTTP (rate limit, bad token, outage) flows to the
+        # app's sanitized httpx→502 handler, never a "not found".
+        raise
+    except httpx.HTTPError:
+        # No status to inspect (timeout, refused connection): same handler.
+        raise
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Issue #{number} not found") from e
+        raise HTTPException(status_code=500, detail="Internal server error") from e
     return _issue_to_response(issue, config)
 
 

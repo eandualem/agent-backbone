@@ -209,7 +209,7 @@ class AgentStateDetail(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
-_MAX_TS_SKEW_SECONDS = 86400.0
+_MAX_TS_SKEW_SECONDS = 60.0
 """How far ahead of now a pushed state timestamp may be (clock skew); more is rejected."""
 
 
@@ -248,7 +248,8 @@ class StateUpdateRequest(BaseModel):
     def _ts_must_be_plausible(cls, value: float) -> float:
         """A non-finite ``ts`` would stay "fresh" forever and make the pushed
         state permanently authoritative; a far-future one nearly so. ``0``
-        keeps its legacy meaning (no known time — the terminal decides)."""
+        keeps its legacy meaning (no time given — the route substitutes the
+        server receipt time)."""
         if not math.isfinite(value) or value < 0:
             raise ValueError(f"ts must be a finite timestamp >= 0, got {value!r}")
         if value > time.time() + _MAX_TS_SKEW_SECONDS:
@@ -375,7 +376,8 @@ class MessageRequest(BaseModel):
         """The sender is interpolated into ``[via:backbone from:<sender>]``,
         so it must not contain the envelope's delimiters or a newline that
         would forge a second envelope. This bounds parsing ambiguity — it
-        does not authenticate the sender (the API key does that)."""
+        does not authenticate the sender: the API key authenticates caller
+        access, never the ``from_entity`` identity."""
         if not value.strip():
             raise ValueError("from_entity must not be empty")
         if len(value) > 64:

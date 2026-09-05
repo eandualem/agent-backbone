@@ -143,6 +143,9 @@ class TestWaitForApi:
             {"healthy": True, "version": "0.1.1"},  # no started: a proxy page
             {"healthy": True, "version": "?", "started": "bad"},
             {"healthy": True, "version": "?", "started": None},
+            {"healthy": True, "version": "?", "started": "nan"},  # never equals before
+            {"healthy": True, "version": "?", "started": 0},
+            {"healthy": True, "version": "?", "started": -5.0},
         ):
             with patch(f"{_UP}._common.api", new_callable=AsyncMock, return_value=(200, body)):
                 assert await upgrade._generation(config) is None

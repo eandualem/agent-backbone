@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import subprocess
 import sys
 
@@ -37,6 +38,10 @@ async def _generation(config: BackboneConfig) -> tuple[float, str] | None:
     try:
         started = float(health[1]["started"])
     except (KeyError, TypeError, ValueError):
+        return None
+    if not math.isfinite(started) or started <= 0:
+        # NaN never equals the previous generation, so it would always look
+        # like a new build; a non-positive start time is no generation.
         return None
     return (started, str(health[1].get("version") or "?"))
 

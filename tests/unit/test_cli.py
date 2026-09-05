@@ -436,6 +436,45 @@ class TestSwarmList:
         assert "s1" in capsys.readouterr().out
 
 
+class TestReply:
+    def _client(self, body, status=200):
+        class _Resp:
+            status_code = status
+
+            @staticmethod
+            def json():
+                return body
+
+        client = AsyncMock()
+        client.request = AsyncMock(return_value=_Resp())
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        return client
+
+    def test_negative_200_is_a_nonzero_error(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_AGENT", "ike")
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        client = self._client(
+            {"ok": False, "session": "ike", "posted": {}, "results": {"telegram": "failed"}}
+        )
+        with patch("httpx.AsyncClient", return_value=client):
+            assert _run(["reply", "nope, failed"]) == 1
+        out = capsys.readouterr().out
+        assert "not posted" in out and "posted to " not in out
+
+    def test_posted_reply_is_zero(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_AGENT", "ike")
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        client = self._client(
+            {"ok": True, "session": "ike", "posted": {"telegram": True}, "results": {}}
+        )
+        with patch("httpx.AsyncClient", return_value=client):
+            assert _run(["reply", "done"]) == 0
+        assert "posted to telegram as ike" in capsys.readouterr().out
+
+
 class TestDown:
     async def test_failed_stop_is_reported(self, tmp_path, capsys):
         from agent_backbone.cli import server
