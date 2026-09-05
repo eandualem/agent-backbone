@@ -65,16 +65,17 @@ members like any other agent.
 
 ## Members and permission prompts
 
-With `swarm.unattended_members` (on by default) Codex members never ask:
-Codex's sandbox confines them to the worktree (plus temp and the network,
-so `backbone tell` and `gh` work), and inside that wall the backbone
-launches them with `-a never -s workspace-write`. A write outside fails
-and the model is told; what a project's tooling needs outside is opened
-once with `agents.writable_dirs` (this repository: `["~/.cache/uv"]`).
+`swarm.unattended_members` (on by default) runs sandboxed Codex members
+without permission prompts. Other runtimes keep their approval policy.
+See the full [permission boundaries](https://github.com/eandualem/agent-backbone/blob/develop/docs/security.md#unattended-agents-and-writable-directories).
 
-Members on a runtime without a sandbox (OpenCode, Claude Code, Gemini)
-keep their dialogs — unattended there would be trust on the whole
-machine, the owner's explicit call per agent, never the swarm's.
+`agents.writable_dirs` applies to every Codex agent on this machine; use it
+for deliberately shared caches. For a cache inside one member's worktree,
+leave that list empty and set its environment before restarting/resuming:
+
+```bash
+backbone agent set NAME env='{"UV_CACHE_DIR": ".uv-cache"}'
+```
 
 When a member does show one, `backbone agent inspect <member>` reports
 `waiting_for_human (permission)` with the prompt in the evidence and

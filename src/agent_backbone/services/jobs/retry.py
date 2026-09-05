@@ -13,10 +13,10 @@ from agent_backbone.services.routing import (
     is_acknowledged,
     list_open_queue_for_target,
     queue_scope,
+    route_issue,
     safe_deliver,
     stamp_queued_age,
 )
-from agent_backbone.services.routing._targets import route_issue
 from agent_backbone.services.terminal import list_sessions
 
 if TYPE_CHECKING:

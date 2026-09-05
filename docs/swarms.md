@@ -149,52 +149,17 @@ coupled work, one agent is faster and cheaper. Start with 3–5 members.
 
 ## Members, permissions and the sandbox
 
-A member needs three things and nothing else: free rein over the files in
-its worktree, GitHub for its branch and its issue, and its peers through
-`backbone tell`. A member that stops to ask for any of those stalls the
-whole swarm, and a member that can reach past them is a liability. The
-line between the two is the runtime's **sandbox**, so the backbone treats
-the two kinds of runtime differently.
+With `swarm.unattended_members` enabled (the default), sandboxed Codex
+members run without permission prompts. Other runtimes retain their approval
+policy. The setting is evaluated at each member's next launch.
 
-**Codex members never ask.** Codex confines every command it runs to the
-working directory, temp, and (because the backbone opens it with
-`sandbox_workspace_write.network_access`) the network, so `backbone tell`
-and `gh` work; a write anywhere else fails with "Operation not
-permitted" and the model is told so. A worktree's git metadata (index,
-HEAD, objects, refs) lives under the main checkout's `.git`, outside that
-wall, so the backbone opens that one directory to every member — without
-it `git commit` fails on `index.lock` (seen live). Inside that wall there
-is nothing worth asking a person, so
-with `swarm.unattended_members` (the default) a Codex member is launched
-with `-a never -s workspace-write`: no approval dialog, ever, and the
-sandbox pinned. This is decided at each member start from the setting and
-the member's runtime, not stored on the member: flip the setting and the
-next restart follows; move a member to a runtime without a sandbox and it
-asks again. What a project's tooling keeps outside the checkout is
-declared once in `agents.writable_dirs` — for this repository `uv`'s
-cache:
+The full [permission boundaries and cache options](security.md#unattended-agents-and-writable-directories)
+explain the Git grants, machine-wide `agents.writable_dirs`, and the
+worktree-local `UV_CACHE_DIR` alternative.
 
-```bash
-backbone config set agents.writable_dirs '["~/.cache/uv"]'
-```
-
-That cache is shared with you and every other agent on the machine, so a
-member can write what your next `uv sync` installs. If you would rather
-not share it, leave the list empty and give the member a cache inside its
-worktree (`UV_CACHE_DIR` in its `env`, set with `agent set`).
-
-**Members without a sandbox keep asking.** OpenCode, Claude Code (outside
-auto mode) and Gemini have a no-approval switch too, but no wall behind
-it: unattended there means trust on the whole machine with your
-credentials. The swarm never makes that choice for you. Such a member
-stops on its approval dialog, shown as `waiting_for_human (permission)`
-in `backbone agent inspect <member>` with the prompt quoted in the
-evidence, and the coordinator answers with `backbone agent approve
-<member>` — the runtime's affirmative key, sent only while the dialog is
-on screen, recorded as an `approval` event. If you do accept machine-wide
-trust for one member, `backbone agent set <member> unattended=true` and
-restart it; that is your call per agent, documented in
-[configuration](configuration.md#agents).
+For a member showing `waiting_for_human (permission)`, inspect its evidence
+with `backbone agent inspect <member>` and answer a supported dialog with
+`backbone agent approve <member>`. Every approval is recorded.
 
 Either way a *choice* dialog — Codex's rate-limit "switch model?" — is a
 question, not a permission: nothing answers it automatically,
