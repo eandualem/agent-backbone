@@ -49,6 +49,9 @@ class ClaudeCode(Runtime):
     binary = "claude"
     brief_mode = "system_prompt"
     models = ("opus", "sonnet", "haiku")  # Claude Code's own aliases
+    # `claude --effort <level>`; levels as Claude Code itself lists them when
+    # it rejects an unknown one (live capture).
+    efforts = ("low", "medium", "high", "xhigh", "max")
 
     hook_script = "claude_hook.py"
     # An empty matcher means every tool; None omits the matcher.
@@ -125,6 +128,10 @@ class ClaudeCode(Runtime):
             log.warning("Could not write the launch hook settings: %s", exc)
             return []
         return ["--settings", str(path)]
+
+    def effort_args(self, effort: str | None) -> list[str]:
+        """``--effort <level>``, Claude Code's own session flag."""
+        return ["--effort", effort] if effort else []
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args = super().launch_args(

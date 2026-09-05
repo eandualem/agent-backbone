@@ -1,4 +1,8 @@
-"""Roster parsing — member specs like ``scout*3@claude/sonnet``."""
+"""Roster parsing — member specs like ``scout*3@claude/sonnet``.
+
+The model half may carry a reasoning effort (``coordinator@codex/gpt-6-astra:high``);
+the runtime splits it off at launch, so nothing here has to know the levels.
+"""
 
 from __future__ import annotations
 
@@ -25,12 +29,13 @@ class MemberSpec:
 
 
 def parse_member_spec(raw: str) -> MemberSpec:
-    """Parse ``role[*N][@runtime[/model]]`` (e.g. ``scout*3@claude/sonnet``)."""
+    """Parse ``role[*N][@runtime[/model[:effort]]]`` (e.g. ``scout*3@claude/sonnet``,
+    ``coordinator@codex/gpt-6-astra:high``)."""
     match = _SPEC_RE.match(raw.strip())
     if not match:
         raise ValueError(
-            f"invalid member spec {raw!r} — expected role[*N][@runtime[/model]], "
-            "e.g. scout*3@claude/sonnet"
+            f"invalid member spec {raw!r} — expected role[*N][@runtime[/model[:effort]]], "
+            "e.g. scout*3@claude/sonnet or coordinator@codex/gpt-6-astra:high"
         )
     count = int(match["count"]) if match["count"] else 1
     if count < 1:

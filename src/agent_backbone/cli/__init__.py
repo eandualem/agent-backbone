@@ -136,8 +136,9 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument(
         "--model",
         default=None,
-        help="model passed to the runtime CLI (e.g. opus, sonnet, or a full model id); "
-        "recorded on the agent and reused by later starts",
+        help="model passed to the runtime CLI (e.g. opus, sonnet, or a full model id), "
+        "optionally `model:effort` (e.g. gpt-6-astra:high) for runtimes with an effort "
+        "setting; recorded on the agent and reused by later starts (`backbone runtimes`)",
     )
     ps.add_argument(
         "--resume",
@@ -218,9 +219,10 @@ def build_parser() -> argparse.ArgumentParser:
     psc.add_argument(
         "--member",
         action="append",
-        metavar="ROLE[*N][@RUNTIME[/MODEL]]",
+        metavar="ROLE[*N][@RUNTIME[/MODEL[:EFFORT]]]",
         help="roster entry, repeatable — quote specs with a count so the shell "
-        "does not glob the * (e.g. 'scout*3@claude/sonnet', coder@codex); "
+        "does not glob the * (e.g. 'scout*3@claude/sonnet', coder@codex); the model "
+        "may carry an effort as model:effort (e.g. coordinator@codex/gpt-6-astra:high); "
         "a coordinator@claude is added when none is given",
     )
     psc.add_argument(

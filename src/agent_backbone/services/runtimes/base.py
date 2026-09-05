@@ -71,6 +71,23 @@ def read_brief(brief_file: Path | str) -> str | None:
     return text or None
 
 
+def split_model_effort(spec: str | None) -> tuple[str | None, str | None]:
+    """Split a ``model[:effort]`` spec into ``(model, effort)``.
+
+    The effort is the text after the last colon. Model ids do not contain
+    one, and carrying the effort inside the model spec is what lets every
+    surface that already names a model name an effort too — ``--model``,
+    ``agent set model=…`` and a swarm roster entry
+    (``coordinator@codex/gpt-6-astra:high``) — without a second field.
+    """
+    if not spec:
+        return None, None
+    model, separator, effort = spec.rpartition(":")
+    if not separator:
+        return spec, None
+    return (model or None), (effort.strip().lower() or None)
+
+
 class Runtime:
     """Behavioural contract for one interactive CLI. Subclasses set the data."""
 
@@ -88,6 +105,11 @@ class Runtime:
     """Model ids known to work with ``--model`` (aliases or ids seen live).
     Examples for `backbone runtimes`, not an exhaustive list — the CLI's own
     model picker is the authority."""
+    efforts: tuple[str, ...] = ()
+    """Reasoning-effort levels this runtime can be launched with, as its own
+    CLI spells them (verified live against that CLI). Empty means the CLI has
+    no effort switch, and an effort asked of it is refused rather than
+    silently dropped."""
 
     # --- pane recognition -------------------------------------------------
     prompt_prefixes: tuple[str, ...] = ()
@@ -213,6 +235,35 @@ class Runtime:
         hooks.save_settings(path, hooks.remove_hooks(hooks.load_settings(path)))
         return path
 
+    def effort_args(self, effort: str | None) -> list[str]:
+        """Arguments that set the reasoning effort for this launch.
+
+        The base runtime knows no effort switch, so asking one of a runtime
+        that has none is an error: silently dropping it would hand back an
+        agent that looks configured and is not.
+        """
+        if not effort:
+            return []
+        raise RuntimeError(
+            f"Runtime '{self.id}' has no effort setting — drop the ':{effort}' from "
+            f"the model, or pick a runtime that has one (`backbone runtimes`)"
+        )
+
+    def check_effort(self, effort: str | None) -> None:
+        """Raise unless ``effort`` is one this runtime accepts."""
+        if not effort:
+            return
+        if not self.efforts:
+            raise RuntimeError(
+                f"Runtime '{self.id}' has no effort setting — drop the ':{effort}' from "
+                f"the model, or pick a runtime that has one (`backbone runtimes`)"
+            )
+        if effort not in self.efforts:
+            raise RuntimeError(
+                f"Runtime '{self.id}' has no effort '{effort}' — expected one of "
+                f"{', '.join(self.efforts)}"
+            )
+
     def launch_args(
         self,
         *,
@@ -266,10 +317,17 @@ class Runtime:
             brief = None
         if self.brief_mode in ("message", "none"):
             brief = None
+        model_id, effort = split_model_effort(model)
+        if effort and not model_id:
+            # `:high` would otherwise pass validation and launch the CLI's
+            # default model — a spec that names an effort must name a model.
+            raise RuntimeError(f"model spec '{model}' names an effort but no model")
+        self.check_effort(effort)
         return [
             resolved,
+            *self.effort_args(effort),
             *self.launch_args(
-                model=model,
+                model=model_id,
                 resume=resume,
                 brief_file=brief,
                 pre_trust=pre_trust,

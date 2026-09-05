@@ -23,9 +23,20 @@ a swarm costs several times the tokens.
        --member 'scout*2@claude/sonnet' --member coder@claude/opus
    ```
 
-   Member spec: `ROLE[*N][@RUNTIME[/MODEL]]`. Model ids come from
-   `backbone runtimes` (see `backbone help agents`, "Choosing a model");
-   do not ask the human for one. Roles with shipped briefs:
+   Member spec: `ROLE[*N][@RUNTIME[/MODEL[:EFFORT]]]`. Model ids and the
+   effort levels each runtime accepts come from `backbone runtimes` (see
+   `backbone help agents`, "Choosing a model" and "Choosing an effort");
+   do not ask the human for either. The effort rides on the model, so a
+   roster can mix levels — the expensive one where the judgement is:
+
+   ```bash
+   backbone swarm create review --issue OWNER/REPO#7 \
+       --member coordinator@codex/gpt-6-astra:high \
+       --member 'scout*2@codex/gpt-6-astra'
+   ```
+
+   Leave the suffix off and the CLI's own default applies, which may be
+   its cheapest level. Roles with shipped briefs:
    `coordinator` (added automatically; at most one), `scout` (read-only
    research), `coder` (implements an owned slice), `reviewer` (verifies
    by running). Any other role gets a generic brief. 3–5 members total

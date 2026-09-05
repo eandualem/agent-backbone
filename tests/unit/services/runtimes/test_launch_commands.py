@@ -6,7 +6,9 @@ import json
 import tomllib
 from unittest.mock import patch
 
-from agent_backbone.services.runtimes import RUNTIMES
+import pytest
+
+from agent_backbone.services.runtimes import RUNTIMES, split_model_effort
 from agent_backbone.services.runtimes.claude import pre_trust_directory
 from agent_backbone.services.runtimes.codex import pre_trust_codex_directory
 
@@ -292,3 +294,66 @@ class TestDeepCode:
         assert RUNTIMES["deepcode"].launch_env("deepseek-v4-pro") == {"MODEL": "deepseek-v4-pro"}
         assert RUNTIMES["deepcode"].launch_env(None) == {}
         assert RUNTIMES["codex"].launch_env("x") == {}
+
+
+class TestEffort:
+    """``model:effort`` — one spec that every model-naming surface can carry."""
+
+    def test_split_separates_the_effort_from_the_model(self):
+        assert split_model_effort("gpt-6-astra:high") == ("gpt-6-astra", "high")
+        assert split_model_effort("opus") == ("opus", None)
+        assert split_model_effort(None) == (None, None)
+        assert split_model_effort("") == (None, None)
+
+    def test_split_normalizes_the_level(self):
+        assert split_model_effort("opus: HIGH ") == ("opus", "high")
+
+    def test_codex_effort_is_a_config_override(self):
+        with _resolve("/bin/codex"):
+            command = RUNTIMES["codex"].build_command(model="gpt-6-astra:high")
+        assert command == [
+            "/bin/codex",
+            "-c",
+            "model_reasoning_effort=high",
+            "--model",
+            "gpt-6-astra",
+        ]
+
+    def test_claude_effort_is_a_flag(self):
+        with _resolve("/usr/bin/claude"):
+            command = RUNTIMES["claude"].build_command(model="opus:xhigh")
+        assert command == ["/usr/bin/claude", "--effort", "xhigh", "--model", "opus"]
+
+    def test_no_effort_leaves_the_command_untouched(self):
+        with _resolve("/bin/codex"):
+            assert RUNTIMES["codex"].build_command(model="gpt-6-astra") == [
+                "/bin/codex",
+                "--model",
+                "gpt-6-astra",
+            ]
+
+    def test_a_level_the_runtime_does_not_have_is_refused(self):
+        # Codex has `ultra`, Claude Code does not: the level is checked against
+        # the runtime that will actually be launched.
+        with _resolve("/usr/bin/claude"), pytest.raises(RuntimeError, match="no effort 'ultra'"):
+            RUNTIMES["claude"].build_command(model="opus:ultra")
+        with _resolve("/bin/codex"):
+            assert "model_reasoning_effort=ultra" in RUNTIMES["codex"].build_command(
+                model="gpt-6-astra:ultra"
+            )
+
+    def test_an_effort_without_a_model_is_refused(self):
+        # ":high" would otherwise launch the CLI's own default model.
+        with _resolve("/bin/codex"), pytest.raises(RuntimeError, match="no model"):
+            RUNTIMES["codex"].build_command(model=":high")
+
+    def test_a_runtime_without_an_effort_setting_refuses_rather_than_dropping_it(self):
+        with _resolve("/bin/gemini"), pytest.raises(RuntimeError, match="no effort setting"):
+            RUNTIMES["gemini"].build_command(model="gemini-3-pro:high")
+
+    def test_effort_survives_resume(self):
+        # Codex resumes through a subcommand; `-c` is a global option and still applies.
+        with _resolve("/bin/codex"):
+            command = RUNTIMES["codex"].build_command(model="gpt-6-astra:max", resume=True)
+        assert command[:3] == ["/bin/codex", "-c", "model_reasoning_effort=max"]
+        assert "resume" in command

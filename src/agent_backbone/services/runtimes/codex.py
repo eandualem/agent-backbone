@@ -73,7 +73,10 @@ class Codex(Runtime):
     display_name = "Codex"
     binary = "codex"
     brief_mode = "initial_prompt"
-    models = ("gpt-5.6-sol",)  # as shown by codex 0.152's status line (live capture)
+    models = ("gpt-5.6-sol", "gpt-6-astra")  # as shown by codex's own status line (live capture)
+    # Codex has no effort flag; the level is a config override. Levels as
+    # gpt-6-astra reports them in codex 0.153 (`~/.codex/models_cache.json`).
+    efforts = ("low", "medium", "high", "xhigh", "max", "ultra")
 
     hook_script = "codex_hook.py"
     hook_events = (
@@ -124,6 +127,14 @@ class Codex(Runtime):
 
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_codex_directory(directory)
+
+    def effort_args(self, effort: str | None) -> list[str]:
+        """``-c model_reasoning_effort=<level>``, Codex's config override.
+
+        A global option, so it is valid both before the TUI and before the
+        ``resume`` subcommand. Verified live against codex-cli 0.153.
+        """
+        return ["-c", f"model_reasoning_effort={effort}"] if effort else []
 
     def hook_settings_path(self, project_dir: Path | None) -> Path:
         # Codex reads `hooks.json` from its home and from a trusted project's

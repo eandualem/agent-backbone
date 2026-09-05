@@ -65,7 +65,7 @@ backbone swarm disband research  # manual teardown
 
 ## Roster syntax
 
-`--member ROLE[*N][@RUNTIME[/MODEL]]`, repeatable:
+`--member ROLE[*N][@RUNTIME[/MODEL[:EFFORT]]]`, repeatable:
 
 | Example | Meaning |
 |---|---|
@@ -73,6 +73,21 @@ backbone swarm disband research  # manual teardown
 | `coder@codex` | one coder on Codex, its default model |
 | `reviewer` | one reviewer on the default runtime |
 | `coordinator@claude/opus` | the coordinator (at most one; added automatically if omitted) |
+| `coordinator@codex/gpt-6-astra:high` | the coordinator on Codex at `high` reasoning effort |
+
+The effort rides on the model, so a roster can spend where the judgement
+is and stay cheap elsewhere — a coordinator that validates and implements
+at `high`, scouts that only read at the CLI's default:
+
+```bash
+backbone swarm create review --issue OWNER/REPO#7 \
+    --member coordinator@codex/gpt-6-astra:high \
+    --member 'scout*2@codex/gpt-6-astra'
+```
+
+Omitting the suffix means the CLI's own default, which is not always the
+cheap end — GPT-6-Astra defaults to `low`. `backbone runtimes` lists the
+levels each runtime accepts.
 
 ## Roles and briefs
 

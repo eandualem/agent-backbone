@@ -90,6 +90,11 @@ Codex shows in its status line, Deep Code's two models). The list is a
 starting point for agents choosing a model for another agent or a swarm
 member; the runtime's own model picker is the authority.
 
+Each line also prints the reasoning-effort levels that runtime accepts —
+`low, medium, high, xhigh, max` for Claude Code, the same plus `ultra`
+for Codex, `-` for a CLI with no effort setting. Unlike model ids, these
+are checked: a level the runtime does not have is refused at start.
+
 ## `backbone status`
 
 API health per component, GitHub intake mode, every known agent with its
@@ -134,7 +139,7 @@ an orchestrator that should spin up workers runs these commands itself.
 | `NAME` (positional) | Agent name = tmux session = `for:` label. Known name: starts from its recorded directory. Unknown name: registers the cwd under it. Omitted: the folder name is the name — the usual case for single-repository agents | yes (the key) |
 | `--dir D` | Project directory to discover (name defaults from its folder name; repo from its `origin` remote) | yes |
 | `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `deepcode`, `aider`, or `shell` | yes — later bare starts reuse it |
-| `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent | yes — later bare starts reuse it |
+| `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent. Write it as `M:EFFORT` (e.g. `gpt-6-astra:high`, `opus:max`) to set the reasoning effort too — such a spec is **not** passed verbatim: it is split, and the CLI gets the bare model plus its own effort switch. A level the runtime does not have, or an effort with no model (`:high`), is refused rather than dropped | yes — later bare starts reuse it |
 | `--watch OWNER/REPO` | Also subscribe to a repository (repeatable) | yes |
 | `--resume` | Reopen the session the backbone last saw through the runtime's hook (its id is recorded), else the runtime's last conversation | no |
 | `--always-on` | Instead of names: start every agent marked `always_on` (after a reboot, with `--resume`) | — |
