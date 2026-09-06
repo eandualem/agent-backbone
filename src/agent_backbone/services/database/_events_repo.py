@@ -2,13 +2,72 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from weakref import WeakValueDictionary
+
 from sqlalchemy import text
 
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
+_review_locks: WeakValueDictionary[tuple[int, int, str], asyncio.Lock] = WeakValueDictionary()
+
 
 class EventRepo(Repo):
+    def _review_lock(self, source_key: str) -> asyncio.Lock:
+        # The server owns one engine. Like terminal delivery serialization,
+        # this lock spans awaits without holding a SQLite write transaction
+        # open through terminal I/O and its separate receipt transactions.
+        key = (id(asyncio.get_running_loop()), id(self._engine()), source_key)
+        return _review_locks.setdefault(key, asyncio.Lock())
+
+    @asynccontextmanager
+    async def review_delivery(self, source_key: str) -> AsyncIterator[bool]:
+        """Serialize start delivery with completion in the running server."""
+        async with self._review_lock(source_key):
+            yield not await self.review_finished(source_key)
+
+    async def review_finished(self, source_key: str) -> bool:
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT 1 FROM review_lifecycle WHERE source_key = :key AND finished_at != ''"
+                ),
+                {"key": source_key},
+            )
+            return result.scalar_one_or_none() is not None
+
+    async def finish_review(self, source_key: str) -> None:
+        async with self._review_lock(source_key):
+            await self._finish_review(source_key)
+
+    async def _finish_review(self, source_key: str) -> None:
+        async with self._tx() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO review_lifecycle (source_key, finished_at) VALUES (:key, :now) "
+                    "ON CONFLICT (source_key) DO UPDATE SET finished_at = excluded.finished_at"
+                ),
+                {"key": source_key, "now": now_iso()},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET status = 'delivered', delivered_at = :now "
+                    "WHERE dedup_key = :key AND status IN ('pending', 'in_progress')"
+                ),
+                {"key": f"src:{source_key}", "now": now_iso()},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE event_outbox SET status = 'skipped', updated_at = :now "
+                    "WHERE status IN ('pending', 'failed') AND event_id IN "
+                    "(SELECT id FROM events WHERE delivery_id = :key)"
+                ),
+                {"key": source_key, "now": now_iso()},
+            )
+
     async def poll_cursor(self, repo: str) -> str | None:
         """The persisted GitHub replay boundary, not an event receipt time."""
         async with self._tx() as conn:
@@ -124,6 +183,13 @@ class EventRepo(Repo):
             params = {"cutoff": cutoff_iso(days=retention_days)}
             await conn.execute(
                 text(f"DELETE FROM event_outbox WHERE event_id IN ({expired})"), params
+            )
+            await conn.execute(
+                text(
+                    "DELETE FROM review_lifecycle WHERE finished_at < :cutoff AND NOT EXISTS "
+                    "(SELECT 1 FROM events WHERE delivery_id = review_lifecycle.source_key)"
+                ),
+                params,
             )
             result = await conn.execute(text(f"DELETE FROM events WHERE id IN ({expired})"), params)
             return result.rowcount

@@ -78,6 +78,7 @@ _LOCAL_API_ACCESS = ("-c", "sandbox_workspace_write.network_access=true")
 
 class Codex(Runtime):
     id = "codex"
+    fallback_prompts = ("›",)
     display_name = "Codex"
     binary = "codex"
     brief_mode = "initial_prompt"
@@ -102,7 +103,6 @@ class Codex(Runtime):
     # with workspace-write enforced by this switch (verified with --help).
     auto_review_args = ("--approve-for-me",)
 
-    hook_script = "codex_hook.py"
     hook_events = (
         ("SessionStart", None),
         ("SessionEnd", None),

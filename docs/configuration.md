@@ -13,13 +13,13 @@ There is no configuration file. The **data directory** is the configuration:
 - **Settings** are keys with built-in defaults, stored in the database and
   edited with `backbone config set KEY VALUE` (or `PUT /api/config/{key}`).
   The running backbone publishes the new configuration immediately. Routing
-  and delivery thresholds use it on their next operation. Restart the backbone
-  after changing server bindings (`backbone.host`, `backbone.port`,
-  `backbone.cors_origins`), GitHub intake/backfill mode, or job periods
-  (`github.poll_interval_seconds`, `timing.monitor_interval_seconds`,
-  `timing.retry_interval_seconds`): listeners and scheduled jobs are constructed
-  at startup. Enabling an integration that was disabled at startup also requires
-  a restart.
+  and delivery thresholds use it on their next operation. Job periods and
+  GitHub poll intake reconcile on publication: a sleeping job resets its timer;
+  an active run finishes before a disabled job stops. Integration connections
+  start or stop as their required settings change. Restart for server bindings
+  (`backbone.host`, `backbone.port`, `backbone.cors_origins`) and GitHub credentials.
+  Webhook backfill remains a startup-only operation; changing its setting does
+  not replay historical activity immediately.
 - **Agents** are discovered by `backbone agent start` and edited with
   `backbone agent set|watch|unwatch|forget`.
 - **Secrets** come from `<data_dir>/.env` (read at startup into the config
@@ -55,12 +55,15 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | `agents.pre_trust` | `true` | Answer the runtime's folder-trust dialog before starting, so it never blocks an unattended start: Claude Code and Codex get the same trust record their own dialog writes; Gemini is launched with `--skip-trust`. Starting an agent in a directory is treated as the trust decision; set `false` to answer the dialog yourself |
 | `agents.writable_dirs` | `[]` | Machine-wide directories that every Codex agent may write outside its own checkout (`--add-dir`; JSON list, `~` allowed). Use for deliberately shared tooling caches; for a project-specific cache, set `UV_CACHE_DIR` inside the agent's worktree. Other runtimes ignore this setting. See [permission boundaries and cache options](security.md#unattended-agents-and-writable-directories) |
 | `agents.auto_review` | `false` | Use automatic permission review where the runtime supports it (currently Codex, `--approve-for-me`, with its workspace sandbox). Routine requests can proceed after review; refusals return to the agent. Applies on the next start/resume. Unattended agents keep their no-prompt policy; other runtimes are unaffected. Set `false` to use your own runtime approval configuration |
+| `agents.shared_policy` | `[]` | Ordered names of Markdown files under `<data_dir>/policies/`, composed after the shipped environment brief at the next fresh launch; see below |
 | `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Codex, Gemini and OpenCode receive it as the session's initial prompt (not re-sent on `--resume`); `aider` receives it as its first delivered message; plain shells get none. Override the text with `<data_dir>/agent-brief.md` |
 
 ### `github.*`
 
 | Key | Default | Meaning |
 |---|---|---|
+| `github.review_poll_interval_seconds` | `300` | Minimum interval between review metadata polls per repo, with a separate durable cursor; positive seconds |
+| `github.reviewers` | `[]` | Reviewer logins or GitHub App slugs (with or without `[bot]`); replace their PR comments with commit-anchored review lifecycle notices. Enables review polling; see [GitHub](github.md#review-lifecycle) |
 | `github.intake` | `auto` | `auto` (webhook if `GITHUB_WEBHOOK_SECRET` is set, else poll), `webhook` (falls back to poll, with a startup warning, when the secret is missing), `poll`, `off` |
 | `github.poll_interval_seconds` | `60` | Poll frequency in poll intake (must be positive) |
 | `github.backfill_on_start` | `true` | Webhook intake: run one poll at startup to catch missed events |
@@ -172,3 +175,37 @@ many repositories, each with its own `.env` for its own app — reading
 those would leak unrelated secrets into agent sessions. So exactly one
 file is read, and it is the data directory's — and its contents are kept
 out of agent sessions rather than exported into them.
+
+## Shared policy and environment facts
+
+Put user-authored policy in individually reviewable files, for example
+`<data_dir>/policies/pr-etiquette.md` and `policies/coordination.md`, then select
+and order them in the database:
+
+```bash
+backbone config set agents.shared_policy '["pr-etiquette", "coordination"]'
+```
+
+Policy text is included literally after the shipped environment facts, with a
+heading naming its source. Names use lowercase letters, digits and hyphens;
+paths and duplicates are rejected. A selected missing or empty file fails the
+launch with its path, so the agent cannot silently start without that policy.
+The files survive package upgrades. `agents.inject_brief=false` disables both
+parts, and an explicit launch brief replaces them. Existing
+`<data_dir>/agent-brief.md` overrides retain full control: selected policy files
+are not added to that override. Initial-prompt runtimes do not reinject on resume.
+
+Keep shared procedures in policy files and project-specific instructions in the
+repository. The existing project-precedence sentence remains a compatibility
+safety net: the backbone cannot enforce that arbitrary Markdown never overlaps.
+No policy content or new authority rule is installed by default.
+
+## Agent record validation
+
+Registration, API edits and CLI direct edits share store validation for runtime,
+model/effort syntax, repository names, paths and field shapes. Model IDs remain
+open-ended; known effort levels are checked against the runtime. Directories
+need not exist when recorded but must exist at launch. Empty `repo` removes
+ownership; watches require `OWNER/REPO`. Invalid updates write no fields.
+Existing records remain visible on refresh; repair invalid fields together before
+editing or starting them. No agent is silently deleted or migrated to a runtime.

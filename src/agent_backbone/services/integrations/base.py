@@ -58,6 +58,16 @@ class Integration:
         return False
 
     @property
+    def can_start(self) -> bool:
+        """Whether credentials and required settings permit startup."""
+        return self.enabled
+
+    @property
+    def startup_key(self) -> object:
+        """Values whose changes require rebuilding the connection; never logged."""
+        return self.can_start
+
+    @property
     def running(self) -> bool:
         return self._running
 

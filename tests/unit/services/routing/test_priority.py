@@ -54,6 +54,8 @@ class TestComputePriorityScore:
         config = PriorityConfig()
         older = _make_issue(number=10, issue_type="task")
         newer = _make_issue(number=20, issue_type="task")
+        older.created_at = "2026-08-01T00:00:00Z"
+        newer.created_at = "2026-08-02T00:00:00Z"
 
         score_older = compute_priority_score(older, config)
         score_newer = compute_priority_score(newer, config)
@@ -67,7 +69,7 @@ class TestComputePriorityScore:
         score = compute_priority_score(issue, config)
 
         # Only age tiebreaker contributes (base is 0)
-        expected_age = (10000 - 42) * 0.01
+        expected_age = 0  # missing source time has no inferred age
         assert abs(score - expected_age) < 0.001
 
     def test_custom_config(self):

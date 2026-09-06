@@ -9,6 +9,7 @@ instance of this; the keys are theirs, the eviction is shared.
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 from collections.abc import Hashable
 
 
@@ -24,11 +25,14 @@ class RecentKeys:
     def __init__(self, ttl_seconds: float) -> None:
         self.ttl_seconds = ttl_seconds
         self._retention = ttl_seconds
-        self._marked: dict[Hashable, float] = {}
+        self._marked: OrderedDict[Hashable, float] = OrderedDict()
 
     def _evict(self, now: float) -> None:
-        for key in [k for k, t in self._marked.items() if now - t > self._retention]:
-            del self._marked[key]
+        while self._marked:
+            oldest = next(iter(self._marked.values()))
+            if now - oldest <= self._retention:
+                break
+            self._marked.popitem(last=False)
 
     def seen(self, key: Hashable, *, ttl_seconds: float | None = None) -> bool:
         """Whether ``key`` was marked within the window (does not mark it)."""
@@ -40,7 +44,10 @@ class RecentKeys:
         return marked_at is not None and now - marked_at <= ttl
 
     def mark(self, key: Hashable) -> None:
-        self._marked[key] = time.monotonic()
+        now = time.monotonic()
+        self._evict(now)
+        self._marked[key] = now
+        self._marked.move_to_end(key)
 
     def check_and_mark(self, key: Hashable, *, ttl_seconds: float | None = None) -> bool:
         """True when ``key`` is recent; otherwise marks it now and returns False."""

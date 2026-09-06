@@ -131,6 +131,14 @@ class TelegramService(Integration):
     def enabled(self) -> bool:
         return bool(self.config.telegram_token)
 
+    @property
+    def can_start(self) -> bool:
+        return self.enabled and bool(self.config.telegram.allowed_chat_ids)
+
+    @property
+    def startup_key(self) -> object:
+        return self.config.telegram_token, self.can_start
+
     # -- Integration contract --
 
     async def reply_to_agent(self, agent: str, text: str) -> bool:

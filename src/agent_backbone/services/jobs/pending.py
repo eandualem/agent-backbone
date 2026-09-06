@@ -102,7 +102,7 @@ async def deliver_pending_issues(
             log.debug("Deferred delivery to %s (state=%s)", name, snapshot.state.value)
             continue
 
-        pending_issues = await list_open_queue_for_target(config, name, gh)
+        pending_issues = await list_open_queue_for_target(config, name, gh, db=db)
         if not pending_issues:
             result[name] = "no_pending"
             continue

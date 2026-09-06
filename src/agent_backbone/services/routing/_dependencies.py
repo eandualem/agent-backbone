@@ -84,6 +84,9 @@ async def sync_dependencies(
     """Record sub-issue relationships for every open issue in every agent queue."""
     if gh is None:
         return
+    for repo in config.agents.repos:
+        open_issues = await gh.list_issues(state="open", repo_full_name=repo, all_pages=True)
+        await db.dependencies.retain_parents(repo, {issue.number for issue in open_issues})
     checked: set[tuple[str, int]] = set()
     for name in config.agents.names:
         for issue in await list_open_queue_for_target(config, name, gh):

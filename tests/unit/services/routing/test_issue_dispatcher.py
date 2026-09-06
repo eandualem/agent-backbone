@@ -179,7 +179,7 @@ class TestReviewDispatch:
             result = await issue_dispatcher(event, config, mock_db)
         assert sorted(result.delivered) == ["feynman", "ike"]
         message = deliver.await_args.args[1]
-        assert message.startswith("[via:github pr:41] Review on acme/app#41")
+        assert message.startswith("[via:github pr:41] Review finished on acme/app#41")
         assert "from coderabbitai[bot] (changes requested)" in message
         assert '"Two findings."' in message and "https://r/9" in message
         # A queued copy is identified by the review, so a retry never stores it twice.
@@ -203,6 +203,7 @@ class TestReviewDispatch:
 @pytest.fixture
 def mock_db():
     db = AsyncMock()
+    db.dependencies.counts = AsyncMock(return_value={})
     db.acks.record = AsyncMock()
     db.acks.clear = AsyncMock()
     db.deliveries.record = AsyncMock()

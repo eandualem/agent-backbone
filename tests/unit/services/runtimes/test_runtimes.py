@@ -448,7 +448,8 @@ class TestChoiceDialogs:
         rt = RUNTIMES["claude"]
         assert rt.detect_waiting_for_human(_CLAUDE_BYPASS_ACCEPT)
         assert not rt.detect_idle(_CLAUDE_BYPASS_ACCEPT)
-        assert not rt.detect_active_dialog(_CLAUDE_BYPASS_ACCEPT)
+        assert rt.detect_active_dialog(_CLAUDE_BYPASS_ACCEPT)
+        assert rt.detect_choice_dialog(_CLAUDE_BYPASS_ACCEPT)
 
     def test_summary_carries_the_command_and_the_reason(self):
         summary = RUNTIMES["codex"].dialog_summary(_CODEX_PERMISSION)

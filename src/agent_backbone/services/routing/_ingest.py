@@ -11,8 +11,9 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 
-from agent_backbone.models import EventType, IssueEvent
+from agent_backbone.models import EventType, IssueEvent, review_source_key
 from agent_backbone.services.routing._lifecycle import on_issue_closed
+from agent_backbone.services.routing._outbox import flush_outbox
 from agent_backbone.services.routing._router import issue_dispatcher
 
 if TYPE_CHECKING:
@@ -52,6 +53,11 @@ def _dedup_id(event: IssueEvent) -> str:
     Webhook and poll synthesise different delivery ids for the same comment,
     so comments dedup on repo + comment id instead of the transport's id.
     """
+    if event.event_type == EventType.REVIEW_STARTED and event.review:
+        return review_source_key(event.issue, event.review)
+    if event.event_type == EventType.ISSUE_CLOSED and event.issue.closed_at:
+        issue = event.issue
+        return f"closed:{issue.repo_full_name.casefold()}#{issue.number}@{issue.closed_at}"
     if event.event_type == EventType.COMMENT_CREATED and event.comment and event.comment.id:
         return f"comment:{event.issue.repo_full_name}:{event.comment.id}"
     if event.event_type == EventType.REVIEW_SUBMITTED and event.review and event.review.id:
@@ -135,17 +141,35 @@ _DISPATCHED = frozenset(
         EventType.ISSUE_LABELED,
         EventType.COMMENT_CREATED,
         EventType.REVIEW_SUBMITTED,
+        EventType.REVIEW_STARTED,
         EventType.PULL_REQUEST_OPENED,
     }
 )
 
 
 async def _route(event, config, db, gh, issue_closed_hooks, *, event_id=None) -> str:
+    if event.review and event.review.commit_id:
+        review_key = review_source_key(event.issue, event.review)
+        if event.event_type == EventType.REVIEW_STARTED and await db.events.review_finished(
+            review_key
+        ):
+            return "ignored: review already finished for this commit"
+        if event.event_type == EventType.REVIEW_SUBMITTED:
+            await db.events.finish_review(review_key)
     if event.event_type == EventType.ISSUE_CLOSED:
-        await db.outbox.discard_issue(event.issue.repo_full_name, event.issue.number)
+        current_close = await db.outbox.discard_issue(
+            event.issue.repo_full_name, event.issue.number, keep_event_id=event_id
+        )
+        if not current_close:
+            return "ignored: superseded issue closure"
         if gh is None:
             return "ignored: github client not configured"
-        result = await on_issue_closed(event, config, gh, db)
+        if event_id is not None and await db.outbox.entries(event_id):
+            # A persisted close receipt means the purge/next selection already
+            # ran. Repeating the purge would erase a queued opener notice.
+            result = await flush_outbox(event_id, config, db, gh)
+        else:
+            result = await on_issue_closed(event, config, gh, db, event_id=event_id)
         for hook in issue_closed_hooks:
             try:
                 await hook(event.issue.repo_full_name, event.issue.number)
@@ -153,9 +177,19 @@ async def _route(event, config, db, gh, issue_closed_hooks, *, event_id=None) ->
                 log.exception("issue-closed hook failed (non-fatal)")
         return f"lifecycle: {result}"
 
+    if (
+        event.event_type == EventType.COMMENT_CREATED
+        and event.comment
+        and event.issue.is_pull_request
+        and config.github.is_reviewer(event.comment.user_login)
+    ):
+        return "ignored: reviewer PR comments are lifecycle-only"
     if event.event_type == EventType.COMMENT_CREATED and event.issue.state == "closed":
         return f"ignored: comment on closed issue #{event.issue.number}"
-    if event.event_type == EventType.REVIEW_SUBMITTED and event.issue.state == "closed":
+    if (
+        event.event_type in {EventType.REVIEW_SUBMITTED, EventType.REVIEW_STARTED}
+        and event.issue.state == "closed"
+    ):
         return f"ignored: review on closed pull request #{event.issue.number}"
 
     if event.event_type in _DISPATCHED:

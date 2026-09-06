@@ -14,7 +14,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
     app = FastAPI()
     app.state.config = bootstrap_config(tmp_path)
     app.state.github = None
-    app.state.integrations = SimpleNamespace(sync_agents=AsyncMock())
+    app.state.integrations = SimpleNamespace(sync_agents=AsyncMock(), reconcile=AsyncMock())
     app.state.db = SimpleNamespace(
         deliveries=SimpleNamespace(prune=AsyncMock(return_value=2)),
         events=SimpleNamespace(prune=AsyncMock(return_value=3)),

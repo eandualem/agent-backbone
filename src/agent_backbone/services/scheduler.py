@@ -41,6 +41,8 @@ class _Job:
     status: JobStatus = field(init=False)
     task: asyncio.Task | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    wake: asyncio.Event = field(default_factory=asyncio.Event)
+    enabled: bool = True
 
     def __post_init__(self) -> None:
         self.status = JobStatus(name=self.name, interval_seconds=self.interval)
@@ -51,6 +53,7 @@ class PeriodicScheduler:
 
     def __init__(self) -> None:
         self._jobs: dict[str, _Job] = {}
+        self._running = False
 
     def add(
         self,
@@ -66,20 +69,55 @@ class PeriodicScheduler:
             raise ValueError(f"Job already registered: {name}")
         if interval_seconds < 0 or (interval_seconds == 0 and not once):
             raise ValueError(f"Job {name}: interval must be positive")
-        self._jobs[name] = _Job(name, float(interval_seconds), fn, run_immediately, once)
+        job = _Job(name, float(interval_seconds), fn, run_immediately, once)
+        self._jobs[name] = job
+        if self._running:
+            job.task = asyncio.create_task(self._loop(job), name=f"scheduler-{job.name}")
+
+    def configure(
+        self,
+        name: str,
+        interval_seconds: float,
+        fn: JobFn,
+        *,
+        enabled: bool = True,
+        run_immediately: bool = False,
+    ) -> None:
+        """Change scheduling without cancelling a run that may be delivering text."""
+        if interval_seconds <= 0:
+            raise ValueError(f"Job {name}: interval must be positive")
+        job = self._jobs.get(name)
+        if job is None:
+            if enabled:
+                self.add(name, interval_seconds, fn, run_immediately=run_immediately)
+            return
+        changed = job.interval != interval_seconds or job.enabled != enabled
+        job.interval = float(interval_seconds)
+        job.status.interval_seconds = job.interval
+        job.fn = fn
+        job.enabled = enabled
+        if changed:
+            job.wake.set()
+        if self._running and enabled and (job.task is None or job.task.done()):
+            job.run_immediately = run_immediately
+            job.task = asyncio.create_task(self._loop(job), name=f"scheduler-{job.name}")
 
     @property
     def jobs(self) -> list[JobStatus]:
-        return [job.status for job in self._jobs.values()]
+        return [job.status for job in self._jobs.values() if job.enabled]
 
     # --- LifecycleAware ---
 
     async def start(self) -> None:
+        self._running = True
         for job in self._jobs.values():
+            if not job.enabled or (job.task is not None and not job.task.done()):
+                continue
             job.task = asyncio.create_task(self._loop(job), name=f"scheduler-{job.name}")
         log.info("Scheduler started with %d job(s): %s", len(self._jobs), ", ".join(self._jobs))
 
     async def stop(self) -> None:
+        self._running = False
         tasks = [job.task for job in self._jobs.values() if job.task is not None]
         for task in tasks:
             task.cancel()
@@ -102,6 +140,7 @@ class PeriodicScheduler:
                 )
             )
             for job in self._jobs.values()
+            if job.enabled
         )
         return {
             "healthy": alive or not self._jobs,
@@ -114,19 +153,28 @@ class PeriodicScheduler:
                     "last_error": job.status.last_error,
                 }
                 for job in self._jobs.values()
+                if job.enabled
             },
         }
 
     # --- Internals ---
 
+    async def _wait(self, job: _Job) -> None:
+        while job.enabled:
+            job.wake.clear()
+            try:
+                await asyncio.wait_for(job.wake.wait(), timeout=job.interval)
+            except TimeoutError:
+                return
+
     async def _loop(self, job: _Job) -> None:
         if not job.run_immediately:
-            await asyncio.sleep(job.interval)
-        while True:
+            await self._wait(job)
+        while job.enabled:
             await self._run_once(job)
             if job.once:
                 return
-            await asyncio.sleep(job.interval)
+            await self._wait(job)
 
     async def _run_once(self, job: _Job) -> None:
         if job.lock.locked():

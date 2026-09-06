@@ -121,7 +121,7 @@ For an issue in repository R:
 | Issue closed | each target gets its **next** issue; the `from:` opener is told it was closed | |
 | All sub-issues of a parent closed | the parent's targets | "Dependencies resolved" |
 | Pull request opened in R | owners and watchers of R, minus the agent that opened it | informational; the issues it closes count as acknowledged by the opener |
-| Review submitted on a pull request | as for a comment, minus the reviewer when it is an agent | review notice: verdict, **the reviewed commit** (so a review of an earlier push arriving late is recognisable), summary preview, link (one per review, not per inline comment; webhook intake only) |
+| Review submitted on a pull request | as for a comment, minus the reviewer when it is an agent | review notice: verdict, **the reviewed commit** (so a review of an earlier push arriving late is recognisable), summary preview, link (one per review, not per inline comment; webhook intake, plus polling for configured reviewers) |
 
 The `from:` sender never receives its own issue. Editing an existing issue
 (a `labeled` event without a new `for:`) notifies nobody.
@@ -157,13 +157,14 @@ to a person (`routing.ignore_targets`) or to a name the backbone does not
 know is not the owner's. Queue construction follows all result pages before
 ordering and acknowledgement checks.
 
-The current score adds the `blocking` bonus, type weight (`spec-gap` 100,
-`bug` 90, `task` 50, `question` 20, `optimization` 10), and an age proxy
-`max(0, 10000 - issue_number) * priority.age_tiebreaker_weight`. Lower issue
-numbers are favoured; this is not creation-time ordering across repositories.
-`priority.dependents_multiplier` is supported by the scoring helper but queue
-callers do not yet supply dependent counts. These two priority limitations are
-recorded in the [audit report](reviews/2026-09-05-audit-2.md).
+The score adds the `blocking` bonus, type weight (`spec-gap` 100, `bug` 90,
+`task` 50, `question` 20, `optimization` 10), the recorded dependent bonus
+`type_weight * (priority.dependents_multiplier ** parent_count - 1)`, and
+`age_in_days * priority.age_tiebreaker_weight`. Creation time comes from GitHub;
+missing, invalid or future dates get no age bonus. Repository and issue number
+break equal scores deterministically. Dependency counts come from the database's
+sub-issue graph, refreshed by the monitor; closing parents removes stale edges
+at the next sync. Until an edge is discovered it contributes no bonus.
 
 ## What the agent receives
 
@@ -220,3 +221,49 @@ cd ~/code/orchestration && backbone agent start --watch acme/app --watch acme/we
 Two agents can own the same repository (two checkouts of one project):
 unlabelled issues are announced to both and either claims one by
 commenting; `for:` labels address one of them directly.
+
+## Review lifecycle
+
+Set `github.reviewers` to the reviewer logins or GitHub App slugs to track, for
+example `["coderabbitai"]`. The default is empty, preserving comment delivery.
+For configured accounts, comments on pull requests are lifecycle-only and are
+not delivered separately; their comments on ordinary issues remain deliverable.
+This is an explicit account policy, not a guess based on a bot's prose.
+
+An in-progress GitHub check with a start timestamp and commit, or a pending
+commit status from that reviewer, emits **review started**. A pending status
+means queued or running; CodeRabbit currently uses this older status API. A submitted review emits **review finished**, with its verdict,
+commit, submission time, summary and link. Current-head metadata identifies
+older commits. A completed check never implies a finished review or zero
+findings. Fast reviews can finish between polls without an observed start.
+Reviewers that publish no check get finished notices only. Findings are retained
+in the review preview/link; the backbone does not infer a count from prose.
+
+Poll intake lists open PRs, their head statuses/checks and submitted reviews for
+configured accounts at most once per `github.review_poll_interval_seconds` (300
+by default). Its separate durable cursor preserves events between metadata polls
+and across restarts. A review-read failure leaves the cursor unchanged while
+ordinary issues and comments still dispatch. PR update time alone is not used
+to skip status-only activity. Webhook intake needs **Check runs**, **Commit statuses**, and **Pull request reviews** events;
+tokens/apps need read access to checks and PRs. GitHub may omit PR associations
+from fork check webhooks; poll intake can read checks via the PR head reference.
+[GitHub check-run API](https://docs.github.com/en/rest/checks/runs) and
+[review API](https://docs.github.com/en/rest/pulls/reviews) define these signals.
+
+Started notifications deduplicate by repository, PR, reviewer and commit;
+finished reviews retain their review ID. Finished state is durable, so a late
+start cannot reopen the same review. Finishing retires queued starts and pending
+outbox starts. The running server serializes start delivery and completion by
+reviewer/commit, including starts already leased by a queue drain. A start already
+being delivered completes before the finished notice; terminal delivery cannot
+be recalled. Serialization, like the terminal delivery gate, is scoped to the
+single server process; finished state survives restarts. Another commit is a
+separate lifecycle. Lifecycle retention follows the event retention setting.
+
+Close notices deduplicate by repository, issue and `closed_at` across webhook
+and poll intake. A later acknowledgement comment or label edit changes
+`updated_at`, not closure identity. A reopen followed by a new close is a new
+event. Opener notices use durable outbox receipts, so failed queue storage retries
+without repeating a delivered notice. An older close replay cannot retire a
+newer close receipt or repeat its queue purge and next-issue selection. Polling
+ignores closure times older than its replay window.

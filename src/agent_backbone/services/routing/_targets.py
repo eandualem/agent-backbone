@@ -13,6 +13,7 @@ Per repository, four relationships decide routing:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import EventType, IssueData
@@ -91,7 +92,7 @@ def comment_audience(issue: IssueData, commenter: str | None, config: BackboneCo
 
 
 async def list_open_queue_for_target(
-    config: BackboneConfig, target: str, gh: GitHubClient | None
+    config: BackboneConfig, target: str, gh: GitHubClient | None, *, db=None
 ) -> list[IssueData]:
     """An agent's open queue across every repository it owns or watches.
 
@@ -134,7 +135,20 @@ async def list_open_queue_for_target(
         )
 
     scoring = config.priority
-    issues.sort(key=lambda issue: (-compute_priority_score(issue, scoring), issue.number))
+    counts = await db.dependencies.counts() if db is not None else {}
+    now = datetime.now(UTC)
+    issues.sort(
+        key=lambda issue: (
+            -compute_priority_score(
+                issue,
+                scoring,
+                counts.get((issue.repo_full_name.casefold(), issue.number), 0),
+                now=now,
+            ),
+            issue.repo_full_name.casefold(),
+            issue.number,
+        )
+    )
     return issues
 
 

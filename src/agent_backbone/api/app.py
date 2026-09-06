@@ -78,7 +78,7 @@ def _register_jobs(app: FastAPI):
     # Integrations re-provision their per-agent surfaces (Telegram topics):
     # a config publish triggers it immediately, this catches everything else
     # (a group discovered from a message, a transient Telegram error).
-    scheduler.add("integrations-sync", 300, state.integrations.sync_agents)
+    scheduler.add("integrations-sync", 300, state.integrations.reconcile)
 
     async def _restart() -> None:
         # Ask uvicorn for a graceful shutdown; `backbone up` re-executes
@@ -95,6 +95,7 @@ def _register_jobs(app: FastAPI):
     state.upgrade_watch = watch
     scheduler.add("upgrade-watch", 60, watch.run)
 
+    poller = None
     if state.github is not None:
         poller = GitHubPoller(
             lambda: state.config,
@@ -108,6 +109,21 @@ def _register_jobs(app: FastAPI):
             )
         elif config.github_intake == "webhook" and config.github.backfill_on_start:
             scheduler.add("github-backfill", 0, poller.run, run_immediately=True, once=True)
+
+    def reconcile_jobs():
+        current = state.config
+        scheduler.configure("agent-monitor", current.timing.monitor_interval_seconds, _monitor)
+        scheduler.configure("delivery-retry", current.timing.retry_interval_seconds, _retry)
+        if poller is not None:
+            scheduler.configure(
+                "github-poll",
+                current.github.poll_interval_seconds,
+                poller.run,
+                enabled=current.github_intake == "poll",
+                run_immediately=True,
+            )
+
+    state.reconcile_jobs = reconcile_jobs
     return scheduler
 
 
@@ -138,6 +154,9 @@ async def lifespan(app: FastAPI):
 
     def _publish(new_config: BackboneConfig) -> None:
         app.state.config = new_config
+        reconcile_jobs = getattr(app.state, "reconcile_jobs", None)
+        if reconcile_jobs is not None:
+            reconcile_jobs()
         # The set of agents may have changed: integrations re-provision their
         # per-agent surfaces (Telegram topics) against the new snapshot.
         integrations = getattr(app.state, "integrations", None)
@@ -161,8 +180,7 @@ async def lifespan(app: FastAPI):
         lifecycle.register("github", app.state.github)
     app.state.feed = SessionFeed(lambda: app.state.config, getattr(app.state, "sio", None))
     app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
-    for integration in app.state.integrations:
-        lifecycle.register(integration.name, integration)
+    lifecycle.register("integrations", app.state.integrations)
 
     # A closed issue ends the swarm that was working it (PR merged -> issue
     # closed via "Closes #N" -> teardown). Handed to ingest as a hook so

@@ -1,0 +1,37 @@
+[
+  {
+    "id": "claude",
+    "detection_order": 60,
+    "hook_script": "claude_hook.py"
+  },
+  {
+    "id": "codex",
+    "detection_order": 50,
+    "hook_script": "codex_hook.py"
+  },
+  {
+    "id": "gemini",
+    "detection_order": 20,
+    "hook_script": "gemini_hook.py"
+  },
+  {
+    "id": "opencode",
+    "detection_order": 30,
+    "hook_script": "opencode_hook.js"
+  },
+  {
+    "id": "deepcode",
+    "detection_order": 10,
+    "hook_script": ""
+  },
+  {
+    "id": "aider",
+    "detection_order": 40,
+    "hook_script": ""
+  },
+  {
+    "id": "shell",
+    "detection_order": 0,
+    "hook_script": ""
+  }
+]

@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import StateSnapshot, agent_state
+from agent_backbone.services.github import QueueSnapshot
 from agent_backbone.services.jobs.copy_mode import handle_copy_mode_recovery
 from agent_backbone.services.jobs.escalation import (
     check_blocked,
@@ -77,6 +78,8 @@ async def monitor_agents(
         return {"_skipped": "concurrent_run"}
 
     async with _monitor_lock:
+        if gh is not None:
+            gh = QueueSnapshot(gh)
         active_sessions = set(await list_sessions())
         if not active_sessions:
             log.debug("No tmux sessions active")

@@ -281,3 +281,11 @@ class MessageQueueORM(Base):
             sqlite_where=text("delivery_kind != 'issue' AND status IN ('pending','in_progress')"),
         ),
     )
+
+
+class ReviewLifecycleORM(Base):
+    """Finished reviewer/commit pairs; late started events cannot reopen them."""
+
+    __tablename__ = "review_lifecycle"
+    source_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    finished_at: Mapped[str] = mapped_column(Text, nullable=False)

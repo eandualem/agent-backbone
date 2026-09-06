@@ -612,3 +612,24 @@ class TestLaunchEnvFromRuntime:
         ):
             await start_agent(spec, config, model="deepseek-v4-pro", wait=False)
         assert start.await_args.kwargs["environment"]["MODEL"] == "deepseek-v4-pro"
+
+
+@pytest.mark.parametrize("unattended", [False, True])
+async def test_claude_consent_is_preaccepted_only_for_explicit_unattended(tmp_path, unattended):
+    from dataclasses import replace
+
+    config = bootstrap_config(tmp_path / "data")
+    config = replace(config, launch=replace(config.launch, pre_trust=False))
+    spec = replace(TestStartAgentBrief._spec(tmp_path, "claude"), unattended=unattended)
+    exists, start, command, trust, wait = TestStartAgentBrief._launch()
+    with (
+        exists,
+        start,
+        command,
+        trust,
+        wait,
+        patch("agent_backbone.services.runtimes.claude.pre_accept_bypass") as consent,
+    ):
+        result = await start_agent(spec, config, db=AsyncMock())
+    assert result.ok
+    assert consent.call_count == int(unattended)

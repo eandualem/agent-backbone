@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from agent_backbone.models import IssueEvent
+from agent_backbone.services.github import review_started_event, review_status_event
 from agent_backbone.services.routing import IssueClosedHook, dispatch_event
 
 if TYPE_CHECKING:
@@ -59,6 +60,11 @@ def issue_event_from_api(
     state = item.get("state", "open")
 
     if state == "closed":
+        # Comments and label edits change updated_at without closing the issue
+        # again. Only a closure inside this intake window is an event.
+        closed = item.get("closed_at")
+        if closed and closed < since:
+            return None
         action = "closed"
     elif created and created >= since:
         action = "opened"
@@ -158,13 +164,33 @@ class GitHubPoller:
 
         issue_cache = {int(item["number"]): item for item in issues if "number" in item}
         events: list[IssueEvent] = []
+        had_errors = False
+        review_boundary = None
+        review_cursor_key = f"reviews:{repo}"
+        if config.github.reviewers:
+            try:
+                saved = await self._db.events.poll_cursor(review_cursor_key)
+                if saved is None:
+                    saved = since
+                    await self._db.events.save_poll_cursor(review_cursor_key, saved)
+                    due = True
+                else:
+                    due = (
+                        poll_started - _parse(saved)
+                    ).total_seconds() >= config.github.review_poll_interval_seconds
+                if due:
+                    events.extend(
+                        await self._review_events(repo, _iso(_parse(saved) - _OVERLAP), config)
+                    )
+                    review_boundary = _iso(poll_started)
+            except Exception:
+                log.exception("Review poll failed for %s (issues/comments continue)", repo)
+                had_errors = True
         for item in issues:
             event = issue_event_from_api(item, repo, since)
             if event is not None:
                 events.append(event)
             newest = max(newest, item.get("updated_at", ""))
-
-        had_errors = False
 
         for comment in comments:
             number = issue_number_from_url(comment.get("issue_url", ""))
@@ -206,6 +232,8 @@ class GitHubPoller:
         # idle window: old events must leave it before dedup retention expires.
         # A failed batch instead replays its prior window after restart.
         if not had_errors:
+            if review_boundary is not None:
+                await self._db.events.save_poll_cursor(review_cursor_key, review_boundary)
             boundary = max(
                 since,
                 _iso(poll_started - _OVERLAP),
@@ -216,3 +244,50 @@ class GitHubPoller:
                 # previous replay boundary, including across a restart.
                 await self._db.events.save_poll_cursor(repo, boundary)
                 self._since[repo] = boundary
+
+    async def _review_events(self, repo, since, config) -> list[IssueEvent]:
+        events = []
+        for pull in await self._gh.list_pulls_raw(repo):
+            sha = (pull.get("head") or {}).get("sha")
+            if sha:
+                contexts = set()
+                for status in await self._gh.list_commit_statuses(sha, repo):
+                    reviewer = (status.get("creator") or {}).get("login", "")
+                    if not config.github.is_reviewer(reviewer):
+                        continue
+                    context = (
+                        reviewer.casefold().removesuffix("[bot]"),
+                        status.get("context", "").casefold(),
+                    )
+                    if context in contexts:
+                        continue
+                    contexts.add(context)  # REST returns newest first.
+                    if (status.get("created_at") or "") < since:
+                        continue
+                    event = review_status_event(
+                        status, sha, pull, repo, f"poll:status:{status['id']}"
+                    )
+                    if event is not None:
+                        events.append(event)
+                for check in await self._gh.list_check_runs(sha, repo):
+                    if not config.github.is_reviewer((check.get("app") or {}).get("slug", "")):
+                        continue
+                    if (check.get("started_at") or "") < since:
+                        continue
+                    event = review_started_event(check, pull, repo, f"poll:check:{check['id']}")
+                    if event is not None:
+                        events.append(event)
+            for review in await self._gh.list_reviews_raw(pull["number"], repo):
+                if not config.github.is_reviewer((review.get("user") or {}).get("login", "")):
+                    continue
+                if not review.get("submitted_at") or review["submitted_at"] < since:
+                    continue
+                events.append(
+                    IssueEvent.from_webhook(
+                        "pull_request_review",
+                        "submitted",
+                        {"pull_request": pull, "review": review, "repository": {"full_name": repo}},
+                        f"poll:review:{review['id']}",
+                    )
+                )
+        return events

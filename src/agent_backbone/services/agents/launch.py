@@ -45,26 +45,33 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def agent_brief_text(name: str, repo: str, data_dir: Path | str) -> str | None:
+def agent_brief_text(
+    name: str, repo: str, data_dir: Path | str, *, policy_names: tuple[str, ...] = ()
+) -> str | None:
     """Render the common backbone brief for an agent (None when it cannot be read)."""
     try:
         return render_agent_brief(
             {"agent_name": name, "repo": repo or "(no GitHub remote)"},
             data_dir=Path(data_dir),
+            policy_names=policy_names,
         )
     except OSError as exc:
+        if policy_names:
+            raise ValueError(f"Could not render required brief for {name}") from exc
         log.warning("Could not render the agent brief for %s: %s", name, exc)
         return None
 
 
-def agent_brief_file(name: str, repo: str, data_dir: Path | str) -> Path | None:
+def agent_brief_file(
+    name: str, repo: str, data_dir: Path | str, *, policy_names: tuple[str, ...] = ()
+) -> Path | None:
     """Render the common backbone brief for an agent under ``<data_dir>/briefs``.
 
     ``start_agent`` hands it to the runtime at launch or as the first
     delivered message. Best-effort: on any error the agent simply starts
     without the brief.
     """
-    text = agent_brief_text(name, repo, data_dir)
+    text = agent_brief_text(name, repo, data_dir, policy_names=policy_names)
     if text is None:
         return None
     try:
@@ -74,6 +81,8 @@ def agent_brief_file(name: str, repo: str, data_dir: Path | str) -> Path | None:
         brief.write_text(text)
         return brief
     except OSError as exc:
+        if policy_names:
+            raise ValueError(f"Could not write required brief for {name}") from exc
         log.warning("Could not write the agent brief for %s: %s", name, exc)
         return None
 
@@ -169,7 +178,12 @@ async def start_agent(
 
     brief = Path(brief_file) if brief_file else None
     if brief is None and section.inject_brief and rt.brief_mode != "none":
-        brief = agent_brief_file(spec.name, spec.repo, config.data_dir)
+        try:
+            brief = agent_brief_file(
+                spec.name, spec.repo, config.data_dir, policy_names=section.shared_policy
+            )
+        except ValueError as exc:
+            return StartResult(ok=False, evidence=(str(exc),))
     resume_target: bool | str = resume
     resume_evidence: list[str] = []
     if resume:
@@ -199,6 +213,9 @@ async def start_agent(
     except RuntimeError as exc:
         log.error("Cannot start agent '%s': %s", spec.name, exc)
         return StartResult(ok=False, evidence=(str(exc),))
+
+    if unattended:
+        rt.prepare_unattended()
 
     environment = launch_environment(
         spec.name,
