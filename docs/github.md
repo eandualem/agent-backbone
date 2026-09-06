@@ -102,6 +102,10 @@ also check for closed/deleted issues and changed issue targets. Unresolved
 outbox rows survive event-feed retention; completed rows are pruned with their
 event.
 
+Issue offers in the outbox are retired once their recipient acknowledges that
+issue in that repository, even when GitHub is unavailable. Acknowledgment does
+not discard pending comments, reviews or informational notices.
+
 The database cannot transact with a terminal paste. A process crash after a
 paste succeeds but before its receipt is saved can still cause a repeated
 notification. Once the receipt is saved, a later crash during delivery to

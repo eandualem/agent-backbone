@@ -41,6 +41,57 @@ def ready(session, config, **kwargs):
     return SessionProfile(session_name=session, intelligence=SessionIntelligence.READY)
 
 
+@pytest.mark.parametrize("github_available", [False, True])
+@pytest.mark.parametrize(
+    "ack_repo,ack_target,retired",
+    [
+        (TEST_REPO, "ike", True),
+        ("other/repo", "ike", False),
+        (TEST_REPO, "leo", False),
+    ],
+)
+async def test_issue_retry_retires_only_its_recipients_acknowledgment(
+    config, db, github_available, ack_repo, ack_target, retired
+):
+    config = replace(config, agents=AgentsConfig(specs={"ike": config.agents.get("ike")}))
+    issue = event().issue.model_copy(update={"labels": ParsedLabels(targets=["ike"])})
+    opened = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue, delivery_id="ack-retry")
+    gh = AsyncMock() if github_available else None
+    if gh is not None:
+        gh.get_issue.return_value = issue
+        gh.list_issues.return_value = [issue]
+    with patch(
+        f"{_DELIVERY}.get_session_intelligence",
+        return_value=SessionProfile(
+            session_name="ike", intelligence=SessionIntelligence.AGENT_WORKING
+        ),
+    ):
+        await dispatch_event(opened, config, db, gh)
+    await db.acks.record(42, ack_target, repo=ack_repo)
+    with (
+        patch(f"{_DELIVERY}.get_session_intelligence", side_effect=ready),
+        patch(f"{_DELIVERY}.send_message", AsyncMock(return_value=True)) as send,
+    ):
+        await retry_outbox(config, db, gh)
+    assert send.await_count == (0 if retired else 1)
+    (stored,) = await db.events.query()
+    assert stored["processed_at"] is not None
+    (receipt,) = await db.outbox.entries(stored["id"])
+    assert receipt["status"] == ("skipped" if retired else "delivered")
+
+
+async def test_acknowledgment_does_not_retire_a_pending_comment(config, db):
+    with patch(f"{_DELIVERY}.get_session_intelligence", side_effect=RuntimeError("unavailable")):
+        await dispatch_event(event(), config, db, None)
+    await db.acks.record(42, "ike", repo=TEST_REPO)
+    with (
+        patch(f"{_DELIVERY}.get_session_intelligence", side_effect=ready),
+        patch(f"{_DELIVERY}.send_message", AsyncMock(return_value=True)) as send,
+    ):
+        await retry_outbox(config, db, None)
+    assert [call.args[0] for call in send.await_args_list] == ["ike", "leo"]
+
+
 async def test_failed_queue_write_retries_only_unresolved_recipient(config, db):
     reads = []
 
