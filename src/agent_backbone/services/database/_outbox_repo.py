@@ -83,12 +83,15 @@ class OutboxRepo(Repo):
             )
 
     async def pending_events(self, limit: int = 20) -> list[int]:
+        """Oldest unresolved attempts first, plus completed events needing reconciliation."""
         async with self._tx() as conn:
             result = await conn.execute(
                 text(
                     "SELECT o.event_id FROM event_outbox o JOIN events e ON e.id = o.event_id "
                     "WHERE e.processed_at IS NULL "
-                    "GROUP BY o.event_id ORDER BY MIN(o.updated_at), o.event_id LIMIT :limit"
+                    "GROUP BY o.event_id ORDER BY COALESCE("
+                    "MIN(CASE WHEN o.status IN ('pending', 'failed') THEN o.updated_at END), "
+                    "MIN(o.updated_at)), o.event_id LIMIT :limit"
                 ),
                 {"limit": limit},
             )
