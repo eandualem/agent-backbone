@@ -19,14 +19,14 @@ your operator's instructions.
   and delivered oldest-first when the recipient is ready.
 - The response tells you what happened, and its `detail` line says it in
   words. `"outcome": "delivered"` means it landed now. Otherwise `queue`
-  is one of: `stored` — a row exists and the message WILL be delivered
-  when the recipient is ready (`"queued": true`, exit code 2);
+  is one of: `stored` — a row exists and the backbone retries delivery
+  when the recipient is ready, until expiry (`"queued": true`, exit code 2);
   `already_queued` — the same message from you is already waiting, nothing
   was added (`"queued": true`); `failed` — the message could NOT be stored
   (`"queued": false`, exit code 1): this is the only case where sending
   again later is right.
-- **Never build retry loops.** A stored message is delivered exactly once;
-  resending it is what `already_queued` protects you from. Send once,
+- **Never resend a stored message.** The backbone owns its retries;
+  `already_queued` suppresses a duplicate while it is waiting. Send once,
   continue your work; replies reach you the same way when you are next
   idle. Two different agents may send identical text — each is its own
   message; only *you* repeating *yourself* is folded into one.
@@ -43,6 +43,6 @@ backbone agent inspect <agent>     # state + evidence + recent deliveries
 ```
 
 States are `idle`, `busy`, `waiting_for_human(reason)`, `starting`,
-`unknown`. Prefer `inspect`'s evidence lines over reading tmux panes —
-pane captures can show UI artifacts (like prompt suggestions) that look
+`blocked(reason: quota or provider)`, `unknown`, and `offline`. Prefer
+`inspect`'s evidence lines over reading tmux panes — pane captures can show UI artifacts (like prompt suggestions) that look
 like typed text.
