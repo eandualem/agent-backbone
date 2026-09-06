@@ -74,6 +74,56 @@ def _callback(data: str, chat_id: int = ALLOWED_CHAT):
 
 
 class TestButtons:
+    @pytest.mark.parametrize(
+        "data,valid",
+        [
+            ("a" * 64, True),
+            ("a" * 65, False),
+            ("é" * 32, True),
+            ("é" * 33, False),
+            ("", False),
+        ],
+    )
+    def test_callback_limits_count_utf8_bytes_and_keep_button_pairs_together(self, data, valid):
+        from agent_backbone.services.integrations.telegram.interface import inline_keyboard
+
+        actions = [("Allow", data), ("Deny", "deny:ike:123")]
+        result = inline_keyboard(actions)
+        if valid:
+            assert result["inline_keyboard"][0][0]["callback_data"] == data
+            assert len(result["inline_keyboard"][0]) == 2
+        else:
+            assert result is None
+
+    @pytest.mark.parametrize("kind,name_length", [("plan", 40), ("permission", 50)])
+    async def test_long_agent_names_do_not_drop_dialog_alerts(self, config, kind, name_length):
+        from agent_backbone.services.jobs.escalation import permission_actions, plan_actions
+
+        config = replace(
+            config,
+            security=SecurityConfig(allow_remote_plan_control=True, allow_remote_approval=True),
+        )
+        agent = "a" * name_length
+        make_actions = plan_actions if kind == "plan" else permission_actions
+        actions = make_actions(config, agent, _REF)
+        alert = f"{kind} waiting — {agent}\nRespond in the agent's terminal."
+
+        async def telegram_post(url, *, json, timeout):
+            buttons = json.get("reply_markup", {}).get("inline_keyboard", [])
+            valid = all(1 <= len(b["callback_data"].encode()) <= 64 for row in buttons for b in row)
+            return MagicMock(status_code=200 if valid else 400)
+
+        with patch("httpx.AsyncClient") as client:
+            post = client.return_value.__aenter__.return_value.post
+            post.side_effect = telegram_post
+            assert await _send("tok", 5, alert, thread_id=7, actions=actions)
+        payload = post.await_args.kwargs["json"]
+        assert "reply_markup" not in payload
+        assert payload["text"].startswith(alert)
+        assert "Buttons are unavailable" in payload["text"]
+        assert payload["message_thread_id"] == 7
+        post.assert_awaited_once()
+
     def test_inline_keyboard_is_one_row(self):
         from agent_backbone.services.integrations.telegram.interface import inline_keyboard
 

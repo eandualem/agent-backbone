@@ -50,6 +50,11 @@ def inline_keyboard(actions: list[tuple[str, str]] | None) -> dict | None:
     """Telegram's ``reply_markup`` for ``(label, callback data)`` buttons, one row."""
     if not actions:
         return None
+    if any(not 1 <= len(data.encode("utf-8")) <= 64 for _, data in actions):
+        # Never truncate prompt identities or leave half of an Allow/Deny pair.
+        # Telegram rejects the whole message for an invalid callback payload.
+        log.warning("Omitting Telegram buttons: callback data must contain 1–64 UTF-8 bytes")
+        return None
     row = [{"text": label, "callback_data": data} for label, data in actions]
     return {"inline_keyboard": [row]}
 
@@ -70,6 +75,10 @@ async def _send(
     markup = inline_keyboard(actions)
     if markup is not None:
         payload["reply_markup"] = markup
+    elif actions:
+        payload["text"] += (
+            "\n\nButtons are unavailable for this alert. Respond through the agent's terminal."
+        )
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, json=payload, timeout=10)
