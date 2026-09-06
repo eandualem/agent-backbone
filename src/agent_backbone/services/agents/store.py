@@ -39,7 +39,7 @@ _NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 def sanitize_name(raw: str) -> str:
     """Turn a directory name into a valid tmux session / label value."""
-    cleaned = _NAME_RE.sub("-", raw.strip()).strip("-.")
+    cleaned = _NAME_RE.sub("-", raw.strip()).lstrip("-._").rstrip("-.")
     return cleaned or "agent"
 
 
