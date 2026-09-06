@@ -29,7 +29,6 @@ from agent_backbone.services.runtimes import (
     read_brief,
     resolve_runtime,
     sanitize_pane_content,
-    split_model_effort,
 )
 from agent_backbone.services.terminal import (
     capture_pane,
@@ -217,7 +216,7 @@ async def start_agent(
     if unattended:
         rt.prepare_unattended()
 
-    extra_env = {**spec.env, **rt.launch_env(split_model_effort(effective_model)[0])}
+    extra_env = {**spec.env, **rt.launch_env(rt.split_model(effective_model)[0])}
     environment = launch_environment(
         spec.name,
         rt.id,

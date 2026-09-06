@@ -95,6 +95,12 @@ Each line also prints the reasoning-effort levels that runtime accepts —
 for Codex, `-` for a CLI with no effort setting. Unlike model ids, these
 are checked: a level the runtime does not have is refused at start.
 
+OpenCode and Aider use literal colon tags in model IDs. Their model values,
+such as `ollama/qwen3:8b`, pass through unchanged at registration, update and
+launch; a suffix like `:high` is also a model tag for those runtimes. The
+`model:effort` convention continues to select reasoning effort for Codex and
+Claude Code.
+
 The `unattended:` line shows the no-approval switch and sandbox support;
 `-` means unattended startup is unsupported. See the
 [permission boundaries](security.md#unattended-agents-and-writable-directories)

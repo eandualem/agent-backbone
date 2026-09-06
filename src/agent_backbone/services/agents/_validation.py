@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from agent_backbone.config import AgentSpec
-from agent_backbone.services.runtimes import RUNTIMES, split_model_effort
+from agent_backbone.services.runtimes import RUNTIMES
 
 
 def validate_repo(repo: str, *, allow_empty: bool = False) -> None:
@@ -28,12 +28,13 @@ def validate_agent_spec(spec: AgentSpec) -> None:
         not isinstance(spec.model, str) or any(c.isspace() or ord(c) < 32 for c in spec.model)
     ):
         raise ValueError("model must be a model ID, optionally followed by :effort")
-    model, effort = split_model_effort(spec.model)
+    rt = RUNTIMES[spec.runtime]
+    model, effort = rt.split_model(spec.model)
     if effort and not model:
         raise ValueError("model effort requires a model ID")
     try:
-        RUNTIMES[spec.runtime].check_effort(effort)
-        RUNTIMES[spec.runtime].check_unattended(spec.unattended)
+        rt.check_effort(effort)
+        rt.check_unattended(spec.unattended)
     except RuntimeError as exc:
         raise ValueError(str(exc)) from exc
     validate_repo(spec.repo, allow_empty=True)

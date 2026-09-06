@@ -51,6 +51,15 @@ class TestHookLaunchArgs:
 
 
 class TestBuildCommand:
+    @pytest.mark.parametrize("runtime", ["opencode", "aider"])
+    @pytest.mark.parametrize(
+        "model", ["ollama/qwen3:8b", "ollama/model:high", "host:1234/model:tag"]
+    )
+    def test_tagged_model_is_passed_verbatim(self, runtime, model):
+        with _resolve(f"/bin/{runtime}"):
+            command = RUNTIMES[runtime].build_command(model=model)
+        assert command == [f"/bin/{runtime}", "--model", model]
+
     def test_claude_command_includes_settings(self, tmp_path):
         with _resolve("/usr/bin/claude"):
             command = RUNTIMES["claude"].build_command(

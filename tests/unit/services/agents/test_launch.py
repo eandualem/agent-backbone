@@ -19,6 +19,7 @@ from agent_backbone.services.agents import (
     write_state_file,
 )
 from agent_backbone.services.agents.models import AgentState
+from agent_backbone.services.runtimes import RUNTIMES
 
 _MOD = "agent_backbone.services.agents.launch"
 _BASE = "agent_backbone.services.runtimes.base"
@@ -616,6 +617,23 @@ class TestHookWiringReachesTheSession:
 
 
 class TestLaunchEnvFromRuntime:
+    @pytest.mark.parametrize("runtime", ["opencode", "aider"])
+    async def test_tagged_model_reaches_both_command_and_runtime_environment(
+        self, tmp_path, runtime
+    ):
+        config = bootstrap_config(tmp_path / "data")
+        spec = AgentSpec(name="local", dir=str(tmp_path), runtime=runtime, model="ollama/qwen3:8b")
+        with (
+            patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+            patch(f"{_MOD}.start_session", AsyncMock(return_value=True)) as start,
+            patch(f"{_BASE}.resolve_command", return_value=f"/bin/{runtime}"),
+            patch.object(RUNTIMES[runtime], "launch_env", return_value={}) as env,
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        command = start.await_args.kwargs["command"]
+        assert command[command.index("--model") + 1] == spec.model
+        env.assert_called_once_with(spec.model)
+
     async def test_runtime_environment_reaches_the_session(self, tmp_path):
         project = tmp_path / "project"
         project.mkdir()

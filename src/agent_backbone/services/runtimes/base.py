@@ -106,8 +106,9 @@ def read_brief(brief_file: Path | str) -> str | None:
 def split_model_effort(spec: str | None) -> tuple[str | None, str | None]:
     """Split a ``model[:effort]`` spec into ``(model, effort)``.
 
-    The effort is the text after the last colon. Model ids do not contain
-    one, and carrying the effort inside the model spec is what lets every
+    The effort is the text after the last colon. Call ``Runtime.split_model``
+    to account for runtimes with literal model tags. Carrying the effort in
+    the model spec is what lets every
     surface that already names a model name an effort too — ``--model``,
     ``agent set model=…`` and a swarm roster entry
     (``coordinator@codex/gpt-6-astra:high``) — without a second field.
@@ -142,6 +143,8 @@ class Runtime:
     CLI spells them (verified live against that CLI). Empty means the CLI has
     no effort switch, and an effort asked of it is refused rather than
     silently dropped."""
+    model_tags: bool = False
+    """Model IDs use literal colon tags, so ``:suffix`` is not an effort setting."""
     unattended_args: tuple[str, ...] | None = None
     """The CLI's own switch that stops it asking a person before acting — the
     launch arguments for an ``unattended`` agent, as the CLI spells them
@@ -229,6 +232,12 @@ class Runtime:
     def launch_env(self, model: str | None) -> dict[str, str]:
         """Extra environment the session needs (runtimes that take the model from a variable)."""
         return {}
+
+    def split_model(self, spec: str | None) -> tuple[str | None, str | None]:
+        """Interpret a model using this runtime's tag or effort syntax."""
+        if self.model_tags:
+            return spec or None, None
+        return split_model_effort(spec)
 
     @property
     def reports_state(self) -> str:
@@ -406,7 +415,7 @@ class Runtime:
             brief = None
         if self.brief_mode in ("message", "none"):
             brief = None
-        model_id, effort = split_model_effort(model)
+        model_id, effort = self.split_model(model)
         if effort and not model_id:
             # `:high` would otherwise pass validation and launch the CLI's
             # default model — a spec that names an effort must name a model.

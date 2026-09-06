@@ -23,6 +23,7 @@ class OpenCode(Runtime):
     aliases = ("open-code", "open_code")
     binary = "opencode"
     brief_mode = "initial_prompt"
+    model_tags = True
 
     runtime_markers = ("opencode", "ask anything...", "tab agents")
     placeholder_fragments = ("ask anything...", "ctrl+p commands")
