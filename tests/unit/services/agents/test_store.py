@@ -13,6 +13,20 @@ from agent_backbone.services.agents import AgentStore
 _DETECT_REPO = "agent_backbone.services.agents.store.detect_repo"
 
 
+@pytest.mark.parametrize("runtime", ["opencode", "aider"])
+async def test_tagged_models_survive_registration_update_and_reload(db, tmp_path, runtime):
+    store = AgentStore(db, tmp_path)
+    await store.start()
+    await store.register(
+        AgentSpec(name="local", dir=str(tmp_path), runtime=runtime, model="ollama/qwen3:8b")
+    )
+    assert store.agents.get("local").model == "ollama/qwen3:8b"
+    await store.update("local", model="ollama/qwen3:latest")
+    reloaded = AgentStore(db, tmp_path)
+    await reloaded.start()
+    assert reloaded.agents.get("local").model == "ollama/qwen3:latest"
+
+
 async def _store(db, tmp_path) -> AgentStore:
     store = AgentStore(db, tmp_path)
     await store.start()

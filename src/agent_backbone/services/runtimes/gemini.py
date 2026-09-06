@@ -65,7 +65,11 @@ class Gemini(Runtime):
         return Path("~/.gemini/settings.json").expanduser()
 
     def hook_launch_env(
-        self, data_dir: Path | str | None, state_dir: Path | str | None
+        self,
+        data_dir: Path | str | None,
+        state_dir: Path | str | None,
+        *,
+        env: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """``GEMINI_CLI_SYSTEM_SETTINGS_PATH`` → a backbone-owned settings file.
 

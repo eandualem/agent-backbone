@@ -61,10 +61,11 @@ Omit the suffix and the CLI uses its own default, which is not always the
 cheap one: GPT-6-Astra defaults to `low`, so a coordinator that has to
 validate and implement wants an explicit `:high` or better.
 
-An effort asked of a runtime that has none (`gemini`, `opencode`,
-`deepcode`, `aider`) is refused at start with a message naming the
-problem — it is never silently dropped, so an agent can trust that a
-start which succeeded got the effort it asked for.
+OpenCode and Aider interpret colons as literal model tags, so
+`ollama/qwen3:8b` is passed through unchanged; `:high` would also be part of
+the model ID for those runtimes. They do not accept the `model:effort`
+convention. Gemini and Deep Code reject an effort suffix because they have
+no effort setting.
 
 ## Watching repositories
 

@@ -10,7 +10,7 @@ from weakref import WeakValueDictionary
 from httpx import HTTPStatusError
 
 from agent_backbone.models import DeliveryOutcome, EventType
-from agent_backbone.services.routing._delivery import DeliveryReport, safe_deliver
+from agent_backbone.services.routing._delivery import DeliveryReport, is_acknowledged, safe_deliver
 from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import (
     list_open_queue_for_target,
@@ -68,6 +68,12 @@ async def flush_outbox(
                 continue
             delivery["session_name"] = session
             try:
+                if delivery["delivery_kind"] == "issue" and await is_acknowledged(
+                    db, delivery["repo"], delivery["issue_number"], target, session
+                ):
+                    await db.outbox.set_status(event_id, recipient, "skipped")
+                    result.skipped.append(recipient)
+                    continue
                 if retry and gh is not None:
                     try:
                         issue = await gh.get_issue(

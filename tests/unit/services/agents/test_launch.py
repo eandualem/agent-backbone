@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -18,6 +19,7 @@ from agent_backbone.services.agents import (
     write_state_file,
 )
 from agent_backbone.services.agents.models import AgentState
+from agent_backbone.services.runtimes import RUNTIMES
 
 _MOD = "agent_backbone.services.agents.launch"
 _BASE = "agent_backbone.services.runtimes.base"
@@ -562,6 +564,37 @@ class TestStartupHookAuthority:
 
 
 class TestHookWiringReachesTheSession:
+    async def test_opencode_keeps_inline_permissions_and_plugins_when_unattended(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        original = {
+            "permission": {"bash": "deny"},
+            "provider": {"local": {"options": {"baseURL": "http://localhost:11434/v1"}}},
+            "plugin": ["existing-plugin"],
+        }
+        spec = AgentSpec(
+            name="oc",
+            dir=str(project),
+            runtime="opencode",
+            unattended=True,
+            env={"OPENCODE_CONFIG_CONTENT": json.dumps(original)},
+        )
+        with (
+            patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+            patch(f"{_MOD}.start_session", AsyncMock(return_value=True)) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/opencode"),
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        launched = start.await_args.kwargs
+        assert "--auto" in launched["command"]
+        content = json.loads(launched["environment"]["OPENCODE_CONFIG_CONTENT"])
+        assert content == {
+            **original,
+            "plugin": ["existing-plugin", (config.data_dir / "hooks/opencode_hook.js").as_uri()],
+        }
+        assert json.loads(spec.env["OPENCODE_CONFIG_CONTENT"]) == original
+
     async def test_gemini_and_opencode_get_their_hook_environment(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         project = tmp_path / "project"
@@ -584,6 +617,23 @@ class TestHookWiringReachesTheSession:
 
 
 class TestLaunchEnvFromRuntime:
+    @pytest.mark.parametrize("runtime", ["opencode", "aider"])
+    async def test_tagged_model_reaches_both_command_and_runtime_environment(
+        self, tmp_path, runtime
+    ):
+        config = bootstrap_config(tmp_path / "data")
+        spec = AgentSpec(name="local", dir=str(tmp_path), runtime=runtime, model="ollama/qwen3:8b")
+        with (
+            patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+            patch(f"{_MOD}.start_session", AsyncMock(return_value=True)) as start,
+            patch(f"{_BASE}.resolve_command", return_value=f"/bin/{runtime}"),
+            patch.object(RUNTIMES[runtime], "launch_env", return_value={}) as env,
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        command = start.await_args.kwargs["command"]
+        assert command[command.index("--model") + 1] == spec.model
+        env.assert_called_once_with(spec.model)
+
     async def test_runtime_environment_reaches_the_session(self, tmp_path):
         project = tmp_path / "project"
         project.mkdir()

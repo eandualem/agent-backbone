@@ -130,3 +130,8 @@ is internal to the agent that runs it, and you talk to that agent.
   cancel did not clear it.
 
 Stall escalations go to the `escalation.target` agent.
+
+Telegram limits each button's [callback data](https://core.telegram.org/bots/api#inlinekeyboardbutton)
+to 64 bytes. If an agent name makes a button too large, the full alert is sent
+without its button row and directs you to the agent's terminal. Prompt identities
+are never shortened; buttons that fit retain the same stale-prompt protection.

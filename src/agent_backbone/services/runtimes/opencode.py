@@ -23,6 +23,7 @@ class OpenCode(Runtime):
     aliases = ("open-code", "open_code")
     binary = "opencode"
     brief_mode = "initial_prompt"
+    model_tags = True
 
     runtime_markers = ("opencode", "ask anything...", "tab agents")
     placeholder_fragments = ("ask anything...", "ctrl+p commands")
@@ -46,7 +47,11 @@ class OpenCode(Runtime):
         raise RuntimeError("OpenCode state comes from a plugin, not a command hook")
 
     def hook_launch_env(
-        self, data_dir: Path | str | None, state_dir: Path | str | None
+        self,
+        data_dir: Path | str | None,
+        state_dir: Path | str | None,
+        *,
+        env: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """``OPENCODE_CONFIG_CONTENT`` → ``{"plugin": ["file://…/opencode_hook.js"]}``.
 
@@ -58,12 +63,29 @@ class OpenCode(Runtime):
         """
         if data_dir is None or state_dir is None:
             return {}
+        # Inline config has higher precedence than the user's files. Preserve
+        # its provider options, permission denies and existing plugins. If we
+        # cannot compose it (e.g. JSONC), leave it intact for OpenCode to read
+        # and use terminal state detection instead of dropping configuration.
+        try:
+            content = json.loads((env or {}).get("OPENCODE_CONFIG_CONTENT") or "{}")
+        except ValueError:
+            content = None
+        if not isinstance(content, dict) or not isinstance(content.get("plugin", []), list):
+            log.warning(
+                "Skipping OpenCode hook injection: OPENCODE_CONFIG_CONTENT must be a JSON "
+                "object with a plugin array to merge; leaving the existing configuration intact"
+            )
+            return {}
         try:
             plugin = hooks.install_hook_files(Path(data_dir)) / self.hook_script
         except OSError as exc:
             log.warning("Could not write the hook files: %s", exc)
             return {}
-        return {"OPENCODE_CONFIG_CONTENT": json.dumps({"plugin": [plugin.as_uri()]})}
+        plugins = content.setdefault("plugin", [])
+        if plugin.as_uri() not in plugins:
+            plugins.append(plugin.as_uri())
+        return {"OPENCODE_CONFIG_CONTENT": json.dumps(content)}
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args: list[str] = []
