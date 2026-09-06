@@ -2,12 +2,12 @@
 
 import asyncio
 from dataclasses import replace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, create_autospec, patch
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import IssueData, ParsedLabels
 from agent_backbone.recent import RecentKeys
-from agent_backbone.services.github import QueueSnapshot
+from agent_backbone.services.github import GitHubClient, QueueSnapshot
 from agent_backbone.services.routing import list_open_queue_for_target
 
 
@@ -68,7 +68,7 @@ def test_refreshing_old_key_keeps_ordered_expiry_correct():
 
 
 async def test_arbitrary_labels_do_not_fetch_a_complete_queue_first():
-    gh = AsyncMock()
+    gh = create_autospec(GitHubClient, instance=True)
     expected = [IssueData(number=1, repo_full_name="acme/app")]
 
     async def fetch(**kwargs):
@@ -76,13 +76,13 @@ async def test_arbitrary_labels_do_not_fetch_a_complete_queue_first():
             "state": "open",
             "repo_full_name": "acme/app",
             "labels": ["bug"],
-            "limit": 2,
+            "per_page": 2,
         }
         return expected
 
     gh.list_issues.side_effect = fetch
     assert (
-        await QueueSnapshot(gh).list_issues(repo_full_name="acme/app", labels=["bug"], limit=2)
+        await QueueSnapshot(gh).list_issues(repo_full_name="acme/app", labels=["bug"], per_page=2)
         == expected
     )
     gh.list_issues.assert_awaited_once()
