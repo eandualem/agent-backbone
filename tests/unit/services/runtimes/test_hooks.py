@@ -7,6 +7,8 @@ import json
 import tomllib
 from unittest.mock import patch
 
+import pytest
+
 from agent_backbone.hooks import install
 from agent_backbone.services.runtimes import RUNTIMES
 
@@ -123,6 +125,29 @@ class TestGemini:
 
 
 class TestOpenCode:
+    def test_existing_hook_is_not_duplicated(self, tmp_path):
+        rt = RUNTIMES["opencode"]
+        env = rt.hook_launch_env(tmp_path, tmp_path / "state")
+        assert rt.hook_launch_env(tmp_path, tmp_path / "state", env=env) == env
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            '{/* JSONC */ "permission": {"bash": "deny"}}',
+            '{"permission": {"bash": "deny"}, "plugin": "unexpected"}',
+            '["unexpected"]',
+            "invalid config",
+        ],
+    )
+    def test_unmergeable_config_is_left_to_opencode_without_exposing_it(
+        self, tmp_path, content, caplog
+    ):
+        env = {"OPENCODE_CONFIG_CONTENT": content}
+        assert RUNTIMES["opencode"].hook_launch_env(tmp_path, tmp_path / "s", env=env) == {}
+        assert env["OPENCODE_CONFIG_CONTENT"] == content
+        assert "Skipping OpenCode hook injection" in caplog.text
+        assert content not in caplog.text
+
     def test_launch_env_loads_the_plugin_by_file_uri(self, tmp_path):
         env = RUNTIMES["opencode"].hook_launch_env(tmp_path, tmp_path / "state")
         content = json.loads(env["OPENCODE_CONFIG_CONTENT"])

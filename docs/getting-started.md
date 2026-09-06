@@ -80,6 +80,13 @@ is touched:
 The files under `<data_dir>/hooks/` are the backbone's and are regenerated
 on every start. Deep Code, Aider and `shell` are read from the terminal.
 
+For OpenCode, an agent's existing `OPENCODE_CONFIG_CONTENT` is preserved:
+the backbone appends its hook to the plugin array without replacing provider
+settings or permission rules. If the inline configuration cannot be merged as
+a JSON object (for example, JSONC), the backbone logs a warning, leaves it
+unchanged and falls back to terminal state detection. JSONC configuration files
+remain managed by OpenCode itself.
+
 For sessions you start *outside* the backbone, an optional one-time install
 adds the same hooks to the CLI's own settings:
 

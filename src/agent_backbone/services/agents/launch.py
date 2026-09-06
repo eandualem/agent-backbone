@@ -217,14 +217,14 @@ async def start_agent(
     if unattended:
         rt.prepare_unattended()
 
+    extra_env = {**spec.env, **rt.launch_env(split_model_effort(effective_model)[0])}
     environment = launch_environment(
         spec.name,
         rt.id,
         config.state_dir,
         {
-            **spec.env,
-            **rt.launch_env(split_model_effort(effective_model)[0]),
-            **rt.hook_launch_env(config.data_dir, config.state_dir),
+            **extra_env,
+            **rt.hook_launch_env(config.data_dir, config.state_dir, env=extra_env),
         },
     )
     # `starting` lives in its own marker file, written before the launch: a

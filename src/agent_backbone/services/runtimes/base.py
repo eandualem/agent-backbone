@@ -242,9 +242,13 @@ class Runtime:
         return []
 
     def hook_launch_env(
-        self, data_dir: Path | str | None, state_dir: Path | str | None
+        self,
+        data_dir: Path | str | None,
+        state_dir: Path | str | None,
+        *,
+        env: dict[str, str] | None = None,
     ) -> dict[str, str]:
-        """Extra environment that wires the runtime's state hooks to the backbone."""
+        """Hook overrides, composed with the session's existing ``env`` when needed."""
         return {}
 
     def hook_settings(

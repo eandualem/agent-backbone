@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -562,6 +563,37 @@ class TestStartupHookAuthority:
 
 
 class TestHookWiringReachesTheSession:
+    async def test_opencode_keeps_inline_permissions_and_plugins_when_unattended(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        original = {
+            "permission": {"bash": "deny"},
+            "provider": {"local": {"options": {"baseURL": "http://localhost:11434/v1"}}},
+            "plugin": ["existing-plugin"],
+        }
+        spec = AgentSpec(
+            name="oc",
+            dir=str(project),
+            runtime="opencode",
+            unattended=True,
+            env={"OPENCODE_CONFIG_CONTENT": json.dumps(original)},
+        )
+        with (
+            patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+            patch(f"{_MOD}.start_session", AsyncMock(return_value=True)) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/opencode"),
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        launched = start.await_args.kwargs
+        assert "--auto" in launched["command"]
+        content = json.loads(launched["environment"]["OPENCODE_CONFIG_CONTENT"])
+        assert content == {
+            **original,
+            "plugin": ["existing-plugin", (config.data_dir / "hooks/opencode_hook.js").as_uri()],
+        }
+        assert json.loads(spec.env["OPENCODE_CONFIG_CONTENT"]) == original
+
     async def test_gemini_and_opencode_get_their_hook_environment(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         project = tmp_path / "project"
