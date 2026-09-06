@@ -109,9 +109,24 @@ class OutboxRepo(Repo):
 
     async def discard_issue(
         self, repo: str, issue_number: int, *, keep_event_id: int | None = None
-    ) -> None:
-        """Retire pending notifications when their issue or PR closes."""
+    ) -> bool:
+        """Retire old receipts; return whether this is still the newest close.
+
+        Canonical close IDs end in GitHub's UTC closed_at timestamp. Arrival
+        order (and the replaying event ID) cannot identify the latest closure.
+        Legacy events without that identity fall back to their insertion order.
+        """
         async with self._tx() as conn:
+            latest = await conn.execute(
+                text(
+                    "SELECT id FROM events WHERE repo = :repo AND issue_number = :issue "
+                    "AND event_type = 'issue_closed' ORDER BY "
+                    "CASE WHEN delivery_id LIKE 'closed:%' THEN delivery_id ELSE '' END DESC, "
+                    "id DESC LIMIT 1"
+                ),
+                {"repo": repo, "issue": issue_number},
+            )
+            latest_id = latest.scalar_one_or_none()
             await conn.execute(
                 text(
                     "UPDATE event_outbox SET status = 'skipped', updated_at = :now "
@@ -119,5 +134,6 @@ class OutboxRepo(Repo):
                     "(SELECT id FROM events WHERE repo = :repo AND issue_number = :issue "
                     "AND (:keep IS NULL OR id != :keep))"
                 ),
-                {"repo": repo, "issue": issue_number, "now": now_iso(), "keep": keep_event_id},
+                {"repo": repo, "issue": issue_number, "now": now_iso(), "keep": latest_id},
             )
+            return keep_event_id is None or latest_id in {None, keep_event_id}

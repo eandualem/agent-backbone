@@ -80,6 +80,13 @@ def _serialized(fn: Callable[..., Awaitable[DeliveryReport]]):
         key = (id(asyncio.get_running_loop()), session_name)
         lock = _session_locks.setdefault(key, asyncio.Lock())
         async with lock:
+            db = kwargs.get("db")
+            source_key = kwargs.get("source_key") or ""
+            if db is not None and source_key.startswith("review-start:"):
+                async with db.events.review_delivery(source_key) as eligible:
+                    if not eligible:
+                        return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED)
+                    return await fn(session_name, *args, **kwargs)
             return await fn(session_name, *args, **kwargs)
 
     return locked

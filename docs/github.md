@@ -253,13 +253,17 @@ from fork check webhooks; poll intake can read checks via the PR head reference.
 Started notifications deduplicate by repository, PR, reviewer and commit;
 finished reviews retain their review ID. Finished state is durable, so a late
 start cannot reopen the same review. Finishing retires queued starts and pending
-outbox starts. Another commit is a separate lifecycle. Delivery already in flight
-can complete; terminal delivery cannot be recalled. Lifecycle retention follows
-the event retention setting.
+outbox starts. The running server serializes start delivery and completion by
+reviewer/commit, including starts already leased by a queue drain. A start already
+being delivered completes before the finished notice; terminal delivery cannot
+be recalled. Serialization, like the terminal delivery gate, is scoped to the
+single server process; finished state survives restarts. Another commit is a
+separate lifecycle. Lifecycle retention follows the event retention setting.
 
 Close notices deduplicate by repository, issue and `closed_at` across webhook
 and poll intake. A later acknowledgement comment or label edit changes
 `updated_at`, not closure identity. A reopen followed by a new close is a new
 event. Opener notices use durable outbox receipts, so failed queue storage retries
-without repeating a delivered notice. Polling ignores closure times older than
-its replay window.
+without repeating a delivered notice. An older close replay cannot retire a
+newer close receipt or repeat its queue purge and next-issue selection. Polling
+ignores closure times older than its replay window.

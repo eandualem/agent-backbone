@@ -446,6 +446,30 @@ async def test_commit_status_reviewers_use_latest_status_per_context(config, db)
     assert await poller._review_events(TEST_REPO, "2026-09-05T18:00:00Z", config) == []
 
 
+async def test_status_contexts_are_scoped_to_eligible_normalized_reviewers(config, db):
+    config = replace(config, github=replace(config.github, reviewers=("reviewer", "other")))
+    gh = AsyncMock()
+    gh.list_pulls_raw.return_value = [{"number": 1, "head": {"sha": "abc"}}]
+    gh.list_check_runs.return_value = gh.list_reviews_raw.return_value = []
+    status = {
+        "context": "Review",
+        "state": "pending",
+        "created_at": "2026-09-05T18:42:43Z",
+    }
+    gh.list_commit_statuses.return_value = [
+        {**status, "id": 4, "creator": {"login": "outsider"}, "state": "success"},
+        {**status, "id": 3, "creator": {"login": "OTHER[bot]"}, "state": "success"},
+        {**status, "id": 2, "creator": {"login": "other"}},
+        {**status, "id": 1, "creator": {"login": "reviewer[bot]"}},
+    ]
+    events = await GitHubPoller(config, db, gh)._review_events(
+        TEST_REPO, "2026-09-05T18:00:00Z", config
+    )
+    assert len(events) == 1
+    assert events[0].event_type == EventType.REVIEW_STARTED
+    assert events[0].review.user_login == "reviewer[bot]"
+
+
 async def test_review_failure_keeps_issue_intake_and_replay_cursor(config, db, dispatch):
     config = replace(config, github=replace(config.github, reviewers=("reviewer",)))
     gh = AsyncMock()

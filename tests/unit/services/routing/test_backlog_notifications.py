@@ -1,7 +1,10 @@
 """Close and review lifecycle replay regressions using the real database."""
 
+import asyncio
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from agent_backbone.models import (
     EventType,
@@ -220,3 +223,138 @@ async def test_new_close_retires_old_failed_close_outbox(db):
     await db.outbox.discard_issue("acme/app", 1, keep_event_id=second)
     assert (await db.outbox.entries(first))[0]["status"] == "skipped"
     assert (await db.outbox.entries(second))[0]["status"] == "pending"
+
+
+@pytest.mark.parametrize("arrival", [("old", "new"), ("new", "old")])
+async def test_old_close_replay_preserves_newer_receipt_and_skips_lifecycle(config, db, arrival):
+    ids = {}
+    times = {"old": "2026-09-05T14:00:00Z", "new": "2026-09-05T15:00:00Z"}
+    for name in arrival:
+        ids[name] = await db.events.record(
+            delivery_id=f"closed:acme/app#1@{times[name]}",
+            source="poll",
+            event_type="issue_closed",
+            repo="acme/app",
+            issue_number=1,
+        )
+        await db.outbox.plan(ids[name], [{"session_name": "leo"}])
+    old = IssueEvent(
+        event_type=EventType.ISSUE_CLOSED,
+        delivery_id="replay",
+        issue=IssueData(
+            number=1, repo_full_name="acme/app", state="closed", closed_at=times["old"]
+        ),
+    )
+    with patch("agent_backbone.services.routing._ingest.on_issue_closed") as lifecycle:
+        assert "superseded" in await dispatch_event(old, config, db, AsyncMock())
+    lifecycle.assert_not_called()
+    assert (await db.outbox.entries(ids["old"]))[0]["status"] == "skipped"
+    assert (await db.outbox.entries(ids["new"]))[0]["status"] == "pending"
+
+
+async def test_completion_between_outbox_check_and_delivery_suppresses_start(config, db):
+    started = _review(EventType.REVIEW_STARTED)
+    started.issue.labels = ParsedLabels(targets=["leo"])
+    key = review_source_key(started.issue, started.review)
+    checked, release = asyncio.Event(), asyncio.Event()
+    original = db.events.review_finished
+    first = True
+
+    async def paused_check(source_key):
+        nonlocal first
+        result = await original(source_key)
+        # First check is in ingestion; pause the second, in the outbox.
+        if first:
+            first = False
+        elif not checked.is_set():
+            checked.set()
+            await release.wait()
+        return result
+
+    with (
+        patch.object(db.events, "review_finished", side_effect=paused_check),
+        patch("agent_backbone.services.routing._delivery.send_message") as send,
+    ):
+        async with asyncio.timeout(5):
+            task = asyncio.create_task(dispatch_event(started, config, db, None))
+            await checked.wait()
+            await db.events.finish_review(key)
+            release.set()
+            await task
+    send.assert_not_called()
+
+
+async def test_completion_waits_for_active_review_start_delivery(config, db):
+    from agent_backbone.services.routing import safe_deliver
+    from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+    started = _review(EventType.REVIEW_STARTED)
+    key = review_source_key(started.issue, started.review)
+    entered, release, finishing = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    order = []
+
+    async def send(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        order.append("start")
+        return True
+
+    async def finish():
+        finishing.set()
+        await db.events.finish_review(key)
+        order.append("finish")
+
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            return_value=SessionProfile("leo", SessionIntelligence.READY),
+        ),
+        patch("agent_backbone.services.routing._delivery.send_message", side_effect=send),
+    ):
+        async with asyncio.timeout(5):
+            start_task = asyncio.create_task(
+                safe_deliver(
+                    "leo", "started", config, db=db, source_key=key, delivery_kind="review"
+                )
+            )
+            await entered.wait()
+            finish_task = asyncio.create_task(finish())
+            await finishing.wait()
+            assert not finish_task.done()
+            release.set()
+            await asyncio.gather(start_task, finish_task)
+    assert order == ["start", "finish"]
+
+
+async def test_completion_retires_start_already_loaded_by_queue_drain(config, db):
+    from agent_backbone.services.jobs.retry import drain_message_queue
+
+    started = _review(EventType.REVIEW_STARTED)
+    key = review_source_key(started.issue, started.review)
+    await db.queue.enqueue(
+        session_name="leo", message="started", source_key=key, delivery_kind="review"
+    )
+    loaded, release = asyncio.Event(), asyncio.Event()
+    dequeue = db.queue.dequeue
+
+    async def paused_dequeue(*args, **kwargs):
+        rows = await dequeue(*args, **kwargs)
+        loaded.set()
+        await release.wait()
+        return rows
+
+    with (
+        patch.object(db.queue, "dequeue", side_effect=paused_dequeue),
+        patch("agent_backbone.services.routing._delivery.send_message") as send,
+    ):
+        async with asyncio.timeout(5):
+            task = asyncio.create_task(
+                drain_message_queue(config, db, None, active_sessions=["leo"])
+            )
+            await loaded.wait()
+            await db.events.finish_review(key)
+            release.set()
+            result = await task
+    send.assert_not_called()
+    assert result["queue_cleared"] == 1
+    assert await db.queue.pending_count("leo") == 0

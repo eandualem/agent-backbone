@@ -130,6 +130,11 @@ async def _drain_session(config, db, gh, session_name, summary) -> None:
                 queue_scope=scope,
                 delivery_kind=record.get("delivery_kind", "issue"),
                 sender=record.get("sender") or "",
+                source_key=(
+                    record["dedup_key"].removeprefix("src:")
+                    if (record.get("dedup_key") or "").startswith("src:")
+                    else None
+                ),
                 # The leased row already holds this message, including on failure.
                 requeue=False,
             )

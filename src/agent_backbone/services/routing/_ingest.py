@@ -157,9 +157,11 @@ async def _route(event, config, db, gh, issue_closed_hooks, *, event_id=None) ->
         if event.event_type == EventType.REVIEW_SUBMITTED:
             await db.events.finish_review(review_key)
     if event.event_type == EventType.ISSUE_CLOSED:
-        await db.outbox.discard_issue(
+        current_close = await db.outbox.discard_issue(
             event.issue.repo_full_name, event.issue.number, keep_event_id=event_id
         )
+        if not current_close:
+            return "ignored: superseded issue closure"
         if gh is None:
             return "ignored: github client not configured"
         if event_id is not None and await db.outbox.entries(event_id):

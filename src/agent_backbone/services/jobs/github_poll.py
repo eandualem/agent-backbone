@@ -252,15 +252,17 @@ class GitHubPoller:
             if sha:
                 contexts = set()
                 for status in await self._gh.list_commit_statuses(sha, repo):
-                    context = status.get("context", "").casefold()
+                    reviewer = (status.get("creator") or {}).get("login", "")
+                    if not config.github.is_reviewer(reviewer):
+                        continue
+                    context = (
+                        reviewer.casefold().removesuffix("[bot]"),
+                        status.get("context", "").casefold(),
+                    )
                     if context in contexts:
                         continue
                     contexts.add(context)  # REST returns newest first.
-                    reviewer = (status.get("creator") or {}).get("login", "")
-                    if (
-                        not config.github.is_reviewer(reviewer)
-                        or (status.get("created_at") or "") < since
-                    ):
+                    if (status.get("created_at") or "") < since:
                         continue
                     event = review_status_event(
                         status, sha, pull, repo, f"poll:status:{status['id']}"

@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from weakref import WeakValueDictionary
+
 from sqlalchemy import text
 
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
+_review_locks: WeakValueDictionary[tuple[int, int, str], asyncio.Lock] = WeakValueDictionary()
+
 
 class EventRepo(Repo):
+    def _review_lock(self, source_key: str) -> asyncio.Lock:
+        # The server owns one engine. Like terminal delivery serialization,
+        # this lock spans awaits without holding a SQLite write transaction
+        # open through terminal I/O and its separate receipt transactions.
+        key = (id(asyncio.get_running_loop()), id(self._engine()), source_key)
+        return _review_locks.setdefault(key, asyncio.Lock())
+
+    @asynccontextmanager
+    async def review_delivery(self, source_key: str) -> AsyncIterator[bool]:
+        """Serialize start delivery with completion in the running server."""
+        async with self._review_lock(source_key):
+            yield not await self.review_finished(source_key)
+
     async def review_finished(self, source_key: str) -> bool:
         async with self._tx() as conn:
             result = await conn.execute(
@@ -20,6 +40,10 @@ class EventRepo(Repo):
             return result.scalar_one_or_none() is not None
 
     async def finish_review(self, source_key: str) -> None:
+        async with self._review_lock(source_key):
+            await self._finish_review(source_key)
+
+    async def _finish_review(self, source_key: str) -> None:
         async with self._tx() as conn:
             await conn.execute(
                 text(
