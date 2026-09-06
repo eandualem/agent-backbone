@@ -38,19 +38,6 @@ _REPO = "example/orchestration"
 _BUSY_ISSUE_42_SNAP = StateSnapshot(
     state=AgentState.BUSY, current_issue=42, current_repo=_REPO, source="push"
 )
-_BUSY_ISSUE_99_SNAP = StateSnapshot(
-    state=AgentState.BUSY, current_issue=99, current_repo=_REPO, source="push"
-)
-_PLAN_ISSUE_42_SNAP = StateSnapshot(
-    state=AgentState.WAITING_FOR_HUMAN,
-    reason="plan",
-    current_issue=42,
-    current_repo=_REPO,
-    source="push",
-)
-_BUSY_ISSUE_42_UNKNOWN_REPO_SNAP = StateSnapshot(
-    state=AgentState.BUSY, current_issue=42, source="push"
-)
 
 _INTEL = "agent_backbone.services.routing._intelligence"
 _DELIV = "agent_backbone.services.routing._delivery"
@@ -668,35 +655,46 @@ class TestSafeDeliver:
             preview="Hello",
         )
 
-    @pytest.mark.parametrize("snap", [_BUSY_ISSUE_42_SNAP, _PLAN_ISSUE_42_SNAP])
-    async def test_comment_on_current_issue_bypasses_blocking_state(self, config, snap):
-        mock_db = AsyncMock()
-        with _online(snap=snap), _patch_send_message(True):
-            result = await safe_deliver(
-                "ike", "Comment", config, db=mock_db, delivery_kind="comment", **_issue_kwargs()
-            )
-        assert result == "delivered"
+    @pytest.mark.parametrize("priority", [False, True])
+    @pytest.mark.parametrize(
+        ("state", "reason"),
+        [
+            (AgentState.BUSY, None),
+            (AgentState.STARTING, None),
+            (AgentState.BLOCKED, "provider"),
+            (AgentState.BLOCKED, "quota"),
+            (AgentState.WAITING_FOR_HUMAN, "permission"),
+            (AgentState.WAITING_FOR_HUMAN, "plan"),
+            (AgentState.WAITING_FOR_HUMAN, "question"),
+        ],
+    )
+    async def test_current_issue_comments_wait_until_ready(
+        self, config, db, state, reason, priority
+    ):
+        from agent_backbone.services.jobs.retry import drain_message_queue
 
-    async def test_comment_on_same_number_in_unknown_repo_does_not_bypass(self, config):
-        # other/repo#42 must not slip past busy protection because the agent
-        # works on #42 of a repository the hook did not name.
-        mock_db = AsyncMock()
-        with _online(snap=_BUSY_ISSUE_42_UNKNOWN_REPO_SNAP):
-            result = await safe_deliver(
-                "ike", "Comment", config, db=mock_db, delivery_kind="comment", **_issue_kwargs()
+        snap = StateSnapshot(
+            state=state, reason=reason, current_issue=42, current_repo=_REPO, source="push"
+        )
+        with _online(snap=snap), _patch_send_message(True) as send:
+            report = await deliver(
+                "ike",
+                "Comment",
+                config,
+                db=db,
+                delivery_kind="comment",
+                priority=priority,
+                **_issue_kwargs(),
             )
-        assert result == "agent_working"
-
-    async def test_comment_on_other_issue_is_queued_while_busy(self, config):
-        mock_db = AsyncMock()
-        with _online(snap=_BUSY_ISSUE_99_SNAP):
-            result = await safe_deliver(
-                "ike", "Comment", config, db=mock_db, delivery_kind="comment", **_issue_kwargs()
-            )
-        assert result == "agent_working"
-        mock_db.queue.enqueue.assert_called_once()
-        assert mock_db.deliveries.record.await_args.kwargs["outcome"] == "agent_working"
-        assert mock_db.deliveries.record.await_args.kwargs["kind"] == "comment"
+            send.assert_not_called()
+        expected = "waiting_for_human" if state == AgentState.WAITING_FOR_HUMAN else "agent_working"
+        assert report.outcome == expected and report.queued
+        assert await db.queue.pending_count("ike") == 1
+        with _online(), _patch_send_message(True) as send:
+            result = await drain_message_queue(config, db, None, active_sessions=["ike"])
+            send.assert_awaited_once()
+        assert result["queue_delivered"] == 1
+        assert await db.queue.pending_count("ike") == 0
 
     async def test_settling_defers(self, config):
         with patch(

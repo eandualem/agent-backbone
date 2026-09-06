@@ -205,8 +205,9 @@ sequenceDiagram
   counts as delivered.
 - **Busy is never bypassed.** `priority: true` (and issues labelled
   `blocking`) only get through `human_typing` and `settling`.
-- **Comments on the issue the agent is working on** are delivered even
-  while it is busy or waiting; comments on other issues wait.
+- **Comments**, including those on the current issue, wait while the agent is
+  starting, busy, blocked, or waiting for a human. They are queued and delivered
+  when the agent is ready; priority does not bypass these conditions.
 - **Queue hygiene.** Undelivered after `timing.queue_expiry_minutes` (30):
   expired. Leased by a crashed drain: released after 5 min. A blocked drain
   keeps the original row, including when displaying its age; completed rows
@@ -374,6 +375,7 @@ re-read and missed plan-waiting notifications fire right after a restart.
 
 Queue lists and sub-issue reads share one complete repository snapshot within a
 monitor tick or close event. Each tick/request starts a new snapshot; a failed
-read stays failed within that snapshot. Status fans out with at most eight
+read stays failed within that snapshot. Arbitrary label queries go directly to
+GitHub with their requested filters and pagination. Status fans out with at most eight
 concurrent reads. Terminal readiness and individual issue retirement checks stay
 fresh at delivery time.

@@ -2,7 +2,6 @@
 
 import asyncio
 from dataclasses import replace
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 from agent_backbone.config import AgentsConfig, AgentSpec
@@ -25,7 +24,6 @@ async def test_concurrent_filtered_lists_share_complete_repo_request():
     gh.list_issues.assert_awaited_once_with(state="open", repo_full_name="acme/app", all_pages=True)
     gh.list_issues.return_value = []
     assert await QueueSnapshot(gh).list_issues(repo_full_name="acme/app") == []
-    assert snapshot.created_at <= datetime.now(UTC)
 
 
 async def test_queue_orders_real_cross_repo_age_and_recorded_dependents(config, db):
@@ -67,3 +65,24 @@ def test_refreshing_old_key_keeps_ordered_expiry_correct():
         assert cache.seen("old")
         assert not cache.seen("middle")
         assert len(cache._marked) == 1
+
+
+async def test_arbitrary_labels_do_not_fetch_a_complete_queue_first():
+    gh = AsyncMock()
+    expected = [IssueData(number=1, repo_full_name="acme/app")]
+
+    async def fetch(**kwargs):
+        assert kwargs == {
+            "state": "open",
+            "repo_full_name": "acme/app",
+            "labels": ["bug"],
+            "limit": 2,
+        }
+        return expected
+
+    gh.list_issues.side_effect = fetch
+    assert (
+        await QueueSnapshot(gh).list_issues(repo_full_name="acme/app", labels=["bug"], limit=2)
+        == expected
+    )
+    gh.list_issues.assert_awaited_once()

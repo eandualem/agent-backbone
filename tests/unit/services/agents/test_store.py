@@ -125,3 +125,18 @@ async def test_rediscovery_preserves_update_while_waiting_for_agent_lock(db, tmp
             await store.update("app", description="keep this", model="keep-model")
         spec = await asyncio.wait_for(rediscover, 2)
     assert (spec.description, spec.model) == ("keep this", "keep-model")
+
+
+@pytest.mark.parametrize(
+    ("directory", "expected"),
+    [("_app", "app"), ("_.-app_test_", "app_test_"), ("___", "agent")],
+)
+async def test_discovery_normalizes_names_before_registration(db, tmp_path, directory, expected):
+    store = AgentStore(db, tmp_path)
+    await store.start()
+    project = tmp_path / directory
+    project.mkdir()
+    with patch(_DETECT_REPO, AsyncMock(return_value="")):
+        spec = await store.register_directory(project)
+    assert spec.name == expected
+    assert store.agents.get(expected).path == project

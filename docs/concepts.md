@@ -22,7 +22,9 @@ app: ready — claude repo acme/app
 
 - **Name** — the directory name (`--name` to override). It is the tmux
   session name, the value of `for:<name>` labels, and the `from:` identity
-  in messages the agent sends.
+  in messages the agent sends. Discovery removes leading punctuation so the
+  name starts with a letter or digit (`_app` becomes `app`); a name containing
+  only punctuation becomes `agent`. Internal underscores and dots are preserved.
 - **Runtime** — `claude`, `codex`, `gemini`, `opencode`, `deepcode`, `aider`
   or `shell`; default `claude` (`agents.default_runtime`).
 - **Repository** — read from `git remote origin`. An agent whose directory is

@@ -7,13 +7,11 @@ still reach GitHub so delivery retirement checks do not use stale state.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 
 
 class QueueSnapshot:
     def __init__(self, client, *, concurrency: int = 8) -> None:
         self.client = client
-        self.created_at = datetime.now(UTC)
         self._limit = asyncio.Semaphore(concurrency)
         self._lists: dict[tuple, asyncio.Task] = {}
 
@@ -32,7 +30,8 @@ class QueueSnapshot:
         return await self._lists[key]
 
     async def list_issues(self, *, state="open", labels=None, repo_full_name, **kwargs):
-        if state != "open":
+        if state != "open" or any(not label.startswith("for:") for label in labels or ()):
+            # Arbitrary label queries keep the client's filters and pagination.
             return await self.client.list_issues(
                 state=state, labels=labels, repo_full_name=repo_full_name, **kwargs
             )
@@ -43,12 +42,6 @@ class QueueSnapshot:
             ),
         )
         if labels:
-            # Queue callers filter only for:<agent>; preserve other callers'
-            # semantics by sending their arbitrary labels to the real client.
-            if any(not label.startswith("for:") for label in labels):
-                return await self.client.list_issues(
-                    state=state, labels=labels, repo_full_name=repo_full_name, **kwargs
-                )
             items = [i for i in items if all(label[4:] in i.labels.targets for label in labels)]
         return list(items)
 

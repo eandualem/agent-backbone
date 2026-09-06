@@ -37,10 +37,6 @@ log = logging.getLogger(__name__)
 
 _BYPASSABLE = frozenset({SessionIntelligence.HUMAN_TYPING, SessionIntelligence.SETTLING})
 """Blocking conditions ``priority`` may push through. Busy and waiting never are."""
-_ACTIVE_ISSUE_CONDITIONS = frozenset(
-    {SessionIntelligence.AGENT_WORKING, SessionIntelligence.WAITING_FOR_HUMAN}
-)
-"""Conditions under which a comment on the agent's *current* issue still goes in."""
 
 
 @dataclass(frozen=True)
@@ -113,16 +109,6 @@ def queue_detail(report: DeliveryReport, session_name: str, expiry_minutes: int)
             "could not be stored. Send it again later."
         )
     return f"Not delivered: {session_name} is {why}. This kind of message is not queued."
-
-
-def _comment_matches_active_issue(
-    repo: str, issue_number: int | None, current_repo: str | None, current_issue: int | None
-) -> bool:
-    if issue_number is None or current_issue is None or issue_number != current_issue:
-        return False
-    # An unknown repository on either side is not a match: other/repo#42 must
-    # not slip past busy protection because the agent works on own/repo#42.
-    return bool(repo and current_repo and repo.casefold() == current_repo.casefold())
 
 
 async def is_acknowledged(
@@ -392,9 +378,6 @@ async def deliver(
     # 3. Readiness
     profile = await get_session_intelligence(session_name, config, idle_since=idle_since)
     intel = profile.intelligence
-    same_issue_comment = kind == "comment" and _comment_matches_active_issue(
-        repo, issue_number, profile.current_repo, profile.current_issue
-    )
 
     if kind == "plan_response":
         # A plan response is typed into the plan prompt itself, so it goes in
@@ -411,9 +394,7 @@ async def deliver(
         return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=False)
 
     if intel in BLOCKED_OUTCOMES:
-        bypass = (priority and intel in _BYPASSABLE) or (
-            same_issue_comment and intel in _ACTIVE_ISSUE_CONDITIONS
-        )
+        bypass = priority and intel in _BYPASSABLE
         if not bypass:
             # Issue deliveries are re-attempted by the retry job; other kinds
             # are queued durably (except while merely settling / offline issues).

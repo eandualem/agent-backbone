@@ -235,9 +235,13 @@ def test_every_module_imports_only_from_its_layer_or_below():
             dest = _package_of(target)
             assert source in _ALLOWED, f"{source} has no entry in test_imports._ALLOWED"
             assert dest in _ALLOWED, f"{dest} has no entry in test_imports._ALLOWED"
+            where = f"{path.relative_to(root)}:{line}"
             if dest != source and dest not in _ALLOWED[source]:
-                where = f"{path.relative_to(root)}:{line}"
                 violations.append(f"{where} imports {target} ({source} -> {dest})")
+            if dest != source and any(
+                part.startswith("_") and part != "__init__" for part in target.split(".")[1:]
+            ):
+                violations.append(f"{where} imports another package's private module {target}")
     assert not violations, "\n".join(violations)
 
 

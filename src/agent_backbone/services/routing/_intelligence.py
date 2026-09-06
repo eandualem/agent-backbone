@@ -21,8 +21,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.agents._inference import get_agent_state
+from agent_backbone.services.agents import get_agent_state, read_state_file
 from agent_backbone.services.agents.models import WORKING_STATES, AgentState
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.runtimes import resolve_runtime

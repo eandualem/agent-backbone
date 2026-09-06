@@ -1,4 +1,4 @@
-"""Tests for agent_backbone/services/streaming/_pty.py — 1:1 PTY model."""
+"""Tests for agent_backbone/services/terminal/_pty.py — 1:1 PTY model."""
 
 from __future__ import annotations
 
@@ -165,35 +165,26 @@ class TestPtySession:
 
     async def test_start_and_cleanup(self):
         """Start spawns a tmux attach process and cleanup terminates it in executor."""
-        with patch(f"{_PTY}.subprocess.Popen") as mock_popen:
-            mock_proc = MagicMock()
+        with (
+            patch(f"{_PTY}.subprocess.Popen") as mock_popen,
+            patch.object(PtySession, "_read_loop", new_callable=AsyncMock) as reader,
+        ):
+            mock_proc = mock_popen.return_value
             mock_proc.pid = 12345
-            mock_popen.return_value = mock_proc
-
-            master_fd, slave_fd = os.openpty()
-            with patch(f"{_PTY}.os.openpty", return_value=(master_fd, slave_fd)):
-                with patch(f"{_PTY}.os.close"):
-                    with patch(f"{_PTY}.asyncio.create_task"):
-                        session = PtySession("test-session")
-                        session.start(cols=120, rows=40)
-
-                        assert session.master_fd == master_fd
-                        assert session._process is mock_proc
-
-                        # Verify tmux attach command
-                        call_args = mock_popen.call_args
-                        assert call_args[0][0] == ["tmux", "attach-session", "-t", "=test-session:"]
-                        assert call_args[1]["env"]["TERM"] == "xterm-256color"
-
-                        # Cleanup runs _terminate_process in executor
-                        await session.cleanup()
-                        mock_proc.send_signal.assert_called_once_with(signal.SIGTERM)
-
-            # Clean up our test fds
+            session = PtySession("test-session")
             try:
-                os.close(master_fd)
-            except OSError:
-                pass
+                session.start(cols=120, rows=40)
+                await session._reader_task
+                reader.assert_awaited_once()
+                assert session.master_fd is not None
+                assert session._process is mock_proc
+                call_args = mock_popen.call_args
+                assert call_args[0][0] == ["tmux", "attach-session", "-t", "=test-session:"]
+                assert call_args[1]["env"]["TERM"] == "xterm-256color"
+            finally:
+                await session.cleanup()
+            mock_proc.send_signal.assert_called_once_with(signal.SIGTERM)
+            assert session.master_fd is None
 
     def test_resize_sends_ioctl(self):
         """Resize calls ioctl with TIOCSWINSZ."""
