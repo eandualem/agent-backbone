@@ -129,9 +129,8 @@ reach installed databases.
   released branch and only receives merges from `develop`. Never push to
   `main` or `develop` directly. Merges are squash merges titled
   `<type>: <subject> (#N)`.
-- A PR that fully implements an issue includes `Closes #N`. After review and
-  merge, verify GitHub closed the issue; otherwise link the merged PR and close
-  it manually. Partial fixes use `Refs #N` and state the remaining work.
+- Partial fixes use `Refs #N` and state the remaining work. This repository uses
+  `Refs` as its convention for non-closing issue references.
 - Docs are part of a change: update the page that describes the behaviour
   you touched. User-visible strings use the vocabulary from
   `docs/concepts.md` (states, delivery conditions, kinds).
