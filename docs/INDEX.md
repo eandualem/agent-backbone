@@ -15,6 +15,7 @@ available as `backbone docs PAGE` after installation (for example,
 - [Report audio](report-audio.md) — optional local read-aloud in Telegram.
 - [Progress reports](reports.md) — goals, progress, blockers and next steps.
 - [Instruction templates](templates.md) — edit base, role and tag instructions.
+- [Deep reviews](deep-reviews.md) — run reviews in the background and retrieve findings.
 - [Swarms](swarms.md) — coordinate several agents on one task.
 - [Configuration](configuration.md) — settings, secrets and data locations.
 - [Diagnostics](diagnostics.md) — investigate failures, retries and startup problems.
