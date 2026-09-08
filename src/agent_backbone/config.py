@@ -160,7 +160,9 @@ SETTINGS_HELP: dict[str, str] = {
     "timing.monitor_interval_seconds": "agent-monitor job period",
     "timing.retry_interval_seconds": "delivery-retry job period",
     "timing.start_timeout_seconds": "How long `agent start` waits for the prompt",
-    "timing.delivery_retention_days": "Delivery, event and completed queue retention in days",
+    "timing.delivery_retention_days": (
+        "Delivery, event, completed queue and diagnostic retention in days"
+    ),
     "telegram.allowed_chat_ids": "Chat ids allowed to control the backbone (JSON list) — required",
     "telegram.notification_chat_id": "Where alerts are sent",
     "telegram.group_chat_id": "Forum group where each agent gets a topic (learned if unset)",

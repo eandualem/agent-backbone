@@ -357,6 +357,25 @@ class TestAgentCommands:
 
 
 class TestTell:
+    def test_queued_reply_keeps_exact_operation_reference(self, capsys):
+        operation = "3d4f9a1bdede492d88eb6061afc33790"
+        receipt = {
+            "ok": False,
+            "session": "ike",
+            "outcome": "agent_working",
+            "queued": True,
+            "queue": "stored",
+            "detail": "Queued for ike.",
+            "operation_id": operation,
+            "delivery_id": 23,
+            "queue_id": 9,
+        }
+        with patch("agent_backbone.cli._common.api", return_value=(200, receipt)):
+            assert _run(["tell", "ike", "hello"]) == 2
+        output = capsys.readouterr().out.splitlines()
+        assert json.loads(output[0]) == receipt
+        assert output[-1] == f"trace: backbone diagnostics trace {operation}"
+
     def test_sender_defaults_to_backbone_agent(self, monkeypatch):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
         args = cli.build_parser().parse_args(["tell", "x", "hi"])

@@ -246,7 +246,10 @@ async def _agent(args: argparse.Namespace) -> int:
                     f"{'' if data['known'] else ' (not a known agent)'}"
                 )
                 print(f"  dir:      {data['dir'] or '-'}")
-                print(f"  runtime:  {data['runtime'] or '-'}   model: {data['model'] or '-'}")
+                print(
+                    f"  runtime:  {data['runtime'] or '-'}   "
+                    f"configured model: {data['model'] or '-'}"
+                )
                 watches = ", ".join(data["watches"]) or "-"
                 print(f"  repo:     {data['repo'] or '-'}   watches: {watches}")
                 reason = f" ({data['reason']})" if data.get("reason") else ""
@@ -420,6 +423,8 @@ async def _tell(args: argparse.Namespace) -> int:
         print(data["detail"])
     if data.get("ok"):
         return 0
+    if data.get("operation_id"):
+        print(f"trace: backbone diagnostics trace {data['operation_id']}")
     return 2 if data.get("queued") else 1
 
 

@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import time
 from dataclasses import replace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 
@@ -436,6 +436,7 @@ class TestSafeDeliver:
             repo="example/orchestration",
             sender="",
             source_key=None,
+            operation_id=ANY,
         )
 
     async def test_every_delivery_is_recorded_even_direct_messages(self, config):
@@ -459,6 +460,7 @@ class TestSafeDeliver:
             repo="",
             kind="direct_message",
             preview="Hi there",
+            operation_id=ANY,
         )
 
     async def test_human_typing_blocks(self, config):
@@ -510,6 +512,7 @@ class TestSafeDeliver:
             repo="",
             sender="",
             source_key=None,
+            operation_id=ANY,
         )
 
     @pytest.mark.parametrize("snap", [_PLAN_SNAP, _PERMISSION_SNAP])
@@ -620,7 +623,7 @@ class TestSafeDeliver:
             result = await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
         assert result == "delivered"
         assert order == ["claim", "send", "finalize"]
-        mock_db.deliveries.finalize.assert_awaited_once_with(123, "delivered")
+        mock_db.deliveries.finalize.assert_awaited_once_with(123, "delivered", operation_id=ANY)
         assert mock_db.deliveries.claim.await_args.kwargs["repo"] == "example/orchestration"
         mock_db.deliveries.record.assert_not_called()
 
@@ -653,6 +656,7 @@ class TestSafeDeliver:
             repo="example/orchestration",
             kind="comment",
             preview="Hello",
+            operation_id=ANY,
         )
 
     @pytest.mark.parametrize("priority", [False, True])

@@ -16,6 +16,7 @@ from agent_backbone.services.runtimes import shell
 from agent_backbone.services.runtimes._pane import GENERIC_BUSY_FRAGMENTS, sanitize_pane_content
 from agent_backbone.services.runtimes.base import (
     Runtime,
+    RuntimeDiagnostic,
     read_brief,
     resolve_command,
     split_model_effort,
@@ -103,6 +104,7 @@ __all__ = [
     "STATE_DIR_ENV_KEY",
     "UNKNOWN",
     "Runtime",
+    "RuntimeDiagnostic",
     "detect_runtime",
     "get_runtime",
     "read_brief",

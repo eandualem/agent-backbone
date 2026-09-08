@@ -7,6 +7,9 @@ prints any of them from an installed backbone, and `backbone help <topic>`
 prints the shorter playbooks written for agents (`setup`, `agents`,
 `messaging`, `github`, `swarms`).
 
+For local failures and retries, start with
+[Learning from local usage](diagnostics.md) and `backbone diagnostics`.
+
 | Read this | When you want to |
 |---|---|
 | [Concepts](concepts.md) | Understand the handful of words the whole system is built from |

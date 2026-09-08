@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from agent_backbone.services.agents import StateSnapshot, agent_state
 from agent_backbone.services.github import QueueSnapshot
 from agent_backbone.services.jobs.copy_mode import handle_copy_mode_recovery
+from agent_backbone.services.jobs.diagnostics import observe_job, observe_runtime
 from agent_backbone.services.jobs.escalation import (
     check_blocked,
     check_permission_waiting,
@@ -26,7 +27,7 @@ from agent_backbone.services.jobs.escalation import (
 from agent_backbone.services.jobs.pending import deliver_pending_issues
 from agent_backbone.services.jobs.retry import drain_message_queue
 from agent_backbone.services.routing import sync_dependencies
-from agent_backbone.services.terminal import list_sessions
+from agent_backbone.services.terminal import capture_pane, list_sessions
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -47,7 +48,8 @@ async def read_states(config: BackboneConfig, active_sessions: set[str]) -> Agen
     states: AgentStates = {}
     for name in config.agents.names:
         if name in active_sessions:
-            states[name] = await agent_state(config, name)
+            pane = await capture_pane(name)
+            states[name] = await agent_state(config, name, pane_content=pane)
     return states
 
 
@@ -56,8 +58,19 @@ async def sync_states(db: BackboneDB, states: AgentStates) -> None:
     for name, snapshot in states.items():
         try:
             await db.states.set(session_name=name, **snapshot.db_fields())
-        except Exception:
+        except Exception as exc:
             log.exception("Failed to persist agent state for %s (non-fatal)", name)
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="state_persistence",
+                agent_name=name,
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(
+                db, source="agent-monitor", stage="state_persistence", agent_name=name
+            )
 
 
 async def monitor_agents(
@@ -85,49 +98,114 @@ async def monitor_agents(
             log.debug("No tmux sessions active")
 
         states = await read_states(config, active_sessions)
+        await observe_runtime(db, config, states)
         await sync_states(db, states)
 
         if gh is not None:
             try:
                 await sync_dependencies(config, db, gh)
-            except Exception:
+            except Exception as exc:
                 log.exception("Dependency sync failed (non-fatal)")
+                await observe_job(
+                    db,
+                    source="agent-monitor",
+                    stage="dependency_sync",
+                    error_type=type(exc).__name__,
+                )
+            else:
+                await observe_job(db, source="agent-monitor", stage="dependency_sync")
 
         try:
             await handle_stalls(config, states, db)
-        except Exception:
+        except Exception as exc:
             log.exception("Stall detection failed (non-fatal)")
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="stall_detection",
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="stall_detection")
 
         try:
             await handle_offline(config, active_sessions, db, gh)
-        except Exception:
+        except Exception as exc:
             log.exception("Offline detection failed (non-fatal)")
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="offline_detection",
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="offline_detection")
 
         try:
             await check_plan_waiting(config, states, db=db)
-        except Exception:
+        except Exception as exc:
             log.exception("Plan-waiting notification failed (non-fatal)")
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="plan_notification",
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="plan_notification")
 
         try:
             await check_blocked(config, states, db=db)
-        except Exception:
+        except Exception as exc:
             log.exception("Blocked-agent notification failed (non-fatal)")
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="blocked_notification",
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="blocked_notification")
 
         try:
             await check_permission_waiting(config, states)
-        except Exception:
+        except Exception as exc:
             log.exception("Permission-waiting notification failed (non-fatal)")
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="permission_notification",
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="permission_notification")
 
         try:
             await handle_copy_mode_recovery(config, active_sessions)
-        except Exception:
+        except Exception as exc:
             log.exception("Copy-mode recovery failed (non-fatal)")
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="copy_mode",
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="copy_mode")
 
         if on_change is not None:
             try:
                 await on_change()
-            except Exception:
+            except Exception as exc:
                 log.exception("Session snapshot broadcast failed (non-fatal)")
+                await observe_job(
+                    db,
+                    source="agent-monitor",
+                    stage="snapshot_broadcast",
+                    error_type=type(exc).__name__,
+                )
+            else:
+                await observe_job(db, source="agent-monitor", stage="snapshot_broadcast")
 
         # Drain deferred comments/messages for sessions that are now idle.
         try:
@@ -139,8 +217,16 @@ async def monitor_agents(
             )
             if queue_summary:
                 log.info("Monitor queue drain: %s", queue_summary)
-        except Exception:
+        except Exception as exc:
             log.exception("Queue drain during monitor failed (non-fatal)")
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="queue_drain",
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="queue_drain")
 
         if gh is None:
             return {}

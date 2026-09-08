@@ -88,7 +88,7 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period (must be positive) |
 | `timing.retry_interval_seconds` | `300` | `delivery-retry` job period (must be positive) |
 | `timing.start_timeout_seconds` | `60` | How long `agent start` waits for the prompt |
-| `timing.delivery_retention_days` | `30` | Deliveries, events and completed queue messages are pruned every 6 h; queue age is measured from completion, and pending/leased messages are retained |
+| `timing.delivery_retention_days` | `30` | Deliveries, events, completed queue messages and operational diagnostics are pruned every 6 h; diagnostics age from their last observation, queue age from completion, and pending/leased messages are retained |
 
 ### `telegram.*`
 

@@ -6,7 +6,9 @@ when it is not; both paths call these functions so the two never drift.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+import uuid
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import launch
@@ -38,6 +40,7 @@ class StartRequest:
     resume: bool = False
     watch: tuple[str, ...] = ()
     wait: bool = True
+    operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 async def resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
@@ -49,9 +52,55 @@ async def resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     it. Raises KeyError for an unknown name and ValueError when neither a
     name nor a directory was given.
     """
+    started = time.monotonic()
+    try:
+        return await _resolve_agent(store, req)
+    except (KeyError, ValueError) as exc:
+        await _record_start_failure(store._db, req, "resolve", exc, started)
+        raise
+
+
+async def _record_start_failure(
+    db: BackboneDB | None,
+    req: StartRequest,
+    stage: str,
+    error: Exception,
+    started: float,
+    spec: AgentSpec | None = None,
+) -> None:
+    if db is None:
+        return
+    reason = "validation_failed" if stage == "preflight" else "invalid_request"
+    await db.diagnostics.record(
+        category="startup",
+        code="failed",
+        operation_id=req.operation_id,
+        severity="error",
+        agent_name=spec.name if spec else req.name or "",
+        source="start",
+        runtime=req.runtime or (spec.runtime if spec else ""),
+        model=req.model if req.model is not None else spec.model if spec else None,
+        details={
+            "stage": stage,
+            "reason": "unknown_agent" if isinstance(error, KeyError) else reason,
+            "error_type": type(error).__name__,
+            "duration_ms": round((time.monotonic() - started) * 1000),
+            "requested_runtime": req.runtime,
+            "requested_model": req.model,
+            "resume": req.resume,
+            "model_source": "configured",
+        },
+    )
+
+
+async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     if req.directory:
         return await store.register_directory(
-            req.directory, name=req.name, runtime=req.runtime, model=req.model, watches=req.watch
+            req.directory,
+            name=req.name,
+            runtime=req.runtime,
+            model=req.model,
+            watches=req.watch,
         )
 
     if not req.name:
@@ -101,21 +150,30 @@ async def start_resolved(
     db: BackboneDB | None,
 ) -> StartResult:
     """Start a resolved agent. Raises ValueError for a runtime or directory that cannot work."""
+    started = time.monotonic()
     runtime = req.runtime or spec.runtime
-    validate_agent_spec(spec)
-    if runtime not in RUNTIMES:
-        raise ValueError(f"Unknown runtime: {runtime}")
-    if not RUNTIMES[runtime].available():
-        raise ValueError(f"Runtime '{runtime}' binary not found")
-    if not spec.path.is_dir():
-        raise ValueError(f"Directory does not exist: {spec.path}")
+    try:
+        validate_agent_spec(spec)
+        if runtime not in RUNTIMES:
+            raise ValueError(f"Unknown runtime: {runtime}")
+        if not RUNTIMES[runtime].available():
+            raise ValueError(f"Runtime '{runtime}' binary not found")
+        if not spec.path.is_dir():
+            raise ValueError(f"Directory does not exist: {spec.path}")
+    except ValueError as exc:
+        await _record_start_failure(db, req, "preflight", exc, started, spec)
+        raise
     async with lifecycle_lock(spec.name):
-        await store.refresh()
-        current = store.agents.get(spec.name)
-        if current is None:
-            raise ValueError(f"Agent '{spec.name}' was forgotten before startup")
-        if current != spec:
-            raise ValueError(f"Agent '{spec.name}' changed before startup; retry the start")
+        try:
+            await store.refresh()
+            current = store.agents.get(spec.name)
+            if current is None:
+                raise ValueError(f"Agent '{spec.name}' was forgotten before startup")
+            if current != spec:
+                raise ValueError(f"Agent '{spec.name}' changed before startup; retry the start")
+        except ValueError as exc:
+            await _record_start_failure(db, req, "preflight", exc, started, spec)
+            raise
         result = await launch.start_agent(
             spec,
             config,
@@ -124,6 +182,7 @@ async def start_resolved(
             resume=req.resume,
             db=db,
             wait=req.wait,
+            operation_id=req.operation_id,
         )
         if result.ok and not result.already_running:
             await store.touch_started(spec.name)

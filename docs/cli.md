@@ -5,7 +5,8 @@ name; `-v` enables debug logging. Commands go
 through the running backbone's API when it is up and fall back to the
 database (and tmux) directly when it is not — except `agent approve`,
 `agent deny` and `tell`, which only work through the API so that every keystroke into an
-agent is audited.
+agent is audited. `diagnostics` also requires the API and reports unavailable
+when it cannot read a result.
 
 ## `backbone init [--data-dir DIR] [--force]`
 
@@ -112,6 +113,30 @@ API health per component, GitHub intake mode, every known agent with its
 live state (`idle`, `busy`, `waiting_for_human(plan)`, `offline`, …),
 runtime, repository and directory, other tmux sessions, and every tracked
 repository with its owners, watchers and the last event seen.
+
+## `backbone diagnostics [--since WHEN] [--agent NAME] [--limit N] [--json]`
+
+Groups recorded operational warnings and errors, with occurrence counts,
+first/last observation times and IDs for investigation. The default is the
+last 24 hours and at most 20 groups. `--since` accepts positive durations
+such as `30m`, `24h` and `7d`, or ISO timestamps with an explicit timezone.
+`--limit` accepts 1–100. Normal waits while an agent is busy remain aggregate
+delivery counts; message content and terminal tails are excluded.
+
+`backbone diagnostics show ID [--json]` reads one record and at most 100
+records with its exact operation identity.
+`backbone diagnostics trace OPERATION_ID [--json]` accepts the operation ID
+from a delivery receipt and reads up to 100 matching records. Its JSON
+response includes `operation_id`, `count`, `truncated`, `items` and
+`next_before_id`; use the records API to page through more. All forms require the API and
+exit 1 when no result can be read. JSON failures carry
+`{"error": "diagnostics_unavailable", "detail": "…"}`.
+
+Diagnostic occurrence counts cover the retained lifetime of records last
+seen in the interval. Delivery-history counts cover attempts timestamped
+in the interval. An empty result does not establish system health. See
+[Learning from local usage](diagnostics.md) for the evidence inventory,
+retention, correlation limits and an investigator-agent brief.
 
 ## `backbone config list | get KEY | set KEY VALUE | unset KEY`
 
@@ -238,6 +263,12 @@ The reply prints one sentence saying what happened: delivered; stored
 the message is in the queue, 1 if it is not (API error or storage
 failure). Multi-line messages are pasted with bracketed paste and arrive
 intact as a single message.
+
+The JSON includes `operation_id`, `delivery_id` and `queue_id` when available.
+A queued or unsuccessful reply also prints its operation ID after the explanation;
+use `backbone diagnostics trace OPERATION_ID` to follow that message through
+retries, submission, expiry or retirement. A retirement does not mean the message
+was submitted.
 
 ## `backbone reply TEXT… [--agent NAME]`
 
