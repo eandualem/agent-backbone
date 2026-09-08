@@ -8,6 +8,20 @@ database (and tmux) directly when it is not — except `agent approve`,
 agent is audited. `diagnostics` also requires the API and reports unavailable
 when it cannot read a result.
 
+## `backbone report` · `backbone updates`
+
+Publish a short structured progress report with `backbone report --file report.json`
+(or `--file -` for stdin). `--example` and `--schema` expose the authoring tool;
+`--validate` checks a file without publishing. Managed agents use `$BACKBONE_AGENT`;
+other callers supply `--agent NAME`. Oversized reports fail with field-specific errors.
+
+`backbone updates` reads the latest report per agent, including missing reports
+and report age. Use repeated `--agent NAME`, `--history`, `--members`, `--limit`,
+or `--cursor` to select and page; `backbone updates show ID` opens a full report
+and its titled links. `--json` supports scripts and orchestrators. These commands
+require the running API for publishing/reading, and never interrupt an agent.
+See [Agent progress reports](reports.md) for the format, bounds and reporting protocol.
+
 ## `backbone init [--data-dir DIR] [--force]`
 
 Creates the data directory with `.env` (generated `BACKBONE_API_KEY`, mode

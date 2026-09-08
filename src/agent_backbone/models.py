@@ -1,15 +1,210 @@
-"""Normalised GitHub event models shared by the webhook, the poller and routing."""
+"""Shared models for GitHub events, deliveries and authored progress reports."""
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from enum import StrEnum
+from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # The same vocabulary as ``sanitize_name``: an agent called app_test or 1st-desk
 # must be able to acknowledge.
 _FROM_TAG_PATTERN = re.compile(r"^\[from:([A-Za-z0-9][A-Za-z0-9_.-]*)\]")
+
+# Reporting is a bounded authoring tool. These limits apply at every entry point,
+# not just to how much a UI happens to show.
+REPORT_BODY_BYTES = 16_384
+REPORT_TEXT_CHARACTERS = 1_500
+REPORT_LINKS = 6
+REPORTS_PER_HOUR = 30
+
+
+def report_error_details(errors: list[dict]) -> list[dict]:
+    """Bounded errors without rejected input, even for malicious extra field names."""
+    return [
+        {
+            "field": ".".join(map(str, error["loc"]))
+            .encode("unicode_escape")
+            .decode("ascii")[:160],
+            "message": error["msg"][:240],
+        }
+        for error in errors[:10]
+    ]
+
+
+def _report_text(value: str) -> str:
+    if not value.strip():
+        raise ValueError("write a short sentence; this field cannot be blank")
+    if any(
+        unicodedata.category(c) in {"Cc", "Cs", "Zl", "Zp"}
+        or c in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+        for c in value
+    ):
+        raise ValueError("use one plain-text paragraph without control characters")
+    return value.strip()
+
+
+ReportText = Annotated[str, AfterValidator(_report_text)]
+ReportAgentName = Annotated[
+    str, Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+]
+
+
+class ReportLink(BaseModel):
+    """A short title and a real destination, attached to the section it explains."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    title: ReportText = Field(min_length=1, max_length=60)
+    url: str = Field(min_length=1, max_length=400)
+
+    @field_validator("url")
+    @classmethod
+    def safe_url(cls, value: str) -> str:
+        # Links are displayed, never fetched. Credentials and control characters
+        # have no place in a team report, even in an otherwise valid HTTPS URL.
+        if any(c.isspace() or unicodedata.category(c) in {"Cc", "Cs"} for c in value):
+            raise ValueError("use an absolute HTTP(S) link without whitespace")
+        try:
+            parsed = urlsplit(value)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                raise ValueError
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("use an absolute HTTP(S) link without credentials") from exc
+        return value
+
+
+class ReportSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    text: ReportText = Field(min_length=1, max_length=240)
+    links: list[ReportLink] = Field(
+        max_length=2, description="Up to two titled links; use [] when none is relevant."
+    )
+
+
+class ReportProgress(ReportSection):
+    text: ReportText = Field(min_length=1, max_length=480)
+
+
+class ReportNext(ReportSection):
+    text: ReportText = Field(min_length=1, max_length=320)
+
+
+class ReportBlockers(ReportNext):
+    kind: Literal["none", "owner", "dependency", "other"] = Field(
+        description="None, an owner's decision/action, a review/dependency, or another obstacle."
+    )
+
+
+class ProgressReport(BaseModel):
+    """A conversational account for a teammate unfamiliar with the implementation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    status: Literal["active", "blocked", "complete", "inactive"] = Field(
+        description="Authored work status, separate from the measured runtime state."
+    )
+    goal: ReportSection = Field(description="What are we trying to make better, and for whom?")
+    progress: ReportProgress = Field(
+        description="What useful result changed since the last report?"
+    )
+    blockers: ReportBlockers = Field(
+        description="What is needed to continue? Say 'None.' if clear."
+    )
+    next: ReportNext = Field(description="What happens next? Say explicitly if nothing is active.")
+    note: ReportSection | None = Field(
+        default=None, description="Optional useful learning, suggestion, or observation."
+    )
+
+    def sections(self) -> list[tuple[str, ReportSection]]:
+        return [
+            (key, section)
+            for key in ("goal", "progress", "blockers", "next", "note")
+            if (section := getattr(self, key)) is not None
+        ]
+
+    @model_validator(mode="after")
+    def bounded_report(self) -> ProgressReport:
+        sections = [section for _, section in self.sections()]
+        links = [link for section in sections for link in section.links]
+        characters = sum(len(s.text) for s in sections) + sum(len(link.title) for link in links)
+        if characters > REPORT_TEXT_CHARACTERS:
+            raise ValueError(
+                f"report text and link titles total {characters} characters; "
+                f"maximum {REPORT_TEXT_CHARACTERS}. Shorten the report."
+            )
+        if len(links) > REPORT_LINKS:
+            raise ValueError(f"report has {len(links)} links; maximum {REPORT_LINKS}")
+        if self.status == "blocked" and self.blockers.kind == "none":
+            raise ValueError("a blocked report must explain a blocker and its kind")
+        if self.status in {"complete", "inactive"} and self.blockers.kind != "none":
+            raise ValueError("complete/inactive reports cannot have an unresolved blocker")
+        return self
+
+
+class PublishReport(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    agent: ReportAgentName
+    request_id: str = Field(
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+        description="Reuse this key and the same report when retrying a publication.",
+    )
+    report: ProgressReport
+
+
+class ReportQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    agents: list[ReportAgentName] = Field(default_factory=list, max_length=20)
+    author_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    history: bool = False
+    members: bool = False
+    limit: int = Field(default=5, ge=1, le=20)
+    cursor: str | None = Field(default=None, min_length=1, max_length=1024)
+
+    @model_validator(mode="after")
+    def author_history(self) -> ReportQuery:
+        if self.author_id and (not self.history or self.agents):
+            raise ValueError("author_id requires history and cannot be combined with agents")
+        return self
+
+
+def report_example() -> dict:
+    """Synthetic authoring example, shared by the CLI and API schema tool."""
+    return {
+        "status": "active",
+        "goal": {
+            "text": "Make checkout easier to use so customers can finish their orders.",
+            "links": [
+                {"title": "Simpler checkout", "url": "https://github.com/example/shop/issues/42"}
+            ],
+        },
+        "progress": {
+            "text": "Customers now understand why a payment failed. The change passes our checks.",
+            "links": [
+                {"title": "Payment feedback", "url": "https://github.com/example/shop/pull/43"}
+            ],
+        },
+        "blockers": {"kind": "none", "text": "None.", "links": []},
+        "next": {
+            "text": "I'll check the mobile experience and prepare the change for review.",
+            "links": [],
+        },
+    }
+
 
 ISSUE_TYPE_WEIGHTS: dict[str, float] = {
     "spec-gap": 100.0,

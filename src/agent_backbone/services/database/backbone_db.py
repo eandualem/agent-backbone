@@ -19,6 +19,7 @@ from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._events_repo import EventRepo
 from agent_backbone.services.database._outbox_repo import OutboxRepo
 from agent_backbone.services.database._queue_repo import QueueRepo
+from agent_backbone.services.database._reports_repo import ReportRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
 from agent_backbone.services.database._state_repo import StateRepo
 from agent_backbone.services.database._swarms_repo import SwarmRepo
@@ -190,6 +191,7 @@ class BackboneDB:
         engine = lambda: self.engine  # noqa: E731 — the repos read the live engine
         self.deliveries = DeliveryRepo(engine)
         self.queue = QueueRepo(engine)
+        self.reports = ReportRepo(engine)
         self.acks = AcknowledgementRepo(engine)
         self.dependencies = DependencyRepo(engine)
         self.diagnostics = DiagnosticRepo(engine)

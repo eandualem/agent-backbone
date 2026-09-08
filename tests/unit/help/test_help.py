@@ -10,7 +10,7 @@ class TestTopics:
     def test_shipped_topics_listed_with_summaries(self):
         topics = list_topics()
         names = {t["name"] for t in topics}
-        assert {"setup", "swarms", "messaging", "agents", "github"} <= names
+        assert {"setup", "swarms", "messaging", "agents", "github", "reports"} <= names
         assert all(t["summary"] for t in topics)
 
     def test_setup_topic_walks_install_to_first_agent(self):
