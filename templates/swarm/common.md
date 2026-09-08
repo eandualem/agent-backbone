@@ -49,3 +49,6 @@ topics, `backbone help messaging` (etc.) prints one.
 - Commit early and often on `{branch}` with clear messages.
 - If you are blocked and the coordinator does not respond, say so in your
   next report; do not improvise around the architecture.
+
+For a focused independent review, read `backbone help reviews`: a native review
+process can run while you keep working, with its report saved outside the docs.
