@@ -12,17 +12,22 @@ if TYPE_CHECKING:
     from agent_backbone.services.integrations.telegram.interface import TelegramService
 
 from agent_backbone.services.agents import (
-    approve_plan,
+    AgentState,
+    agent_state,
+    approve_agent,
+    deny_agent,
+    plan_control,
+    prompt_id,
     read_plan,
-    read_state_file,
+    record_answer,
     start_agent,
-    stop_agent,
 )
+from agent_backbone.services.agents.operations import stop_agent_session
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     process_message_for_discovery,
 )
-from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.routing import deliver
 from agent_backbone.services.terminal import list_sessions, session_exists
 
 log = logging.getLogger(__name__)
@@ -51,6 +56,7 @@ async def cmd_help(
         "/status — Show active agent sessions\n"
         "/queue — Show pending & recent deliveries\n"
         "/digest — Full system digest (sessions, agents, pending)\n"
+        "/updates — Agent progress reports, blockers, and history\n"
         "/tell `<agent>` `<message>` — Send a message to an agent\n"
         "/start `<agent>` — Start a configured agent\n"
         "/stop `<agent>` — Stop an agent session\n"
@@ -151,7 +157,11 @@ async def cmd_stop_agent(
     if bot.config.agents.get(name) is None:
         await update.message.reply_text(f"Unknown agent `{name}`", parse_mode="Markdown")
         return
-    ok = await stop_agent(name)
+    try:
+        ok = await stop_agent_session(bot.config, name)
+    except ValueError:
+        await update.message.reply_text("Refusing to stop the backbone's own session.")
+        return
     status = "Stopped" if ok else "Failed to stop"
     await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
 
@@ -172,13 +182,13 @@ async def cmd_tell(
         await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
         return
     raw_message = " ".join(context.args[1:])
-    sender = bot._sender_tag(update)
-    message = f"[via:telegram from:{sender}] {raw_message}"
-    result = await safe_deliver(
-        agent, message, bot.config, db=bot._db, delivery_kind="direct_message"
+    sender = bot._sender_id(update)
+    message = f"[via:telegram from:{bot._sender_tag(update)}] {raw_message}"
+    report = await deliver(
+        agent, message, bot.config, db=bot._db, delivery_kind="direct_message", sender=sender
     )
 
-    await update.message.reply_text(_delivery_reply(agent, result), parse_mode="Markdown")
+    await update.message.reply_text(_delivery_reply(agent, report), parse_mode="Markdown")
 
 
 async def cmd_digest(
@@ -267,7 +277,7 @@ async def cmd_viewplan(
         return
 
     agent = context.args[0]
-    snapshot = read_state_file(bot.config.state_dir, agent)
+    snapshot = await agent_state(bot.config, agent)
 
     if not snapshot or not snapshot.is_plan_waiting:
         state_str = snapshot.state.value if snapshot else "unknown"
@@ -292,10 +302,108 @@ async def cmd_viewplan(
         await update.message.reply_text(full_text[i : i + max_len])
 
 
+BUTTON_ACTIONS = ("approve", "deny", "plan_approve", "plan_reject")
+"""Callback data is ``<action>:<agent>:<prompt id>``; ``jobs.escalation`` builds it."""
+
+
+def _who(update: Update) -> tuple[str, str]:
+    """``(actor, display)``: the Telegram user id for the audit trail (stable,
+    unique), and a readable form for the edited alert."""
+    user = getattr(update, "effective_user", None)
+    user_id = getattr(user, "id", None) if user is not None else None
+    name = (getattr(user, "first_name", None) or "") if user is not None else ""
+    actor = f"telegram:{user_id}" if user_id is not None else "telegram:unknown"
+    display = f"{name} ({actor})" if name else actor
+    return actor, display
+
+
+async def _prompt_matches(bot: TelegramService, agent: str, action: str, ref: str) -> bool:
+    """Whether the prompt the button was raised for is still the one waiting.
+
+    Read the way the alert was: ``agent_state`` reconciles the hook and the
+    terminal exactly as the monitor did, so the identity on the button and
+    the identity now are computed from the same kind of reading.
+    """
+    snapshot = await agent_state(bot.config, agent)
+    if snapshot is None or snapshot.state != AgentState.WAITING_FOR_HUMAN:
+        return False
+    if action.startswith("plan_") != snapshot.is_plan_waiting:
+        return False
+    return prompt_id(snapshot) == ref
+
+
+async def on_callback(
+    bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Answer a button on an alert with the same bounded controls the commands
+    and the API use: only a registered agent, only a dialog on screen, only
+    the runtime's verified keys, every answer recorded with who pressed it."""
+    query = getattr(update, "callback_query", None)
+    if query is None:
+        return
+    if not _authorized(bot, update):
+        await query.answer("Not allowed from this chat.")
+        return
+    parts = (query.data or "").split(":", 2)
+    action, agent, ref = [*parts, "", ""][:3]
+    if action not in BUTTON_ACTIONS or not agent or not ref:
+        await query.answer("Unknown button.")
+        return
+    spec = bot.config.agents.get(agent)
+    if spec is None:
+        await query.answer(f"Unknown agent {agent}.")
+        return
+    actor, who = _who(update)
+    security = bot.config.security
+
+    if not await _prompt_matches(bot, agent, action, ref):
+        # The agent moved on: this button must not answer whatever is on screen now.
+        result = f"Not answered: that prompt is no longer waiting (pressed by {who})"
+    elif action in ("approve", "deny"):
+        if not security.allow_remote_approval:
+            await query.answer("Remote approval is off (security.allow_remote_approval).")
+            return
+        answer = approve_agent if action == "approve" else deny_agent
+        outcome, evidence = await answer(agent, runtime=spec.runtime)
+        if outcome in ("approved", "denied"):
+            await record_answer(
+                bot._db,
+                agent=agent,
+                runtime=spec.runtime,
+                verb=outcome,
+                by=actor,
+                evidence=evidence,
+            )
+            result = f"{'Allowed' if outcome == 'approved' else 'Denied'} by {who}"
+        else:
+            reason = evidence[0] if evidence else ""
+            result = f"Not answered ({outcome}): {reason} (pressed by {who})"
+    else:
+        if not security.allow_remote_plan_control:
+            await query.answer("Remote plan control is off (security.allow_remote_plan_control).")
+            return
+        verb = "approve" if action == "plan_approve" else "reject"
+        outcome, evidence = await plan_control(agent, verb, runtime=spec.runtime)
+        if outcome in ("approved", "rejected"):
+            result = f"Plan {outcome} by {who}"
+        else:
+            reason = evidence[0] if evidence else ""
+            result = f"Plan not {verb}d ({outcome}): {reason} (pressed by {who})"
+
+    await query.answer(result[:200])
+    message = getattr(query, "message", None)
+    original = getattr(message, "text", None) or ""
+    try:
+        # Editing drops the keyboard: a button is answered once.
+        await query.edit_message_text(f"{original}\n\n{result}".strip())
+    except Exception:
+        log.debug("Could not edit the alert after the button press (non-fatal)")
+
+
 async def cmd_approve(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Approve an agent's plan by sending Shift+Tab: /approve <agent>"""
+    """Approve an agent's plan with its runtime's own keys: /approve <agent>"""
     if not _authorized(bot, update):
         return
 
@@ -315,7 +423,7 @@ async def cmd_approve(
     if bot.config.agents.get(agent) is None:
         await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
         return
-    snapshot = read_state_file(bot.config.state_dir, agent)
+    snapshot = await agent_state(bot.config, agent)
 
     if not snapshot or not snapshot.is_plan_waiting:
         state_str = snapshot.state.value if snapshot else "unknown"
@@ -329,13 +437,16 @@ async def cmd_approve(
         await update.message.reply_text(f"Session `{agent}` is offline.", parse_mode="Markdown")
         return
 
-    if await approve_plan(agent):
+    spec = bot.config.agents.get(agent)
+    outcome, evidence = await plan_control(agent, "approve", runtime=spec.runtime if spec else None)
+    if outcome == "approved":
+        await update.message.reply_text(f"Plan approved for `{agent}`.", parse_mode="Markdown")
+    elif outcome == "unsupported":
         await update.message.reply_text(
-            f"Plan approved for `{agent}`. Sending approval signal.",
-            parse_mode="Markdown",
+            f"Plan approval is not available for `{agent}`: {evidence[0]}", parse_mode="Markdown"
         )
     else:
         await update.message.reply_text(
-            f"Failed to send approval keys to `{agent}`.",
+            f"Could not approve the plan for `{agent}` ({outcome}): {evidence[0]}",
             parse_mode="Markdown",
         )

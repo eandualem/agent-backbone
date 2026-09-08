@@ -40,8 +40,9 @@ it lazily — `integrations` sits *above* `routing` in the layering.
    `reply_to_agent`, `notify`, `sync_agents` the channel supports.
 2. Route inbound text through `safe_deliver(...)` with a
    `[via:<name> from:<who>]` envelope — never through tmux directly.
-3. Add it to `build_integrations()` in `_registry.py` and, for alerts from
-   jobs, a static sender to `_STATIC_NOTIFIERS` in `_notify.py`.
+3. Add one `IntegrationDescriptor` to `_registry.DESCRIPTORS`, naming its module,
+   service class and static notifier. Both lifecycle and job notifications use it.
+   Override `can_start` and `startup_key` when connection changes require a restart.
 4. Settings go in `SETTINGS_DEFAULTS` under `<name>.*`; secrets in `.env`.
 5. Add the entry module to `tests/unit/test_imports.py` and document it in
    `docs/<name>.md`.

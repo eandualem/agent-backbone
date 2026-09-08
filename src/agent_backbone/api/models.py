@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import math
+import time
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from agent_backbone.config import AgentSpec
+from agent_backbone.services.agents import AgentState
 
 T = TypeVar("T")
 
@@ -30,6 +33,10 @@ class EnrichedAgent(BaseModel):
     runtime: str | None = None
     """Runtime the session was launched with (live), else the configured runtime."""
     model: str | None = None
+    model_source: str = Field(
+        default="configured",
+        description="The saved model selection; the running model is unverified.",
+    )
     dir: str = ""
     repo: str = ""
     tags: list[str] = Field(default_factory=list)
@@ -47,6 +54,10 @@ class EnrichedAgent(BaseModel):
     tmux_windows: int = 0
     last_activity: float | None = None
     state_since: float | None = None
+    last_message: str | None = None
+    detail: str | None = None
+    state_source: str = "default"
+    evidence: list[str] = Field(default_factory=list)
 
 
 class AgentStartRequest(BaseModel):
@@ -61,7 +72,8 @@ class AgentStartRequest(BaseModel):
     dir: str | None = None
     runtime: str | None = None
     model: str | None = None
-    resume: bool = False
+    resume: bool | None = None
+    """Omitted: resume a matching saved session; false: fresh; true: allow runtime fallback."""
     watch: list[str] = Field(default_factory=list)
     wait: bool = True
     """Block until the agent is at its prompt (or the start timeout passes)."""
@@ -76,6 +88,10 @@ class AgentStartResponse(BaseModel):
     working_directory: str | None = None
     runtime: str = "claude"
     model: str | None = None
+    model_source: str = Field(
+        default="configured",
+        description="The selected model, not a provider-confirmed observation.",
+    )
     repo: str = ""
     already_existed: bool = False
     ready: str = "unknown"
@@ -93,6 +109,8 @@ class AgentUpdateRequest(BaseModel):
     tags: list[str] | None = None
     env: dict[str, str] | None = None
     description: str | None = None
+    always_on: bool | None = None
+    unattended: bool | None = None
 
 
 class WatchRequest(BaseModel):
@@ -124,6 +142,10 @@ class AgentInspectResponse(BaseModel):
     dir: str = ""
     runtime: str = ""
     model: str | None = None
+    model_source: str = Field(
+        default="configured",
+        description="The saved model selection; the running model is unverified.",
+    )
     repo: str = ""
     watches: list[str] = Field(default_factory=list)
     state: str = "unknown"
@@ -133,6 +155,12 @@ class AgentInspectResponse(BaseModel):
     state_source: str = "default"
     state_age_seconds: float | None = None
     delivery: str = "unknown"
+    session_id: str | None = None
+    """The runtime's own session id, when its hook reports one."""
+    last_message: str | None = None
+    """The agent's last reply (clipped), when its hook reports one."""
+    detail: str | None = None
+    """What the runtime said about a ``blocked`` state (when its limit resets)."""
     evidence: list[str] = Field(default_factory=list)
     tmux: dict = Field(default_factory=dict)
     pane_tail: list[str] = Field(default_factory=list)
@@ -167,6 +195,21 @@ class AgentApproveResponse(BaseModel):
     approved_by: str = ""
 
 
+class AgentDenyResponse(BaseModel):
+    """Result of refusing a permission prompt.
+
+    ``outcome`` is ``denied`` (the refusing key sent — the evidence says whether the
+    dialog cleared), ``not_waiting``, ``unsupported``, ``offline`` or
+    ``failed``. Nothing is typed unless the prompt is on screen.
+    """
+
+    ok: bool
+    session: str
+    outcome: str
+    evidence: list[str] = []
+    denied_by: str = ""
+
+
 class AgentStateDetail(BaseModel):
     """Detailed agent state snapshot."""
 
@@ -183,6 +226,10 @@ class AgentStateDetail(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+_MAX_TS_SKEW_SECONDS = 60.0
+"""How far ahead of now a pushed state timestamp may be (clock skew); more is rejected."""
+
+
 class StateUpdateRequest(BaseModel):
     """Request body for updating agent state via API (used by runtime hooks)."""
 
@@ -193,6 +240,38 @@ class StateUpdateRequest(BaseModel):
     ts: float = 0.0
     plan_file: str | None = None
     plan_title: str | None = None
+
+    @field_validator("state")
+    @classmethod
+    def _state_must_be_known(cls, value: str) -> str:
+        """An unknown state string would degrade to ``unknown`` on read and
+        silently discard the writer's intent — reject it at the door."""
+        try:
+            AgentState(value)
+        except ValueError:
+            known = ", ".join(s.value for s in AgentState)
+            raise ValueError(f"unknown state {value!r} (expected one of: {known})") from None
+        return value
+
+    @field_validator("issue")
+    @classmethod
+    def _issue_must_be_non_negative(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError(f"issue must be >= 0, got {value}")
+        return value
+
+    @field_validator("ts")
+    @classmethod
+    def _ts_must_be_plausible(cls, value: float) -> float:
+        """A non-finite ``ts`` would stay "fresh" forever and make the pushed
+        state permanently authoritative; a far-future one nearly so. ``0``
+        keeps its legacy meaning (no time given — the route substitutes the
+        server receipt time)."""
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"ts must be a finite timestamp >= 0, got {value!r}")
+        if value > time.time() + _MAX_TS_SKEW_SECONDS:
+            raise ValueError(f"ts {value!r} is implausibly far in the future")
+        return value
 
 
 class RuntimeInfo(BaseModel):
@@ -308,13 +387,38 @@ class MessageRequest(BaseModel):
     message: str
     priority: bool = False
 
+    @field_validator("from_entity")
+    @classmethod
+    def _sender_must_fit_the_envelope(cls, value: str) -> str:
+        """The sender is interpolated into ``[via:backbone from:<sender>]``,
+        so it must not contain the envelope's delimiters or a newline that
+        would forge a second envelope. This bounds parsing ambiguity — it
+        does not authenticate the sender: the API key authenticates caller
+        access, never the ``from_entity`` identity."""
+        if not value.strip():
+            raise ValueError("from_entity must not be empty")
+        if len(value) > 64:
+            raise ValueError("from_entity must be at most 64 characters")
+        if any(c in value for c in "[]\n\r"):
+            raise ValueError("from_entity must not contain newlines or [ ]")
+        return value
+
 
 class MessageResponse(BaseModel):
+    operation_id: str | None = None
+    delivery_id: int | None = None
+    queue_id: int | None = None
     ok: bool
     session: str
     outcome: str
     queued: bool = False
-    """Whether the message was queued for delivery when the agent is ready."""
+    """True only when a row for this message now exists in the queue."""
+    queue: str | None = None
+    """``stored`` (kept, delivered when the agent is ready), ``already_queued``
+    (the same message from this sender is already waiting), ``failed`` (could
+    not be stored — not queued), or None when nothing needed queueing."""
+    detail: str = ""
+    """One plain sentence for the sender, whoever they are."""
 
 
 class IntegrationReplyRequest(BaseModel):
@@ -407,6 +511,8 @@ class AgentConfigResponse(BaseModel):
     watches: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     description: str = ""
+    always_on: bool = False
+    unattended: bool = False
 
     @classmethod
     def from_spec(cls, spec: AgentSpec) -> AgentConfigResponse:
@@ -419,4 +525,6 @@ class AgentConfigResponse(BaseModel):
             watches=list(spec.watches),
             tags=list(spec.tags),
             description=spec.description,
+            always_on=spec.always_on,
+            unattended=spec.unattended,
         )

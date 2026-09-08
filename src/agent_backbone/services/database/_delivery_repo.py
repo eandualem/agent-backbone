@@ -3,9 +3,12 @@ message, watch, escalation) with its kind, repository and outcome."""
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import text
 
 from agent_backbone.models import RETRYABLE_OUTCOMES
+from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
@@ -22,19 +25,21 @@ class DeliveryRepo(Repo):
         repo: str = "",
         kind: str = "issue",
         preview: str = "",
+        operation_id: str | None = None,
     ) -> int:
         """Record a delivery attempt. Returns the row ID."""
         async with self._tx() as conn:
             result = await conn.execute(
                 text(
                     """INSERT INTO deliveries
-                       (kind, repo, issue_number, target_entity, session_name,
+                       (operation_id, kind, repo, issue_number, target_entity, session_name,
                         outcome, source, preview, created_at)
-                       VALUES (:kind, :repo, :issue_number, :target_entity, :session_name,
-                               :outcome, :source, :preview, :created_at)
+                       VALUES (:operation_id, :kind, :repo, :issue_number, :target_entity,
+                               :session_name, :outcome, :source, :preview, :created_at)
                        RETURNING id"""
                 ),
                 {
+                    "operation_id": operation_id or uuid.uuid4().hex,
                     "kind": kind,
                     "repo": repo,
                     "issue_number": issue_number,
@@ -57,16 +62,17 @@ class DeliveryRepo(Repo):
         source: str,
         repo: str = "",
         preview: str = "",
+        operation_id: str | None = None,
     ) -> int | None:
         """Reserve an issue delivery slot before sending to avoid duplicate sends."""
         async with self._tx() as conn:
             result = await conn.execute(
                 text(
                     """INSERT INTO deliveries
-                       (kind, repo, issue_number, target_entity, session_name, outcome,
-                        source, preview, created_at)
-                       VALUES ('issue', :repo, :issue_number, :target_entity, :session_name,
-                               'attempting', :source, :preview, :now)
+                       (operation_id, kind, repo, issue_number, target_entity, session_name,
+                        outcome, source, preview, created_at)
+                       VALUES (:operation_id, 'issue', :repo, :issue_number, :target_entity,
+                               :session_name, 'attempting', :source, :preview, :now)
                        ON CONFLICT (repo, issue_number, session_name)
                        WHERE kind = 'issue'
                          AND issue_number IS NOT NULL
@@ -75,6 +81,7 @@ class DeliveryRepo(Repo):
                        RETURNING id"""
                 ),
                 {
+                    "operation_id": operation_id or uuid.uuid4().hex,
                     "repo": repo,
                     "issue_number": issue_number,
                     "target_entity": target_entity,
@@ -91,15 +98,18 @@ class DeliveryRepo(Repo):
         self,
         delivery_id: int,
         outcome: str,
+        *,
+        operation_id: str | None = None,
     ) -> None:
         """Finalize a claimed delivery attempt."""
         async with self._tx() as conn:
             await conn.execute(
                 text(
-                    """UPDATE deliveries SET outcome = :outcome
+                    """UPDATE deliveries SET outcome = :outcome,
+                       operation_id = COALESCE(:operation_id, operation_id)
                        WHERE id = :id AND outcome = 'attempting'"""
                 ),
-                {"id": delivery_id, "outcome": outcome},
+                {"id": delivery_id, "outcome": outcome, "operation_id": operation_id},
             )
 
     async def reclaim_stale(
@@ -168,7 +178,7 @@ class DeliveryRepo(Repo):
             result = await conn.execute(
                 text(
                     f"""SELECT d.* FROM deliveries d
-                       WHERE d.kind = 'issue'
+                       WHERE d.kind = 'issue' AND d.source != 'github-outbox'
                          AND d.issue_number IS NOT NULL
                          AND d.outcome IN ({placeholders})
                          AND NOT EXISTS (
@@ -184,6 +194,45 @@ class DeliveryRepo(Repo):
                 {"lim": limit},
             )
             return [dict(row._mapping) for row in result.fetchall()]
+
+    async def retire(self, delivery_id: int, outcome: str) -> None:
+        """Keep a failure's history but remove terminal work from the retry window.
+
+        Only retryable attempts can change; an overlapping successful delivery
+        or another retirement must never be overwritten.
+        """
+        if outcome not in {"acknowledged", "no_repo", "issue_closed", "no_longer_targeted"}:
+            raise ValueError(f"Not a terminal retry outcome: {outcome}")
+        placeholders = ",".join(f"'{o.value}'" for o in sorted(RETRYABLE_OUTCOMES))
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "UPDATE deliveries SET outcome = :outcome, "
+                    "operation_id = COALESCE(operation_id, :operation_id) "
+                    f"WHERE id = :id AND kind = 'issue' AND outcome IN ({placeholders}) RETURNING *"
+                ),
+                {
+                    "id": delivery_id,
+                    "outcome": outcome,
+                    "operation_id": uuid.uuid5(
+                        uuid.NAMESPACE_URL, f"backbone:delivery:{delivery_id}"
+                    ).hex,
+                },
+            )
+            row = result.mappings().first()
+        if row is not None:
+            await DiagnosticRepo(self._engine).record(
+                category="delivery",
+                code=f"retired_{outcome}",
+                operation_id=row["operation_id"],
+                severity="info",
+                agent_name=row["session_name"],
+                source=row["source"],
+                repo=row["repo"],
+                issue_number=row["issue_number"],
+                delivery_id=delivery_id,
+                details={"delivery_kind": row["kind"], "reason": outcome},
+            )
 
     async def prune(
         self,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from pathlib import Path
 
@@ -50,3 +51,66 @@ async def detect_repo(directory: Path) -> str:
     """The GitHub ``owner/name`` of a directory's ``origin`` remote, if any."""
     rc, out, _ = await run_git(directory, "remote", "get-url", "origin", timeout=5)
     return parse_github_remote(out) if rc == 0 else ""
+
+
+def git_write_paths(directory: Path | str) -> tuple[str, ...]:
+    """Git paths needed for staging, commits and refs, never hooks or config.
+
+    Linked worktrees must have reciprocal Git metadata: the private gitdir
+    points back to this worktree and its commondir resolves to the shared
+    ``.git``. Absolute pointers are normal Git output and remain supported.
+    Symlinks cannot redirect an automatic grant to another resource.
+    """
+    try:
+        pointer = Path(directory).expanduser().resolve() / ".git"
+        if pointer.is_symlink():
+            return ()
+        if pointer.is_dir():
+            common = private = pointer
+        else:
+            text = pointer.read_text().strip()
+            if not text.startswith("gitdir:"):
+                return ()
+            private = Path(text[len("gitdir:") :].strip())
+            if not private.is_absolute():
+                private = pointer.parent / private
+            private = Path(os.path.abspath(private))
+            common = private.parent.parent
+            if (
+                private.resolve() != private
+                or private.parent.name != "worktrees"
+                or common.name != ".git"
+                or (private / "gitdir").is_symlink()
+                or (private / "commondir").is_symlink()
+                or Path((private / "gitdir").read_text().strip()).resolve() != pointer
+                or (private / (private / "commondir").read_text().strip()).resolve() != common
+            ):
+                return ()
+        shared = ("objects", "refs", "logs", "packed-refs", "shallow")
+        local = (
+            "HEAD",
+            "index",
+            "logs",
+            "COMMIT_EDITMSG",
+            "ORIG_HEAD",
+            "FETCH_HEAD",
+            "AUTO_MERGE",
+            "MERGE_RR",
+            "MERGE_HEAD",
+            "MERGE_MSG",
+            "MERGE_MODE",
+            "SQUASH_MSG",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "REBASE_HEAD",
+        )
+        paths = [common / name for name in shared] + [private / name for name in local]
+        # Git atomically replaces its bookkeeping files through sibling locks.
+        paths += [
+            p.with_name(p.name + ".lock")
+            for p in paths
+            if p.name not in {"objects", "refs", "logs"}
+        ]
+        return tuple(dict.fromkeys(str(p) for p in paths if p.resolve() == p))
+    except (OSError, ValueError, RuntimeError):
+        return ()

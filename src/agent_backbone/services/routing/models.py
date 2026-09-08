@@ -16,6 +16,7 @@ class DispatchResult:
     skipped: list[str] = field(default_factory=list)
     offline: list[str] = field(default_factory=list)
     deferred: list[str] = field(default_factory=list)
+    plan: list[dict] | None = field(default=None, repr=False)
 
 
 class SessionIntelligence(StrEnum):
@@ -47,4 +48,7 @@ class SessionProfile:
     current_issue: int | None = None
     current_repo: str | None = None
     state_source: str = "default"
+    session_id: str | None = None
+    last_message: str | None = None
+    detail: str | None = None
     evidence: list[str] = field(default_factory=list)

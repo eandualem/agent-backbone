@@ -15,8 +15,11 @@ from agent_backbone.services.database._acks_repo import AcknowledgementRepo
 from agent_backbone.services.database._agents_repo import AgentRepo
 from agent_backbone.services.database._delivery_repo import DeliveryRepo
 from agent_backbone.services.database._dependencies_repo import DependencyRepo
+from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._events_repo import EventRepo
+from agent_backbone.services.database._outbox_repo import OutboxRepo
 from agent_backbone.services.database._queue_repo import QueueRepo
+from agent_backbone.services.database._reports_repo import ReportRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
 from agent_backbone.services.database._state_repo import StateRepo
 from agent_backbone.services.database._swarms_repo import SwarmRepo
@@ -37,7 +40,7 @@ and the model's own are ever dropped — an index an operator added is theirs.""
 
 _RENAMED_COLUMNS = {"deliveries": {"flow_name": "source"}, "message_queue": {"flow_name": "source"}}
 """Columns the previous squash spelled differently: renamed in place, data kept."""
-_DROPPED_COLUMNS = {"deliveries": ("flow_run_id",)}
+_DROPPED_COLUMNS = {"deliveries": ("flow_run_id",), "message_queue": ("content_hash",)}
 """Columns the previous squash had and the model no longer has."""
 
 
@@ -95,6 +98,29 @@ def _repair_columns(sync_conn) -> None:
             log.info("Dropped %s.%s (re-stamped database)", table.name, old)
 
 
+def _backfill_dedup_keys(sync_conn) -> None:
+    """Give queue rows from before ``dedup_key`` (they had ``content_hash``)
+    the identity new rows get, so the dedup index can be built and a
+    re-offered message still folds into the row that already waits.
+
+    Rows with no sender and no source event get the sender-less text key —
+    the same identity ``content_hash`` gave them — so pending copies of one
+    text in one session collapse to the oldest exactly as the previous
+    repair did; nothing that was distinct before becomes the same now."""
+    from agent_backbone.services.database._queue_repo import dedup_key_for
+
+    rows = sync_conn.execute(
+        text("SELECT id, message, sender FROM message_queue WHERE dedup_key IS NULL")
+    ).fetchall()
+    for row in rows:
+        sync_conn.execute(
+            text("UPDATE message_queue SET dedup_key = :key WHERE id = :id"),
+            {"key": dedup_key_for(row.message, row.sender or "", None), "id": row.id},
+        )
+    if rows:
+        log.info("Backfilled dedup_key on %d queue rows (re-stamped database)", len(rows))
+
+
 def _sqlite_version(sync_conn) -> tuple[int, ...] | None:
     """The SQLite library's version when the connection is SQLite, else None."""
     if sync_conn.dialect.name != "sqlite":
@@ -110,13 +136,22 @@ def _repair_schema(sync_conn) -> None:
     Tables are stable pre-1.0, but columns and index *predicates* have
     changed (``flow_name`` became ``source``; the ``kind = 'issue'`` guard
     on the delivery owner index; the one queue dedup rule for every
-    non-issue kind). A re-stamp is the only moment an existing database
-    meets a regenerated squash, so columns are repaired and indexes are
-    rebuilt from the model here. Duplicate pending queue rows — the reason
-    the dedup index exists — are expired first so the unique index can be
-    created.
+    non-issue kind). Repair runs for an obsolete revision or missing required
+    schema, even when the revision is current. Columns are repaired and
+    indexes are rebuilt from the model here. Duplicate pending queue rows —
+    the reason the dedup index exists — are expired first so the unique
+    index can be created.
     """
+    # Indexes go first: an index that still names a column about to be
+    # dropped (uq_mq_message_dedup on content_hash) makes SQLite refuse the
+    # DROP COLUMN. They are rebuilt from the model at the end.
+    for table in metadata.sorted_tables:
+        for index in table.indexes:
+            sync_conn.execute(text(f"DROP INDEX IF EXISTS {index.name}"))
+    for name in _SUPERSEDED_INDEXES:
+        sync_conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
     _repair_columns(sync_conn)
+    _backfill_dedup_keys(sync_conn)
     sync_conn.execute(
         text(
             """UPDATE message_queue SET status = 'expired'
@@ -124,16 +159,13 @@ def _repair_schema(sync_conn) -> None:
                  AND id NOT IN (
                    SELECT MIN(id) FROM message_queue
                    WHERE delivery_kind != 'issue' AND status IN ('pending','in_progress')
-                   GROUP BY session_name, content_hash
+                   GROUP BY session_name, dedup_key
                  )"""
         )
     )
     for table in metadata.sorted_tables:
         for index in table.indexes:
-            sync_conn.execute(text(f"DROP INDEX IF EXISTS {index.name}"))
             index.create(sync_conn)
-    for name in _SUPERSEDED_INDEXES:
-        sync_conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
     log.info("Rebuilt indexes from the model (re-stamped database)")
 
 
@@ -159,9 +191,12 @@ class BackboneDB:
         engine = lambda: self.engine  # noqa: E731 — the repos read the live engine
         self.deliveries = DeliveryRepo(engine)
         self.queue = QueueRepo(engine)
+        self.reports = ReportRepo(engine)
         self.acks = AcknowledgementRepo(engine)
         self.dependencies = DependencyRepo(engine)
+        self.diagnostics = DiagnosticRepo(engine)
         self.events = EventRepo(engine)
+        self.outbox = OutboxRepo(engine)
         self.settings = SettingRepo(engine)
         self.agents = AgentRepo(engine)
         self.swarms = SwarmRepo(engine)
@@ -253,18 +288,38 @@ class BackboneDB:
                 existing_app_tables = existing_tables & app_tables
 
                 alembic_cfg.attributes["connection"] = sync_conn
-                if has_alembic and existing_app_tables == app_tables:
+                if has_alembic:
                     # Pre-1.0 policy: one squashed migration. A regenerated
                     # squash changes the revision id, so a database stamped
-                    # with the old id must be re-stamped — its schema is
-                    # already complete (SQLite: create_all above; the stamp
-                    # is the entire migration history).
+                    # with the old id must be repaired and re-stamped. A
+                    # current stamp does not prove required tables/columns
+                    # exist: another process may have stamped using stale
+                    # loaded metadata after the migration files changed.
                     stored = sync_conn.execute(
                         text("SELECT version_num FROM alembic_version")
                     ).scalar()
                     script = ScriptDirectory.from_config(alembic_cfg)
                     known = {rev.revision for rev in script.walk_revisions()}
-                    if stored not in known:
+                    missing_schema = existing_app_tables != app_tables or any(
+                        set(table.columns.keys())
+                        - {column["name"] for column in inspector.get_columns(table.name)}
+                        for table in metadata.sorted_tables
+                    )
+                    # With no Backbone tables, an unknown revision may belong
+                    # to another application. Let Alembic reject it unchanged.
+                    owns_schema = existing_app_tables or stored in known
+                    if owns_schema and (stored not in known or missing_schema):
+                        # Complete current schemas avoid all index rebuilds.
+                        # PostgreSQL also needs any missing tables here; it
+                        # does not run SQLite's startup create_all shortcut.
+                        metadata.create_all(
+                            sync_conn,
+                            tables=[
+                                table
+                                for table in metadata.sorted_tables
+                                if table.name not in existing_app_tables
+                            ],
+                        )
                         _repair_schema(sync_conn)
                         command.stamp(alembic_cfg, "head", purge=True)
                         return

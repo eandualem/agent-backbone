@@ -69,13 +69,53 @@ Setting `GITHUB_WEBHOOK_SECRET` switches intake from poll to webhook
 (`github.intake` is `auto`). In webhook intake the backbone still runs
 **one poll at startup** (`github.backfill_on_start`) to catch what happened
 while it was down, and the monitor independently notices new open issues in
-agents' queues. All paths produce the same event; the `events` table
+agents' queues. Polling persists a replay cursor per repository before its
+first fetch. With no cursor, it starts at `github.backfill_lookback_hours`
+(including the first start after upgrading to cursor storage). A complete batch
+advances to the later of poll-start time and newest source timestamp, with two
+minutes of overlap. Fetch, hydration or dispatch failure retains the old boundary
+across restart; event retention does not remove cursors. Successful quiet polls
+also advance, so old events leave the replay window.
+
+All paths produce the same event; the `events` table
 deduplicates by delivery id and the per-issue delivery claim guarantees an
 issue reaches an agent once, so overlap is safe. For a quick real-time test
 without any tunnel, `gh webhook forward --repo=acme/app
---events=issues,issue_comment,pull_request
+--events=issues,issue_comment,pull_request,pull_request_review
 --url=http://127.0.0.1:7120/webhooks/github --secret=$GITHUB_WEBHOOK_SECRET`
 also works.
+
+## Delivery receipts and retries
+
+Before sending a GitHub event to its recipients, the backbone stores the full
+delivery plan in `event_outbox` in one transaction. Each recipient gets a
+receipt after delivery or durable queue storage. The event is marked handled
+only when every recipient is resolved. If event or plan storage fails, no
+messages are sent; the request fails so intake can retry it.
+
+A queue-write failure leaves that recipient pending. Replaying the event or
+running the delivery-retry job resumes unresolved recipients and skips those
+already delivered or queued, including after a process restart. The retry job
+uses this outbox for GitHub events; older delivery records still use the
+existing retry path. Closing an issue retires pending notifications; retries
+also check for closed/deleted issues and changed issue targets. Unresolved
+outbox rows survive event-feed retention; completed rows are pruned with their
+event.
+
+Issue offers in the outbox are retired once their recipient acknowledges that
+issue in that repository, even when GitHub is unavailable. Acknowledgment does
+not discard pending comments, reviews or informational notices.
+
+Retry order uses the oldest unresolved recipient attempt for each event.
+Completed receipts cannot keep a partially delivered event at the front forever;
+after its remaining recipients are attempted, later events get a turn. Events
+whose receipts are all complete remain eligible until their handled marker is
+saved, so a crash between the last receipt and that marker can be reconciled.
+
+The database cannot transact with a terminal paste. A process crash after a
+paste succeeds but before its receipt is saved can still cause a repeated
+notification. Once the receipt is saved, a later crash during delivery to
+another recipient does not repeat the completed recipient.
 
 ## Who hears about what
 
@@ -90,7 +130,8 @@ For an issue in repository R:
 | Comment | `for:` targets ∪ `from:` opener ∪ sole owner, minus the commenter and `routing.ignore_targets` | comment notice |
 | Issue closed | each target gets its **next** issue; the `from:` opener is told it was closed | |
 | All sub-issues of a parent closed | the parent's targets | "Dependencies resolved" |
-| Pull request opened in R | owners and watchers of R | informational |
+| Pull request opened in R | owners and watchers of R, minus the agent that opened it | informational; the issues it closes count as acknowledged by the opener |
+| Review submitted on a pull request | as for a comment, minus the reviewer when it is an agent | review notice: verdict, **the reviewed commit** (so a review of an earlier push arriving late is recognisable), summary preview, link (one per review, not per inline comment; webhook intake, plus polling for configured reviewers) |
 
 The `from:` sender never receives its own issue. Editing an existing issue
 (a `labeled` event without a new `for:`) notifies nobody.
@@ -119,9 +160,21 @@ queue stays blocked on it (`awaiting_ack`) until a comment appears. Watch
 
 `for:<agent>` issues in every repository the agent owns or watches, plus —
 if it is the sole owner of its repository — that repository's unlabelled
-open issues. Ordered `blocking` first; then type weight (`spec-gap` 100,
-`bug` 90, `task` 50, `question` 20, `optimization` 10); then number of
-dependents; then oldest first. Tune with `priority.*` settings.
+open issues. Swarm members are not owners; their work queues contain explicitly
+targeted issues, and issues opened by the target itself are excluded.
+"Unlabelled" means no `for:` label at all: an issue addressed
+to a person (`routing.ignore_targets`) or to a name the backbone does not
+know is not the owner's. Queue construction follows all result pages before
+ordering and acknowledgement checks.
+
+The score adds the `blocking` bonus, type weight (`spec-gap` 100, `bug` 90,
+`task` 50, `question` 20, `optimization` 10), the recorded dependent bonus
+`type_weight * (priority.dependents_multiplier ** parent_count - 1)`, and
+`age_in_days * priority.age_tiebreaker_weight`. Creation time comes from GitHub;
+missing, invalid or future dates get no age bonus. Repository and issue number
+break equal scores deterministically. Dependency counts come from the database's
+sub-issue graph, refreshed by the monitor; closing parents removes stale edges
+at the next sync. Until an edge is discovered it contributes no bonus.
 
 ## What the agent receives
 
@@ -178,3 +231,49 @@ cd ~/code/orchestration && backbone agent start --watch acme/app --watch acme/we
 Two agents can own the same repository (two checkouts of one project):
 unlabelled issues are announced to both and either claims one by
 commenting; `for:` labels address one of them directly.
+
+## Review lifecycle
+
+Set `github.reviewers` to the reviewer logins or GitHub App slugs to track, for
+example `["coderabbitai"]`. The default is empty, preserving comment delivery.
+For configured accounts, comments on pull requests are lifecycle-only and are
+not delivered separately; their comments on ordinary issues remain deliverable.
+This is an explicit account policy, not a guess based on a bot's prose.
+
+An in-progress GitHub check with a start timestamp and commit, or a pending
+commit status from that reviewer, emits **review started**. A pending status
+means queued or running; CodeRabbit currently uses this older status API. A submitted review emits **review finished**, with its verdict,
+commit, submission time, summary and link. Current-head metadata identifies
+older commits. A completed check never implies a finished review or zero
+findings. Fast reviews can finish between polls without an observed start.
+Reviewers that publish no check get finished notices only. Findings are retained
+in the review preview/link; the backbone does not infer a count from prose.
+
+Poll intake lists open PRs, their head statuses/checks and submitted reviews for
+configured accounts at most once per `github.review_poll_interval_seconds` (300
+by default). Its separate durable cursor preserves events between metadata polls
+and across restarts. A review-read failure leaves the cursor unchanged while
+ordinary issues and comments still dispatch. PR update time alone is not used
+to skip status-only activity. Webhook intake needs **Check runs**, **Commit statuses**, and **Pull request reviews** events;
+tokens/apps need read access to checks and PRs. GitHub may omit PR associations
+from fork check webhooks; poll intake can read checks via the PR head reference.
+[GitHub check-run API](https://docs.github.com/en/rest/checks/runs) and
+[review API](https://docs.github.com/en/rest/pulls/reviews) define these signals.
+
+Started notifications deduplicate by repository, PR, reviewer and commit;
+finished reviews retain their review ID. Finished state is durable, so a late
+start cannot reopen the same review. Finishing retires queued starts and pending
+outbox starts. The running server serializes start delivery and completion by
+reviewer/commit, including starts already leased by a queue drain. A start already
+being delivered completes before the finished notice; terminal delivery cannot
+be recalled. Serialization, like the terminal delivery gate, is scoped to the
+single server process; finished state survives restarts. Another commit is a
+separate lifecycle. Lifecycle retention follows the event retention setting.
+
+Close notices deduplicate by repository, issue and `closed_at` across webhook
+and poll intake. A later acknowledgement comment or label edit changes
+`updated_at`, not closure identity. A reopen followed by a new close is a new
+event. Opener notices use durable outbox receipts, so failed queue storage retries
+without repeating a delivered notice. An older close replay cannot retire a
+newer close receipt or repeat its queue purge and next-issue selection. Polling
+ignores closure times older than its replay window.

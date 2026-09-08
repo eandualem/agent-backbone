@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import sqlite3
+from pathlib import Path
 from typing import Any
 
-from agent_backbone.config import BackboneConfig, bootstrap_config
+from agent_backbone.config import BackboneConfig, bootstrap_config, build_config, validate_setting
 
 log = logging.getLogger(__name__)
 
@@ -111,3 +114,113 @@ def parse_value(raw: str) -> Any:
         return json.loads(raw)
     except ValueError:
         return raw
+
+
+_CLIENT_SETTINGS_SQL = (
+    "SELECT key, value FROM settings WHERE key IN ('backbone.host', 'backbone.port')"
+)
+
+
+async def read_client_config() -> BackboneConfig:
+    """Read only existing address settings, without creating or repairing a database."""
+    from sqlalchemy import text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    boot = bootstrap_config()
+    try:
+        url = make_url(boot.database_url)
+        if url.get_backend_name() == "sqlite":
+            if not url.database or url.database == ":memory:":
+                return boot
+
+            def sqlite_settings():
+                uri = Path(url.database).expanduser().resolve().as_uri() + "?mode=ro"
+                conn = sqlite3.connect(uri, uri=True, timeout=1)
+                try:
+                    return conn.execute(_CLIENT_SETTINGS_SQL).fetchall()
+                finally:
+                    conn.close()
+
+            rows = await asyncio.to_thread(sqlite_settings)
+        else:
+            engine = create_async_engine(boot.database_url)
+            try:
+
+                async def server_settings():
+                    async with engine.connect() as conn:
+                        return (await conn.execute(text(_CLIENT_SETTINGS_SQL))).fetchall()
+
+                rows = await asyncio.wait_for(server_settings(), timeout=3)
+            finally:
+                await engine.dispose()
+        settings = {key: validate_setting(key, json.loads(value)) for key, value in rows}
+    except Exception:
+        # A missing database or unreadable settings must not trigger initialization.
+        # The API call will report whether the bootstrap address is reachable.
+        return boot
+    # Share server precedence, including BACKBONE_PORT from process env/.env,
+    # while keeping this path read-only and limited to address settings.
+    return build_config(boot.data_dir, settings=settings, agents=boot.agents)
+
+
+async def _read_config() -> BackboneConfig:
+    """Existing full configuration for inspection, without schema repair or creation."""
+    from sqlalchemy import text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from agent_backbone.config import agents_from_rows, build_config
+
+    boot = bootstrap_config()
+    url = make_url(boot.database_url)
+    queries = (
+        "SELECT key, value FROM settings",
+        "SELECT * FROM agents ORDER BY name",
+        "SELECT agent_name, repo FROM agent_watches ORDER BY agent_name, repo",
+    )
+    if url.get_backend_name() == "sqlite":
+        if not url.database or url.database == ":memory:":
+            return boot
+        path = Path(url.database).expanduser().resolve()
+        if not path.exists():
+            return boot
+
+        def read_sqlite():
+            conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute("BEGIN")
+                return [[dict(row) for row in conn.execute(query)] for query in queries]
+            finally:
+                conn.close()
+
+        rows = await asyncio.to_thread(read_sqlite)
+    else:
+        engine = create_async_engine(boot.database_url)
+        try:
+            async with engine.connect() as conn:
+                rows = [(await conn.execute(text(query))).mappings().all() for query in queries]
+        finally:
+            await engine.dispose()
+    settings = {row["key"]: json.loads(row["value"]) for row in rows[0]}
+    agents = []
+    for row in rows[1]:
+        agent = dict(row)
+        agent["tags"] = json.loads(agent.get("tags") or "[]")
+        agent["env"] = json.loads(agent.get("env") or "{}")
+        agent["watches"] = [
+            watch["repo"] for watch in rows[2] if watch["agent_name"] == agent["name"]
+        ]
+        agents.append(agent)
+    return build_config(boot.data_dir, settings=settings, agents=agents_from_rows(agents))
+
+
+async def read_config() -> BackboneConfig:
+    """Fail clearly if existing configuration cannot be inspected safely."""
+    try:
+        return await asyncio.wait_for(_read_config(), timeout=5)
+    except Exception as exc:
+        raise ValueError(
+            "Could not read existing configuration; check database availability and schema"
+        ) from exc

@@ -187,6 +187,22 @@ class TestBuildConfig:
         config = replace(config, github_token="ghp")
         assert config.github_intake == "off"
 
+    def test_bad_port_env_falls_back_to_the_setting(self, tmp_path):
+        settings = effective_settings({"backbone.port": 7999})
+        config = build_config(
+            tmp_path, settings=settings, agents=AgentsConfig(), env={"BACKBONE_PORT": "abc"}
+        )
+        assert config.backbone.port == 7999
+
+    def test_port_env_overrides_the_setting(self, tmp_path):
+        config = build_config(
+            tmp_path,
+            settings=effective_settings({}),
+            agents=AgentsConfig(),
+            env={"BACKBONE_PORT": "7999"},
+        )
+        assert config.backbone.port == 7999
+
 
 class TestAgents:
     def test_agents_from_rows(self):
@@ -235,5 +251,22 @@ class TestAgents:
         )
         assert [s.name for s in agents.owners("ACME/app")] == ["a", "b"]
         assert [s.name for s in agents.watchers("acme/app")] == ["orch"]
+
         assert agents.repos == ["acme/app", "acme/orch"]
         assert "orch" in agents
+
+    def test_swarm_members_are_neither_owners_nor_watchers(self):
+        agents = AgentsConfig(
+            specs={
+                "app": AgentSpec(name="app", dir="/app", repo="acme/app"),
+                "audit-scout-1": AgentSpec(
+                    name="audit-scout-1",
+                    dir="/app/.backbone/swarms/audit",
+                    repo="acme/app",
+                    watches=("acme/other",),
+                    tags=("swarm:audit", "role:scout"),
+                ),
+            }
+        )
+        assert [s.name for s in agents.owners("acme/app")] == ["app"]
+        assert agents.watchers("acme/other") == []

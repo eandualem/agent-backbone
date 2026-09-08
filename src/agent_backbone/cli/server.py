@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -37,9 +38,35 @@ def _run_server(config: BackboneConfig, reload: bool = False) -> None:
 
     from agent_backbone.api.app import create_app
 
-    uvicorn.run(
-        create_app(config), host=config.backbone.host, port=config.backbone.port, log_level="info"
+    app = create_app(config)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app, host=config.backbone.host, port=config.backbone.port, log_level="info", workers=1
+        )
     )
+    inner = getattr(app, "other_asgi_app", app)
+    # An internal upgrade must not send SIGTERM: Uvicorn replays captured
+    # signals after shutdown, which would kill us before the exec below.
+    inner.state.request_shutdown = lambda: setattr(server, "should_exit", True)
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        return
+    if not server.started:
+        raise SystemExit(3)  # preserve uvicorn.run's startup-failure exit status
+    if restart_requested(app):
+        # The upgrade watch asked for new code: become a fresh `backbone up`
+        # in place, so the login service or tmux session is unchanged.
+        log.warning("restarting onto the new code")
+        os.execv(sys.executable, [sys.executable, "-m", "agent_backbone.cli", *sys.argv[1:]])
+
+
+def restart_requested(app) -> bool:
+    """Whether the upgrade watch asked for a restart. ``create_app`` returns the
+    Socket.IO wrapper; the flag is on the FastAPI app inside it."""
+    inner = getattr(app, "other_asgi_app", app)
+    state = getattr(inner, "state", None)
+    return bool(getattr(state, "restart_requested", False))
 
 
 async def _up_detached(config: BackboneConfig) -> int:
@@ -78,80 +105,15 @@ async def _down(config: BackboneConfig) -> int:
     if not await session_exists(session):
         print("backbone is not running in tmux")
         return 0
-    await graceful_close(session, timeout=15.0)
+    if not await graceful_close(session, timeout=15.0):
+        print(f"failed to stop backbone session '{session}'")
+        return 1
     print("backbone stopped")
     return 0
 
 
 def cmd_down(args: argparse.Namespace) -> int:
     return asyncio.run(_down(asyncio.run(_common.load_config())))
-
-
-async def _status() -> int:
-    from agent_backbone.services.terminal import list_sessions
-
-    config = await _common.load_config()
-    sessions = set(await list_sessions())
-    health = await _common.api(config, "GET", "/health", timeout=3.0)
-    api_up = health is not None
-    print(f"backbone API : {'up' if api_up else 'down'} ({_common.api_url(config, '')})")
-    if api_up and isinstance(health[1], dict):
-        for name, comp in health[1].get("components", {}).items():
-            print(f"  {name:<14s} {'ok' if comp.get('healthy') else 'DEGRADED'}")
-    print(f"github intake: {config.github_intake}")
-
-    print("\nagents:")
-    if not config.agents:
-        print("  (none yet — run `backbone agent start` from a project directory)")
-    states: dict[str, dict] = {}
-    if api_up:
-        result = await _common.api(config, "GET", "/api/agents")
-        if result and result[0] == 200:
-            states = {a["name"]: a for a in result[1].get("items", [])}
-    width = max((len(n) for n in config.agents.names), default=8)
-    for spec in config.agents:
-        live = states.get(spec.name, {})
-        if spec.name in sessions:
-            state = live.get("state") or "running"
-            if live.get("reason"):
-                state += f"({live['reason']})"
-        else:
-            state = "offline"
-        watches = f"  watches {', '.join(spec.watches)}" if spec.watches else ""
-        repo = spec.repo or "-"
-        print(
-            f"  {spec.name:<{width}s}  {state:<18s} {spec.runtime:<8s} {repo:<28s} "
-            f"{spec.path}{watches}"
-        )
-    others = sorted(
-        s for s in sessions if s not in config.agents and s != config.backbone.session_name
-    )
-    if others:
-        print("\nother tmux sessions: " + ", ".join(others))
-
-    if config.agents.repos:
-        print("\nrepositories:")
-        last: dict[str, str] = {}
-        if api_up:
-            result = await _common.api(config, "GET", "/api/status")
-            if result and result[0] == 200:
-                last = {
-                    r["repo"]: r.get("last_event_at") or "-" for r in result[1].get("repos", [])
-                }
-        for repo in config.agents.repos:
-            owners = ", ".join(s.name for s in config.agents.owners(repo)) or "-"
-            watchers = ", ".join(s.name for s in config.agents.watchers(repo))
-            line = f"  {repo:<30s} owner: {owners}"
-            if watchers:
-                line += f"  watchers: {watchers}"
-            if last.get(repo):
-                line += f"  last event: {last[repo]}"
-            print(line)
-    return 0
-
-
-def cmd_status(args: argparse.Namespace) -> int:
-    return asyncio.run(_status())
 
 
 async def _config_cmd(args: argparse.Namespace) -> int:
@@ -207,6 +169,10 @@ async def _config_cmd(args: argparse.Namespace) -> int:
             if result and result[0] == 200:
                 print(f"{args.key} reset to default")
                 return 0
+            # The daemon is up and owns the live value: a failed API call
+            # must not fall through to the database and claim success.
+            print(f"API error: {result[1] if result else 'unreachable'}")
+            return 1
         async with _common.Direct(boot) as direct:
             await direct.db.settings.delete(args.key)
         print(f"{args.key} reset to default")

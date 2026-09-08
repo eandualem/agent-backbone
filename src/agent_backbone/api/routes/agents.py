@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from agent_backbone.api.deps import (
     get_agent_store,
@@ -19,6 +19,7 @@ from agent_backbone.api.models import (
     AgentApproveRequest,
     AgentApproveResponse,
     AgentConfigResponse,
+    AgentDenyResponse,
     AgentInspectResponse,
     AgentStartRequest,
     AgentStartResponse,
@@ -38,10 +39,20 @@ from agent_backbone.services.agents import (
     AgentStore,
     agent_state,
     approve_agent,
+    deny_agent,
     read_state_file,
+    record_answer,
     write_state_file,
 )
-from agent_backbone.services.agents.operations import StartRequest, resolve_agent, start_resolved
+from agent_backbone.services.agents.operations import (
+    StartRequest,
+    resolve_agent,
+    start_resolved,
+    stop_agent_session,
+)
+from agent_backbone.services.agents.operations import (
+    forget_agent as forget_agent_op,
+)
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import get_session_intelligence
 from agent_backbone.services.runtimes import RUNTIMES, sanitize_pane_content
@@ -51,12 +62,46 @@ from agent_backbone.services.terminal import (
     list_sessions,
     query_format_vars,
     session_exists,
-    stop_session,
 )
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agents"])
+
+
+class AgentTagsRequest(BaseModel):
+    tags: list[str]
+    remove: bool = False
+
+
+class AgentRenameRequest(BaseModel):
+    name: str
+
+
+@router.post("/agents/{name}/tags", response_model=AgentConfigResponse)
+async def tag_agent(
+    name: str, body: AgentTagsRequest, store: AgentStore = Depends(get_agent_store)
+):
+    try:
+        spec = await store.tag(name, body.tags, remove=body.remove)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown agent '{name}'") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AgentConfigResponse.from_spec(spec)
+
+
+@router.post("/agents/{name}/rename", response_model=AgentConfigResponse)
+async def rename_agent(
+    name: str, body: AgentRenameRequest, store: AgentStore = Depends(get_agent_store)
+):
+    try:
+        spec = await store.rename(name, body.name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown agent '{name}'") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return AgentConfigResponse.from_spec(spec)
 
 
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
@@ -134,6 +179,9 @@ async def inspect_agent(
         state_source=profile.state_source,
         state_age_seconds=state_age,
         delivery=profile.intelligence.value,
+        session_id=profile.session_id,
+        last_message=profile.last_message,
+        detail=profile.detail,
         evidence=list(profile.evidence),
         tmux=tmux_vars,
         pane_tail=pane_tail,
@@ -227,16 +275,24 @@ async def stop_agent(
     config: BackboneConfig = Depends(get_config),
     feed: SessionFeed = Depends(get_feed),
 ):
-    """Stop an agent tmux session."""
-    if session == config.backbone.session_name:
-        raise HTTPException(status_code=400, detail="Refusing to stop the backbone's own session")
-    ok = await stop_session(session)
+    """Stop an agent tmux session (never the backbone's own)."""
+    registered_agent_or_404(config, session)
+    try:
+        ok = await stop_agent_session(config, session)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     if ok:
         await feed.refresh_and_emit()
     return AgentStopResponse(ok=ok, session=session)
 
 
-_APPROVE_STATUS = {"not_waiting": 409, "unsupported": 400, "offline": 404, "failed": 502}
+_APPROVE_STATUS = {
+    "not_waiting": 409,
+    "not_permission": 409,
+    "unsupported": 400,
+    "offline": 404,
+    "failed": 502,
+}
 
 
 @router.post("/agents/{name}/approve", response_model=AgentApproveResponse)
@@ -269,20 +325,52 @@ async def approve_agent_prompt(
             status_code=_APPROVE_STATUS.get(outcome, 500),
             detail={"outcome": outcome, "evidence": evidence},
         )
-    dialog = next((ln for ln in evidence[1:] if ln), "")
-    event_id = await db.events.record(
-        delivery_id=f"approval:{uuid.uuid4().hex}",
-        source="backbone",
-        event_type="approval",
-        sender=approved_by,
-        summary=f"{approved_by} approved a {spec.runtime} permission prompt on {name}: {dialog}",
+    await record_answer(
+        db, agent=name, runtime=spec.runtime, verb="approved", by=approved_by, evidence=evidence
     )
-    if event_id is not None:
-        await db.events.mark_processed(event_id, "approved")
-    log.info("Permission prompt on '%s' approved by %s", name, approved_by)
     await feed.refresh_and_emit()
     return AgentApproveResponse(
         ok=True, session=name, outcome=outcome, evidence=evidence, approved_by=approved_by
+    )
+
+
+@router.post("/agents/{name}/deny", response_model=AgentDenyResponse)
+async def deny_agent_prompt(
+    name: str,
+    body: AgentApproveRequest | None = None,
+    config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
+    feed: SessionFeed = Depends(get_feed),
+):
+    """Refuse the permission prompt a registered agent's runtime is showing.
+
+    The mirror of approve with the runtime's refusing key — on a choice
+    dialog (a Codex model switch) this is the answer that keeps things as
+    they are. Same gate: only a dialog on screen is answered, and every
+    denial is recorded as a ``denial`` event.
+    """
+    if not config.security.allow_remote_approval:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Remote approval is disabled. Run "
+                "`backbone config set security.allow_remote_approval true` to enable."
+            ),
+        )
+    spec = registered_agent_or_404(config, name)
+    denied_by = (body.from_entity if body else "") or "api"
+    outcome, evidence = await deny_agent(name, runtime=spec.runtime)
+    if outcome != "denied":
+        raise HTTPException(
+            status_code=_APPROVE_STATUS.get(outcome, 500),
+            detail={"outcome": outcome, "evidence": evidence},
+        )
+    await record_answer(
+        db, agent=name, runtime=spec.runtime, verb="denied", by=denied_by, evidence=evidence
+    )
+    await feed.refresh_and_emit()
+    return AgentDenyResponse(
+        ok=True, session=name, outcome=outcome, evidence=evidence, denied_by=denied_by
     )
 
 
@@ -292,7 +380,8 @@ async def update_agent(
     body: AgentUpdateRequest,
     store: AgentStore = Depends(get_agent_store),
 ):
-    """Change an agent's recorded settings (dir, runtime, model, repo, tags, env, description)."""
+    """Change an agent's recorded settings (dir, runtime, model, repo, tags,
+    env, description, always_on, unattended)."""
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
     try:
         spec = await store.update(name, **changes)
@@ -325,9 +414,10 @@ async def unwatch_repo(name: str, body: WatchRequest, store: AgentStore = Depend
 @router.delete("/agents/{name}")
 async def forget_agent(name: str, store: AgentStore = Depends(get_agent_store)):
     """Forget an agent (its session must be stopped first)."""
-    if await session_exists(name):
-        raise HTTPException(status_code=409, detail=f"'{name}' is running — stop it first")
-    removed = await store.forget(name)
+    try:
+        removed = await forget_agent_op(store, name)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     if not removed:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'")
     return {"ok": True, "name": name}

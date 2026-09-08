@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent_backbone.services.runtimes import RuntimeDiagnostic
 
 
 class AgentState(StrEnum):
@@ -12,12 +16,16 @@ class AgentState(StrEnum):
     ``waiting_for_human`` covers plan approval, permission prompts and any
     other question the runtime is blocking on; the detail is in
     ``StateSnapshot.reason`` (``plan``, ``permission``, ``question``).
+    ``blocked`` is the runtime waiting on something that is not a person —
+    a usage limit (``quota``) or model-provider failure (``provider``).
+    Recovery may require waiting or choosing another model.
     """
 
     STARTING = "starting"
     IDLE = "idle"
     BUSY = "busy"
     WAITING_FOR_HUMAN = "waiting_for_human"
+    BLOCKED = "blocked"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -29,11 +37,29 @@ class AgentState(StrEnum):
             return cls.UNKNOWN
 
 
-WORKING_STATES = frozenset({AgentState.STARTING, AgentState.BUSY})
+def prompt_id(snapshot: StateSnapshot) -> str:
+    """The identity of one prompt, as an alert's dedup key and a Telegram
+    button both carry it.
+
+    A hook-written state has a timestamp that changes only when the agent
+    does, so it names that prompt exactly. A state read from the terminal is
+    stamped at every poll, so its identity is the reason alone: coarser (a
+    later prompt of the same kind matches), but stable — otherwise every
+    monitor tick would look like a new prompt and re-alert. Answering is
+    still gated on the dialog being on screen either way.
+    """
+    if snapshot.source == "push":
+        return f"{snapshot.timestamp:.3f}"
+    return f"pane:{snapshot.prompt_ref or snapshot.reason or 'waiting'}"
+
+
+WORKING_STATES = frozenset({AgentState.STARTING, AgentState.BUSY, AgentState.BLOCKED})
+"""States in which the agent cannot accept another delivery."""
 
 REASON_PLAN = "plan"
 REASON_PERMISSION = "permission"
 REASON_QUESTION = "question"
+REASON_QUOTA = "quota"
 
 
 @dataclass
@@ -49,7 +75,24 @@ class StateSnapshot:
     started_at: float | None = None
     plan_file: str | None = None
     plan_title: str | None = None
+    session_id: str | None = None
+    """The runtime's own session id, when its hook reports one."""
+    runtime: str | None = None
+    """The runtime whose hook wrote the record (a session id is only good for that runtime)."""
+    last_message: str | None = None
+    """The agent's last reply (clipped), when its hook reports one."""
+    event: str | None = None
+    """The hook event that produced a push snapshot."""
+    detail: str | None = None
+    """What the runtime said about a ``blocked`` state (e.g. when the limit resets)."""
+    prompt_ref: str | None = None
+    """Identifies the dialog a terminal reading found (a digest of what is on
+    screen): stable while it is up, different for the next one."""
     evidence: list[str] = field(default_factory=list)
+    diagnostics: tuple[RuntimeDiagnostic, ...] = ()
+    """Typed terminal observations, independent of the reconciled state."""
+    diagnostics_observed: bool = False
+    """Whether nonempty terminal output was available (empty also means capture failed)."""
 
     @property
     def is_plan_waiting(self) -> bool:

@@ -8,7 +8,9 @@ the envelope is untrusted input from the tracker.
 
 from __future__ import annotations
 
-from agent_backbone.models import CommentData, IssueData, parse_from_tag
+import re
+
+from agent_backbone.models import CommentData, IssueData, ReviewData, parse_from_tag
 
 
 def _issue_ref(issue: IssueData) -> str:
@@ -42,6 +44,55 @@ def format_pull_request_notification(issue: IssueData) -> str:
     )
 
 
+_PREVIEW_CHARS = 500
+_ENVELOPE_RE = re.compile(r"^\[via:[^\]]*\]")
+QUEUED_AGE_NOTED_AFTER = 120.0
+"""Seconds a message must have waited in the queue before its delivery says so."""
+
+
+def stamp_queued_age(message: str, waited_seconds: float) -> str:
+    """``message`` with ``(queued N min ago)`` after its envelope when it waited
+    long enough to matter: a review or comment drained after twenty minutes
+    reads as current otherwise, and the agent acts on stale news."""
+    if waited_seconds < QUEUED_AGE_NOTED_AFTER:
+        return message
+    minutes = int(waited_seconds // 60)
+    age = f"{minutes} min" if minutes < 120 else f"{minutes // 60} h"
+    note = f"(queued {age} ago)"
+    match = _ENVELOPE_RE.match(message)
+    if match:
+        return f"{message[: match.end()]} {note}{message[match.end() :]}"
+    return f"{note} {message}"
+
+
+def _strip_html_comments(text: str) -> str:
+    """``text`` without ``<!-- … -->`` blocks, in one pass: a regex with a
+    lazy ``.*?`` rescans to the end for every unterminated opener, which a
+    hostile comment body could stack by the thousand."""
+    out: list[str] = []
+    i = 0
+    while True:
+        start = text.find("<!--", i)
+        if start < 0:
+            out.append(text[i:])
+            break
+        out.append(text[i:start])
+        end = text.find("-->", start + 4)
+        if end < 0:
+            break  # unterminated: the rest is comment, as a browser reads it
+        i = end + 3
+    return "".join(out)
+
+
+def _preview(body: str) -> str:
+    """The first 500 characters that mean something: HTML comments (bots
+    open with several) and runs of whitespace carry nothing to an agent."""
+    text = " ".join(_strip_html_comments(body).split())
+    if len(text) <= _PREVIEW_CHARS:
+        return text
+    return text[: _PREVIEW_CHARS - 3] + "..."  # the ellipsis counts toward the cap
+
+
 def format_comment_notification(
     issue: IssueData,
     comment: CommentData,
@@ -54,9 +105,7 @@ def format_comment_notification(
         idx = body.index("]") + 1
         body = body[idx:].lstrip()
 
-    preview = body[:500].replace("\n", " ")
-    if len(body) > 500:
-        preview += "..."
+    preview = _preview(body)
 
     attribution = commenter_entity if commenter_entity else comment.user_login
 
@@ -98,6 +147,57 @@ def format_unexpected_offline_notification(session: str, entity: str, pending_co
         f"Agent {entity} ({session}) went offline unexpectedly with "
         f"{pending_count} pending {issue_word}. Session may need restart."
     )
+
+
+def format_offline_queue_notification(session: str, queued: int) -> str:
+    """Messages are waiting for an agent that is not running."""
+    word = "message" if queued == 1 else "messages"
+    return (
+        f"[via:backbone] Agent {session} is offline with {queued} queued {word}. "
+        f"It was not restarted; `backbone agent start {session}` delivers them."
+    )
+
+
+_REVIEW_STATES = {
+    "approved": "approved",
+    "changes_requested": "changes requested",
+    "commented": "commented",
+}
+
+
+def format_review_notification(issue: IssueData, review: ReviewData) -> str:
+    """A pull request review: verdict, the reviewed commit, summary preview
+    (500 chars) and link.
+
+    Inline comments are not relayed; the link points at the review.
+    """
+    body = review.body
+    tag = parse_from_tag(body)
+    if tag:
+        body = body[body.index("]") + 1 :].lstrip()
+    preview = _preview(body)
+    verdict = _REVIEW_STATES.get(review.state, review.state or "review")
+    summary = f'"{preview}"' if preview else "(no summary; see the inline comments)"
+    attribution = tag or review.user_login
+    link = review.html_url or issue.html_url
+    # The commit is what lets the agent tell a review of its latest push
+    # from one of an earlier commit arriving late.
+    anchor = f" of {review.commit_id[:7]}" if review.commit_id else " of unknown commit"
+    if review.head_sha and review.head_sha != review.commit_id:
+        anchor += f" (current head {review.head_sha[:7]}; earlier commit)"
+    if review.submitted_at:
+        anchor += f" at {review.submitted_at}"
+    phase = "started" if review.state == "started" else "finished"
+    if review.state == "started":
+        summary = (
+            f"{preview} Await the submitted review; check completion alone is not a review verdict."
+        ).strip()
+    return (
+        f"[via:github pr:{issue.number}] "
+        f'Review {phase} on {_issue_ref(issue)} "{issue.title}" '
+        f"from {attribution} ({verdict}){anchor}: "
+        f"{summary} Link: {link}"
+    ).rstrip()
 
 
 def format_plan_notification(

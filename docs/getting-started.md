@@ -61,24 +61,41 @@ There is no configuration file. Settings have defaults and are changed with
 
 ## 3. State hooks — nothing to install
 
-With hooks, Claude Code tells the backbone the moment it becomes busy, idle,
-or waits for a person (plan approval, permission prompt, question). Without
-them the backbone reads the terminal, which works but is less precise.
+With hooks, the runtime tells the backbone the moment the agent becomes
+busy, idle, or waits for a person (plan approval, permission prompt,
+question). Without them the backbone reads the terminal, which works but
+is less precise.
 
-Every Claude Code session the backbone starts gets the hooks automatically:
-`agent start` launches `claude --settings <data_dir>/hooks/claude-settings.json`,
-a file the backbone owns and regenerates on every start. No repository and no
-`~/.claude/settings.json` is touched.
+Every session the backbone starts gets the hooks automatically, wired for
+that launch only — no repository and none of the CLI's own configuration
+is touched:
 
-For Claude Code sessions you start *outside* the backbone, an optional
-one-time global install adds the same hooks to `~/.claude/settings.json`:
+| Runtime | How the hooks reach the session |
+|---|---|
+| Claude Code | `--settings <data_dir>/hooks/claude-settings.json` |
+| Codex | `-c hooks.<Event>=…` overrides, with the hook-trust prompt bypassed for the backbone's own hooks |
+| Gemini CLI | `GEMINI_CLI_SYSTEM_SETTINGS_PATH=<data_dir>/hooks/gemini-settings.json` |
+| OpenCode | `OPENCODE_CONFIG_CONTENT` loading the `opencode_hook.js` plugin |
+
+The files under `<data_dir>/hooks/` are the backbone's and are regenerated
+on every start. Deep Code, Aider and `shell` are read from the terminal.
+
+For OpenCode, an agent's existing `OPENCODE_CONFIG_CONTENT` is preserved:
+the backbone appends its hook to the plugin array without replacing provider
+settings or permission rules. If the inline configuration cannot be merged as
+a JSON object (for example, JSONC), the backbone logs a warning, leaves it
+unchanged and falls back to terminal state detection. JSONC configuration files
+remain managed by OpenCode itself.
+
+For sessions you start *outside* the backbone, an optional one-time install
+adds the same hooks to the CLI's own settings:
 
 ```bash
-backbone hooks install claude              # global: ~/.claude/settings.json
+backbone hooks install claude                    # ~/.claude/settings.json
 backbone hooks install claude --dir ~/code/app   # or one project
+backbone hooks install codex                     # ~/.codex/hooks.json (then accept them once with /hooks)
+backbone hooks install gemini                    # ~/.gemini/settings.json
 ```
-
-Other runtimes are read from the terminal for now.
 
 ## 4. Run the backbone
 
@@ -133,6 +150,8 @@ Useful right away:
 
 ```bash
 backbone status                 # agents, their state, repositories
+backbone status --watch          # live roster; Ctrl-C exits
+backbone agent attach app        # open the session; Ctrl-b d detaches
 backbone agent inspect app      # state + delivery readiness + evidence
 backbone tell app "Summarise what this repository does in three sentences."
 ```
@@ -145,7 +164,51 @@ backbone tell app "Summarise what this repository does in three sentences."
 
 If the agent is busy you get `"outcome": "agent_working"` and the message
 is queued; the monitor delivers it when the agent is idle (within a
-minute). Watch it happen: `tmux attach -t app`.
+minute). Watch it happen: `backbone agent attach app`.
+
+Later, use `backbone agent resume app --attach` to reopen a stopped agent's
+conversation, or add `--attach` to the first `agent start`. An already running
+agent stays running. `backbone help agent start` recalls its options.
+
+Set up [shell completion](cli.md#quick-reference-and-tab-completion) once so Tab
+offers agent names and commands. To preview Backbone startup instructions and selected policies,
+run `backbone instructions preview app` (project/runtime instructions load separately);
+`backbone instructions list` shows
+where to edit shared policies and assign them to tags.
+
+### Codex permissions and scrolling
+
+The backbone grants Codex access to Git commit data: objects, refs, logs,
+the index, and commit bookkeeping files and locks. For linked worktrees, it
+validates Git's reciprocal pointers before opening shared and private commit
+paths. Codex normally protects `.git` even inside a writable checkout; these grants let
+ordinary `git add` and `git commit` run inside the sandbox. Source files,
+configured tooling directories (`agents.writable_dirs`) and the network are
+also available. Git hooks and configuration, `.codex`, `.agents`, and unrelated
+directories keep their existing protection. A `.git` symlink or unverified
+worktree pointer receives no automatic Git grant. Directory resolution errors
+(including symlink loops) also yield no automatic grant. See [Codex's protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).
+
+To have Codex review remaining permission requests automatically:
+
+```bash
+backbone config set agents.auto_review true
+```
+
+This selects Codex's `--approve-for-me` mode with its workspace sandbox.
+Requests needing extra permission go to Codex's reviewer, which can approve
+routine actions or refuse them. It does not guarantee every request will
+run. Set the setting to `false` to use your own Codex approval configuration.
+Unattended agents keep their no-prompt policy; other runtimes are unaffected.
+The change applies on the next start or resume, including for an existing
+conversation. See [automatic approval reviews](https://learn.chatgpt.com/docs/agent-approvals-security#automatic-approval-reviews).
+
+Codex launches in inline mode (`--no-alt-screen`) with tmux mouse handling
+enabled for its session. The wheel scrolls terminal history instead of
+recalling earlier prompts. Press `q` to leave tmux copy mode and return to
+input. Other runtimes retain your tmux mouse setting. For an already running
+Codex session, enable mouse handling with
+`tmux set-option -t '=NAME:' mouse on` (replace `NAME` with the agent name).
 
 ### The thing worth trying first
 
@@ -334,13 +397,28 @@ Agents are tmux sessions, so a reboot ends them:
 
 ```bash
 backbone agent start app web      # the agents you want, by name
+backbone agent start --always-on --resume   # or every agent marked always_on, resumed
 backbone status                   # confirm
 ```
 
-There is deliberately no "start everything ever registered" — start the
-agents you need, or keep a one-liner for the group you usually run
-(e.g. `alias work-agents='ab agent start app web orch'`). Without the
-service, `backbone up --detach` starts the backbone by hand.
+`--resume` reopens the session the backbone last saw through the runtime's
+hook (its session id is recorded), or the runtime's own "last
+conversation" when there is none. There is deliberately no "start
+everything ever registered" — start the agents you need, mark the ones
+that should always be up (`backbone agent set app always_on=true`), or
+keep a one-liner for the group you usually run. Without the service,
+`backbone up --detach` starts the backbone by hand.
+
+## Upgrading
+
+```bash
+backbone upgrade                  # new package in, backbone restarted, agents untouched
+backbone upgrade --check          # installed vs newest on PyPI
+```
+
+The running backbone notices new code on its own (a `uv tool upgrade`, or
+a pull of a development checkout) and restarts onto it within a minute,
+once nothing is being routed. Agents keep running through it.
 
 ## Where things are
 

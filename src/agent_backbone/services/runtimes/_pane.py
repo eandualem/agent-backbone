@@ -17,6 +17,9 @@ busy marker or question was found."""
 
 # A dialog's own option lines: "❯ 1. Yes", "› 1. Yes, proceed (y)", "● 1. Yes", "  2. No".
 DIALOG_OPTION_RE = re.compile(r"^\S{0,2}\s*\d{1,2}\.\s")
+# The option the selection cursor sits on: "❯ 1. Resume from summary", "› 1. Yes",
+# "● 1. Trust folder". A plain numbered list in agent output has no cursor.
+DIALOG_CURSOR_RE = re.compile(r"^[❯›●▶]\s*\d{1,2}\.\s")
 
 
 def sanitize_pane_content(pane_content: str) -> str:

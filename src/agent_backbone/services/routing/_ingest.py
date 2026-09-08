@@ -11,8 +11,9 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 
-from agent_backbone.models import EventType, IssueEvent
+from agent_backbone.models import EventType, IssueEvent, review_source_key
 from agent_backbone.services.routing._lifecycle import on_issue_closed
+from agent_backbone.services.routing._outbox import flush_outbox
 from agent_backbone.services.routing._router import issue_dispatcher
 
 if TYPE_CHECKING:
@@ -33,6 +34,15 @@ durably; this closes the window in which a retry of the same delivery
 arrives before the first copy is marked processed."""
 
 
+_active_routes = 0
+"""Events inside ``dispatch_event`` right now, whatever their dedup key."""
+
+
+def routing_in_flight() -> int:
+    """How many events are being routed right now (a restart waits for zero)."""
+    return _active_routes
+
+
 def _source(delivery_id: str) -> str:
     return "poll" if delivery_id.startswith("poll:") else "webhook"
 
@@ -43,8 +53,15 @@ def _dedup_id(event: IssueEvent) -> str:
     Webhook and poll synthesise different delivery ids for the same comment,
     so comments dedup on repo + comment id instead of the transport's id.
     """
+    if event.event_type == EventType.REVIEW_STARTED and event.review:
+        return review_source_key(event.issue, event.review)
+    if event.event_type == EventType.ISSUE_CLOSED and event.issue.closed_at:
+        issue = event.issue
+        return f"closed:{issue.repo_full_name.casefold()}#{issue.number}@{issue.closed_at}"
     if event.event_type == EventType.COMMENT_CREATED and event.comment and event.comment.id:
         return f"comment:{event.issue.repo_full_name}:{event.comment.id}"
+    if event.event_type == EventType.REVIEW_SUBMITTED and event.review and event.review.id:
+        return f"review:{event.issue.repo_full_name}:{event.review.id}"
     return event.delivery_id
 
 
@@ -52,7 +69,17 @@ def _summary(event: IssueEvent) -> str:
     title = event.issue.title[:120]
     if event.event_type == EventType.COMMENT_CREATED and event.comment:
         return f'comment on "{title}": {event.comment.body[:120]}'
+    if event.event_type == EventType.REVIEW_SUBMITTED and event.review:
+        return f'review on "{title}" ({event.review.state}): {event.review.body[:120]}'
     return f'{event.event_type.value}: "{title}"'
+
+
+def _sender(event: IssueEvent) -> str:
+    if event.comment:
+        return event.comment.user_login
+    if event.review:
+        return event.review.user_login
+    return event.issue.labels.sender
 
 
 async def dispatch_event(
@@ -64,13 +91,17 @@ async def dispatch_event(
     issue_closed_hooks: Sequence[IssueClosedHook] = (),
 ) -> str:
     """Store, route and mark an event. Returns a short outcome string."""
+    global _active_routes
     key = _dedup_id(event)
     if key and key in _in_flight:
         return f"deduped: event {event.delivery_id} is being routed"
-    _in_flight.add(key)
+    if key:
+        _in_flight.add(key)
+    _active_routes += 1
     try:
         return await _store_route_mark(event, key, config, db, gh, issue_closed_hooks)
     finally:
+        _active_routes -= 1
         _in_flight.discard(key)
 
 
@@ -84,19 +115,21 @@ async def _store_route_mark(event, key, config, db, gh, issue_closed_hooks) -> s
                 repo=event.issue.repo_full_name,
                 event_type=event.event_type.value,
                 issue_number=event.issue.number or None,
-                sender=(event.comment.user_login if event.comment else event.issue.labels.sender),
+                sender=_sender(event),
                 summary=_summary(event),
             )
             if event_id is None:
                 return f"deduped: event {event.delivery_id} already stored"
         except Exception:
-            log.warning("Failed to persist event %s (continuing)", event.delivery_id)
+            log.exception("Failed to persist event %s", event.delivery_id)
+            raise
 
-    outcome = await _route(event, config, db, gh, issue_closed_hooks)
+    outcome = await _route(event, config, db, gh, issue_closed_hooks, event_id=event_id)
 
     if event_id is not None:
         try:
-            await db.events.mark_processed(event_id, outcome)
+            if not await db.outbox.finish_event(event_id, outcome):
+                return f"deferred: outbox recipients pending; {outcome}"
         except Exception:
             log.debug("Failed to mark event processed (non-fatal)")
     return outcome
@@ -107,16 +140,36 @@ _DISPATCHED = frozenset(
         EventType.ISSUE_OPENED,
         EventType.ISSUE_LABELED,
         EventType.COMMENT_CREATED,
+        EventType.REVIEW_SUBMITTED,
+        EventType.REVIEW_STARTED,
         EventType.PULL_REQUEST_OPENED,
     }
 )
 
 
-async def _route(event, config, db, gh, issue_closed_hooks) -> str:
+async def _route(event, config, db, gh, issue_closed_hooks, *, event_id=None) -> str:
+    if event.review and event.review.commit_id:
+        review_key = review_source_key(event.issue, event.review)
+        if event.event_type == EventType.REVIEW_STARTED and await db.events.review_finished(
+            review_key
+        ):
+            return "ignored: review already finished for this commit"
+        if event.event_type == EventType.REVIEW_SUBMITTED:
+            await db.events.finish_review(review_key)
     if event.event_type == EventType.ISSUE_CLOSED:
+        current_close = await db.outbox.discard_issue(
+            event.issue.repo_full_name, event.issue.number, keep_event_id=event_id
+        )
+        if not current_close:
+            return "ignored: superseded issue closure"
         if gh is None:
             return "ignored: github client not configured"
-        result = await on_issue_closed(event, config, gh, db)
+        if event_id is not None and await db.outbox.entries(event_id):
+            # A persisted close receipt means the purge/next selection already
+            # ran. Repeating the purge would erase a queued opener notice.
+            result = await flush_outbox(event_id, config, db, gh)
+        else:
+            result = await on_issue_closed(event, config, gh, db, event_id=event_id)
         for hook in issue_closed_hooks:
             try:
                 await hook(event.issue.repo_full_name, event.issue.number)
@@ -124,11 +177,23 @@ async def _route(event, config, db, gh, issue_closed_hooks) -> str:
                 log.exception("issue-closed hook failed (non-fatal)")
         return f"lifecycle: {result}"
 
+    if (
+        event.event_type == EventType.COMMENT_CREATED
+        and event.comment
+        and event.issue.is_pull_request
+        and config.github.is_reviewer(event.comment.user_login)
+    ):
+        return "ignored: reviewer PR comments are lifecycle-only"
     if event.event_type == EventType.COMMENT_CREATED and event.issue.state == "closed":
         return f"ignored: comment on closed issue #{event.issue.number}"
+    if (
+        event.event_type in {EventType.REVIEW_SUBMITTED, EventType.REVIEW_STARTED}
+        and event.issue.state == "closed"
+    ):
+        return f"ignored: review on closed pull request #{event.issue.number}"
 
     if event.event_type in _DISPATCHED:
-        result = await issue_dispatcher(event, config, db, gh)
+        result = await issue_dispatcher(event, config, db, gh, event_id=event_id)
         return (
             f"dispatch: {len(result.delivered)} delivered, "
             f"{len(result.offline)} offline, "

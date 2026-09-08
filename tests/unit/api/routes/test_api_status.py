@@ -124,3 +124,33 @@ class TestGetAgentConfig:
     async def test_requires_auth(self, api_client):
         resp = await api_client.get("/api/config/agents")
         assert resp.status_code == 401
+
+
+async def test_upgrade_hold_is_authenticated_scoped_and_refuses_late_requests(
+    api_client, auth_headers, api_app
+):
+    from uuid import uuid4
+
+    from agent_backbone.release import Installation
+    from agent_backbone.services.jobs import UpgradeWatch
+
+    watch = UpgradeWatch(
+        enabled=lambda: True,
+        restart=AsyncMock(),
+        in_flight=lambda: 0,
+        identity=lambda install: "version:1",
+        install=Installation("uv"),
+    )
+    api_app.state.upgrade_watch = watch
+    body = {"operation_id": str(uuid4()), "enabled": True}
+    assert (await api_client.post("/api/upgrade/hold", json=body)).status_code in (401, 403)
+    held = await api_client.post("/api/upgrade/hold", json=body, headers=auth_headers)
+    assert held.json() == {"held": True, "operation_held": True}
+    released = await api_client.post(
+        "/api/upgrade/hold", json={**body, "enabled": False}, headers=auth_headers
+    )
+    assert released.json() == {"held": False, "operation_held": False}
+    watch.requested = True
+    assert (
+        await api_client.post("/api/upgrade/hold", json=body, headers=auth_headers)
+    ).status_code == 409

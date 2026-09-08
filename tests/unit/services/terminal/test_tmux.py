@@ -37,7 +37,7 @@ class TestSessionExists:
             "tmux",
             "has-session",
             "-t",
-            "ike",
+            "=ike:",
             stdout=-3,  # DEVNULL
             stderr=-1,  # PIPE
         )
@@ -52,6 +52,18 @@ class TestSessionExists:
 
 
 class TestListSessions:
+    @pytest.mark.parametrize("returncode", [0, 1])
+    async def test_strict_query_distinguishes_empty_from_failure(self, mock_subprocess, returncode):
+        proc = AsyncMock()
+        proc.returncode = returncode
+        proc.communicate = AsyncMock(return_value=(b"", b"query failed"))
+        mock_subprocess.return_value = proc
+        if returncode:
+            with pytest.raises(RuntimeError, match="query failed"):
+                await list_sessions(strict=True)
+        else:
+            assert await list_sessions(strict=True) == []
+
     async def test_list_sessions(self, mock_subprocess):
         proc = AsyncMock()
         proc.returncode = 0
@@ -107,6 +119,21 @@ class TestSendKeys:
 
 
 class TestStartSession:
+    @pytest.mark.parametrize("mouse", [False, True])
+    async def test_mouse_option_is_scoped_to_the_session(self, mouse):
+        with (
+            patch("agent_backbone.services.terminal._sessions.session_exists", return_value=False),
+            patch(
+                "agent_backbone.services.terminal._sessions._run_tmux", return_value=(0, b"", b"")
+            ) as run,
+        ):
+            assert await start_session("test", mouse=mouse)
+        calls = [call.args for call in run.await_args_list]
+        if mouse:
+            assert calls[-1] == ("set-option", "-t", "=test:", "mouse", "on")
+        else:
+            assert len(calls) == 1
+
     async def test_start_with_working_dir_and_command(self, mock_subprocess):
         with patch(
             "agent_backbone.services.terminal._sessions.session_exists",

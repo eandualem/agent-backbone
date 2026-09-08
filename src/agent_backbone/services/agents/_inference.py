@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,6 +13,7 @@ from agent_backbone.services.agents._file_reader import read_state_file
 from agent_backbone.services.agents.models import (
     REASON_PERMISSION,
     REASON_PLAN,
+    REASON_QUESTION,
     AgentState,
     StateSnapshot,
 )
@@ -56,6 +59,26 @@ def _trust_stale_push(snapshot: StateSnapshot) -> bool:
 
 def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) -> StateSnapshot:
     """Infer the agent state from visible terminal output (with evidence)."""
+    return _with_diagnostics(
+        _infer_state_from_pane(pane_content, runtime_hint), pane_content, runtime_hint
+    )
+
+
+def _with_diagnostics(
+    snapshot: StateSnapshot, pane_content: str | None, runtime_hint: str | None
+) -> StateSnapshot:
+    """Attach classified observations without changing a state decision or reading a pane."""
+    if not pane_content or not pane_content.strip():
+        return snapshot
+    runtime = get_runtime(runtime_hint)
+    if runtime is UNKNOWN:
+        runtime = detect_runtime(pane_content)
+    return replace(
+        snapshot, diagnostics=runtime.diagnostics(pane_content), diagnostics_observed=True
+    )
+
+
+def _infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) -> StateSnapshot:
     lines = sanitize_pane_content(pane_content).strip().splitlines()
     if not lines:
         return StateSnapshot(state=AgentState.UNKNOWN, source="pull", evidence=["empty pane"])
@@ -64,6 +87,14 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
     if runtime is UNKNOWN:
         runtime = detect_runtime(pane_content)
 
+    if detail := runtime.provider_failure(pane_content):
+        return StateSnapshot(
+            state=AgentState.BLOCKED,
+            reason="provider",
+            detail=detail,
+            source="pull",
+            evidence=[f"terminal shows a provider failure ({runtime.id}): {detail}"],
+        )
     if runtime.detect_busy(pane_content):
         return StateSnapshot(
             state=AgentState.BUSY,
@@ -71,12 +102,7 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
             evidence=[f"terminal shows a busy marker ({runtime.id})"],
         )
     if runtime.detect_waiting_for_human(pane_content):
-        return StateSnapshot(
-            state=AgentState.WAITING_FOR_HUMAN,
-            reason=REASON_PERMISSION,
-            source="pull",
-            evidence=[f"terminal shows a permission prompt ({runtime.id})"],
-        )
+        return _dialog_snapshot(runtime, pane_content)
     if runtime.detect_idle(pane_content):
         return StateSnapshot(
             state=AgentState.IDLE,
@@ -95,6 +121,40 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
         source="pull",
         evidence=[f"terminal inconclusive: no prompt, busy or question marker ({runtime.id})"],
     )
+
+
+def _dialog_snapshot(runtime, pane_content: str, prefix: list[str] | None = None) -> StateSnapshot:
+    """``waiting_for_human`` as read from the terminal: a known permission
+    prompt, or any dialog recognised by its numbered options."""
+    known = runtime.prompt_markers and any(
+        marker in sanitize_pane_content(pane_content).lower()[-2000:]
+        for marker in runtime.prompt_markers
+    )
+    if runtime.detect_choice_dialog(pane_content):
+        reason, seen = REASON_QUESTION, "a choice dialog (Enter would pick, not allow)"
+    elif known:
+        reason, seen = REASON_PERMISSION, "a permission prompt"
+    else:
+        reason, seen = REASON_QUESTION, "a dialog with numbered options"
+    return StateSnapshot(
+        state=AgentState.WAITING_FOR_HUMAN,
+        reason=reason,
+        source="pull",
+        prompt_ref=dialog_ref(pane_content),
+        evidence=[*(prefix or []), f"terminal shows {seen} ({runtime.id})"],
+    )
+
+
+def dialog_ref(pane_content: str) -> str:
+    """A short digest of the dialog on screen.
+
+    A terminal reading is stamped at the moment it is taken, so its
+    timestamp cannot identify the prompt: it moves at every poll. What is on
+    screen does not, until the agent moves on — so the tail of the pane is
+    the identity of that prompt (see ``models.prompt_id``).
+    """
+    tail = [ln.strip() for ln in sanitize_pane_content(pane_content).splitlines() if ln.strip()]
+    return hashlib.sha256("\n".join(tail[-10:]).encode()).hexdigest()[:12]
 
 
 async def get_agent_state(
@@ -119,10 +179,65 @@ async def get_agent_state(
         stale_threshold = _fresh_window(push, stale_threshold)
 
     if push and push_age is not None and push_age < stale_threshold:
-        push.evidence = [f"hook state '{push.state.value}' written {push_age:.0f}s ago (fresh)"]
+        via = f", {push.event}" if push.event else ""
+        push.evidence = [
+            f"hook state '{push.state.value}' written {push_age:.0f}s ago (fresh{via})"
+        ]
         if push.reason:
             push.evidence.append(f"reason: {push.reason}")
-        return push
+        if push.state == AgentState.IDLE:
+            # The one thing a hook cannot see: a dialog drawn by the runtime
+            # itself (Claude Code's resume picker arrives after SessionStart
+            # already said idle). A dialog on screen beats the idle claim.
+            if pane_content is None:
+                pane_content = await capture_pane(session)
+            runtime = get_runtime(runtime_hint)
+            if runtime is UNKNOWN and pane_content:
+                runtime = detect_runtime(pane_content)
+            if pane_content and (detail := runtime.provider_failure(pane_content)):
+                blocked = replace(
+                    push,
+                    state=AgentState.BLOCKED,
+                    reason="provider",
+                    detail=detail,
+                    source="pull",
+                    timestamp=time.time(),
+                    evidence=[
+                        *push.evidence,
+                        f"terminal shows a provider failure ({runtime.id}): {detail}",
+                    ],
+                )
+                return _with_diagnostics(blocked, pane_content, runtime_hint)
+            if pane_content and runtime.detect_active_dialog(pane_content):
+                dialog = _dialog_snapshot(runtime, pane_content, prefix=push.evidence)
+                dialog.timestamp = time.time()
+                dialog.current_issue = push.current_issue
+                dialog.current_repo = push.current_repo
+                dialog.session_id = push.session_id
+                dialog.last_message = push.last_message
+                dialog.runtime = push.runtime
+                dialog.evidence.append("the dialog on screen beats the hook's idle")
+                return _with_diagnostics(dialog, pane_content, runtime_hint)
+        if push.state == AgentState.WAITING_FOR_HUMAN and push.reason == REASON_PERMISSION:
+            # The hook said "permission", but the runtime may since have drawn
+            # a dialog of its own on top (Codex's rate-limit model switch),
+            # where the affirmative key chooses: the screen wins.
+            if pane_content is None:
+                pane_content = await capture_pane(session)
+            runtime = get_runtime(runtime_hint)
+            if runtime is UNKNOWN and pane_content:
+                runtime = detect_runtime(pane_content)
+            if pane_content and runtime.detect_choice_dialog(pane_content):
+                dialog = _dialog_snapshot(runtime, pane_content, prefix=push.evidence)
+                dialog.timestamp = time.time()
+                dialog.current_issue = push.current_issue
+                dialog.current_repo = push.current_repo
+                dialog.session_id = push.session_id
+                dialog.last_message = push.last_message
+                dialog.runtime = push.runtime
+                dialog.evidence.append("the choice dialog on screen beats the hook's permission")
+                return _with_diagnostics(dialog, pane_content, runtime_hint)
+        return _with_diagnostics(push, pane_content, runtime_hint)
 
     if pane_content is None:
         pane_content = await capture_pane(session)
@@ -130,35 +245,59 @@ async def get_agent_state(
         pull = infer_state_from_pane(pane_content, runtime_hint)
         pull.timestamp = time.time()
         if push:
+            # State freshness and saved conversation metadata are independent.
+            pull.session_id = push.session_id
+            pull.last_message = push.last_message
+            pull.runtime = push.runtime
             pull.evidence.insert(
                 0, f"hook state '{push.state.value}' is stale ({push_age:.0f}s) — reading terminal"
             )
         else:
             pull.evidence.insert(0, "no hook state file — reading terminal")
         if pull.state != AgentState.UNKNOWN:
+            if push and pull.state == AgentState.BLOCKED:
+                pull.current_issue = push.current_issue
+                pull.current_repo = push.current_repo
             return pull
         if push and _trust_stale_push(push):
             push.evidence = [
                 *pull.evidence,
                 f"terminal inconclusive; falling back to stale hook state '{push.state.value}'",
             ]
-            return push
+            return replace(
+                push,
+                diagnostics=pull.diagnostics,
+                diagnostics_observed=pull.diagnostics_observed,
+            )
         return pull
 
     if push and _trust_stale_push(push):
         push.evidence = [
             f"no terminal output; using stale hook state '{push.state.value}' ({push_age:.0f}s)"
         ]
-        return push
+        return _with_diagnostics(push, pane_content, runtime_hint)
 
-    return StateSnapshot(
-        state=AgentState.UNKNOWN,
-        source="default",
-        evidence=["no hook state and no terminal output"],
+    return _with_diagnostics(
+        StateSnapshot(
+            state=AgentState.UNKNOWN,
+            source="default",
+            session_id=push.session_id if push else None,
+            last_message=push.last_message if push else None,
+            runtime=push.runtime if push else None,
+            evidence=[
+                "stale hook state is not trustworthy and no terminal output"
+                if push
+                else "no hook state and no terminal output"
+            ],
+        ),
+        pane_content,
+        runtime_hint,
     )
 
 
-async def agent_state(config: BackboneConfig, name: str) -> StateSnapshot:
+async def agent_state(
+    config: BackboneConfig, name: str, *, pane_content: str | None = None
+) -> StateSnapshot:
     """``get_agent_state`` with the paths and thresholds taken from the configuration."""
     spec = config.agents.get(name)
     return await get_agent_state(
@@ -166,4 +305,5 @@ async def agent_state(config: BackboneConfig, name: str) -> StateSnapshot:
         name,
         config.timing.stale_threshold_seconds,
         runtime_hint=spec.runtime if spec else None,
+        pane_content=pane_content,
     )

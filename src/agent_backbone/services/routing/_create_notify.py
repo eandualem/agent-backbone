@@ -46,7 +46,7 @@ async def create_and_notify(
         session_name = resolve_entity_session(target, config)
         if session_name is None:
             continue
-        scope = queue_scope(await list_open_queue_for_target(config, target, gh))
+        scope = queue_scope(await list_open_queue_for_target(config, target, gh, db=db))
         outcome = await safe_deliver(
             session_name,
             message,

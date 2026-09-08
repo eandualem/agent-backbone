@@ -30,6 +30,7 @@ dependencies = [
     "python-socketio>=5.11",
     "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.13",
+    "rich>=14.1",
 ]
 
 [project.optional-dependencies]
@@ -42,7 +43,7 @@ ab = "agent_backbone.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/eandualem/agent-backbone"
-Documentation = "https://github.com/eandualem/agent-backbone/blob/main/docs/README.md"
+Documentation = "https://github.com/eandualem/agent-backbone/blob/main/docs/INDEX.md"
 Source = "https://github.com/eandualem/agent-backbone"
 Issues = "https://github.com/eandualem/agent-backbone/issues"
 
@@ -67,10 +68,13 @@ packages = ["src/agent_backbone"]
 # The user documentation ships inside the wheel so an installed backbone can
 # print it (`backbone docs <page>`) without a checkout of the repository.
 [tool.hatch.build.targets.wheel.force-include]
-"docs" = "agent_backbone/help/docs"
+"docs" = "agent_backbone/_resources/docs"
+"USAGE.md" = "agent_backbone/_resources/USAGE.md"
+"help" = "agent_backbone/_resources/help"
+"templates" = "agent_backbone/_resources/templates"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/agent_backbone", "docs", "alembic.ini", "README.md", "LICENSE"]
+include = ["src/agent_backbone", "docs", "help", "templates", "alembic.ini", "README.md", "USAGE.md", "examples", "LICENSE"]
 
 [tool.ruff]
 target-version = "py311"

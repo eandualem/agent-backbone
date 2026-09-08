@@ -20,11 +20,14 @@ $ cd ~/code/app && backbone agent start
 app: ready — claude repo acme/app
 ```
 
-- **Name** — the directory name (`--name` to override). It is the tmux
+- **Name** — the directory name (pass `agent start NAME` to override). It is the tmux
   session name, the value of `for:<name>` labels, and the `from:` identity
-  in messages the agent sends.
+  in messages the agent sends. Discovery removes leading punctuation so the
+  name starts with a letter or digit (`_app` becomes `app`); a name containing
+  only punctuation becomes `agent`. Internal underscores and dots are preserved.
 - **Runtime** — `claude`, `codex`, `gemini`, `opencode`, `deepcode`, `aider`
-  or `shell`; default `claude` (`agents.default_runtime`).
+  or `shell`; a known agent reuses its saved runtime. New agents use
+  `agents.default_runtime` (initially `claude`) unless explicitly selected.
 - **Repository** — read from `git remote origin`. An agent whose directory is
   a GitHub checkout **owns** that repository.
 - **Watches** — other repositories the agent wants to hear about
@@ -52,7 +55,7 @@ Four relationships decide routing for an issue in repository R:
 
 | Relationship | How it comes about | Effect |
 |---|---|---|
-| **owner** | the agent's directory is R | unlabelled issues are its work (sole owner) or are announced to all owners |
+| **owner** | the agent's directory is R (swarm members excepted: their worktree is R, but they are not owners) | unlabelled issues are its work (sole owner) or are announced to all owners |
 | **`for:<agent>`** | a label on the issue | goes to that agent's queue |
 | **`from:<agent>`** | a label on the issue | comments and the close are reported back to the opener |
 | **watch** | `backbone agent watch` | informational notice about new issues; `for:` labels in R route to it |
@@ -66,14 +69,16 @@ What an agent is doing, in a vocabulary shared by every runtime:
 | `starting` | Session exists; runtime not at its prompt yet |
 | `idle` | At the prompt, nothing running |
 | `busy` | Working on a prompt |
-| `waiting_for_human` | Blocked on a person — `reason` is `plan` (plan approval), `permission` (tool permission prompt) or `question` |
+| `waiting_for_human` | Blocked on a person — `reason` is `plan` (plan approval), `permission` (tool permission prompt) or `question` (`AskUserQuestion`, or any dialog seen on the terminal) |
+| `blocked` | Waiting on a usage limit (`reason: quota`) or a provider capacity/rate-limit failure (`reason: provider`). `detail` preserves the error and retry/reset time. Recovery may require waiting or choosing another model. |
 | `unknown` | No trustworthy signal |
 | `offline` | No tmux session (reported by the API; not a stored state) |
 
 Where it comes from, in order: `agent start` writes `starting` when the
 session is created (trusted for two minutes at most; the first hook write
 replaces it, and a visible prompt clears it). **Hooks** the runtime itself
-runs (Claude Code today) write `<data_dir>/state/<agent>.json` on every
+runs (Claude Code, Codex, Gemini CLI and OpenCode) write
+`<data_dir>/state/<agent>.json` on every
 transition; a fresh hook state is authoritative. When there is no hook state or it is
 older than `timing.stale_threshold_seconds` (5 min), the backbone reads
 the **terminal** through the runtime's module (prompt visible, busy
@@ -88,9 +93,9 @@ Derived from the state plus the terminal, right before anything is pasted:
 |---|---|---|
 | `offline` | no session | no — queued |
 | `waiting_for_human` | agent is asking a person something | no — queued |
-| `agent_working` | starting or busy | no — queued (never bypassed) |
+| `agent_working` | starting, busy, or blocked on a usage limit or provider failure | no — queued (never bypassed) |
 | `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
-| `settling` | became idle less than `timing.grace_period_seconds` ago | not yet, unless `priority` |
+| `settling` | hook reported idle less than `timing.grace_period_seconds` ago | not yet, unless `priority` |
 | `ready` | idle, empty prompt | **yes** |
 | `unknown` | no signal either way | yes, best effort |
 
@@ -114,20 +119,50 @@ knows where it came from:
 ## Delivery
 
 One attempt to hand a message to a session, recorded with its **kind**
-(`issue`, `comment`, `pull_request`, `direct_message`, `watch`,
-`escalation`), repository, outcome and a preview — direct messages
-included. What cannot be delivered now is **queued** in the database and
-delivered by the background jobs; queued messages expire after
-`timing.queue_expiry_minutes` (30). Issue deliveries are additionally
-**claimed** so two jobs can never deliver the same issue twice.
+(`issue`, `comment`, `review`, `pull_request`, `direct_message`, `watch`,
+`escalation`, `plan_response`), repository, outcome and a preview — direct
+messages included. A `plan_response` (an answer typed into a plan prompt)
+is the one kind that is **never queued**: it goes in only while the agent
+is waiting for a plan decision, and is refused as `not_waiting` otherwise. What cannot be delivered now is **queued** in the database and
+delivered by the background jobs — a message that waited at least two
+minutes is delivered with `(queued N min ago)` (`N h` from two hours) after
+its envelope, so a review or comment drained after a long busy stretch
+does not read as current; queued messages expire after
+`timing.queue_expiry_minutes` (30), and an expired message leaves a
+delivery with outcome `expired` (kind, source and preview kept), so
+`agent inspect` shows what never arrived. The sender is told whether a row
+exists (`stored`), whether the same message from them was already
+waiting (`already_queued`), or whether storing it failed (`failed`) —
+"queued" is never claimed for a message that is not in the database.
+The same message means the same source event (a comment or review id) or
+the same sender with the same text; two senders with identical text are two
+messages. Issue deliveries are additionally
+**claimed** so concurrent jobs cannot deliver the same issue twice. Delivery
+checks and pastes are serialized per session within the running server;
+different sessions can proceed concurrently. A blocked queue drain retains its
+leased row instead of inserting an age-stamped copy.
 
 ## Event
 
 Every inbound GitHub event (webhook or poll) is stored before it is
 routed, with what the backbone did about it. That table is the activity
 feed (`GET /api/events`, `backbone status` shows the last event per
-repository) and the dedup record that makes restarts and overlapping
-polls safe.
+repository) and the dedup record used by overlapping polls. A separate durable
+cursor per repository preserves an incomplete batch across restarts, independent
+of event retention. A durable outbox records every eligible recipient before
+the first delivery, then records delivered or queued receipts. A failed queue
+write leaves that recipient pending; replay and the retry job resume only
+unresolved recipients. See [delivery receipts](github.md#delivery-receipts-and-retries)
+for retention and the external-terminal crash boundary.
+
+## Progress report
+
+An agent's short account of its goal, accomplishments, blockers and next steps.
+Agents publish at meaningful milestones; the database preserves their reports
+so people and orchestrators can read a shared feed without interrupting work.
+Report age and missing reports are explicit. This authored account is separate
+from the runtime's measured state and from operational diagnostics. See
+[Agent progress reports](reports.md) for publishing tools and enforced length limits.
 
 ## Settings
 
@@ -146,7 +181,7 @@ Background loops inside the backbone process:
 | `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
 | `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
 | `github-backfill` | once at startup | webhook intake only: catch up on what happened while the backbone was down |
-| `prune` | 6 h | delete old deliveries and events; rotate the hook action log |
+| `prune` | 6 h | delete old deliveries, events and completed queue bodies; rotate the hook action log |
 
 ## What the backbone does not decide
 
@@ -156,3 +191,8 @@ Background loops inside the backbone process:
   protocol.
 - **Who may talk to whom.** Any agent can message any agent through the API.
 - **Whether to restart a dead agent.** It reports; it never restarts.
+
+Runtime registration is declared in `services/runtimes/catalog.json`: IDs,
+detection order and hook files feed configuration, the runtime registry and
+hook installation from the same data. Runtime behavior remains in each runtime's
+module; shipped hook scripts stay standalone.

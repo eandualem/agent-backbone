@@ -21,7 +21,9 @@ backbone picks it up on its next refresh.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -41,9 +43,12 @@ def sqlite_url(data_dir: Path) -> str:
     return f"sqlite+aiosqlite:///{data_dir / SQLITE_FILENAME}"
 
 
-RUNTIMES: tuple[str, ...] = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "shell")
-"""The ``agents.default_runtime`` vocabulary. ``services.runtimes`` registers
-exactly these ids (asserted at import); the knowledge about each lives there."""
+# Declarative data is read without importing the runtime service into this leaf.
+RUNTIME_METADATA = tuple(
+    json.loads((Path(__file__).parent / "services" / "runtimes" / "catalog.json").read_text())
+)
+RUNTIMES: tuple[str, ...] = tuple(entry["id"] for entry in RUNTIME_METADATA)
+
 
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "BACKBONE_API_KEY",
@@ -67,9 +72,16 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "backbone.port": DEFAULT_PORT,
     "backbone.session_name": "backbone",
     "backbone.cors_origins": [],
+    "backbone.restart_on_upgrade": True,
     "agents.default_runtime": "claude",
     "agents.pre_trust": True,
     "agents.inject_brief": True,
+    "agents.shared_policy": [],
+    "agents.tag_policy": {},
+    "agents.writable_dirs": [],
+    "agents.auto_review": False,
+    "github.reviewers": [],
+    "github.review_poll_interval_seconds": 300,
     "github.intake": "auto",  # auto | webhook | poll | off
     "github.poll_interval_seconds": 60,
     "github.backfill_on_start": True,
@@ -89,6 +101,10 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "telegram.notification_chat_id": None,
     "telegram.group_chat_id": None,
     "telegram.auto_topics": True,
+    "telegram.report_updates": True,
+    "telegram.report_audio": False,
+    "telegram.tts_url": "http://127.0.0.1:8765/speak",
+    "telegram.tts_voice": "af_heart",
     "telegram.topic_routes": {},
     "escalation.target": "",
     "priority.blocking_weight": 1000.0,
@@ -98,6 +114,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "security.allow_remote_plan_control": False,
     "security.allow_remote_approval": True,
     "security.allow_unauthenticated": False,
+    "swarm.unattended_members": True,
 }
 
 SETTINGS_HELP: dict[str, str] = {
@@ -108,33 +125,64 @@ SETTINGS_HELP: dict[str, str] = {
     "backbone.port": "API port",
     "backbone.session_name": "tmux session used by `backbone up --detach`",
     "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",
+    "backbone.restart_on_upgrade": (
+        "Restart the running backbone onto new code when the installed version "
+        "(or the checkout's commit) changes; agents are untouched"
+    ),
     "agents.default_runtime": "Runtime used by `agent start` when none is given",
     "agents.pre_trust": (
         "Answer the runtime's folder-trust dialog before starting (claude, codex, gemini)"
     ),
+    "agents.auto_review": (
+        "Use the runtime's automatic permission reviewer when available (currently Codex). "
+        "Keeps its sandbox; unattended agents still never ask. Applies at the next start/resume."
+    ),
     "agents.inject_brief": (
         "Give each agent the backbone's brief at launch (system prompt or initial prompt)"
+    ),
+    "agents.shared_policy": (
+        "Ordered policy names from <data_dir>/templates/policies/<name>.md (JSON list)"
+    ),
+    "agents.tag_policy": "Policy names by agent tag (JSON object of ordered lists)",
+    "agents.writable_dirs": (
+        "Directories outside an agent's own that a sandboxed runtime (Codex) may also "
+        "write to, e.g. a package cache such as ~/.cache/uv (JSON list)"
+    ),
+    "github.review_poll_interval_seconds": "Reviewer metadata poll period per repo",
+    "github.reviewers": (
+        "Reviewer accounts/app slugs whose PR comments become commit-anchored lifecycle notices"
     ),
     "github.intake": "auto | webhook | poll | off — how GitHub events arrive",
     "github.poll_interval_seconds": "Poll frequency when intake resolves to poll",
     "github.backfill_on_start": "Fetch events missed while the backbone was down",
-    "github.backfill_lookback_hours": "How far back a first-ever backfill looks",
+    "github.backfill_lookback_hours": "Lookback when a repository has no durable poll cursor",
     "routing.ignore_targets": "for:/from: values that are people, not agents (JSON list)",
     "routing.notification_dedup_seconds": (
         "Do not announce the same issue to the same agent twice within this window"
     ),
     "timing.stale_threshold_seconds": "Hook state older than this is verified against the terminal",
-    "timing.grace_period_seconds": "Settle time after an agent becomes idle before delivering",
+    "timing.grace_period_seconds": "Settle time after a hook reports idle before delivering",
     "timing.queue_expiry_minutes": "Queued messages older than this are dropped",
     "timing.stall_threshold_seconds": "Busy on one issue longer than this is a stall",
     "timing.escalation_dedup_seconds": "Do not repeat the same escalation within this window",
     "timing.monitor_interval_seconds": "agent-monitor job period",
     "timing.retry_interval_seconds": "delivery-retry job period",
     "timing.start_timeout_seconds": "How long `agent start` waits for the prompt",
-    "timing.delivery_retention_days": "Delivery history retention",
+    "timing.delivery_retention_days": (
+        "Delivery, event, completed queue, diagnostic and report-history retention in days; "
+        "each author's latest report is kept"
+    ),
     "telegram.allowed_chat_ids": "Chat ids allowed to control the backbone (JSON list) — required",
     "telegram.notification_chat_id": "Where alerts are sent",
     "telegram.group_chat_id": "Forum group where each agent gets a topic (learned if unset)",
+    "telegram.report_audio": (
+        "Attach local speech of full reports to General and agent topics (opt-in)"
+    ),
+    "telegram.tts_url": "Loopback Kokoro-compatible /speak endpoint returning WAV audio",
+    "telegram.tts_voice": "Voice available in the local speech service",
+    "telegram.report_updates": (
+        "Push new progress reports to the allowed agents group; false pauses delivery"
+    ),
     "telegram.auto_topics": "Create/close a forum topic per registered agent automatically",
     "telegram.topic_routes": "JSON object thread_id -> agent name (explicit, on top of automatic)",
     "escalation.target": "Agent that receives stall/offline/plan escalations",
@@ -147,6 +195,10 @@ SETTINGS_HELP: dict[str, str] = {
         "Allow `agent approve` to answer a visible permission prompt via the API"
     ),
     "security.allow_unauthenticated": "Serve the API without an API key (dev only)",
+    "swarm.unattended_members": (
+        "Register members on a sandboxed runtime (Codex) as unattended: free inside "
+        "their worktree, never a permission dialog; members without a sandbox keep asking"
+    ),
 }
 
 
@@ -160,6 +212,7 @@ _INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids"})
 _POSITIVE_SETTINGS = frozenset(
     {
         "github.poll_interval_seconds",
+        "github.review_poll_interval_seconds",
         "timing.monitor_interval_seconds",
         "timing.retry_interval_seconds",
     }
@@ -171,9 +224,54 @@ def validate_setting(key: str, value: Any) -> Any:
     if key not in SETTINGS_DEFAULTS:
         raise KeyError(f"unknown setting {key!r}")
     default = SETTINGS_DEFAULTS[key]
+    if key == "agents.tag_policy":
+        if not isinstance(value, dict) or not all(
+            isinstance(tag, str)
+            and tag
+            and len(tag) <= 100
+            and all(c.isprintable() and not c.isspace() for c in tag)
+            for tag in value
+        ):
+            raise ValueError(f"{key}: expected an object keyed by non-empty tags without spaces")
+        for policies in value.values():
+            validate_setting("agents.shared_policy", policies)
+        return value
     if key in _SETTING_CHOICES:
         if not isinstance(value, str) or value not in _SETTING_CHOICES[key]:
             raise ValueError(f"{key}: expected one of {', '.join(_SETTING_CHOICES[key])}")
+        return value
+    if key == "telegram.tts_url":
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(value) if isinstance(value, str) else None
+        if (
+            parsed is None
+            or parsed.scheme != "http"
+            or parsed.hostname not in ("127.0.0.1", "localhost", "::1")
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "telegram.tts_url must be an HTTP loopback URL without credentials or query"
+            )
+        return value
+    if key == "telegram.tts_voice":
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value):
+            raise ValueError("telegram.tts_voice must be a local voice name")
+        return value
+    if key == "agents.shared_policy":
+        if (
+            not isinstance(value, list)
+            or not all(
+                isinstance(v, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,40}", v) for v in value
+            )
+            or len(set(value)) != len(value)
+        ):
+            raise ValueError(
+                f"{key}: expected unique policy names (lowercase letters, digits, hyphens)"
+            )
         return value
     if key in _INT_LIST_SETTINGS:
         if not isinstance(value, list):
@@ -214,6 +312,10 @@ def validate_setting(key: str, value: Any) -> Any:
     if isinstance(default, list):
         if not isinstance(value, list):
             raise ValueError(f"{key}: expected a JSON list")
+        if all(isinstance(d, str) for d in default) and not all(isinstance(v, str) for v in value):
+            # build_config() turns these into frozensets of names; one stored
+            # dict member would fail every refresh and the next start.
+            raise ValueError(f"{key}: expected a JSON list of strings")
         return value
     if isinstance(default, dict):
         if not isinstance(value, dict):
@@ -262,10 +364,34 @@ class AgentSpec:
     tags: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     description: str = ""
+    always_on: bool = False
+    """Expected to stay up: a dead session is reported the moment it is
+    noticed. Off by default — agents come and go, and the humans hear about
+    an absent agent only when messages are waiting for it."""
+    unattended: bool = False
+    """Launched with the runtime's own no-approval switch, so it never parks
+    on a permission dialog. Behind a sandbox (Codex: ``-a never``, the
+    workspace-write sandbox kept) that is freedom inside its directory;
+    without one (OpenCode ``--auto``, Claude Code
+    ``--dangerously-skip-permissions``, Gemini ``--approval-mode yolo``) it
+    is trust on the machine. Off by default; sandboxed swarm members get it
+    from ``swarm.unattended_members``."""
 
     @property
     def path(self) -> Path:
         return Path(self.dir).expanduser()
+
+    @property
+    def swarm(self) -> str | None:
+        """The swarm this agent belongs to (its ``swarm:<name>`` tag), else None.
+
+        Swarm members are internal to the agent that runs the swarm: no
+        Telegram topic, no human-facing surface of their own.
+        """
+        for tag in self.tags:
+            if tag.startswith("swarm:"):
+                return tag[len("swarm:") :]
+        return None
 
     @property
     def repos(self) -> tuple[str, ...]:
@@ -304,19 +430,30 @@ class AgentsConfig:
         return list(self.specs)
 
     def owners(self, repo_full_name: str) -> list[AgentSpec]:
-        """Agents whose directory *is* the repository."""
+        """Agents whose directory *is* the repository.
+
+        Swarm members are not owners: they carry the repository for their
+        worktree and pull request, not for routing — a swarm must not turn a
+        sole owner into a multi-owner repository, nor hear about every issue.
+        """
         key = repo_full_name.casefold()
         if not key:
             return []
-        return [spec for spec in self.specs.values() if spec.repo.casefold() == key]
+        return [
+            spec
+            for spec in self.specs.values()
+            if spec.repo.casefold() == key and spec.swarm is None
+        ]
 
     def watchers(self, repo_full_name: str) -> list[AgentSpec]:
-        """Agents that watch a repository without owning it."""
+        """Agents that watch a repository without owning it (never swarm members)."""
         key = repo_full_name.casefold()
         return [
             spec
             for spec in self.specs.values()
-            if spec.repo.casefold() != key and any(w.casefold() == key for w in spec.watches)
+            if spec.swarm is None
+            and spec.repo.casefold() != key
+            and any(w.casefold() == key for w in spec.watches)
         ]
 
     @property
@@ -346,6 +483,7 @@ class BackboneSection:
     port: int = DEFAULT_PORT
     session_name: str = "backbone"
     cors_origins: tuple[str, ...] = ()
+    restart_on_upgrade: bool = True
 
     @property
     def data_path(self) -> Path:
@@ -360,16 +498,34 @@ class LaunchConfig:
     default_runtime: str = "claude"
     pre_trust: bool = True
     inject_brief: bool = True
+    shared_policy: tuple[str, ...] = ()
+    tag_policy: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    writable_dirs: tuple[str, ...] = ()
+    auto_review: bool = False
+
+    def policy_names(self, tags: tuple[str, ...] = ()) -> tuple[str, ...]:
+        """Global order, then sorted matching tags; each policy appears once."""
+        names = list(self.shared_policy)
+        for tag in sorted(set(tags)):
+            names.extend(self.tag_policy.get(tag, ()))
+        return tuple(dict.fromkeys(names))
 
 
 @dataclass(frozen=True)
 class GitHubConfig:
     """``github.*`` — intake settings (non-secret). Credentials come from the environment."""
 
+    reviewers: tuple[str, ...] = ()
+    review_poll_interval_seconds: int = 300
     intake: str = "auto"
     poll_interval_seconds: int = 60
     backfill_on_start: bool = True
     backfill_lookback_hours: int = 24
+
+    def is_reviewer(self, login: str) -> bool:
+        return login.casefold().removesuffix("[bot]") in {
+            name.casefold().removesuffix("[bot]") for name in self.reviewers
+        }
 
 
 @dataclass(frozen=True)
@@ -404,6 +560,10 @@ class TelegramConfig:
     group_chat_id: int | None = None
     notification_chat_id: int | None = None
     auto_topics: bool = True
+    report_updates: bool = True
+    report_audio: bool = False
+    tts_url: str = "http://127.0.0.1:8765/speak"
+    tts_voice: str = "af_heart"
 
 
 @dataclass(frozen=True)
@@ -434,6 +594,14 @@ class SecurityConfig:
     allow_unauthenticated: bool = False
 
 
+@dataclass(frozen=True)
+class SwarmConfig:
+    """``swarm.*`` — how swarm members are registered."""
+
+    unattended_members: bool = True
+    """Members on a sandboxed runtime never ask; the rest keep their dialogs."""
+
+
 # ---------------------------------------------------------------------------
 # Top-level
 # ---------------------------------------------------------------------------
@@ -462,6 +630,7 @@ class BackboneConfig:
     priority: PriorityConfig = field(default_factory=PriorityConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    swarm: SwarmConfig = field(default_factory=SwarmConfig)
     database_url_override: str = ""
     """``BACKBONE_DATABASE_URL`` when set (PostgreSQL); empty means SQLite in the data dir."""
     settings: dict[str, Any] = field(default_factory=dict)
@@ -621,17 +790,24 @@ def build_config(
         backbone=BackboneSection(
             data_dir=str(data_dir),
             host=s["backbone.host"],
-            port=int(env.get("BACKBONE_PORT") or s["backbone.port"]),
+            port=_opt_int(env.get("BACKBONE_PORT")) or s["backbone.port"],
             session_name=s["backbone.session_name"],
             cors_origins=tuple(s["backbone.cors_origins"]),
+            restart_on_upgrade=bool(s["backbone.restart_on_upgrade"]),
         ),
         agents=agents,
         launch=LaunchConfig(
             default_runtime=s["agents.default_runtime"],
             pre_trust=s["agents.pre_trust"],
             inject_brief=s["agents.inject_brief"],
+            shared_policy=tuple(s["agents.shared_policy"]),
+            tag_policy={tag: tuple(names) for tag, names in s["agents.tag_policy"].items()},
+            writable_dirs=tuple(str(d) for d in s["agents.writable_dirs"]),
+            auto_review=s["agents.auto_review"],
         ),
         github=GitHubConfig(
+            reviewers=tuple(s["github.reviewers"]),
+            review_poll_interval_seconds=s["github.review_poll_interval_seconds"],
             intake=s["github.intake"],
             poll_interval_seconds=s["github.poll_interval_seconds"],
             backfill_on_start=s["github.backfill_on_start"],
@@ -659,6 +835,10 @@ def build_config(
             group_chat_id=_opt_int(s["telegram.group_chat_id"]),
             notification_chat_id=_opt_int(s["telegram.notification_chat_id"]),
             auto_topics=bool(s["telegram.auto_topics"]),
+            report_updates=bool(s["telegram.report_updates"]),
+            report_audio=bool(s["telegram.report_audio"]),
+            tts_url=str(s["telegram.tts_url"]),
+            tts_voice=str(s["telegram.tts_voice"]),
         ),
         priority=PriorityConfig(
             blocking_weight=float(s["priority.blocking_weight"]),
@@ -675,6 +855,7 @@ def build_config(
                 or bool(s["security.allow_unauthenticated"])
             ),
         ),
+        swarm=SwarmConfig(unattended_members=bool(s["swarm.unattended_members"])),
         settings=s,
     )
 
@@ -693,5 +874,7 @@ def agents_from_rows(rows: list[dict]) -> AgentsConfig:
             tags=tuple(row.get("tags") or ()),
             env=dict(row.get("env") or {}),
             description=row.get("description") or "",
+            always_on=bool(row.get("always_on")),
+            unattended=bool(row.get("unattended")),
         )
     return AgentsConfig(specs=specs)

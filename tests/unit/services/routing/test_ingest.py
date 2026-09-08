@@ -43,6 +43,31 @@ class TestDispatchEvent:
         assert outcome == "deduped: event d-1 already stored"
         assert d.await_count == 1
 
+    async def test_active_routes_are_counted_without_a_dedup_key(self, config, db):
+        """Two events without delivery ids share the empty key; the counter
+        still sees both until each is done (the upgrade watch relies on it)."""
+        from agent_backbone.services.routing import routing_in_flight
+
+        seen: list[int] = []
+        gate = asyncio.Event()
+
+        async def _slow(*args, **kwargs):
+            seen.append(routing_in_flight())
+            await gate.wait()
+            return "ok"
+
+        with patch(f"{_INGEST}._route", side_effect=_slow):
+            tasks = [
+                asyncio.create_task(dispatch_event(_event(""), config, db, None)) for _ in range(2)
+            ]
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert routing_in_flight() == 2
+            gate.set()
+            await asyncio.gather(*tasks)
+        assert routing_in_flight() == 0
+        assert max(seen) == 2
+
     async def test_a_delivery_in_flight_is_not_routed_twice(self, config, db):
         """A retry that lands while the first copy is still routing is dropped."""
         started = asyncio.Event()

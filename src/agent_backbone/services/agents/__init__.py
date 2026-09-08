@@ -13,20 +13,25 @@ from agent_backbone.services.agents._inference import (
     get_agent_state,
     infer_state_from_pane,
 )
+from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents.acknowledgement import (
     find_outgoing_comment,
+    find_outgoing_pull_request,
     has_commented_on_issue,
     rotate_action_log,
 )
+from agent_backbone.services.agents.audit import record_answer
+from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.launch import (
     StartResult,
     approve_agent,
-    approve_plan,
+    deny_agent,
+    plan_control,
     start_agent,
     stop_agent,
     wait_until_ready,
 )
-from agent_backbone.services.agents.models import AgentState, StateSnapshot
+from agent_backbone.services.agents.models import AgentState, StateSnapshot, prompt_id
 from agent_backbone.services.agents.store import AgentStore
 
 __all__ = [
@@ -36,14 +41,20 @@ __all__ = [
     "StateSnapshot",
     "agent_state",
     "approve_agent",
-    "approve_plan",
     "clear_starting_marker",
+    "deny_agent",
     "find_outgoing_comment",
+    "find_outgoing_pull_request",
     "get_agent_state",
     "has_commented_on_issue",
     "infer_state_from_pane",
+    "instruction_preview",
+    "lifecycle_lock",
+    "plan_control",
+    "prompt_id",
     "read_plan",
     "read_state_file",
+    "record_answer",
     "rotate_action_log",
     "start_agent",
     "stop_agent",

@@ -82,6 +82,40 @@ class TestLinux:
         assert ("systemctl", "--user", "enable", "--now", "agent-backbone.service") in calls
 
 
+class TestRestart:
+    def test_macos_kickstarts_the_agent(self, tmp_path, capsys):
+        service._plist_path().parent.mkdir(parents=True, exist_ok=True)
+        service._plist_path().write_text("<plist/>")
+        with (
+            patch(f"{_SVC}.platform.system", return_value="Darwin"),
+            patch(f"{_SVC}.subprocess.run", side_effect=_ok) as run,
+        ):
+            assert _run(["service", "restart"]) == 0
+        args = run.call_args.args[0]
+        assert args[:3] == ("launchctl", "kickstart", "-k") and args[3].endswith(service.LABEL)
+        assert "restarted" in capsys.readouterr().out
+
+    def test_linux_restarts_the_unit(self, tmp_path):
+        service._unit_path().parent.mkdir(parents=True, exist_ok=True)
+        service._unit_path().write_text("[Unit]")
+        with (
+            patch(f"{_SVC}.platform.system", return_value="Linux"),
+            patch(f"{_SVC}.subprocess.run", side_effect=_ok) as run,
+        ):
+            assert _run(["service", "restart"]) == 0
+        assert run.call_args.args[0] == (
+            "systemctl",
+            "--user",
+            "restart",
+            "agent-backbone.service",
+        )
+
+    def test_not_installed_is_reported(self, capsys):
+        with patch(f"{_SVC}.platform.system", return_value="Darwin"):
+            assert _run(["service", "restart"]) == 1
+        assert "not installed" in capsys.readouterr().out
+
+
 def test_unsupported_platform():
     with patch(f"{_SVC}.platform.system", return_value="Windows"):
         assert service.install() == 1

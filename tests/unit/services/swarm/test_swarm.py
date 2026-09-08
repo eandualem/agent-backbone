@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -9,7 +11,7 @@ import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.agents import StartResult
+from agent_backbone.services.agents import AgentState, AgentStore, StartResult, StateSnapshot
 from agent_backbone.services.swarm import (
     SwarmError,
     create_swarm,
@@ -17,7 +19,9 @@ from agent_backbone.services.swarm import (
     parse_member_spec,
     parse_roster,
     render_brief,
+    swarm_overview,
     teardown_for_issue,
+    teardown_swarm,
 )
 from agent_backbone.services.swarm._roster import MemberSpec, member_names
 from tests.conftest import make_config
@@ -25,6 +29,47 @@ from tests.conftest import make_config
 _IFACE = "agent_backbone.services.swarm.interface"
 _STARTED = StartResult(ok=True, ready="ready")
 _FAILED = StartResult(ok=False)
+
+
+async def test_overview_exposes_provider_block_and_offline_member(db, tmp_path):
+    store = AgentStore(db, tmp_path)
+    await store.start()
+    for name in ("scout", "coordinator"):
+        await store.register(
+            AgentSpec(name=name, dir=str(tmp_path / name), tags=("swarm:research", f"role:{name}"))
+        )
+    await db.swarms.create(
+        "research",
+        repo="acme/app",
+        issue_number=42,
+        initiator="owner",
+        coordinator="coordinator",
+        branch="swarm/research",
+        worktree_dir=str(tmp_path),
+    )
+    snapshot = StateSnapshot(
+        state=AgentState.BLOCKED,
+        reason="provider",
+        detail="Selected model is at capacity",
+        source="pull",
+        evidence=["terminal shows a provider failure"],
+    )
+    with (
+        patch(f"{_IFACE}.list_sessions", return_value=["scout"]),
+        patch(f"{_IFACE}.agent_state", return_value=snapshot) as state,
+    ):
+        result = await swarm_overview(db, store)
+    members = {m["name"]: m for m in result[0]["members"]}
+    assert members["scout"]["state"] == "blocked"
+    assert members["scout"]["reason"] == "provider"
+    assert members["scout"]["detail"] == snapshot.detail
+    assert members["scout"]["evidence"] == snapshot.evidence
+    assert members["coordinator"]["state"] == "offline"
+    state.assert_awaited_once_with(store.config, "scout")
+    with patch(f"{_IFACE}.list_sessions", side_effect=RuntimeError("query failed")):
+        unavailable = await swarm_overview(db, store)
+    assert {m["state"] for m in unavailable[0]["members"]} == {"unknown"}
+    assert "could not be queried" in unavailable[0]["members"][0]["evidence"][0]
 
 
 class TestRoster:
@@ -37,6 +82,18 @@ class TestRoster:
 
     def test_runtime_without_model(self):
         assert parse_member_spec("coder@codex") == MemberSpec(role="coder", runtime="codex")
+
+    def test_model_may_be_a_provider_path(self):
+        # OpenCode names models provider/model; the runtime is what follows "@".
+        assert parse_member_spec("scout@opencode/google/gemini-3.8-flash") == MemberSpec(
+            role="scout", runtime="opencode", model="google/gemini-3.8-flash"
+        )
+
+    def test_model_may_carry_an_effort(self):
+        # The roster keeps the spec whole; the runtime splits it at launch.
+        assert parse_member_spec("coordinator@codex/gpt-6-astra:high") == MemberSpec(
+            role="coordinator", runtime="codex", model="gpt-6-astra:high"
+        )
 
     def test_invalid_spec_rejected(self):
         with pytest.raises(ValueError):
@@ -111,6 +168,11 @@ class TestBriefs:
         brief = render_brief("cartographer", {"role": "cartographer"})
         assert "Your role: cartographer" in brief
 
+    def test_coordinator_waits_for_kickoff(self):
+        brief = render_brief("coordinator", {"swarm_name": "research"})
+        assert "Before assigning work, wait for" in brief
+        assert "[via:backbone swarm:research] Your\nswarm is live" in brief
+
     def test_data_dir_override_wins(self, tmp_path):
         override = tmp_path / "swarm-templates"
         override.mkdir()
@@ -174,6 +236,7 @@ def _swarm_config(tmp_path):
 
 
 class TestCreateSwarm:
+    @pytest.mark.parametrize("custom_kickoff", [False, True])
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
@@ -181,14 +244,64 @@ class TestCreateSwarm:
     @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
     async def test_create_full_flow(
-        self, _git, _branch, mock_wt, _exists, mock_start, mock_deliver, db, tmp_path
+        self,
+        _git,
+        _branch,
+        mock_wt,
+        _exists,
+        mock_start,
+        mock_deliver,
+        db,
+        tmp_path,
+        custom_kickoff,
     ):
         config, repo_dir = _swarm_config(tmp_path)
+        if custom_kickoff:
+            override = config.data_dir / "templates" / "swarm" / "kickoff.md"
+            override.parent.mkdir(parents=True)
+            override.write_text("Plan carefully: {title} ({issue_url})")
         worktree = repo_dir / ".backbone" / "swarms" / "research"
         mock_wt.return_value = (worktree, "swarm/research")
         store = _FakeStore(config)
         gh = AsyncMock()
         gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="Do the research"))
+
+        async def start_with_registered_roster(*args, **kwargs):
+            assert {s.name for s in store.registered} == {
+                "research-coordinator",
+                "research-scout-1",
+                "research-scout-2",
+            }
+            # A reused name can have a saved conversation from an old swarm.
+            # Exercise the launch selection and runtime brief path, not just
+            # the keyword: the new issue's brief must reach the new command.
+            from agent_backbone.services.agents import write_state_file
+            from agent_backbone.services.agents.launch import resolve_resume
+            from agent_backbone.services.runtimes import RUNTIMES
+
+            agent = args[0]
+            write_state_file(
+                config.state_dir,
+                agent.name,
+                {
+                    "state": "unknown",
+                    "runtime": agent.runtime,
+                    "session_id": "old-swarm",
+                },
+            )
+            resume = resolve_resume(config, agent.name, agent.runtime, kwargs.get("resume"))
+            with patch(
+                "agent_backbone.services.runtimes.base.resolve_command", return_value="/cli"
+            ):
+                command = RUNTIMES[agent.runtime].build_command(
+                    resume=resume, brief_file=kwargs["brief_file"]
+                )
+            assert resume is False
+            brief = Path(kwargs["brief_file"])
+            assert str(brief) in command or brief.read_text().strip() in command
+            return _STARTED
+
+        mock_start.side_effect = start_with_registered_roster
 
         result = await create_swarm(
             config,
@@ -210,17 +323,28 @@ class TestCreateSwarm:
         # Members registered in the shared worktree with swarm tags.
         assert all(s.dir == str(worktree) for s in store.registered)
         assert "swarm:research" in store.registered[0].tags
+        assert [call.args[0].name for call in mock_start.await_args_list] == [
+            "research-scout-1",
+            "research-scout-2",
+            "research-coordinator",
+        ]
         # Every member is started with its role brief.
-        launch = mock_start.await_args_list[0].kwargs
+        launch = mock_start.await_args_list[-1].kwargs
         assert launch["brief_file"] is not None
         brief = Path(launch["brief_file"]).read_text()
         assert "research-coordinator" in brief and "acme/app" in brief
         # Kickoff went to the coordinator.
         assert mock_deliver.await_args.args[0] == "research-coordinator"
         assert "Do the research" in mock_deliver.await_args.args[1]
+        message = mock_deliver.await_args.args[1]
+        assert message.startswith("[via:backbone swarm:research] ")
+        assert ("Plan carefully:" in message) == custom_kickoff
         # Recorded as active.
         row = await db.swarms.get("research")
         assert row["status"] == "active" and row["issue_number"] == 7
+        # Whether a member asks is start_agent's call at each launch (from
+        # `swarm.unattended_members` and the runtime's sandbox), never stored.
+        assert not any(s.unattended for s in store.registered)
 
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
@@ -242,12 +366,13 @@ class TestCreateSwarm:
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
-    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, side_effect=[_STARTED, _FAILED])
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock)
     @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
     @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
+    @pytest.mark.parametrize("occupied", [False, True])
     async def test_failed_member_start_rolls_back(
         self,
         _git,
@@ -260,6 +385,7 @@ class TestCreateSwarm:
         mock_rm,
         db,
         tmp_path,
+        occupied,
     ):
         config, repo_dir = _swarm_config(tmp_path)
         worktree = repo_dir / ".backbone" / "swarms" / "research"
@@ -268,7 +394,11 @@ class TestCreateSwarm:
         gh = AsyncMock()
         gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
 
-        with pytest.raises(SwarmError, match="failed to start"):
+        _start.side_effect = [
+            _STARTED,
+            StartResult(ok=True, already_running=True) if occupied else _FAILED,
+        ]
+        with pytest.raises(SwarmError, match="became occupied" if occupied else "failed to start"):
             await create_swarm(
                 config,
                 db,
@@ -280,9 +410,17 @@ class TestCreateSwarm:
                 initiator="simon",
             )
 
-        mock_rm.assert_awaited_once()
-        assert store.registered == []  # all rolled back
-        assert (await db.swarms.get("research"))["status"] == "disbanded"
+        mock_stop.assert_awaited_once_with("research-scout")
+        _deliver.assert_not_awaited()
+        if occupied:
+            mock_rm.assert_not_awaited()
+            assert [agent.name for agent in store.registered] == ["research-coordinator"]
+        else:
+            mock_rm.assert_awaited_once()
+            assert store.registered == []  # all rolled back
+        assert (await db.swarms.get("research"))["status"] == (
+            "active" if occupied else "disbanded"
+        )
 
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
@@ -358,7 +496,92 @@ class TestCreateSwarm:
         mock_start.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "failure", ["remove_false", "remove_error", "status_error", "forget_error"]
+)
+async def test_incomplete_startup_rollback_remains_retryable(db, tmp_path, failure):
+    config, repo_dir = _swarm_config(tmp_path)
+    worktree = repo_dir / ".backbone" / "swarms" / "research"
+    store = _FakeStore(config)
+    gh = AsyncMock()
+    gh.get_issue.return_value = AsyncMock(state="open", title="task")
+    if failure == "forget_error":
+        store.forget = AsyncMock(side_effect=OSError("forget failed"))
+    status = db.swarms.set_status
+    with (
+        patch(f"{_IFACE}.is_git_repo", AsyncMock(return_value=True)),
+        patch(f"{_IFACE}.current_branch", AsyncMock(return_value="develop")),
+        patch(f"{_IFACE}.create_worktree", AsyncMock(return_value=(worktree, "swarm/research"))),
+        patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_IFACE}.start_agent", AsyncMock(return_value=_FAILED)),
+        patch(
+            f"{_IFACE}.remove_worktree",
+            AsyncMock(
+                return_value=failure != "remove_false",
+                side_effect=OSError("remove failed") if failure == "remove_error" else None,
+            ),
+        ),
+        patch.object(
+            db.swarms,
+            "set_status",
+            AsyncMock(
+                side_effect=OSError("status failed") if failure == "status_error" else status,
+            ),
+        ),
+        pytest.raises(SwarmError, match="failed to start member"),
+    ):
+        await create_swarm(
+            config,
+            db,
+            store,
+            gh,
+            name="research",
+            issue_ref="acme/app#7",
+            member_specs=["scout"],
+            initiator="simon",
+        )
+    assert (await db.swarms.get("research"))["status"] == "active"
+
+
 class TestTeardown:
+    async def test_teardown_holds_member_lock_through_removal_and_forget(self, db, tmp_path):
+        config, repo_dir = _swarm_config(tmp_path)
+        worktree = repo_dir / ".backbone" / "swarms" / "research"
+        store = AgentStore(db, tmp_path)
+        await store.start()
+        await store.register(
+            AgentSpec(name="research-scout", dir=str(worktree), tags=("swarm:research",))
+        )
+        removing, release = asyncio.Event(), asyncio.Event()
+
+        async def remove(*args):
+            removing.set()
+            await release.wait()
+            return True
+
+        with (
+            patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+            patch(f"{_IFACE}.remove_worktree", side_effect=remove),
+        ):
+            teardown = asyncio.create_task(
+                teardown_swarm(
+                    config,
+                    db,
+                    store,
+                    {"name": "research", "worktree_dir": str(worktree)},
+                    status="done",
+                )
+            )
+            await asyncio.wait_for(removing.wait(), 2)
+            update = asyncio.create_task(store.update("research-scout", model="late"))
+            await asyncio.sleep(0)
+            assert not update.done()
+            release.set()
+            assert await asyncio.wait_for(teardown, 2) == ["research-scout"]
+            with pytest.raises(KeyError):
+                await asyncio.wait_for(update, 2)
+        assert store.agents.get("research-scout") is None
+
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=True)
@@ -395,6 +618,40 @@ class TestTeardown:
         assert name == "research"
         assert mock_stop.await_count == 2
         assert store.forgotten == ["research-coordinator", "research-scout-1"]
+        assert (await db.swarms.get("research"))["status"] == "done"
+
+    @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=False)
+    @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
+    async def test_a_repository_that_is_gone_leaves_nothing_to_remove(
+        self, _exists, _stop, remove_worktree, db, tmp_path
+    ):
+        """The checkout was deleted: git cannot be asked, and teardown must not
+        wedge the swarm for good."""
+        config, repo_dir = _swarm_config(tmp_path)
+        worktree = repo_dir / ".backbone" / "swarms" / "research"
+        await db.swarms.create(
+            "research",
+            repo="acme/app",
+            issue_number=7,
+            initiator="simon",
+            coordinator="research-coordinator",
+            branch="swarm/research",
+            worktree_dir=str(worktree),
+        )
+        store = _FakeStore(config)
+        store.registered = [
+            AgentSpec(
+                name="research-coordinator",
+                dir=str(worktree),
+                tags=("swarm:research", "role:coordinator"),
+            )
+        ]
+        shutil.rmtree(repo_dir)
+
+        assert await teardown_for_issue(config, db, store, "acme/app", 7) == "research"
+        remove_worktree.assert_not_awaited()
+        assert store.forgotten == ["research-coordinator"]
         assert (await db.swarms.get("research"))["status"] == "done"
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
@@ -454,3 +711,29 @@ class TestOwnRepoGuardrail:
                 member_specs=[],
                 initiator="simon",
             )
+
+
+async def test_missing_kickoff_fails_before_creating_worktree(db, tmp_path):
+    config, _ = _swarm_config(tmp_path)
+    override = config.data_dir / "templates" / "swarm" / "kickoff.md"
+    override.parent.mkdir(parents=True)
+    override.write_text("")
+    gh = AsyncMock()
+    gh.get_issue.return_value = AsyncMock(state="open", title="Research")
+    with (
+        patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_IFACE}.create_worktree", AsyncMock()) as create,
+    ):
+        with pytest.raises(SwarmError, match="empty"):
+            await create_swarm(
+                config,
+                db,
+                _FakeStore(config),
+                gh,
+                name="research",
+                issue_ref="acme/app#7",
+                member_specs=[],
+                initiator="simon",
+            )
+    create.assert_not_called()
+    assert await db.swarms.get("research") is None

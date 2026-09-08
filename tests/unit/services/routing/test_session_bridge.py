@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 from dataclasses import replace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 
 from agent_backbone.config import TimingConfig
 from agent_backbone.services.agents import AgentState, StateSnapshot
-from agent_backbone.services.routing import get_session_intelligence, safe_deliver
+from agent_backbone.services.routing import deliver, get_session_intelligence, safe_deliver
 from agent_backbone.services.routing._resolution import (
     resolve_entity_session,
     validate_issue_targets,
@@ -21,20 +22,156 @@ from agent_backbone.services.routing.models import SessionIntelligence, SessionP
 _IDLE_SNAP = StateSnapshot(state=AgentState.IDLE, source="push")
 _BUSY_SNAP = StateSnapshot(state=AgentState.BUSY, source="push")
 _STARTING_SNAP = StateSnapshot(state=AgentState.STARTING, source="push")
+_BLOCKED_SNAP = StateSnapshot(
+    state=AgentState.BLOCKED,
+    reason="quota",
+    detail="resets at 3 PM",
+    current_issue=42,
+    source="push",
+)
 _PLAN_SNAP = StateSnapshot(state=AgentState.WAITING_FOR_HUMAN, reason="plan", source="push")
 _PERMISSION_SNAP = StateSnapshot(
     state=AgentState.WAITING_FOR_HUMAN, reason="permission", source="push"
 )
 _UNKNOWN_SNAP = StateSnapshot(state=AgentState.UNKNOWN, source="default")
-_BUSY_ISSUE_42_SNAP = StateSnapshot(state=AgentState.BUSY, current_issue=42, source="push")
-_BUSY_ISSUE_99_SNAP = StateSnapshot(state=AgentState.BUSY, current_issue=99, source="push")
-_PLAN_ISSUE_42_SNAP = StateSnapshot(
-    state=AgentState.WAITING_FOR_HUMAN, reason="plan", current_issue=42, source="push"
+_REPO = "example/orchestration"
+_BUSY_ISSUE_42_SNAP = StateSnapshot(
+    state=AgentState.BUSY, current_issue=42, current_repo=_REPO, source="push"
 )
 
 _INTEL = "agent_backbone.services.routing._intelligence"
 _DELIV = "agent_backbone.services.routing._delivery"
 _COPY = "agent_backbone.services.terminal._copy_mode"
+
+
+class TestDeliverySerialization:
+    def test_contended_session_can_be_used_from_a_new_event_loop(self, config):
+        from agent_backbone.services.routing._delivery import _session_locks
+
+        retained = []
+
+        async def run():
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def send(*args, **kwargs):
+                entered.set()
+                await release.wait()
+                return True
+
+            profile = SessionProfile("ike", SessionIntelligence.READY)
+            with (
+                patch(f"{_DELIV}.get_session_intelligence", AsyncMock(return_value=profile)),
+                patch(f"{_DELIV}.send_message", AsyncMock(side_effect=send)),
+            ):
+                first = asyncio.create_task(deliver("ike", "one", config))
+                await entered.wait()
+                second = asyncio.create_task(deliver("ike", "two", config))
+                await asyncio.sleep(0)
+                # Model delayed garbage collection of locks retained by waiters.
+                retained.extend(_session_locks.values())
+                release.set()
+                results = await asyncio.gather(first, second)
+                assert all(result.outcome == "delivered" for result in results)
+
+        asyncio.run(run())
+        asyncio.run(run())
+
+    async def test_same_session_gate_waits_for_recording_but_other_sessions_continue(
+        self, config, db
+    ):
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def send(session, message, **kwargs):
+            if message == "first":
+                entered.set()
+                await release.wait()
+            return True
+
+        profile = SessionProfile(session_name="ike", intelligence=SessionIntelligence.READY)
+        with (
+            patch(f"{_DELIV}.get_session_intelligence", AsyncMock(return_value=profile)),
+            patch(f"{_DELIV}.send_message", AsyncMock(side_effect=send)) as paste,
+        ):
+            first = asyncio.create_task(
+                deliver(
+                    "ike",
+                    "first",
+                    config,
+                    db=db,
+                    repo=_REPO,
+                    issue_number=1,
+                    target_entity="ike",
+                    enforce_issue_queue=True,
+                )
+            )
+            await entered.wait()
+            second = asyncio.create_task(
+                deliver(
+                    "ike",
+                    "second",
+                    config,
+                    db=db,
+                    repo=_REPO,
+                    issue_number=2,
+                    target_entity="ike",
+                    enforce_issue_queue=True,
+                )
+            )
+            try:
+                other = await asyncio.wait_for(
+                    deliver("leo", "other", config, delivery_kind="direct_message"), timeout=1
+                )
+                assert other.outcome == "delivered"
+                assert not second.done()
+            finally:
+                release.set()
+                results = await asyncio.gather(first, second)
+        assert [result.outcome for result in results] == ["delivered", "awaiting_ack"]
+        assert [call.args[1] for call in paste.await_args_list] == ["first", "other"]
+
+    async def test_cancelling_waiter_and_holder_leaves_session_usable(self, config):
+        entered = asyncio.Event()
+
+        async def send(session, message, **kwargs):
+            if message == "first":
+                entered.set()
+                await asyncio.Event().wait()
+            return True
+
+        profile = SessionProfile(session_name="ike", intelligence=SessionIntelligence.READY)
+        with (
+            patch(f"{_DELIV}.get_session_intelligence", AsyncMock(return_value=profile)),
+            patch(f"{_DELIV}.send_message", AsyncMock(side_effect=send)),
+        ):
+            first = asyncio.create_task(
+                deliver("ike", "first", config, delivery_kind="direct_message")
+            )
+            await entered.wait()
+            waiter = asyncio.create_task(
+                deliver("ike", "waiting", config, delivery_kind="direct_message")
+            )
+            await asyncio.sleep(0)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            result = await asyncio.wait_for(
+                deliver("ike", "after cancellation", config, delivery_kind="direct_message"),
+                timeout=1,
+            )
+        assert result.outcome == "delivered"
+
+    async def test_finished_deliveries_do_not_retain_session_locks(self, config):
+        from agent_backbone.services.routing._delivery import _session_locks
+
+        profile = SessionProfile(session_name="unused", intelligence=SessionIntelligence.OFFLINE)
+        with patch(f"{_DELIV}.get_session_intelligence", AsyncMock(return_value=profile)):
+            for number in range(20):
+                name = f"temporary-{number}"
+                await deliver(name, "hello", config, delivery_kind="direct_message")
+                assert not any(key[1] == name for key in _session_locks)
 
 
 @pytest.fixture(autouse=True)
@@ -161,6 +298,7 @@ class TestGetSessionIntelligence:
             (_PLAN_SNAP, SessionIntelligence.WAITING_FOR_HUMAN),
             (_PERMISSION_SNAP, SessionIntelligence.WAITING_FOR_HUMAN),
             (_BUSY_SNAP, SessionIntelligence.AGENT_WORKING),
+            (_BLOCKED_SNAP, SessionIntelligence.AGENT_WORKING),
             (_STARTING_SNAP, SessionIntelligence.AGENT_WORKING),
             (_IDLE_SNAP, SessionIntelligence.READY),
             (_UNKNOWN_SNAP, SessionIntelligence.UNKNOWN),
@@ -208,6 +346,37 @@ class TestGetSessionIntelligence:
             profile = await get_session_intelligence(
                 "ike", config, idle_since=time.monotonic() - 10
             )
+        assert profile.intelligence == SessionIntelligence.READY
+
+    async def test_hook_idle_timestamp_starts_grace(self, config):
+        # A freshly hook-reported idle (wall-clock transition time) settles;
+        # no explicit idle_since needed — the push timestamp is the source.
+        from agent_backbone.services.agents import StateSnapshot as Snap
+
+        config = replace(config, timing=TimingConfig(grace_period_seconds=60))
+        snap = Snap(state=AgentState.IDLE, source="push", timestamp=time.time() - 1)
+        with _online(snap=snap):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.SETTLING
+
+    async def test_hook_idle_beyond_grace_is_ready(self, config):
+        from agent_backbone.services.agents import StateSnapshot as Snap
+
+        config = replace(config, timing=TimingConfig(grace_period_seconds=60))
+        snap = Snap(state=AgentState.IDLE, source="push", timestamp=time.time() - 3600)
+        with _online(snap=snap):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.READY
+
+    async def test_terminal_idle_carries_no_grace(self, config):
+        # A terminal reading is stamped at read time: deriving grace from it
+        # would reset the window on every read and settle forever.
+        from agent_backbone.services.agents import StateSnapshot as Snap
+
+        config = replace(config, timing=TimingConfig(grace_period_seconds=3600))
+        snap = Snap(state=AgentState.IDLE, source="pull", timestamp=time.time())
+        with _online(snap=snap):
+            profile = await get_session_intelligence("ike", config)
         assert profile.intelligence == SessionIntelligence.READY
 
 
@@ -265,6 +434,9 @@ class TestSafeDeliver:
             delivery_kind="issue",
             source="t",
             repo="example/orchestration",
+            sender="",
+            source_key=None,
+            operation_id=ANY,
         )
 
     async def test_every_delivery_is_recorded_even_direct_messages(self, config):
@@ -288,6 +460,7 @@ class TestSafeDeliver:
             repo="",
             kind="direct_message",
             preview="Hi there",
+            operation_id=ANY,
         )
 
     async def test_human_typing_blocks(self, config):
@@ -337,6 +510,9 @@ class TestSafeDeliver:
             delivery_kind="direct_message",
             source="api-messages",
             repo="",
+            sender="",
+            source_key=None,
+            operation_id=ANY,
         )
 
     @pytest.mark.parametrize("snap", [_PLAN_SNAP, _PERMISSION_SNAP])
@@ -447,7 +623,7 @@ class TestSafeDeliver:
             result = await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
         assert result == "delivered"
         assert order == ["claim", "send", "finalize"]
-        mock_db.deliveries.finalize.assert_awaited_once_with(123, "delivered")
+        mock_db.deliveries.finalize.assert_awaited_once_with(123, "delivered", operation_id=ANY)
         assert mock_db.deliveries.claim.await_args.kwargs["repo"] == "example/orchestration"
         mock_db.deliveries.record.assert_not_called()
 
@@ -480,27 +656,49 @@ class TestSafeDeliver:
             repo="example/orchestration",
             kind="comment",
             preview="Hello",
+            operation_id=ANY,
         )
 
-    @pytest.mark.parametrize("snap", [_BUSY_ISSUE_42_SNAP, _PLAN_ISSUE_42_SNAP])
-    async def test_comment_on_current_issue_bypasses_blocking_state(self, config, snap):
-        mock_db = AsyncMock()
-        with _online(snap=snap), _patch_send_message(True):
-            result = await safe_deliver(
-                "ike", "Comment", config, db=mock_db, delivery_kind="comment", **_issue_kwargs()
-            )
-        assert result == "delivered"
+    @pytest.mark.parametrize("priority", [False, True])
+    @pytest.mark.parametrize(
+        ("state", "reason"),
+        [
+            (AgentState.BUSY, None),
+            (AgentState.STARTING, None),
+            (AgentState.BLOCKED, "provider"),
+            (AgentState.BLOCKED, "quota"),
+            (AgentState.WAITING_FOR_HUMAN, "permission"),
+            (AgentState.WAITING_FOR_HUMAN, "plan"),
+            (AgentState.WAITING_FOR_HUMAN, "question"),
+        ],
+    )
+    async def test_current_issue_comments_wait_until_ready(
+        self, config, db, state, reason, priority
+    ):
+        from agent_backbone.services.jobs.retry import drain_message_queue
 
-    async def test_comment_on_other_issue_is_queued_while_busy(self, config):
-        mock_db = AsyncMock()
-        with _online(snap=_BUSY_ISSUE_99_SNAP):
-            result = await safe_deliver(
-                "ike", "Comment", config, db=mock_db, delivery_kind="comment", **_issue_kwargs()
+        snap = StateSnapshot(
+            state=state, reason=reason, current_issue=42, current_repo=_REPO, source="push"
+        )
+        with _online(snap=snap), _patch_send_message(True) as send:
+            report = await deliver(
+                "ike",
+                "Comment",
+                config,
+                db=db,
+                delivery_kind="comment",
+                priority=priority,
+                **_issue_kwargs(),
             )
-        assert result == "agent_working"
-        mock_db.queue.enqueue.assert_called_once()
-        assert mock_db.deliveries.record.await_args.kwargs["outcome"] == "agent_working"
-        assert mock_db.deliveries.record.await_args.kwargs["kind"] == "comment"
+            send.assert_not_called()
+        expected = "waiting_for_human" if state == AgentState.WAITING_FOR_HUMAN else "agent_working"
+        assert report.outcome == expected and report.queued
+        assert await db.queue.pending_count("ike") == 1
+        with _online(), _patch_send_message(True) as send:
+            result = await drain_message_queue(config, db, None, active_sessions=["ike"])
+            send.assert_awaited_once()
+        assert result["queue_delivered"] == 1
+        assert await db.queue.pending_count("ike") == 0
 
     async def test_settling_defers(self, config):
         with patch(
@@ -525,3 +723,116 @@ class TestSafeDeliver:
             issue = await safe_deliver("ike", "Issue", config, db=mock_db, **_issue_kwargs())
             mock_db.queue.enqueue.assert_not_called()
         assert comment == "settling" and issue == "settling"
+
+
+class TestPlanResponseDelivery:
+    """A plan response goes in exactly when the agent waits for a plan decision."""
+
+    async def test_delivered_while_waiting_for_a_plan(self, config):
+        mock_db = AsyncMock()
+        with _online(snap=_PLAN_SNAP), _patch_send_message(True) as send:
+            result = await safe_deliver(
+                "ike", "2", config, db=mock_db, source="api-plans", delivery_kind="plan_response"
+            )
+        assert result == "delivered"
+        send.assert_called_once_with("ike", "2", runtime_hint="unknown")
+        assert mock_db.deliveries.record.await_args.kwargs["kind"] == "plan_response"
+        mock_db.queue.enqueue.assert_not_called()
+
+    async def test_a_permission_prompt_is_not_a_plan(self, config):
+        mock_db = AsyncMock()
+        with _online(snap=_PERMISSION_SNAP), _patch_send_message(True) as send:
+            result = await safe_deliver(
+                "ike", "2", config, db=mock_db, delivery_kind="plan_response"
+            )
+        assert result == "not_waiting"
+        send.assert_not_called()
+        mock_db.queue.enqueue.assert_not_called()
+
+    async def test_anything_but_a_waiting_plan_is_not_waiting_and_never_queued(self, config):
+        # An idle prompt is the dangerous case: a bare "2" would become an instruction.
+        for snap in (_IDLE_SNAP, _BUSY_SNAP, _UNKNOWN_SNAP):
+            mock_db = AsyncMock()
+            with _online(snap=snap), _patch_send_message(True) as send:
+                result = await safe_deliver(
+                    "ike", "2", config, db=mock_db, delivery_kind="plan_response"
+                )
+            assert result == "not_waiting", snap
+            send.assert_not_called()
+            mock_db.queue.enqueue.assert_not_called()
+
+    async def test_offline_agent_is_offline_not_queued(self, config):
+        mock_db = AsyncMock()
+        with _patch_list_sessions([]):
+            result = await safe_deliver(
+                "ike", "2", config, db=mock_db, delivery_kind="plan_response"
+            )
+        assert result == "offline"
+        mock_db.queue.enqueue.assert_not_called()
+
+
+class TestDeliveryReport:
+    """`queued` is claimed only for a message that is in the database."""
+
+    def _db(self, status):
+        from agent_backbone.services.database._queue_repo import EnqueueResult
+
+        mock_db = AsyncMock()
+        row_id = 1 if status == "inserted" else None
+        mock_db.queue.enqueue.return_value = EnqueueResult(status, row_id)
+        return mock_db
+
+    async def test_stored(self, config):
+        mock_db = self._db("inserted")
+        with _online(snap=_BUSY_SNAP):
+            report = await deliver(
+                "ike", "hi", config, db=mock_db, delivery_kind="direct_message", sender="leo"
+            )
+        assert report.outcome == "agent_working"
+        assert report.queue == "stored" and report.queued
+        assert mock_db.queue.enqueue.await_args.kwargs["sender"] == "leo"
+
+    async def test_already_queued_is_reported_as_such(self, config):
+        mock_db = self._db("already_queued")
+        with _online(snap=_BUSY_SNAP):
+            report = await deliver("ike", "hi", config, db=mock_db, delivery_kind="direct_message")
+        assert report.queue == "already_queued" and report.queued
+
+    async def test_storage_error_is_failed_not_queued(self, config):
+        mock_db = AsyncMock()
+        mock_db.queue.enqueue.side_effect = RuntimeError("disk full")
+        with _online(snap=_BUSY_SNAP):
+            report = await deliver("ike", "hi", config, db=mock_db, delivery_kind="direct_message")
+        assert report.outcome == "agent_working"
+        assert report.queue == "failed" and not report.queued
+
+    async def test_delivered_needs_no_queue(self, config):
+        with _online(), _patch_send_message(True):
+            report = await deliver("ike", "hi", config, delivery_kind="direct_message")
+        assert report.outcome == "delivered" and report.queue is None and not report.queued
+
+
+class TestBlockedAndOfflineMetadata:
+    async def test_a_blocked_agent_keeps_its_issue_and_detail(self, config):
+        with (
+            patch(f"{_INTEL}.list_sessions", new_callable=AsyncMock, return_value=["ike"]),
+            patch(f"{_INTEL}.capture_pane", new_callable=AsyncMock, return_value="❯ "),
+            patch(f"{_INTEL}.get_agent_state", new_callable=AsyncMock, return_value=_BLOCKED_SNAP),
+            patch(f"{_INTEL}.clear_copy_mode", new_callable=AsyncMock, return_value=(False, False)),
+        ):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.AGENT_WORKING
+        assert profile.current_issue == 42 and profile.detail == "resets at 3 PM"
+
+    async def test_an_offline_agent_still_shows_what_its_hook_recorded(self, config):
+        from agent_backbone.services.agents import write_state_file
+
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {"state": "unknown", "ts": 1.0, "session_id": "sess-1", "last_message": "bye"},
+        )
+        with patch(f"{_INTEL}.list_sessions", new_callable=AsyncMock, return_value=[]):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.OFFLINE
+        assert profile.session_id == "sess-1" and profile.last_message == "bye"

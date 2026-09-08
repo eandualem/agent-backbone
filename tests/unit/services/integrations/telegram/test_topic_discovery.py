@@ -9,10 +9,12 @@ from agent_backbone.config import BackboneConfig, TelegramConfig
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     TopicDiscovery,
+    agent_topic,
     effective_group_chat_id,
     effective_routes,
     load_discovery,
     process_message_for_discovery,
+    rebind_group,
     resolve_topic_name,
     save_discovery,
 )
@@ -123,6 +125,51 @@ class TestEffectiveRoutes:
             20: "ike",
         }
 
+    def test_stale_discovery_is_dropped_when_the_configured_group_changes(self):
+        # Thread ids are per-group: discoveries from the old group must not
+        # route in the new one, while explicit config still applies.
+        config = _make_config(
+            telegram=TelegramConfig(group_chat_id=-200, topic_routes={7: "feynman"})
+        )
+        discovery = TopicDiscovery(group_chat_id=-100, topic_routes={7: "ike", 8: "leo"})
+        assert effective_routes(config, discovery) == {7: "feynman"}
+
+    def test_discovery_routes_survive_without_a_configured_group(self):
+        discovery = TopicDiscovery(group_chat_id=-100, topic_routes={8: "leo"})
+        assert effective_routes(_make_config(), discovery) == {8: "leo"}
+
+    def test_unknown_origin_ignored_beside_an_explicit_group(self):
+        # Until a rebind adopts and resets them, unknown-origin routes
+        # never apply under an explicit group; explicit config still does.
+        config = _make_config(
+            telegram=TelegramConfig(group_chat_id=-200, topic_routes={7: "feynman"})
+        )
+        discovery = TopicDiscovery(topic_routes={7: "ike", 8: "leo"})
+        assert effective_routes(config, discovery) == {7: "feynman"}
+        assert agent_topic(config, discovery, "ike") is None
+
+
+class TestAgentTopic:
+    def test_discovery_hit(self):
+        config = _make_config()
+        assert agent_topic(config, TopicDiscovery(topic_routes={7: "ike"}), "ike") == 7
+
+    def test_config_override_wins_outbound(self):
+        # Thread 7 was discovered for ike but config remapped it to
+        # feynman: ike has no topic (no stale post), feynman has thread 7.
+        config = _make_config(telegram=TelegramConfig(topic_routes={7: "feynman"}))
+        discovery = TopicDiscovery(topic_routes={7: "ike"})
+        assert agent_topic(config, discovery, "ike") is None
+        assert agent_topic(config, discovery, "feynman") == 7
+
+    def test_config_thread_preferred_when_both_name_the_agent(self):
+        config = _make_config(telegram=TelegramConfig(topic_routes={8: "ike"}))
+        discovery = TopicDiscovery(topic_routes={7: "ike"})
+        assert agent_topic(config, discovery, "ike") == 8
+
+    def test_catch_all_has_no_topic(self):
+        assert agent_topic(_make_config(), TopicDiscovery(), CATCH_ALL_TOPIC) is None
+
 
 class TestEffectiveGroupChatId:
     def test_config_wins(self):
@@ -180,6 +227,24 @@ class TestProcessMessageForDiscovery:
         assert not process_message_for_discovery(update, _make_config(), d, tmp_path / "t.json")
         assert 42 not in d.topic_routes
 
+    def test_message_from_another_group_teaches_nothing(self, tmp_path):
+        d = TopicDiscovery(group_chat_id=-100)
+        update = _make_update(chat_id=-200, thread_id=42, forum_topic_name="Leo")
+        assert not process_message_for_discovery(update, _make_config(), d, tmp_path / "t.json")
+        assert d.group_chat_id == -100
+        assert d.topic_routes == {}
+
+    def test_configured_group_is_not_overwritten_by_discovery(self, tmp_path):
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery()
+        update = _make_update(chat_id=-200, thread_id=42, forum_topic_name="Leo")
+        assert process_message_for_discovery(update, config, d, tmp_path / "t.json")
+        assert d.group_chat_id == -200  # adopted the selected group on first learn
+        assert d.topic_routes[42] == "leo"
+        other = _make_update(chat_id=-300, thread_id=43, forum_topic_name="Ike")
+        assert not process_message_for_discovery(other, config, d, tmp_path / "t.json")
+        assert 43 not in d.topic_routes
+
 
 class TestLoadDiscoveryShapes:
     def test_non_object_shapes_load_as_empty(self, tmp_path):
@@ -198,3 +263,74 @@ class TestClosedTopics:
         assert loaded.closed_topics == {5} and loaded.topic_routes == {5: "gone"}
         path.write_text(json.dumps({"topic_routes": {"5": "gone"}}))  # older file
         assert load_discovery(path).closed_topics == set()
+
+
+class TestRebindGroup:
+    def test_unknown_origin_routes_are_discarded_on_binding(self):
+        # The real legacy shape: old sync_topics wrote routes under the
+        # configured group without recording it. Adopting them into a
+        # (possibly different) selected group would reuse unrelated
+        # thread ids — discard, then rediscover.
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery(topic_routes={9: "ike"}, topic_names={9: "Ike"})
+        assert rebind_group(config, d) is True
+        assert d.group_chat_id == -200
+        assert d.topic_routes == {} and d.topic_names == {}
+
+    def test_changed_group_resets_learned_state(self):
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery(
+            group_chat_id=-100,
+            topic_routes={7: "ike"},
+            topic_names={7: "Ike"},
+            closed_topics={5},
+        )
+        assert rebind_group(config, d) is True
+        assert d.group_chat_id == -200
+        assert d.topic_routes == {} and d.topic_names == {} and d.closed_topics == set()
+
+    def test_aligned_group_is_a_noop(self):
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-100))
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={7: "ike"})
+        assert rebind_group(config, d) is False
+        assert d.topic_routes == {7: "ike"}
+
+    def test_no_selected_group_is_a_noop(self):
+        d = TopicDiscovery()
+        assert rebind_group(_make_config(), d) is False
+
+    def test_new_group_learning_persists_and_is_effective(self, tmp_path):
+        # The reported bug: the new group was accepted but the discovery
+        # stayed on the old group, so effective_routes discarded every
+        # newly learned route forever.
+        path = tmp_path / "t.json"
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={5: "leo"})
+        update = _make_update(chat_id=-200, thread_id=9, forum_topic_name="Ike")
+        assert process_message_for_discovery(update, config, d, path) is True
+        assert d.group_chat_id == -200
+        assert d.topic_routes == {9: "ike"}
+        assert load_discovery(path).topic_routes == {9: "ike"}
+        assert effective_routes(config, d) == {9: "ike"}
+        assert agent_topic(config, d, "ike") == 9
+
+    def test_legacy_shape_resets_then_relearns_in_the_configured_group(self, tmp_path):
+        path = tmp_path / "t.json"
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery(topic_routes={5: "leo"}, topic_names={5: "Leo"})
+        update = _make_update(chat_id=-200, thread_id=9, forum_topic_name="Ike")
+        assert process_message_for_discovery(update, config, d, path) is True
+        assert d.group_chat_id == -200
+        assert d.topic_routes == {9: "ike"}  # old id 5 gone, new id 9 learned
+        assert load_discovery(path).topic_routes == {9: "ike"}
+
+    def test_other_group_does_not_rebind_or_report_an_unsaved_change(self, tmp_path):
+        config = _make_config(telegram=TelegramConfig(group_chat_id=-200))
+        d = TopicDiscovery(group_chat_id=-100, topic_routes={5: "leo"})
+        path = tmp_path / "t.json"
+        save_discovery(d, path)
+        other = _make_update(chat_id=-300, thread_id=9, forum_topic_name="Ike")
+        assert not process_message_for_discovery(other, config, d, path)
+        assert d == load_discovery(path)
+        assert d.group_chat_id == -100
+        assert effective_routes(config, d) == {}

@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import secrets
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ from agent_backbone.config import (
     bootstrap_config,
     env_file_keys,
 )
+from agent_backbone.services.database.engine import redact_url
 
 log = logging.getLogger(__name__)
 
@@ -62,13 +64,19 @@ def cmd_init(args: argparse.Namespace) -> int:
             pass
 
     asyncio.run(_migrate())
-    print(f"database ready: {config.database_url}")
+    print(f"database ready: {redact_url(config.database_url)}")
 
     print("\nNext steps:")
     print("  1. backbone doctor")
     print("  2. backbone up --detach")
     print("  3. cd ~/code/my-app && backbone agent start")
     print(f"\nTokens (GitHub, Telegram) go in {env_path} — `backbone secrets set TELEGRAM_TOKEN`.")
+    if args.data_dir and os.environ.get("BACKBONE_DATA_DIR") != str(data_dir):
+        # Every other command finds this install through the environment, not
+        # the flag (only `init` takes --data-dir): say so now, or the next
+        # `secrets set` lands in the default directory's .env instead.
+        print("\nCustom data dir — export it before any other backbone command:")
+        print(f"  export BACKBONE_DATA_DIR={shlex.quote(str(data_dir))}")
     return 0
 
 
@@ -100,25 +108,39 @@ def _write_env_value(env_path: Path, key: str, value: str | None) -> str:
 def _write_env_value_locked(env_path: Path, key: str, value: str | None) -> str:
     lines = env_path.read_text().splitlines() if env_path.is_file() else []
     out: list[str] = []
-    action = "absent" if value is None else "added"
+    # One key means one value: the first occurrence (live or placeholder)
+    # becomes the assignment on set; every live duplicate is dropped on set
+    # and on unset, so a stale second line can never shadow the change.
+    wrote = False
+    saw_live = False
     for line in lines:
         stripped = line.strip()
         bare = stripped.lstrip("#").strip()
-        if bare.startswith(f"{key}=") and action in ("added", "absent"):
-            if value is None:
-                if not stripped.startswith("#"):
-                    action = "removed"
-                    continue
-            else:
-                action = "replaced" if not stripped.startswith("#") else "added"
-                out.append(f"{key}={value}")
-                continue
-        out.append(line)
-    if value is not None and action == "added" and not any(ln.startswith(f"{key}=") for ln in out):
+        if not bare.startswith(f"{key}="):
+            out.append(line)
+            continue
+        saw_live = saw_live or not stripped.startswith("#")
+        if value is None:
+            if stripped.startswith("#"):
+                out.append(line)  # a commented placeholder is not a value
+            continue
+        if not wrote:
+            out.append(f"{key}={value}")
+            wrote = True
+        # Later duplicates are dropped.
+    if value is not None and not wrote:
         out.append(f"{key}={value}")
+    if value is None:
+        action = "removed" if saw_live else "absent"
+    else:
+        action = "replaced" if saw_live else "added"
     env_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = env_path.with_name(f".env.{os.getpid()}.tmp")
-    tmp.write_text("\n".join(out) + ("\n" if out else ""))
+    # Created 0600: write_text() would honour the umask and leave the secrets
+    # world-readable until the chmod below.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write("\n".join(out) + ("\n" if out else ""))
     os.chmod(tmp, 0o600)
     os.replace(tmp, env_path)
     os.chmod(env_path, 0o600)
@@ -179,8 +201,27 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
     for rt in REGISTRY.values():
         installed = "installed" if rt.available() else "not found"
         models = ", ".join(rt.models) if rt.models else "use the CLI's own model picker"
-        print(f"  {rt.id:<10s} {rt.display_name:<12s} {installed:<10s} models: {models}")
-    print("\n`--model` is passed to the CLI verbatim; these are examples, not a complete list.")
+        efforts = ", ".join(rt.efforts) if rt.efforts else "-"
+        if rt.unattended_args:
+            wall = "sandboxed" if rt.sandboxed else "no sandbox"
+            unattended = f"{' '.join(rt.unattended_args)} ({wall})"
+        else:
+            unattended = "-"
+        print(
+            f"  {rt.id:<10s} {rt.display_name:<12s} {installed:<10s} "
+            f"state: {rt.reports_state:<17s} models: {models}"
+        )
+        print(f"  {'':<10s} {'':<12s} {'':<10s} effort: {efforts}")
+        print(f"  {'':<10s} {'':<12s} {'':<10s} unattended: {unattended}")
+    print("\nA plain model id is passed to the CLI verbatim; these are examples, not a")
+    print("complete list. Effort rides on the model as `model:effort` (e.g.")
+    print("`gpt-6-astra:high`), so every surface that names a model can name an effort:")
+    print("`--model`, `agent set model=…`, and a roster entry `coordinator@codex/…:high`.")
+    print("Such a spec is split: the CLI gets the bare model plus its own effort switch.")
+    print("`unattended` is the switch an `unattended=true` agent is launched with (its")
+    print("runtime then never asks a person). `sandboxed` means an OS sandbox still")
+    print("confines it to its directory; `no sandbox` means trust on the machine. `-`:")
+    print("the backbone refuses to start that runtime unattended rather than guess.")
     return 0
 
 
@@ -204,9 +245,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         try:
             async with _common.Direct(boot) as direct:
                 config = direct.config
-                check(f"database reachable: {config.database_url}", True)
+                check(f"database reachable: {redact_url(config.database_url)}", True)
         except Exception as exc:
-            check(f"database reachable: {boot.database_url}", False, f"{exc}; run `backbone init`")
+            check(
+                f"database reachable: {redact_url(boot.database_url)}",
+                False,
+                f"{exc}; run `backbone init`",
+            )
             return 1
 
         print("Agents")

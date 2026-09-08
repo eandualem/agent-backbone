@@ -13,6 +13,7 @@ Per repository, four relationships decide routing:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import EventType, IssueData
@@ -54,6 +55,9 @@ def route_issue(issue: IssueData, event_type: EventType, config: BackboneConfig)
     watchers = [s.name for s in agents.watchers(repo)]
 
     explicit = [t for t in issue.labels.targets if t not in ignore and t in agents]
+    # `for:` labels that name a person (ignored) or an unknown agent still mean
+    # the issue is addressed — it must not fall back to the owner as if unlabelled.
+    addressed = bool(issue.labels.targets)
     if event_type == EventType.PULL_REQUEST_OPENED:
         routing.watch = [n for n in owners + watchers if n not in explicit]
         routing.queue = explicit
@@ -62,7 +66,7 @@ def route_issue(issue: IssueData, event_type: EventType, config: BackboneConfig)
     if explicit:
         # Explicit always wins; targets that own or watch the repo go first.
         routing.queue = sorted(explicit, key=lambda t: not agent_knows_repo(agents.get(t), repo))
-    elif event_type == EventType.ISSUE_OPENED:
+    elif event_type == EventType.ISSUE_OPENED and not addressed:
         if len(owners) == 1:
             routing.queue = owners
         elif owners:
@@ -88,7 +92,7 @@ def comment_audience(issue: IssueData, commenter: str | None, config: BackboneCo
 
 
 async def list_open_queue_for_target(
-    config: BackboneConfig, target: str, gh: GitHubClient | None
+    config: BackboneConfig, target: str, gh: GitHubClient | None, *, db=None
 ) -> list[IssueData]:
     """An agent's open queue across every repository it owns or watches.
 
@@ -104,25 +108,47 @@ async def list_open_queue_for_target(
 
     def _add(items: list[IssueData]) -> None:
         for item in items:
+            if item.labels.sender == target:
+                continue  # the opener never receives its own work on a later monitor tick
             key = (item.repo_full_name.casefold(), item.number)
             if key not in seen:
                 seen.add(key)
                 issues.append(item)
 
     for repo in spec.repos:
-        _add(await gh.list_issues(state="open", labels=[f"for:{target}"], repo_full_name=repo))
+        _add(
+            await gh.list_issues(
+                state="open", labels=[f"for:{target}"], repo_full_name=repo, all_pages=True
+            )
+        )
 
-    if spec.repo and len(config.agents.owners(spec.repo)) == 1:
+    owners = config.agents.owners(spec.repo) if spec.repo else []
+    if len(owners) == 1 and owners[0].name == target:
         _add(
             [
                 item
-                for item in await gh.list_issues(state="open", repo_full_name=spec.repo)
+                for item in await gh.list_issues(
+                    state="open", repo_full_name=spec.repo, all_pages=True
+                )
                 if not item.labels.targets
             ]
         )
 
     scoring = config.priority
-    issues.sort(key=lambda issue: (-compute_priority_score(issue, scoring), issue.number))
+    counts = await db.dependencies.counts() if db is not None else {}
+    now = datetime.now(UTC)
+    issues.sort(
+        key=lambda issue: (
+            -compute_priority_score(
+                issue,
+                scoring,
+                counts.get((issue.repo_full_name.casefold(), issue.number), 0),
+                now=now,
+            ),
+            issue.repo_full_name.casefold(),
+            issue.number,
+        )
+    )
     return issues
 
 

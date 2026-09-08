@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from agent_backbone.services.terminal._core import _run_tmux
+from agent_backbone.services.terminal._core import _run_tmux, exact_target
 from agent_backbone.services.terminal._sessions import query_format_vars
 
 log = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ async def in_copy_mode(session_name: str) -> bool:
 
 async def cancel_copy_mode(session_name: str) -> bool:
     """Ask tmux to leave copy mode now. True when the command was accepted."""
-    rc, _, stderr = await _run_tmux("send-keys", "-X", "-t", session_name, "cancel")
+    rc, _, stderr = await _run_tmux("send-keys", "-X", "-t", exact_target(session_name), "cancel")
     if rc == 0 or "not in a mode" in stderr.decode().strip().lower():
         return True
     log.error("tmux copy-mode cancel failed for '%s': %s", session_name, stderr.decode())

@@ -57,6 +57,7 @@ def find_outgoing_comment(
     recency_seconds: float = 30.0,
     *,
     repo: str = "",
+    include_intent: bool = True,
 ) -> str | None:
     """Session that recently commented on an issue according to the hook action log.
 
@@ -67,7 +68,55 @@ def find_outgoing_comment(
     for entry in _read_tail(action_log, max_lines):
         if entry.get("action") != "comment" or entry.get("issue") != issue_number:
             continue
+        if not include_intent and entry.get("phase") != "succeeded":
+            continue
         if not _repo_matches(entry, repo):
+            continue
+        if now - float(entry.get("ts", 0)) <= recency_seconds:
+            return entry.get("session")
+    return None
+
+
+def find_outgoing_pull_request(
+    head_repo: str,
+    head_ref: str,
+    action_log: str | Path | None = None,
+    max_lines: int = 200,
+    recency_seconds: float = 900.0,
+    *,
+    base_repo: str = "",
+    include_intent: bool = True,
+) -> str | None:
+    """Session that recently ran ``gh pr create`` from this head repository and branch.
+
+    Log format: ``{"ts": …, "session": "app", "action": "pull_request",
+    "repo": "owner/name", "head_repo": "forker/name", "branch": "feat/x"}``.
+    The head repository *and* the branch must match: two forks may use the
+    same branch name, and the event names the head repository exactly.
+
+    ``head_repo`` is what the event named, ``base_repo`` the repository the
+    pull request was opened against. When the event names a head, only a
+    head is compared to it (an entry that predates ``head_repo`` falls back
+    to its own ``repo``); when it names none — a fork deleted before the
+    event arrived — the two base repositories are compared instead. An
+    explicit head is therefore never satisfied by a base repository.
+    """
+    if not head_ref or not (head_repo or base_repo):
+        return None
+    now = time.time()
+    for entry in _read_tail(action_log, max_lines):
+        if entry.get("action") != "pull_request":
+            continue
+        if not include_intent and entry.get("phase") != "succeeded":
+            continue
+        entry_head = (entry.get("head_repo") or "").casefold()
+        entry_base = (entry.get("repo") or "").casefold()
+        if head_repo:
+            if (entry_head or entry_base) != head_repo.casefold():
+                continue
+        elif entry_base != base_repo.casefold():
+            continue
+        if (entry.get("branch") or "") != head_ref:
             continue
         if now - float(entry.get("ts", 0)) <= recency_seconds:
             return entry.get("session")
@@ -86,6 +135,7 @@ def has_commented_on_issue(
     for entry in _read_tail(action_log, max_lines):
         if (
             entry.get("action") == "comment"
+            and entry.get("phase") == "succeeded"
             and entry.get("issue") == issue_number
             and entry.get("session") == session
             and _repo_matches(entry, repo)

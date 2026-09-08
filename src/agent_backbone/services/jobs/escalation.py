@@ -12,16 +12,19 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.recent import RecentKeys
-from agent_backbone.services.agents import AgentState
+from agent_backbone.services.agents import AgentState, prompt_id
 from agent_backbone.services.integrations import notify_humans
 from agent_backbone.services.routing import (
+    deliver,
+    format_offline_queue_notification,
     format_plan_notification,
     format_stall_notification,
     format_unexpected_offline_notification,
     list_open_queue_for_target,
-    outcome_queues,
     safe_deliver,
 )
+from agent_backbone.services.runtimes import resolve_runtime
+from agent_backbone.services.terminal import capture_pane, query_format_vars
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -36,6 +39,94 @@ _escalated = RecentKeys(1800)
 """(session, event) pairs escalated within ``timing.escalation_dedup_seconds``."""
 _plan_notified = RecentKeys(_PLAN_NOTIFY_DEDUP_SECONDS)
 """(session, plan ref) pairs the humans / escalation target were told about."""
+_permission_notified = RecentKeys(_PLAN_NOTIFY_DEDUP_SECONDS)
+"""(session, state timestamp) pairs of permission prompts the humans were told about."""
+
+
+async def _attended(session: str) -> bool:
+    """Whether someone is at that terminal (the tmux session is attached)."""
+    try:
+        vars_ = await query_format_vars(session, "attached=#{session_attached}")
+    except Exception:
+        return False
+    return vars_.get("attached", "0") not in ("", "0")
+
+
+def permission_actions(
+    config: BackboneConfig, agent: str, ref: str
+) -> list[tuple[str, str]] | None:
+    """Allow / Deny bound to *this* prompt: a button pressed after the agent
+    moved on must not answer whatever is on screen then."""
+    if not config.security.allow_remote_approval:
+        return None
+    return [("Allow", f"approve:{agent}:{ref}"), ("Deny", f"deny:{agent}:{ref}")]
+
+
+def plan_actions(config: BackboneConfig, agent: str, ref: str) -> list[tuple[str, str]] | None:
+    if not config.security.allow_remote_plan_control:
+        return None
+    return [
+        ("Approve plan", f"plan_approve:{agent}:{ref}"),
+        ("Reject plan", f"plan_reject:{agent}:{ref}"),
+    ]
+
+
+async def _dialog_text(config: BackboneConfig, name: str) -> str:
+    """What the agent's dialog asks, for the person deciding from their phone."""
+    spec = config.agents.get(name)
+    try:
+        pane = await capture_pane(name, lines=40)
+        if not pane:
+            return ""
+        rt = await resolve_runtime(name, hint=spec.runtime if spec else None, pane_content=pane)
+        if not rt.detect_active_dialog(pane):
+            return ""  # a dialog left above an idle prompt is history, not the ask
+        return rt.dialog_summary(pane)
+    except Exception:
+        log.debug("Could not read %s's dialog for the notification", name)
+        return ""
+
+
+async def check_permission_waiting(config: BackboneConfig, states: AgentStates) -> None:
+    """Tell the humans about a permission prompt, with Allow / Deny buttons.
+
+    Once per prompt (the state's timestamp), and not while someone is at
+    that terminal: an attached tmux session means the dialog is being
+    looked at. A ``question`` (a dialog the backbone cannot answer for a
+    person) is reported without buttons.
+    """
+    for name, snapshot in states.items():
+        if snapshot.state != AgentState.WAITING_FOR_HUMAN or snapshot.is_plan_waiting:
+            continue
+        key = (name, prompt_id(snapshot))
+        if _permission_notified.seen(key):
+            continue
+        if await _attended(name):
+            continue
+        # The dialog's own words (the command, the runtime's reason), so the
+        # person can see what they are answering; runtime output, previewed.
+        asked = await _dialog_text(config, name)
+        if snapshot.reason == "permission":
+            text = (
+                f"\U0001f510 Permission prompt — {name}\n"
+                + (f"{asked}\n" if asked else "The runtime is asking to run a tool. ")
+                + f"Allow or deny it here, or in the terminal: tmux attach -t {name}"
+            )
+            actions = permission_actions(config, name, prompt_id(snapshot))
+            if actions is None:
+                text += (
+                    "\n\nButtons are off: backbone config set security.allow_remote_approval true"
+                )
+        else:
+            text = (
+                f"\u2753 Question — {name}\n"
+                + (f"{asked}\n" if asked else "")
+                + f"The runtime is asking something only you can answer: tmux attach -t {name}"
+            )
+            actions = None
+        if await notify_humans(config, text, agent=name, actions=actions):
+            _permission_notified.mark(key)
+            log.info("Sent permission-waiting notification for %s", name)
 
 
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
@@ -154,9 +245,19 @@ async def handle_stalls(config: BackboneConfig, states: AgentStates, db: Backbon
 async def handle_offline(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB, gh: GitHubClient | None
 ) -> None:
-    """Report dead sessions (never restart them) and clear their recorded state."""
+    """Report dead sessions (never restart them) and clear their recorded state.
+
+    Agents are not expected to stay up. Only one marked ``always_on`` is
+    reported the moment its session is gone; for every other agent the
+    humans hear about it when messages are waiting for it
+    (``report_offline_queues``).
+    """
     for agent in await check_for_unexpected_offline(config, active_sessions, db, gh):
-        if _should_escalate(agent["session"], "offline", config.timing.escalation_dedup_seconds):
+        spec = config.agents.get(agent["session"])
+        expected_up = spec is not None and spec.always_on
+        if expected_up and _should_escalate(
+            agent["session"], "offline", config.timing.escalation_dedup_seconds
+        ):
             escalation_session = _escalation_session(config, agent["session"])
             if escalation_session and escalation_session in active_sessions:
                 msg = format_unexpected_offline_notification(
@@ -177,12 +278,106 @@ async def handle_offline(
                 agent=agent["session"],
             )
             log.warning("Agent offline unexpectedly: %s", agent["entity"])
+        elif not expected_up:
+            log.info("Agent %s is offline (not always_on; not reported)", agent["entity"])
         try:
             await db.states.set(session_name=agent["session"], state="unknown", current_issue=None)
         except Exception:
             log.exception(
                 "Failed to clear DB state for offline agent %s (non-fatal)", agent["session"]
             )
+    await report_offline_queues(config, active_sessions, db)
+
+
+async def report_offline_queues(
+    config: BackboneConfig, active_sessions: set[str], db: BackboneDB
+) -> None:
+    """Tell the humans (and the escalation target) about messages waiting for
+    an agent that is not running — the consequence of an absence, not the
+    absence itself. ``always_on`` agents were already reported when they died."""
+    for spec in config.agents:
+        if spec.name in active_sessions or spec.always_on:
+            continue
+        try:
+            queued = await db.queue.pending_count(spec.name)
+        except Exception:
+            log.exception("Failed to count queued messages for %s", spec.name)
+            continue
+        if queued == 0 or not _should_escalate(
+            spec.name, "offline_queued", config.timing.escalation_dedup_seconds
+        ):
+            continue
+        msg = format_offline_queue_notification(spec.name, queued)
+        escalation_session = _escalation_session(config, spec.name)
+        if escalation_session and escalation_session in active_sessions:
+            await safe_deliver(
+                escalation_session,
+                msg,
+                config,
+                db=db,
+                priority=True,
+                delivery_kind="escalation",
+            )
+        word = "message" if queued == 1 else "messages"
+        await notify_humans(
+            config,
+            f"Agent {spec.name} is offline with {queued} queued {word}. It was not restarted.",
+            agent=spec.name,
+        )
+        log.info("Agent %s is offline with %d queued message(s)", spec.name, queued)
+
+
+async def check_blocked(
+    config: BackboneConfig, states: AgentStates, db: BackboneDB | None = None
+) -> None:
+    """Report provider/usage blocks to humans and the responsible agents, once per recipient."""
+    for name, snapshot in states.items():
+        if snapshot.state != AgentState.BLOCKED:
+            continue
+        reason = snapshot.reason or "its runtime"
+        detail = f" ({snapshot.detail})" if snapshot.detail else ""
+        what = "its usage limit" if reason == "quota" else reason
+        message = (
+            f"Agent {name} is blocked on {what}{detail}. Messages for it remain queued. "
+            "Check the retry/reset time or reassign its work; the backbone does not restart it."
+        )
+        if _should_escalate(name, "blocked", config.timing.escalation_dedup_seconds):
+            try:
+                accepted = await notify_humans(config, message, agent=name)
+            except Exception:
+                accepted = False
+                log.exception("Could not report blocked agent %s to humans", name)
+            if not accepted:
+                _escalated.forget((name, "blocked"))
+
+        if db is None:
+            continue
+        recipients = {_escalation_session(config, name)}
+        spec = config.agents.get(name)
+        for tag in spec.tags if spec else ():
+            if not tag.startswith("swarm:"):
+                continue
+            swarm = await db.swarms.get(tag.split(":", 1)[1])
+            if swarm and swarm["status"] == "active":
+                recipients.update((swarm["coordinator"], swarm["initiator"]))
+        for recipient in sorted(r for r in recipients if r and r != name and r in config.agents):
+            key = f"blocked:{recipient}"
+            if not _should_escalate(name, key, config.timing.escalation_dedup_seconds):
+                continue
+            try:
+                report = await deliver(
+                    recipient,
+                    f"[via:backbone event:provider-blocked] {message}",
+                    config,
+                    db=db,
+                    priority=True,
+                    delivery_kind="escalation",
+                )
+                if report.outcome != DeliveryOutcome.DELIVERED and not report.queued:
+                    _escalated.forget((name, key))
+            except Exception:
+                _escalated.forget((name, key))
+                log.exception("Could not report blocked agent %s to %s", name, recipient)
 
 
 async def check_plan_waiting(
@@ -209,7 +404,9 @@ async def check_plan_waiting(
                 f"\U0001f4cb Plan waiting — {name}\nTitle: {plan_title}\n\n"
                 f"/viewplan {name}\n/approve {name}"
             )
-            if await notify_humans(config, msg, agent=name):
+            if await notify_humans(
+                config, msg, agent=name, actions=plan_actions(config, name, prompt_id(snapshot))
+            ):
                 _record_plan_notification(name, human_ref)
                 log.info("Sent plan-waiting notification for %s", name)
 
@@ -226,7 +423,7 @@ async def check_plan_waiting(
                 orch_msg = format_plan_notification(
                     name, name, plan_file, plan_title, issue_number=snapshot.current_issue
                 )
-                outcome = await safe_deliver(
+                report = await deliver(
                     escalation_session,
                     orch_msg,
                     config,
@@ -234,10 +431,13 @@ async def check_plan_waiting(
                     priority=True,
                     delivery_kind="escalation",
                 )
-                # A queued notification will reach the target when it frees up,
-                # so record it either way and do not enqueue it again next run.
-                if outcome == DeliveryOutcome.DELIVERED or outcome_queues(outcome, "escalation"):
+                # Only suppress another attempt when the message arrived or a
+                # durable queue row exists. A failed write must retry next tick.
+                if report.outcome == DeliveryOutcome.DELIVERED or report.queued:
                     _record_plan_notification(name, orch_ref)
                     log.info(
-                        "Plan notification for %s -> %s (%s)", name, escalation_session, outcome
+                        "Plan notification for %s -> %s (%s)",
+                        name,
+                        escalation_session,
+                        report.outcome,
                     )

@@ -10,6 +10,7 @@ wires the remaining services against that snapshot.
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 
 import httpx
@@ -25,17 +26,32 @@ from agent_backbone.config import BackboneConfig, bootstrap_config
 log = logging.getLogger(__name__)
 
 API_VERSION = __version__  # the package version is the API version
+STARTED_AT = time.time()
+"""When this process started: /health reports it so a restart is observable."""
 
 
 def _register_jobs(app: FastAPI):
     """Wire the periodic jobs. Each job reads ``app.state.config`` at run time so
     setting changes and newly discovered agents are picked up without a restart."""
     from agent_backbone.services.agents import rotate_action_log
-    from agent_backbone.services.jobs import GitHubPoller, delivery_retry, monitor_agents
+    from agent_backbone.services.jobs import (
+        GitHubPoller,
+        UpgradeWatch,
+        delivery_retry,
+        monitor_agents,
+        observe_job,
+    )
+    from agent_backbone.services.routing import routing_in_flight
     from agent_backbone.services.scheduler import PeriodicScheduler
 
-    scheduler = PeriodicScheduler()
     state = app.state
+
+    async def _job_result(name: str, error_type: str | None, duration_ms: int):
+        await observe_job(
+            state.db, source=name, stage="run", error_type=error_type, duration_ms=duration_ms
+        )
+
+    scheduler = PeriodicScheduler(on_result=_job_result)
     config: BackboneConfig = state.config
 
     async def _broadcast():
@@ -54,6 +70,9 @@ def _register_jobs(app: FastAPI):
         return {
             "deliveries": await state.db.deliveries.prune(days),
             "events": await state.db.events.prune(days),
+            "queue": await state.db.queue.prune(days),
+            "diagnostics": await state.db.diagnostics.prune(days),
+            "reports": await state.db.reports.prune(days),
             "action_log_lines": rotate_action_log(state.config.action_log_path),
         }
 
@@ -63,11 +82,38 @@ def _register_jobs(app: FastAPI):
     )
     scheduler.add("delivery-retry", config.timing.retry_interval_seconds, _retry)
     scheduler.add("prune", 6 * 3600, _prune)
+    scheduler.add("report-audio", 30, state.integrations.flush_report_audio, run_immediately=True)
     # Integrations re-provision their per-agent surfaces (Telegram topics):
     # a config publish triggers it immediately, this catches everything else
     # (a group discovered from a message, a transient Telegram error).
-    scheduler.add("integrations-sync", 300, state.integrations.sync_agents)
+    scheduler.add("integrations-sync", 300, state.integrations.reconcile)
+    scheduler.add(
+        "report-notifications", 30, state.integrations.flush_reports, run_immediately=True
+    )
 
+    async def _restart() -> None:
+        # Ask uvicorn for a graceful shutdown; `backbone up` re-executes
+        # itself when it sees the flag, so the same service or tmux session
+        # comes back on the new code.
+        shutdown = getattr(state, "request_shutdown", None)
+        if shutdown is None:
+            log.warning("automatic restart requires the backbone up server runner")
+            return
+        state.restart_requested = True
+        shutdown()
+
+    watch = UpgradeWatch(
+        enabled=lambda: (
+            state.config.backbone.restart_on_upgrade
+            and getattr(state, "request_shutdown", None) is not None
+        ),
+        restart=_restart,
+        in_flight=routing_in_flight,
+    )
+    state.upgrade_watch = watch
+    scheduler.add("upgrade-watch", 60, watch.run)
+
+    poller = None
     if state.github is not None:
         poller = GitHubPoller(
             lambda: state.config,
@@ -80,7 +126,22 @@ def _register_jobs(app: FastAPI):
                 "github-poll", config.github.poll_interval_seconds, poller.run, run_immediately=True
             )
         elif config.github_intake == "webhook" and config.github.backfill_on_start:
-            scheduler.add("github-backfill", 24 * 3600, poller.run, run_immediately=True)
+            scheduler.add("github-backfill", 0, poller.run, run_immediately=True, once=True)
+
+    def reconcile_jobs():
+        current = state.config
+        scheduler.configure("agent-monitor", current.timing.monitor_interval_seconds, _monitor)
+        scheduler.configure("delivery-retry", current.timing.retry_interval_seconds, _retry)
+        if poller is not None:
+            scheduler.configure(
+                "github-poll",
+                current.github.poll_interval_seconds,
+                poller.run,
+                enabled=current.github_intake == "poll",
+                run_immediately=True,
+            )
+
+    state.reconcile_jobs = reconcile_jobs
     return scheduler
 
 
@@ -111,6 +172,9 @@ async def lifespan(app: FastAPI):
 
     def _publish(new_config: BackboneConfig) -> None:
         app.state.config = new_config
+        reconcile_jobs = getattr(app.state, "reconcile_jobs", None)
+        if reconcile_jobs is not None:
+            reconcile_jobs()
         # The set of agents may have changed: integrations re-provision their
         # per-agent surfaces (Telegram topics) against the new snapshot.
         integrations = getattr(app.state, "integrations", None)
@@ -134,8 +198,7 @@ async def lifespan(app: FastAPI):
         lifecycle.register("github", app.state.github)
     app.state.feed = SessionFeed(lambda: app.state.config, getattr(app.state, "sio", None))
     app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
-    for integration in app.state.integrations:
-        lifecycle.register(integration.name, integration)
+    lifecycle.register("integrations", app.state.integrations)
 
     # A closed issue ends the swarm that was working it (PR merged -> issue
     # closed via "Closes #N" -> teardown). Handed to ingest as a hook so
@@ -226,19 +289,26 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     async def health(request: Request):
         lifecycle: LifecycleManager | None = getattr(request.app.state, "lifecycle", None)
         if lifecycle is None:
-            return {"healthy": False, "components": {}}
-        return await lifecycle.health()
+            return {
+                "healthy": False,
+                "components": {},
+                "version": API_VERSION,
+                "started": STARTED_AT,
+            }
+        return {**(await lifecycle.health()), "version": API_VERSION, "started": STARTED_AT}
 
     from agent_backbone.api.auth import require_api_key
     from agent_backbone.api.routes.agents import router as agents_router
     from agent_backbone.api.routes.config import router as config_router
     from agent_backbone.api.routes.deliveries import router as deliveries_router
+    from agent_backbone.api.routes.diagnostics import router as diagnostics_router
     from agent_backbone.api.routes.events import router as events_router
     from agent_backbone.api.routes.help import router as help_router
     from agent_backbone.api.routes.integrations import router as integrations_router
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.plans import router as plans_router
+    from agent_backbone.api.routes.reports import router as reports_router
     from agent_backbone.api.routes.status import router as status_router
     from agent_backbone.api.routes.swarms import router as swarms_router
     from agent_backbone.api.routes.webhook import router as webhook_router
@@ -250,12 +320,14 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
         status_router,  # before config_router: /api/config/agents vs /api/config/{key}
         config_router,
         deliveries_router,
+        diagnostics_router,
         events_router,
         help_router,
         integrations_router,
         issues_router,
         messages_router,
         plans_router,
+        reports_router,
         swarms_router,
     ):
         app.include_router(router, dependencies=[Depends(require_api_key)])

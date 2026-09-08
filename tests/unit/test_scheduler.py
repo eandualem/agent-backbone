@@ -10,6 +10,61 @@ from agent_backbone.services.scheduler import PeriodicScheduler
 
 
 class TestPeriodicScheduler:
+    async def test_observer_receives_type_only_and_cannot_fail_the_job(self):
+        observed = []
+
+        async def observer(name, error_type, duration_ms):
+            observed.append((name, error_type, duration_ms))
+            raise RuntimeError("observer unavailable")
+
+        async def fail():
+            raise ValueError("sensitive exception message")
+
+        scheduler = PeriodicScheduler(on_result=observer)
+        scheduler.add("test", 1, fail)
+        await scheduler._run_once(scheduler._jobs["test"])
+        assert observed[0][:2] == ("test", "ValueError")
+        assert isinstance(observed[0][2], int) and observed[0][2] >= 0
+        assert scheduler.jobs[0].failures == 1
+        assert scheduler.jobs[0].runs == 1
+
+    async def test_cancelled_run_does_not_report_success(self):
+        observed = []
+
+        async def observer(*args):
+            observed.append(args)
+
+        async def cancelled():
+            raise asyncio.CancelledError
+
+        scheduler = PeriodicScheduler(on_result=observer)
+        scheduler.add("test", 1, cancelled)
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._run_once(scheduler._jobs["test"])
+        assert observed == []
+
+    @pytest.mark.parametrize("fail", [False, True])
+    async def test_one_shot_finishes_after_one_attempt_and_reports_health(self, fail):
+        scheduler = PeriodicScheduler()
+        calls = 0
+
+        async def backfill():
+            nonlocal calls
+            calls += 1
+            if fail:
+                raise RuntimeError("backfill failed")
+
+        scheduler.add("backfill", 0, backfill, run_immediately=True, once=True)
+        await scheduler.start()
+        try:
+            await asyncio.wait_for(asyncio.shield(scheduler._jobs["backfill"].task), timeout=1)
+            assert calls == 1
+            assert scheduler.jobs[0].runs == 1
+            assert scheduler.jobs[0].failures == int(fail)
+            assert (await scheduler.health_check())["healthy"] is not fail
+        finally:
+            await scheduler.stop()
+
     async def test_runs_jobs_on_interval(self):
         scheduler = PeriodicScheduler()
         calls: list[int] = []

@@ -7,11 +7,15 @@ import time
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent_backbone.config import AgentsConfig
 from agent_backbone.services.agents import (
     AgentState,
+    StateSnapshot,
     agent_state,
     find_outgoing_comment,
+    find_outgoing_pull_request,
     get_agent_state,
     has_commented_on_issue,
     infer_state_from_pane,
@@ -121,6 +125,7 @@ class TestWaitingForHuman:
             "idle",
             "busy",
             "waiting_for_human",
+            "blocked",
             "unknown",
         }
 
@@ -282,6 +287,35 @@ class TestGetAgentState:
         assert result.state == AgentState.BUSY
         assert result.source == "push"
         capture.assert_not_called()
+
+    async def test_fresh_idle_push_is_vetoed_by_a_dialog_on_screen(self, tmp_path):
+        """Claude Code's resume picker shows after SessionStart already said idle."""
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(json.dumps({"state": "idle", "ts": time.time()}))
+        picker = (
+            "  We recommend resuming from a summary.\n"
+            "  ❯ 1. Resume from summary (recommended)\n"
+            "    2. Resume full session as-is\n"
+            "  Enter to confirm · Esc to cancel\n"
+        )
+        with patch(f"{_INF}.capture_pane", new_callable=AsyncMock, return_value=picker):
+            result = await get_agent_state(tmp_path, "ike", runtime_hint="claude")
+        assert result.state == AgentState.WAITING_FOR_HUMAN
+        assert result.reason == "question"
+        assert result.source == "pull"
+        assert any("fresh" in line for line in result.evidence)
+        assert any("beats the hook" in line for line in result.evidence)
+        assert result.timestamp > 0  # the observation time is kept for the database
+
+    async def test_fresh_idle_push_stands_when_the_terminal_shows_a_prompt(self, tmp_path):
+        state_file = tmp_path / "ike.json"
+        state_file.write_text(json.dumps({"state": "idle", "ts": time.time()}))
+        with patch(
+            f"{_INF}.capture_pane", new_callable=AsyncMock, return_value="❯ \n  ? for shortcuts\n"
+        ):
+            result = await get_agent_state(tmp_path, "ike", runtime_hint="claude")
+        assert result.state == AgentState.IDLE
+        assert result.source == "push"
 
     async def test_fresh_processing_push_is_trusted(self, tmp_path):
         state_file = tmp_path / "ike.json"
@@ -459,6 +493,7 @@ def _action_entry(session="ike", action="comment", issue=42, ts=None):
         "ts": ts if ts is not None else time.time(),
         "session": session,
         "action": action,
+        "phase": "succeeded",
         "issue": issue,
     }
 
@@ -528,7 +563,15 @@ class TestRotateActionLog:
         path = tmp_path / "actions.jsonl"
         path.write_text(
             "".join(
-                json.dumps({"ts": float(i), "session": "ike", "action": "comment", "issue": i})
+                json.dumps(
+                    {
+                        "ts": float(i),
+                        "session": "ike",
+                        "action": "comment",
+                        "issue": i,
+                        "phase": "succeeded",
+                    }
+                )
                 + "\n"
                 for i in range(lines)
             )
@@ -615,3 +658,193 @@ def test_rotation_tolerates_invalid_utf8(tmp_path):
     path.write_bytes(lines + b"\xff\xfe not json\n")
     assert rotate_action_log(path, keep_lines=5) == 16
     assert len(path.read_text(errors="replace").splitlines()) == 5
+
+
+class TestPromptIdentity:
+    def _pane(self, question: str) -> str:
+        return f" {question}\n ❯ 1. Yes\n   2. No\n Esc to cancel\n"
+
+    def test_a_hook_state_is_identified_by_its_timestamp(self):
+        from agent_backbone.services.agents.models import prompt_id
+
+        snapshot = StateSnapshot(state=AgentState.WAITING_FOR_HUMAN, timestamp=5.5, source="push")
+        assert prompt_id(snapshot) == "5.500"
+
+    def test_a_terminal_reading_is_identified_by_the_dialog_not_the_clock(self):
+        """The same dialog polled twice keeps its identity; a new one does not."""
+        from agent_backbone.services.agents.models import prompt_id
+
+        first = infer_state_from_pane(self._pane("Do you want to proceed?"), "claude")
+        first.timestamp = 100.0
+        again = infer_state_from_pane(self._pane("Do you want to proceed?"), "claude")
+        again.timestamp = 160.0
+        other = infer_state_from_pane(self._pane("Do you want to make this edit?"), "claude")
+
+        assert first.state == AgentState.WAITING_FOR_HUMAN
+        assert prompt_id(first) == prompt_id(again)
+        assert prompt_id(first) != prompt_id(other)
+
+
+class TestFindOutgoingPullRequest:
+    def _log(self, tmp_path, *entries: dict):
+        path = tmp_path / "actions.jsonl"
+        path.write_text("".join(json.dumps(e) + "\n" for e in entries))
+        return path
+
+    def test_matches_head_repository_and_branch(self, tmp_path):
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time(),
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "head_repo": "forker/app",
+                "branch": "feat/x",
+            },
+        )
+        assert find_outgoing_pull_request("forker/app", "feat/x", action_log=log) == "app"
+        # the same branch name from another fork is not it
+        assert find_outgoing_pull_request("other/app", "feat/x", action_log=log) is None
+        assert find_outgoing_pull_request("forker/app", "feat/other", action_log=log) is None
+
+    def test_an_event_without_a_head_repository_compares_the_base_ones(self, tmp_path):
+        """A fork deleted before the event arrives: GitHub names no head repo,
+        so the two base repositories are compared instead."""
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time(),
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "head_repo": "forker/app",
+                "branch": "feat/x",
+            },
+        )
+        found = find_outgoing_pull_request("", "feat/x", action_log=log, base_repo="acme/app")
+        assert found == "app"
+        missed = find_outgoing_pull_request("", "feat/x", action_log=log, base_repo="other/app")
+        assert missed is None
+
+    def test_an_explicit_head_repository_is_never_satisfied_by_a_base_one(self, tmp_path):
+        """Someone else's pull request in the base repo, same branch name: the
+        fork entry must not claim it."""
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time(),
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "head_repo": "forker/app",
+                "branch": "feat/x",
+            },
+        )
+        found = find_outgoing_pull_request(
+            "acme/app", "feat/x", action_log=log, base_repo="acme/app"
+        )
+        assert found is None
+
+    def test_an_older_entry_without_head_repo_matches_on_repo(self, tmp_path):
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time(),
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "branch": "feat/x",
+            },
+        )
+        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) == "app"
+
+    def test_old_entries_and_missing_fields_do_not_match(self, tmp_path):
+        log = self._log(
+            tmp_path,
+            {
+                "ts": time.time() - 3600,
+                "session": "app",
+                "action": "pull_request",
+                "repo": "acme/app",
+                "branch": "feat/x",
+            },
+            {"ts": time.time(), "session": "app", "action": "pull_request", "repo": "acme/app"},
+        )
+        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) is None
+        assert find_outgoing_pull_request("", "feat/x", action_log=log) is None
+
+
+class TestChoiceDialogBeatsHookPermission:
+    async def test_fresh_permission_hook_with_a_model_switch_on_screen_is_a_question(
+        self, tmp_path
+    ):
+        import json
+        import time
+
+        from agent_backbone.services.agents import get_agent_state
+
+        (tmp_path / "ike.json").write_text(
+            json.dumps({"state": "waiting_for_human", "reason": "permission", "ts": time.time()})
+        )
+        pane = (
+            "  Approaching rate limits\n"
+            "  Switch to gpt-5.6-luna for lower credit usage?\n"
+            "› 1. Switch to gpt-5.6-luna\n"
+            "  2. Keep current model\n"
+            "  Press enter to confirm or esc to go back\n"
+        )
+        snap = await get_agent_state(tmp_path, "ike", runtime_hint="codex", pane_content=pane)
+        assert snap.state.value == "waiting_for_human" and snap.reason == "question"
+        assert any("choice dialog on screen beats" in e for e in snap.evidence)
+
+
+@pytest.mark.parametrize(
+    "pane,state", [("user@host $", AgentState.IDLE), ("Thinking...\n", AgentState.BUSY)]
+)
+async def test_terminal_state_retains_saved_session_metadata(tmp_path, pane, state):
+    (tmp_path / "ike.json").write_text(
+        json.dumps(
+            {
+                "state": "waiting_for_human",
+                "reason": "permission",
+                "ts": time.time() - 600,
+                "session_id": "saved-id",
+                "last_message": "Tests passed.",
+                "runtime": "codex",
+            }
+        )
+    )
+    with patch(f"{_INF}.capture_pane", AsyncMock(return_value=pane)):
+        result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
+    assert result.state == state
+    assert result.source == "pull"
+    assert result.reason is None
+    assert result.session_id == "saved-id"
+    assert result.last_message == "Tests passed."
+    assert result.runtime == "codex"
+    assert result.evidence
+
+
+@pytest.mark.parametrize("state,reason", [("unknown", None), ("waiting_for_human", "permission")])
+async def test_expired_untrusted_state_keeps_metadata_without_reviving_state(
+    tmp_path, state, reason
+):
+    (tmp_path / "ike.json").write_text(
+        json.dumps(
+            {
+                "state": state,
+                "reason": reason,
+                "ts": 1,
+                "runtime": "codex",
+                "session_id": "saved",
+                "last_message": "Done.",
+            }
+        )
+    )
+    result = await get_agent_state(tmp_path, "ike", pane_content="")
+    assert result.state == AgentState.UNKNOWN
+    assert result.reason is None
+    assert result.session_id == "saved"
+    assert result.last_message == "Done."
+    assert result.runtime == "codex"

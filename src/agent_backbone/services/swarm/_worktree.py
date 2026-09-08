@@ -65,17 +65,44 @@ async def create_worktree(repo_dir: Path, swarm: str) -> tuple[Path, str]:
         # A previous swarm with this name left its branch behind (branches
         # survive teardown by design) — continue on the existing branch.
         rc, _, err = await run_git(repo_dir, "worktree", "add", str(worktree), branch)
+    if rc != 0 and "already registered" in err:
+        # The directory is gone but git still lists it: a swarm whose files
+        # were deleted by hand. Prune the stale registration and try again.
+        await run_git(repo_dir, "worktree", "prune")
+        rc, _, err = await run_git(repo_dir, "worktree", "add", str(worktree), branch)
     if rc != 0:
         raise RuntimeError(f"git worktree add failed: {err}")
     log.info("Created swarm worktree %s (branch %s)", worktree, branch)
     return worktree, branch
 
 
-async def remove_worktree(repo_dir: Path, worktree: Path) -> bool:
-    """Remove the swarm worktree (the branch is kept — history is never destroyed)."""
-    rc, _, err = await run_git(repo_dir, "worktree", "remove", "--force", str(worktree))
+async def is_registered(repo_dir: Path, worktree: Path) -> bool | None:
+    """Whether git still lists ``worktree`` (files present or not);
+    ``None`` when git could not be asked — never mistaken for "gone"."""
+    rc, out, _ = await run_git(repo_dir, "worktree", "list", "--porcelain")
     if rc != 0:
-        log.warning("git worktree remove failed for %s: %s", worktree, err)
-        return False
-    log.info("Removed swarm worktree %s", worktree)
-    return True
+        return None
+    target = str(worktree.resolve())
+    return any(
+        line.startswith("worktree ") and line[9:].strip() == target for line in out.splitlines()
+    )
+
+
+async def remove_worktree(repo_dir: Path, worktree: Path) -> bool:
+    """Remove the swarm worktree (the branch is kept — history is never destroyed).
+
+    A worktree whose directory is already gone is still registered with git
+    and blocks the name; ``worktree prune`` clears that registration, so the
+    result is the same: git no longer lists it.
+    """
+    rc, _, err = await run_git(repo_dir, "worktree", "remove", "--force", str(worktree))
+    if rc == 0:
+        log.info("Removed swarm worktree %s", worktree)
+        return True
+    if not worktree.exists():
+        await run_git(repo_dir, "worktree", "prune")
+        if await is_registered(repo_dir, worktree) is False:  # confirmed gone, not unknown
+            log.info("Pruned the registration of the missing swarm worktree %s", worktree)
+            return True
+    log.warning("git worktree remove failed for %s: %s", worktree, err)
+    return False

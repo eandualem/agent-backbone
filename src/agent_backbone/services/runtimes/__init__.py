@@ -9,55 +9,38 @@ the modules next to this file; nothing else in the backbone names a CLI.
 
 from __future__ import annotations
 
-from agent_backbone.config import RUNTIMES as RUNTIME_IDS
-from agent_backbone.services.runtimes import (
-    aider,
-    claude,
-    codex,
-    deepcode,
-    gemini,
-    opencode,
-    shell,
-)
+from importlib import import_module
+
+from agent_backbone.config import RUNTIME_METADATA
+from agent_backbone.services.runtimes import shell
 from agent_backbone.services.runtimes._pane import GENERIC_BUSY_FRAGMENTS, sanitize_pane_content
-from agent_backbone.services.runtimes.base import Runtime, read_brief, resolve_command
+from agent_backbone.services.runtimes.base import (
+    Runtime,
+    RuntimeDiagnostic,
+    read_brief,
+    resolve_command,
+    split_model_effort,
+)
 from agent_backbone.services.terminal import capture_pane, query_environment_var
 
 RUNTIME_ENV_KEY = "BACKBONE_RUNTIME"
 AGENT_ENV_KEY = "BACKBONE_AGENT"
 STATE_DIR_ENV_KEY = "BACKBONE_STATE_DIR"
 
-RUNTIMES: dict[str, Runtime] = {
-    r.id: r
-    for r in (
-        claude.RUNTIME,
-        codex.RUNTIME,
-        gemini.RUNTIME,
-        opencode.RUNTIME,
-        deepcode.RUNTIME,
-        aider.RUNTIME,
-        shell.RUNTIME,
-    )
-}
-"""Every runtime an agent can be started with, in display order."""
+RUNTIMES: dict[str, Runtime] = {}
+for entry in RUNTIME_METADATA:
+    runtime = import_module(f"{__name__}.{entry['id']}").RUNTIME
+    if runtime.id != entry["id"]:
+        raise RuntimeError(f"Runtime catalog ID mismatch: {entry['id']}")
+    runtime.hook_script = entry["hook_script"] or None
+    RUNTIMES[runtime.id] = runtime
 UNKNOWN = shell.UNKNOWN
-
-if set(RUNTIMES) != set(RUNTIME_IDS):
-    raise RuntimeError(
-        "config.RUNTIMES must list the registered runtimes: "
-        f"{sorted(set(RUNTIMES) ^ set(RUNTIME_IDS))}"
-    )
-_ALIASES: dict[str, Runtime] = {alias: r for r in RUNTIMES.values() for alias in r.aliases}
-
-_DETECTION_ORDER = (
-    deepcode.RUNTIME,
-    gemini.RUNTIME,
-    opencode.RUNTIME,
-    aider.RUNTIME,
-    codex.RUNTIME,
-    claude.RUNTIME,
+_ALIASES = {alias: r for r in RUNTIMES.values() for alias in r.aliases}
+_DETECTION_ORDER = tuple(
+    RUNTIMES[entry["id"]]
+    for entry in sorted(RUNTIME_METADATA, key=lambda e: e["detection_order"])
+    if entry["detection_order"]
 )
-"""Runtimes with distinctive markers first; Claude's markers are the most generic."""
 
 
 def get_runtime(value: str | Runtime | None) -> Runtime:
@@ -80,10 +63,9 @@ def detect_runtime(pane_content: str) -> Runtime:
     from agent_backbone.services.runtimes._pane import last_prompt_char
 
     first = last_prompt_char(pane_content)
-    if first == "❯":
-        return claude.RUNTIME
-    if first == "›":
-        return codex.RUNTIME
+    for runtime in _DETECTION_ORDER:
+        if first in runtime.fallback_prompts:
+            return runtime
     if shell.RUNTIME.detect_idle(pane_content):
         return shell.RUNTIME
     return UNKNOWN
@@ -122,6 +104,7 @@ __all__ = [
     "STATE_DIR_ENV_KEY",
     "UNKNOWN",
     "Runtime",
+    "RuntimeDiagnostic",
     "detect_runtime",
     "get_runtime",
     "read_brief",
@@ -129,4 +112,5 @@ __all__ = [
     "resolve_runtime",
     "sanitize_pane_content",
     "send_message",
+    "split_model_effort",
 ]

@@ -55,7 +55,9 @@ def tmux_svc():
         patch(f"{_FEED}.list_sessions_rich", mocks.list_sessions_rich),
         patch(f"{_ROUTE}.list_sessions", mocks.list_sessions),
         patch(f"{_ROUTE}.session_exists", mocks.session_exists),
-        patch(f"{_ROUTE}.stop_session", mocks.stop_session),
+        # stop and forget go through the shared operations now
+        patch("agent_backbone.services.agents.operations.session_exists", mocks.session_exists),
+        patch("agent_backbone.services.agents.launch.stop_session", mocks.stop_session),
         patch(f"{_ROUTE}.capture_pane", mocks.capture_pane),
     ):
         yield mocks
@@ -285,6 +287,28 @@ class TestStartAgent:
         assert data["evidence"] == ["hook state 'busy' written 3s ago (fresh)"]
         assert data["known"] is True and data["online"] is True
 
+    async def test_inspect_carries_the_session_id_and_last_reply(
+        self, api_client, auth_headers, tmux_svc
+    ):
+        tmux_svc.session_exists.return_value = True
+        from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+        with patch(f"{_ROUTE}.get_session_intelligence", new_callable=AsyncMock) as intel:
+            intel.return_value = SessionProfile(
+                "ike",
+                SessionIntelligence.READY,
+                runtime="claude",
+                agent_state=AgentState.IDLE,
+                session_id="01a0-sess",
+                last_message="Shipped it.",
+                detail="resets at 3 PM",
+            )
+            resp = await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["session_id"] == "01a0-sess"
+        assert resp.json()["last_message"] == "Shipped it."
+        assert resp.json()["detail"] == "resets at 3 PM"
+
     async def test_patch_watch_and_forget(self, api_client, auth_headers, tmux_svc):
         resp = await api_client.patch(
             "/api/agents/ike", json={"description": "Reviews", "model": "m"}, headers=auth_headers
@@ -311,8 +335,26 @@ class TestStopAgent:
         assert resp.json() == {"ok": True, "session": "ike"}
         tmux_svc.stop_session.assert_awaited_once_with("ike")
 
-    async def test_refuses_to_stop_backbone_session(self, api_client, auth_headers):
-        resp = await api_client.post("/api/agents/backbone/stop", headers=auth_headers)
+    async def test_unregistered_tmux_session_is_out_of_reach(
+        self, api_client, auth_headers, tmux_svc
+    ):
+        # The API key is a backbone credential, not a shell: stopping an
+        # arbitrary tmux session through a registered-looking path is a 404
+        # and never reaches tmux.
+        resp = await api_client.post("/api/agents/stray/stop", headers=auth_headers)
+        assert resp.status_code == 404
+        assert "not a registered agent" in resp.json()["detail"]
+        tmux_svc.stop_session.assert_not_awaited()
+
+    async def test_refuses_to_stop_backbone_session(self, api_client, auth_headers, api_app):
+        from dataclasses import replace
+
+        from agent_backbone.config import BackboneSection
+
+        api_app.state.config = replace(
+            api_app.state.config, backbone=BackboneSection(session_name="ike")
+        )
+        resp = await api_client.post("/api/agents/ike/stop", headers=auth_headers)
         assert resp.status_code == 400
 
 
@@ -429,3 +471,118 @@ class TestPostAgentState:
             "/api/agents/stray/state", json={"state": "busy"}, headers=auth_headers
         )
         assert resp.status_code == 404
+
+    async def test_unknown_state_is_rejected_not_silently_unknown(
+        self, api_client, auth_headers, api_app
+    ):
+        from agent_backbone.services.agents import read_state_file
+
+        resp = await api_client.post(
+            "/api/agents/leo/state", json={"state": "napping"}, headers=auth_headers
+        )
+        assert resp.status_code == 422
+        assert read_state_file(api_app.state.config.state_dir, "leo") is None
+
+    async def test_negative_issue_is_rejected(self, api_client, auth_headers):
+        resp = await api_client.post(
+            "/api/agents/ike/state",
+            json={"state": "busy", "issue": -5},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+
+    async def test_far_future_ts_is_rejected(self, api_client, auth_headers):
+        # A ts that stays "fresh" forever would make the push permanently
+        # authoritative over the terminal.
+        resp = await api_client.post(
+            "/api/agents/ike/state",
+            json={"state": "idle", "ts": 9999999999},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+
+    async def test_legacy_zero_ts_still_accepted(self, api_client, auth_headers, api_app):
+        from agent_backbone.services.agents import read_state_file
+
+        resp = await api_client.post(
+            "/api/agents/ike/state", json={"state": "busy", "ts": 0}, headers=auth_headers
+        )
+        assert resp.status_code == 200
+        assert read_state_file(api_app.state.config.state_dir, "ike") is not None
+
+
+class TestDeny:
+    async def test_denies_and_records_an_event(self, api_client, auth_headers, api_app):
+        with patch(
+            f"{_ROUTE}.deny_agent",
+            new_callable=AsyncMock,
+            return_value=("denied", ["answered with Escape; prompt cleared", "Switch to gpt-"]),
+        ) as deny:
+            resp = await api_client.post(
+                "/api/agents/ike/deny", json={"from_entity": "orch"}, headers=auth_headers
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["ok"] and data["outcome"] == "denied" and data["denied_by"] == "orch"
+        deny.assert_awaited_once()
+        events = await api_app.state.db.events.query(limit=5)
+        assert events and events[0]["event_type"] == "denial"
+        assert "orch denied a claude permission prompt on ike" in events[0]["summary"]
+
+    async def test_a_choice_dialog_cannot_be_approved(self, api_client, auth_headers, api_app):
+        with patch(
+            f"{_ROUTE}.approve_agent",
+            new_callable=AsyncMock,
+            return_value=("not_permission", ["the dialog on screen is a choice"]),
+        ):
+            resp = await api_client.post("/api/agents/ike/approve", headers=auth_headers)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["outcome"] == "not_permission"
+
+
+async def test_group_tags_are_persistent_and_validated(api_client, auth_headers):
+    url = "/api/agents/ike/tags"
+    response = await api_client.post(
+        url, headers=auth_headers, json={"tags": ["python", "python", "backend"]}
+    )
+    assert response.status_code == 200
+    assert response.json()["tags"] == ["python", "backend"]
+    response = await api_client.post(
+        url, headers=auth_headers, json={"tags": ["python"], "remove": True}
+    )
+    assert response.json()["tags"] == ["backend"]
+    response = await api_client.post(
+        url, headers=auth_headers, json={"tags": ["safe", "role:scout"]}
+    )
+    assert response.status_code == 400
+    response = await api_client.post(url, headers=auth_headers, json={"tags": []})
+    assert response.json()["tags"] == ["backend"]
+    response = await api_client.post(
+        "/api/agents/missing/tags", headers=auth_headers, json={"tags": ["python"]}
+    )
+    assert response.status_code == 404
+
+
+async def test_offline_agent_retains_expired_session_end_recap(config):
+    import json
+
+    from agent_backbone.api.session_updates import build_enriched_agent
+
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    (config.state_dir / "ike.json").write_text(
+        json.dumps(
+            {
+                "state": "unknown",
+                "event": "SessionEnd",
+                "runtime": "codex",
+                "ts": 1,
+                "session_id": "saved-conversation",
+                "last_message": "Finished the release checks.",
+            }
+        )
+    )
+    with patch("agent_backbone.services.agents._inference.capture_pane") as capture:
+        agent = await build_enriched_agent("ike", config, set())
+    assert agent.state == "offline"
+    assert agent.last_message == "Finished the release checks."
+    capture.assert_not_called()

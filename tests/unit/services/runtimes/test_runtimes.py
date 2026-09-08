@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent_backbone.config import RUNTIMES as RUNTIME_IDS
 from agent_backbone.services.runtimes import (
     RUNTIMES,
@@ -108,6 +110,30 @@ class TestSendMessage:
 
 
 class TestRuntimePaste:
+    @pytest.mark.parametrize("consumed", [True, False])
+    async def test_buffered_envelope_is_verified_and_retried(self, consumed):
+        runtime = RUNTIMES["claude"]
+        envelope = "❯ [via:backbone from:sender] review this"
+        assert not runtime.prompt_has_pending_input(envelope)
+        with (
+            patch(
+                "agent_backbone.services.runtimes.base.paste_message", AsyncMock(return_value=True)
+            ),
+            patch(
+                "agent_backbone.services.runtimes.base.press_submit", AsyncMock(return_value=True)
+            ) as submit,
+            patch(
+                "agent_backbone.services.runtimes.base.capture_pane",
+                AsyncMock(side_effect=[envelope, "❯" if consumed else envelope]),
+            ),
+            patch("agent_backbone.services.runtimes.base.asyncio.sleep", AsyncMock()),
+        ):
+            assert (
+                await runtime.deliver_message("app", "[via:backbone from:sender] review this")
+                is consumed
+            )
+        assert submit.await_count == 2
+
     async def test_claude_adapter_submits_with_enter(self):
         runtime = RUNTIMES["claude"]
         with (
@@ -339,3 +365,120 @@ class TestPaneLinePairing:
     def test_non_sgr_escapes_do_not_count_as_typed_text(self):
         pane = "❯ \x1b[2mTry a suggestion\x1b[0m\x1b[K\n"
         assert RUNTIMES["claude"].prompt_has_pending_input(pane) is False
+
+
+class TestPlanControlCapability:
+    def test_only_claude_code_has_a_plan_mode_the_backbone_drives(self):
+        from agent_backbone.services.runtimes import RUNTIMES, get_runtime
+
+        supported = {name for name in RUNTIMES if get_runtime(name).supports_plan_control}
+        assert supported == {"claude"}
+        assert get_runtime("claude").plan_approve_keys == ("Escape", "[Z")
+        assert get_runtime("claude").plan_reject_keys == ("Escape",)
+
+    async def test_unsupported_runtime_sends_nothing(self):
+        from unittest.mock import AsyncMock, patch
+
+        from agent_backbone.services.runtimes import get_runtime
+
+        with patch(
+            "agent_backbone.services.runtimes.base.send_keys", new_callable=AsyncMock
+        ) as keys:
+            approved = await get_runtime("codex").approve_plan("x")
+            rejected = await get_runtime("codex").reject_plan("x")
+        assert type(approved) is int and approved == 0  # a count, not a bool
+        assert type(rejected) is int and rejected == 0
+        keys.assert_not_awaited()
+
+
+_CODEX_MODEL_SWITCH = """\
+  Approaching rate limits
+  Switch to gpt-5.6-luna for lower credit usage?
+› 1. Switch to gpt-5.6-luna                 Fast and affordable agentic coding
+                                            model.
+  2. Keep current model
+  3. Keep current model (never show again)  Hide future rate limit reminders
+                                            about switching models.
+  Press enter to confirm or esc to go back
+"""
+
+_CODEX_PERMISSION = """\
+• Running backbone tell audit-coordinator 'Read issue and docs; starting'
+  Would you like to run the following command?
+  Environment: local
+  Reason: Allow the scout to send audit findings to the local swarm coordinator?
+  $ backbone tell audit-coordinator 'Read issue and docs; starting'
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `backbone tell` (p)
+  3. No, and tell Codex what to do differently (esc)
+  Press enter to confirm or esc to cancel
+"""
+
+
+_CLAUDE_BYPASS_ACCEPT = """\
+  WARNING: Claude Code running in Bypass Permissions mode
+  In Bypass Permissions mode, Claude Code will not ask for your approval before running
+  potentially dangerous commands.
+  By proceeding, you accept all responsibility for actions taken while running in Bypass
+  Permissions mode.
+  ❯ No, exit
+    Yes, I accept
+  Enter to confirm · Esc to cancel
+"""
+
+
+class TestChoiceDialogs:
+    """A dialog whose Enter chooses (a model switch) is not a permission prompt."""
+
+    def test_codex_model_switch_is_a_choice(self):
+        rt = RUNTIMES["codex"]
+        assert rt.detect_active_dialog(_CODEX_MODEL_SWITCH)
+        assert rt.detect_choice_dialog(_CODEX_MODEL_SWITCH)
+
+    def test_codex_permission_prompt_is_not(self):
+        rt = RUNTIMES["codex"]
+        assert rt.detect_active_dialog(_CODEX_PERMISSION)
+        assert not rt.detect_choice_dialog(_CODEX_PERMISSION)
+
+    def test_claude_bypass_mode_acceptance_waits_for_a_person_and_is_never_answered(self):
+        # Live capture (2.1.x): "No, exit" is preselected, so Enter would end
+        # the session. The dialog must read as waiting_for_human (not as an
+        # idle prompt with "No, exit" typed into it) and must not be
+        # answerable by `agent approve`.
+        rt = RUNTIMES["claude"]
+        assert rt.detect_waiting_for_human(_CLAUDE_BYPASS_ACCEPT)
+        assert not rt.detect_idle(_CLAUDE_BYPASS_ACCEPT)
+        assert rt.detect_active_dialog(_CLAUDE_BYPASS_ACCEPT)
+        assert rt.detect_choice_dialog(_CLAUDE_BYPASS_ACCEPT)
+
+    def test_summary_carries_the_command_and_the_reason(self):
+        summary = RUNTIMES["codex"].dialog_summary(_CODEX_PERMISSION)
+        assert "$ backbone tell audit-coordinator" in summary
+        assert "Reason: Allow the scout" in summary
+        assert "1. Yes, proceed" not in summary
+
+    def test_summary_of_a_choice_names_the_choice(self):
+        summary = RUNTIMES["codex"].dialog_summary(_CODEX_MODEL_SWITCH)
+        assert "Switch to gpt-5.6-luna" in summary
+
+    def test_summary_keeps_the_end_when_long(self):
+        long = "\n".join(["x" * 80] * 8) + "\n" + _CODEX_PERMISSION
+        summary = RUNTIMES["codex"].dialog_summary(long, limit=120)
+        assert len(summary) <= 120 and summary.endswith("starting'")
+
+    def test_stale_output_above_a_real_prompt_is_not_a_choice(self):
+        # "switch to gpt-" scrolled past earlier; the active dialog is a permission.
+        pane = (
+            "• Earlier: the user said switch to gpt-5.6-luna maybe\n"
+            + "\n".join(f"output line {i}" for i in range(12))
+            + "\n"
+            + _CODEX_PERMISSION
+        )
+        rt = RUNTIMES["codex"]
+        assert rt.detect_active_dialog(pane)
+        assert not rt.detect_choice_dialog(pane)
+
+    def test_summary_honours_tiny_limits(self):
+        rt = RUNTIMES["codex"]
+        assert len(rt.dialog_summary(_CODEX_PERMISSION, limit=1)) <= 1
+        assert rt.dialog_summary(_CODEX_PERMISSION, limit=0) == ""

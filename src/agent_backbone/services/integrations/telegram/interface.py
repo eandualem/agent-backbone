@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,7 @@ import httpx
 from telegram import Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -30,7 +32,7 @@ from telegram.ext import (
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.integrations.base import Integration
-from agent_backbone.services.integrations.telegram import _commands, _routing
+from agent_backbone.services.integrations.telegram import _commands, _routing, _updates
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     agent_topic,
     effective_group_chat_id,
@@ -45,12 +47,39 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-async def _send(token: str, chat_id: int, text: str, *, thread_id: int | None = None) -> bool:
+def inline_keyboard(actions: list[tuple[str, str]] | None) -> dict | None:
+    """Telegram's ``reply_markup`` for ``(label, callback data)`` buttons, one row."""
+    if not actions:
+        return None
+    if any(not 1 <= len(data.encode("utf-8")) <= 64 for _, data in actions):
+        # Never truncate prompt identities or leave half of an Allow/Deny pair.
+        # Telegram rejects the whole message for an invalid callback payload.
+        log.warning("Omitting Telegram buttons: callback data must contain 1–64 UTF-8 bytes")
+        return None
+    row = [{"text": label, "callback_data": data} for label, data in actions]
+    return {"inline_keyboard": [row]}
+
+
+async def _send(
+    token: str,
+    chat_id: int,
+    text: str,
+    *,
+    thread_id: int | None = None,
+    actions: list[tuple[str, str]] | None = None,
+) -> bool:
     """One sendMessage through the HTTP API (no bot instance needed)."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload: dict = {"chat_id": chat_id, "text": text}
     if thread_id is not None:
         payload["message_thread_id"] = thread_id
+    markup = inline_keyboard(actions)
+    if markup is not None:
+        payload["reply_markup"] = markup
+    elif actions:
+        payload["text"] += (
+            "\n\nButtons are unavailable for this alert. Respond through the agent's terminal."
+        )
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, json=payload, timeout=10)
@@ -63,12 +92,19 @@ async def _send(token: str, chat_id: int, text: str, *, thread_id: int | None = 
         return False
 
 
-async def notify_static(config: BackboneConfig, text: str, *, agent: str | None = None) -> bool:
+async def notify_static(
+    config: BackboneConfig,
+    text: str,
+    *,
+    agent: str | None = None,
+    actions: list[tuple[str, str]] | None = None,
+) -> bool:
     """Config-driven alert for callers without the bot instance (scheduler jobs).
 
     Goes into the agent's topic when it has one and the group is known,
-    otherwise to ``telegram.notification_chat_id``. False when Telegram is
-    not configured for either.
+    otherwise to ``telegram.notification_chat_id``. ``actions`` become an
+    inline keyboard the bot answers in ``on_callback``. False when Telegram
+    is not configured for either destination.
     """
     token = config.telegram_token
     if not token:
@@ -78,11 +114,11 @@ async def notify_static(config: BackboneConfig, text: str, *, agent: str | None 
         group = effective_group_chat_id(config, discovery)
         thread_id = agent_topic(config, discovery, agent)
         if group and thread_id is not None:
-            return await _send(token, group, text, thread_id=thread_id)
+            return await _send(token, group, text, thread_id=thread_id, actions=actions)
     chat_id = config.telegram.notification_chat_id
     if not chat_id:
         return False
-    return await _send(token, chat_id, text)
+    return await _send(token, chat_id, text, actions=actions)
 
 
 class TelegramService(Integration):
@@ -100,10 +136,21 @@ class TelegramService(Integration):
         self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
         self._background: set[asyncio.Task] = set()
         self._sync_lock = asyncio.Lock()
+        self._report_lock = asyncio.Lock()
+        self._audio_lock = asyncio.Lock()
+        self._report_views: OrderedDict[str, dict] = OrderedDict()
 
     @property
     def enabled(self) -> bool:
         return bool(self.config.telegram_token)
+
+    @property
+    def can_start(self) -> bool:
+        return self.enabled and bool(self.config.telegram.allowed_chat_ids)
+
+    @property
+    def startup_key(self) -> object:
+        return self.config.telegram_token, self.can_start
 
     # -- Integration contract --
 
@@ -113,10 +160,29 @@ class TelegramService(Integration):
         thread_id = agent_topic(self.config, self._discovery, agent)
         if not group or thread_id is None:
             return False
-        return await _send(self.config.telegram_token, group, text, thread_id=thread_id)
+        if not await _send(self.config.telegram_token, group, text, thread_id=thread_id):
+            # The registry reports False as "no surface"; an outage is "failed".
+            raise RuntimeError(f"Telegram could not post to {agent}'s topic")
+        return True
 
-    async def notify(self, text: str, *, agent: str | None = None) -> bool:
-        return await notify_static(self.config, text, agent=agent)
+    async def notify(
+        self,
+        text: str,
+        *,
+        agent: str | None = None,
+        actions: list[tuple[str, str]] | None = None,
+    ) -> bool:
+        return await notify_static(self.config, text, agent=agent, actions=actions)
+
+    async def flush_reports(self) -> None:
+        async with self._report_lock:
+            await _updates.flush_reports(self)
+
+    async def flush_report_audio(self) -> None:
+        from agent_backbone.services.integrations.telegram._report_delivery import flush_audio
+
+        async with self._audio_lock:
+            await flush_audio(self)
 
     async def sync_agents(self) -> None:
         """One forum topic per registered agent (see ``_topics``)."""
@@ -157,11 +223,25 @@ class TelegramService(Integration):
 
     @staticmethod
     def _sender_tag(update: Update) -> str:
-        """Extract sender name from Telegram update for [via:telegram from:X] tag."""
+        """Readable sender name for the [via:telegram from:X] envelope."""
         user = getattr(update, "effective_user", None)
         if user:
             return (user.first_name or user.username or "unknown").lower()
         return "unknown"
+
+    @staticmethod
+    def _sender_id(update: Update) -> str:
+        """Stable queue identity for the Telegram user: ``telegram:<id>``.
+
+        First names collide — two users named Alice were one sender under
+        the display tag, so one's text deduplicated the other's. The user
+        id does not collide; the envelope keeps the readable name.
+        """
+        user = getattr(update, "effective_user", None)
+        user_id = getattr(user, "id", None) if user is not None else None
+        if not isinstance(user_id, int):
+            return "telegram:unknown"
+        return f"telegram:{user_id}"
 
     def _is_authorized(self, chat_id: int) -> bool:
         """Only chats on the allowlist may control the backbone."""
@@ -192,6 +272,9 @@ class TelegramService(Integration):
     async def cmd_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _commands.cmd_digest(self, update, context)
 
+    async def cmd_updates(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await _updates.cmd_updates(self, update, context)
+
     async def cmd_identify(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         self._discover(update)
         await _commands.cmd_identify(self, update, context)
@@ -201,6 +284,13 @@ class TelegramService(Integration):
 
     async def cmd_approve(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _commands.cmd_approve(self, update, context)
+
+    async def on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """A button on an alert: Allow / Deny a permission prompt, Approve / Reject a plan."""
+        if (getattr(update.callback_query, "data", None) or "").startswith("updates:"):
+            await _updates.on_callback(self, update, context)
+        else:
+            await _commands.on_callback(self, update, context)
 
     async def handle_topic_message(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -287,9 +377,11 @@ class TelegramService(Integration):
         self._app.add_handler(CommandHandler("stop", self.cmd_stop_agent))
         self._app.add_handler(CommandHandler("tell", self.cmd_tell))
         self._app.add_handler(CommandHandler("digest", self.cmd_digest))
+        self._app.add_handler(CommandHandler("updates", self.cmd_updates))
         self._app.add_handler(CommandHandler("identify", self.cmd_identify))
         self._app.add_handler(CommandHandler("viewplan", self.cmd_viewplan))
         self._app.add_handler(CommandHandler("approve", self.cmd_approve))
+        self._app.add_handler(CallbackQueryHandler(self.on_callback))
         self._app.add_handler(
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND & filters.IS_TOPIC_MESSAGE,

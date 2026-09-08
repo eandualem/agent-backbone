@@ -8,12 +8,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.config import EscalationConfig, TelegramConfig
+from agent_backbone.config import AgentsConfig, EscalationConfig, TelegramConfig
 from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.jobs import escalation as esc
 from agent_backbone.services.jobs.monitor import monitor_agents, read_states, sync_states
 from agent_backbone.services.jobs.pending import deliver_pending_issues
+from agent_backbone.services.routing import DeliveryReport
 
 _ESC = "agent_backbone.services.jobs.escalation"
 _PEND = "agent_backbone.services.jobs.pending"
@@ -65,13 +66,17 @@ class TestShouldEscalate:
 
 class TestReadAndSyncStates:
     async def test_reads_only_configured_live_agents(self, config):
-        async def _get(config, name):
+        async def _get(config, name, **kwargs):
             return _snap(AgentState.BUSY, issue=1)
 
-        with patch(f"{_MON}.agent_state", side_effect=_get) as get:
+        with (
+            patch(f"{_MON}.agent_state", side_effect=_get) as get,
+            patch(f"{_MON}.capture_pane", AsyncMock(return_value="pane")) as capture,
+        ):
             states = await read_states(config, {"ike", "leo", "stranger"})
         assert set(states) == {"ike", "leo"}
         assert get.await_count == 2  # once per agent per tick, never more
+        assert capture.await_count == 2
 
     async def test_sync_mirrors_snapshots_into_the_database(self, db):
         await sync_states(db, {"ike": _snap(AgentState.BUSY, issue=42, current_repo=_REPO)})
@@ -131,9 +136,14 @@ class TestHandleStalls:
         d.assert_not_called()
 
 
+def _always_on(config, name: str):
+    spec = replace(config.agents.get(name), always_on=True)
+    return replace(config, agents=AgentsConfig({**config.agents.specs, name: spec}))
+
+
 class TestOffline:
     async def test_detects_and_clears_offline_agent(self, config, db):
-        config = replace(config, escalation=EscalationConfig(target="leo"))
+        config = _always_on(replace(config, escalation=EscalationConfig(target="leo")), "ike")
         await db.states.set("ike", "busy", current_issue=3)
         gh = AsyncMock()
         gh.list_issues = AsyncMock(return_value=[_issue(3)])
@@ -144,10 +154,218 @@ class TestOffline:
         assert "1 pending issue" in d.await_args.args[1]
         assert (await db.states.get("ike"))["state"] == "unknown"
 
+    async def test_an_ordinary_agent_going_offline_is_not_reported(self, config, db):
+        """Agents are not expected to stay up; the state is cleared quietly."""
+        config = replace(config, escalation=EscalationConfig(target="leo"))
+        await db.states.set("ike", "busy", current_issue=3)
+        gh = AsyncMock()
+        gh.list_issues = AsyncMock(return_value=[_issue(3)])
+        with (
+            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+        ):
+            await esc.handle_offline(config, {"leo"}, db, gh)
+        d.assert_not_called()
+        tg.assert_not_called()
+        assert (await db.states.get("ike"))["state"] == "unknown"
+
+    async def test_queued_messages_for_an_offline_agent_are_reported_once(self, config, db):
+        config = replace(config, escalation=EscalationConfig(target="leo"))
+        await db.queue.enqueue(session_name="ike", message="[via:backbone from:leo] hi")
+        await db.queue.enqueue(session_name="ike", message="[via:backbone from:ada] hey")
+        with (
+            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+        ):
+            await esc.handle_offline(config, {"leo"}, db, AsyncMock())
+            await esc.handle_offline(config, {"leo"}, db, AsyncMock())
+        tg.assert_awaited_once()
+        assert "ike is offline with 2 queued messages" in tg.await_args.args[1]
+        assert tg.await_args.kwargs["agent"] == "ike"
+        d.assert_awaited_once()
+        assert d.await_args.args[0] == "leo"
+        assert "2 queued messages" in d.await_args.args[1]
+
+    async def test_no_queued_messages_no_report(self, config, db):
+        with patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg:
+            await esc.handle_offline(config, set(), db, AsyncMock())
+        tg.assert_not_called()
+
     async def test_active_or_unknown_not_flagged(self, config, db):
         await db.states.set("ike", "busy")
         await db.states.set("leo", "unknown")
         assert await esc.check_for_unexpected_offline(config, {"ike"}, db, AsyncMock()) == []
+
+
+class TestPermissionWaiting:
+    @pytest.fixture(autouse=True)
+    def _fresh(self):
+        esc._permission_notified.clear()
+        yield
+        esc._permission_notified.clear()
+
+    async def test_alert_with_buttons_once_per_prompt(self, config):
+        states = {"ike": _snap(_WAITING, reason="permission"), "leo": _snap(AgentState.BUSY)}
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+        ):
+            await esc.check_permission_waiting(config, states)
+            await esc.check_permission_waiting(config, states)
+        tg.assert_awaited_once()
+        assert "Permission prompt — ike" in tg.await_args.args[1]
+        ref = f"{states['ike'].timestamp:.3f}"
+        assert tg.await_args.kwargs["actions"] == [
+            ("Allow", f"approve:ike:{ref}"),
+            ("Deny", f"deny:ike:{ref}"),
+        ]
+        assert tg.await_args.kwargs["agent"] == "ike"
+
+    async def test_the_alert_says_what_is_being_approved(self, config):
+        states = {"ike": _snap(_WAITING, reason="permission")}
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+            patch(
+                f"{_ESC}._dialog_text",
+                new_callable=AsyncMock,
+                return_value="Reason: send findings $ backbone tell orch 'done'",
+            ),
+        ):
+            await esc.check_permission_waiting(config, states)
+        text = tg.await_args.args[1]
+        assert "$ backbone tell orch 'done'" in text
+        assert "asking to run a tool" not in text
+
+    async def test_a_terminal_read_prompt_alerts_once_not_every_tick(self, config):
+        """A runtime without hooks is stamped at every poll: the identity must
+        not move, or the humans would be alerted every minute."""
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+        ):
+            for _ in range(3):
+                snapshot = StateSnapshot(
+                    state=_WAITING,
+                    reason="permission",
+                    timestamp=time.time(),
+                    source="pull",
+                    prompt_ref="abc123",  # the dialog on screen, not the clock
+                )
+                await esc.check_permission_waiting(config, {"ike": snapshot})
+        tg.assert_awaited_once()
+        ref = tg.await_args.kwargs["actions"][0][1].split(":", 2)[2]
+        assert ref == "pane:abc123"  # stable while that dialog is up
+
+    async def test_a_new_prompt_is_a_new_alert(self, config):
+        first = _snap(_WAITING, reason="permission", age=30)
+        second = _snap(_WAITING, reason="permission")
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+        ):
+            await esc.check_permission_waiting(config, {"ike": first})
+            await esc.check_permission_waiting(config, {"ike": second})
+        assert tg.await_count == 2
+
+    async def test_not_while_someone_is_at_the_terminal(self, config):
+        states = {"ike": _snap(_WAITING, reason="permission")}
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=True),
+        ):
+            await esc.check_permission_waiting(config, states)
+        tg.assert_not_called()
+
+    async def test_buttons_off_when_remote_approval_is_off(self, config):
+        from agent_backbone.config import SecurityConfig
+
+        config = replace(config, security=SecurityConfig(allow_remote_approval=False))
+        states = {"ike": _snap(_WAITING, reason="permission")}
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+        ):
+            await esc.check_permission_waiting(config, states)
+        assert tg.await_args.kwargs["actions"] is None
+        assert "allow_remote_approval" in tg.await_args.args[1]
+
+    async def test_a_question_has_no_buttons(self, config):
+        states = {"ike": _snap(_WAITING, reason="question")}
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+            patch(f"{_ESC}._attended", new_callable=AsyncMock, return_value=False),
+        ):
+            await esc.check_permission_waiting(config, states)
+        assert tg.await_args.kwargs["actions"] is None
+        assert "Question — ike" in tg.await_args.args[1]
+
+    async def test_plans_are_left_to_the_plan_check(self, config):
+        states = {"ike": _snap(_WAITING, reason="plan", plan_file="/p.md", plan_title="T")}
+        with patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg:
+            await esc.check_permission_waiting(config, states)
+        tg.assert_not_called()
+
+
+class TestBlocked:
+    async def test_swarm_recipients_are_deduplicated_independently(self, config, db):
+        specs = dict(config.agents.specs)
+        specs["ike"] = replace(specs["ike"], tags=("swarm:research",))
+        config = replace(
+            config, agents=AgentsConfig(specs=specs), escalation=EscalationConfig(target="leo")
+        )
+        await db.swarms.create(
+            "research",
+            repo=_REPO,
+            issue_number=42,
+            initiator="ada",
+            coordinator="leo",
+            branch="swarm/research",
+            worktree_dir="/scratch/research",
+        )
+        states = {"ike": _snap(AgentState.BLOCKED, reason="provider", detail="Please retry in 49s")}
+        attempts = []
+
+        async def send(recipient, message, *args, **kwargs):
+            attempts.append(recipient)
+            assert "Please retry in 49s" in message
+            assert "remain queued" in message
+            assert kwargs["priority"] is True
+            if recipient == "ada" and attempts.count("ada") == 1:
+                return DeliveryReport(DeliveryOutcome.AGENT_WORKING, "failed")
+            return DeliveryReport(DeliveryOutcome.AGENT_WORKING, "stored")
+
+        with (
+            patch(f"{_ESC}.notify_humans", side_effect=[RuntimeError("offline"), True]) as human,
+            patch(f"{_ESC}.deliver", side_effect=send),
+        ):
+            for _ in range(3):
+                await esc.check_blocked(config, states, db)
+        assert attempts == ["ada", "leo", "ada"]
+        assert human.await_count == 2
+
+    async def test_notifies_once_with_the_runtimes_detail(self, config):
+        states = {
+            "ike": _snap(AgentState.BLOCKED, reason="quota", detail="resets at 3 PM"),
+            "leo": _snap(AgentState.BUSY),
+        }
+        with patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg:
+            await esc.check_blocked(config, states)
+            await esc.check_blocked(config, states)
+        tg.assert_awaited_once()
+        text = tg.await_args.args[1]
+        assert "ike is blocked on its usage limit (resets at 3 PM)" in text
+        assert tg.await_args.kwargs["agent"] == "ike"
+
+    async def test_an_alert_nobody_accepted_is_retried_next_cycle(self, config):
+        states = {"ike": _snap(AgentState.BLOCKED, reason="quota")}
+        with patch(
+            f"{_ESC}.notify_humans", new_callable=AsyncMock, side_effect=[False, True, True]
+        ) as tg:
+            await esc.check_blocked(config, states)
+            await esc.check_blocked(config, states)
+            await esc.check_blocked(config, states)
+        assert tg.await_count == 2  # the first attempt reached nobody; the second did
 
 
 class TestPlanWaiting:
@@ -165,9 +383,9 @@ class TestPlanWaiting:
         with (
             patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
             patch(
-                f"{_ESC}.safe_deliver",
+                f"{_ESC}.deliver",
                 new_callable=AsyncMock,
-                return_value=DeliveryOutcome.DELIVERED,
+                return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
             ) as d,
         ):
             await esc.check_plan_waiting(config, states, db=db)
@@ -176,9 +394,31 @@ class TestPlanWaiting:
         tg.assert_awaited_once()
         assert "/approve ike" in tg.await_args.args[1]
         assert tg.await_args.kwargs["agent"] == "ike"  # lands in the agent's own topic
+        assert tg.await_args.kwargs["actions"] is None  # plan control is off by default
         d.assert_awaited_once()
         assert d.await_args.args[0] == "leo"
         assert "created a plan" in d.await_args.args[1]
+
+    @pytest.mark.parametrize("queue", ["stored", "already_queued"])
+    async def test_suppresses_only_after_queue_accepts_plan_alert(self, config, db, queue):
+        config = replace(config, escalation=EscalationConfig(target="leo"))
+        states = {
+            "ike": _snap(_WAITING, reason="plan", plan_file="/p.md"),
+            "leo": _snap(AgentState.BUSY),
+        }
+        with (
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=False),
+            patch(
+                f"{_ESC}.deliver",
+                side_effect=[
+                    DeliveryReport(DeliveryOutcome.AGENT_WORKING, "failed"),
+                    DeliveryReport(DeliveryOutcome.AGENT_WORKING, queue),
+                ],
+            ) as send,
+        ):
+            for _ in range(3):
+                await esc.check_plan_waiting(config, states, db=db)
+        assert send.await_count == 2
 
     async def test_new_plan_timestamp_renotifies(self, config, db):
         config = replace(
@@ -197,7 +437,7 @@ class TestPlanWaiting:
         states = {"ike": _snap(_WAITING, reason="plan")}
         with (
             patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=False) as tg,
-            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.deliver", new_callable=AsyncMock) as d,
         ):
             await esc.check_plan_waiting(config, states, db=db)
             await esc.check_plan_waiting(config, states, db=db)
@@ -207,7 +447,7 @@ class TestPlanWaiting:
     async def test_real_notify_humans_is_false_when_nothing_is_configured(self, config, db):
         states = {"ike": _snap(_WAITING, reason="plan")}
         with (
-            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.deliver", new_callable=AsyncMock) as d,
             patch(f"{_ESC}._record_plan_notification") as recorded,
         ):
             await esc.check_plan_waiting(config, states, db=db)
@@ -303,6 +543,11 @@ class TestDeliverPendingIssues:
 
 
 class TestMonitorAgents:
+    @pytest.fixture(autouse=True)
+    def _captured_pane(self):
+        with patch(f"{_MON}.capture_pane", AsyncMock(return_value="")):
+            yield
+
     async def test_runs_all_steps(self, config, db):
         gh = AsyncMock()
         with (
@@ -390,5 +635,7 @@ class TestMonitorAgents:
         ):
             assert await monitor_agents(config, db, gh) == {}
 
-        offline.assert_awaited_once_with(config, set(), db, gh)
+        snapshot = offline.await_args.args[3]
+        assert snapshot.client is gh
+        offline.assert_awaited_once_with(config, set(), db, snapshot)
         drain.assert_awaited_once()

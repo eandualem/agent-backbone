@@ -124,7 +124,7 @@ GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App*
 | **Webhook URL** | `https://<your host>/webhooks/github` — **include the `/webhooks/github` path**; a bare hostname is the most common mistake (you'll see 530/404 in the delivery log) |
 | **Webhook secret** | generate one: `openssl rand -hex 32` — keep it, step 4 needs the exact same string |
 | **Repository permissions** | *Issues: Read and write* · *Pull requests: Read and write* (Metadata: Read-only is added automatically) |
-| **Subscribe to events** | *Issues* · *Issue comment* · *Pull request* |
+| **Subscribe to events** | *Issues* · *Issue comment* · *Pull request* · *Pull request review* |
 | Where can this app be installed | Only on this account |
 
 Create the app, then on its **General** page:
@@ -222,6 +222,6 @@ webhook replay plus backfill never double-delivers.
 Without an App, GitHub can only attach token-manageable webhooks **per
 repository** (personal accounts have no account-wide webhook). If you must:
 Repo → Settings → Webhooks → Add webhook, same URL/secret, content type
-`application/json`, events *Issues / Issue comments / Pull requests* — for
-each repository. This is tedious by design of GitHub's permission model,
+`application/json`, events *Issues / Issue comments / Pull requests / Pull
+request reviews* — for each repository. This is tedious by design of GitHub's permission model,
 which is why the App path above is the default recommendation.

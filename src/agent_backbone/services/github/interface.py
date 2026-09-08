@@ -257,6 +257,22 @@ class GitHubClient:
         resp.raise_for_status()
         return resp
 
+    async def _request_all(
+        self, path: str, *, repo_full_name: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Every item of a paginated listing: GitHub caps a page at 100 and the
+        rest is only reachable through the ``Link: rel="next"`` header."""
+        assert self._client is not None
+        resp = await self._request("GET", path, repo_full_name=repo_full_name, params=params)
+        items: list[dict[str, Any]] = list(resp.json())
+        while (nxt := resp.links.get("next")) and nxt.get("url"):
+            owner, repo = self._resolve_repo(repo_full_name)
+            headers = {"Authorization": await self._auth_header(owner, repo)}
+            resp = await self._client.get(nxt["url"], headers=headers)
+            resp.raise_for_status()
+            items.extend(resp.json())
+        return items
+
     @staticmethod
     def _build_issue(item: dict[str, Any], repo_full_name: str) -> IssueData:
         labels = ParsedLabels.from_github_labels(item.get("labels", []))
@@ -267,14 +283,51 @@ class GitHubClient:
             labels=labels,
             html_url=item.get("html_url", ""),
             repo_full_name=repo_full_name,
+            created_at=item.get("created_at") or "",
+            closed_at=item.get("closed_at") or "",
+            is_pull_request="pull_request" in item,
         )
+
+    async def get_pull_raw(self, number: int, repo_full_name: str) -> dict:
+        resp = await self._request("GET", f"/pulls/{number}", repo_full_name=repo_full_name)
+        return resp.json()
+
+    async def list_pulls_raw(self, repo_full_name: str) -> list[dict]:
+        return await self._request_all(
+            "/pulls", repo_full_name=repo_full_name, params={"state": "open", "per_page": 100}
+        )
+
+    async def list_reviews_raw(self, number: int, repo_full_name: str) -> list[dict]:
+        return await self._request_all(
+            f"/pulls/{number}/reviews", repo_full_name=repo_full_name, params={"per_page": 100}
+        )
+
+    async def list_commit_statuses(self, sha: str, repo_full_name: str) -> list[dict]:
+        return await self._request_all(
+            f"/commits/{sha}/statuses", repo_full_name=repo_full_name, params={"per_page": 100}
+        )
+
+    async def list_check_runs(self, sha: str, repo_full_name: str) -> list[dict]:
+        items = []
+        page = 1
+        while True:
+            resp = await self._request(
+                "GET",
+                f"/commits/{sha}/check-runs",
+                repo_full_name=repo_full_name,
+                params={"per_page": 100, "page": page},
+            )
+            batch = resp.json().get("check_runs", [])
+            items.extend(batch)
+            if "next" not in resp.links:
+                return items
+            page += 1
 
     # --- Raw listing (used by the poller) ---
 
     async def list_issues_since(self, repo_full_name: str, since: str) -> list[dict[str, Any]]:
         """Issues (open and closed, PRs excluded) updated since an ISO timestamp."""
-        resp = await self._request(
-            "GET",
+        items = await self._request_all(
             "/issues",
             repo_full_name=repo_full_name,
             params={
@@ -285,17 +338,15 @@ class GitHubClient:
                 "per_page": 100,
             },
         )
-        return [item for item in resp.json() if "pull_request" not in item]
+        return [item for item in items if "pull_request" not in item]
 
     async def list_comments_since(self, repo_full_name: str, since: str) -> list[dict[str, Any]]:
         """Issue comments created/updated since an ISO timestamp, oldest first."""
-        resp = await self._request(
-            "GET",
+        return await self._request_all(
             "/issues/comments",
             repo_full_name=repo_full_name,
             params={"since": since, "sort": "updated", "direction": "asc", "per_page": 100},
         )
-        return list(resp.json())
 
     async def get_issue_raw(self, issue_number: int, repo_full_name: str) -> dict[str, Any]:
         """Raw issue JSON (webhook-shaped) for building polled events."""
@@ -304,19 +355,24 @@ class GitHubClient:
 
     # --- Issue operations ---
 
-    async def get_sub_issues(self, issue_number: int, repo_full_name: str) -> list[IssueData]:
-        """Fetch sub-issues of a parent. Returns empty list on error."""
+    async def get_sub_issues(
+        self, issue_number: int, repo_full_name: str
+    ) -> list[IssueData] | None:
+        """Fetch sub-issues of a parent; ``None`` when the fetch failed (an
+        empty list is a real answer and callers act on it)."""
         url = f"/issues/{issue_number}/sub_issues"
         try:
-            resp = await self._request("GET", url, repo_full_name=repo_full_name)
+            items = await self._request_all(
+                url, repo_full_name=repo_full_name, params={"per_page": 100}
+            )
         except httpx.HTTPStatusError as exc:
             log.warning("Failed to fetch sub-issues for #%d: %s", issue_number, exc)
-            return []
+            return None
         except httpx.TimeoutException:
             log.warning("Timeout fetching sub-issues for #%d", issue_number)
-            return []
+            return None
 
-        return [self._build_issue(item, repo_full_name=repo_full_name) for item in resp.json()]
+        return [self._build_issue(item, repo_full_name=repo_full_name) for item in items]
 
     async def get_issue(self, issue_number: int, repo_full_name: str) -> IssueData:
         """Get a single issue by number."""
@@ -330,8 +386,13 @@ class GitHubClient:
         per_page: int = 50,
         *,
         repo_full_name: str,
+        all_pages: bool = False,
     ) -> list[IssueData]:
-        """Issues (PRs excluded) filtered by state and labels, in GitHub's order."""
+        """Issues (PRs excluded) in GitHub's order; one page unless ``all_pages``.
+
+        Internal work queues need every page before sorting and filtering;
+        interactive callers keep the bounded default.
+        """
         params: dict[str, str | int] = {
             "state": state,
             "sort": "created",
@@ -341,29 +402,33 @@ class GitHubClient:
         if labels:
             params["labels"] = ",".join(labels)
 
-        resp = await self._request("GET", "/issues", repo_full_name=repo_full_name, params=params)
+        if all_pages:
+            items = await self._request_all("/issues", repo_full_name=repo_full_name, params=params)
+        else:
+            resp = await self._request(
+                "GET", "/issues", repo_full_name=repo_full_name, params=params
+            )
+            items = resp.json()
         return [
             self._build_issue(item, repo_full_name=repo_full_name)
-            for item in resp.json()
+            for item in items
             if "pull_request" not in item
         ]
 
     async def list_comments(self, issue_number: int, repo_full_name: str) -> list[CommentData]:
         """List comments on an issue."""
-        resp = await self._request(
-            "GET",
+        items = await self._request_all(
             f"/issues/{issue_number}/comments",
             repo_full_name=repo_full_name,
             params={"per_page": 100},
         )
-
         return [
             CommentData(
                 id=item.get("id", 0),
                 body=item.get("body", ""),
                 user_login=item.get("user", {}).get("login", "unknown"),
             )
-            for item in resp.json()
+            for item in items
         ]
 
     async def create_issue(

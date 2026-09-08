@@ -11,6 +11,7 @@ class Aider(Runtime):
     aliases = ("aider-chat",)
     binary = "aider"
     brief_mode = "message"
+    model_tags = True
 
     prompt_prefixes = ("aider>", ">")
     # "model:" and "/help" appear in other CLIs' chrome; only aider's own banner

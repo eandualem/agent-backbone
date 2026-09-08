@@ -24,13 +24,19 @@ That single command:
    branch `swarm/research`, inside the repository checkout of the
    initiating agent (`--initiator`, defaulting to `$BACKBONE_AGENT`, or
    the repo's owner agent),
-3. registers and starts each member in that worktree — here a
+3. registers the whole roster in that worktree, then starts members with
+   the coordinator last — here a
    `research-coordinator` (added automatically), `research-scout-1..3`
-   on Sonnet, and a `research-coder` on Opus — each with a **role brief**
-   injected as a system prompt (Claude Code) or first message (other
-   runtimes); nothing is ever written into the repository,
-4. delivers the kickoff to the coordinator, which reads the issue and
-   starts assigning work.
+   on Sonnet, and a `research-coder` on Opus. **Role briefs** are injected
+   at launch for Claude Code, Codex, Gemini and OpenCode; Aider receives a
+   queued first message, and plain shell sessions receive no brief.
+   Nothing is ever written into the repository,
+4. delivers the kickoff to the coordinator. Its brief tells it to wait for
+   this message before assigning work, so assignments cannot race registration.
+
+If a member's session name becomes occupied during startup, creation fails.
+Rollback stops only sessions it started; the occupied session and its record
+and worktree remain available for inspection.
 
 ## The communication model
 
@@ -42,6 +48,12 @@ That single command:
   may also `tell` the initiating agent directly.
 - **You ↔ swarm**: `backbone tell research "..."` — a swarm's name
   resolves to its coordinator.
+- **GitHub ↔ swarm**: members are registered with the repository for
+  their worktree and pull request, but they are **not** its owners or
+  watchers for routing — a swarm does not turn a sole owner into a
+  multi-owner repository, and members do not hear about unrelated issues
+  or pull requests. The coordinator is a party to the swarm's own issue:
+  comments there reach it like any `for:` target.
 
 ## The lifecycle
 
@@ -60,12 +72,24 @@ committed before disbanding.
 ```bash
 backbone swarm list              # every swarm with roster and status
 backbone swarm status research   # one swarm
+backbone swarm status research --watch --details  # state and recent replies
 backbone swarm disband research  # manual teardown
 ```
 
 ## Roster syntax
 
-`--member ROLE[*N][@RUNTIME[/MODEL]]`, repeatable:
+`swarm status` groups each member's state, runtime/model and current issue.
+`--details` adds hook-reported replies and terminal activity when available;
+`--json` returns the full snapshot with state evidence. These observations do
+not measure task completion. Open any member with `backbone agent attach NAME`,
+or watch from a separate terminal with `--read-only`.
+
+Startup role briefs compose global shared policies and policies selected by
+the member's `role:ROLE` or `swarm:NAME` tags. Inspect the exact content and source
+paths with `backbone instructions preview MEMBER`. A fresh member restart reuses
+its saved role brief; see [instruction management](cli.md#backbone-instructions-).
+
+`--member ROLE[*N][@RUNTIME[/MODEL[:EFFORT]]]`, repeatable:
 
 | Example | Meaning |
 |---|---|
@@ -73,6 +97,23 @@ backbone swarm disband research  # manual teardown
 | `coder@codex` | one coder on Codex, its default model |
 | `reviewer` | one reviewer on the default runtime |
 | `coordinator@claude/opus` | the coordinator (at most one; added automatically if omitted) |
+| `coordinator@codex/gpt-6-astra:high` | the coordinator on Codex at `high` reasoning effort |
+| `scout@opencode/google/gemini-3-flash-preview` | one scout on OpenCode; its models are named `provider/model`, and the runtime is what follows `@` |
+| `scout@opencode/ollama/qwen3:8b` | one scout using the literal tagged model `ollama/qwen3:8b`; OpenCode and Aider preserve colons in model IDs |
+
+The effort rides on the model, so a roster can spend where the judgement
+is and stay cheap elsewhere — a coordinator that validates and implements
+at `high`, scouts that only read at the CLI's default:
+
+```bash
+backbone swarm create review --issue OWNER/REPO#7 \
+    --member coordinator@codex/gpt-6-astra:high \
+    --member 'scout*2@codex/gpt-6-astra'
+```
+
+Omitting the suffix means the CLI's own default, which is not always the
+cheap end — GPT-6-Astra defaults to `low`. `backbone runtimes` lists the
+levels each runtime accepts.
 
 ## Roles and briefs
 
@@ -84,10 +125,12 @@ worker brief driven by the coordinator's instructions.
 
 Every brief starts from a common preamble covering the shared-worktree
 rules (one branch, file ownership, no scope creep) and the exact
-communication commands. To customize, copy a template from the package
-(`services/swarm/templates/`) into `<data_dir>/swarm-templates/<role>.md`
-— files there override the shipped ones, and you can add new roles the
-same way.
+communication commands. Use `backbone templates edit swarm:scout` (or another
+role) to create an override in `<data_dir>/templates/swarm/`. Canonical defaults
+live in the repository's top-level `templates/swarm/` and ship in the package.
+New role files use the same layout. `swarm:common` edits the shared preamble and
+`swarm:kickoff` edits the coordinator's initial message. Tag policies can target
+`role:scout`, `role:coordinator`, or `swarm:NAME`. See [Templates](templates.md).
 
 ## What a swarm is, and is not
 
@@ -125,12 +168,39 @@ debugging, features whose pieces can be owned separately. A swarm costs
 a multiple of a single agent's tokens — for sequential or tightly
 coupled work, one agent is faster and cheaper. Start with 3–5 members.
 
-## Members stuck on permission prompts
+## Members, permissions and the sandbox
 
-Codex and OpenCode members (and Claude Code outside auto mode) stop on
-approval dialogs. The backbone shows this as `waiting_for_human
-(permission)` in `backbone agent inspect <member>` with the prompt quoted
-in the evidence, and `backbone agent approve <member>` answers it — the
-runtime's affirmative key, sent only while the dialog is on screen, and
-recorded as an `approval` event. The coordinator's brief tells it to do
-this instead of reaching into tmux directly.
+`backbone swarm list` shows each member's state, reason and provider error.
+If session availability cannot be queried, members show `unknown`, not `offline`.
+Capacity and quota failures appear as `blocked (provider)`; messages stay queued,
+including priority messages. The monitor alerts the coordinator, initiator and
+configured escalation target, deduplicated separately for each recipient. Failed
+notification delivery is retried; a stored queue receipt counts as accepted.
+
+For a short retry interval, the coordinator waits up to five minutes and inspects
+the member again. A long quota reset or persistent capacity failure calls for
+notifying the initiator and reassigning ownership to an available member. The
+backbone reports the failure and never restarts the blocked agent.
+
+With `swarm.unattended_members` enabled (the default), sandboxed Codex
+members run without permission prompts. Other runtimes retain their approval
+policy. The setting is evaluated at each member's next launch.
+
+The full [permission boundaries and cache options](security.md#unattended-agents-and-writable-directories)
+explain the Git grants, machine-wide `agents.writable_dirs`, and the
+worktree-local `UV_CACHE_DIR` alternative.
+
+For a member showing `waiting_for_human (permission)`, inspect its evidence
+with `backbone agent inspect <member>` and answer a supported dialog with
+`backbone agent approve <member>`. Every approval is recorded.
+
+Either way a *choice* dialog — Codex's rate-limit "switch model?" — is a
+question, not a permission: nothing answers it automatically,
+`agent approve` refuses it, and `backbone agent deny <member>` keeps the
+model.
+
+
+Creating a swarm always starts fresh conversations, including when a completed
+or disbanded swarm name is reused. Saved state from an earlier swarm cannot
+replace the new issue’s role briefs and roster. Ordinary agent starts retain
+their automatic continuation behavior.

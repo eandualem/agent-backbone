@@ -134,3 +134,19 @@ class TestPersistenceDependencies:
             await db.dependencies.sync(10, [20, 21])
             await db.dependencies.sync(10, [])
             assert await db.dependencies.parents(20) == []
+
+
+class TestSubIssueAnswers:
+    async def test_empty_answer_syncs_but_a_failed_fetch_does_not(self, config):
+        # S1-16: an empty list clears stale edges; a failed fetch keeps them.
+        gh = AsyncMock()
+        gh.list_issues = AsyncMock(return_value=[_make_issue(10, "open")])
+        gh.get_sub_issues = AsyncMock(return_value=[])
+        db = AsyncMock()
+        await sync_dependencies(config, db, gh)
+        db.dependencies.sync.assert_awaited()
+
+        gh.get_sub_issues = AsyncMock(return_value=None)
+        db = AsyncMock()
+        await sync_dependencies(config, db, gh)
+        db.dependencies.sync.assert_not_awaited()

@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import agent_backbone.help as help_module
-from agent_backbone.help import get_doc, get_topic, list_docs, list_topics, render_agent_brief
+from agent_backbone.help import get_doc, get_topic, list_docs, list_topics
+from agent_backbone.templates import render_agent_brief
 
 
 class TestTopics:
     def test_shipped_topics_listed_with_summaries(self):
         topics = list_topics()
         names = {t["name"] for t in topics}
-        assert {"setup", "swarms", "messaging", "agents", "github"} <= names
+        assert {"setup", "swarms", "messaging", "agents", "github", "reports"} <= names
         assert all(t["summary"] for t in topics)
 
     def test_setup_topic_walks_install_to_first_agent(self):
@@ -26,7 +27,10 @@ class TestDocs:
         from pathlib import Path
 
         repo_docs = Path(__file__).resolve().parents[3] / "docs"
-        expected = {p.stem for p in repo_docs.glob("*.md")} - {"README"}
+        expected = {p.stem for p in repo_docs.glob("*.md")} - {"README", "INDEX"} | {
+            "index",
+            "usage",
+        }
         assert expected  # the repository's docs/ was found
         pages = list_docs()
         assert {p["name"] for p in pages} == expected
@@ -74,18 +78,14 @@ class TestAgentBrief:
         assert render_agent_brief({"agent_name": "x"}, tmp_path) == "hello x"
 
 
-class TestBriefInjection:
-    def test_brief_file_written_and_passed_for_claude(self, tmp_path):
-        from agent_backbone.services.agents.launch import agent_brief_file
-
-        path = agent_brief_file("orch", "acme/app", tmp_path)
-        assert path is not None and path.read_text().startswith("# agent-backbone environment")
-        assert "**orch**" in path.read_text()
-
-    def test_brief_is_written_for_every_runtime(self, tmp_path):
-        # start_agent decides whether it goes in at launch or as the first
-        # message; the file itself does not depend on the runtime.
-        from agent_backbone.services.agents.launch import agent_brief_file
-
-        path = agent_brief_file("orch", "acme/app", tmp_path)
-        assert path == tmp_path / "briefs" / "orch.md"
+def test_instructions_alias_preserves_explicit_help_overrides(tmp_path):
+    assert get_topic("instructions", tmp_path) == get_topic("templates", tmp_path)
+    for directory in ("help-topics", "help"):
+        path = tmp_path / directory / "instructions.md"
+        path.parent.mkdir(parents=True)
+        path.write_text(f"# Custom instructions playbook in {directory}")
+        entries = {row["name"]: row for row in list_topics(tmp_path)}
+        assert entries["instructions"]["summary"] == f"Custom instructions playbook in {directory}"
+        assert get_topic("instructions", tmp_path) == path.read_text()
+    # The canonical directory wins even when a legacy topic also exists.
+    assert "in help" in get_topic("instructions", tmp_path)

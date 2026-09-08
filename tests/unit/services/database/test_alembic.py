@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from agent_backbone.config import sqlite_url
 from agent_backbone.services.database import build_engine
@@ -16,17 +19,29 @@ _EXPECTED_TABLES = {
     "agent_watches",
     "agents",
     "deliveries",
+    "diagnostics",
     "events",
+    "event_outbox",
     "issue_dependencies",
     "message_queue",
+    "poll_cursors",
+    "reports",
+    "review_lifecycle",
     "settings",
     "swarms",
 }
 
 _EXPECTED_INDEXES = {
+    "uq_agents_report_identity",
+    "uq_reports_request",
+    "idx_reports_author",
+    "idx_reports_created",
+    "idx_reports_telegram",
+    "idx_reports_audio",
     "uq_events_delivery_id",
     "idx_events_received",
     "idx_events_repo",
+    "idx_outbox_pending",
     "idx_deliveries_issue",
     "idx_deliveries_entity",
     "idx_deliveries_outcome",
@@ -39,6 +54,9 @@ _EXPECTED_INDEXES = {
     "uq_mq_issue_dedup",
     "uq_mq_message_dedup",
     "uq_swarms_active_issue",
+    "uq_diagnostics_observation",
+    "idx_diagnostics_last_seen",
+    "idx_diagnostics_agent",
 }
 
 
@@ -96,6 +114,90 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
         await db.stop()
 
 
+async def test_direct_migrations_refuse_unstamped_partial_schema(tmp_path):
+    from sqlalchemy import inspect
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'partial.db'}"
+    db = BackboneDB(url)
+    db._engine = build_engine(url)
+    try:
+        async with db.engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync: metadata.create_all(sync, tables=[metadata.tables["deliveries"]])
+            )
+        delivery_id = await db.deliveries.record(
+            issue_number=7, target_entity="worker", session_name="worker", outcome="offline"
+        )
+
+        with pytest.raises(RuntimeError, match="refusing to stamp partial schema"):
+            await db._run_migrations()
+
+        async with db.engine.connect() as conn:
+            tables = await conn.run_sync(lambda sync: inspect(sync).get_table_names())
+        assert tables == ["deliveries"]
+        (delivery,) = await db.deliveries.query(issue_number=7)
+        assert delivery["id"] == delivery_id and delivery["outcome"] == "offline"
+    finally:
+        await db.stop()
+
+
+async def test_direct_migrations_refuse_another_applications_unknown_revision(tmp_path):
+    from alembic.util.exc import CommandError
+    from sqlalchemy import inspect, text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'unrelated.db'}"
+    db = BackboneDB(url)
+    db._engine = build_engine(url)
+    try:
+        async with db.engine.begin() as conn:
+            await conn.execute(
+                text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
+            )
+            await conn.execute(text("INSERT INTO alembic_version VALUES ('unrelated_revision')"))
+            await conn.execute(text("CREATE TABLE unrelated_items (value TEXT NOT NULL)"))
+            await conn.execute(text("INSERT INTO unrelated_items VALUES ('preserve this row')"))
+
+        with pytest.raises(CommandError, match="unrelated_revision"):
+            await db._run_migrations()
+
+        async with db.engine.connect() as conn:
+            tables = await conn.run_sync(lambda sync: inspect(sync).get_table_names())
+            stamp = (
+                await conn.execute(text("SELECT version_num FROM alembic_version"))
+            ).scalar_one()
+            value = (await conn.execute(text("SELECT value FROM unrelated_items"))).scalar_one()
+        assert set(tables) == {"alembic_version", "unrelated_items"}
+        assert stamp == "unrelated_revision"
+        assert value == "preserve this row"
+    finally:
+        await db.stop()
+
+
+async def test_direct_migrations_repair_current_stamp_without_any_app_tables(tmp_path):
+    from sqlalchemy import text
+
+    async with BackboneDB.connect(f"sqlite+aiosqlite:///{tmp_path / 'missing-all.db'}") as db:
+        async with db.engine.begin() as conn:
+            stamp = (
+                await conn.execute(text("SELECT version_num FROM alembic_version"))
+            ).scalar_one()
+            await conn.run_sync(metadata.drop_all)
+
+        await db._run_migrations()
+
+        async with db.engine.connect() as conn:
+            assert (
+                await conn.execute(text("SELECT version_num FROM alembic_version"))
+            ).scalar_one() == stamp
+        await db.deliveries.record(
+            issue_number=7, target_entity="worker", session_name="worker", outcome="offline"
+        )
+        enqueued = await db.queue.enqueue(
+            session_name="worker", message="a new message", delivery_kind="direct_message"
+        )
+        assert (await queue_row(db, enqueued.id))["status"] == "pending"
+
+
 async def test_file_db_idempotent_start(tmp_path):
     url = f"sqlite+aiosqlite:///{tmp_path / 'idem.db'}"
     db = BackboneDB(url)
@@ -143,9 +245,148 @@ async def test_unknown_stamped_revision_is_restamped_after_squash(tmp_path):
     await db2.stop()
 
 
-async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_path):
-    """A database whose indexes predate the model is repaired when it is re-stamped."""
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0),
+    reason="constructing the old schema uses SQLite 3.35+ DROP COLUMN",
+)
+@pytest.mark.parametrize("current_stamp", [False, True])
+async def test_pre_diagnostics_database_gains_schema_without_losing_history(
+    tmp_path, current_stamp
+):
     from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'before-diagnostics.db'}"
+    async with BackboneDB.connect(url) as db:
+        delivery_id = await db.deliveries.record(
+            issue_number=7, target_entity="worker", session_name="worker", outcome="offline"
+        )
+        enqueued = await db.queue.enqueue(
+            session_name="worker",
+            message="preserve this queued message",
+            delivery_kind="direct_message",
+        )
+        async with db.engine.begin() as conn:
+            current_revision = (
+                await conn.execute(text("SELECT version_num FROM alembic_version"))
+            ).scalar_one()
+            await conn.execute(text("DROP TABLE diagnostics"))
+            await conn.execute(text("ALTER TABLE deliveries DROP COLUMN operation_id"))
+            await conn.execute(text("ALTER TABLE message_queue DROP COLUMN operation_id"))
+            if not current_stamp:
+                await conn.execute(
+                    text("UPDATE alembic_version SET version_num='before_diagnostics'")
+                )
+    async with BackboneDB.connect(url) as db:
+        (delivery,) = await db.deliveries.query(issue_number=7)
+        assert delivery["id"] == delivery_id
+        assert delivery["outcome"] == "offline" and delivery["operation_id"] is None
+        queue = await queue_row(db, enqueued.id)
+        assert queue["status"] == "pending"
+        assert queue["message"] == "preserve this queued message" and queue["operation_id"] is None
+        async with db.engine.connect() as conn:
+            revision = (
+                await conn.execute(text("SELECT version_num FROM alembic_version"))
+            ).scalar_one()
+        assert revision == current_revision
+        await db.deliveries.record(
+            issue_number=8,
+            target_entity="worker",
+            session_name="worker",
+            outcome="offline",
+            operation_id="after-upgrade-delivery",
+        )
+        (new_delivery,) = await db.deliveries.query(issue_number=8)
+        assert new_delivery["operation_id"] == "after-upgrade-delivery"
+        new_queue = await db.queue.enqueue(
+            session_name="worker",
+            message="a new queued message",
+            delivery_kind="direct_message",
+            operation_id="after-upgrade-queue",
+        )
+        assert (await queue_row(db, new_queue.id))["operation_id"] == "after-upgrade-queue"
+        assert (
+            await db.diagnostics.record(
+                operation_id="after-upgrade", category="startup", code="ready"
+            )
+            is not None
+        )
+        assert len(await db.diagnostics.query()) == 1
+
+
+async def test_old_sqlite_schema_gains_cursor_table_on_restart(tmp_path):
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'before-cursors.db'}"
+    async with BackboneDB.connect(url) as db:
+        await db.events.record(delivery_id="kept", source="poll", event_type="test")
+        async with db.engine.begin() as conn:
+            await conn.execute(text("DROP TABLE poll_cursors"))
+            await conn.execute(text("UPDATE alembic_version SET version_num='pre_cursor_squash'"))
+    async with BackboneDB.connect(url) as db:
+        await db.events.save_poll_cursor("acme/a", "2026-01-01T00:00:00Z")
+        assert await db.events.poll_cursor("acme/a") == "2026-01-01T00:00:00Z"
+        assert len(await db.events.query()) == 1
+
+
+@pytest.mark.parametrize("current_stamp", [False, True])
+async def test_old_schema_gains_new_tables_without_startup_create_all(tmp_path, current_stamp):
+    """The PostgreSQL migration path: no SQLite startup create_all to fill gaps."""
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'old-direct.db'}"
+    async with BackboneDB.connect(url) as db:
+        await db.events.record(delivery_id="preserved", source="poll", event_type="test")
+        async with db.engine.begin() as conn:
+            await conn.execute(text("DROP TABLE poll_cursors"))
+            if not current_stamp:
+                await conn.execute(text("UPDATE alembic_version SET version_num='old_squash'"))
+        # Invoke migrations directly, bypassing start() and its SQLite shortcut.
+        await db._run_migrations()
+        await db.events.save_poll_cursor("acme/a", "2026-01-01T00:00:00Z")
+        assert await db.events.poll_cursor("acme/a") == "2026-01-01T00:00:00Z"
+        assert (await db.events.query())[0]["delivery_id"] == "preserved"
+        async with db.engine.connect() as conn:
+            stamp = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
+        assert stamp != "old_squash"
+        # The repaired schema remains valid and idempotent on another run.
+        await db._run_migrations()
+
+
+@pytest.mark.parametrize("extra_legacy_column", [False, True])
+async def test_current_complete_schema_keeps_indexes_on_startup(tmp_path, extra_legacy_column):
+    """Checking a current schema must not rebuild indexes or expire queued rows."""
+    from sqlalchemy import event, text
+
+    async with BackboneDB.connect(f"sqlite+aiosqlite:///{tmp_path / 'complete.db'}") as db:
+        enqueued = await db.queue.enqueue(
+            session_name="worker", message="still pending", delivery_kind="direct_message"
+        )
+        if extra_legacy_column:
+            async with db.engine.begin() as conn:
+                await conn.execute(text("ALTER TABLE deliveries ADD COLUMN flow_run_id TEXT"))
+        statements = []
+
+        def capture_statement(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement.lstrip().upper())
+
+        event.listen(db.engine.sync_engine, "before_cursor_execute", capture_statement)
+        try:
+            await db._run_migrations()
+        finally:
+            event.remove(db.engine.sync_engine, "before_cursor_execute", capture_statement)
+
+        assert not any(
+            statement.startswith(
+                ("DROP INDEX", "CREATE INDEX", "CREATE UNIQUE INDEX", "UPDATE MESSAGE_QUEUE")
+            )
+            for statement in statements
+        )
+        assert (await queue_row(db, enqueued.id))["status"] == "pending"
+
+
+async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_path):
+    """A database whose queue predates ``dedup_key`` is repaired when it is re-stamped."""
+    from sqlalchemy import inspect, text
 
     from agent_backbone.services.database.backbone_db import _repair_schema
 
@@ -154,8 +395,10 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
     engine = db.engine
     try:
         async with engine.begin() as conn:
-            # An older install: no dedup rule for PR notices, so the queue grew copies.
+            # An older install: content_hash instead of dedup_key, no dedup
+            # rule for PR notices, so the queue grew copies.
             await conn.execute(text("DROP INDEX uq_mq_message_dedup"))
+            await conn.execute(text("ALTER TABLE message_queue ADD COLUMN content_hash TEXT"))
             digest = hashlib.sha256(b"same notice").hexdigest()
             for _ in range(3):
                 await conn.execute(
@@ -174,21 +417,67 @@ async def test_restamp_rebuilds_indexes_and_collapses_duplicate_queue_rows(tmp_p
                 .scalars()
                 .all()
             )
+            keys = (await conn.execute(text("SELECT dedup_key FROM message_queue"))).scalars().all()
             names = {
                 row[0]
                 for row in (
                     await conn.execute(text("SELECT name FROM sqlite_master WHERE type='index'"))
                 ).fetchall()
             }
+            columns = {
+                c["name"]
+                for c in await conn.run_sync(lambda s: inspect(s).get_columns("message_queue"))
+            }
         assert statuses == ["pending", "expired", "expired"]
+        assert len(set(keys)) == 1 and keys[0].startswith("msg:")
         assert "uq_mq_message_dedup" in names
-        # ...and the rule now holds for new rows.
-        assert (
-            await db.queue.enqueue(
-                session_name="ike", message="same notice", delivery_kind="pull_request"
-            )
-            == -1
+        assert "content_hash" not in columns and "dedup_key" in columns
+        # ...and the rule now holds for new rows: the old pending copy is *the same* message.
+        again = await db.queue.enqueue(
+            session_name="ike", message="same notice", delivery_kind="pull_request"
         )
+        assert again.status == "already_queued"
+    finally:
+        await db.stop()
+
+
+async def test_restamp_drops_a_column_the_old_index_still_names(tmp_path):
+    """The 0.1.0 database: uq_mq_message_dedup on content_hash is present when
+    content_hash has to go. SQLite refuses DROP COLUMN while an index names
+    the column, so the repair must drop indexes before columns (seen live)."""
+    from sqlalchemy import inspect, text
+
+    from agent_backbone.services.database.backbone_db import _repair_schema
+
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'old.db'}")
+    await db.start()
+    try:
+        async with db.engine.begin() as conn:
+            await conn.execute(text("DROP INDEX uq_mq_message_dedup"))
+            await conn.execute(text("ALTER TABLE message_queue ADD COLUMN content_hash TEXT"))
+            await conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX uq_mq_message_dedup ON message_queue "
+                    "(session_name, content_hash) WHERE delivery_kind != 'issue' "
+                    "AND status IN ('pending','in_progress')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO message_queue (session_name, message, delivery_kind, "
+                    "enqueued_at, status, content_hash) VALUES "
+                    "('ike', 'old notice', 'watch', '2026-09-01T00:00:00.000000Z', 'pending', 'h')"
+                )
+            )
+        async with db.engine.begin() as conn:
+            await conn.run_sync(_repair_schema)
+            columns = {
+                c["name"]
+                for c in await conn.run_sync(lambda s: inspect(s).get_columns("message_queue"))
+            }
+            key = (await conn.execute(text("SELECT dedup_key FROM message_queue"))).scalar()
+        assert "content_hash" not in columns and "dedup_key" in columns
+        assert key.startswith("msg:")
     finally:
         await db.stop()
 

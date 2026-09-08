@@ -5,17 +5,28 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from agent_backbone.models import DeliveryOutcome, EventType, IssueEvent, parse_from_tag
-from agent_backbone.services.agents.acknowledgement import find_outgoing_comment
+from agent_backbone.models import (
+    DeliveryOutcome,
+    EventType,
+    IssueEvent,
+    parse_from_tag,
+    review_source_key,
+)
+from agent_backbone.services.agents.acknowledgement import (
+    find_outgoing_comment,
+    find_outgoing_pull_request,
+)
 from agent_backbone.services.routing._dedup import is_recent_notification
 from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._format import (
     format_comment_notification,
     format_issue_notification,
     format_pull_request_notification,
+    format_review_notification,
     format_unassigned_notification,
     format_watch_notification,
 )
+from agent_backbone.services.routing._outbox import flush_outbox
 from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import (
     comment_audience,
@@ -35,14 +46,19 @@ log = logging.getLogger(__name__)
 SOURCE = "issue-dispatcher"
 
 
-def _resolve_commenter_entity(event: IssueEvent, config: BackboneConfig) -> str | None:
+def _resolve_commenter_entity(
+    event: IssueEvent, config: BackboneConfig, *, include_intent: bool = True
+) -> str | None:
     """Who made the comment: ``[from:X]`` tag first, then the hook action log."""
     if event.comment and event.comment.body:
         entity = parse_from_tag(event.comment.body)
         if entity:
             return entity
     return find_outgoing_comment(
-        event.issue.number, action_log=config.action_log_path, repo=event.issue.repo_full_name
+        event.issue.number,
+        action_log=config.action_log_path,
+        repo=event.issue.repo_full_name,
+        include_intent=include_intent,
     )
 
 
@@ -55,6 +71,26 @@ def _record(result: DispatchResult, session: str, outcome: DeliveryOutcome) -> N
         result.offline.append(session)
     else:
         result.deferred.append(session)
+
+
+def _event_sender(event: IssueEvent) -> str:
+    if event.comment:
+        return event.comment.user_login
+    if event.review:
+        return event.review.user_login
+    return ""
+
+
+def _source_key(event: IssueEvent, kind: str) -> str | None:
+    """The originating event's identity, so a queued copy is never stored twice."""
+    repo = event.issue.repo_full_name
+    if kind == "comment" and event.comment and event.comment.id:
+        return f"comment:{repo}#{event.issue.number}:{event.comment.id}"
+    if kind == "review" and event.review and event.event_type == EventType.REVIEW_STARTED:
+        return review_source_key(event.issue, event.review)
+    if kind == "review" and event.review and event.review.id:
+        return f"review:{repo}#{event.issue.number}:{event.review.id}"
+    return None
 
 
 async def _deliver(
@@ -76,11 +112,32 @@ async def _deliver(
         log.warning("No session for target '%s'", target)
         result.skipped.append(target)
         return
-    if kind == "issue" and is_recent_notification(
-        repo, event.issue.number, target, config.routing.notification_dedup_seconds
+    if (
+        result.plan is None
+        and kind == "issue"
+        and is_recent_notification(
+            repo, event.issue.number, target, config.routing.notification_dedup_seconds
+        )
     ):
         log.info("Deduped %s#%d → %s (announced moments ago)", repo, event.issue.number, target)
         result.skipped.append(target)
+        return
+    if result.plan is not None:
+        result.plan.append(
+            {
+                "session_name": session,
+                "message": message,
+                "repo": repo,
+                "issue_number": event.issue.number,
+                "target_entity": target,
+                "priority": priority,
+                "enforce_issue_queue": enforce_issue_queue,
+                "queue_scope": sorted(scope) if scope is not None else None,
+                "delivery_kind": kind,
+                "sender": _event_sender(event),
+                "source_key": _source_key(event, kind),
+            }
+        )
         return
     outcome = await safe_deliver(
         session,
@@ -95,9 +152,21 @@ async def _deliver(
         enforce_issue_queue=enforce_issue_queue,
         queue_scope=scope,
         delivery_kind=kind,
+        sender=_event_sender(event),
+        source_key=_source_key(event, kind),
     )
     _record(result, session, outcome)
     log.info("Decision: %s#%d → %s (%s) = %s", repo, event.issue.number, target, kind, outcome)
+
+
+async def _swarm_coordinator(db: BackboneDB, repo: str, issue_number: int) -> str | None:
+    """The coordinator of the swarm active on ``(repo, issue)``, if any."""
+    try:
+        swarm = await db.swarms.active_for_issue(repo, issue_number)
+    except Exception:
+        log.debug("Could not look up a swarm for %s#%d", repo, issue_number)
+        return None
+    return swarm.get("coordinator") if isinstance(swarm, dict) else None
 
 
 async def _dispatch_comment(
@@ -106,13 +175,20 @@ async def _dispatch_comment(
     repo = event.issue.repo_full_name
     commenter = _resolve_commenter_entity(event, config)
     audience = comment_audience(event.issue, commenter, config)
+    # A swarm's coordinator is a party to the swarm's own issue — it is not
+    # an owner (members never are), so it would otherwise hear nothing.
+    coordinator = await _swarm_coordinator(db, repo, event.issue.number)
+    if coordinator and coordinator != commenter and coordinator not in audience:
+        audience.append(coordinator)
     message = format_comment_notification(event.issue, event.comment, commenter_entity=commenter)
 
     commenter_session: str | None = None
     if commenter:
         commenter_session = resolve_entity_session(commenter, config)
+    acknowledged = _resolve_commenter_entity(event, config, include_intent=False)
+    if acknowledged:
         try:
-            await db.acks.record(event.issue.number, commenter, repo=repo)
+            await db.acks.record(event.issue.number, acknowledged, repo=repo)
         except Exception:
             log.exception("Failed to record acknowledgment (non-fatal)")
 
@@ -137,12 +213,74 @@ async def _dispatch_comment(
         )
 
 
+async def _dispatch_review(
+    event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
+) -> None:
+    """A review reaches the pull request's parties, like a comment would.
+
+    The reviewer is excluded when it is an agent (a ``[from:X]`` tag in the
+    review body); a bot or human reviewer excludes nobody.
+    """
+    review = event.review
+    if review is None:
+        return
+    reviewer = parse_from_tag(review.body)
+    audience = comment_audience(event.issue, reviewer, config)
+    message = format_review_notification(event.issue, review)
+    reviewer_session = resolve_entity_session(reviewer, config) if reviewer else None
+    for target in audience:
+        session = resolve_entity_session(target, config)
+        if session is None or session == reviewer_session:
+            result.skipped.append(target)
+            continue
+        await _deliver(
+            target,
+            message,
+            event,
+            config,
+            db,
+            result,
+            kind="review",
+            priority=event.issue.labels.blocking,
+        )
+
+
 async def _dispatch_pull_request(
     event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
 ) -> None:
+    """Owners and watchers hear about a pull request — except the agent that
+    opened it (its hook logged the ``gh pr create``), for which the issues
+    the pull request closes count as acknowledged instead."""
+    repo = event.issue.repo_full_name
+    opener = find_outgoing_pull_request(
+        event.issue.head_repo,
+        event.issue.head_ref,
+        action_log=config.action_log_path,
+        base_repo=repo,
+    )
+    confirmed = (
+        find_outgoing_pull_request(
+            event.issue.head_repo,
+            event.issue.head_ref,
+            action_log=config.action_log_path,
+            base_repo=repo,
+            include_intent=False,
+        )
+        if opener
+        else None
+    )
+    if confirmed:
+        for number in event.issue.linked_issues():
+            try:
+                await db.acks.record(number, confirmed, repo=repo)
+            except Exception:
+                log.exception("Failed to record acknowledgment (non-fatal)")
     routing = route_issue(event.issue, event.event_type, config)
     message = format_pull_request_notification(event.issue)
     for target in routing.queue + routing.watch:
+        if opener and resolve_entity_session(target, config) == opener:
+            result.skipped.append(target)
+            continue
         await _deliver(target, message, event, config, db, result, kind="pull_request")
 
 
@@ -175,7 +313,7 @@ async def _dispatch_issue(
         scope: set[tuple[str, int]] | None = None
         if gh is not None:
             try:
-                scope = queue_scope(await list_open_queue_for_target(config, target, gh))
+                scope = queue_scope(await list_open_queue_for_target(config, target, gh, db=db))
             except Exception:
                 log.exception("Failed to load queue scope for %s (non-fatal)", target)
         await _deliver(
@@ -209,11 +347,19 @@ async def issue_dispatcher(
     config: BackboneConfig,
     db: BackboneDB,
     gh: GitHubClient | None = None,
+    *,
+    event_id: int | None = None,
 ) -> DispatchResult:
     """Dispatch an issue / comment / pull-request event to its audiences."""
-    result = DispatchResult()
+    if event_id is not None and await db.outbox.entries(event_id):
+        return await flush_outbox(event_id, config, db, gh)
+    result = DispatchResult(plan=[] if event_id is not None else None)
     if event.event_type == EventType.COMMENT_CREATED and event.comment:
         await _dispatch_comment(event, config, db, result)
+    elif (
+        event.event_type in {EventType.REVIEW_SUBMITTED, EventType.REVIEW_STARTED} and event.review
+    ):
+        await _dispatch_review(event, config, db, result)
     elif event.event_type == EventType.PULL_REQUEST_OPENED:
         await _dispatch_pull_request(event, config, db, result)
     elif event.event_type in (EventType.ISSUE_OPENED, EventType.ISSUE_LABELED):
@@ -221,6 +367,11 @@ async def issue_dispatcher(
     else:
         log.info("Ignoring event type: %s", event.event_type)
         return result
+
+    if result.plan is not None:
+        delivered = await flush_outbox(event_id, config, db, gh, plan=result.plan)
+        delivered.skipped.extend(result.skipped)
+        result = delivered
 
     log.info(
         "Dispatch %s#%d: %d delivered, %d skipped, %d offline, %d deferred",

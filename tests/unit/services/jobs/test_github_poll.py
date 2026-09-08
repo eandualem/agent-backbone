@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -118,7 +120,7 @@ def config(tmp_path):
 
 
 class TestGitHubPoller:
-    async def test_dispatches_new_issue_and_comment_once(self, config, db, dispatch):
+    async def test_dispatches_new_issue_and_comment_once(self, config, db, dispatch, frozen_now):
         gh = AsyncMock()
         gh.list_issues_since = AsyncMock(return_value=[_issue(1, labels=["for:ike"])])
         gh.list_comments_since = AsyncMock(return_value=[_comment(9, 1, "[from:leo] hi")])
@@ -134,7 +136,7 @@ class TestGitHubPoller:
         assert kinds == [EventType.ISSUE_OPENED, EventType.COMMENT_CREATED]
         assert second == {"deduped": 2}
         assert dispatch.issue_dispatcher.await_count == 2
-        assert gh.list_issues_since.await_args_list[1].args[1] == "2026-08-31T10:05:01Z"
+        assert gh.list_issues_since.await_args_list[1].args[1] == "2026-08-31T11:58:00Z"
         # Both events were stored in the activity feed
         assert len(await db.events.query(repo=TEST_REPO)) == 2
 
@@ -184,7 +186,7 @@ class TestGitHubPoller:
         assert summary == {"deduped": 1}
         assert dispatch.issue_dispatcher.await_count == 1
 
-    async def test_backfill_resumes_from_last_stored_event(self, config, db, dispatch):
+    async def test_initial_boundary_is_independent_of_receipt_time(self, config, db, dispatch):
         await db.events.record(
             delivery_id="x", source="webhook", event_type="issue_opened", repo=TEST_REPO
         )
@@ -193,5 +195,306 @@ class TestGitHubPoller:
         gh.list_comments_since = AsyncMock(return_value=[])
         await GitHubPoller(config, db, gh).run()
         since = gh.list_issues_since.await_args.args[1]
-        # A little before the stored event, never the full lookback window
+        # Initial boundaries use lookback; event receipt times do not decide replay
         assert since.endswith("Z") and since >= "2020"
+
+
+class TestHydrationFailure:
+    async def test_comment_whose_issue_cannot_be_fetched_keeps_the_cursor(
+        self, config, db, dispatch
+    ):
+        # S1-1: C1 fails to hydrate, C2 succeeds; the cursor must not move past C1.
+        gh = AsyncMock()
+        gh.list_issues_since = AsyncMock(return_value=[])
+        gh.list_comments_since = AsyncMock(
+            return_value=[
+                _comment(9, 1, "first", updated="2026-08-31T10:00:00Z"),
+                _comment(10, 2, "second", updated="2026-08-31T10:01:00Z"),
+            ]
+        )
+
+        async def raw(number, repo):
+            if number == 1:
+                raise RuntimeError("boom")
+            return _issue(2)
+
+        gh.get_issue_raw = AsyncMock(side_effect=raw)
+        poller = GitHubPoller(lambda: config, db, gh)
+        poller._since[TEST_REPO] = "2026-08-31T09:00:00Z"
+
+        await poller.run()
+
+        assert poller._since[TEST_REPO] == "2026-08-31T09:00:00Z"
+
+
+_POLL = "agent_backbone.services.jobs.github_poll"
+
+
+@pytest.fixture
+def frozen_now():
+    with patch(f"{_POLL}.datetime", wraps=datetime) as clock:
+        clock.now.return_value = datetime(2026, 8, 31, 12, tzinfo=UTC)
+        yield clock
+
+
+class TestDurableBoundary:
+    @pytest.mark.parametrize("empty", [False, True])
+    async def test_successful_stationary_or_empty_batch_leaves_old_events_behind(
+        self, config, db, dispatch, frozen_now, empty
+    ):
+        gh = AsyncMock()
+        item = _issue(1, updated="2026-08-31T11:59:00Z", labels=["for:ike"])
+
+        async def fetch(repo, since):
+            return [item] if not empty and item["updated_at"] >= since else []
+
+        gh.list_issues_since.side_effect = fetch
+        gh.list_comments_since.return_value = []
+        await GitHubPoller(config, db, gh).run()
+        assert await db.events.poll_cursor(TEST_REPO) == "2026-08-31T11:58:00Z"
+        frozen_now.now.return_value = datetime(2026, 8, 31, 12, 5, tzinfo=UTC)
+        await GitHubPoller(config, db, gh).run()
+        assert await db.events.poll_cursor(TEST_REPO) == "2026-08-31T12:03:00Z"
+        # Even once the dedup record expires, the old item is outside the
+        # successfully completed window and cannot be delivered again.
+        await db.events.prune(0)
+        await GitHubPoller(config, db, gh).run()
+        assert dispatch.issue_dispatcher.await_count == (0 if empty else 1)
+
+    async def test_progress_uses_time_before_fetch_not_time_after_dispatch(
+        self, config, db, frozen_now
+    ):
+        gh = AsyncMock()
+
+        async def slow_fetch(repo, since):
+            frozen_now.now.return_value = datetime(2026, 8, 31, 20, tzinfo=UTC)
+            return []
+
+        gh.list_issues_since.side_effect = slow_fetch
+        gh.list_comments_since.return_value = []
+        await GitHubPoller(config, db, gh).run()
+        assert await db.events.poll_cursor(TEST_REPO) == "2026-08-31T11:58:00Z"
+
+    @pytest.mark.parametrize("failure", ["hydration", "dispatch"])
+    async def test_partial_first_batch_restarts_from_persisted_initial_window(
+        self, config, db, frozen_now, failure
+    ):
+        gh = AsyncMock()
+        gh.list_issues_since.return_value = [_issue(2)]
+        gh.list_comments_since.return_value = [_comment(9, 1, "first")]
+        gh.get_issue_raw.side_effect = (
+            RuntimeError("unavailable") if failure == "hydration" else None
+        )
+        gh.get_issue_raw.return_value = _issue(1)
+        fetched_boundaries = []
+
+        async def fetch(repo, since):
+            # This assertion is before either API response or event receipt.
+            assert await db.events.poll_cursor(repo) == since
+            fetched_boundaries.append(since)
+            return [_issue(2)]
+
+        gh.list_issues_since.side_effect = fetch
+
+        async def dispatch(event, *args, **kwargs):
+            await db.events.record(
+                delivery_id=event.delivery_id, source="poll", event_type="test", repo=TEST_REPO
+            )
+            if failure == "dispatch" and event.comment:
+                raise RuntimeError("dispatch failed")
+            return "dispatch"
+
+        first = GitHubPoller(config, db, gh)
+        with patch(f"{_POLL}.dispatch_event", side_effect=dispatch):
+            await first.run()
+        boundary = await db.events.poll_cursor(TEST_REPO)
+        assert boundary == fetched_boundaries[0]
+        assert len(await db.events.query()) >= 1
+        # A much later restart must use the stored initial window, even though
+        # successful events from the first batch now have newer receipt times.
+        frozen_now.now.return_value = datetime(2026, 9, 5, tzinfo=UTC)
+        gh.get_issue_raw.side_effect = None
+        with patch(f"{_POLL}.dispatch_event", AsyncMock(return_value="dispatch")):
+            await GitHubPoller(config, db, gh).run()
+        assert fetched_boundaries == [boundary, boundary]
+
+    async def test_successful_restart_keeps_overlap_and_same_second_late_arrival(
+        self, config, db, frozen_now
+    ):
+        gh = AsyncMock()
+        gh.list_issues_since.return_value = [_issue(1, updated="2026-08-31T12:00:00Z")]
+        gh.list_comments_since.return_value = []
+        with patch(f"{_POLL}.dispatch_event", AsyncMock(return_value="dispatch")) as dispatch:
+            await GitHubPoller(config, db, gh).run()
+            assert await db.events.poll_cursor(TEST_REPO) == "2026-08-31T11:58:00Z"
+            gh.list_issues_since.return_value = [
+                _issue(1, updated="2026-08-31T12:00:00Z"),
+                _issue(2, updated="2026-08-31T12:00:00Z"),
+            ]
+            await GitHubPoller(config, db, gh).run()
+        assert gh.list_issues_since.await_args.args[1] == "2026-08-31T11:58:00Z"
+        assert dispatch.await_args.args[0].issue.number == 2
+
+    @pytest.mark.parametrize("phase", ["initial", "advance", "read"])
+    async def test_cursor_failure_preserves_boundary_and_isolates_repositories(
+        self, config, db, frozen_now, phase
+    ):
+        config = replace(
+            config,
+            agents=AgentsConfig(
+                specs={
+                    "a": AgentSpec(name="a", dir="/a", repo="acme/a"),
+                    "b": AgentSpec(name="b", dir="/b", repo="acme/b"),
+                }
+            ),
+        )
+        prior = "2026-08-31T09:00:00Z"
+        if phase == "advance":
+            await db.events.save_poll_cursor("acme/a", prior)
+        gh = AsyncMock()
+        gh.list_issues_since.return_value = [_issue(1)]
+        gh.list_comments_since.return_value = []
+        method = "poll_cursor" if phase == "read" else "save_poll_cursor"
+        original = getattr(db.events, method)
+
+        async def fail_a(repo, *args):
+            if repo == "acme/a":
+                raise RuntimeError("database unavailable")
+            return await original(repo, *args)
+
+        poller = GitHubPoller(config, db, gh)
+        with (
+            patch.object(db.events, method, side_effect=fail_a),
+            patch(f"{_POLL}.dispatch_event", AsyncMock(return_value="dispatch")),
+        ):
+            await poller.run()
+        assert await db.events.poll_cursor("acme/a") == (prior if phase == "advance" else None)
+        assert poller._since.get("acme/a") == (prior if phase == "advance" else None)
+        assert await db.events.poll_cursor("acme/b") == "2026-08-31T11:58:00Z"
+        if phase != "advance":
+            assert [c.args[0] for c in gh.list_issues_since.await_args_list] == ["acme/b"]
+
+    @pytest.mark.parametrize("bad", ["bad", "2026-08-01", "9999-01-01T00:00:00Z"])
+    async def test_malformed_or_future_cursor_is_reset_before_fetch(
+        self, config, db, frozen_now, bad
+    ):
+        await db.events.save_poll_cursor(TEST_REPO, bad)
+        gh = AsyncMock()
+
+        async def fetch(repo, since):
+            assert since != bad
+            assert await db.events.poll_cursor(repo) == since
+            return []
+
+        gh.list_issues_since.side_effect = fetch
+        gh.list_comments_since.return_value = []
+        await GitHubPoller(config, db, gh).run()
+        gh.list_issues_since.assert_awaited_once()
+
+
+async def test_review_poll_fetches_commit_anchored_lifecycle(config, db):
+    config = replace(config, github=replace(config.github, reviewers=("reviewer",)))
+    gh = AsyncMock()
+    pull = {"number": 1, "head": {"sha": "new-head"}, "labels": []}
+    gh.list_pulls_raw.return_value = [pull]
+    gh.list_commit_statuses.return_value = []
+    gh.list_check_runs.return_value = [
+        {
+            "id": 10,
+            "status": "in_progress",
+            "head_sha": "new-head",
+            "started_at": "2026-09-05T15:00:00Z",
+            "app": {"slug": "reviewer"},
+        }
+    ]
+    gh.list_reviews_raw.return_value = [
+        {
+            "id": 20,
+            "state": "commented",
+            "commit_id": "old-head",
+            "submitted_at": "2026-09-05T15:01:00Z",
+            "user": {"login": "reviewer[bot]"},
+        }
+    ]
+    events = await GitHubPoller(config, db, gh)._review_events(
+        TEST_REPO, "2026-09-05T14:00:00Z", config
+    )
+    assert [e.event_type for e in events] == [EventType.REVIEW_STARTED, EventType.REVIEW_SUBMITTED]
+    assert events[0].review.commit_id == "new-head"
+    assert events[1].review.commit_id == "old-head" and events[1].review.head_sha == "new-head"
+
+
+async def test_commit_status_reviewers_use_latest_status_per_context(config, db):
+    config = replace(config, github=replace(config.github, reviewers=("coderabbitai",)))
+    gh = AsyncMock()
+    gh.list_pulls_raw.return_value = [{"number": 1, "head": {"sha": "abc"}}]
+    gh.list_check_runs.return_value = []
+    gh.list_reviews_raw.return_value = []
+    status = {
+        "id": 1,
+        "context": "CodeRabbit",
+        "state": "pending",
+        "creator": {"login": "coderabbitai[bot]"},
+        "created_at": "2026-09-05T18:42:43Z",
+    }
+    gh.list_commit_statuses.return_value = [status]
+    poller = GitHubPoller(config, db, gh)
+    events = await poller._review_events(TEST_REPO, "2026-09-05T18:00:00Z", config)
+    assert len(events) == 1 and events[0].review.commit_id == "abc"
+    assert "queued or running" in events[0].review.body
+    gh.list_commit_statuses.return_value = [{**status, "id": 2, "state": "success"}, status]
+    assert await poller._review_events(TEST_REPO, "2026-09-05T18:00:00Z", config) == []
+
+
+async def test_status_contexts_are_scoped_to_eligible_normalized_reviewers(config, db):
+    config = replace(config, github=replace(config.github, reviewers=("reviewer", "other")))
+    gh = AsyncMock()
+    gh.list_pulls_raw.return_value = [{"number": 1, "head": {"sha": "abc"}}]
+    gh.list_check_runs.return_value = gh.list_reviews_raw.return_value = []
+    status = {
+        "context": "Review",
+        "state": "pending",
+        "created_at": "2026-09-05T18:42:43Z",
+    }
+    gh.list_commit_statuses.return_value = [
+        {**status, "id": 4, "creator": {"login": "outsider"}, "state": "success"},
+        {**status, "id": 3, "creator": {"login": "OTHER[bot]"}, "state": "success"},
+        {**status, "id": 2, "creator": {"login": "other"}},
+        {**status, "id": 1, "creator": {"login": "reviewer[bot]"}},
+    ]
+    events = await GitHubPoller(config, db, gh)._review_events(
+        TEST_REPO, "2026-09-05T18:00:00Z", config
+    )
+    assert len(events) == 1
+    assert events[0].event_type == EventType.REVIEW_STARTED
+    assert events[0].review.user_login == "reviewer[bot]"
+
+
+async def test_review_failure_keeps_issue_intake_and_replay_cursor(config, db, dispatch):
+    config = replace(config, github=replace(config.github, reviewers=("reviewer",)))
+    gh = AsyncMock()
+    gh.list_issues_since.return_value = [_issue(1, labels=["for:ike"])]
+    gh.list_comments_since.return_value = []
+    gh.list_pulls_raw.side_effect = RuntimeError("missing checks permission")
+    poller = GitHubPoller(config, db, gh)
+    summary = {}
+    await poller._poll_repo(TEST_REPO, config, summary)
+    dispatch.issue_dispatcher.assert_awaited_once()
+    first = await db.events.poll_cursor(TEST_REPO)
+    await poller._poll_repo(TEST_REPO, config, summary)
+    assert await db.events.poll_cursor(TEST_REPO) == first
+
+
+async def test_review_cadence_uses_independent_durable_cursor(config, db):
+    config = replace(config, github=replace(config.github, reviewers=("reviewer",)))
+    gh = AsyncMock()
+    gh.list_issues_since.return_value = []
+    gh.list_comments_since.return_value = []
+    gh.list_pulls_raw.return_value = []
+    await GitHubPoller(config, db, gh)._poll_repo(TEST_REPO, config, {})
+    saved = await db.events.poll_cursor(f"reviews:{TEST_REPO}")
+    assert saved is not None
+    # A fresh poller (restart) must not reset the metadata cadence.
+    await GitHubPoller(config, db, gh)._poll_repo(TEST_REPO, config, {})
+    gh.list_pulls_raw.assert_awaited_once()
+    assert await db.events.poll_cursor(f"reviews:{TEST_REPO}") == saved

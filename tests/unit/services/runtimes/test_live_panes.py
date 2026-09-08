@@ -182,6 +182,60 @@ OPENCODE_PERMISSION_DIALOG = (
 )
 
 
+# Claude Code 2.1.260, `claude --resume` on a long session: SessionStart has
+# already fired (the hook says idle) while this picker is on screen. None of
+# its wording is a known prompt marker — the option block is the signal.
+CLAUDE_RESUME_PICKER = (
+    "  ───────────────────────────────────────────────\n"
+    "  This session is 2h 22m old and 304.3k tokens.\n"
+    "  Resuming the full session will consume a substantial portion of your usage limits."
+    " We recommend resuming from a summary.\n"
+    "  ❯ 1. Resume from summary (recommended)\n"
+    "    2. Resume full session as-is\n"
+    "    3. Don't ask me again\n"
+    "  Enter to confirm · Esc to cancel\n"
+)
+
+CLAUDE_RESUME_PICKER_ANSWERED = CLAUDE_RESUME_PICKER + "❯ \n  ? for shortcuts\n"
+
+# A numbered list in the agent's own output is not a dialog: no cursor.
+CLAUDE_NUMBERED_OUTPUT = (
+    "⏺ Three options:\n"
+    "  1. Keep the current layout\n"
+    "  2. Split the module\n"
+    "  3. Do nothing\n"
+    "❯ \n"
+    "  ? for shortcuts\n"
+)
+
+
+class TestUnknownDialogs:
+    def test_resume_picker_is_waiting_not_idle(self):
+        claude = RUNTIMES["claude"]
+        assert claude.detect_dialog_chrome(CLAUDE_RESUME_PICKER)
+        assert claude.detect_waiting_for_human(CLAUDE_RESUME_PICKER)
+        assert not claude.detect_idle(CLAUDE_RESUME_PICKER)
+        assert claude.detect_prompt(CLAUDE_RESUME_PICKER) is None
+
+    def test_resume_picker_is_an_active_dialog_approve_can_answer(self):
+        assert RUNTIMES["claude"].detect_active_dialog(CLAUDE_RESUME_PICKER)
+
+    def test_answered_picker_above_a_prompt_is_not_active(self):
+        claude = RUNTIMES["claude"]
+        assert not claude.detect_active_dialog(CLAUDE_RESUME_PICKER_ANSWERED)
+        assert claude.detect_prompt(CLAUDE_RESUME_PICKER_ANSWERED)
+
+    def test_numbered_output_without_a_cursor_is_idle(self):
+        claude = RUNTIMES["claude"]
+        assert not claude.detect_dialog_chrome(CLAUDE_NUMBERED_OUTPUT)
+        assert not claude.detect_waiting_for_human(CLAUDE_NUMBERED_OUTPUT)
+        assert claude.detect_idle(CLAUDE_NUMBERED_OUTPUT)
+
+    def test_every_runtime_reads_the_chrome(self):
+        # A runtime with no prompt markers at all still sees the furniture.
+        assert RUNTIMES["shell"].detect_waiting_for_human(CLAUDE_RESUME_PICKER)
+
+
 class TestPermissionDialogs:
     def test_claude_permission_dialog_is_waiting(self):
         adapter = RUNTIMES["claude"]

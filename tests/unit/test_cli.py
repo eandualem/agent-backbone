@@ -53,6 +53,15 @@ class TestInit:
         assert _run(["init", "--force"]) == 0
         assert "keep" not in (data / ".env").read_text()
 
+    def test_custom_data_dir_prints_export_hint(self, tmp_path, capsys):
+        assert _run(["init", "--data-dir", str(tmp_path / "custom")]) == 0
+        out = capsys.readouterr().out
+        assert "export BACKBONE_DATA_DIR=" in out and str(tmp_path / "custom") in out
+
+    def test_default_init_prints_no_export_hint(self, _isolated_data_dir, capsys):
+        assert _run(["init"]) == 0
+        assert "export BACKBONE_DATA_DIR" not in capsys.readouterr().out
+
 
 class TestConfig:
     def test_set_get_list_unset(self, capsys):
@@ -74,6 +83,20 @@ class TestConfig:
         assert _run(["init"]) == 0
         assert _run(["config", "set", "backbone.port", "lots"]) == 1
         assert _run(["config", "set", "nope.key", "1"]) == 1
+
+    def test_unset_reports_api_failure_instead_of_claiming_success(self, capsys):
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        with (
+            patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=True),
+            patch(
+                "agent_backbone.cli._common.api",
+                new_callable=AsyncMock,
+                return_value=(404, {"detail": "nope"}),
+            ),
+        ):
+            assert _run(["config", "unset", "backbone.port"]) == 1
+        assert "API error" in capsys.readouterr().out
 
 
 class TestDoctor:
@@ -196,10 +219,23 @@ class TestAgentCommands:
         assert "unknown agent" in capsys.readouterr().out
 
     def test_direct_stop_refuses_backbone_session(self, capsys):
-        with patch("agent_backbone.services.agents.stop_agent", new_callable=AsyncMock) as stop:
+        # The shared operation stops through the launch module: patch what it calls.
+        with patch(
+            "agent_backbone.services.agents.operations.launch.stop_agent", new_callable=AsyncMock
+        ) as stop:
             assert _run(["agent", "stop", "backbone"]) == 1
         stop.assert_not_awaited()
         assert "refusing to stop" in capsys.readouterr().out
+
+    def test_direct_stop_stops_an_agent_through_the_shared_operation(self, capsys):
+        with patch(
+            "agent_backbone.services.agents.operations.launch.stop_agent",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as stop:
+            assert _run(["agent", "stop", "orch"]) == 0
+        stop.assert_awaited_once_with("orch")
+        assert "orch: stopped" in capsys.readouterr().out
 
     def test_direct_inspect_uses_configured_state_helper(self, capsys):
         snapshot = StateSnapshot(state=AgentState.BUSY, evidence=["configured runtime"])
@@ -282,7 +318,7 @@ class TestAgentCommands:
         assert "orch" in capsys.readouterr().out
         assert _run(["agent", "unwatch", "orch", "acme/web"]) == 0
         with patch(
-            "agent_backbone.services.terminal.session_exists",
+            "agent_backbone.services.agents.operations.session_exists",
             new_callable=AsyncMock,
             return_value=False,
         ):
@@ -321,6 +357,25 @@ class TestAgentCommands:
 
 
 class TestTell:
+    def test_queued_reply_keeps_exact_operation_reference(self, capsys):
+        operation = "3d4f9a1bdede492d88eb6061afc33790"
+        receipt = {
+            "ok": False,
+            "session": "ike",
+            "outcome": "agent_working",
+            "queued": True,
+            "queue": "stored",
+            "detail": "Queued for ike.",
+            "operation_id": operation,
+            "delivery_id": 23,
+            "queue_id": 9,
+        }
+        with patch("agent_backbone.cli._common.api", return_value=(200, receipt)):
+            assert _run(["tell", "ike", "hello"]) == 2
+        output = capsys.readouterr().out.splitlines()
+        assert json.loads(output[0]) == receipt
+        assert output[-1] == f"trace: backbone diagnostics trace {operation}"
+
     def test_sender_defaults_to_backbone_agent(self, monkeypatch):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
         args = cli.build_parser().parse_args(["tell", "x", "hi"])
@@ -355,6 +410,162 @@ class TestTell:
         assert kwargs["headers"] == {"Authorization": "Bearer k"}
         assert json.loads(capsys.readouterr().out)["ok"] is True
 
+    def test_malformed_200_payload_is_an_error_not_a_traceback(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+
+        class _Resp:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return ["ok", True]  # a proxy page massaged into JSON
+
+        client = AsyncMock()
+        client.request = AsyncMock(return_value=_Resp())
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        with patch("httpx.AsyncClient", return_value=client):
+            assert _run(["tell", "a", "hello"]) == 1
+        assert "unexpected response" in capsys.readouterr().out
+
+
+class TestSwarmList:
+    def test_status_shows_provider_error(self, capsys):
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        member = {
+            "name": "scout",
+            "state": "blocked",
+            "reason": "provider",
+            "detail": "Selected model is at capacity",
+            "tags": ["swarm:s1"],
+        }
+        swarm = {
+            "name": "s1",
+            "members": [member],
+            "repo": "acme/app",
+            "issue_number": 1,
+            "status": "active",
+        }
+        with patch(
+            "agent_backbone.cli._common.api",
+            new_callable=AsyncMock,
+            side_effect=lambda config, method, path, **kw: (
+                200,
+                {"items": [swarm] if path == "/api/swarms" else [member]},
+            ),
+        ):
+            assert _run(["swarm", "status", "s1"]) == 0
+        output = capsys.readouterr().out
+        assert "blocked" in output
+        assert "Reason: provider" in output
+        assert member["detail"] in output
+
+    def test_malformed_200_items_are_an_error(self, capsys):
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        with patch(
+            "agent_backbone.cli._common.api",
+            new_callable=AsyncMock,
+            return_value=(200, {"items": "not-a-list"}),
+        ):
+            assert _run(["swarm", "list"]) == 1
+        assert "unexpected swarm list" in capsys.readouterr().out
+
+    def test_partial_entries_render_without_traceback(self, capsys):
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        with patch(
+            "agent_backbone.cli._common.api",
+            new_callable=AsyncMock,
+            return_value=(200, {"items": [{"name": "s1"}]}),
+        ):
+            assert _run(["swarm", "list"]) == 0
+        assert "s1" in capsys.readouterr().out
+
+
+class TestReply:
+    def _client(self, body, status=200):
+        class _Resp:
+            status_code = status
+
+            @staticmethod
+            def json():
+                return body
+
+        client = AsyncMock()
+        client.request = AsyncMock(return_value=_Resp())
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        return client
+
+    def test_negative_200_is_a_nonzero_error(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_AGENT", "ike")
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        client = self._client(
+            {"ok": False, "session": "ike", "posted": {}, "results": {"telegram": "failed"}}
+        )
+        with patch("httpx.AsyncClient", return_value=client):
+            assert _run(["reply", "nope, failed"]) == 1
+        out = capsys.readouterr().out
+        assert "not posted" in out and "posted to " not in out
+
+    def test_posted_reply_is_zero(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_AGENT", "ike")
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        client = self._client(
+            {"ok": True, "session": "ike", "posted": {"telegram": True}, "results": {}}
+        )
+        with patch("httpx.AsyncClient", return_value=client):
+            assert _run(["reply", "done"]) == 0
+        assert "posted to telegram as ike" in capsys.readouterr().out
+
+
+class TestDown:
+    async def test_failed_stop_is_reported(self, tmp_path, capsys):
+        from agent_backbone.cli import server
+        from agent_backbone.config import bootstrap_config
+
+        config = bootstrap_config(tmp_path / "data")
+        with (
+            patch(
+                "agent_backbone.services.terminal.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal.graceful_close",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            assert await server._down(config) == 1
+        assert "failed to stop" in capsys.readouterr().out
+
+    async def test_clean_stop(self, tmp_path, capsys):
+        from agent_backbone.cli import server
+        from agent_backbone.config import bootstrap_config
+
+        config = bootstrap_config(tmp_path / "data")
+        with (
+            patch(
+                "agent_backbone.services.terminal.session_exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agent_backbone.services.terminal.graceful_close",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            assert await server._down(config) == 0
+        assert "backbone stopped" in capsys.readouterr().out
+
 
 class TestHooks:
     def test_install_claude_into_project(self, tmp_path, _isolated_data_dir, capsys):
@@ -377,6 +588,13 @@ class TestAgentApproveParser:
         assert ns.agent_command == "approve" and ns.name == "scout" and ns.sender == "orch"
         ns = build_parser().parse_args(["agent", "approve", "scout", "--from", "elias"])
         assert ns.sender == "elias"
+
+    def test_deny_mirrors_approve(self, monkeypatch):
+        from agent_backbone.cli import build_parser
+
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        ns = build_parser().parse_args(["agent", "deny", "scout"])
+        assert ns.agent_command == "deny" and ns.name == "scout" and ns.sender == "orch"
 
 
 class TestSecrets:
@@ -427,6 +645,18 @@ class TestSecrets:
         assert _run(["secrets", "set", "GITHUB_TOKEN"]) == 0
         assert "GITHUB_TOKEN=piped-token" in (_isolated_data_dir / ".env").read_text()
 
+    def test_set_and_unset_drop_duplicate_live_lines(self, _isolated_data_dir):
+        # A hand-edited .env with two live lines for one key: the second
+        # line must not survive to shadow the change.
+        assert _run(["init"]) == 0
+        env_path = _isolated_data_dir / ".env"
+        env_path.write_text("GITHUB_TOKEN=old1\nGITHUB_TOKEN=old2\n")
+        assert _run(["secrets", "set", "GITHUB_TOKEN", "new"]) == 0
+        assert env_path.read_text() == "GITHUB_TOKEN=new\n"
+        env_path.write_text("GITHUB_TOKEN=a\nGITHUB_TOKEN=b\n")
+        assert _run(["secrets", "unset", "GITHUB_TOKEN"]) == 0
+        assert "GITHUB_TOKEN=" not in env_path.read_text()
+
 
 class TestApiClient:
     def test_loopback_is_http_and_anything_else_is_https(self):
@@ -474,3 +704,47 @@ class TestRuntimesCommand:
         assert "deepcode" in out and "deepseek-v4-flash" in out
         assert "claude" in out and "opus, sonnet, haiku" in out
         assert "passed to the CLI verbatim" in out
+
+
+class TestAlwaysOnStart:
+    def test_without_always_on_agents_it_says_so(self, capsys):
+        assert _run(["agent", "start", "--always-on"]) == 0
+        assert "no always_on agents" in capsys.readouterr().out
+
+    def test_names_and_always_on_do_not_mix(self, capsys):
+        assert _run(["agent", "start", "app", "--always-on"]) == 1
+        assert "do not pass names" in capsys.readouterr().out
+
+    def test_helper_lists_the_marked_agents(self, tmp_path):
+        from dataclasses import replace
+
+        from agent_backbone.cli.agents import always_on_names
+        from agent_backbone.config import AgentsConfig
+        from tests.conftest import make_config
+
+        config = make_config(tmp_path)
+        marked = replace(config.agents.get("ike"), always_on=True)
+        config = replace(config, agents=AgentsConfig({**config.agents.specs, "ike": marked}))
+        assert always_on_names(config) == ["ike"]
+
+    def test_always_on_with_resume_resumes_every_marked_agent(self, tmp_path, capsys):
+        from agent_backbone.config import AgentSpec
+        from agent_backbone.services.agents import StartResult
+
+        seen: list[tuple[str, bool]] = []
+
+        async def _resolve(store, req):
+            return AgentSpec(name=req.name, dir=str(tmp_path), runtime="shell")
+
+        async def _start(store, config, spec, req, *, db):
+            seen.append((spec.name, req.resume))
+            return StartResult(ok=True, ready="not_waited")
+
+        with (
+            patch("agent_backbone.cli.agents.always_on_names", return_value=["app", "web"]),
+            patch("agent_backbone.services.agents.operations.resolve_agent", side_effect=_resolve),
+            patch("agent_backbone.services.agents.operations.start_resolved", side_effect=_start),
+        ):
+            assert _run(["agent", "start", "--always-on", "--resume", "--no-wait"]) == 0
+        assert seen == [("app", True), ("web", True)]
+        assert "starting always_on agents: app, web" in capsys.readouterr().out

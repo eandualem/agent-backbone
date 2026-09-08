@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from agent_backbone.api.deps import get_config, get_db, get_github
@@ -69,6 +70,7 @@ async def list_issues(
     repo: str = Query(..., description="owner/name"),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
+    db: BackboneDB = Depends(get_db),
 ):
     """List issues in a repository with filtering. Enriched with priority scores."""
     labels: list[str] = []
@@ -82,7 +84,11 @@ async def list_issues(
         labels.append(label)
 
     issues = await gh.list_issues(state=state, labels=labels, repo_full_name=repo)
-    items = [_issue_to_response(i, config) for i in issues]
+    counts = await db.dependencies.counts()
+    items = [
+        _issue_to_response(i, config, counts.get((i.repo_full_name.casefold(), i.number), 0))
+        for i in issues
+    ]
     items.sort(key=lambda item: (-item.priority_score, item.number))
     return ListEnvelope(items=items, total=len(items))
 
@@ -93,13 +99,27 @@ async def get_issue(
     repo: str = Query(..., description="owner/name"),
     config: BackboneConfig = Depends(get_config),
     gh: GitHubClient = Depends(get_github),
+    db: BackboneDB = Depends(get_db),
 ):
     """Get a single issue by number with priority score."""
     try:
         issue = await gh.get_issue(number, repo_full_name=repo)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            # GitHub itself says the issue is gone — that 404 is real.
+            raise HTTPException(status_code=404, detail=f"Issue #{number} not found") from e
+        # Anything else HTTP (rate limit, bad token, outage) flows to the
+        # app's sanitized httpx→502 handler, never a "not found".
+        raise
+    except httpx.HTTPError:
+        # No status to inspect (timeout, refused connection): same handler.
+        raise
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Issue #{number} not found") from e
-    return _issue_to_response(issue, config)
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+    counts = await db.dependencies.counts()
+    return _issue_to_response(
+        issue, config, counts.get((issue.repo_full_name.casefold(), issue.number), 0)
+    )
 
 
 @router.get("/issues/{number}/comments", response_model=ListEnvelope[IssueCommentResponse])
@@ -124,6 +144,8 @@ async def get_issue_dependencies(
 ):
     """Get sub-issues and parent issues for an issue."""
     sub_issues = await gh.get_sub_issues(number, repo_full_name=repo)
+    if sub_issues is None:
+        raise HTTPException(status_code=502, detail=f"GitHub did not answer for {repo}#{number}")
     parents = await db.dependencies.parents(number, repo=repo)
     return IssueDependencies(
         sub_issues=[_issue_to_response(s, config) for s in sub_issues],
