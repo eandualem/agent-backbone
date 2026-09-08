@@ -56,6 +56,7 @@ async def cmd_help(
         "/status — Show active agent sessions\n"
         "/queue — Show pending & recent deliveries\n"
         "/digest — Full system digest (sessions, agents, pending)\n"
+        "/updates — Agent progress reports, blockers, and history\n"
         "/tell `<agent>` `<message>` — Send a message to an agent\n"
         "/start `<agent>` — Start a configured agent\n"
         "/stop `<agent>` — Stop an agent session\n"

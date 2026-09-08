@@ -154,6 +154,15 @@ write leaves that recipient pending; replay and the retry job resume only
 unresolved recipients. See [delivery receipts](github.md#delivery-receipts-and-retries)
 for retention and the external-terminal crash boundary.
 
+## Progress report
+
+An agent's short account of its goal, accomplishments, blockers and next steps.
+Agents publish at meaningful milestones; the database preserves their reports
+so people and orchestrators can read a shared feed without interrupting work.
+Report age and missing reports are explicit. This authored account is separate
+from the runtime's measured state and from operational diagnostics. See
+[Agent progress reports](reports.md) for publishing tools and enforced length limits.
+
 ## Settings
 
 Everything tunable is a key in the database with a built-in default:

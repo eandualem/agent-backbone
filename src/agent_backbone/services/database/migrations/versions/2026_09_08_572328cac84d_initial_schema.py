@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 00d3414fb746
+Revision ID: 572328cac84d
 Revises:
-Create Date: 2026-09-08 08:49:07.984938
+Create Date: 2026-09-08 10:41:03.645732
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "00d3414fb746"
+revision: str = "572328cac84d"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -65,8 +65,12 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.Text(), nullable=False),
         sa.Column("last_started_at", sa.Text(), nullable=True),
+        sa.Column("report_identity", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("name", name=op.f("pk_agents")),
     )
+    with op.batch_alter_table("agents", schema=None) as batch_op:
+        batch_op.create_index("uq_agents_report_identity", ["report_identity"], unique=True)
+
     op.create_table(
         "deliveries",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -235,6 +239,25 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("repo", name=op.f("pk_poll_cursors")),
     )
     op.create_table(
+        "reports",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("author_id", sa.Text(), nullable=False),
+        sa.Column("author_name", sa.Text(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("source", sa.Text(), nullable=False),
+        sa.Column("content", sa.Text(), nullable=False),
+        sa.Column("priority", sa.Integer(), nullable=False),
+        sa.Column("swarm_member", sa.Integer(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_reports")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("reports", schema=None) as batch_op:
+        batch_op.create_index("idx_reports_author", ["author_id", "id"], unique=False)
+        batch_op.create_index("idx_reports_created", ["created_at"], unique=False)
+        batch_op.create_index("uq_reports_request", ["author_id", "request_id"], unique=True)
+
+    op.create_table(
         "review_lifecycle",
         sa.Column("source_key", sa.Text(), nullable=False),
         sa.Column("finished_at", sa.Text(), nullable=False),
@@ -285,6 +308,12 @@ def downgrade() -> None:
     op.drop_table("swarms")
     op.drop_table("settings")
     op.drop_table("review_lifecycle")
+    with op.batch_alter_table("reports", schema=None) as batch_op:
+        batch_op.drop_index("uq_reports_request")
+        batch_op.drop_index("idx_reports_created")
+        batch_op.drop_index("idx_reports_author")
+
+    op.drop_table("reports")
     op.drop_table("poll_cursors")
     with op.batch_alter_table("message_queue", schema=None) as batch_op:
         batch_op.drop_index(
@@ -350,6 +379,9 @@ def downgrade() -> None:
         batch_op.drop_index("idx_deliveries_created")
 
     op.drop_table("deliveries")
+    with op.batch_alter_table("agents", schema=None) as batch_op:
+        batch_op.drop_index("uq_agents_report_identity")
+
     op.drop_table("agents")
     op.drop_table("agent_watches")
     op.drop_table("agent_states")

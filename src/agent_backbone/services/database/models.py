@@ -45,6 +45,33 @@ class AgentORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     last_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    report_identity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Lazily assigned report author ID; survives rename, never reused after forget."""
+
+    __table_args__ = (Index("uq_agents_report_identity", "report_identity", unique=True),)
+
+
+class ReportORM(Base):
+    """Short authored progress reports, separate from operational diagnostics."""
+
+    __tablename__ = "reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    author_id: Mapped[str] = mapped_column(Text, nullable=False)
+    author_name: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    swarm_member: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index("uq_reports_request", "author_id", "request_id", unique=True),
+        Index("idx_reports_author", "author_id", "id"),
+        Index("idx_reports_created", "created_at"),
+        {"sqlite_autoincrement": True},
+    )
 
 
 class AgentWatchORM(Base):

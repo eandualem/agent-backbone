@@ -25,12 +25,17 @@ _EXPECTED_TABLES = {
     "issue_dependencies",
     "message_queue",
     "poll_cursors",
+    "reports",
     "review_lifecycle",
     "settings",
     "swarms",
 }
 
 _EXPECTED_INDEXES = {
+    "uq_agents_report_identity",
+    "uq_reports_request",
+    "idx_reports_author",
+    "idx_reports_created",
     "uq_events_delivery_id",
     "idx_events_received",
     "idx_events_repo",

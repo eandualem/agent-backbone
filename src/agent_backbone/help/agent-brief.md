@@ -19,6 +19,14 @@ What this environment gives you:
   `[via:telegram from:X]` came from a person on Telegram; reply with
   `backbone reply "…"` and it lands in your own topic there.
 - **See the system**: `backbone status`, `backbone agent inspect <agent>`.
+- **Keep the team informed**: read `backbone help reports`, then publish with
+  `backbone report --file report.json`. Report when accepting substantial work,
+  reaching a meaningful milestone, encountering/clearing a blocker, changing
+  direction, and finishing. Write short, conversational updates for a teammate
+  unfamiliar with the project: goal, progress, blockers, next steps, and a few
+  titled links. The tool rejects oversized reports. Read everyone's saved
+  updates with `backbone updates`; coalesce small changes instead of repeating
+  unchanged reports or narrating tools. A long single issue needs milestones too.
 - **Unblock a peer**: when `inspect` shows `waiting_for_human (permission)`,
   `backbone agent approve <agent>` answers the runtime's permission prompt
   (only while it is on screen; every approval is audited). Never reach

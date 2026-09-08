@@ -32,6 +32,12 @@ command and message from an unlisted chat is ignored silently.
 
 ## Commands
 
+`/updates` reads saved [progress reports](reports.md): goals, progress, blockers
+and next steps. `/updates NAME` selects an agent; `/updates history [NAME]` reads
+older reports; `/updates show ID` opens the full report and its links. Buttons
+provide the same navigation. Add `--members` to include swarm members. These
+reads never ask an agent to regenerate a report or create a new topic.
+
 | Command | Does |
 |---|---|
 | `/status` | Known agents (🟢 running / ⚪ stopped) and other tmux sessions |

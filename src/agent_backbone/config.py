@@ -161,7 +161,8 @@ SETTINGS_HELP: dict[str, str] = {
     "timing.retry_interval_seconds": "delivery-retry job period",
     "timing.start_timeout_seconds": "How long `agent start` waits for the prompt",
     "timing.delivery_retention_days": (
-        "Delivery, event, completed queue and diagnostic retention in days"
+        "Delivery, event, completed queue, diagnostic and report-history retention in days; "
+        "each author's latest report is kept"
     ),
     "telegram.allowed_chat_ids": "Chat ids allowed to control the backbone (JSON list) — required",
     "telegram.notification_chat_id": "Where alerts are sent",

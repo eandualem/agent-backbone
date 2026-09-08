@@ -6,66 +6,15 @@ import argparse
 import asyncio
 import json
 import re
-import sqlite3
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from urllib.parse import urlencode
 
 from agent_backbone.cli import _common
-from agent_backbone.config import BackboneConfig, bootstrap_config, validate_setting
-
-_CLIENT_SETTINGS_SQL = (
-    "SELECT key, value FROM settings WHERE key IN ('backbone.host', 'backbone.port')"
-)
+from agent_backbone.config import BackboneConfig
 
 
 async def _client_config() -> BackboneConfig:
-    """Read only existing address settings, without creating or repairing a database."""
-    from sqlalchemy import text
-    from sqlalchemy.engine import make_url
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    boot = bootstrap_config()
-    try:
-        url = make_url(boot.database_url)
-        if url.get_backend_name() == "sqlite":
-            if not url.database or url.database == ":memory:":
-                return boot
-
-            def sqlite_settings():
-                uri = Path(url.database).expanduser().resolve().as_uri() + "?mode=ro"
-                conn = sqlite3.connect(uri, uri=True, timeout=1)
-                try:
-                    return conn.execute(_CLIENT_SETTINGS_SQL).fetchall()
-                finally:
-                    conn.close()
-
-            rows = await asyncio.to_thread(sqlite_settings)
-        else:
-            engine = create_async_engine(boot.database_url)
-            try:
-
-                async def server_settings():
-                    async with engine.connect() as conn:
-                        return (await conn.execute(text(_CLIENT_SETTINGS_SQL))).fetchall()
-
-                rows = await asyncio.wait_for(server_settings(), timeout=3)
-            finally:
-                await engine.dispose()
-        settings = {key: validate_setting(key, json.loads(value)) for key, value in rows}
-    except Exception:
-        # A missing database or unreadable settings must not trigger initialization.
-        # The API call will report whether the bootstrap address is reachable.
-        return boot
-    return replace(
-        boot,
-        backbone=replace(
-            boot.backbone,
-            host=settings.get("backbone.host", boot.backbone.host),
-            port=settings.get("backbone.port", boot.backbone.port),
-        ),
-    )
+    return await _common.read_client_config()
 
 
 def parse_since(value: str) -> str:

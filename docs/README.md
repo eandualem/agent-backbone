@@ -10,6 +10,9 @@ prints the shorter playbooks written for agents (`setup`, `agents`,
 For local failures and retries, start with
 [Learning from local usage](diagnostics.md) and `backbone diagnostics`.
 
+For goals, progress, blockers and next steps across agents, read
+[Agent progress reports](reports.md) and use `backbone updates`.
+
 | Read this | When you want to |
 |---|---|
 | [Concepts](concepts.md) | Understand the handful of words the whole system is built from |

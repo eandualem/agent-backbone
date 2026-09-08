@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -31,7 +32,7 @@ from telegram.ext import (
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.integrations.base import Integration
-from agent_backbone.services.integrations.telegram import _commands, _routing
+from agent_backbone.services.integrations.telegram import _commands, _routing, _updates
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     agent_topic,
     effective_group_chat_id,
@@ -135,6 +136,7 @@ class TelegramService(Integration):
         self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
         self._background: set[asyncio.Task] = set()
         self._sync_lock = asyncio.Lock()
+        self._report_views: OrderedDict[str, dict] = OrderedDict()
 
     @property
     def enabled(self) -> bool:
@@ -258,6 +260,9 @@ class TelegramService(Integration):
     async def cmd_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _commands.cmd_digest(self, update, context)
 
+    async def cmd_updates(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await _updates.cmd_updates(self, update, context)
+
     async def cmd_identify(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         self._discover(update)
         await _commands.cmd_identify(self, update, context)
@@ -270,7 +275,10 @@ class TelegramService(Integration):
 
     async def on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """A button on an alert: Allow / Deny a permission prompt, Approve / Reject a plan."""
-        await _commands.on_callback(self, update, context)
+        if (getattr(update.callback_query, "data", None) or "").startswith("updates:"):
+            await _updates.on_callback(self, update, context)
+        else:
+            await _commands.on_callback(self, update, context)
 
     async def handle_topic_message(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -357,6 +365,7 @@ class TelegramService(Integration):
         self._app.add_handler(CommandHandler("stop", self.cmd_stop_agent))
         self._app.add_handler(CommandHandler("tell", self.cmd_tell))
         self._app.add_handler(CommandHandler("digest", self.cmd_digest))
+        self._app.add_handler(CommandHandler("updates", self.cmd_updates))
         self._app.add_handler(CommandHandler("identify", self.cmd_identify))
         self._app.add_handler(CommandHandler("viewplan", self.cmd_viewplan))
         self._app.add_handler(CommandHandler("approve", self.cmd_approve))

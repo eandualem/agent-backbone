@@ -74,6 +74,7 @@ def _register_jobs(app: FastAPI):
             "events": await state.db.events.prune(days),
             "queue": await state.db.queue.prune(days),
             "diagnostics": await state.db.diagnostics.prune(days),
+            "reports": await state.db.reports.prune(days),
             "action_log_lines": rotate_action_log(state.config.action_log_path),
         }
 
@@ -298,6 +299,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.plans import router as plans_router
+    from agent_backbone.api.routes.reports import router as reports_router
     from agent_backbone.api.routes.status import router as status_router
     from agent_backbone.api.routes.swarms import router as swarms_router
     from agent_backbone.api.routes.webhook import router as webhook_router
@@ -316,6 +318,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
         issues_router,
         messages_router,
         plans_router,
+        reports_router,
         swarms_router,
     ):
         app.include_router(router, dependencies=[Depends(require_api_key)])

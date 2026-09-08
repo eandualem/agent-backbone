@@ -4,6 +4,26 @@ Base URL `http://127.0.0.1:7120`. Interactive OpenAPI docs at `/docs` while
 running. Every route except `GET /health` and the webhook requires
 `Authorization: Bearer <BACKBONE_API_KEY>`.
 
+## Progress reports
+
+`GET /api/reports/schema` exposes the required sections, field and total limits,
+and a synthetic example. `POST /api/reports` accepts `{agent, request_id, report}`
+and returns `{record, created}` (201 new, 200 same retry). Validation failures are
+422 with short field errors, oversized requests 413, key/content conflicts 409,
+and the per-author publication bound 429. Report text is never silently truncated.
+
+`GET /api/reports` returns the latest report per registered agent before limiting,
+or history with `history=true`. Filters: repeatable `agent`, `members`, `limit`
+(1–20), and `cursor`; use `author_id` with history for a forgotten author's records.
+Responses contain `items`, `has_more`, and `next_cursor`. Each item carries
+`agent_name`, `author_id`, and a full `record`, or null when no report exists.
+`GET /api/reports/{id}` returns one complete report with age, authorship and links.
+
+The named OpenAPI operations and [reporting reference](reports.md) describe these
+agent-facing tools, bounded content, stable pagination, identity and retention.
+Reads query stored reports without prompting agents. Author names are supplied by
+the authenticated client; there is no separate per-agent authentication boundary.
+
 ## Agents
 
 ### `GET /api/agents`
