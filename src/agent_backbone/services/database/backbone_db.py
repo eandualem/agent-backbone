@@ -135,11 +135,11 @@ def _repair_schema(sync_conn) -> None:
     Tables are stable pre-1.0, but columns and index *predicates* have
     changed (``flow_name`` became ``source``; the ``kind = 'issue'`` guard
     on the delivery owner index; the one queue dedup rule for every
-    non-issue kind). A re-stamp is the only moment an existing database
-    meets a regenerated squash, so columns are repaired and indexes are
-    rebuilt from the model here. Duplicate pending queue rows — the reason
-    the dedup index exists — are expired first so the unique index can be
-    created.
+    non-issue kind). Repair runs for an obsolete revision or missing required
+    schema, even when the revision is current. Columns are repaired and
+    indexes are rebuilt from the model here. Duplicate pending queue rows —
+    the reason the dedup index exists — are expired first so the unique
+    index can be created.
     """
     # Indexes go first: an index that still names a column about to be
     # dropped (uq_mq_message_dedup on content_hash) makes SQLite refuse the
@@ -286,18 +286,30 @@ class BackboneDB:
                 existing_app_tables = existing_tables & app_tables
 
                 alembic_cfg.attributes["connection"] = sync_conn
-                if has_alembic and existing_app_tables:
+                if has_alembic:
                     # Pre-1.0 policy: one squashed migration. A regenerated
                     # squash changes the revision id, so a database stamped
-                    # with the old id must be repaired and re-stamped. New
-                    # tables must also be created here: PostgreSQL does not
-                    # run create_all before migrations like SQLite does.
+                    # with the old id must be repaired and re-stamped. A
+                    # current stamp does not prove required tables/columns
+                    # exist: another process may have stamped using stale
+                    # loaded metadata after the migration files changed.
                     stored = sync_conn.execute(
                         text("SELECT version_num FROM alembic_version")
                     ).scalar()
                     script = ScriptDirectory.from_config(alembic_cfg)
                     known = {rev.revision for rev in script.walk_revisions()}
-                    if stored not in known:
+                    missing_schema = existing_app_tables != app_tables or any(
+                        set(table.columns.keys())
+                        - {column["name"] for column in inspector.get_columns(table.name)}
+                        for table in metadata.sorted_tables
+                    )
+                    # With no Backbone tables, an unknown revision may belong
+                    # to another application. Let Alembic reject it unchanged.
+                    owns_schema = existing_app_tables or stored in known
+                    if owns_schema and (stored not in known or missing_schema):
+                        # Complete current schemas avoid all index rebuilds.
+                        # PostgreSQL also needs any missing tables here; it
+                        # does not run SQLite's startup create_all shortcut.
                         metadata.create_all(
                             sync_conn,
                             tables=[
