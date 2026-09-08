@@ -3,9 +3,9 @@
 The injected agent brief stays short; when an agent needs detail it asks
 for a topic (``backbone help swarms`` or ``GET /api/help/swarms``) instead
 of reading the backbone's source. Topics ship with the package
-(``topics/*.md``); a file with the same name under
-``<data_dir>/help-topics/`` overrides it, and new files there become new
-topics.
+in the top-level ``help/`` directory; installed ``<data_dir>/help/`` files
+override them. The legacy ``help-topics/`` override directory is still read.
+Injected instructions live separately in ``templates/``.
 
 The user documentation (``docs/*.md`` in the repository) ships with the
 package too — ``backbone docs getting-started`` — so an agent that installed
@@ -17,17 +17,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from agent_backbone.templates import load_template, render
+from agent_backbone.templates import bundled_dir
 
-_TOPICS_DIR = Path(__file__).with_name("topics")
+_TOPICS_DIR = bundled_dir("help")
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,40}$")
 
-# The docs live at ``docs/`` in a source checkout and are force-included into
-# the wheel as ``agent_backbone/help/docs``; whichever exists is used.
-_DOCS_DIRS = (
-    Path(__file__).with_name("docs"),
-    Path(__file__).resolve().parents[3] / "docs",
-)
+_DOCS_DIRS = (bundled_dir("docs"),)
 
 
 def _docs_dir() -> Path | None:
@@ -61,13 +56,17 @@ def get_doc(name: str) -> str | None:
 
 
 def _override_dir(data_dir: Path | None) -> Path | None:
-    return (data_dir / "help-topics") if data_dir is not None else None
+    return (data_dir / "help") if data_dir is not None else None
 
 
 def list_topics(data_dir: Path | None = None) -> list[dict]:
     """All topics as ``{name, summary}`` — shipped plus data-dir additions."""
     names: dict[str, Path] = {}
-    for source in (_TOPICS_DIR, _override_dir(data_dir)):
+    for source in (
+        _TOPICS_DIR,
+        data_dir / "help-topics" if data_dir else None,
+        _override_dir(data_dir),
+    ):
         if source is None or not source.is_dir():
             continue
         for path in sorted(source.glob("*.md")):
@@ -80,31 +79,13 @@ def get_topic(name: str, data_dir: Path | None = None) -> str | None:
     """A topic's markdown, or None. Data-dir files override shipped ones."""
     if not _NAME_RE.match(name):
         return None
-    return load_template(name, _TOPICS_DIR, _override_dir(data_dir))
-
-
-def render_agent_brief(
-    facts: dict[str, str], data_dir: Path | None = None, *, policy_names: tuple[str, ...] = ()
-) -> str:
-    """The common brief injected into every backbone-started agent.
-
-    Complements the project's own instructions (CLAUDE.md still loads);
-    ``<data_dir>/agent-brief.md`` overrides the shipped template.
-    """
-    template = load_template("agent-brief", Path(__file__).parent, data_dir)
-    brief = render(template or "", facts)
-    # Full overrides keep their original meaning, including control over policy.
-    if data_dir is not None and (data_dir / "agent-brief.md").is_file():
-        return brief
-    for name in policy_names:
-        if data_dir is None or not _NAME_RE.fullmatch(name):
-            raise ValueError(f"Invalid shared policy name: {name!r}")
-        path = data_dir / "policies" / f"{name}.md"
-        try:
-            policy = path.read_text().strip()
-        except OSError as exc:
-            raise ValueError(f"Cannot read configured shared policy {name!r}: {path}") from exc
-        if not policy:
-            raise ValueError(f"Configured shared policy {name!r} is empty: {path}")
-        brief += f"\n\n## Shared policy: {name}\n\n{policy}\n"
-    return brief
+    for source in (
+        _override_dir(data_dir),
+        data_dir / "help-topics" if data_dir else None,
+        _TOPICS_DIR,
+    ):
+        if source is not None:
+            path = source / f"{name}.md"
+            if path.exists() or path.is_symlink():
+                return path.read_text()
+    return get_topic("templates", data_dir) if name == "instructions" else None

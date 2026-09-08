@@ -171,3 +171,5 @@ make dev         # backbone up --reload
 ## License
 
 MIT — see [LICENSE](https://github.com/eandualem/agent-backbone/blob/main/LICENSE).
+
+Injected instructions are separate from help: see [templates/](templates/) and [the templates guide](docs/templates.md). Use `backbone templates list` to inspect an installed Backbone.

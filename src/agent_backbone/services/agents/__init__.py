@@ -21,6 +21,7 @@ from agent_backbone.services.agents.acknowledgement import (
     rotate_action_log,
 )
 from agent_backbone.services.agents.audit import record_answer
+from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.launch import (
     StartResult,
     approve_agent,
@@ -47,6 +48,7 @@ __all__ = [
     "get_agent_state",
     "has_commented_on_issue",
     "infer_state_from_pane",
+    "instruction_preview",
     "lifecycle_lock",
     "plan_control",
     "prompt_id",

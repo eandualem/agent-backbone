@@ -176,6 +176,27 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"  {spec.name:<{width}s}  {spec.runtime}{model}  {spec.path}")
         return 0
 
+    if sub in ("tag", "untag"):
+        if api_up:
+            response = await _common.api(
+                boot,
+                "POST",
+                f"/api/agents/{args.name}/tags",
+                json_body={"tags": args.tags, "remove": sub == "untag"},
+            )
+            if not response or response[0] != 200:
+                print(f"error: {response[1] if response else 'API unreachable'}")
+                return 1
+        else:
+            async with _common.Direct(boot) as direct:
+                try:
+                    await direct.store.tag(args.name, args.tags, remove=sub == "untag")
+                except (KeyError, ValueError) as exc:
+                    print(f"error: {exc}")
+                    return 1
+        print(f"{args.name}: tags updated; preview with backbone templates preview {args.name}")
+        return 0
+
     if sub == "stop":
         failed = False
         for name in args.names:

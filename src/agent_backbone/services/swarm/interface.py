@@ -32,6 +32,7 @@ from agent_backbone.services.swarm._worktree import (
     remove_worktree,
 )
 from agent_backbone.services.terminal import list_sessions, session_exists, stop_session
+from agent_backbone.templates import read_template, render
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -149,6 +150,20 @@ async def create_swarm(
     if existing is not None:
         raise SwarmError(f"swarm '{existing['name']}' is already working {repo}#{issue_number}")
     title = await _verify_issue(gh, repo, issue_number)
+    try:
+        kickoff_body = render(
+            read_template("swarm:kickoff", config.data_dir),
+            {
+                "repo": repo,
+                "issue_number": str(issue_number),
+                "title": title,
+                "issue_url": _issue_url(repo, issue_number),
+                "swarm": name,
+            },
+        ).strip()
+    except (OSError, ValueError) as exc:
+        raise SwarmError(str(exc)) from exc
+    kickoff = f"[via:backbone swarm:{name}] {kickoff_body}"
 
     # The worktree is created from the initiating agent's checkout of the repo.
     # An agent swarms on its OWN repository — running in another agent's
@@ -321,11 +336,6 @@ async def create_swarm(
                     log.exception("rollback: could not mark '%s' disbanded; retry disband", name)
         raise
 
-    kickoff = (
-        f"[via:backbone swarm:{name}] Your swarm is live. Task: {repo}#{issue_number} "
-        f'— "{title}" ({_issue_url(repo, issue_number)}). Read the issue, plan, and '
-        f"start assigning work to your members. Your role brief has the details."
-    )
     outcome = await safe_deliver(
         coordinator,
         kickoff,

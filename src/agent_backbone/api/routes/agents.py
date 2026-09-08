@@ -6,6 +6,7 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from agent_backbone.api.deps import (
     get_agent_store,
@@ -66,6 +67,24 @@ from agent_backbone.services.terminal import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agents"])
+
+
+class AgentTagsRequest(BaseModel):
+    tags: list[str]
+    remove: bool = False
+
+
+@router.post("/agents/{name}/tags", response_model=AgentConfigResponse)
+async def tag_agent(
+    name: str, body: AgentTagsRequest, store: AgentStore = Depends(get_agent_store)
+):
+    try:
+        spec = await store.tag(name, body.tags, remove=body.remove)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown agent '{name}'") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AgentConfigResponse.from_spec(spec)
 
 
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])

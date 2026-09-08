@@ -67,10 +67,12 @@ packages = ["src/agent_backbone"]
 # The user documentation ships inside the wheel so an installed backbone can
 # print it (`backbone docs <page>`) without a checkout of the repository.
 [tool.hatch.build.targets.wheel.force-include]
-"docs" = "agent_backbone/help/docs"
+"docs" = "agent_backbone/_resources/docs"
+"help" = "agent_backbone/_resources/help"
+"templates" = "agent_backbone/_resources/templates"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/agent_backbone", "docs", "alembic.ini", "README.md", "LICENSE"]
+include = ["src/agent_backbone", "docs", "help", "templates", "alembic.ini", "README.md", "LICENSE"]
 
 [tool.ruff]
 target-version = "py311"

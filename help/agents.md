@@ -11,6 +11,9 @@ backbone agent start --model opus          # model recorded, reused next start
 backbone agent start --model gpt-6-astra:high   # model *and* reasoning effort
 backbone agent stop NAME…                  # kill sessions
 backbone agent forget NAME                 # remove a stopped agent's record
+backbone agent tag NAME python             # apply a persistent group tag
+backbone agent untag NAME python           # remove that tag
+backbone templates preview NAME            # inspect effective startup instructions
 ```
 
 - Runtimes: `claude` (default), `codex`, `gemini`, `opencode`,

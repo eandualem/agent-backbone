@@ -246,7 +246,7 @@ GitHub, Telegram, and exactly where a human is needed.
 Every backbone-started Claude agent carries a short injected brief (see
 `agents.inject_brief`) that points here, so the injected text stays
 small while the capability surface can grow. Add or override topics by
-dropping markdown files into `<data_dir>/help-topics/`.
+dropping markdown files into `<data_dir>/help/`.
 
 ## `backbone docs [PAGE]`
 
@@ -312,3 +312,17 @@ loads its plugin only through the launch wiring; there is no install.
 The hooks prefer `$BACKBONE_STATE_DIR` (exported into every session the
 backbone starts), so one global install serves any data directory. Restart
 running sessions afterwards.
+
+## `backbone templates`
+
+Find, edit and preview injected instructions. `list [--json]` shows sources and
+assignments; `show NAME` prints content; `path [NAME]` locates editable files;
+`edit NAME` opens the editor; `init [NAME...]` copies defaults without overwriting.
+`use [POLICY...] [--tag TAG]` replaces global or tag assignments;
+`preview AGENT [--json]` shows effective next-launch content;
+`validate [AGENT]` checks required instructions. Names are `base`, `swarm:ROLE`,
+or `policy:NAME`. See [Templates](templates.md) for examples and adoption rules.
+
+`backbone agent tag NAME TAG...` adds persistent group tags;
+`backbone agent untag NAME TAG...` removes them. Swarm/role identity tags cannot
+be changed with these commands. Changes take effect at the next fresh launch.

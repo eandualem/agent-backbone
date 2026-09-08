@@ -1,28 +1,39 @@
-"""Role briefs — the instructions injected into every swarm member at launch.
-
-Templates ship with the package (``templates/<role>.md``); a file with the
-same name under ``<data_dir>/swarm-templates/`` overrides it. Every brief is
-the shared preamble (``common.md``) followed by the role body, rendered with
-the swarm's facts. Nothing is ever written into the repository.
-"""
+"""Swarm roles use editable common and role templates from templates/swarm/."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from agent_backbone.templates import load_template, render
+from agent_backbone.templates import (
+    list_templates,
+    read_template,
+    render,
+    template_path,
+    template_source,
+)
 
-_TEMPLATE_DIR = Path(__file__).with_name("templates")
-_FALLBACK_ROLE = "worker"
+
+def template_paths(role: str, data_dir: Path | None) -> tuple[Path, Path]:
+    name = f"swarm:{role}"
+    source = template_source(name, data_dir)
+    if not source.exists() and not source.is_symlink():
+        source = template_source("swarm:worker", data_dir)
+    target = template_path(data_dir, name) if data_dir is not None else source
+    return source, target
+
+
+def list_brief_templates(data_dir: Path) -> list[dict]:
+    return [
+        {"name": row["name"][6:], "source": row["source"], "override": row["path"]}
+        for row in list_templates(data_dir)
+        if row["name"].startswith("swarm:")
+    ]
 
 
 def render_brief(role: str, facts: dict[str, str], *, data_dir: Path | None = None) -> str:
-    """The full brief for a role: common preamble + role body, placeholders filled."""
-    override = (data_dir / "swarm-templates") if data_dir is not None else None
-    common = load_template("common", _TEMPLATE_DIR, override) or ""
-    body = (
-        load_template(role, _TEMPLATE_DIR, override)
-        or load_template(_FALLBACK_ROLE, _TEMPLATE_DIR, override)
-        or ""
-    )
+    common = read_template("swarm:common", data_dir)
+    source, _ = template_paths(role, data_dir)
+    body = source.read_text()
+    if not body.strip():
+        raise ValueError(f"Swarm role template is empty: {source}")
     return render(f"{common}\n{body}".strip() + "\n", facts)

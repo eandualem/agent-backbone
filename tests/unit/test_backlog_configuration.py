@@ -10,12 +10,12 @@ from fastapi import FastAPI
 
 from agent_backbone.api.app import _register_jobs
 from agent_backbone.config import AgentsConfig, AgentSpec, build_config, validate_setting
-from agent_backbone.help import render_agent_brief
 from agent_backbone.services.agents import AgentStore, approve_agent
 from agent_backbone.services.integrations import Integration, Integrations
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.runtimes.claude import pre_accept_bypass
 from agent_backbone.services.scheduler import PeriodicScheduler
+from agent_backbone.templates import render_agent_brief
 
 
 @pytest.mark.parametrize("question", ["Choose a session", "Quick safety check", "Unknown picker"])
@@ -60,7 +60,9 @@ def test_policy_order_literal_content_and_full_override(tmp_path):
     with pytest.raises(ValueError):
         validate_setting("agents.shared_policy", ["../secrets"])
     (tmp_path / "agent-brief.md").write_text("Full control")
-    assert render_agent_brief({}, tmp_path, policy_names=("missing",)) == "Full control"
+    with pytest.raises(ValueError, match="Cannot read configured shared policy"):
+        render_agent_brief({}, tmp_path, policy_names=("missing",))
+    assert "Review {literal}" in render_agent_brief({}, tmp_path, policy_names=("pr",))
 
 
 @pytest.mark.parametrize(
