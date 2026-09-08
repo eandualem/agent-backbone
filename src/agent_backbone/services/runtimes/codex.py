@@ -302,11 +302,18 @@ class Codex(Runtime):
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         hook = self.hook_launch_args(data_dir, state_dir)
-        # `codex resume` is a subcommand; the resumed session keeps its model.
+        # `codex resume` accepts explicit model overrides as well as a session ID.
         # Both the TUI and `resume` take `-c` and the hook-trust flag.
         if resume:
             target = resume if isinstance(resume, str) else "--last"
-            return ["resume", target, *_LOCAL_API_ACCESS, "--no-alt-screen", *hook]
+            return [
+                "resume",
+                target,
+                *_LOCAL_API_ACCESS,
+                "--no-alt-screen",
+                *hook,
+                *(["--model", model] if model else []),
+            ]
         # Inline output gives tmux scrollback to display; session mouse
         # handling keeps the wheel from becoming Up/Down in the composer.
         args: list[str] = [*_LOCAL_API_ACCESS, "--no-alt-screen", *hook]

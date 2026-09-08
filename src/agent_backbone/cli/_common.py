@@ -6,11 +6,10 @@ import asyncio
 import json
 import logging
 import sqlite3
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from agent_backbone.config import BackboneConfig, bootstrap_config, validate_setting
+from agent_backbone.config import BackboneConfig, bootstrap_config, build_config, validate_setting
 
 log = logging.getLogger(__name__)
 
@@ -160,14 +159,9 @@ async def read_client_config() -> BackboneConfig:
         # A missing database or unreadable settings must not trigger initialization.
         # The API call will report whether the bootstrap address is reachable.
         return boot
-    return replace(
-        boot,
-        backbone=replace(
-            boot.backbone,
-            host=settings.get("backbone.host", boot.backbone.host),
-            port=settings.get("backbone.port", boot.backbone.port),
-        ),
-    )
+    # Share server precedence, including BACKBONE_PORT from process env/.env,
+    # while keeping this path read-only and limited to address settings.
+    return build_config(boot.data_dir, settings=settings, agents=boot.agents)
 
 
 async def _read_config() -> BackboneConfig:

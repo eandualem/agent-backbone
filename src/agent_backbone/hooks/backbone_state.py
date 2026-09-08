@@ -331,6 +331,28 @@ def tool_actions(tool: str, tool_input: dict, cwd: str | None, now: float) -> li
     return shell_actions(tool_input.get("command", tool_input.get("cmd", "")), effective_cwd, now)
 
 
+def effective_gh_repo(cwd: str | None) -> str | None:
+    """Resolve safe local gh selection; ambiguous defaults wait for GitHub confirmation."""
+    if os.environ.get("GH_HOST", "github.com").casefold() != "github.com":
+        return None
+    override = os.environ.get("GH_REPO")
+    if override:
+        parts = override.split("/")
+        if len(parts) == 3 and parts[0].casefold() == "github.com":
+            parts = parts[1:]
+        if len(parts) == 2 and all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in parts):
+            return "/".join(parts)
+        return None
+    defaults = _git_output(cwd, "config", "--get-regexp", r"^remote\..*\.gh-resolved$")
+    if any(re.match(r"remote\..*\.gh-resolved\s+", line) for line in (defaults or "").splitlines()):
+        # gh owns this resolution protocol. Do not guess an origin-based
+        # acknowledgment when it selected a default remote; its API confirms it.
+        return None
+    remote = _git_output(cwd, "remote", "get-url", "origin")
+    found = _REMOTE_RE.search(remote or "")
+    return found.group(1) if found else None
+
+
 def shell_actions(command: str | list[str], cwd: str | None, now: float) -> list[dict]:
     actions = []
     for argv in command_argv(command):
@@ -338,11 +360,8 @@ def shell_actions(command: str | list[str], cwd: str | None, now: float) -> list
             argv, cwd, now
         )
         if action:
-            if not action.get("repo"):
-                remote = _git_output(cwd, "remote", "get-url", "origin")
-                found = _REMOTE_RE.search(remote or "")
-                if found:
-                    action["repo"] = found.group(1)
+            if not action.get("repo") and (repo := effective_gh_repo(cwd)):
+                action["repo"] = repo
             actions.append(action)
         elif argv and argv[0] == "cd":
             # Later gh commands run elsewhere; never infer repo/branch from the old cwd.

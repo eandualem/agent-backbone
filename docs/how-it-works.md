@@ -110,7 +110,9 @@ session exists — and from then on by the runtime's shipped hook. Every
 record carries the event that produced it (shown in `agent inspect`'s
 evidence), the runtime's session id, and, after a turn, the agent's last
 reply (clipped). One script per runtime maps that CLI's events onto the
-shared vocabulary:
+shared vocabulary. Saved session IDs and last replies remain available when
+terminal evidence supplies the current state; stale permission requests are not
+revived:
 
 | Claude Code event | State written |
 |---|---|
@@ -154,6 +156,9 @@ metadata. Claude, Codex and OpenCode record **intent** before execution to suppr
 self-notification. Only a **successful completion** acknowledges work; a failed
 command or a quoted example cannot remove an issue from the agent's queue.
 Legacy action records without completion evidence no longer acknowledge work.
+Comment hooks honor an explicit repository and `GH_REPO`. If `gh repo set-default`
+makes local attribution ambiguous, the hook leaves the action unscoped and waits
+for repository-specific GitHub confirmation.
 
 Direct commands, argv lists and `&&` chains are supported. Ambiguous shell
 control flow, expansion, background execution and unknown completion output
