@@ -7,17 +7,18 @@ without the working spinner's "esc interrupt".
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
 from agent_backbone.hooks import install as hooks
+from agent_backbone.services.runtimes._opencode_launch import merge_config
 from agent_backbone.services.runtimes.base import Runtime, read_brief
 
 log = logging.getLogger(__name__)
 
 
 class OpenCode(Runtime):
+    supports_exact_resume = True
     id = "opencode"
     display_name = "OpenCode"
     aliases = ("open-code", "open_code")
@@ -67,32 +68,46 @@ class OpenCode(Runtime):
         # its provider options, permission denies and existing plugins. If we
         # cannot compose it (e.g. JSONC), leave it intact for OpenCode to read
         # and use terminal state detection instead of dropping configuration.
-        try:
-            content = json.loads((env or {}).get("OPENCODE_CONFIG_CONTENT") or "{}")
-        except ValueError:
-            content = None
-        if not isinstance(content, dict) or not isinstance(content.get("plugin", []), list):
-            log.warning(
-                "Skipping OpenCode hook injection: OPENCODE_CONFIG_CONTENT must be a JSON "
-                "object with a plugin array to merge; leaving the existing configuration intact"
-            )
+        # When no explicit value is supplied, only the launched process knows
+        # the effective tmux-server environment. Its wrapper composes it there.
+        if env is None or "OPENCODE_CONFIG_CONTENT" not in env:
             return {}
         try:
             plugin = hooks.install_hook_files(Path(data_dir)) / self.hook_script
         except OSError as exc:
             log.warning("Could not write the hook files: %s", exc)
             return {}
-        plugins = content.setdefault("plugin", [])
-        if plugin.as_uri() not in plugins:
-            plugins.append(plugin.as_uri())
-        return {"OPENCODE_CONFIG_CONTENT": json.dumps(content)}
+        content = merge_config(env["OPENCODE_CONFIG_CONTENT"], plugin.as_uri())
+        if content is None:
+            log.warning(
+                "Skipping OpenCode hook injection: preserving unsupported inline configuration"
+            )
+            return {}
+        return {"OPENCODE_CONFIG_CONTENT": content}
+
+    def build_command(self, **kwargs):
+        command = super().build_command(**kwargs)
+        data_dir, state_dir = kwargs.get("data_dir"), kwargs.get("state_dir")
+        if command is None or data_dir is None or state_dir is None:
+            return command
+        try:
+            plugin = hooks.install_hook_files(Path(data_dir)) / self.hook_script
+        except OSError as exc:
+            log.warning("Could not install OpenCode launch hooks: %s", exc)
+            return command
+        return [
+            hooks.default_python(),
+            str(Path(__file__).with_name("_opencode_launch.py")),
+            str(plugin),
+            *command,
+        ]
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args: list[str] = []
         if model:
             args.extend(["--model", model])
         if resume:
-            args.append("--continue")  # opencode's resume flag
+            args.extend(["--session", resume] if isinstance(resume, str) else ["--continue"])
         if brief_file is not None and (brief := read_brief(brief_file)):
             args.extend(["--prompt", brief])
         return args

@@ -615,7 +615,11 @@ class TestHookWiringReachesTheSession:
                 result = await start_agent(spec, config, wait=False)
             assert result.ok
             env = start.await_args.kwargs["environment"]
-            assert key in env
+            if runtime == "opencode":
+                assert key not in env  # composed after inheriting tmux's environment
+                assert start.await_args.kwargs["command"][1].endswith("_opencode_launch.py")
+            else:
+                assert key in env
             assert env["BACKBONE_AGENT"] == f"{runtime}-agent"
 
 

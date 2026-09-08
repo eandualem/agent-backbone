@@ -155,3 +155,33 @@ def test_cd_changes_the_repository_used_for_later_commands(tmp_path):
         (action,) = bb.shell_actions("cd other && gh issue comment 5 -b x", str(tmp_path), 1)
     assert action["repo"] == "other/repo"
     git.assert_called_once_with(str(tmp_path / "other"), "remote", "get-url", "origin")
+
+
+@pytest.mark.parametrize("key", ["workdir", "cwd"])
+def test_tool_directory_override_scopes_successful_acknowledgment(key):
+    def git(cwd, *args):
+        if args == ("remote", "get-url", "origin"):
+            return "git@github.com:acme/b.git" if cwd == "/repo-b" else "git@github.com:acme/a.git"
+        return "branch-b"
+
+    with patch.object(bb, "_git_output", side_effect=git):
+        _, actions = codex_hook.derive(
+            {
+                "hook_event_name": "PostToolUse",
+                "cwd": "/repo-a",
+                "tool_name": "exec_command",
+                "tool_input": {"cmd": "gh issue comment 42 -b done", key: "/repo-b"},
+                "tool_response": {"exit_code": 0},
+            },
+            {},
+        )
+    assert len(actions) == 1
+    assert actions[0]["repo"] == "acme/b"
+    assert actions[0]["phase"] == "succeeded"
+
+
+@pytest.mark.parametrize("override", [None, "", 42, {}])
+def test_invalid_workdir_never_acknowledges_in_the_parent_repository(override):
+    assert (
+        bb.tool_actions("exec_command", {"cmd": COMMAND, "workdir": override}, "/repo-a", 1) == []
+    )

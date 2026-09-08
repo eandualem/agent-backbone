@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 
 
 class Gemini(Runtime):
+    supports_exact_resume = True
     id = "gemini"
     display_name = "Gemini CLI"
     aliases = ("gemini-cli",)
@@ -94,7 +95,7 @@ class Gemini(Runtime):
         if model:
             args.extend(["--model", model])
         if resume:
-            args.extend(["--resume", "latest"])
+            args.extend(["--resume", resume if isinstance(resume, str) else "latest"])
         if pre_trust:
             args.append("--skip-trust")  # Gemini's trust dialog is a flag, not a config file
         if brief_file is not None and (brief := read_brief(brief_file)):

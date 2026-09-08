@@ -7,6 +7,7 @@ import asyncio
 import math
 import subprocess
 import sys
+from uuid import uuid4
 
 from agent_backbone.cli import _common
 from agent_backbone.config import BackboneConfig
@@ -97,7 +98,42 @@ async def restart_backbone(config: BackboneConfig) -> int:
     return 0
 
 
+async def _set_restart_hold(config: BackboneConfig, operation: str, enabled: bool) -> bool:
+    result = await _common.api(
+        config,
+        "POST",
+        "/api/upgrade/hold",
+        json_body={"operation_id": operation, "enabled": enabled},
+    )
+    return bool(
+        result
+        and result[0] == 200
+        and isinstance(result[1], dict)
+        and result[1].get("operation_held") is enabled
+    )
+
+
 async def _upgrade(args: argparse.Namespace) -> int:
+    if args.check or not args.no_restart:
+        return await _install_upgrade(args)
+    # Coordinate before the installer can change any files. Refuse an old or
+    # unhealthy API that cannot acknowledge this hold instead of making a promise
+    # that its watcher will immediately break.
+    config = await _common.read_client_config()
+    health = await _common.api(config, "GET", "/health", timeout=2.0)
+    operation = str(uuid4()) if health is not None else None
+    if operation and (health[0] != 200 or not await _set_restart_hold(config, operation, True)):
+        print(
+            "cannot hold automatic restart; restart/update the service "
+            "before upgrading with --no-restart"
+        )
+        return 1
+    # A failed installer may have changed files too: --no-restart keeps the
+    # hold on failure as well. A later explicit service restart clears it.
+    return await _install_upgrade(args)
+
+
+async def _install_upgrade(args: argparse.Namespace) -> int:
     install = installation()
     before = installed_version()
     print(f"install: {install.describe()}")
@@ -128,7 +164,10 @@ async def _upgrade(args: argparse.Namespace) -> int:
         return 1
 
     if args.no_restart:
-        print("not restarting (--no-restart); the running backbone keeps the old code")
+        print(
+            "not restarting (--no-restart); automatic restart is held "
+            "until a manual service restart"
+        )
         return 0
     config = await _common.load_config()
     return await restart_backbone(config)

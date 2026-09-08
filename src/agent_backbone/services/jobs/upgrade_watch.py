@@ -37,6 +37,19 @@ class UpgradeWatch:
         self._install = install or installation()
         self.started = identity(self._install)
         self.requested = False
+        self._holds: set[str] = set()
+
+    def set_hold(self, operation: str, enabled: bool) -> dict:
+        """Suppress automatic restarts until this process ends or the operation releases."""
+        if enabled:
+            if self.requested:
+                raise ValueError("automatic restart already requested; retry after restart")
+            if operation not in self._holds and len(self._holds) >= 32:
+                raise ValueError("too many upgrade holds; restart the service to clear them")
+            self._holds.add(operation)
+        else:
+            self._holds.discard(operation)
+        return {"held": bool(self._holds), "operation_held": operation in self._holds}
 
     async def run(self) -> dict:
         if self.requested:
@@ -47,6 +60,8 @@ class UpgradeWatch:
         if not same_line(self.started, current):
             # The checkout is on another branch: someone is developing in it.
             return {"code": current, "changed_from": self.started, "restart": "other branch"}
+        if self._holds:
+            return {"code": current, "changed_from": self.started, "restart": "held"}
         if not self._enabled():
             return {"code": current, "changed_from": self.started, "restart": "disabled"}
         pending = self._in_flight()

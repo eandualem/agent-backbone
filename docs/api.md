@@ -473,3 +473,12 @@ Ordinary agent reports appear in General and the agent's topic, with separate
 delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
+
+### Hold automatic upgrade restarts
+
+`POST /api/upgrade/hold` accepts `{"operation_id":"<UUID>","enabled":true}` and
+returns `{"held":true,"operation_held":true}`. This authenticated operation holds
+the running process's automatic upgrade watcher, without changing saved settings.
+`enabled:false` releases only that operation's hold; a manual restart clears all
+holds. A restart already requested returns 409, and an unavailable watcher returns
+503. The CLI uses this handshake before `upgrade --no-restart` changes any files.

@@ -464,6 +464,9 @@ class Runtime:
 
     # --- pane recognition ----------------------------------------------------
 
+    supports_exact_resume: bool = False
+    """Whether a saved session ID is honored rather than selecting runtime-latest."""
+
     fallback_prompts: tuple[str, ...] = ()
 
     def matches(self, pane_content: str) -> bool:

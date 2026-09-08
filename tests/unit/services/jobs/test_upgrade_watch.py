@@ -55,3 +55,25 @@ async def test_routing_in_flight_defers_the_restart():
     assert (await watch.run())["restart"] == "deferred (2 in flight)"
     restart.assert_not_called()
     assert not watch.requested
+
+
+async def test_holds_are_operation_scoped_and_reset_on_manual_restart():
+    watch, restart = _watch(["version:1", "version:2", "version:2"])
+    watch.set_hold("first", True)
+    watch.set_hold("second", True)
+    assert watch.set_hold("first", False) == {"held": True, "operation_held": False}
+    assert (await watch.run())["restart"] == "held"
+    watch.set_hold("second", False)
+    assert (await watch.run())["restart"] == "requested"
+    restart.assert_awaited_once()
+    fresh, _ = _watch(["version:2", "version:2"])
+    assert await fresh.run() == {"code": "version:2"}
+
+
+async def test_a_requested_restart_cannot_be_promised_a_hold():
+    import pytest
+
+    watch, _ = _watch(["version:1", "version:2"])
+    await watch.run()
+    with pytest.raises(ValueError, match="already requested"):
+        watch.set_hold("late", True)

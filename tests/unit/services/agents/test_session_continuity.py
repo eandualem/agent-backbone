@@ -100,3 +100,39 @@ def test_cli_and_api_have_the_same_auto_fresh_and_explicit_resume_choices():
     assert AgentStartRequest().resume is None
     assert AgentStartRequest(resume=False).resume is False
     assert AgentStartRequest(resume=True).resume is True
+
+
+@pytest.mark.parametrize("runtime", ["gemini", "opencode", "aider"])
+async def test_auto_resume_requires_adapter_exact_id_capability(db, tmp_path, runtime):
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    store = await store_with_agent(db, tmp_path)
+    await store.update("Feynman", runtime=runtime)
+    await store.register(AgentSpec(name="neighbor", dir=str(tmp_path), runtime=runtime))
+    write_state_file(
+        store.config.state_dir, "Feynman", {"runtime": runtime, "session_id": "own-session"}
+    )
+    write_state_file(
+        store.config.state_dir, "neighbor", {"runtime": runtime, "session_id": "different-session"}
+    )
+    req = StartRequest(name="Feynman")
+    spec = await resolve_agent(store, req)
+    with (
+        patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+        patch(
+            "agent_backbone.services.agents.operations.launch.start_agent",
+            AsyncMock(return_value=StartResult(ok=True)),
+        ) as launch,
+    ):
+        await start_resolved(store, store.config, spec, req, db=db)
+    assert launch.await_args.kwargs["resume"] is (runtime != "aider")
+    if runtime != "aider":
+        args = RUNTIMES[runtime].launch_args(
+            model=None,
+            resume="own-session",
+            brief_file=None,
+            pre_trust=False,
+            data_dir=None,
+            state_dir=None,
+        )
+        assert "own-session" in args and "latest" not in args and "--continue" not in args

@@ -89,6 +89,7 @@ _MODEL_CHANGED = re.compile(
 
 
 class Codex(Runtime):
+    supports_exact_resume = True
     id = "codex"
     fallback_prompts = ("›",)
     display_name = "Codex"

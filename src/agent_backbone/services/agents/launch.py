@@ -266,7 +266,7 @@ async def _start_agent(
             resume_evidence.append(
                 f"last session id belongs to {last.runtime}; using {rt.id}'s own resume"
             )
-        elif last is not None and last.session_id:
+        elif last is not None and last.session_id and rt.supports_exact_resume:
             resume_target = last.session_id
             details["resume_selection"] = "known_session"
             resume_evidence.append(f"resuming the session the backbone last saw: {last.session_id}")
