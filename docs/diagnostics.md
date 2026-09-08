@@ -148,8 +148,10 @@ observations by the monitor or startup wait, not distinct provider requests.
 
 ## Investigating a concrete problem
 
-1. Read the digest for a narrow interval and agent. Select a diagnostic ID
-   from a new group or one whose last observation/count changed.
+1. Read the digest for a narrow interval and agent. Inspect new operations
+   or changed outcomes. An advancing count or last observation alone can
+   mean the same terminal banner is still visible; it does not call for
+   another full investigation.
 2. Read that record and its operation. Separate the observed failure from
    expected waits, queue storage, retry and expiry.
 3. If the evidence is incomplete, inspect only the affected agent or the
@@ -159,13 +161,15 @@ observations by the monitor or startup wait, not distinct provider requests.
    remains unverified. A useful local report identifies the trigger and
    the missing evidence needed to confirm the cause.
 
-The `model` field describes configuration or the model requested at launch.
-It does not prove which provider or model actually generated a response.
-`model_source: configured`, where provided by agent APIs or diagnostic
-details, makes that distinction explicit. A runtime's displayed model or
-account error can supply additional evidence, but the backbone does not
-infer provider identity from conversation text. Capturing a runtime error
-does not select another model or change a running agent's settings.
+Agent APIs and most diagnostic records use `model` for configuration or
+the model requested at launch (`model_source: configured`). Runtime
+observations retain the displayed identifier separately as `observed_model`.
+During startup, a runtime record also uses that observed identifier as its
+`model` and labels it `model_source: terminal`; `requested_model` retains
+the launch selection. None of these fields proves which model generated a
+response. The backbone does not infer provider identity from conversation
+text. Capturing a runtime error does not select another model or change a
+running agent's settings.
 
 ## Using an investigator agent
 
@@ -176,11 +180,13 @@ you start for this purpose:
 
 > Investigate this machine's Backbone behavior. Start with
 > `backbone diagnostics --since 24h --json` and read
-> `backbone docs diagnostics`. Inspect diagnostic IDs only when their group
-> is new or its last observation/count changed. Keep a small local record
-> of groups already investigated, using code, agent, operation ID and last
-> observation; IDs alone are not a permanent checkpoint after retention or
-> database replacement. Treat normal busy/settling waits as expected.
+> `backbone docs diagnostics`. Investigate new problem operations or material
+> changes to their outcomes or typed evidence. Do not reopen an unchanged
+> investigation just because its count or last observation advances. Keep a
+> small local record of operations already investigated, using code, agent,
+> operation ID, observed metadata and last outcome; record IDs alone are not
+> a permanent checkpoint after retention or database replacement. Treat
+> normal busy/settling waits as expected.
 > Report the trigger, observed sequence, relevant diagnostic/queue/delivery
 > IDs, a supported explanation and missing evidence. Do not implement
 > features, modify configuration, restart agents, or send test messages as
