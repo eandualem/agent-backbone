@@ -31,6 +31,11 @@ There is no configuration file. The **data directory** is the configuration:
 Only two knobs live outside the directory: `BACKBONE_DATA_DIR` (where it
 is) and `BACKBONE_DATABASE_URL` (PostgreSQL instead of the SQLite file).
 
+Persistent database startup checks that required tables and columns exist,
+even when the migration revision is current. Missing structures trigger
+schema repair while preserving stored rows. A complete current schema does
+not rebuild its indexes on every start.
+
 ## Settings
 
 `backbone config list` prints every key with its current value and marks
