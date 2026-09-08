@@ -87,6 +87,8 @@ def _record(row: dict) -> dict:
         "agent_name": row.get("agent_name"),
         "report": json.loads(row["content"]),
         "age_seconds": age,
+        "telegram_delivery": row.get("telegram_delivery", "not_requested"),
+        "telegram_audio_delivery": row.get("telegram_audio_delivery", "not_requested"),
         "stale": age >= STALE_REPORT_SECONDS,
     }
 
@@ -184,6 +186,7 @@ class ReportRepo(Repo):
                             content=content,
                             priority=priority,
                             swarm_member=int(member),
+                            telegram_delivery="pending",
                         )
                         .returning(*_R.c)
                     )
@@ -192,6 +195,98 @@ class ReportRepo(Repo):
                 .one()
             )
             return _record(dict(row) | {"agent_name": publication.agent}), True
+
+    async def claim_telegram(self, *, audio: bool = False) -> dict | None:
+        """Lease one due text/audio job. Each lane has independent retry state."""
+        prefix = "telegram_audio_" if audio else "telegram_"
+        state, retry, lease, attempts = (
+            _R.c[prefix + k] for k in ("delivery", "retry_at", "lease", "attempts")
+        )
+        due = and_(state.in_(("pending", "sending")), retry <= now_iso())
+        token = uuid4().hex
+        async with self._tx() as conn:
+            candidate = select(_R.c.id).where(due).order_by(_R.c.id).limit(1).scalar_subquery()
+            row = (
+                (
+                    await conn.execute(
+                        update(_R)
+                        .where(_R.c.id == candidate, due)
+                        .values(
+                            {
+                                state: "sending",
+                                lease: token,
+                                retry: cutoff_iso(minutes=-5),
+                                attempts: attempts + 1,
+                            }
+                        )
+                        .returning(*_R.c)
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                return None
+            name = await conn.scalar(
+                select(_A.c.name).where(_A.c.report_identity == row["author_id"])
+            )
+            return {
+                "record": _record(dict(row) | {"agent_name": name}),
+                "lease": token,
+                "attempts": row[prefix + "attempts"],
+                "parts": json.loads(row[prefix + "parts"]),
+                "text_parts": json.loads(row["telegram_parts"]),
+            }
+
+    async def checkpoint_telegram(
+        self, report_id: int, lease: str, parts: dict, *, audio: bool = False
+    ) -> bool:
+        prefix = "telegram_audio_" if audio else "telegram_"
+        async with self._tx() as conn:
+            result = await conn.execute(
+                update(_R)
+                .where(
+                    _R.c.id == report_id,
+                    _R.c[prefix + "delivery"] == "sending",
+                    _R.c[prefix + "lease"] == lease,
+                )
+                .values({_R.c[prefix + "parts"]: json.dumps(parts)})
+            )
+            return bool(result.rowcount)
+
+    async def finish_telegram(
+        self,
+        report_id: int,
+        lease: str,
+        *,
+        message_id: str | None,
+        attempts: int,
+        audio: bool = False,
+        request_audio: bool = False,
+    ) -> bool:
+        """Acknowledge this lane only; text completion can enqueue optional audio."""
+        prefix = "telegram_audio_" if audio else "telegram_"
+        delay = min(3600, 30 * 2 ** min(max(attempts - 1, 0), 7))
+        values = {
+            _R.c[prefix + "delivery"]: "sent" if message_id is not None else "pending",
+            _R.c[prefix + "lease"]: None,
+            _R.c[prefix + "retry_at"]: "" if message_id is not None else cutoff_iso(seconds=-delay),
+        }
+        if not audio:
+            values[_R.c.telegram_message_id] = message_id
+            if message_id is not None and request_audio:
+                values[_R.c.telegram_audio_delivery] = "pending"
+        async with self._tx() as conn:
+            result = await conn.execute(
+                update(_R)
+                .where(
+                    _R.c.id == report_id,
+                    _R.c[prefix + "delivery"] == "sending",
+                    _R.c[prefix + "lease"] == lease,
+                )
+                .values(values)
+            )
+            return bool(result.rowcount)
 
     async def get(self, report_id: int) -> dict | None:
         async with self._tx() as conn:

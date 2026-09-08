@@ -54,6 +54,10 @@ class EnrichedAgent(BaseModel):
     tmux_windows: int = 0
     last_activity: float | None = None
     state_since: float | None = None
+    last_message: str | None = None
+    detail: str | None = None
+    state_source: str = "default"
+    evidence: list[str] = Field(default_factory=list)
 
 
 class AgentStartRequest(BaseModel):
@@ -68,7 +72,8 @@ class AgentStartRequest(BaseModel):
     dir: str | None = None
     runtime: str | None = None
     model: str | None = None
-    resume: bool = False
+    resume: bool | None = None
+    """Omitted: resume a matching saved session; false: fresh; true: allow runtime fallback."""
     watch: list[str] = Field(default_factory=list)
     wait: bool = True
     """Block until the agent is at its prompt (or the start timeout passes)."""

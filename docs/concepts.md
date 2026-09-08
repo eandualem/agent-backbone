@@ -20,13 +20,14 @@ $ cd ~/code/app && backbone agent start
 app: ready — claude repo acme/app
 ```
 
-- **Name** — the directory name (`--name` to override). It is the tmux
+- **Name** — the directory name (pass `agent start NAME` to override). It is the tmux
   session name, the value of `for:<name>` labels, and the `from:` identity
   in messages the agent sends. Discovery removes leading punctuation so the
   name starts with a letter or digit (`_app` becomes `app`); a name containing
   only punctuation becomes `agent`. Internal underscores and dots are preserved.
 - **Runtime** — `claude`, `codex`, `gemini`, `opencode`, `deepcode`, `aider`
-  or `shell`; default `claude` (`agents.default_runtime`).
+  or `shell`; a known agent reuses its saved runtime. New agents use
+  `agents.default_runtime` (initially `claude`) unless explicitly selected.
 - **Repository** — read from `git remote origin`. An agent whose directory is
   a GitHub checkout **owns** that repository.
 - **Watches** — other repositories the agent wants to hear about

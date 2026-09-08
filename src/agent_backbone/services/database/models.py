@@ -65,11 +65,31 @@ class ReportORM(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False)
     swarm_member: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Old rows must not be broadcast during an installed-schema repair.
+    telegram_delivery: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="not_requested"
+    )
+    telegram_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    telegram_retry_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    telegram_lease: Mapped[str | None] = mapped_column(Text)
+    telegram_message_id: Mapped[str | None] = mapped_column(Text)
+    telegram_parts: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    telegram_audio_parts: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    telegram_audio_delivery: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="not_requested"
+    )
+    telegram_audio_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    telegram_audio_retry_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    telegram_audio_lease: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         Index("uq_reports_request", "author_id", "request_id", unique=True),
         Index("idx_reports_author", "author_id", "id"),
         Index("idx_reports_created", "created_at"),
+        Index("idx_reports_telegram", "telegram_delivery", "telegram_retry_at", "id"),
+        Index("idx_reports_audio", "telegram_audio_delivery", "telegram_audio_retry_at", "id"),
         {"sqlite_autoincrement": True},
     )
 

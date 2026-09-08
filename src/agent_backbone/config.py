@@ -101,6 +101,10 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "telegram.notification_chat_id": None,
     "telegram.group_chat_id": None,
     "telegram.auto_topics": True,
+    "telegram.report_updates": True,
+    "telegram.report_audio": False,
+    "telegram.tts_url": "http://127.0.0.1:8765/speak",
+    "telegram.tts_voice": "af_heart",
     "telegram.topic_routes": {},
     "escalation.target": "",
     "priority.blocking_weight": 1000.0,
@@ -171,6 +175,14 @@ SETTINGS_HELP: dict[str, str] = {
     "telegram.allowed_chat_ids": "Chat ids allowed to control the backbone (JSON list) — required",
     "telegram.notification_chat_id": "Where alerts are sent",
     "telegram.group_chat_id": "Forum group where each agent gets a topic (learned if unset)",
+    "telegram.report_audio": (
+        "Attach local speech of full reports to General and agent topics (opt-in)"
+    ),
+    "telegram.tts_url": "Loopback Kokoro-compatible /speak endpoint returning WAV audio",
+    "telegram.tts_voice": "Voice available in the local speech service",
+    "telegram.report_updates": (
+        "Push new progress reports to the allowed agents group; false pauses delivery"
+    ),
     "telegram.auto_topics": "Create/close a forum topic per registered agent automatically",
     "telegram.topic_routes": "JSON object thread_id -> agent name (explicit, on top of automatic)",
     "escalation.target": "Agent that receives stall/offline/plan escalations",
@@ -227,6 +239,27 @@ def validate_setting(key: str, value: Any) -> Any:
     if key in _SETTING_CHOICES:
         if not isinstance(value, str) or value not in _SETTING_CHOICES[key]:
             raise ValueError(f"{key}: expected one of {', '.join(_SETTING_CHOICES[key])}")
+        return value
+    if key == "telegram.tts_url":
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(value) if isinstance(value, str) else None
+        if (
+            parsed is None
+            or parsed.scheme != "http"
+            or parsed.hostname not in ("127.0.0.1", "localhost", "::1")
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "telegram.tts_url must be an HTTP loopback URL without credentials or query"
+            )
+        return value
+    if key == "telegram.tts_voice":
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value):
+            raise ValueError("telegram.tts_voice must be a local voice name")
         return value
     if key == "agents.shared_policy":
         if (
@@ -527,6 +560,10 @@ class TelegramConfig:
     group_chat_id: int | None = None
     notification_chat_id: int | None = None
     auto_topics: bool = True
+    report_updates: bool = True
+    report_audio: bool = False
+    tts_url: str = "http://127.0.0.1:8765/speak"
+    tts_voice: str = "af_heart"
 
 
 @dataclass(frozen=True)
@@ -798,6 +835,10 @@ def build_config(
             group_chat_id=_opt_int(s["telegram.group_chat_id"]),
             notification_chat_id=_opt_int(s["telegram.notification_chat_id"]),
             auto_topics=bool(s["telegram.auto_topics"]),
+            report_updates=bool(s["telegram.report_updates"]),
+            report_audio=bool(s["telegram.report_audio"]),
+            tts_url=str(s["telegram.tts_url"]),
+            tts_voice=str(s["telegram.tts_voice"]),
         ),
         priority=PriorityConfig(
             blocking_weight=float(s["priority.blocking_weight"]),

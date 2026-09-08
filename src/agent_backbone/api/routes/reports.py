@@ -67,6 +67,8 @@ class ReportRecord(BaseModel):
     report: ProgressReport
     age_seconds: int
     stale: bool
+    telegram_delivery: str = "not_requested"
+    telegram_audio_delivery: str = "not_requested"
 
 
 class PublicationResult(BaseModel):
@@ -112,7 +114,8 @@ async def publish_report(
     """Publish a short report for a known agent. Reuse request_id on retries.
 
     The authenticated local client supplies the agent identity; this is not a
-    per-agent authentication boundary. No message is sent to an agent or a chat.
+    per-agent authentication boundary. Publication queues a durable Telegram
+    notification; the integration delivers it to the configured agents group.
     """
     try:
         record, created = await db.reports.publish(publication)

@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents import launch
+from agent_backbone.services.agents import launch, read_state_file
 from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.launch import StartResult
@@ -37,7 +37,7 @@ class StartRequest:
     directory: str | None = None
     runtime: str | None = None
     model: str | None = None
-    resume: bool = False
+    resume: bool | None = None
     watch: tuple[str, ...] = ()
     wait: bool = True
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -113,7 +113,7 @@ async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     changes: dict = {}
     if req.runtime and req.runtime != spec.runtime:
         changes["runtime"] = req.runtime
-    if req.model is not None and req.model != spec.model:
+    if req.model is not None and (req.model != spec.model or "runtime" in changes):
         changes["model"] = req.model
     if changes:
         spec = await store.update(spec.name, **changes)
@@ -174,12 +174,18 @@ async def start_resolved(
         except ValueError as exc:
             await _record_start_failure(db, req, "preflight", exc, started, spec)
             raise
+        resume = req.resume
+        if resume is None:
+            last = read_state_file(config.state_dir, spec.name)
+            # Automatic continuation must never pick an unrelated conversation
+            # from the same directory, or an ID belonging to a different CLI.
+            resume = bool(last and last.session_id and last.runtime in (None, runtime))
         result = await launch.start_agent(
             spec,
             config,
             runtime=runtime,
             model=req.model if req.model is not None else spec.model,
-            resume=req.resume,
+            resume=resume,
             db=db,
             wait=req.wait,
             operation_id=req.operation_id,

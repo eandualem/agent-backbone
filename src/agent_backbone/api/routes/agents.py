@@ -74,6 +74,10 @@ class AgentTagsRequest(BaseModel):
     remove: bool = False
 
 
+class AgentRenameRequest(BaseModel):
+    name: str
+
+
 @router.post("/agents/{name}/tags", response_model=AgentConfigResponse)
 async def tag_agent(
     name: str, body: AgentTagsRequest, store: AgentStore = Depends(get_agent_store)
@@ -84,6 +88,19 @@ async def tag_agent(
         raise HTTPException(status_code=404, detail=f"unknown agent '{name}'") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AgentConfigResponse.from_spec(spec)
+
+
+@router.post("/agents/{name}/rename", response_model=AgentConfigResponse)
+async def rename_agent(
+    name: str, body: AgentRenameRequest, store: AgentStore = Depends(get_agent_store)
+):
+    try:
+        spec = await store.rename(name, body.name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown agent '{name}'") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return AgentConfigResponse.from_spec(spec)
 
 

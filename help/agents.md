@@ -1,5 +1,15 @@
 # Agents — starting, configuring and managing them
 
+
+Starting an existing agent reuses its saved CLI and model, and resumes its saved
+conversation when a matching runtime session ID is available. With no saved ID,
+it starts fresh; `--resume` explicitly allows the runtime's own last-conversation
+fallback. Use `backbone agent start NAME --fresh` for a new conversation with the
+same settings (API: `resume: false`; omitted or `null` means automatic).
+Changing runtime without specifying a model clears the previous runtime's model.
+Starting from a directory reuses its registered name, even after a rename;
+if several agents share that directory, specify a name.
+
 Any agent may start other agents; you do not need a human for this.
 
 ```bash
@@ -11,9 +21,13 @@ backbone agent start --model opus          # model recorded, reused next start
 backbone agent start --model gpt-6-astra:high   # model *and* reasoning effort
 backbone agent stop NAME…                  # kill sessions
 backbone agent forget NAME                 # remove a stopped agent's record
-backbone agent tag NAME python             # apply a persistent group tag
-backbone agent untag NAME python           # remove that tag
-backbone templates preview NAME            # inspect effective startup instructions
+backbone agent resume NAME --attach        # reopen a stopped conversation
+backbone agent attach NAME                 # interactive terminal; Ctrl-b d detaches
+backbone agent rename NAME NEW_NAME        # stopped agents only
+backbone agent tag NAME backend            # grouping and shared instruction scope
+backbone status --tag backend --watch      # follow a group
+backbone templates preview NAME         # effective startup content and sources
+backbone help agent start                  # recall command options
 ```
 
 - Runtimes: `claude` (default), `codex`, `gemini`, `opencode`,

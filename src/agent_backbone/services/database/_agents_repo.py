@@ -140,6 +140,89 @@ class AgentRepo(Repo):
             )
             return (result.rowcount or 0) > 0
 
+    async def rename(self, name: str, new_name: str) -> None:
+        """Rekey identity and routing receipts in one transaction; never overwrite history."""
+        references = (
+            ("agents", "name"),
+            ("agent_watches", "agent_name"),
+            ("agent_states", "session_name"),
+            ("acknowledgments", "target_entity"),
+            ("deliveries", "session_name"),
+            ("deliveries", "target_entity"),
+            ("message_queue", "session_name"),
+            ("message_queue", "target_entity"),
+            ("event_outbox", "recipient"),
+        )
+        values = {"old": name, "new": new_name}
+        async with self._tx() as conn:
+            exists = await conn.execute(text("SELECT 1 FROM agents WHERE name = :old"), values)
+            if not exists.first():
+                raise KeyError(name)
+            for table, column in references:
+                found = await conn.execute(
+                    text(f"SELECT 1 FROM {table} WHERE {column} = :new LIMIT 1"), values
+                )
+                if found.first():
+                    raise ValueError(
+                        f"'{new_name}' already has configuration or history; choose another name"
+                    )
+            for sql in (
+                "SELECT 1 FROM message_queue WHERE session_name = :old "
+                "AND status = 'in_progress' LIMIT 1",
+                "SELECT 1 FROM deliveries WHERE session_name = :old "
+                "AND outcome = 'attempting' LIMIT 1",
+                "SELECT 1 FROM swarms WHERE status = 'active' "
+                "AND (initiator = :old OR coordinator = :old) LIMIT 1",
+            ):
+                if (await conn.execute(text(sql), values)).first():
+                    raise ValueError(
+                        "agent has an active delivery or swarm; retry after it finishes"
+                    )
+            rows = (
+                await conn.execute(
+                    text("SELECT event_id, delivery FROM event_outbox WHERE recipient = :old"),
+                    values,
+                )
+            ).fetchall()
+            for row in rows:
+                delivery = json.loads(row.delivery)
+                for key in ("session_name", "target_entity"):
+                    if delivery.get(key) == name:
+                        delivery[key] = new_name
+                await conn.execute(
+                    text(
+                        "UPDATE event_outbox SET delivery = :delivery "
+                        "WHERE event_id = :event AND recipient = :old"
+                    ),
+                    {**values, "event": row.event_id, "delivery": json.dumps(delivery)},
+                )
+            for table, column in references:
+                await conn.execute(
+                    text(f"UPDATE {table} SET {column} = :new WHERE {column} = :old"), values
+                )
+            for column in ("initiator", "coordinator"):
+                await conn.execute(
+                    text(f"UPDATE swarms SET {column} = :new WHERE {column} = :old"), values
+                )
+            settings = (
+                await conn.execute(
+                    text(
+                        "SELECT key, value FROM settings "
+                        "WHERE key IN ('escalation.target', 'telegram.topic_routes')"
+                    )
+                )
+            ).fetchall()
+            for row in settings:
+                value = json.loads(row.value)
+                if row.key == "escalation.target":
+                    value = new_name if value == name else value
+                else:
+                    value = {k: new_name if v == name else v for k, v in value.items()}
+                await conn.execute(
+                    text("UPDATE settings SET value = :value, updated_at = :now WHERE key = :key"),
+                    {"value": json.dumps(value), "now": now_iso(), "key": row.key},
+                )
+
     async def add_watch(self, name: str, repo: str) -> None:
         async with self._tx() as conn:
             await conn.execute(

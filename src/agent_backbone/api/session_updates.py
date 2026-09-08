@@ -94,6 +94,10 @@ async def build_enriched_agent(
         tmux_windows=tmux_windows,
         last_activity=last_activity,
         state_since=snapshot.timestamp if snapshot.timestamp else None,
+        last_message=snapshot.last_message,
+        detail=snapshot.detail,
+        state_source=snapshot.source,
+        evidence=list(snapshot.evidence),
     )
 
 

@@ -1,5 +1,22 @@
 # Agent progress reports
 
+
+Newly published reports are queued durably for Telegram and posted to the allowed
+agents group (General and the author’s own topic), including swarm members' reports. The shared
+feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
+bounded batches and retries after failures. `telegram.report_updates=false` pauses
+sending; re-enabling drains retained pending reports. A configured or discovered
+group must be allowlisted; there is no fallback to a private notification chat.
+Existing reports from before this feature remain readable and are not broadcast.
+`telegram_delivery` in report JSON distinguishes pending, sending, sent and
+not_requested. The saved report survives delivery failures. Retries are normally
+deduplicated; a crash after Telegram accepts a message but before its receipt is
+saved can cause a duplicate bearing the same report ID. Report retention still applies.
+
+Read reports with `backbone updates`, `backbone updates --agent NAME --history`,
+or `backbone updates show ID`; in Telegram use `/updates`, `/updates NAME`,
+`/updates history NAME`, or `/updates show ID`. `backbone usage` is the quick guide.
+
 `backbone updates` gives you one place to read what agents are trying to achieve,
 what they accomplished, where they need help, and what comes next. Agents publish
 short structured reports through the CLI or API. Reading the feed uses the
@@ -100,8 +117,9 @@ chat/topic; reading reports does not provision topics or deliver agent messages.
 Buttons expire after 24 hours, a service restart, or enough newer views; run
 `/updates` again to reopen the feed. Their tokens are bound to the authorized chat.
 
-Publishing a report does not send an unsolicited Telegram notification or create
-a GitHub issue. The database is the shared feed; Telegram is another way to read it.
+Publishing a report queues its Telegram copies when report updates are enabled;
+optional audio follows the text. It does not create a GitHub issue. The database
+keeps the shared feed available even when Telegram delivery is delayed.
 
 ## Proactive reporting and adoption
 
@@ -163,3 +181,8 @@ inactive. This prevents inactivity from disappearing into “no report yet.” R
 keys live with their reports and expire when those historical records are pruned.
 The single initial migration and installed-schema repair add the report store
 and nullable author identity to existing databases on service startup.
+
+Reports now appear in both General and the agent's topic, with separate delivery
+receipts. Optional full-report voice messages can be enabled with
+`backbone config set telegram.report_audio true` after local speech setup.
+See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.

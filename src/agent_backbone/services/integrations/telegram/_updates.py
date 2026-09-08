@@ -213,3 +213,31 @@ async def on_callback(bot: TelegramService, update, context) -> None:
         await _display(bot, query.message, update.effective_chat.id, stored["view"])
     except ValueError:
         await query.message.reply_text("This selection changed. Run /updates again.")
+
+
+def notification_text(record: dict) -> str:
+    """One bounded message; Telegram measures the rendered text, not HTML markup."""
+    report = ProgressReport.model_validate(record["report"])
+    name = record["agent_name"] or record["author_name"]
+    lines = [f"<b>{html.escape(name)}</b> · {report.status} · report {record['id']}"]
+    labels = {
+        "goal": "Goal",
+        "progress": "Progress",
+        "blockers": "Blockers",
+        "next": "Next",
+        "note": "Note",
+    }
+    for key, section in report.sections():
+        lines.append(f"\n<b>{labels[key]}</b>: {html.escape(section.text)}")
+        lines.extend(
+            f'<a href="{html.escape(link.url, quote=True)}">{html.escape(link.title)}</a>'
+            for link in section.links
+        )
+    lines.append(f"\n/updates show {record['id']} · /updates for the team")
+    return "\n".join(lines)
+
+
+async def flush_reports(bot: TelegramService) -> None:
+    from agent_backbone.services.integrations.telegram._report_delivery import flush_text
+
+    await flush_text(bot)

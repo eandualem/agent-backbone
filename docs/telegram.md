@@ -1,5 +1,22 @@
 # Telegram
 
+
+Newly published reports are queued durably for Telegram and posted to the allowed
+agents group (General and the author’s own topic), including swarm members' reports. The shared
+feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
+bounded batches and retries after failures. `telegram.report_updates=false` pauses
+sending; re-enabling drains retained pending reports. A configured or discovered
+group must be allowlisted; there is no fallback to a private notification chat.
+Existing reports from before this feature remain readable and are not broadcast.
+`telegram_delivery` in report JSON distinguishes pending, sending, sent and
+not_requested. The saved report survives delivery failures. Retries are normally
+deduplicated; a crash after Telegram accepts a message but before its receipt is
+saved can cause a duplicate bearing the same report ID. Report retention still applies.
+
+Read reports with `backbone updates`, `backbone updates --agent NAME --history`,
+or `backbone updates show ID`; in Telegram use `/updates`, `/updates NAME`,
+`/updates history NAME`, or `/updates show ID`. `backbone usage` is the quick guide.
+
 A phone-sized control surface: see who is running, talk to an agent,
 approve a plan, get told when an agent is stuck or died.
 
@@ -141,3 +158,8 @@ Telegram limits each button's [callback data](https://core.telegram.org/bots/api
 to 64 bytes. If an agent name makes a button too large, the full alert is sent
 without its button row and directs you to the agent's terminal. Prompt identities
 are never shortened; buttons that fit retain the same stale-prompt protection.
+
+Reports now appear in both General and the agent's topic, with separate delivery
+receipts. Optional full-report voice messages can be enabled with
+`backbone config set telegram.report_audio true` after local speech setup.
+See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.

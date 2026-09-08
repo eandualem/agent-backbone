@@ -34,22 +34,32 @@ import sys
 
 from agent_backbone import __version__
 from agent_backbone.cli.agents import cmd_agent, cmd_hooks, cmd_reply, cmd_tell
+from agent_backbone.cli.completion import cmd_completion, complete
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
 from agent_backbone.cli.instructions import add_instruction_commands
 from agent_backbone.cli.reports import add_report_parsers
-from agent_backbone.cli.server import cmd_config, cmd_down, cmd_status, cmd_up
+from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
+from agent_backbone.cli.status import add_status_options, cmd_status
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
 from agent_backbone.cli.upgrade import cmd_upgrade
 from agent_backbone.config import RUNTIMES
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="backbone", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(
+        prog="backbone",
+        description="Start agents, follow their work and connect their sessions.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Start here:\n  backbone agent start --attach\n  backbone status --watch\n"
+        "\nRecall a command: backbone help agent start\n"
+        "Capability playbooks: backbone help\n"
+        "Enable Tab completion: backbone completion zsh --install (also bash/fish)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     parser.add_argument("--version", action="version", version=f"backbone {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True, title="commands", metavar="COMMAND")
 
     p = sub.add_parser("init", help="create the data directory, .env and database")
     p.add_argument(
@@ -65,6 +75,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("runtimes", help="supported runtimes, whether installed, example model ids")
     p.set_defaults(func=cmd_runtimes)
+
+    p = sub.add_parser("completion", help="enable Tab completion (see docs cli)")
+    p.add_argument("shell", choices=["bash", "zsh", "fish"])
+    install = p.add_mutually_exclusive_group()
+    install.add_argument(
+        "--install", action="store_true", help="persist setup in your shell config"
+    )
+    install.add_argument("--uninstall", action="store_true", help="remove the managed setup block")
+    p.add_argument("--rc-file", metavar="PATH", help="use a different shell startup file")
+    p.add_argument(
+        "--suggestions", action="store_true", help="add inline hints using zsh-autosuggestions"
+    )
+    p.set_defaults(func=cmd_completion)
 
     p = sub.add_parser("service", help="start the backbone at login (launchd / systemd --user)")
     svc = p.add_subparsers(dest="service_command", required=True)
@@ -104,7 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-restart", action="store_true", help="upgrade without restarting")
     p.set_defaults(func=cmd_upgrade)
 
-    p = sub.add_parser("status", help="show agents, repositories, sessions and health")
+    p = sub.add_parser("status", help="show agent state, current work, swarms and health")
+    add_status_options(p)
     p.set_defaults(func=cmd_status)
 
     add_diagnostics_parser(sub)
@@ -125,7 +149,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("agent", help="manage agents")
     asub = p.add_subparsers(dest="agent_command", required=True)
-    asub.add_parser("list", help="list known agents")
+    pl = asub.add_parser("list", help="list known agents")
+    pl.add_argument("--tag", help="show agents with this tag")
+    pl.add_argument("--json", action="store_true")
     ps = asub.add_parser("start", help="start agents (discovers a new one from a directory)")
     ps.add_argument(
         "names",
@@ -141,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--runtime",
         default=None,
         help=f"{' | '.join(RUNTIMES)} "
-        "(default: agents.default_runtime, recorded on the agent afterwards)",
+        "(default: saved runtime; agents.default_runtime for a new agent)",
     )
     ps.add_argument(
         "--model",
@@ -150,10 +176,19 @@ def build_parser() -> argparse.ArgumentParser:
         "optionally `model:effort` (e.g. gpt-6-astra:high) for runtimes with an effort "
         "setting; recorded on the agent and reused by later starts (`backbone runtimes`)",
     )
-    ps.add_argument(
+    conversation = ps.add_mutually_exclusive_group()
+    conversation.add_argument(
         "--resume",
+        dest="resume",
         action="store_true",
-        help="resume the runtime's conversation (the session the backbone last saw, when known)",
+        default=None,
+        help="resume even without a saved session ID, using the runtime's last conversation",
+    )
+    conversation.add_argument(
+        "--fresh",
+        dest="resume",
+        action="store_false",
+        help="start a new conversation; keep the agent's saved runtime and model",
     )
     ps.add_argument(
         "--always-on",
@@ -172,6 +207,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="return immediately instead of waiting for the prompt",
     )
+    ps.add_argument("--attach", action="store_true", help="attach to this agent after starting")
+    pr = asub.add_parser("resume", help="resume a known agent's previous conversation")
+    pr.add_argument("names", nargs="+", metavar="NAME")
+    pr.add_argument("--attach", action="store_true", help="attach after resuming")
+    pr.add_argument("--no-wait", action="store_true")
+    pr.set_defaults(resume=True, dir=None, runtime=None, model=None, watch=None, group=True)
+    pa = asub.add_parser("attach", help="open an agent session; detach with Ctrl-b d")
+    pa.add_argument("name")
+    pa.add_argument("--read-only", action="store_true", help="watch without sending input")
     pst = asub.add_parser("stop", help="stop agent sessions")
     pst.add_argument("names", nargs="+", metavar="NAME")
     pi = asub.add_parser("inspect", help="show state, delivery readiness and the evidence")
@@ -216,6 +260,11 @@ def build_parser() -> argparse.ArgumentParser:
         pt = asub.add_parser(verb, help=f"{verb} an agent for grouping and shared instructions")
         pt.add_argument("name")
         pt.add_argument("tags", nargs="+", metavar="TAG")
+    pr = asub.add_parser(
+        "rename", help="rename a stopped agent, preserving configuration and history"
+    )
+    pr.add_argument("name")
+    pr.add_argument("new_name")
     p.set_defaults(func=cmd_agent)
 
     p = sub.add_parser("hooks", help="install runtime hooks that report agent state")
@@ -258,14 +307,20 @@ def build_parser() -> argparse.ArgumentParser:
     ssub.add_parser("list", help="all swarms with members")
     pss = ssub.add_parser("status", help="one swarm's roster and state")
     pss.add_argument("name", nargs="?", default=None)
+    add_status_options(pss)
     psd = ssub.add_parser("disband", help="stop members, remove the worktree, keep the branch")
     psd.add_argument("name")
     p.set_defaults(func=cmd_swarm)
 
     p = sub.add_parser("help", help="capability playbooks for agents (setup, swarms, messaging, …)")
     p.add_argument("topic", nargs="?", default=None)
+    p.add_argument("path", nargs="*", help="optional subcommands, e.g. help agent start")
     p.set_defaults(func=cmd_help)
 
+    usage = sub.add_parser(
+        "usage", help="quick guide: start agents, read reports, rename and find help"
+    )
+    usage.set_defaults(func=cmd_docs, page="usage")
     p = sub.add_parser("docs", help="the documentation shipped with this install")
     p.add_argument("page", nargs="?", default=None)
     p.set_defaults(func=cmd_docs)
@@ -299,6 +354,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["_complete"]:
+        words = argv[2:] if argv[1:2] == ["--"] else argv[1:]
+        sys.exit(complete(parser, words))
     args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,

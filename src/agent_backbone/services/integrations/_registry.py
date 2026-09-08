@@ -167,3 +167,13 @@ class Integrations:
         task = loop.create_task(drain_changes(), name="integrations-sync")
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+
+    async def flush_reports(self) -> None:
+        for integration in self.enabled:
+            if integration.running:
+                await integration.flush_reports()
+
+    async def flush_report_audio(self) -> None:
+        for integration in self.enabled:
+            if integration.running:
+                await integration.flush_report_audio()
