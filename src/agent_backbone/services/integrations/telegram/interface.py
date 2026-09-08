@@ -136,6 +136,8 @@ class TelegramService(Integration):
         self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
         self._background: set[asyncio.Task] = set()
         self._sync_lock = asyncio.Lock()
+        self._report_lock = asyncio.Lock()
+        self._audio_lock = asyncio.Lock()
         self._report_views: OrderedDict[str, dict] = OrderedDict()
 
     @property
@@ -171,6 +173,16 @@ class TelegramService(Integration):
         actions: list[tuple[str, str]] | None = None,
     ) -> bool:
         return await notify_static(self.config, text, agent=agent, actions=actions)
+
+    async def flush_reports(self) -> None:
+        async with self._report_lock:
+            await _updates.flush_reports(self)
+
+    async def flush_report_audio(self) -> None:
+        from agent_backbone.services.integrations.telegram._report_delivery import flush_audio
+
+        async with self._audio_lock:
+            await flush_audio(self)
 
     async def sync_agents(self) -> None:
         """One forum topic per registered agent (see ``_topics``)."""

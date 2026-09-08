@@ -84,10 +84,14 @@ def _register_jobs(app: FastAPI):
     )
     scheduler.add("delivery-retry", config.timing.retry_interval_seconds, _retry)
     scheduler.add("prune", 6 * 3600, _prune)
+    scheduler.add("report-audio", 30, state.integrations.flush_report_audio, run_immediately=True)
     # Integrations re-provision their per-agent surfaces (Telegram topics):
     # a config publish triggers it immediately, this catches everything else
     # (a group discovered from a message, a transient Telegram error).
     scheduler.add("integrations-sync", 300, state.integrations.reconcile)
+    scheduler.add(
+        "report-notifications", 30, state.integrations.flush_reports, run_immediately=True
+    )
 
     async def _restart() -> None:
         # Ask uvicorn for a graceful shutdown; `backbone up` re-executes

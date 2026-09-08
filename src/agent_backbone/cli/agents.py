@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ def _print_start_result(data: dict) -> None:
     name = data.get("name") or data.get("session")
     if data.get("already_existed"):
         print(f"{name}: already running")
+        print(f"  open: backbone agent attach {name}")
         return
     if not data.get("ok"):
         print(f"{name}: failed to start ({data.get('ready', 'unknown')})")
@@ -38,10 +40,12 @@ def _print_start_result(data: dict) -> None:
     }
     print(f"{name}: {label.get(ready, ready)} — {data.get('runtime')}{repo}")
     print(f"  dir: {data.get('working_directory')}")
+    print(f"  open: backbone agent attach {name}")
+    print(f"  details: backbone agent inspect {name}")
     for line in data.get("evidence", []):
         print(f"  - {line}")
     if ready in ("timeout", "waiting_for_human"):
-        print(f"  answer it there: tmux attach -t {name}")
+        print(f"  answer it there: backbone agent attach {name}")
 
 
 def always_on_names(config) -> list[str]:
@@ -50,6 +54,11 @@ def always_on_names(config) -> list[str]:
 
 
 async def _agent_start(args: argparse.Namespace) -> int:
+    if getattr(args, "attach", False) and (
+        len(args.names) > 1 or getattr(args, "always_on", False)
+    ):
+        print("--attach requires a single agent")
+        return 1
     boot = await _common.client_config()
     if getattr(args, "always_on", False):
         if args.names or args.dir:
@@ -103,6 +112,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
             print(f"error {status}: {data.get('detail') if isinstance(data, dict) else data}")
             return 1
         _print_start_result(data)
+        args.attach_name = data.get("name") or data.get("session")
         return 0 if data.get("ok") else 1
 
     # Backbone not running: register + start directly, through the same
@@ -149,6 +159,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
                 "evidence": list(result.evidence),
             }
         )
+        args.attach_name = spec.name
         print(
             "note: the backbone is not running — start it with `backbone up --detach` for routing"
         )
@@ -159,7 +170,7 @@ async def _agent(args: argparse.Namespace) -> int:
     from agent_backbone.services.agents.operations import forget_agent, stop_agent_session
 
     sub = args.agent_command
-    if sub == "start":
+    if sub in ("start", "resume"):
         return await _agent_start(args)
 
     boot = await _common.client_config()
@@ -167,13 +178,55 @@ async def _agent(args: argparse.Namespace) -> int:
 
     if sub == "list":
         config = boot
-        if not config.agents:
+        specs = [spec for spec in config.agents if not args.tag or args.tag in spec.tags]
+        if args.json:
+            from agent_backbone.api.models import AgentConfigResponse
+
+            _common.print_json(
+                {"items": [AgentConfigResponse.from_spec(s).model_dump() for s in specs]}
+            )
+            return 0
+        if not specs:
             print("No agents known yet. Run `backbone agent start` from a project directory.")
             return 0
         width = max(len(name) for name in config.agents.names)
-        for spec in config.agents:
+        for spec in specs:
             model = f" ({spec.model})" if spec.model else ""
             print(f"  {spec.name:<{width}s}  {spec.runtime}{model}  {spec.path}")
+            if spec.tags:
+                print(f"    tags: {', '.join(spec.tags)}")
+        return 0
+
+    if sub in ("tag", "untag", "rename"):
+        body = (
+            {"name": args.new_name}
+            if sub == "rename"
+            else {"tags": args.tags, "remove": sub == "untag"}
+        )
+        if api_up:
+            endpoint = "rename" if sub == "rename" else "tags"
+            response = await _common.api(
+                boot, "POST", f"/api/agents/{args.name}/{endpoint}", json_body=body
+            )
+            if not response or response[0] != 200:
+                print(f"error: {response[1] if response else 'API unreachable'}")
+                return 1
+        else:
+            async with _common.Direct(boot) as direct:
+                try:
+                    if sub == "rename":
+                        await direct.store.rename(args.name, args.new_name)
+                    else:
+                        await direct.store.tag(args.name, args.tags, remove=sub == "untag")
+                except (KeyError, ValueError, OSError) as exc:
+                    print(f"error: {exc}")
+                    return 1
+        if sub == "rename":
+            print(f"{args.name} renamed to {args.new_name}")
+            print(f"Resume: backbone agent resume {args.new_name} --attach")
+            print(f"Update external for:{args.name} labels and scripts to use {args.new_name}.")
+        else:
+            print(f"{args.name}: tags updated")
         return 0
 
     if sub in ("tag", "untag"):
@@ -319,6 +372,25 @@ async def _agent(args: argparse.Namespace) -> int:
         config = await _common.load_config()
         online = await session_exists(args.name)
         snapshot = await agent_state(config, args.name)
+        if args.json:
+            from dataclasses import asdict
+
+            spec = config.agents.get(args.name)
+            _common.print_json(
+                {
+                    **asdict(snapshot),
+                    "name": args.name,
+                    "online": online,
+                    "known": spec is not None,
+                    "state": snapshot.state.value if online else "offline",
+                    "dir": str(spec.path) if spec else "",
+                    "model": spec.model if spec else None,
+                    "runtime": snapshot.runtime or (spec.runtime if spec else None),
+                    "repo": spec.repo if spec else "",
+                    "watches": list(spec.watches) if spec else [],
+                }
+            )
+            return 0
         print(f"{args.name}: {'online' if online else 'offline'} (backbone not running)")
         print(
             f"  state: {snapshot.state.value}{f' ({snapshot.reason})' if snapshot.reason else ''}"
@@ -413,7 +485,21 @@ async def _agent(args: argparse.Namespace) -> int:
 
 
 def cmd_agent(args: argparse.Namespace) -> int:
-    return asyncio.run(_agent(args))
+    attach = args.agent_command == "attach" or getattr(args, "attach", False)
+    if attach and not sys.stdin.isatty():
+        print("attachment needs an interactive terminal; use `backbone agent inspect NAME`")
+        return 1
+    result = 0 if args.agent_command == "attach" else asyncio.run(_agent(args))
+    if result == 0 and attach:
+        from agent_backbone.services.terminal import attach_session
+
+        name = args.name if args.agent_command == "attach" else args.attach_name
+        try:
+            return attach_session(name, read_only=getattr(args, "read_only", False))
+        except (OSError, ValueError) as exc:
+            print(f"could not attach to {name}: {exc}")
+            return 1
+    return result
 
 
 async def _tell(args: argparse.Namespace) -> int:

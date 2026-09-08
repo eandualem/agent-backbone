@@ -202,3 +202,17 @@ need not exist when recorded but must exist at launch. Empty `repo` removes
 ownership; watches require `OWNER/REPO`. Invalid updates write no fields.
 Existing records remain visible on refresh; repair invalid fields together before
 editing or starting them. No agent is silently deleted or migrated to a runtime.
+
+### Progress notifications
+
+`telegram.report_updates` defaults to `true`. Newly published reports are queued
+in the database and posted to the allowlisted agents group every 30 seconds.
+Set it to `false` to pause sending without deleting reports; setting it back to
+`true` drains pending reports still within retention. No group means delivery waits.
+Destinations are General and the agent’s own topic, not the private alert chat. Reports
+saved before this feature are never automatically broadcast.
+
+Reports now appear in both General and the agent's topic, with separate delivery
+receipts. Optional full-report voice messages can be enabled with
+`backbone config set telegram.report_audio true` after local speech setup.
+See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.

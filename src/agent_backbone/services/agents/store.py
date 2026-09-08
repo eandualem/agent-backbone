@@ -141,6 +141,12 @@ class AgentStore:
         name, and the new one gets a numbered name (``app-2``).
         """
         path = Path(directory).expanduser().resolve()
+        if name is None:
+            matches = [agent for agent in self._agents if agent.path == path]
+            if len(matches) > 1:
+                raise ValueError("multiple agents use this directory; specify an agent name")
+            if matches:
+                name = matches[0].name
         agent_name = sanitize_name(name or path.name)
         existing = self._agents.get(agent_name)
         if existing is not None and existing.path != path and existing.path.is_dir():
@@ -157,7 +163,9 @@ class AgentStore:
             dir=str(path),
             runtime=runtime
             or (existing.runtime if existing else self.config.launch.default_runtime),
-            model=model if model is not None else (existing.model if existing else None),
+            model=model
+            if model is not None
+            else (existing.model if existing and runtime in (None, existing.runtime) else None),
             # Keep the recorded repo only for a record that lived elsewhere (a
             # moved project); rediscovering the same checkout trusts what the
             # checkout says now, so a removed origin clears ownership.
@@ -237,6 +245,7 @@ class AgentStore:
             raise KeyError(name)
         if changes.get("runtime", current.runtime) != current.runtime:
             changes.setdefault("unattended", False)
+            changes.setdefault("model", None)
         validate_agent_spec(replace(current, **changes))
         if not await self._db.agents.update_fields(name, changes):
             raise KeyError(name)
@@ -272,6 +281,50 @@ class AgentStore:
         removed = await self._db.agents.delete(name)
         await self.refresh()
         return removed
+
+    async def rename(self, name: str, new_name: str) -> AgentSpec:
+        """Rename a stopped non-swarm agent and retain its runtime resume record."""
+        from agent_backbone.fs import atomic_write_text
+        from agent_backbone.services.terminal import session_exists
+
+        if name == new_name:
+            raise ValueError("the new name is the same as the current name")
+        # Stable lock order prevents two cross-renames from deadlocking.
+        async with lifecycle_lock(min(name, new_name)), lifecycle_lock(max(name, new_name)):
+            await self.refresh()
+            spec = self._agents.get(name)
+            if spec is None:
+                raise KeyError(name)
+            validate_agent_spec(replace(spec, name=new_name))
+            if (
+                name == self.config.backbone.session_name
+                or new_name == self.config.backbone.session_name
+            ):
+                raise ValueError("the backbone session name is reserved")
+            if spec.swarm:
+                raise ValueError("swarm member names belong to the swarm lifecycle")
+            if await session_exists(name) or await session_exists(new_name):
+                raise ValueError(
+                    f"stop '{name}' before renaming; both session names must be unused"
+                )
+            source = self.config.state_dir / f"{name}.json"
+            target = self.config.state_dir / f"{new_name}.json"
+            if target.exists():
+                raise ValueError(f"'{new_name}' already has saved state; choose another name")
+            copied = False
+            try:
+                if source.exists():
+                    atomic_write_text(target, source.read_text())
+                    copied = True
+                await self._db.agents.rename(name, new_name)
+            except BaseException:
+                if copied:
+                    target.unlink(missing_ok=True)
+                raise
+            source.unlink(missing_ok=True)
+            (self.config.state_dir / f"{name}.starting").unlink(missing_ok=True)
+            await self.refresh()
+            return self._agents.get(new_name)
 
     @serialized_mutation
     async def watch(self, name: str, repo: str) -> AgentSpec:

@@ -1,5 +1,15 @@
 # How it works
 
+
+Starting an existing agent reuses its saved CLI and model, and resumes its saved
+conversation when a matching runtime session ID is available. With no saved ID,
+it starts fresh; `--resume` explicitly allows the runtime's own last-conversation
+fallback. Use `backbone agent start NAME --fresh` for a new conversation with the
+same settings (API: `resume: false`; omitted or `null` means automatic).
+Changing runtime without specifying a model clears the previous runtime's model.
+Starting from a directory reuses its registered name, even after a rename;
+if several agents share that directory, specify a name.
+
 This page follows real requests through the system. Read
 [Concepts](concepts.md) first if the vocabulary is new.
 

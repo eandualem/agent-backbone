@@ -39,11 +39,15 @@ def list_docs() -> list[dict]:
     docs_dir = _docs_dir()
     if docs_dir is None:
         return []
-    return [
+    pages = [
         {"name": path.stem, "summary": _summary(path)}
         for path in sorted(docs_dir.glob("*.md"))
         if _NAME_RE.match(path.stem)
     ]
+    for name, path in (("index", docs_dir / "INDEX.md"), ("usage", docs_dir.parent / "USAGE.md")):
+        if path.is_file():
+            pages.insert(0, {"name": name, "summary": _summary(path)})
+    return pages
 
 
 def get_doc(name: str) -> str | None:
@@ -51,7 +55,13 @@ def get_doc(name: str) -> str | None:
     docs_dir = _docs_dir()
     if docs_dir is None or not _NAME_RE.match(name):
         return None
-    path = docs_dir / f"{name}.md"
+    path = (
+        docs_dir / "INDEX.md"
+        if name == "index"
+        else docs_dir.parent / "USAGE.md"
+        if name == "usage"
+        else docs_dir / f"{name}.md"
+    )
     return path.read_text() if path.is_file() else None
 
 

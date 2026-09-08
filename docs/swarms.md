@@ -72,10 +72,22 @@ committed before disbanding.
 ```bash
 backbone swarm list              # every swarm with roster and status
 backbone swarm status research   # one swarm
+backbone swarm status research --watch --details  # state and recent replies
 backbone swarm disband research  # manual teardown
 ```
 
 ## Roster syntax
+
+`swarm status` groups each member's state, runtime/model and current issue.
+`--details` adds hook-reported replies and terminal activity when available;
+`--json` returns the full snapshot with state evidence. These observations do
+not measure task completion. Open any member with `backbone agent attach NAME`,
+or watch from a separate terminal with `--read-only`.
+
+Startup role briefs compose global shared policies and policies selected by
+the member's `role:ROLE` or `swarm:NAME` tags. Inspect the exact content and source
+paths with `backbone instructions preview MEMBER`. A fresh member restart reuses
+its saved role brief; see [instruction management](cli.md#backbone-instructions-).
 
 `--member ROLE[*N][@RUNTIME[/MODEL[:EFFORT]]]`, repeatable:
 

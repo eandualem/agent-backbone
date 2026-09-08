@@ -30,6 +30,10 @@ By default, each new agent session the backbone starts is briefed at launch on w
 
 ## Getting started
 
+Run `backbone usage` for [quick usage](USAGE.md): start, resume, attach, rename
+and read agent progress with `backbone updates`.
+[Documentation index](docs/INDEX.md) gives a suggested reading order.
+
 Three commands install and run it; the fourth starts your first agent. Or hand the whole thing to an agent.
 
 ### Requirements
@@ -142,19 +146,10 @@ The repository is itself run through the backbone: most of its issues, reviews a
 
 ## Documentation
 
-Every page is also available from an installed package as `backbone docs <page>`.
-
-| Page | What it covers |
-|---|---|
-| [Concepts](https://github.com/eandualem/agent-backbone/blob/main/docs/concepts.md) | The vocabulary: agent, repository, state, delivery, event |
-| [Getting started](https://github.com/eandualem/agent-backbone/blob/main/docs/getting-started.md) | Install, start two agents, send the first message, add GitHub |
-| [How it works](https://github.com/eandualem/agent-backbone/blob/main/docs/how-it-works.md) | Every flow step by step, with the decisions the backbone makes |
-| [Configuration](https://github.com/eandualem/agent-backbone/blob/main/docs/configuration.md) | Settings (`backbone config`), secrets, the data directory |
-| [CLI](https://github.com/eandualem/agent-backbone/blob/main/docs/cli.md) · [API](https://github.com/eandualem/agent-backbone/blob/main/docs/api.md) | Reference |
-| [GitHub](https://github.com/eandualem/agent-backbone/blob/main/docs/github.md) · [App setup walkthrough](https://github.com/eandualem/agent-backbone/blob/main/docs/github-app-setup.md) · [Integrations](https://github.com/eandualem/agent-backbone/blob/main/docs/integrations.md) · [Telegram](https://github.com/eandualem/agent-backbone/blob/main/docs/telegram.md) | Integrations |
-| [Swarms](https://github.com/eandualem/agent-backbone/blob/main/docs/swarms.md) | A coordinator plus members on one issue |
-| [Security](https://github.com/eandualem/agent-backbone/blob/main/docs/security.md) | Defaults and what you opt into |
-| [Status and roadmap](https://github.com/eandualem/agent-backbone/blob/main/docs/status-and-roadmap.md) | What works, what is missing, what is next |
+Start with [Quick usage](USAGE.md) or the [documentation index](docs/INDEX.md).
+Every page ships with the package: `backbone docs index` gives the reading guide;
+`backbone docs <page>` opens a reference. Agent playbooks live in [help/](help/),
+and injected instructions live in [templates/](templates/).
 
 ## Development
 

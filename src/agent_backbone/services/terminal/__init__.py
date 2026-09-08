@@ -1,6 +1,7 @@
 """Terminal service — async tmux primitives and PTY streaming. A leaf: it
 knows sessions, panes and keys, never which program runs inside."""
 
+from agent_backbone.services.terminal._attach import attach_session
 from agent_backbone.services.terminal._copy_mode import clear_copy_mode
 from agent_backbone.services.terminal._core import (
     active_pane_size,
@@ -30,6 +31,7 @@ __all__ = [
     "PtyManager",
     "PtySession",
     "active_pane_size",
+    "attach_session",
     "capture_pane",
     "clear_copy_mode",
     "graceful_close",

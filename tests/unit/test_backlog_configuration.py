@@ -138,7 +138,9 @@ async def test_off_to_poll_and_intervals_reconcile(tmp_path):
     )
     app.state.github = AsyncMock()
     app.state.db = AsyncMock()
-    app.state.integrations = SimpleNamespace(reconcile=AsyncMock())
+    app.state.integrations = SimpleNamespace(
+        reconcile=AsyncMock(), flush_reports=AsyncMock(), flush_report_audio=AsyncMock()
+    )
     app.state.issue_closed_hooks = ()
     scheduler = _register_jobs(app)
     assert "github-poll" not in {j.name for j in scheduler.jobs}

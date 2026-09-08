@@ -36,6 +36,8 @@ _EXPECTED_INDEXES = {
     "uq_reports_request",
     "idx_reports_author",
     "idx_reports_created",
+    "idx_reports_telegram",
+    "idx_reports_audio",
     "uq_events_delivery_id",
     "idx_events_received",
     "idx_events_repo",

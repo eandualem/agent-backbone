@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 572328cac84d
+Revision ID: d18bd413f432
 Revises:
-Create Date: 2026-09-08 10:41:03.645732
+Create Date: 2026-09-08 15:01:47.688706
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "572328cac84d"
+revision: str = "d18bd413f432"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -249,12 +249,33 @@ def upgrade() -> None:
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("priority", sa.Integer(), nullable=False),
         sa.Column("swarm_member", sa.Integer(), nullable=False),
+        sa.Column("telegram_delivery", sa.Text(), server_default="not_requested", nullable=False),
+        sa.Column("telegram_attempts", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("telegram_retry_at", sa.Text(), server_default="", nullable=False),
+        sa.Column("telegram_lease", sa.Text(), nullable=True),
+        sa.Column("telegram_message_id", sa.Text(), nullable=True),
+        sa.Column("telegram_parts", sa.Text(), server_default="{}", nullable=False),
+        sa.Column("telegram_audio_parts", sa.Text(), server_default="{}", nullable=False),
+        sa.Column(
+            "telegram_audio_delivery", sa.Text(), server_default="not_requested", nullable=False
+        ),
+        sa.Column("telegram_audio_attempts", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("telegram_audio_retry_at", sa.Text(), server_default="", nullable=False),
+        sa.Column("telegram_audio_lease", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_reports")),
         sqlite_autoincrement=True,
     )
     with op.batch_alter_table("reports", schema=None) as batch_op:
+        batch_op.create_index(
+            "idx_reports_audio",
+            ["telegram_audio_delivery", "telegram_audio_retry_at", "id"],
+            unique=False,
+        )
         batch_op.create_index("idx_reports_author", ["author_id", "id"], unique=False)
         batch_op.create_index("idx_reports_created", ["created_at"], unique=False)
+        batch_op.create_index(
+            "idx_reports_telegram", ["telegram_delivery", "telegram_retry_at", "id"], unique=False
+        )
         batch_op.create_index("uq_reports_request", ["author_id", "request_id"], unique=True)
 
     op.create_table(
@@ -310,8 +331,10 @@ def downgrade() -> None:
     op.drop_table("review_lifecycle")
     with op.batch_alter_table("reports", schema=None) as batch_op:
         batch_op.drop_index("uq_reports_request")
+        batch_op.drop_index("idx_reports_telegram")
         batch_op.drop_index("idx_reports_created")
         batch_op.drop_index("idx_reports_author")
+        batch_op.drop_index("idx_reports_audio")
 
     op.drop_table("reports")
     op.drop_table("poll_cursors")

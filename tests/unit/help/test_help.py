@@ -27,7 +27,10 @@ class TestDocs:
         from pathlib import Path
 
         repo_docs = Path(__file__).resolve().parents[3] / "docs"
-        expected = {p.stem for p in repo_docs.glob("*.md")} - {"README"}
+        expected = {p.stem for p in repo_docs.glob("*.md")} - {"README", "INDEX"} | {
+            "index",
+            "usage",
+        }
         assert expected  # the repository's docs/ was found
         pages = list_docs()
         assert {p["name"] for p in pages} == expected

@@ -1,5 +1,17 @@
 # CLI reference
 
+`backbone usage` opens the quick guide, including reading and publishing progress.
+
+
+Starting an existing agent reuses its saved CLI and model, and resumes its saved
+conversation when a matching runtime session ID is available. With no saved ID,
+it starts fresh; `--resume` explicitly allows the runtime's own last-conversation
+fallback. Use `backbone agent start NAME --fresh` for a new conversation with the
+same settings (API: `resume: false`; omitted or `null` means automatic).
+Changing runtime without specifying a model clears the previous runtime's model.
+Starting from a directory reuses its registered name, even after a rename;
+if several agents share that directory, specify a name.
+
 `backbone --help` lists everything; `ab` is the same command under a short
 name; `-v` enables debug logging. Commands go
 through the running backbone's API when it is up and fall back to the
@@ -7,6 +19,78 @@ database (and tmux) directly when it is not — except `agent approve`,
 `agent deny` and `tell`, which only work through the API so that every keystroke into an
 agent is audited. `diagnostics` also requires the API and reports unavailable
 when it cannot read a result.
+
+## Quick reference and Tab completion
+
+```bash
+backbone agent start --attach       # start here and open the session
+backbone agent resume app --attach  # return to a stopped agent's conversation
+backbone status --watch             # follow agents and swarms; Ctrl-C exits
+backbone help agent start           # recall this command's options
+backbone help swarms                # read the capability playbook
+```
+
+Install completion once for the shell you use. Both `backbone` and `ab` complete
+commands, options, agent names, swarm names, runtime names, settings, tags and
+instruction names. Tab shows matching choices, extends a common prefix, and
+fills in a unique match. At an empty argument it also offers available flags;
+flags already supplied are omitted unless they can be repeated.
+
+```bash
+backbone completion zsh --install   # ~/.zshrc (respects ZDOTDIR)
+backbone completion bash --install  # ~/.bashrc
+backbone completion fish --install  # fish/conf.d under XDG_CONFIG_HOME or ~/.config
+```
+
+Setup adds one marked block, backs up an existing file, and is safe to run again.
+Shell configuration outside that block is preserved, including dotfile symlinks.
+The block loads the current completion wrapper on each shell start, so upgrades
+do not require regenerating a saved script. Use `--rc-file PATH` for a different
+startup file (for example, `~/.bash_profile` for a Bash login shell that does not
+source `.bashrc`). `--uninstall` removes only the managed block; open a new shell
+to unload its functions. Zsh initializes `compinit` only if it is not already
+loaded and keeps existing key bindings, including FZF's Tab widget.
+
+Open a new terminal, or use the activation command printed by the installer.
+For Zsh/Bash that is `source <(backbone completion zsh)` or
+`source <(backbone completion bash)`; for Fish, `backbone completion fish | source`.
+Without `--install`, the command still prints a script for manual integration.
+
+Try these without executing them (`<Tab>` means press the key):
+
+```text
+ab <Tab>                         # commands and global options
+ab agent st<Tab>                 # start and stop
+ab agent attach <Tab>            # known agents and attach options
+ab status <Tab>                  # available status flags
+ab agent start --runtime co<Tab> # completes codex
+```
+
+For inline suggestions in Zsh, load
+[zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions) in your
+shell, then enable Backbone's integration:
+
+```zsh
+backbone completion zsh --install --suggestions
+source <(backbone completion zsh --suggestions)
+```
+
+Existing history suggestions retain their priority. When history has no match,
+Backbone commands get a faint suggestion from the completion engine, including
+agent names and flags, without pressing Tab. Right arrow at the end of the line
+accepts the hint; it does not execute the command. Other commands retain their
+existing suggestion strategies. The integration uses the plugin's asynchronous
+fetching and installs no plugin itself. Fish provides inline suggestions natively;
+Bash setup provides Tab completion only.
+
+Names
+are read directly from the selected SQLite database, including stopped agents;
+the service need not be running. Completion never creates or migrates a database,
+starts an agent or contacts a model provider. Missing or locked data produces no
+names rather than an error in your prompt. PostgreSQL installations currently
+get static command/option completion; name discovery uses local SQLite only.
+Directory arguments complete directories, and `--rc-file` completes files.
+Unknown agent names and free-text messages do not fall back to unrelated files.
 
 ## `backbone report` · `backbone updates`
 
@@ -123,10 +207,44 @@ before enabling it and [configuration](configuration.md#agents) for settings.
 
 ## `backbone status`
 
-API health per component, GitHub intake mode, every known agent with its
-live state (`idle`, `busy`, `waiting_for_human(plan)`, `offline`, …),
-runtime, repository and directory, other tmux sessions, and every tracked
-repository with its owners, watchers and the last event seen.
+Bordered tables show Agent, State, CLI, Model and Work columns, grouped into
+ordinary agents and swarms. At 80 columns each agent occupies one row. Wider
+terminals reveal longer model names and full repository paths; below 80 columns
+CLI/model share a column, and below 60 they move to `--details`. Long cells use
+an ellipsis. Compact views show the repository name without its owner;
+`--details` includes full model/repository names, tags, replies and activity times.
+Work shows the current issue, repository or configured description; an offline
+agent's saved issue is labelled `Last:`.
+
+Agents needing attention appear first, then busy, starting and idle agents.
+A divider separates offline agents. States have colors as well as text labels;
+`waiting` is the compact label for `waiting_for_human`. Reasons, provider errors
+and plan titles appear in aligned details below the tables. Component failures
+are shown above the roster. State comes from
+the same hook/terminal inference as `agent inspect`; an API authentication error
+is an error, not an offline result. With the service down, local tmux and saved
+state remain available.
+
+```bash
+backbone status --running           # only live sessions
+backbone status --tag backend       # one group
+backbone status --swarm audit       # one swarm
+backbone status --details           # last replies and terminal activity times
+backbone status --watch --interval 3
+backbone status --json              # full snapshot, including state evidence
+```
+
+`--plain` uses ASCII borders and disables color; `NO_COLOR` disables color.
+Redirected output contains no terminal escapes. `--watch` requires a terminal
+with cursor support. It refreshes in the alternate screen, adapts to width
+changes on the next refresh, and restores the previous screen and cursor on
+Ctrl-C. This also applies with `--plain`. A roster taller than the window is
+clipped with an ellipsis instead of scrolling repeated snapshots; use `--running`,
+`--tag` or `--swarm` to focus the view, or omit `--watch` to see every row.
+`--json` returns one snapshot for scripts. Activity is terminal activity, and a
+last reply is labelled as such: neither implies a task completion percentage.
+Use `agent inspect NAME` for the terminal tail and recent deliveries. Repository
+owners/watchers and intake diagnostics remain available through `/api/status`.
 
 ## `backbone diagnostics [--since WHEN] [--agent NAME] [--limit N] [--json]`
 
@@ -168,8 +286,10 @@ backbone config set escalation.target orch
 
 | Command | Effect |
 |---|---|
-| `agent start [NAME…] [--dir D] [--name N] [--runtime R] [--model M] [--resume] [--watch REPO]… [--no-wait]` | Discover the agent from `--dir` (default: cwd), record it, start its tmux session and **wait until it is at its prompt**. A bare known `NAME` starts from its recorded directory; a bare unknown `NAME` registers the cwd under that name. Several names start a group of known agents (`ab agent start app web orch`) |
-| `agent list` | Known agents with runtime, model and directory |
+| `agent start [NAME…] [--dir D] [--runtime R] [--model M] [--resume \| --fresh] [--watch REPO]… [--no-wait] [--attach]` | Discover the agent from `--dir` (default: cwd), record it, start its tmux session and **wait until it is at its prompt**. A bare known `NAME` starts from its recorded directory; a bare unknown `NAME` registers the cwd under that name. Several names start a group of known agents (`ab agent start app web orch`). `--attach` opens a single session afterwards |
+| `agent resume NAME… [--attach]` | Start known agents with their saved runtime conversations. An already running session is left running |
+| `agent attach NAME [--read-only]` | Open a session in your terminal. Detach with Ctrl-b, then d. From inside tmux, switch the current client; read-only viewing requires a separate terminal |
+| `agent list [--tag TAG] [--json]` | Known agents with runtime, model, directory and tags |
 | `agent inspect NAME [--json]` | State, reason, current issue, delivery condition, the runtime's session id and the agent's last reply (when its hook reports them), the evidence, the terminal tail, recent deliveries |
 | `agent stop NAME…` | Kill the session(s) |
 | `agent approve NAME [--from WHO]` | Answer the permission prompt the agent's runtime is showing (Claude Code, Codex, OpenCode — each verified against a live dialog; other runtimes report `unsupported`). Checks the terminal at the moment of the call and types only if the dialog is on screen *then* — otherwise reports `not_waiting` with the terminal tail. (tmux has no check-and-send: a dialog a human answers in that same instant can receive one extra key at an empty prompt; the response says whether the dialog actually cleared.) Needs the backbone running (`backbone up`): there is no direct-tmux fallback, so every approval goes through the API and is recorded as an `approval` event. Disable with `security.allow_remote_approval false` |
@@ -177,6 +297,14 @@ backbone config set escalation.target orch
 | `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object), `always_on` and `unattended` (`true`/`false`; `unattended` launches the runtime with its own no-approval switch — see [configuration](configuration.md#agents)) |
 | `agent watch [NAME] REPO…` / `agent unwatch [NAME] REPO…` | Add / remove watched repositories. Inside an agent session `NAME` defaults to the agent itself (`$BACKBONE_AGENT`), so an agent can subscribe on its own |
 | `agent forget NAME` | Remove a stopped agent from the backbone (refuses while its session is still running) |
+| `agent tag NAME TAG…` / `agent untag NAME TAG…` | Add/remove tags, retaining other tags. `swarm:` and `role:` tags are managed by the swarm lifecycle |
+| `agent rename NAME NEW_NAME` | Rename a stopped non-swarm agent, preserving its directory, settings, watches, resume ID, queue and routing receipts. Refuses occupied names or names with existing history, active deliveries and agents participating in an active swarm |
+
+Renaming also updates explicit Telegram routes and the escalation target.
+Automatically provisioned Telegram topics follow the existing lifecycle: the
+old topic closes with history retained and the new name gets a topic. Update
+external `for:OLD_NAME` labels, scripts and saved command lines yourself; the
+command prints a reminder. A rename never stops a running agent for you.
 
 ### Every `agent start` parameter
 
@@ -192,9 +320,11 @@ an orchestrator that should spin up workers runs these commands itself.
 | `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `deepcode`, `aider`, or `shell` | yes — later bare starts reuse it |
 | `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent. Write it as `M:EFFORT` (e.g. `gpt-6-astra:high`, `opus:max`) to set the reasoning effort too — such a spec is **not** passed verbatim: it is split, and the CLI gets the bare model plus its own effort switch. A level the runtime does not have, or an effort with no model (`:high`), is refused rather than dropped | yes — later bare starts reuse it |
 | `--watch OWNER/REPO` | Also subscribe to a repository (repeatable) | yes |
-| `--resume` | Reopen the session the backbone last saw through the runtime's hook (its id is recorded), else the runtime's last conversation | no |
+| `--resume` | Allow the runtime's last-conversation fallback when no matching saved ID exists | automatic with a matching saved ID |
+| `--fresh` | New conversation, keeping saved CLI and model | no |
 | `--always-on` | Instead of names: start every agent marked `always_on` (after a reboot, with `--resume`) | — |
 | `--no-wait` | Return immediately instead of waiting for the prompt | no |
+| `--attach` | Open this one session after startup; an interactive terminal is required | no |
 
 Examples:
 
@@ -235,6 +365,55 @@ and removes the worktree (the branch is kept). The swarm's issue being
 closed (normally by merging the coordinator's PR) tears it down
 automatically. `backbone tell <swarm-name> …` reaches its coordinator.
 
+`swarm status NAME --watch` follows a roster using the same layout and filters as
+`status`; `--details`, `--json` and `--plain` work there too. `swarm list` includes
+completed swarms. Open a member with `backbone agent attach MEMBER`.
+
+## `backbone instructions …`
+
+Startup instructions are Markdown files in the data directory. Assignments are
+settings in the database. Preview an agent's next launch before changing it:
+
+```bash
+backbone instructions list
+backbone instructions preview app
+backbone instructions preview app --json
+backbone instructions show base
+backbone instructions show swarm:common
+backbone instructions edit swarm:scout        # template for newly created swarms
+backbone instructions path base
+backbone instructions edit coding
+backbone instructions use coding             # replace the global assignment
+backbone agent tag app backend
+backbone instructions edit python
+backbone instructions use python --tag backend
+backbone instructions validate
+```
+
+`edit` uses `$VISUAL`, then `$EDITOR`, on a temporary draft. Only a successful,
+nonempty edit is saved atomically; editor failure or a concurrent edit leaves
+the original untouched. Set the editor first, for example `export EDITOR=vi`.
+`path` prints the file to edit with any other tool. Editing a policy does not
+assign it automatically. `use` replaces the ordered list for its scope; omit
+policy names to clear that scope. Policies are deduplicated after composing
+global names, then matching tags in alphabetical order. Runtime changes retain
+tags and assignments. Use `role:scout` or `swarm:audit` as a policy scope when
+appropriate; membership in those tags is managed by the swarm.
+
+`base` refers to the common environment brief. Editing it for the first time
+copies the shipped template and adds `{shared_policy}`, where global/tag
+instructions will be inserted. Existing overrides without that placeholder
+continue to replace the whole brief; preview explicitly marks policies skipped.
+Swarm members use their saved role brief plus selected policies on each fresh
+start. Preview reports the sources, paths, injection mode and effective content;
+it describes the next launch, not the contents of an existing conversation.
+Project/runtime-owned instructions are still loaded by the runtime itself.
+`instructions list` also lists shipped/overridden swarm template sources.
+`show`, `path` and `edit` accept `swarm:common`, `swarm:coordinator`, `swarm:scout`
+or a custom role. These edits affect newly created swarms; existing members
+keep their saved role brief and compose the currently selected policies.
+See [Shared policy](configuration.md#shared-policy-and-environment-facts).
+
 ## `backbone help [TOPIC]`
 
 The backbone explains its own capabilities to agents: no argument lists
@@ -247,6 +426,9 @@ Every backbone-started Claude agent carries a short injected brief (see
 `agents.inject_brief`) that points here, so the injected text stays
 small while the capability surface can grow. Add or override topics by
 dropping markdown files into `<data_dir>/help/`.
+
+A command path such as `backbone help agent start` prints that command's parser
+help. The plural topics (`agents`, `swarms`) remain the longer playbooks.
 
 ## `backbone docs [PAGE]`
 
@@ -326,3 +508,8 @@ or `policy:NAME`. See [Templates](templates.md) for examples and adoption rules.
 `backbone agent tag NAME TAG...` adds persistent group tags;
 `backbone agent untag NAME TAG...` removes them. Swarm/role identity tags cannot
 be changed with these commands. Changes take effect at the next fresh launch.
+
+Completion installers serialize updates to the same resolved rc file using a
+`.backbone-completion.lock` sidecar, retained alongside the file. The backup and
+conflict check protect existing content. Editors and dotfile managers that do not
+use that lock must not write the rc file concurrently with installation.

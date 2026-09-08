@@ -24,7 +24,12 @@ def test_only_enabled_webhook_backfill_is_a_one_shot(tmp_path, intake, backfill)
     app.state.config = config
     app.state.github = AsyncMock()
     app.state.db = AsyncMock()
-    app.state.integrations = SimpleNamespace(sync_agents=AsyncMock(), reconcile=AsyncMock())
+    app.state.integrations = SimpleNamespace(
+        sync_agents=AsyncMock(),
+        reconcile=AsyncMock(),
+        flush_reports=AsyncMock(),
+        flush_report_audio=AsyncMock(),
+    )
     app.state.issue_closed_hooks = ()
     with (
         patch("agent_backbone.services.jobs.UpgradeWatch"),

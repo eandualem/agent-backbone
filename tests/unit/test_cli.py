@@ -440,15 +440,27 @@ class TestSwarmList:
             "state": "blocked",
             "reason": "provider",
             "detail": "Selected model is at capacity",
+            "tags": ["swarm:s1"],
+        }
+        swarm = {
+            "name": "s1",
+            "members": [member],
+            "repo": "acme/app",
+            "issue_number": 1,
+            "status": "active",
         }
         with patch(
             "agent_backbone.cli._common.api",
             new_callable=AsyncMock,
-            return_value=(200, {"items": [{"name": "s1", "members": [member]}]}),
+            side_effect=lambda config, method, path, **kw: (
+                200,
+                {"items": [swarm] if path == "/api/swarms" else [member]},
+            ),
         ):
             assert _run(["swarm", "status", "s1"]) == 0
         output = capsys.readouterr().out
-        assert "blocked (provider)" in output
+        assert "blocked" in output
+        assert "Reason: provider" in output
         assert member["detail"] in output
 
     def test_malformed_200_items_are_an_error(self, capsys):

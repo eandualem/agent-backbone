@@ -150,6 +150,8 @@ Useful right away:
 
 ```bash
 backbone status                 # agents, their state, repositories
+backbone status --watch          # live roster; Ctrl-C exits
+backbone agent attach app        # open the session; Ctrl-b d detaches
 backbone agent inspect app      # state + delivery readiness + evidence
 backbone tell app "Summarise what this repository does in three sentences."
 ```
@@ -162,7 +164,17 @@ backbone tell app "Summarise what this repository does in three sentences."
 
 If the agent is busy you get `"outcome": "agent_working"` and the message
 is queued; the monitor delivers it when the agent is idle (within a
-minute). Watch it happen: `tmux attach -t app`.
+minute). Watch it happen: `backbone agent attach app`.
+
+Later, use `backbone agent resume app --attach` to reopen a stopped agent's
+conversation, or add `--attach` to the first `agent start`. An already running
+agent stays running. `backbone help agent start` recalls its options.
+
+Set up [shell completion](cli.md#quick-reference-and-tab-completion) once so Tab
+offers agent names and commands. To preview Backbone startup instructions and selected policies,
+run `backbone instructions preview app` (project/runtime instructions load separately);
+`backbone instructions list` shows
+where to edit shared policies and assign them to tags.
 
 ### Codex permissions and scrolling
 

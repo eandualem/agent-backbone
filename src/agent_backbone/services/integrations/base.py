@@ -107,3 +107,11 @@ class Integration:
     async def sync_agents(self) -> None:
         """Provision / retire per-agent surfaces to match the registered agents."""
         return None
+
+    async def flush_reports(self) -> None:
+        """Deliver durable progress notifications on integrations that support them."""
+        return None
+
+    async def flush_report_audio(self) -> None:
+        """Optional audio delivery, independent from text notifications."""
+        return None

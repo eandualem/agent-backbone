@@ -43,7 +43,7 @@ async def _swarm(args: argparse.Namespace) -> int:
         print(f"  worktree:    {data['worktree']}")
         return 0
 
-    if sub in ("list", "status"):
+    if sub == "list":
         result = await _common.api(boot, "GET", "/api/swarms")
         if result is None or result[0] != 200:
             print("backbone API unreachable")
@@ -55,11 +55,6 @@ async def _swarm(args: argparse.Namespace) -> int:
             # the direct indexes below as a traceback.
             print("error: unexpected swarm list from the backbone API")
             return 1
-        if sub == "status" and getattr(args, "name", None):
-            swarms = [s for s in swarms if s.get("name") == args.name]
-            if not swarms:
-                print(f"unknown swarm '{args.name}'")
-                return 1
         if not swarms:
             print("no swarms")
             return 0
@@ -100,6 +95,12 @@ async def _swarm(args: argparse.Namespace) -> int:
 
 
 def cmd_swarm(args: argparse.Namespace) -> int:
+    if args.swarm_command == "status":
+        from agent_backbone.cli.status import cmd_status
+
+        args.swarm = args.name or args.swarm
+        args.swarms_only = True
+        return cmd_status(args)
     return asyncio.run(_swarm(args))
 
 
@@ -108,6 +109,28 @@ def cmd_help(args: argparse.Namespace) -> int:
     from agent_backbone.help import get_topic, list_topics
 
     data_dir = bootstrap_config().data_dir
+    if args.topic and not getattr(args, "path", []):
+        content = get_topic(args.topic, data_dir)
+        if content is not None:
+            print(content)
+            return 0
+    if args.topic:
+        from agent_backbone.cli import build_parser
+
+        parser = build_parser()
+        commands = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+        if args.topic in commands.choices:
+            parser = commands.choices[args.topic]
+            for name in getattr(args, "path", []):
+                commands = next(
+                    (a for a in parser._actions if isinstance(a, argparse._SubParsersAction)), None
+                )
+                if commands is None or name not in commands.choices:
+                    print(f"unknown subcommand '{name}'")
+                    return 1
+                parser = commands.choices[name]
+            parser.print_help()
+            return 0
     if not args.topic:
         print("backbone capabilities — `backbone help <topic>` for the details:\n")
         for topic in list_topics(data_dir):

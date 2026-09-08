@@ -1,5 +1,33 @@
 # HTTP & Socket.IO API
 
+
+Newly published reports are queued durably for Telegram and posted to the allowed
+agents group: ordinary agents go to General and their own topic; swarm members
+go to General only, including audio. The shared
+feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
+bounded batches and retries after failures. `telegram.report_updates=false` pauses
+sending; re-enabling drains retained pending reports. A configured or discovered
+group must be allowlisted; there is no fallback to a private notification chat.
+Existing reports from before this feature remain readable and are not broadcast.
+`telegram_delivery` in report JSON distinguishes pending, sending, sent and
+not_requested. The saved report survives delivery failures. Retries are normally
+deduplicated; a crash after Telegram accepts a message but before its receipt is
+saved can cause a duplicate bearing the same report ID. Report retention still applies.
+
+Read reports with `backbone updates`, `backbone updates --agent NAME --history`,
+or `backbone updates show ID`; in Telegram use `/updates`, `/updates NAME`,
+`/updates history NAME`, or `/updates show ID`. `backbone usage` is the quick guide.
+
+
+Starting an existing agent reuses its saved CLI and model, and resumes its saved
+conversation when a matching runtime session ID is available. With no saved ID,
+it starts fresh; `--resume` explicitly allows the runtime's own last-conversation
+fallback. Use `backbone agent start NAME --fresh` for a new conversation with the
+same settings (API: `resume: false`; omitted or `null` means automatic).
+Changing runtime without specifying a model clears the previous runtime's model.
+Starting from a directory reuses its registered name, even after a rename;
+if several agents share that directory, specify a name.
+
 Base URL `http://127.0.0.1:7120`. Interactive OpenAPI docs at `/docs` while
 running. Every route except `GET /health` and the webhook requires
 `Authorization: Bearer <BACKBONE_API_KEY>`.
@@ -58,7 +86,7 @@ actually generated a response in the running session.
 
 ```json
 {"dir": "/Users/me/code/app", "name": null, "runtime": null, "model": null,
- "resume": false, "watch": ["acme/web"], "wait": true}
+ "resume": null, "watch": ["acme/web"], "wait": true}
 ```
 
 Discovers (or re-registers) the agent for `dir`, starts it and — with
@@ -140,11 +168,32 @@ negative or more than 60 seconds future timestamps return 422.
 
 ### `PATCH /api/agents/{name}`
 
+The agent session feed (`GET /api/agents` and Socket.IO sessions updates) also
+includes `last_message`, `detail`, `state_source` and `evidence`, when available.
+CLI status uses those observations without polling GitHub for task estimates.
+
 Change `dir`, `runtime`, `model`, `repo`, `tags`, `env`, `description`,
 `always_on`, `unattended` (booleans; see [configuration](configuration.md#agents)).
 Changing `runtime` clears `unattended` unless the same request sets it: a
 freedom granted with one CLI's sandbox in mind does not follow the agent to
 another.
+
+### `POST /api/agents/{name}/tags`
+
+`{"tags":["backend","python"],"remove":false}` adds tags without replacing the
+others; `remove:true` removes only those tags. Names are printable, at most 100
+characters, with no whitespace. `swarm:` and `role:` tags are lifecycle-managed.
+Returns the updated agent configuration; unknown agents return 404, invalid
+tags 400. Concurrent changes are serialized through the agent store.
+
+### `POST /api/agents/{name}/rename`
+
+`{"name":"new-name"}` renames a stopped non-swarm agent. Configuration, watches,
+queued messages, routing receipts, explicit topic routes, escalation target and
+the saved runtime conversation ID follow the new name. An occupied name, existing
+history at the destination, an active delivery or active swarm participation
+returns 409. External GitHub labels and scripts are not changed. See the
+[CLI reference](cli.md#backbone-agent-) for session and topic behavior.
 
 ### `POST /api/agents/{name}/watch` · `/unwatch` `{"repo": "acme/web"}` · `DELETE /api/agents/{name}`
 
@@ -419,3 +468,8 @@ agents return 404; invalid or reserved swarm/role tags return 400. Assign polici
 through the existing configuration API using `agents.shared_policy` and
 `agents.tag_policy`; see [Templates](templates.md). This does not message or
 restart an existing conversation.
+
+Ordinary agent reports appear in General and the agent's topic, with separate
+delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
+`backbone config set telegram.report_audio true` after local speech setup.
+See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
