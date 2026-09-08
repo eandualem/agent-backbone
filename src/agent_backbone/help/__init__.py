@@ -77,8 +77,6 @@ def list_topics(data_dir: Path | None = None) -> list[dict]:
 
 def get_topic(name: str, data_dir: Path | None = None) -> str | None:
     """A topic's markdown, or None. Data-dir files override shipped ones."""
-    if name == "instructions":
-        name = "templates"
     if not _NAME_RE.match(name):
         return None
     for source in (
@@ -90,4 +88,4 @@ def get_topic(name: str, data_dir: Path | None = None) -> str | None:
             path = source / f"{name}.md"
             if path.exists() or path.is_symlink():
                 return path.read_text()
-    return None
+    return get_topic("templates", data_dir) if name == "instructions" else None

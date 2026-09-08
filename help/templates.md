@@ -19,7 +19,7 @@ local edits. Files live in the installed data directory's `templates/` folder.
 
 Assign short policies globally with `backbone templates use NAME...`, or to a
 specific group with `backbone templates use NAME... --tag TAG`. Apply a group tag
-with `backbone agent tag AGENT TAG`; remove it with `agent untag AGENT TAG`.
+with `backbone agent tag AGENT TAG`; remove it with `backbone agent untag AGENT TAG`.
 Assignments replace that scope's list; no names clears it. Global rules come first,
 then matching tags alphabetically; each policy appears once. Required rules apply
 even with a custom base. Missing or empty selected policies fail launch clearly.

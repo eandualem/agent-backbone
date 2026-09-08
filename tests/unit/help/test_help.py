@@ -73,3 +73,16 @@ class TestAgentBrief:
     def test_data_dir_override(self, tmp_path):
         (tmp_path / "agent-brief.md").write_text("hello {agent_name}")
         assert render_agent_brief({"agent_name": "x"}, tmp_path) == "hello x"
+
+
+def test_instructions_alias_preserves_explicit_help_overrides(tmp_path):
+    assert get_topic("instructions", tmp_path) == get_topic("templates", tmp_path)
+    for directory in ("help-topics", "help"):
+        path = tmp_path / directory / "instructions.md"
+        path.parent.mkdir(parents=True)
+        path.write_text(f"# Custom instructions playbook in {directory}")
+        entries = {row["name"]: row for row in list_topics(tmp_path)}
+        assert entries["instructions"]["summary"] == f"Custom instructions playbook in {directory}"
+        assert get_topic("instructions", tmp_path) == path.read_text()
+    # The canonical directory wins even when a legacy topic also exists.
+    assert "in help" in get_topic("instructions", tmp_path)
