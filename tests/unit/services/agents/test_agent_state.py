@@ -824,3 +824,27 @@ async def test_terminal_state_retains_saved_session_metadata(tmp_path, pane, sta
     assert result.last_message == "Tests passed."
     assert result.runtime == "codex"
     assert result.evidence
+
+
+@pytest.mark.parametrize("state,reason", [("unknown", None), ("waiting_for_human", "permission")])
+async def test_expired_untrusted_state_keeps_metadata_without_reviving_state(
+    tmp_path, state, reason
+):
+    (tmp_path / "ike.json").write_text(
+        json.dumps(
+            {
+                "state": state,
+                "reason": reason,
+                "ts": 1,
+                "runtime": "codex",
+                "session_id": "saved",
+                "last_message": "Done.",
+            }
+        )
+    )
+    result = await get_agent_state(tmp_path, "ike", pane_content="")
+    assert result.state == AgentState.UNKNOWN
+    assert result.reason is None
+    assert result.session_id == "saved"
+    assert result.last_message == "Done."
+    assert result.runtime == "codex"

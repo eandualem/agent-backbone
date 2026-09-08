@@ -10,8 +10,6 @@ wires the remaining services against that snapshot.
 from __future__ import annotations
 
 import logging
-import os
-import signal
 import time
 from contextlib import asynccontextmanager
 
@@ -97,11 +95,18 @@ def _register_jobs(app: FastAPI):
         # Ask uvicorn for a graceful shutdown; `backbone up` re-executes
         # itself when it sees the flag, so the same service or tmux session
         # comes back on the new code.
+        shutdown = getattr(state, "request_shutdown", None)
+        if shutdown is None:
+            log.warning("automatic restart requires the backbone up server runner")
+            return
         state.restart_requested = True
-        os.kill(os.getpid(), signal.SIGTERM)
+        shutdown()
 
     watch = UpgradeWatch(
-        enabled=lambda: state.config.backbone.restart_on_upgrade,
+        enabled=lambda: (
+            state.config.backbone.restart_on_upgrade
+            and getattr(state, "request_shutdown", None) is not None
+        ),
         restart=_restart,
         in_flight=routing_in_flight,
     )

@@ -164,3 +164,8 @@ Ordinary agent reports appear in General and the agent's topic, with separate
 delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
+
+
+`/start NAME` uses the same automatic continuation policy as CLI/API starts: it
+keeps the configured CLI/model and resumes that agent’s saved conversation when
+the runtime supports an exact matching session ID. Without one, it starts fresh.

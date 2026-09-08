@@ -48,3 +48,25 @@ def test_only_enabled_webhook_backfill_is_a_one_shot(tmp_path, intake, backfill)
         assert job.interval == 0
     else:
         assert "github-backfill" not in jobs and "github-poll" not in jobs
+
+
+async def test_upgrade_requests_server_exit_without_sending_a_signal(tmp_path):
+    from unittest.mock import MagicMock
+
+    app = FastAPI()
+    app.state.config = bootstrap_config(tmp_path)
+    app.state.github = None
+    app.state.integrations = SimpleNamespace(
+        reconcile=AsyncMock(), flush_reports=AsyncMock(), flush_report_audio=AsyncMock()
+    )
+    shutdown = MagicMock()
+    app.state.request_shutdown = shutdown
+    with patch("agent_backbone.services.jobs.UpgradeWatch") as watch:
+        _register_jobs(app)
+    with patch("os.kill") as kill:
+        await watch.call_args.kwargs["restart"]()
+    assert app.state.restart_requested is True
+    shutdown.assert_called_once_with()
+    kill.assert_not_called()
+    del app.state.request_shutdown
+    assert not watch.call_args.kwargs["enabled"]()

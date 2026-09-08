@@ -111,8 +111,8 @@ record carries the event that produced it (shown in `agent inspect`'s
 evidence), the runtime's session id, and, after a turn, the agent's last
 reply (clipped). One script per runtime maps that CLI's events onto the
 shared vocabulary. Saved session IDs and last replies remain available when
-terminal evidence supplies the current state; stale permission requests are not
-revived:
+terminal evidence supplies the current state, including after an offline
+SessionEnd record expires; stale permission requests are not revived:
 
 | Claude Code event | State written |
 |---|---|
@@ -429,3 +429,10 @@ OpenCode's launch wrapper merges the state plugin into the environment actually
 inherited by the new process, preserving inline provider settings and permission
 denies. Unsupported inline JSON/JSONC is preserved unchanged and hook injection
 is skipped; terminal state detection remains available.
+
+
+For automatic upgrades, `backbone up` requests Uvicorn’s graceful exit directly
+and re-executes after shutdown completes. External termination still stops the
+process normally. A custom ASGI runner that does not install this shutdown
+callback does not perform Backbone’s automatic restart; its supervisor owns
+restart behavior. `--reload` continues to use Uvicorn’s development reloader.

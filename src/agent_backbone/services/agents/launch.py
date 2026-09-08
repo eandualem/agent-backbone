@@ -87,13 +87,26 @@ class StartResult:
     evidence: tuple[str, ...] = ()
 
 
+def resolve_resume(config: BackboneConfig, name: str, runtime: str, resume: bool | None) -> bool:
+    """Auto-resume only this agent's saved conversation in a capable runtime."""
+    if resume is not None:
+        return resume
+    last = read_state_file(config.state_dir, name)
+    return bool(
+        get_runtime(runtime).supports_exact_resume
+        and last
+        and last.session_id
+        and last.runtime in (None, runtime)
+    )
+
+
 async def start_agent(
     spec: AgentSpec,
     config: BackboneConfig,
     *,
     runtime: str | None = None,
     model: str | None = None,
-    resume: bool = False,
+    resume: bool | None = None,
     brief_file: Path | str | None = None,
     db: BackboneDB | None = None,
     wait: bool = True,
@@ -105,6 +118,7 @@ async def start_agent(
     may include terminal evidence, paths or a session id; none of those are
     copied into the diagnostic history.
     """
+    resume = resolve_resume(config, spec.name, runtime or spec.runtime, resume)
     operation_id = operation_id or uuid.uuid4().hex
     started = time.monotonic()
     details: dict = {

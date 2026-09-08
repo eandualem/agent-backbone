@@ -213,6 +213,9 @@ async def get_agent_state(
                 dialog.timestamp = time.time()
                 dialog.current_issue = push.current_issue
                 dialog.current_repo = push.current_repo
+                dialog.session_id = push.session_id
+                dialog.last_message = push.last_message
+                dialog.runtime = push.runtime
                 dialog.evidence.append("the dialog on screen beats the hook's idle")
                 return _with_diagnostics(dialog, pane_content, runtime_hint)
         if push.state == AgentState.WAITING_FOR_HUMAN and push.reason == REASON_PERMISSION:
@@ -229,6 +232,9 @@ async def get_agent_state(
                 dialog.timestamp = time.time()
                 dialog.current_issue = push.current_issue
                 dialog.current_repo = push.current_repo
+                dialog.session_id = push.session_id
+                dialog.last_message = push.last_message
+                dialog.runtime = push.runtime
                 dialog.evidence.append("the choice dialog on screen beats the hook's permission")
                 return _with_diagnostics(dialog, pane_content, runtime_hint)
         return _with_diagnostics(push, pane_content, runtime_hint)
@@ -275,7 +281,14 @@ async def get_agent_state(
         StateSnapshot(
             state=AgentState.UNKNOWN,
             source="default",
-            evidence=["no hook state and no terminal output"],
+            session_id=push.session_id if push else None,
+            last_message=push.last_message if push else None,
+            runtime=push.runtime if push else None,
+            evidence=[
+                "stale hook state is not trustworthy and no terminal output"
+                if push
+                else "no hook state and no terminal output"
+            ],
         ),
         pane_content,
         runtime_hint,
