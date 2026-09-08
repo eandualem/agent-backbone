@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent_backbone.models import IssueEvent
 from agent_backbone.services.github import review_started_event, review_status_event
+from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import IssueClosedHook, dispatch_event
 
 if TYPE_CHECKING:
@@ -147,10 +148,19 @@ class GitHubPoller:
         for repo in config.agents.repos:
             try:
                 await self._poll_repo(repo, config, summary)
-            except Exception:
+            except Exception as exc:
                 # A read, fetch, conversion or cursor save failure must not
                 # move this boundary or prevent another repository's poll.
                 log.exception("GitHub poll failed for %s (non-fatal)", repo)
+                await observe_job(
+                    self._db,
+                    source="github-poll",
+                    stage="repository",
+                    repo=repo,
+                    error_type=type(exc).__name__,
+                )
+            else:
+                await observe_job(self._db, source="github-poll", stage="repository", repo=repo)
         if summary:
             log.info("GitHub poll: %s", summary)
         return summary
@@ -244,6 +254,13 @@ class GitHubPoller:
                 # previous replay boundary, including across a restart.
                 await self._db.events.save_poll_cursor(repo, boundary)
                 self._since[repo] = boundary
+        await observe_job(
+            self._db,
+            source="github-poll",
+            stage="batch",
+            repo=repo,
+            error_type="IncompleteBatch" if had_errors else None,
+        )
 
     async def _review_events(self, repo, since, config) -> list[IssueEvent]:
         events = []

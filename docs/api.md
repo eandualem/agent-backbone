@@ -30,6 +30,9 @@ waiting, `quota` when blocked. `GET /api/agents/{name}/inspect` also carries
 `session_id` (the runtime's own) and `last_message` (the agent's last reply,
 clipped) when the runtime's hook reports them.
 The `always_on` and `unattended` settings are exposed by `GET /api/config/agents`.
+Agent responses label the saved model with `model_source: "configured"`.
+That model is configuration metadata, not proof of which model or provider
+actually generated a response in the running session.
 
 ### `POST /api/agents/start`
 
@@ -149,6 +152,13 @@ types into a tmux session that is not one of its agents). Outcomes:
 `delivered`, `agent_working`, `waiting_for_human`, `offline`, `expired`,
 `human_typing`, `settling`, `delivery_failed`.
 
+The reply also includes `operation_id`, `delivery_id` and `queue_id` (nullable).
+The operation identifies this message across queue drains and retries; a duplicate
+enqueue returns the existing queue row and operation. `delivery_id` identifies the
+attempt receipt, and `queue_id` identifies its stored queue row when present.
+Use `GET /api/diagnostics/records?operation_id=...` to follow its operational evidence
+without reading message content. A later independent send receives a new operation.
+
 When the message could not be delivered now, `queue` says what happened to
 it and `queued` is true **only when a row for it exists**:
 
@@ -216,6 +226,80 @@ recorded, direct messages included, with `kind`, `repo`, `outcome`,
 `GET /api/events?repo=&limit=` — inbound GitHub events (webhook and poll),
 newest first, each with `source`, `event_type`, `issue_number`, `sender`,
 `summary`, `received_at`, `processed_at` and the routing `outcome`.
+
+## Operational diagnostics
+
+These endpoints return explicit operational metadata. They do not include
+message bodies/previews, terminal output, assistant replies, event summaries,
+command lines or raw exception text. See [Learning from local usage](diagnostics.md)
+for the investigation workflow and limits.
+
+### `GET /api/diagnostics?since=&agent=&limit=`
+
+Groups warning/error diagnostic records by category, code, severity, agent,
+runtime, repository and issue. `since` is an ISO timestamp with a timezone;
+omitting it uses the last 24 hours. `limit` is 1–100, default 20. Totals are
+calculated before the display limit.
+
+```json
+{
+  "since": "2026-09-07T00:00:00.000000Z",
+  "generated_at": "2026-09-08T00:00:00+00:00",
+  "groups": [{
+    "category": "delivery", "code": "submission_unconfirmed", "severity": "error",
+    "agent_name": "app", "runtime": "shell", "repo": "", "issue_number": null,
+    "first_seen_at": "2026-09-07T12:00:00.000000Z",
+    "last_seen_at": "2026-09-07T12:05:00.000000Z",
+    "occurrences": 2, "operation_count": 1, "sample_id": 42
+  }],
+  "total_groups": 1, "total_occurrences": 2, "has_more": false,
+  "count_semantics": "retained occurrences for operation/code records last seen in interval",
+  "coverage": {
+    "earliest_retained_at": "2026-09-07T09:00:00.000000Z",
+    "retention_days": 30, "write_failures_since_process_start": 0
+  },
+  "informational": {"deferred_agent_working": 3, "submitted": 1},
+  "deliveries": {"attempts": 6, "outcomes": {"agent_working": 3, "delivery_failed": 2, "delivered": 1}},
+  "queue": {"pending": 1, "in_progress": 0, "oldest_pending_at": "2026-09-07T12:00:00.000000Z"}
+}
+```
+
+`since` selects diagnostics by last observation. Occurrence counts include
+each selected operation/code record's retained earlier observations; they
+are not exact counts inside the window. `informational` summarizes expected
+waits and other info records with those same count semantics. Delivery
+counts are attempts timestamped in the window. Queue metadata describes the
+current pending/leased rows. `earliest_retained_at` is the earliest surviving
+record, not the beginning of guaranteed continuous coverage.
+
+### `GET /api/diagnostics/records`
+
+Filters: `since`, `agent`, `category`, `severity` (`info`, `warning`, `error`),
+`operation_id`, `limit` (1–100, default 100), `before_id` (positive integer).
+Returns `{"items": [...], "has_more": false, "next_before_id": null}`.
+Records are ordered by descending ID. When `has_more` is true, pass
+`next_before_id` as `before_id` to read the next page. Because a repeated
+observation updates an existing record, an increasing ID alone is not a
+cursor for all new observations.
+`backbone diagnostics trace OPERATION_ID [--json]` reads this endpoint with
+the exact operation identity from a delivery receipt.
+
+A record contains `id`, `operation_id`, `category`, `code`, `severity`,
+`agent_name`, `source`, `runtime`, `model`, `repo`, `issue_number`, optional
+`delivery_id`/`queue_id`/`event_id`, `first_seen_at`, `last_seen_at`,
+`occurrences`, and `details`. Details are restricted to declared scalar
+identifiers/codes, booleans and counters. Missing correlation references
+remain null; they are not reconstructed from message content.
+
+### `GET /api/diagnostics/{id}`
+
+Returns `{"record": {...}, "operation_records": [...], "has_more": false}`.
+The operation records share the selected record's exact `operation_id` and
+are limited to 100. Use the records endpoint to page through more. Unknown
+or pruned IDs return 404. A successful terminal submission is evidence of
+submission; it does not prove the runtime accepted the prompt or a model
+completed it. A retired retry or a runtime error no longer visible is not
+proof that its original cause recovered.
 
 ## Plans
 

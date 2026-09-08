@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from functools import wraps
@@ -26,7 +27,7 @@ from weakref import WeakValueDictionary
 
 from agent_backbone.models import BLOCKED_OUTCOMES, SUCCESS_OUTCOMES, DeliveryOutcome
 from agent_backbone.services.routing._intelligence import get_session_intelligence
-from agent_backbone.services.routing.models import SessionIntelligence
+from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.runtimes import send_message
 
 if TYPE_CHECKING:
@@ -54,11 +55,22 @@ class DeliveryReport:
     queue: str | None = None
     unconfirmed: bool = False
     """A duplicate claim can still be in flight; it is not a delivery receipt."""
+    operation_id: str | None = None
+    delivery_id: int | None = None
+    queue_id: int | None = None
 
     @property
     def queued(self) -> bool:
         """True only when a row for this message exists in the queue."""
         return self.queue in ("stored", "already_queued")
+
+
+@dataclass(frozen=True)
+class _QueueReceipt:
+    status: str | None = None
+    id: int | None = None
+    operation_id: str | None = None
+    error_type: str | None = None
 
 
 _session_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDictionary()
@@ -171,14 +183,15 @@ async def _record(
     source: str,
     kind: str,
     preview: str,
-) -> None:
+    operation_id: str,
+) -> int | None:
     if db is None:
-        return
+        return None
     try:
         if claim_id is not None:
-            await db.deliveries.finalize(claim_id, outcome.value)
-            return
-        await db.deliveries.record(
+            await db.deliveries.finalize(claim_id, outcome.value, operation_id=operation_id)
+            return claim_id
+        return await db.deliveries.record(
             issue_number=issue_number,
             target_entity=target_entity or session_name,
             session_name=session_name,
@@ -187,9 +200,11 @@ async def _record(
             repo=repo,
             kind=kind,
             preview=preview,
+            operation_id=operation_id,
         )
-    except Exception:
-        log.exception("Failed to record delivery (non-fatal)")
+    except Exception as exc:
+        log.error("Failed to record delivery (non-fatal; %s)", type(exc).__name__)
+        return None
 
 
 async def _enqueue(
@@ -204,13 +219,14 @@ async def _enqueue(
     kind: str,
     sender: str,
     source_key: str | None,
-) -> str | None:
+    operation_id: str,
+) -> _QueueReceipt:
     """Store the message; say what happened (``stored`` / ``already_queued`` /
     ``failed``), or None when there is nothing to store it in."""
     if db is None:
-        return None
+        return _QueueReceipt()
     if kind == "issue" and (issue_number is None or target_entity is None):
-        return None
+        return _QueueReceipt()
     try:
         result = await db.queue.enqueue(
             session_name=session_name,
@@ -222,15 +238,23 @@ async def _enqueue(
             repo=repo,
             sender=sender,
             source_key=source_key,
+            operation_id=operation_id,
         )
-    except Exception:
-        log.exception("Could not store a %s for %s — the sender is told", kind, session_name)
-        return "failed"
+    except Exception as exc:
+        log.error(
+            "Could not store a %s for %s — the sender is told (%s)",
+            kind,
+            session_name,
+            type(exc).__name__,
+        )
+        return _QueueReceipt("failed", error_type=type(exc).__name__)
+    queue_id = result.id if isinstance(result.id, int) else None
+    stored_operation = result.operation_id if isinstance(result.operation_id, str) else operation_id
     if result.status == "inserted":
         log.info("Queued %s for %s (%s) via %s", kind, session_name, repo or "-", source or "?")
-        return "stored"
+        return _QueueReceipt("stored", queue_id, stored_operation)
     log.info("Same %s for %s already queued (from %s)", kind, session_name, sender or "?")
-    return "already_queued"
+    return _QueueReceipt("already_queued", queue_id, stored_operation)
 
 
 async def safe_deliver(
@@ -251,6 +275,9 @@ async def safe_deliver(
     sender: str = "",
     source_key: str | None = None,
     requeue: bool = True,
+    operation_id: str | None = None,
+    queue_id: int | None = None,
+    event_id: int | None = None,
     on_report: Callable[[DeliveryReport], Awaitable[None]] | None = None,
 ) -> DeliveryOutcome:
     """Deliver safely, optionally persisting its detailed receipt before returning."""
@@ -271,6 +298,9 @@ async def safe_deliver(
         sender=sender,
         source_key=source_key,
         requeue=requeue,
+        operation_id=operation_id,
+        queue_id=queue_id,
+        event_id=event_id,
     )
     if on_report is not None:
         await on_report(report)
@@ -296,6 +326,9 @@ async def deliver(
     sender: str = "",
     source_key: str | None = None,
     requeue: bool = True,
+    operation_id: str | None = None,
+    queue_id: int | None = None,
+    event_id: int | None = None,
 ) -> DeliveryReport:
     """Deliver ``message`` to ``session_name`` if the agent can take it, else queue it.
 
@@ -307,6 +340,7 @@ async def deliver(
     already holds the message, even when the displayed text gains an age note.
     """
     kind = delivery_kind
+    operation_id = operation_id or uuid.uuid4().hex
     trackable_issue = db is not None and issue_number is not None and target_entity is not None
     preview = message[:200]
 
@@ -316,7 +350,7 @@ async def deliver(
             log.info(
                 "Suppressed duplicate issue delivery %s#%s -> %s", repo, issue_number, session_name
             )
-            return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED)
+            return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, operation_id=operation_id)
         if enforce_issue_queue:
             blocking = await _get_unacknowledged_gate_issue(
                 db, session_name, repo, issue_number, queue_scope
@@ -329,7 +363,7 @@ async def deliver(
                     session_name,
                     *blocking,
                 )
-                return DeliveryReport(DeliveryOutcome.AWAITING_ACK)
+                return DeliveryReport(DeliveryOutcome.AWAITING_ACK, operation_id=operation_id)
 
     # 2. Claim
     claim_id: int | None = None
@@ -341,15 +375,20 @@ async def deliver(
             source=source,
             repo=repo,
             preview=preview,
+            operation_id=operation_id,
         )
         if claim is None:
-            return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, unconfirmed=True)
+            return DeliveryReport(
+                DeliveryOutcome.ALREADY_DELIVERED, unconfirmed=True, operation_id=operation_id
+            )
         claim_id = claim
 
+    profile: SessionProfile | None = None
+
     async def finish(outcome: DeliveryOutcome, *, queue: bool) -> DeliveryReport:
-        stored: str | None = None
+        receipt = _QueueReceipt()
         if queue and requeue:
-            stored = await _enqueue(
+            receipt = await _enqueue(
                 db,
                 session_name=session_name,
                 message=message,
@@ -360,8 +399,11 @@ async def deliver(
                 kind=kind,
                 sender=sender,
                 source_key=source_key,
+                operation_id=operation_id,
             )
-        await _record(
+        trace = receipt.operation_id or operation_id
+        stored_queue_id = receipt.id if receipt.id is not None else queue_id
+        delivery_id = await _record(
             db,
             claim_id=claim_id,
             repo=repo,
@@ -372,11 +414,100 @@ async def deliver(
             source=source,
             kind=kind,
             preview=preview,
+            operation_id=trace,
         )
-        return DeliveryReport(outcome, stored)
+        if db is not None:
+            details = {
+                "delivery_kind": kind,
+                "priority": priority,
+                "requeue": requeue,
+                "queue_status": receipt.status,
+            }
+            if profile is not None:
+                reason = profile.reason
+                if reason is not None and reason not in {
+                    "plan",
+                    "permission",
+                    "question",
+                    "quota",
+                    "provider",
+                }:
+                    reason = "unknown"
+                details.update(
+                    condition=profile.intelligence.value,
+                    state=str(profile.agent_state),
+                    state_source=profile.state_source,
+                    reason=reason,
+                )
+            metadata = {
+                "operation_id": trace,
+                "agent_name": session_name,
+                "source": source,
+                "runtime": profile.runtime if profile is not None else "",
+                "repo": repo,
+                "issue_number": issue_number,
+                "delivery_id": delivery_id,
+                "queue_id": stored_queue_id,
+                "event_id": event_id,
+            }
+            if outcome == DeliveryOutcome.DELIVERED:
+                code, severity = "submitted", "info"
+            elif outcome == DeliveryOutcome.DELIVERY_FAILED:
+                code, severity = "submission_unconfirmed", "error"
+            else:
+                code, severity = f"deferred_{outcome.value}", "info"
+                if profile is not None and profile.reason in {"quota", "provider"}:
+                    code += f"_{profile.reason}"
+            await db.diagnostics.record(
+                category="delivery", code=code, severity=severity, details=details, **metadata
+            )
+            if receipt.status is not None:
+                await db.diagnostics.record(
+                    category="queue",
+                    code="queue_storage_failed" if receipt.status == "failed" else "queue_stored",
+                    severity="error" if receipt.status == "failed" else "info",
+                    details={**details, "error_type": receipt.error_type},
+                    **metadata,
+                )
+        return DeliveryReport(
+            outcome,
+            receipt.status,
+            operation_id=trace,
+            delivery_id=delivery_id,
+            queue_id=stored_queue_id,
+        )
+
+    async def record_exception(code: str, stage: str, exc: Exception) -> None:
+        if db is not None:
+            await db.diagnostics.record(
+                category="delivery",
+                code=code,
+                severity="error",
+                operation_id=operation_id,
+                agent_name=session_name,
+                source=source,
+                runtime=profile.runtime if profile is not None else "",
+                repo=repo,
+                issue_number=issue_number,
+                delivery_id=claim_id,
+                queue_id=queue_id,
+                event_id=event_id,
+                details={"stage": stage, "error_type": type(exc).__name__, "delivery_kind": kind},
+            )
+
+    async def submit() -> bool:
+        try:
+            return await send_message(session_name, message, runtime_hint=profile.runtime)
+        except Exception as exc:
+            await record_exception("submission_unconfirmed", "submission", exc)
+            raise
 
     # 3. Readiness
-    profile = await get_session_intelligence(session_name, config, idle_since=idle_since)
+    try:
+        profile = await get_session_intelligence(session_name, config, idle_since=idle_since)
+    except Exception as exc:
+        await record_exception("readiness_failed", "readiness", exc)
+        raise
     intel = profile.intelligence
 
     if kind == "plan_response":
@@ -389,7 +520,7 @@ async def deliver(
             return await finish(DeliveryOutcome.OFFLINE, queue=False)
         if not (intel == SessionIntelligence.WAITING_FOR_HUMAN and profile.reason == "plan"):
             return await finish(DeliveryOutcome.NOT_WAITING, queue=False)
-        if await send_message(session_name, message, runtime_hint=profile.runtime):
+        if await submit():
             return await finish(DeliveryOutcome.DELIVERED, queue=False)
         return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=False)
 
@@ -404,6 +535,6 @@ async def deliver(
             return await finish(DeliveryOutcome(intel.value), queue=queue)
 
     # 4. Paste + submit
-    if await send_message(session_name, message, runtime_hint=profile.runtime):
+    if await submit():
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
     return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)

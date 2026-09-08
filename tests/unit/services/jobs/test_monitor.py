@@ -66,13 +66,17 @@ class TestShouldEscalate:
 
 class TestReadAndSyncStates:
     async def test_reads_only_configured_live_agents(self, config):
-        async def _get(config, name):
+        async def _get(config, name, **kwargs):
             return _snap(AgentState.BUSY, issue=1)
 
-        with patch(f"{_MON}.agent_state", side_effect=_get) as get:
+        with (
+            patch(f"{_MON}.agent_state", side_effect=_get) as get,
+            patch(f"{_MON}.capture_pane", AsyncMock(return_value="pane")) as capture,
+        ):
             states = await read_states(config, {"ike", "leo", "stranger"})
         assert set(states) == {"ike", "leo"}
         assert get.await_count == 2  # once per agent per tick, never more
+        assert capture.await_count == 2
 
     async def test_sync_mirrors_snapshots_into_the_database(self, db):
         await sync_states(db, {"ike": _snap(AgentState.BUSY, issue=42, current_repo=_REPO)})
@@ -539,6 +543,11 @@ class TestDeliverPendingIssues:
 
 
 class TestMonitorAgents:
+    @pytest.fixture(autouse=True)
+    def _captured_pane(self):
+        with patch(f"{_MON}.capture_pane", AsyncMock(return_value="")):
+            yield
+
     async def test_runs_all_steps(self, config, db):
         gh = AsyncMock()
         with (

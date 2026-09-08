@@ -16,6 +16,7 @@ _EXPECTED_TABLES = {
     "agent_watches",
     "agents",
     "deliveries",
+    "diagnostics",
     "events",
     "event_outbox",
     "issue_dependencies",
@@ -43,6 +44,9 @@ _EXPECTED_INDEXES = {
     "uq_mq_issue_dedup",
     "uq_mq_message_dedup",
     "uq_swarms_active_issue",
+    "uq_diagnostics_observation",
+    "idx_diagnostics_last_seen",
+    "idx_diagnostics_agent",
 }
 
 
@@ -145,6 +149,38 @@ async def test_unknown_stamped_revision_is_restamped_after_squash(tmp_path):
         stored = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
     assert stored != "deadbeef0000"
     await db2.stop()
+
+
+async def test_pre_diagnostics_database_gains_schema_without_losing_history(tmp_path):
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'before-diagnostics.db'}"
+    async with BackboneDB.connect(url) as db:
+        await db.deliveries.record(
+            issue_number=7, target_entity="worker", session_name="worker", outcome="offline"
+        )
+        await db.queue.enqueue(
+            session_name="worker",
+            message="preserve this queued message",
+            delivery_kind="direct_message",
+        )
+        async with db.engine.begin() as conn:
+            await conn.execute(text("DROP TABLE diagnostics"))
+            await conn.execute(text("ALTER TABLE deliveries DROP COLUMN operation_id"))
+            await conn.execute(text("ALTER TABLE message_queue DROP COLUMN operation_id"))
+            await conn.execute(text("UPDATE alembic_version SET version_num='before_diagnostics'"))
+    async with BackboneDB.connect(url) as db:
+        (delivery,) = await db.deliveries.query(issue_number=7)
+        assert delivery["outcome"] == "offline" and delivery["operation_id"] is None
+        queue = await queue_row(db, 1)
+        assert queue["message"] == "preserve this queued message" and queue["operation_id"] is None
+        assert (
+            await db.diagnostics.record(
+                operation_id="after-upgrade", category="startup", code="ready"
+            )
+            is not None
+        )
+        assert len(await db.diagnostics.query()) == 1
 
 
 async def test_old_sqlite_schema_gains_cursor_table_on_restart(tmp_path):

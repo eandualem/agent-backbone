@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.routing import DeliveryReport
+from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+from tests.support import queue_row
 
 # ---------------------------------------------------------------------------
 # POST /api/messages
@@ -13,6 +15,39 @@ from agent_backbone.services.routing import DeliveryReport
 
 
 class TestSendMessage:
+    async def test_failed_send_returns_exact_delivery_and_queue_evidence(
+        self, api_client, auth_headers, api_app
+    ):
+        with (
+            patch(
+                "agent_backbone.services.routing._delivery.get_session_intelligence",
+                return_value=SessionProfile(
+                    session_name="ike", intelligence=SessionIntelligence.READY
+                ),
+            ),
+            patch("agent_backbone.services.routing._delivery.send_message", return_value=False),
+        ):
+            response = await api_client.post(
+                "/api/messages",
+                headers=auth_headers,
+                json={"target_session": "ike", "from_entity": "bell", "message": "hello"},
+            )
+        assert response.status_code == 200
+        receipt = response.json()
+        assert receipt["outcome"] == "delivery_failed" and receipt["queued"]
+        db = api_app.state.db
+        (delivery,) = await db.deliveries.query(session_name="ike")
+        queued = await queue_row(db, receipt["queue_id"])
+        assert receipt["operation_id"] == delivery["operation_id"] == queued["operation_id"]
+        assert receipt["delivery_id"] == delivery["id"]
+        diagnostic = next(
+            row
+            for row in await db.diagnostics.query(operation_id=receipt["operation_id"])
+            if row["code"] == "submission_unconfirmed"
+        )
+        assert diagnostic["delivery_id"] == receipt["delivery_id"]
+        assert diagnostic["queue_id"] == receipt["queue_id"]
+
     async def test_send_message_delivered(self, api_client, auth_headers, api_app):
         """Returns ok=True when safe_deliver returns 'delivered'."""
         with patch(

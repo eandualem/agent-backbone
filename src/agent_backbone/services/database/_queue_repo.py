@@ -3,28 +3,32 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import text
 
+from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
-_INSERT_COLUMNS = """(session_name, message, repo, issue_number, target_entity,
+_INSERT_COLUMNS = """(operation_id, session_name, message, repo, issue_number, target_entity,
                 delivery_kind, source, enqueued_at, status, sender, dedup_key)
-               VALUES (:session_name, :message, :repo, :issue_number, :target_entity,
+               VALUES (:operation_id, :session_name, :message, :repo, :issue_number, :target_entity,
                        :delivery_kind, :source, :enqueued_at, 'pending', :sender, :dedup_key)"""
 
 
 @dataclass(frozen=True)
 class EnqueueResult:
-    """What ``enqueue`` did: ``inserted`` (a new row, ``id`` set) or
+    """What ``enqueue`` did: ``inserted`` (a new row) or
     ``already_queued`` (the same message is already waiting — nothing added).
+    Both return the stored row's id and operation identity.
     A database error is raised, never swallowed: the caller decides what to
     tell the sender."""
 
     status: str
     id: int | None = None
+    operation_id: str | None = None
 
     @property
     def stored(self) -> bool:
@@ -76,6 +80,7 @@ class QueueRepo(Repo):
         repo: str = "",
         sender: str = "",
         source_key: str | None = None,
+        operation_id: str | None = None,
     ) -> EnqueueResult:
         """Store a message for later delivery.
 
@@ -85,6 +90,7 @@ class QueueRepo(Repo):
         """
         async with self._tx() as conn:
             params = {
+                "operation_id": operation_id or uuid.uuid4().hex,
                 "session_name": session_name,
                 "message": message,
                 "repo": repo,
@@ -114,8 +120,27 @@ class QueueRepo(Repo):
             result = await conn.execute(text(sql), params)
             row = result.fetchone()
             if row is None:
-                return EnqueueResult("already_queued")
-            return EnqueueResult("inserted", row._mapping["id"])
+                # Resolve the exact conflict key, including a row leased by a
+                # drain. Never correlate using a message preview or its age.
+                key = (
+                    "session_name = :session_name AND repo = :repo "
+                    "AND issue_number = :issue_number AND delivery_kind = 'issue'"
+                    if delivery_kind == "issue"
+                    else "session_name = :session_name AND dedup_key = :dedup_key "
+                    "AND delivery_kind != 'issue'"
+                )
+                existing = await conn.execute(
+                    text(
+                        "UPDATE message_queue SET operation_id = "
+                        "COALESCE(operation_id, :operation_id) "
+                        f"WHERE {key} AND status IN ('pending', 'in_progress') "
+                        "RETURNING id, operation_id"
+                    ),
+                    params,
+                )
+                stored = existing.mappings().one()
+                return EnqueueResult("already_queued", stored["id"], stored["operation_id"])
+            return EnqueueResult("inserted", row._mapping["id"], params["operation_id"])
 
     async def pending_count(self, session_name: str) -> int:
         """How many messages are waiting for one session."""
@@ -152,6 +177,8 @@ class QueueRepo(Repo):
                 text(sql), {"session": session_name, "lim": limit, "now": now}
             )
             rows = [dict(row._mapping) for row in result.fetchall()]
+            for row in rows:
+                await self._ensure_operation_id(conn, row)
             rows.sort(key=lambda row: row["enqueued_at"])
             return rows
 
@@ -177,16 +204,63 @@ class QueueRepo(Repo):
             )
             return result.rowcount
 
-    async def mark_delivered(self, message_id: int) -> None:
+    async def mark_delivered(self, message_id: int, *, reason: str | None = None) -> None:
+        """Complete the lease; ``reason`` identifies intentional retirement."""
+        if reason is not None and reason not in {
+            "acknowledged",
+            "no_repo",
+            "issue_closed",
+            "no_longer_targeted",
+            "already_delivered",
+        }:
+            raise ValueError("Invalid queue retirement reason")
         async with self._tx() as conn:
-            await conn.execute(
+            result = await conn.execute(
                 text(
                     """UPDATE message_queue
                        SET status = 'delivered', delivered_at = :delivered_at
-                       WHERE id = :id AND status = 'in_progress'"""
+                       WHERE id = :id AND status = 'in_progress' RETURNING *"""
                 ),
                 {"delivered_at": now_iso(), "id": message_id},
             )
+            row = result.mappings().first()
+            if row is not None:
+                row = dict(row)
+                await self._ensure_operation_id(conn, row)
+        if row is not None and reason is not None:
+            await self._record_lifecycle(row, f"retired_{reason}", reason=reason)
+
+    async def _ensure_operation_id(self, conn, row: dict) -> None:
+        """Give legacy rows one identity, derived only from their exact database key."""
+        if not row.get("operation_id"):
+            row["operation_id"] = uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:queue:{row['id']}").hex
+            await conn.execute(
+                text("UPDATE message_queue SET operation_id = :operation WHERE id = :id"),
+                {"operation": row["operation_id"], "id": row["id"]},
+            )
+
+    async def _record_lifecycle(
+        self, row, code: str, *, reason: str | None = None, delivery_id: int | None = None
+    ) -> None:
+        """Persist metadata after completion; diagnostics cannot roll back the queue."""
+        await DiagnosticRepo(self._engine).record(
+            category="queue",
+            code=code,
+            operation_id=row["operation_id"]
+            or uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:queue:{row['id']}").hex,
+            severity="warning" if code == "queue_expired" else "info",
+            agent_name=row["session_name"],
+            source=row["source"],
+            repo=row["repo"],
+            issue_number=row["issue_number"],
+            queue_id=row["id"],
+            delivery_id=delivery_id,
+            details={
+                "delivery_kind": row["delivery_kind"],
+                "queue_status": row["status"],
+                "reason": reason,
+            },
+        )
 
     async def expire_pending(self, max_age_minutes: int = 30) -> list[dict]:
         """Expire pending messages older than the cutoff and, in the same
@@ -208,16 +282,19 @@ class QueueRepo(Repo):
             )
             rows = [dict(row._mapping) for row in result.fetchall()]
             for row in rows:
+                await self._ensure_operation_id(conn, row)
                 message = row.get("message") or ""
-                await conn.execute(
+                delivery = await conn.execute(
                     text(
                         """INSERT INTO deliveries
-                           (kind, repo, issue_number, target_entity, session_name,
+                           (operation_id, kind, repo, issue_number, target_entity, session_name,
                             outcome, source, preview, created_at)
-                           VALUES (:kind, :repo, :issue_number, :target_entity, :session_name,
-                                   'expired', :source, :preview, :created_at)"""
+                           VALUES (:operation_id, :kind, :repo, :issue_number, :target_entity,
+                                   :session_name, 'expired', :source, :preview, :created_at)
+                           RETURNING id"""
                     ),
                     {
+                        "operation_id": row["operation_id"],
                         "kind": row.get("delivery_kind") or "issue",
                         "repo": row.get("repo") or "",
                         "issue_number": row.get("issue_number"),
@@ -228,7 +305,10 @@ class QueueRepo(Repo):
                         "created_at": now,
                     },
                 )
-            return rows
+                row["delivery_id"] = delivery.scalar_one()
+        for row in rows:
+            await self._record_lifecycle(row, "queue_expired", delivery_id=row["delivery_id"])
+        return rows
 
     async def purge_for_issue(self, issue_number: int, *, repo: str = "") -> int:
         """Mark pending/leased messages for an issue as delivered (issue closed)."""
@@ -238,8 +318,13 @@ class QueueRepo(Repo):
                     """UPDATE message_queue
                        SET status = 'delivered', delivered_at = :delivered_at
                        WHERE repo = :repo AND issue_number = :issue_number
-                         AND status IN ('pending', 'in_progress')"""
+                         AND status IN ('pending', 'in_progress') RETURNING *"""
                 ),
                 {"delivered_at": now_iso(), "repo": repo, "issue_number": issue_number},
             )
-            return result.rowcount
+            rows = [dict(row) for row in result.mappings()]
+            for row in rows:
+                await self._ensure_operation_id(conn, row)
+        for row in rows:
+            await self._record_lifecycle(row, "retired_issue_closed", reason="issue_closed")
+        return len(rows)

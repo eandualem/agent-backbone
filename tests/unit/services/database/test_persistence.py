@@ -384,7 +384,8 @@ class TestMessageQueue:
         )
 
         assert first.status == "inserted"
-        assert second.status == "already_queued" and second.id is None
+        assert second.status == "already_queued" and second.id == first.id
+        assert second.operation_id == first.operation_id
 
         messages = await db.queue.dequeue("ike")
         assert len(messages) == 1

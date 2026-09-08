@@ -6,6 +6,7 @@ backbone up [--detach]               run the backbone (API + scheduler + integra
 backbone down                        stop a detached backbone
 backbone status                      agents, sessions, repositories and health
 backbone doctor                      check tmux, runtimes, credentials
+backbone diagnostics                 recorded problems, grouped without message content
 backbone runtimes                    supported CLIs, installed or not, example model ids
 backbone service install|uninstall|status   start the backbone at login (launchd / systemd --user)
 backbone config list|get|set|unset   settings (stored in the database)
@@ -31,6 +32,7 @@ import sys
 
 from agent_backbone import __version__
 from agent_backbone.cli.agents import cmd_agent, cmd_hooks, cmd_reply, cmd_tell
+from agent_backbone.cli.diagnostics import add_diagnostics_parser
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_status, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
@@ -100,6 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("status", help="show agents, repositories, sessions and health")
     p.set_defaults(func=cmd_status)
+
+    add_diagnostics_parser(sub)
 
     p = sub.add_parser("config", help="settings (stored in the database)")
     csub = p.add_subparsers(dest="config_command", required=True)

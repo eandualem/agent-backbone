@@ -144,6 +144,8 @@ class DeliveryORM(Base):
     __tablename__ = "deliveries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    operation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Stable identity shared by the original message and its retries."""
     kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="issue")
     repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -225,6 +227,8 @@ class MessageQueueORM(Base):
     __tablename__ = "message_queue"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    operation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Delivery operation identity; retained through duplicate enqueue and drain."""
     session_name: Mapped[str] = mapped_column(Text, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
@@ -289,3 +293,42 @@ class ReviewLifecycleORM(Base):
     __tablename__ = "review_lifecycle"
     source_key: Mapped[str] = mapped_column(Text, primary_key=True)
     finished_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class DiagnosticORM(Base):
+    """Content-free observations, coalesced by exact operation and reason code."""
+
+    __tablename__ = "diagnostics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    operation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    observation_key: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    code: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_name: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    source: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    runtime: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delivery_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    queue_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_seen_at: Mapped[str] = mapped_column(Text, nullable=False)
+    last_seen_at: Mapped[str] = mapped_column(Text, nullable=False)
+    occurrences: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    details: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+
+    __table_args__ = (
+        Index(
+            "uq_diagnostics_observation",
+            "operation_id",
+            "category",
+            "code",
+            "observation_key",
+            unique=True,
+        ),
+        Index("idx_diagnostics_last_seen", "last_seen_at"),
+        Index("idx_diagnostics_agent", "agent_name", "last_seen_at"),
+    )

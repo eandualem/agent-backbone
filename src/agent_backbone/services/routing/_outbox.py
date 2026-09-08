@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import TYPE_CHECKING
 from weakref import WeakValueDictionary
 
@@ -53,6 +54,10 @@ async def flush_outbox(
                 result.skipped.append(recipient)
                 continue
             delivery = dict(row["delivery"])
+            # The durable recipient identity survives replay and process restarts.
+            delivery["operation_id"] = uuid.uuid5(
+                uuid.NAMESPACE_URL, f"backbone:outbox:{event_id}:{recipient}"
+            ).hex
             source_key = delivery.get("source_key") or ""
             if source_key.startswith("review-start:") and await db.events.review_finished(
                 source_key
@@ -125,7 +130,12 @@ async def flush_outbox(
                     await db.outbox.set_status(event_id, recipient, status)
 
                 outcome = await safe_deliver(
-                    **delivery, config=config, db=db, source="github-outbox", on_report=receipt
+                    **delivery,
+                    config=config,
+                    db=db,
+                    source="github-outbox",
+                    event_id=event_id,
+                    on_report=receipt,
                 )
                 if outcome == DeliveryOutcome.DELIVERED:
                     result.delivered.append(session)

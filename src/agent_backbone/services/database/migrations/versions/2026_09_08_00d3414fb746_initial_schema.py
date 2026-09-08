@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 25304058e90e
+Revision ID: 00d3414fb746
 Revises:
-Create Date: 2026-09-05 20:17:57.427126
+Create Date: 2026-09-08 08:49:07.984938
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "25304058e90e"
+revision: str = "00d3414fb746"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -70,6 +70,7 @@ def upgrade() -> None:
     op.create_table(
         "deliveries",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=True),
         sa.Column("kind", sa.Text(), server_default="issue", nullable=False),
         sa.Column("repo", sa.Text(), server_default="", nullable=False),
         sa.Column("issue_number", sa.Integer(), nullable=True),
@@ -96,6 +97,38 @@ def upgrade() -> None:
             sqlite_where=sa.text(
                 "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
             ),
+        )
+
+    op.create_table(
+        "diagnostics",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=False),
+        sa.Column("observation_key", sa.Text(), server_default="", nullable=False),
+        sa.Column("category", sa.Text(), nullable=False),
+        sa.Column("code", sa.Text(), nullable=False),
+        sa.Column("severity", sa.Text(), nullable=False),
+        sa.Column("agent_name", sa.Text(), server_default="", nullable=False),
+        sa.Column("source", sa.Text(), server_default="", nullable=False),
+        sa.Column("runtime", sa.Text(), server_default="", nullable=False),
+        sa.Column("model", sa.Text(), nullable=True),
+        sa.Column("repo", sa.Text(), server_default="", nullable=False),
+        sa.Column("issue_number", sa.Integer(), nullable=True),
+        sa.Column("delivery_id", sa.Integer(), nullable=True),
+        sa.Column("queue_id", sa.Integer(), nullable=True),
+        sa.Column("event_id", sa.Integer(), nullable=True),
+        sa.Column("first_seen_at", sa.Text(), nullable=False),
+        sa.Column("last_seen_at", sa.Text(), nullable=False),
+        sa.Column("occurrences", sa.Integer(), server_default=sa.text("1"), nullable=False),
+        sa.Column("details", sa.Text(), server_default="{}", nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_diagnostics")),
+    )
+    with op.batch_alter_table("diagnostics", schema=None) as batch_op:
+        batch_op.create_index("idx_diagnostics_agent", ["agent_name", "last_seen_at"], unique=False)
+        batch_op.create_index("idx_diagnostics_last_seen", ["last_seen_at"], unique=False)
+        batch_op.create_index(
+            "uq_diagnostics_observation",
+            ["operation_id", "category", "code", "observation_key"],
+            unique=True,
         )
 
     op.create_table(
@@ -146,6 +179,7 @@ def upgrade() -> None:
     op.create_table(
         "message_queue",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=True),
         sa.Column("session_name", sa.Text(), nullable=False),
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column("repo", sa.Text(), server_default="", nullable=False),
@@ -294,6 +328,12 @@ def downgrade() -> None:
         batch_op.drop_index("idx_outbox_pending")
 
     op.drop_table("event_outbox")
+    with op.batch_alter_table("diagnostics", schema=None) as batch_op:
+        batch_op.drop_index("uq_diagnostics_observation")
+        batch_op.drop_index("idx_diagnostics_last_seen")
+        batch_op.drop_index("idx_diagnostics_agent")
+
+    op.drop_table("diagnostics")
     with op.batch_alter_table("deliveries", schema=None) as batch_op:
         batch_op.drop_index(
             "uq_deliveries_active_owner",

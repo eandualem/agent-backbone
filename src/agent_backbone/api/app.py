@@ -41,12 +41,19 @@ def _register_jobs(app: FastAPI):
         UpgradeWatch,
         delivery_retry,
         monitor_agents,
+        observe_job,
     )
     from agent_backbone.services.routing import routing_in_flight
     from agent_backbone.services.scheduler import PeriodicScheduler
 
-    scheduler = PeriodicScheduler()
     state = app.state
+
+    async def _job_result(name: str, error_type: str | None, duration_ms: int):
+        await observe_job(
+            state.db, source=name, stage="run", error_type=error_type, duration_ms=duration_ms
+        )
+
+    scheduler = PeriodicScheduler(on_result=_job_result)
     config: BackboneConfig = state.config
 
     async def _broadcast():
@@ -66,6 +73,7 @@ def _register_jobs(app: FastAPI):
             "deliveries": await state.db.deliveries.prune(days),
             "events": await state.db.events.prune(days),
             "queue": await state.db.queue.prune(days),
+            "diagnostics": await state.db.diagnostics.prune(days),
             "action_log_lines": rotate_action_log(state.config.action_log_path),
         }
 
@@ -283,6 +291,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     from agent_backbone.api.routes.agents import router as agents_router
     from agent_backbone.api.routes.config import router as config_router
     from agent_backbone.api.routes.deliveries import router as deliveries_router
+    from agent_backbone.api.routes.diagnostics import router as diagnostics_router
     from agent_backbone.api.routes.events import router as events_router
     from agent_backbone.api.routes.help import router as help_router
     from agent_backbone.api.routes.integrations import router as integrations_router
@@ -300,6 +309,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
         status_router,  # before config_router: /api/config/agents vs /api/config/{key}
         config_router,
         deliveries_router,
+        diagnostics_router,
         events_router,
         help_router,
         integrations_router,

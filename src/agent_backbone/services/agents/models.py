@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent_backbone.services.runtimes import RuntimeDiagnostic
 
 
 class AgentState(StrEnum):
@@ -85,6 +89,10 @@ class StateSnapshot:
     """Identifies the dialog a terminal reading found (a digest of what is on
     screen): stable while it is up, different for the next one."""
     evidence: list[str] = field(default_factory=list)
+    diagnostics: tuple[RuntimeDiagnostic, ...] = ()
+    """Typed terminal observations, independent of the reconciled state."""
+    diagnostics_observed: bool = False
+    """Whether nonempty terminal output was available (empty also means capture failed)."""
 
     @property
     def is_plan_waiting(self) -> bool:

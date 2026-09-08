@@ -41,6 +41,21 @@ This page follows real requests through the system. Read
    controls its mode. Folder trust remains controlled by `agents.pre_trust`.
 5. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
+Starts with a database handle retain operational diagnostics under one operation
+identity: the requested launch, its final outcome, elapsed time and classified
+failure stage. Request-resolution and preflight rejections are recorded too.
+`already_running` and `not_waited` describe exactly those outcomes; neither
+asserts that a new runtime reached its prompt. The history stores model/runtime
+identifiers and error types, without command arguments, directories, environment
+values, brief text, terminal output or exception messages. See
+[Learning from local usage](diagnostics.md) for the digest and investigation flow.
+
+The model returned by agent APIs is the saved selection, labelled
+`model_source: configured`. It does not confirm which model accepted a request
+or produced a response. Startup can observe a provider error independently of
+its readiness result: an input prompt and a rejected model request can both be
+visible. The observation history keeps that distinction.
+
 The running backbone serializes registration, edits, watches, start, stop and
 forget for each agent. Edits update only the supplied database fields, so two
 concurrent edits keep both changes. A start checks its resolved record again
@@ -168,6 +183,18 @@ Every reading carries its evidence. `backbone agent inspect app` shows the
 state, the delivery condition, the evidence lines, the terminal tail and
 the recent deliveries — the first thing to look at when a delivery did not
 happen.
+
+Runtime adapters also classify a small set of terminal observations for the
+diagnostic history, using panes already captured by startup or monitoring.
+These observations do not change hook authority or delivery conditions. Codex
+structured error banners retain an HTTP status and error type; a recognized
+model/account incompatibility adds its reason and model identifier. A visible
+model-change notice is a separate informational observation. Both can remain
+in one pane, so seeing the notice does not establish that a subsequent request
+succeeded. Repeated visibility updates an observation count, while distinct
+model/error metadata remains separate. Empty or failed captures cannot establish
+that an earlier error disappeared. Errors that appear and leave between captures
+may be missed; this is bounded observation rather than a transcript recorder.
 
 ## 3. Sending a message
 

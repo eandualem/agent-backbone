@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tomllib
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
-from agent_backbone.services.runtimes.base import Runtime, read_brief
+from agent_backbone.services.runtimes._pane import sanitize_pane_content
+from agent_backbone.services.runtimes.base import Runtime, RuntimeDiagnostic, read_brief
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +76,16 @@ def _toml_entries(entries: list[dict]) -> str:
 # This override lets the sandbox reach the network; verified live against
 # codex-cli 0.153 (API probe: 000 without it, 401 with it).
 _LOCAL_API_ACCESS = ("-c", "sandbox_workspace_write.network_access=true")
+
+_MODEL_FOR_ACCOUNT = re.compile(
+    r"The '(?P<model>[A-Za-z0-9_./:@+\-]{1,160})' model is not supported "
+    r"when using Codex with a ChatGPT account\.",
+    re.IGNORECASE,
+)
+_MODEL_CHANGED = re.compile(
+    r"[•●] Model changed to (?P<model>[A-Za-z0-9_./:@+\-]{1,160})"
+    r"(?: (?P<effort>low|medium|high|xhigh|max|ultra))?\s*"
+)
 
 
 class Codex(Runtime):
@@ -159,6 +171,80 @@ class Codex(Runtime):
     # ("go back") keeps it.
     choice_markers = ("keep current model", "switch to gpt-")
     interrupt_queued_delivery = True
+
+    def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
+        """Observe typed error banners, including one still visible after a model change.
+
+        A banner in scrollback is evidence it was visible, not proof the error
+        still blocks the runtime. The state classifier remains independent.
+        Ordinary prose, quoted JSON and unknown provider text are not recorded.
+        """
+        observations = {item.observation_key: item for item in super().diagnostics(pane_content)}
+        lines = sanitize_pane_content(pane_content).splitlines()[-80:]
+        in_code_block = False
+        for index, raw in enumerate(lines):
+            line = raw.strip()
+            if line.startswith(("```", "~~~")):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block:
+                continue
+            if changed := _MODEL_CHANGED.fullmatch(line):
+                signal = RuntimeDiagnostic(
+                    code="model_changed",
+                    severity="info",
+                    model=changed["model"],
+                    observed_effort=changed["effort"],
+                )
+                observations[signal.observation_key] = signal
+            if not line.startswith("■ {"):
+                continue
+            # A narrow pane may wrap a JSON error over several display lines.
+            # Bound both the lines and bytes inspected; json.loads must still
+            # prove there is exactly one object rather than a prose fragment.
+            payload = raw.lstrip()[1:].lstrip()
+            for continuation in range(8):
+                if len(payload) > 4096:
+                    break
+                try:
+                    error = json.loads(payload)
+                except ValueError:
+                    if index + continuation + 1 >= len(lines):
+                        break
+                    payload += lines[index + continuation + 1]
+                    continue
+                if not isinstance(error, dict):
+                    break
+                body = error.get("error")
+                status = error.get("status")
+                if (
+                    error.get("type") != "error"
+                    or type(status) is not int
+                    or not 400 <= status <= 599
+                    or not isinstance(body, dict)
+                    or not isinstance(body.get("type"), str)
+                    or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", body["type"])
+                ):
+                    break
+                signal = RuntimeDiagnostic(
+                    code="request_error", error_type=body["type"], http_status=status
+                )
+                if (
+                    status == 400
+                    and body["type"] == "invalid_request_error"
+                    and isinstance(body.get("message"), str)
+                    and (unsupported := _MODEL_FOR_ACCOUNT.fullmatch(body["message"]))
+                ):
+                    signal = RuntimeDiagnostic(
+                        code="model_account_incompatible",
+                        reason="unsupported_model_for_account",
+                        error_type=body["type"],
+                        model=unsupported["model"],
+                        http_status=status,
+                    )
+                observations[signal.observation_key] = signal
+                break
+        return tuple(observations.values())
 
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_codex_directory(directory)

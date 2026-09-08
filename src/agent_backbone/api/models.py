@@ -33,6 +33,10 @@ class EnrichedAgent(BaseModel):
     runtime: str | None = None
     """Runtime the session was launched with (live), else the configured runtime."""
     model: str | None = None
+    model_source: str = Field(
+        default="configured",
+        description="The saved model selection; the running model is unverified.",
+    )
     dir: str = ""
     repo: str = ""
     tags: list[str] = Field(default_factory=list)
@@ -79,6 +83,10 @@ class AgentStartResponse(BaseModel):
     working_directory: str | None = None
     runtime: str = "claude"
     model: str | None = None
+    model_source: str = Field(
+        default="configured",
+        description="The selected model, not a provider-confirmed observation.",
+    )
     repo: str = ""
     already_existed: bool = False
     ready: str = "unknown"
@@ -129,6 +137,10 @@ class AgentInspectResponse(BaseModel):
     dir: str = ""
     runtime: str = ""
     model: str | None = None
+    model_source: str = Field(
+        default="configured",
+        description="The saved model selection; the running model is unverified.",
+    )
     repo: str = ""
     watches: list[str] = Field(default_factory=list)
     state: str = "unknown"
@@ -388,6 +400,9 @@ class MessageRequest(BaseModel):
 
 
 class MessageResponse(BaseModel):
+    operation_id: str | None = None
+    delivery_id: int | None = None
+    queue_id: int | None = None
     ok: bool
     session: str
     outcome: str

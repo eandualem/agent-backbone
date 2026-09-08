@@ -60,4 +60,7 @@ async def send_message(
         queued=report.queued,
         queue=report.queue,
         detail=queue_detail(report, target, config.timing.queue_expiry_minutes),
+        operation_id=report.operation_id,
+        delivery_id=report.delivery_id,
+        queue_id=report.queue_id,
     )

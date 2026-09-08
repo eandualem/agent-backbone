@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import BLOCKED_OUTCOMES, DeliveryOutcome, EventType, IssueData
+from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import (
     format_next_issue_notification,
     is_acknowledged,
@@ -61,8 +63,11 @@ async def drain_message_queue(
         stale_leases = await db.queue.expire_stale_leases(max_age_minutes=5)
         if stale_leases:
             summary["leases_recovered"] = stale_leases
-    except Exception:
+    except Exception as exc:
         log.exception("Failed to recover stale leases (non-fatal)")
+        await observe_job(db, source=SOURCE, stage="lease_recovery", error_type=type(exc).__name__)
+    else:
+        await observe_job(db, source=SOURCE, stage="lease_recovery")
 
     try:
         expired = await db.queue.expire_pending(max_age_minutes=config.timing.queue_expiry_minutes)
@@ -73,25 +78,45 @@ async def drain_message_queue(
                 config.timing.queue_expiry_minutes,
             )
             summary["queue_expired"] = len(expired)  # each left a delivery row (same transaction)
-    except Exception:
+    except Exception as exc:
         log.exception("Failed to expire stale messages (non-fatal)")
+        await observe_job(db, source=SOURCE, stage="queue_expiry", error_type=type(exc).__name__)
+    else:
+        await observe_job(db, source=SOURCE, stage="queue_expiry")
 
-    queued_sessions = set(await db.queue.sessions_with_pending())
+    try:
+        queued_sessions = set(await db.queue.sessions_with_pending())
+    except Exception as exc:
+        await observe_job(db, source=SOURCE, stage="queue_sessions", error_type=type(exc).__name__)
+        raise
+    else:
+        await observe_job(db, source=SOURCE, stage="queue_sessions")
     for session_name in sorted(set(active_sessions) | queued_sessions):
         if session_name in _draining:
             continue
         _draining.add(session_name)
         try:
-            await _drain_session(config, db, gh, session_name, summary)
-        except Exception:
+            completed = await _drain_session(config, db, gh, session_name, summary)
+        except Exception as exc:
             log.exception("Queue drain failed for %s (other sessions continue)", session_name)
+            await observe_job(
+                db,
+                source=SOURCE,
+                stage="queue_drain",
+                agent_name=session_name,
+                error_type=type(exc).__name__,
+            )
+        else:
+            if completed:
+                await observe_job(db, source=SOURCE, stage="queue_drain", agent_name=session_name)
         finally:
             _draining.discard(session_name)
     return summary
 
 
-async def _drain_session(config, db, gh, session_name, summary) -> None:
+async def _drain_session(config, db, gh, session_name, summary) -> bool:
     queued = await db.queue.dequeue(session_name, limit=5)
+    completed = True
     try:
         for record in queued:
             target = record.get("target_entity")
@@ -100,23 +125,42 @@ async def _drain_session(config, db, gh, session_name, summary) -> None:
                 try:
                     issue, status = await _current_issue(config, record, db, gh)
                     if status in _RETIRED:
-                        await db.queue.mark_delivered(record["id"])
+                        await db.queue.mark_delivered(record["id"], reason=status)
                         summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
                         continue
                     if issue is None:
                         raise RuntimeError("Current issue could not be verified")
                     scope = queue_scope(await list_open_queue_for_target(config, target, gh, db=db))
-                except Exception:
+                except Exception as exc:
                     # Without the open queue the acknowledgement gate would
                     # widen to every historical delivery (closed issues
                     # included) and could stall the whole queue. Defer: the
                     # rows go back to pending and the next drain retries.
                     log.exception("Failed to load queue scope for %s; deferring", target)
+                    await observe_job(
+                        db,
+                        source=SOURCE,
+                        stage="queue_scope",
+                        agent_name=session_name,
+                        repo=record.get("repo") or "",
+                        issue_number=record.get("issue_number"),
+                        error_type=type(exc).__name__,
+                    )
                     index = queued.index(record)
                     summary["queue_deferred"] = summary.get("queue_deferred", 0) + (
                         len(queued) - index
                     )
+                    completed = False
                     break
+                else:
+                    await observe_job(
+                        db,
+                        source=SOURCE,
+                        stage="queue_scope",
+                        agent_name=session_name,
+                        repo=record.get("repo") or "",
+                        issue_number=record.get("issue_number"),
+                    )
             outcome = await safe_deliver(
                 session_name,
                 stamp_queued_age(record["message"], _waited_seconds(record)),
@@ -137,9 +181,14 @@ async def _drain_session(config, db, gh, session_name, summary) -> None:
                 ),
                 # The leased row already holds this message, including on failure.
                 requeue=False,
+                operation_id=record.get("operation_id"),
+                queue_id=record["id"],
             )
             if outcome in _QUEUE_DONE:
-                await db.queue.mark_delivered(record["id"])
+                if outcome == DeliveryOutcome.ALREADY_DELIVERED:
+                    await db.queue.mark_delivered(record["id"], reason="already_delivered")
+                else:
+                    await db.queue.mark_delivered(record["id"])
                 key = "queue_delivered" if outcome == DeliveryOutcome.DELIVERED else "queue_cleared"
                 summary[key] = summary.get(key, 0) + 1
             else:
@@ -152,6 +201,7 @@ async def _drain_session(config, db, gh, session_name, summary) -> None:
         # attempts put every remaining lease back for the next drain.
         for record in queued:
             await db.queue.release(record["id"])
+    return completed
 
 
 async def _current_issue(
@@ -173,9 +223,27 @@ async def _current_issue(
 
     try:
         issue = await gh.get_issue(issue_number, repo_full_name=repo)
-    except Exception:
+    except Exception as exc:
         log.warning("Failed to fetch %s#%d for retry", repo, issue_number)
+        await observe_job(
+            db,
+            source=SOURCE,
+            stage="issue_fetch",
+            agent_name=session_name,
+            repo=repo,
+            issue_number=issue_number,
+            error_type=type(exc).__name__,
+        )
         return None, "fetch_failed"
+    else:
+        await observe_job(
+            db,
+            source=SOURCE,
+            stage="issue_fetch",
+            agent_name=session_name,
+            repo=repo,
+            issue_number=issue_number,
+        )
     if issue.state == "closed":
         return None, "issue_closed"
     if (
@@ -199,6 +267,9 @@ async def retry_delivery(
     repo = delivery.get("repo") or ""
 
     scope = queue_scope(await list_open_queue_for_target(config, target, gh, db=db))
+    operation_id = delivery.get("operation_id")
+    if not operation_id and delivery.get("id") is not None:
+        operation_id = uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:delivery:{delivery['id']}").hex
     outcome = await safe_deliver(
         session_name,
         format_next_issue_notification(issue),
@@ -210,6 +281,7 @@ async def retry_delivery(
         source=SOURCE,
         enforce_issue_queue=True,
         queue_scope=scope,
+        operation_id=operation_id,
     )
     if outcome == DeliveryOutcome.DELIVERED:
         return "retried"
@@ -229,29 +301,59 @@ async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: GitHubClien
         reclaimed = await db.deliveries.reclaim_stale(max_age_minutes=5)
         if reclaimed:
             summary["attempts_reclaimed"] = reclaimed
-    except Exception:
+    except Exception as exc:
         log.exception("Failed to reclaim stale attempts (non-fatal)")
+        await observe_job(db, source=SOURCE, stage="claim_reclaim", error_type=type(exc).__name__)
+    else:
+        await observe_job(db, source=SOURCE, stage="claim_reclaim")
 
     try:
         summary.update(await retry_outbox(config, db, gh))
-    except Exception:
+    except Exception as exc:
         log.exception("Could not load pending outbox events (other retries continue)")
+        await observe_job(db, source=SOURCE, stage="outbox_load", error_type=type(exc).__name__)
+    else:
+        await observe_job(db, source=SOURCE, stage="outbox_load")
 
     if gh is not None:
         try:
             failures = await db.deliveries.failed(limit=20)
-        except Exception:
+        except Exception as exc:
             log.exception("Could not load failed issues (queue drain continues)")
+            await observe_job(
+                db, source=SOURCE, stage="issue_retry_read", error_type=type(exc).__name__
+            )
             failures = []
+        else:
+            await observe_job(db, source=SOURCE, stage="issue_retry_read")
         for delivery in failures:
             try:
                 outcome = await retry_delivery(config, delivery, db, gh)
                 if outcome in _RETIRED:
                     await db.deliveries.retire(delivery["id"], outcome)
                 summary[outcome] = summary.get(outcome, 0) + 1
-            except Exception:
+            except Exception as exc:
                 log.exception("Could not retry delivery %s (continuing)", delivery["id"])
                 summary["errors"] = summary.get("errors", 0) + 1
+                await observe_job(
+                    db,
+                    source=SOURCE,
+                    stage="issue_retry",
+                    agent_name=delivery["session_name"],
+                    repo=delivery.get("repo") or "",
+                    issue_number=delivery.get("issue_number"),
+                    error_type=type(exc).__name__,
+                )
+            else:
+                if outcome != "fetch_failed":
+                    await observe_job(
+                        db,
+                        source=SOURCE,
+                        stage="issue_retry",
+                        agent_name=delivery["session_name"],
+                        repo=delivery.get("repo") or "",
+                        issue_number=delivery.get("issue_number"),
+                    )
 
     try:
         drained = await drain_message_queue(
@@ -259,8 +361,13 @@ async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: GitHubClien
         )
         for key, value in drained.items():
             summary[key] = summary.get(key, 0) + value
-    except Exception:
+    except Exception as exc:
         log.exception("Queue drain failed (non-fatal)")
+        await observe_job(db, source=SOURCE, stage="queue_dispatch", error_type=type(exc).__name__)
+    else:
+        # This scope covers loading/dispatching the session list. Individual
+        # session failures are observed independently above, never cleared here.
+        await observe_job(db, source=SOURCE, stage="queue_dispatch")
 
     if summary:
         log.info("Retry complete: %s", summary)

@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -136,6 +138,113 @@ async def start_agent(
     brief_file: Path | str | None = None,
     db: BackboneDB | None = None,
     wait: bool = True,
+    operation_id: str | None = None,
+) -> StartResult:
+    """Start an agent and retain a bounded record of the attempt and its outcome.
+
+    Diagnostic details contain classifications only. The human-facing result
+    may include terminal evidence, paths or a session id; none of those are
+    copied into the diagnostic history.
+    """
+    operation_id = operation_id or uuid.uuid4().hex
+    started = time.monotonic()
+    details: dict = {
+        "stage": "preflight",
+        "requested_runtime": runtime,
+        "requested_model": model,
+        "resume": resume,
+        "resume_selection": "runtime_latest" if resume else "fresh",
+        "model_source": "configured",
+    }
+    record = {
+        "category": "startup",
+        "operation_id": operation_id,
+        "agent_name": spec.name,
+        "source": "start",
+        "runtime": runtime or spec.runtime,
+        "model": model if model is not None else spec.model,
+    }
+    if db is not None:
+        await db.diagnostics.record(
+            **record, code="requested", severity="info", details=dict(details)
+        )
+
+    async def observe(pane: str) -> None:
+        if db is None:
+            return
+        rt = get_runtime(runtime or spec.runtime)
+        for signal in rt.diagnostics(pane):
+            await db.diagnostics.record(
+                category="runtime",
+                code=signal.code,
+                operation_id=operation_id,
+                observation_key=signal.observation_key,
+                severity=signal.severity,
+                agent_name=spec.name,
+                source="startup",
+                runtime=rt.id,
+                model=signal.model,
+                details={
+                    "stage": "readiness",
+                    "reason": signal.reason,
+                    "error_type": signal.error_type,
+                    "http_status": signal.http_status,
+                    "observed_model": signal.model,
+                    "observed_effort": signal.observed_effort,
+                    "requested_model": model if model is not None else spec.model,
+                    "model_source": "terminal",
+                },
+            )
+
+    try:
+        result = await _start_agent(
+            spec,
+            config,
+            runtime=runtime,
+            model=model,
+            resume=resume,
+            brief_file=brief_file,
+            db=db,
+            wait=wait,
+            details=details,
+            observe=observe,
+        )
+    except Exception as exc:
+        details.update(reason="exception", error_type=type(exc).__name__)
+        log.error("Agent startup failed during %s (%s)", details["stage"], type(exc).__name__)
+        details["duration_ms"] = round((time.monotonic() - started) * 1000)
+        if db is not None:
+            await db.diagnostics.record(**record, code="failed", severity="error", details=details)
+        raise
+    outcome = (
+        "already_running" if result.already_running else result.ready if result.ok else "failed"
+    )
+    severity = (
+        "error"
+        if outcome in {"failed", "exited"}
+        else "warning"
+        if outcome == "timeout"
+        else "info"
+    )
+    details["duration_ms"] = round((time.monotonic() - started) * 1000)
+    if db is not None:
+        await db.diagnostics.record(**record, code=outcome, severity=severity, details=details)
+    log.info("Agent '%s' startup ended: %s", spec.name, outcome)
+    return result
+
+
+async def _start_agent(
+    spec: AgentSpec,
+    config: BackboneConfig,
+    *,
+    runtime: str | None,
+    model: str | None,
+    resume: bool,
+    brief_file: Path | str | None,
+    db: BackboneDB | None,
+    wait: bool,
+    details: dict,
+    observe: Callable[[str], Awaitable[None]],
 ) -> StartResult:
     """Start an agent in its tmux session.
 
@@ -153,16 +262,19 @@ async def start_agent(
         return StartResult(ok=True, already_running=True)
 
     if not spec.path.is_dir():
+        details["reason"] = "directory_missing"
         log.error("Directory '%s' does not exist for agent '%s'", spec.path, spec.name)
         return StartResult(ok=False, evidence=(f"directory does not exist: {spec.path}",))
 
     runtime_id = runtime or spec.runtime
     if runtime_id not in RUNTIMES:
+        details["reason"] = "unknown_runtime"
         log.error("Cannot start agent '%s': unknown runtime %s", spec.name, runtime_id)
         return StartResult(ok=False, evidence=(f"unknown runtime: {runtime_id}",))
     rt = RUNTIMES[runtime_id]
     effective_model = model if model is not None else spec.model
     section = config.launch
+    details["stage"] = "preparation"
     if section.pre_trust:
         rt.pre_trust(spec.path)
 
@@ -182,6 +294,7 @@ async def start_agent(
                 spec.name, spec.repo, config.data_dir, policy_names=section.shared_policy
             )
         except ValueError as exc:
+            details.update(reason="brief_failed", error_type=type(exc).__name__)
             return StartResult(ok=False, evidence=(str(exc),))
     resume_target: bool | str = resume
     resume_evidence: list[str] = []
@@ -196,7 +309,9 @@ async def start_agent(
             )
         elif last is not None and last.session_id:
             resume_target = last.session_id
+            details["resume_selection"] = "known_session"
             resume_evidence.append(f"resuming the session the backbone last saw: {last.session_id}")
+    details["stage"] = "command"
     try:
         command = rt.build_command(
             model=effective_model,
@@ -210,9 +325,11 @@ async def start_agent(
             auto_review=section.auto_review,
         )
     except RuntimeError as exc:
+        details.update(reason="command_failed", error_type=type(exc).__name__)
         log.error("Cannot start agent '%s': %s", spec.name, exc)
         return StartResult(ok=False, evidence=(str(exc),))
 
+    details["stage"] = "preparation"
     if unattended:
         rt.prepare_unattended()
 
@@ -230,6 +347,7 @@ async def start_agent(
     # hook write newer than the marker outranks it, ``wait_until_ready``
     # clears it when the prompt shows, and ``get_agent_state`` stops
     # trusting it after a short window regardless.
+    details["stage"] = "launch"
     launched_at = time.time()
     write_starting_marker(config.state_dir, spec.name, launched_at)
     ok = await start_session(
@@ -241,6 +359,7 @@ async def start_agent(
         mouse=rt.mouse_scroll,
     )
     if not ok:
+        details["reason"] = "session_failed"
         clear_starting_marker(config.state_dir, spec.name)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
     extra = f", model: {effective_model}" if effective_model else ""
@@ -250,12 +369,15 @@ async def start_agent(
 
     ready, evidence = "not_waited", []
     if wait:
+        details["stage"] = "readiness"
         ready, evidence = await wait_until_ready(
             spec.name,
             state_dir=config.state_dir,
             runtime=rt,
             timeout=config.timing.start_timeout_seconds,
             since=launched_at,
+            details=details,
+            observe=observe,
         )
 
     # No launch-time injection for this runtime: the brief is queued as the
@@ -295,6 +417,8 @@ async def wait_until_ready(
     timeout: float = 60.0,
     poll_interval: float = 0.5,
     since: float | None = None,
+    details: dict | None = None,
+    observe: Callable[[str], Awaitable[None]] | None = None,
 ) -> tuple[str, list[str]]:
     """Wait until the agent is at its prompt.
 
@@ -310,8 +434,10 @@ async def wait_until_ready(
     rt = get_runtime(runtime)
     state_path = Path(state_dir).expanduser()
     last_pane = ""
+    details = details if details is not None else {}
     while True:
         if not await session_exists(name):
+            details.update(state="offline", state_source="terminal", reason="session_exited")
             clear_starting_marker(state_path, name)
             return "exited", ["tmux session ended before the agent reached its prompt"]
 
@@ -325,11 +451,23 @@ async def wait_until_ready(
             and snapshot.state in (AgentState.BUSY, AgentState.BLOCKED)
         )
         if snapshot and snapshot.timestamp >= wall_started:
+            details.update(
+                state=snapshot.state.value,
+                state_source=snapshot.source,
+                reason=snapshot.reason
+                if snapshot.reason in {"plan", "permission", "question", "quota", "provider"}
+                else None,
+            )
             if snapshot.state == AgentState.IDLE:
                 # Claude Code fires SessionStart with its resume picker still
                 # on screen: a dialog the terminal shows beats the hook's idle.
                 pane = await capture_pane(name, lines=60)
+                if pane and observe is not None:
+                    await observe(pane)
                 if pane and rt.detect_active_dialog(pane):
+                    details.update(
+                        state="waiting_for_human", state_source="terminal", reason="question"
+                    )
                     return "waiting_for_human", [
                         "hook reported idle, but the terminal shows a dialog:",
                         *_pane_tail(pane),
@@ -339,19 +477,26 @@ async def wait_until_ready(
                 return "waiting_for_human", [f"hook reported waiting_for_human ({snapshot.reason})"]
 
         pane = await capture_pane(name, lines=60)
+        if pane and observe is not None:
+            await observe(pane)
         if pane and not hook_working:
             last_pane = pane
             if rt.detect_waiting_for_human(pane):
+                details.update(
+                    state="waiting_for_human", state_source="terminal", reason="question"
+                )
                 clear_starting_marker(state_path, name)
                 return "waiting_for_human", [
                     "terminal shows a question for the human:",
                     *_pane_tail(pane),
                 ]
             if rt.detect_idle(pane):
+                details.update(state="idle", state_source="terminal", reason=None)
                 clear_starting_marker(state_path, name)
                 return "ready", ["terminal shows an empty prompt"]
 
         if time.monotonic() - started >= timeout:
+            details["reason"] = details.get("reason") or "readiness_timeout"
             tail = [ln for ln in last_pane.strip().splitlines() if ln.strip()][-3:]
             return "timeout", [f"no prompt after {timeout:.0f}s; last lines: {tail}"]
         await asyncio.sleep(poll_interval)

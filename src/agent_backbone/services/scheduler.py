@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 log = logging.getLogger(__name__)
 
 JobFn = Callable[[], Awaitable[object]]
+ResultObserver = Callable[[str, str | None, int], Awaitable[None]]
 
 
 @dataclass
@@ -51,9 +52,10 @@ class _Job:
 class PeriodicScheduler:
     """LifecycleAware scheduler for interval jobs."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, on_result: ResultObserver | None = None) -> None:
         self._jobs: dict[str, _Job] = {}
         self._running = False
+        self._on_result = on_result
 
     def add(
         self,
@@ -184,12 +186,17 @@ class PeriodicScheduler:
             status = job.status
             status.running = True
             status.last_started = time.time()
+            started = time.monotonic()
+            error_type = None
+            cancelled = False
             try:
                 await job.fn()
                 status.last_error = None
             except asyncio.CancelledError:
+                cancelled = True
                 raise
             except Exception as exc:
+                error_type = type(exc).__name__
                 status.failures += 1
                 status.last_error = f"{type(exc).__name__}: {exc}"
                 log.exception("Job %s failed", job.name)
@@ -197,3 +204,10 @@ class PeriodicScheduler:
                 status.runs += 1
                 status.running = False
                 status.last_finished = time.time()
+                if self._on_result is not None and not cancelled:
+                    try:
+                        await self._on_result(
+                            job.name, error_type, int((time.monotonic() - started) * 1000)
+                        )
+                    except Exception:
+                        log.warning("Job diagnostic observer failed; evidence is incomplete")

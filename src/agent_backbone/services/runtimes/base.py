@@ -11,9 +11,12 @@ module in this package that subclasses ``Runtime`` and registers itself in
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import re
 import shutil
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -48,6 +51,29 @@ _FALLBACK_DIRS = (
 )
 
 BriefMode = Literal["system_prompt", "initial_prompt", "message", "none"]
+
+
+@dataclass(frozen=True)
+class RuntimeDiagnostic:
+    """A classified observation, independent of whether the agent is currently blocked.
+
+    Fields contain codes and model identifiers only. Terminal text and provider
+    response bodies are deliberately excluded from this contract.
+    """
+
+    code: str
+    severity: Literal["info", "warning", "error"] = "error"
+    reason: str | None = None
+    error_type: str | None = None
+    model: str | None = None
+    http_status: int | None = None
+    observed_effort: str | None = None
+
+    @property
+    def observation_key(self) -> str:
+        """Coalesce identical metadata while retaining later model/error changes."""
+        encoded = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def _error_foreground(raw: str) -> bool:
@@ -500,6 +526,12 @@ class Runtime:
             # A later response/tool output means the earlier error is history.
             return None
         return None
+
+    def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
+        """Recognized terminal observations; they never make a delivery/state decision."""
+        if self.provider_failure(pane_content):
+            return (RuntimeDiagnostic(code="provider_failure", reason="provider"),)
+        return ()
 
     def detect_waiting_for_human(self, pane_content: str) -> bool:
         """Whether the runtime is visibly blocked on a question to the human.
