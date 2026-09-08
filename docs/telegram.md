@@ -2,7 +2,8 @@
 
 
 Newly published reports are queued durably for Telegram and posted to the allowed
-agents group (General and the author’s own topic), including swarm members' reports. The shared
+agents group: ordinary agents go to General and their own topic; swarm members
+go to General only, including audio. The shared
 feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
 bounded batches and retries after failures. `telegram.report_updates=false` pauses
 sending; re-enabling drains retained pending reports. A configured or discovered
@@ -159,7 +160,7 @@ to 64 bytes. If an agent name makes a button too large, the full alert is sent
 without its button row and directs you to the agent's terminal. Prompt identities
 are never shortened; buttons that fit retain the same stale-prompt protection.
 
-Reports now appear in both General and the agent's topic, with separate delivery
-receipts. Optional full-report voice messages can be enabled with
+Ordinary agent reports appear in General and the agent's topic, with separate
+delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.

@@ -171,8 +171,9 @@ conversation, or add `--attach` to the first `agent start`. An already running
 agent stays running. `backbone help agent start` recalls its options.
 
 Set up [shell completion](cli.md#quick-reference-and-tab-completion) once so Tab
-offers agent names and commands. To see what instructions an agent receives,
-run `backbone instructions preview app`; `backbone instructions list` shows
+offers agent names and commands. To preview Backbone startup instructions and selected policies,
+run `backbone instructions preview app` (project/runtime instructions load separately);
+`backbone instructions list` shows
 where to edit shared policies and assign them to tags.
 
 ### Codex permissions and scrolling

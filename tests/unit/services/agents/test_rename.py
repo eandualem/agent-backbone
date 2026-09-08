@@ -99,3 +99,19 @@ async def test_tag_updates_merge_concurrently_and_reject_internal_tags(store):
     for tag in ("swarm:audit", "role:worker", "bad\nname", ""):
         with pytest.raises(ValueError):
             await store.tag("api", [tag])
+
+
+@pytest.mark.parametrize("column", ["initiator", "coordinator"])
+async def test_rename_rejects_name_in_completed_swarm_history(db, store, column):
+    fields = dict(
+        repo="acme/app", issue_number=1, initiator="", coordinator="", branch="b", worktree_dir="/w"
+    )
+    fields[column] = "taken"
+    await db.swarms.create("previous", **fields)
+    await db.swarms.set_status("previous", "done")
+    write_state_file(store.config.state_dir, "api", {"session_id": "original"})
+    with pytest.raises(ValueError, match="history"):
+        await store.rename("api", "taken")
+    assert store.agents.get("api") is not None
+    assert not (store.config.state_dir / "taken.json").exists()
+    assert (await db.swarms.get("previous"))[column] == "taken"

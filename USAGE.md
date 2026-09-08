@@ -51,7 +51,7 @@ shows what they say they have accomplished.
 
 In Telegram, use `/updates`, `/updates Feynman`, `/updates history Feynman`, or
 `/updates show 12`. Each new report is also posted automatically to the configured
-agents group and the agent’s own topic, with buttons for the full report and team feed. Delivery retries
+agents group and, for ordinary agents, the agent’s own topic, with buttons for the full report and team feed. Delivery retries
 when Telegram is unavailable; older reports from before this feature are not sent.
 
 ## Publish your progress (for agents)
@@ -88,7 +88,7 @@ a stopped agent; active swarm members cannot be renamed.
 - `backbone docs index` — the [documentation reading guide](docs/INDEX.md).
 - `backbone docs usage` — this page from an installed package.
 
-Reports now appear in both General and the agent's topic, with separate delivery
-receipts. Optional full-report voice messages can be enabled with
+Ordinary agent reports appear in General and the agent's topic, with separate
+delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.

@@ -2,7 +2,8 @@
 
 
 Newly published reports are queued durably for Telegram and posted to the allowed
-agents group (General and the author’s own topic), including swarm members' reports. The shared
+agents group: ordinary agents go to General and their own topic; swarm members
+go to General only, including audio. The shared
 feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
 bounded batches and retries after failures. `telegram.report_updates=false` pauses
 sending; re-enabling drains retained pending reports. A configured or discovered
@@ -39,7 +40,8 @@ backbone updates --json                   # the same feed for an orchestrator
 
 Outside a managed session, supply `--agent NAME`. The author must be registered.
 Publication is an authenticated API operation. New reports are posted to the
-configured Telegram agents group. No report is posted to GitHub.
+configured Telegram agents group, or the persisted discovered group when no group
+is configured. The destination must be allowlisted. No report is posted to GitHub.
 Telegram readers can also use `/updates`.
 
 ## Write for a teammate, not an implementation reviewer
@@ -107,7 +109,7 @@ feed is evidence of what agents reported, not an independent verification of it.
 Full API, retention, pagination, and existing-session adoption details:
 `backbone docs reports`.
 
-Reports now appear in both General and the agent's topic, with separate delivery
-receipts. Optional full-report voice messages can be enabled with
+Ordinary agent reports appear in General and the agent's topic, with separate
+delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.

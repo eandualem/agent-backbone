@@ -2,7 +2,8 @@
 
 Audio uses the local Kokoro-82M model through `kokoro-onnx` in the setup below.
 It is optional and off by default. With it enabled, each new report gets a
-playable voice recording below its text in both General and the agent's topic.
+playable voice recording below its text in General and, for ordinary agents,
+the agent's topic. Swarm members receive both text and audio in General only.
 It reads every report section and reference title; URLs remain clickable in the
 text rather than being spelled aloud. Speech is generated locally, then the audio
 is uploaded to the same Telegram group as the text. No paid speech service is used.

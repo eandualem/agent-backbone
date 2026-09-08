@@ -158,7 +158,7 @@ class AgentRepo(Repo):
             exists = await conn.execute(text("SELECT 1 FROM agents WHERE name = :old"), values)
             if not exists.first():
                 raise KeyError(name)
-            for table, column in references:
+            for table, column in (*references, ("swarms", "initiator"), ("swarms", "coordinator")):
                 found = await conn.execute(
                     text(f"SELECT 1 FROM {table} WHERE {column} = :new LIMIT 1"), values
                 )
