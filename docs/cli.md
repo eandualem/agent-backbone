@@ -8,7 +8,8 @@ conversation when a matching runtime session ID is available. With no saved ID,
 it starts fresh; `--resume` explicitly allows the runtime's own last-conversation
 fallback. Use `backbone agent start NAME --fresh` for a new conversation with the
 same settings (API: `resume: false`; omitted or `null` means automatic).
-Changing runtime without specifying a model clears the previous runtime's model.
+Codex resume honors `--model`, including an effort suffix, while retaining the
+saved conversation. Changing runtime without specifying a model clears the previous runtime's model.
 Starting from a directory reuses its registered name, even after a rename;
 if several agents share that directory, specify a name.
 
@@ -18,7 +19,9 @@ through the running backbone's API when it is up and fall back to the
 database (and tmux) directly when it is not — except `agent approve`,
 `agent deny` and `tell`, which only work through the API so that every keystroke into an
 agent is audited. `diagnostics` also requires the API and reports unavailable
-when it cannot read a result.
+when it cannot read a result. Address-only commands such as `updates` use the
+same port precedence as the server: process `BACKBONE_PORT`, then the data
+directory’s `.env`, then `backbone.port`.
 
 ## Quick reference and Tab completion
 

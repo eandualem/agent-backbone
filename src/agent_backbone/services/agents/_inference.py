@@ -239,6 +239,10 @@ async def get_agent_state(
         pull = infer_state_from_pane(pane_content, runtime_hint)
         pull.timestamp = time.time()
         if push:
+            # State freshness and saved conversation metadata are independent.
+            pull.session_id = push.session_id
+            pull.last_message = push.last_message
+            pull.runtime = push.runtime
             pull.evidence.insert(
                 0, f"hook state '{push.state.value}' is stale ({push_age:.0f}s) — reading terminal"
             )
@@ -248,7 +252,6 @@ async def get_agent_state(
             if push and pull.state == AgentState.BLOCKED:
                 pull.current_issue = push.current_issue
                 pull.current_repo = push.current_repo
-                pull.session_id = push.session_id
             return pull
         if push and _trust_stale_push(push):
             push.evidence = [

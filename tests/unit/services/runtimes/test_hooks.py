@@ -177,3 +177,13 @@ class TestDegradation:
             assert RUNTIMES[rt_id].hook_launch_args(None, tmp_path) == []
         for rt_id in ("gemini", "opencode"):
             assert RUNTIMES[rt_id].hook_launch_env(tmp_path, None) == {}
+
+
+@pytest.mark.parametrize("resume", [True, "saved-id"])
+def test_codex_resumed_command_honors_model_and_effort(resume):
+    with patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/c"):
+        command = RUNTIMES["codex"].build_command(model="gpt-6-astra:high", resume=resume)
+    assert command[0] == "/c"
+    assert command[command.index("resume") + 1] == ("--last" if resume is True else resume)
+    assert command[command.index("--model") + 1] == "gpt-6-astra"
+    assert "model_reasoning_effort=high" in command

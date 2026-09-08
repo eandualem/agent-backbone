@@ -7,6 +7,8 @@ import time
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent_backbone.config import AgentsConfig
 from agent_backbone.services.agents import (
     AgentState,
@@ -795,3 +797,30 @@ class TestChoiceDialogBeatsHookPermission:
         snap = await get_agent_state(tmp_path, "ike", runtime_hint="codex", pane_content=pane)
         assert snap.state.value == "waiting_for_human" and snap.reason == "question"
         assert any("choice dialog on screen beats" in e for e in snap.evidence)
+
+
+@pytest.mark.parametrize(
+    "pane,state", [("user@host $", AgentState.IDLE), ("Thinking...\n", AgentState.BUSY)]
+)
+async def test_terminal_state_retains_saved_session_metadata(tmp_path, pane, state):
+    (tmp_path / "ike.json").write_text(
+        json.dumps(
+            {
+                "state": "waiting_for_human",
+                "reason": "permission",
+                "ts": time.time() - 600,
+                "session_id": "saved-id",
+                "last_message": "Tests passed.",
+                "runtime": "codex",
+            }
+        )
+    )
+    with patch(f"{_INF}.capture_pane", AsyncMock(return_value=pane)):
+        result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
+    assert result.state == state
+    assert result.source == "pull"
+    assert result.reason is None
+    assert result.session_id == "saved-id"
+    assert result.last_message == "Tests passed."
+    assert result.runtime == "codex"
+    assert result.evidence

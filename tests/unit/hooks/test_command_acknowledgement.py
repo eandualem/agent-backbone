@@ -154,7 +154,7 @@ def test_cd_changes_the_repository_used_for_later_commands(tmp_path):
     with patch.object(bb, "_git_output", return_value="git@github.com:other/repo.git") as git:
         (action,) = bb.shell_actions("cd other && gh issue comment 5 -b x", str(tmp_path), 1)
     assert action["repo"] == "other/repo"
-    git.assert_called_once_with(str(tmp_path / "other"), "remote", "get-url", "origin")
+    git.assert_called_with(str(tmp_path / "other"), "remote", "get-url", "origin")
 
 
 @pytest.mark.parametrize("key", ["workdir", "cwd"])
@@ -185,3 +185,32 @@ def test_invalid_workdir_never_acknowledges_in_the_parent_repository(override):
     assert (
         bb.tool_actions("exec_command", {"cmd": COMMAND, "workdir": override}, "/repo-a", 1) == []
     )
+
+
+@pytest.mark.parametrize("override", ["acme/selected", "github.com/acme/selected"])
+def test_gh_repo_override_scopes_comment(monkeypatch, override):
+    monkeypatch.setenv("GH_REPO", override)
+    monkeypatch.delenv("GH_HOST", raising=False)
+    with patch.object(bb, "_git_output", return_value="git@github.com:acme/origin.git"):
+        (action,) = bb.shell_actions("gh issue comment 42 -b done", "/repo", 1)
+        (explicit,) = bb.shell_actions("gh issue comment 42 -R acme/explicit -b done", "/repo", 1)
+    assert action["repo"] == "acme/selected"
+    assert explicit["repo"] == "acme/explicit"
+
+
+def test_gh_default_remote_does_not_acknowledge_origin(monkeypatch, tmp_path):
+    monkeypatch.delenv("GH_REPO", raising=False)
+    monkeypatch.delenv("GH_HOST", raising=False)
+
+    def git_output(_cwd, *args):
+        if args == ("config", "--get-regexp", r"^remote\..*\.gh-resolved$"):
+            return "remote.upstream.gh-resolved base"
+        if args == ("remote", "get-url", "origin"):
+            return "git@github.com:acme/origin.git"
+        raise AssertionError(args)
+
+    with patch.object(bb, "_git_output", side_effect=git_output):
+        (action,) = bb.shell_actions("gh issue comment 42 -b done", "/repo", 1)
+    assert "repo" not in action
+    bb.append_action(tmp_path, "ike", {**action, "phase": "succeeded"})
+    assert not has_commented_on_issue(42, "ike", tmp_path / "actions.jsonl", repo="acme/origin")
