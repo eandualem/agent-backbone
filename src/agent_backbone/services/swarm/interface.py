@@ -271,8 +271,11 @@ async def create_swarm(
                     raise SwarmError(
                         f"member '{agent_name}' changed or was forgotten before startup"
                     )
-                # The runtime chooses launch injection or a queued first message.
-                result = await start_agent(agent, config, brief_file=brief_file, db=db)
+                # Reused names may retain state files from an earlier swarm.
+                # New members must receive this issue's role brief and roster.
+                result = await start_agent(
+                    agent, config, resume=False, brief_file=brief_file, db=db
+                )
                 if result.already_running:
                     occupied.append(agent_name)
                     raise SwarmError(f"member '{agent_name}' became occupied during startup")

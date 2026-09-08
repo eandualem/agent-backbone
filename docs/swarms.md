@@ -198,3 +198,9 @@ Either way a *choice* dialog — Codex's rate-limit "switch model?" — is a
 question, not a permission: nothing answers it automatically,
 `agent approve` refuses it, and `backbone agent deny <member>` keeps the
 model.
+
+
+Creating a swarm always starts fresh conversations, including when a completed
+or disbanded swarm name is reused. Saved state from an earlier swarm cannot
+replace the new issue’s role briefs and roster. Ordinary agent starts retain
+their automatic continuation behavior.
