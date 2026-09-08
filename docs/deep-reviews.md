@@ -8,7 +8,7 @@ work. The review produces findings for an agent to verify, not automatic fixes.
 
 ## Codex: explicit Ultra effort
 
-Check `codex --version` and `codex exec review --help`. The verified CLI is
+Check `codex --version` and `codex exec review --help`. A complete review was verified with CLI
 0.153.4, with `gpt-6-astra` supporting `ultra`. Ultra is a reasoning setting for
 Codex's review command, not a separate `codex ultrareview` subcommand. Set both
 model and effort explicitly rather than inheriting the implementing agent's defaults.

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent_backbone.config import TelegramConfig
 from agent_backbone.services.integrations import (
     Integration,
@@ -155,3 +157,14 @@ class TestTelegramSurfaces:
             assert await bot.reply_to_agent("ike", "done") is True
             assert await bot.reply_to_agent("feynman", "done") is False
         send.assert_awaited_once_with("t", -100, "done", thread_id=7)
+
+
+@pytest.mark.parametrize("method", ["flush_reports", "flush_report_audio"])
+async def test_report_flush_continues_after_integration_failure(method):
+    first, second = _Fake(), _Fake()
+    first._running = second._running = True
+    first.name, second.name = "broken", "healthy"
+    setattr(first, method, AsyncMock(side_effect=RuntimeError("unavailable")))
+    setattr(second, method, AsyncMock())
+    await getattr(Integrations([first, second]), method)()
+    getattr(second, method).assert_awaited_once()

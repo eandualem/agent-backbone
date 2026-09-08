@@ -171,9 +171,19 @@ class Integrations:
     async def flush_reports(self) -> None:
         for integration in self.enabled:
             if integration.running:
-                await integration.flush_reports()
+                try:
+                    await integration.flush_reports()
+                except Exception:
+                    log.exception(
+                        "Integration %s flush_reports failed; continuing", integration.name
+                    )
 
     async def flush_report_audio(self) -> None:
         for integration in self.enabled:
             if integration.running:
-                await integration.flush_report_audio()
+                try:
+                    await integration.flush_report_audio()
+                except Exception:
+                    log.exception(
+                        "Integration %s flush_report_audio failed; continuing", integration.name
+                    )

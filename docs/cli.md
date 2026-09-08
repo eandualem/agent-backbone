@@ -508,3 +508,8 @@ or `policy:NAME`. See [Templates](templates.md) for examples and adoption rules.
 `backbone agent tag NAME TAG...` adds persistent group tags;
 `backbone agent untag NAME TAG...` removes them. Swarm/role identity tags cannot
 be changed with these commands. Changes take effect at the next fresh launch.
+
+Completion installers serialize updates to the same resolved rc file using a
+`.backbone-completion.lock` sidecar, retained alongside the file. The backup and
+conflict check protect existing content. Editors and dotfile managers that do not
+use that lock must not write the rc file concurrently with installation.

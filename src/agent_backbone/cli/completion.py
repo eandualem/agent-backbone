@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import shlex
@@ -142,6 +143,19 @@ def _install(
     """Replace only our marked block, backing up existing content before editing."""
     # Preserve a dotfile symlink and edit its target, as a dotfile manager expects.
     path = path.expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Lock a stable sidecar: atomic replacement changes the rc file's inode.
+    # Keep the lock file so waiting installers never lock a different inode.
+    lock_path = path.with_name(path.name + ".backbone-completion.lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _install_locked(shell, path, suggestions=suggestions, remove=remove)
+
+
+def _install_locked(
+    shell: str, path: Path, *, suggestions: bool, remove: bool
+) -> tuple[bool, Path | None]:
     before = path.read_text() if path.exists() else ""
     if before.count(_START) != before.count(_END) or before.count(_START) > 1:
         raise ValueError(f"incomplete or duplicate completion markers in {path}; repair them first")

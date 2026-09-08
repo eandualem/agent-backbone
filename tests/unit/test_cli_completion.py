@@ -187,3 +187,35 @@ printf '%s\n' "${COMPREPLY[@]}"
         check=True,
     )
     assert result.stdout.splitlines() == ["codex", "scout"]
+
+
+def test_concurrent_install_and_remove_serialize_the_entire_edit(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    from threading import Event
+
+    import agent_backbone.cli.completion as module
+
+    path = tmp_path / "rc"
+    path.write_text("# existing config\n")
+    original_write = module.atomic_write_text
+    writing, release = Event(), Event()
+
+    def pause_first_write(target, content):
+        if target == path and not writing.is_set():
+            writing.set()
+            assert release.wait(5)
+        original_write(target, content)
+
+    monkeypatch.setattr(module, "atomic_write_text", pause_first_write)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(_install, "zsh", path, suggestions=False, remove=False)
+        assert writing.wait(5)
+        second = pool.submit(_install, "zsh", path, suggestions=False, remove=True)
+        try:
+            with pytest.raises(TimeoutError):
+                second.result(timeout=0.1)
+        finally:
+            release.set()
+        assert first.result(timeout=5)[0]
+        assert second.result(timeout=5)[0]
+    assert path.read_text() == "# existing config\n"
