@@ -247,6 +247,27 @@ class AgentStore:
         return current
 
     @serialized_mutation
+    async def tag(self, name: str, tags: list[str], *, remove: bool = False) -> AgentSpec:
+        if any(
+            not tag
+            or len(tag) > 100
+            or tag.startswith(("swarm:", "role:"))
+            or any(not c.isprintable() or c.isspace() for c in tag)
+            for tag in tags
+        ):
+            raise ValueError("tags must be printable without spaces; swarm: and role: are reserved")
+        await self.refresh()
+        spec = self._agents.get(name)
+        if spec is None:
+            raise KeyError(name)
+        changed = (
+            [tag for tag in spec.tags if tag not in tags]
+            if remove
+            else list(dict.fromkeys((*spec.tags, *tags)))
+        )
+        return await self.update(name, tags=changed)
+
+    @serialized_mutation
     async def forget(self, name: str) -> bool:
         removed = await self._db.agents.delete(name)
         await self.refresh()

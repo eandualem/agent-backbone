@@ -77,6 +77,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "agents.pre_trust": True,
     "agents.inject_brief": True,
     "agents.shared_policy": [],
+    "agents.tag_policy": {},
     "agents.writable_dirs": [],
     "agents.auto_review": False,
     "github.reviewers": [],
@@ -135,7 +136,10 @@ SETTINGS_HELP: dict[str, str] = {
     "agents.inject_brief": (
         "Give each agent the backbone's brief at launch (system prompt or initial prompt)"
     ),
-    "agents.shared_policy": "Ordered policy names from <data_dir>/policies/<name>.md (JSON list)",
+    "agents.shared_policy": (
+        "Ordered policy names from <data_dir>/templates/policies/<name>.md (JSON list)"
+    ),
+    "agents.tag_policy": "Policy names by agent tag (JSON object of ordered lists)",
     "agents.writable_dirs": (
         "Directories outside an agent's own that a sandboxed runtime (Codex) may also "
         "write to, e.g. a package cache such as ~/.cache/uv (JSON list)"
@@ -208,6 +212,18 @@ def validate_setting(key: str, value: Any) -> Any:
     if key not in SETTINGS_DEFAULTS:
         raise KeyError(f"unknown setting {key!r}")
     default = SETTINGS_DEFAULTS[key]
+    if key == "agents.tag_policy":
+        if not isinstance(value, dict) or not all(
+            isinstance(tag, str)
+            and tag
+            and len(tag) <= 100
+            and all(c.isprintable() and not c.isspace() for c in tag)
+            for tag in value
+        ):
+            raise ValueError(f"{key}: expected an object keyed by non-empty tags without spaces")
+        for policies in value.values():
+            validate_setting("agents.shared_policy", policies)
+        return value
     if key in _SETTING_CHOICES:
         if not isinstance(value, str) or value not in _SETTING_CHOICES[key]:
             raise ValueError(f"{key}: expected one of {', '.join(_SETTING_CHOICES[key])}")
@@ -450,8 +466,16 @@ class LaunchConfig:
     pre_trust: bool = True
     inject_brief: bool = True
     shared_policy: tuple[str, ...] = ()
+    tag_policy: dict[str, tuple[str, ...]] = field(default_factory=dict)
     writable_dirs: tuple[str, ...] = ()
     auto_review: bool = False
+
+    def policy_names(self, tags: tuple[str, ...] = ()) -> tuple[str, ...]:
+        """Global order, then sorted matching tags; each policy appears once."""
+        names = list(self.shared_policy)
+        for tag in sorted(set(tags)):
+            names.extend(self.tag_policy.get(tag, ()))
+        return tuple(dict.fromkeys(names))
 
 
 @dataclass(frozen=True)
@@ -740,6 +764,7 @@ def build_config(
             pre_trust=s["agents.pre_trust"],
             inject_brief=s["agents.inject_brief"],
             shared_policy=tuple(s["agents.shared_policy"]),
+            tag_policy={tag: tuple(names) for tag, names in s["agents.tag_policy"].items()},
             writable_dirs=tuple(str(d) for d in s["agents.writable_dirs"]),
             auto_review=s["agents.auto_review"],
         ),

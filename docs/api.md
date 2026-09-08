@@ -210,7 +210,7 @@ This is the endpoint agents use to talk to each other.
 
 | Route | Purpose |
 |---|---|
-| `GET /api/help` · `GET /api/help/{topic}` | The agent playbooks (`setup`, `agents`, `messaging`, `github`, `swarms`, plus any under `<data_dir>/help-topics/`) — index with one-line summaries, or one topic's markdown |
+| `GET /api/help` · `GET /api/help/{topic}` | The agent playbooks (`setup`, `agents`, `messaging`, `github`, `swarms`, plus any under `<data_dir>/help/`) — index with one-line summaries, or one topic's markdown |
 | `GET /api/docs` · `GET /api/docs/{page}` | The documentation shipped with the installed package (`getting-started`, `concepts`, …) — index, or one page's markdown |
 
 The same content as `backbone help` and `backbone docs`, for agents that
@@ -410,3 +410,12 @@ previous PTY cleanup to finish.
 const sio = io("http://127.0.0.1:7120/sessions", { auth: { api_key: KEY } });
 sio.on("sessions:update", agents => render(agents));
 ```
+
+### Agent group tags
+
+`POST /api/agents/{name}/tags` accepts `{"tags": ["python"], "remove": false}`.
+It adds tags without duplicates, or removes them when `remove` is true. Unknown
+agents return 404; invalid or reserved swarm/role tags return 400. Assign policies
+through the existing configuration API using `agents.shared_policy` and
+`agents.tag_policy`; see [Templates](templates.md). This does not message or
+restart an existing conversation.

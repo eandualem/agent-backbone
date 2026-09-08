@@ -118,8 +118,8 @@ swarm, while each member reports its assigned work for explicit agent views.
 Existing or resumed conversations need
 to read `backbone help reports` once to adopt this protocol; updating a brief on
 disk does not change an existing conversation. At the next natural interaction,
-ask the agent to adopt that playbook. Custom `agent-brief.md` overrides should
-include the same reporting guidance, as should custom `swarm-templates/common.md`
+ask the agent to adopt that playbook. Custom `templates/base.md` overrides should
+include the same reporting guidance, as should custom `templates/swarm/common.md`
 overrides. Existing swarms reuse their saved role briefs; changing the template
 applies to newly created swarms. Reading `backbone updates` alone cannot
 instruct an agent to start publishing.

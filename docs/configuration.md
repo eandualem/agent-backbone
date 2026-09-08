@@ -60,8 +60,9 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | `agents.pre_trust` | `true` | Answer the runtime's folder-trust dialog before starting, so it never blocks an unattended start: Claude Code and Codex get the same trust record their own dialog writes; Gemini is launched with `--skip-trust`. Starting an agent in a directory is treated as the trust decision; set `false` to answer the dialog yourself |
 | `agents.writable_dirs` | `[]` | Machine-wide directories that every Codex agent may write outside its own checkout (`--add-dir`; JSON list, `~` allowed). Use for deliberately shared tooling caches; for a project-specific cache, set `UV_CACHE_DIR` inside the agent's worktree. Other runtimes ignore this setting. See [permission boundaries and cache options](security.md#unattended-agents-and-writable-directories) |
 | `agents.auto_review` | `false` | Use automatic permission review where the runtime supports it (currently Codex, `--approve-for-me`, with its workspace sandbox). Routine requests can proceed after review; refusals return to the agent. Applies on the next start/resume. Unattended agents keep their no-prompt policy; other runtimes are unaffected. Set `false` to use your own runtime approval configuration |
-| `agents.shared_policy` | `[]` | Ordered names of Markdown files under `<data_dir>/policies/`, composed after the shipped environment brief at the next fresh launch; see below |
-| `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Codex, Gemini and OpenCode receive it as the session's initial prompt (not re-sent on `--resume`); `aider` receives it as its first delivered message; plain shells get none. Override the text with `<data_dir>/agent-brief.md` |
+| `agents.shared_policy` | `[]` | Ordered policy names under `<data_dir>/templates/policies/`, composed with base and swarm briefs; see [templates](templates.md) |
+| `agents.tag_policy` | `{}` | Policy names by agent tag, as a JSON object of ordered lists; global policies apply first, then matching tags alphabetically, deduplicated |
+| `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Codex, Gemini and OpenCode receive it as the session's initial prompt (not re-sent on `--resume`); `aider` receives it as its first delivered message; plain shells get none. Override the text with `<data_dir>/templates/base.md` |
 
 ### `github.*`
 
@@ -183,27 +184,14 @@ out of agent sessions rather than exported into them.
 
 ## Shared policy and environment facts
 
-Put user-authored policy in individually reviewable files, for example
-`<data_dir>/policies/pr-etiquette.md` and `policies/coordination.md`, then select
-and order them in the database:
-
-```bash
-backbone config set agents.shared_policy '["pr-etiquette", "coordination"]'
-```
-
-Policy text is included literally after the shipped environment facts, with a
-heading naming its source. Names use lowercase letters, digits and hyphens;
-paths and duplicates are rejected. A selected missing or empty file fails the
-launch with its path, so the agent cannot silently start without that policy.
-The files survive package upgrades. `agents.inject_brief=false` disables both
-parts, and an explicit launch brief replaces them. Existing
-`<data_dir>/agent-brief.md` overrides retain full control: selected policy files
-are not added to that override. Initial-prompt runtimes do not reinject on resume.
-
-Keep shared procedures in policy files and project-specific instructions in the
-repository. The existing project-precedence sentence remains a compatibility
-safety net: the backbone cannot enforce that arbitrary Markdown never overlaps.
-No policy content or new authority rule is installed by default.
+Use `backbone templates edit policy:NAME` to create a policy, then
+`backbone templates use NAME` to assign it globally, or add `--tag TAG` for a group.
+Assignments are stored in the database; Markdown files live in
+`<data_dir>/templates/policies/`. `backbone templates preview AGENT` shows the
+actual next-launch content and sources. Missing or empty selected rules fail
+launch, including when the base brief is customized. See [Agent instruction
+templates](templates.md) for ordering, migration from legacy paths, placeholders,
+and the distinction between fresh starts and resumed conversations.
 
 ## Agent record validation
 

@@ -236,6 +236,7 @@ def _swarm_config(tmp_path):
 
 
 class TestCreateSwarm:
+    @pytest.mark.parametrize("custom_kickoff", [False, True])
     @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
@@ -243,9 +244,22 @@ class TestCreateSwarm:
     @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
     @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
     async def test_create_full_flow(
-        self, _git, _branch, mock_wt, _exists, mock_start, mock_deliver, db, tmp_path
+        self,
+        _git,
+        _branch,
+        mock_wt,
+        _exists,
+        mock_start,
+        mock_deliver,
+        db,
+        tmp_path,
+        custom_kickoff,
     ):
         config, repo_dir = _swarm_config(tmp_path)
+        if custom_kickoff:
+            override = config.data_dir / "templates" / "swarm" / "kickoff.md"
+            override.parent.mkdir(parents=True)
+            override.write_text("Plan carefully: {title} ({issue_url})")
         worktree = repo_dir / ".backbone" / "swarms" / "research"
         mock_wt.return_value = (worktree, "swarm/research")
         store = _FakeStore(config)
@@ -295,6 +309,9 @@ class TestCreateSwarm:
         # Kickoff went to the coordinator.
         assert mock_deliver.await_args.args[0] == "research-coordinator"
         assert "Do the research" in mock_deliver.await_args.args[1]
+        message = mock_deliver.await_args.args[1]
+        assert message.startswith("[via:backbone swarm:research] ")
+        assert ("Plan carefully:" in message) == custom_kickoff
         # Recorded as active.
         row = await db.swarms.get("research")
         assert row["status"] == "active" and row["issue_number"] == 7
@@ -667,3 +684,29 @@ class TestOwnRepoGuardrail:
                 member_specs=[],
                 initiator="simon",
             )
+
+
+async def test_missing_kickoff_fails_before_creating_worktree(db, tmp_path):
+    config, _ = _swarm_config(tmp_path)
+    override = config.data_dir / "templates" / "swarm" / "kickoff.md"
+    override.parent.mkdir(parents=True)
+    override.write_text("")
+    gh = AsyncMock()
+    gh.get_issue.return_value = AsyncMock(state="open", title="Research")
+    with (
+        patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_IFACE}.create_worktree", AsyncMock()) as create,
+    ):
+        with pytest.raises(SwarmError, match="empty"):
+            await create_swarm(
+                config,
+                db,
+                _FakeStore(config),
+                gh,
+                name="research",
+                issue_ref="acme/app#7",
+                member_specs=[],
+                initiator="simon",
+            )
+    create.assert_not_called()
+    assert await db.swarms.get("research") is None

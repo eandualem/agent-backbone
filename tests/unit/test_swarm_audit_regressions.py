@@ -1,6 +1,6 @@
 """Regressions for defects the 2026-09-05 swarm audit found.
 
-See docs/reviews/2026-09-05-swarm-audit.md for the findings and their dispositions.
+These cases retain the invariants established by the historical swarm audit.
 """
 
 from __future__ import annotations

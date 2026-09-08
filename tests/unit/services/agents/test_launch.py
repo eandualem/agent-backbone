@@ -371,6 +371,9 @@ class TestStartAgentBrief:
         config = bootstrap_config(tmp_path / "data")
         config = replace(config, swarm=SwarmConfig(unattended_members=setting))
         spec = replace(self._spec(tmp_path, runtime), tags=("swarm:audit", "role:scout"))
+        role_brief = config.data_dir / "swarms" / "audit" / f"{spec.name}.md"
+        role_brief.parent.mkdir(parents=True)
+        role_brief.write_text("Scout role instructions")
         assert spec.swarm == "audit" and not spec.unattended
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:

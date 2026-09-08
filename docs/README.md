@@ -32,3 +32,5 @@ For goals, progress, blockers and next steps across agents, read
 Conventions: `reviewer`, `builder`, `orch` are example agent names; `acme/app`
 and `acme/web` are example repositories; `<data_dir>` is
 `~/.local/share/agent-backbone` unless you changed it.
+
+Injected instructions are separate from help: see [Agent instruction templates](templates.md). Use `backbone templates list` to inspect an installed Backbone.

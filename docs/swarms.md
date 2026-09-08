@@ -113,10 +113,12 @@ worker brief driven by the coordinator's instructions.
 
 Every brief starts from a common preamble covering the shared-worktree
 rules (one branch, file ownership, no scope creep) and the exact
-communication commands. To customize, copy a template from the package
-(`services/swarm/templates/`) into `<data_dir>/swarm-templates/<role>.md`
-— files there override the shipped ones, and you can add new roles the
-same way.
+communication commands. Use `backbone templates edit swarm:scout` (or another
+role) to create an override in `<data_dir>/templates/swarm/`. Canonical defaults
+live in the repository's top-level `templates/swarm/` and ship in the package.
+New role files use the same layout. `swarm:common` edits the shared preamble and
+`swarm:kickoff` edits the coordinator's initial message. Tag policies can target
+`role:scout`, `role:coordinator`, or `swarm:NAME`. See [Templates](templates.md).
 
 ## What a swarm is, and is not
 

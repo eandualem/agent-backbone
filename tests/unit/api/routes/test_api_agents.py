@@ -538,3 +538,26 @@ class TestDeny:
             resp = await api_client.post("/api/agents/ike/approve", headers=auth_headers)
         assert resp.status_code == 409
         assert resp.json()["detail"]["outcome"] == "not_permission"
+
+
+async def test_group_tags_are_persistent_and_validated(api_client, auth_headers):
+    url = "/api/agents/ike/tags"
+    response = await api_client.post(
+        url, headers=auth_headers, json={"tags": ["python", "python", "backend"]}
+    )
+    assert response.status_code == 200
+    assert response.json()["tags"] == ["python", "backend"]
+    response = await api_client.post(
+        url, headers=auth_headers, json={"tags": ["python"], "remove": True}
+    )
+    assert response.json()["tags"] == ["backend"]
+    response = await api_client.post(
+        url, headers=auth_headers, json={"tags": ["safe", "role:scout"]}
+    )
+    assert response.status_code == 400
+    response = await api_client.post(url, headers=auth_headers, json={"tags": []})
+    assert response.json()["tags"] == ["backend"]
+    response = await api_client.post(
+        "/api/agents/missing/tags", headers=auth_headers, json={"tags": ["python"]}
+    )
+    assert response.status_code == 404

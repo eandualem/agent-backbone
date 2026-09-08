@@ -168,3 +168,65 @@ async def read_client_config() -> BackboneConfig:
             port=settings.get("backbone.port", boot.backbone.port),
         ),
     )
+
+
+async def _read_config() -> BackboneConfig:
+    """Existing full configuration for inspection, without schema repair or creation."""
+    from sqlalchemy import text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from agent_backbone.config import agents_from_rows, build_config
+
+    boot = bootstrap_config()
+    url = make_url(boot.database_url)
+    queries = (
+        "SELECT key, value FROM settings",
+        "SELECT * FROM agents ORDER BY name",
+        "SELECT agent_name, repo FROM agent_watches ORDER BY agent_name, repo",
+    )
+    if url.get_backend_name() == "sqlite":
+        if not url.database or url.database == ":memory:":
+            return boot
+        path = Path(url.database).expanduser().resolve()
+        if not path.exists():
+            return boot
+
+        def read_sqlite():
+            conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute("BEGIN")
+                return [[dict(row) for row in conn.execute(query)] for query in queries]
+            finally:
+                conn.close()
+
+        rows = await asyncio.to_thread(read_sqlite)
+    else:
+        engine = create_async_engine(boot.database_url)
+        try:
+            async with engine.connect() as conn:
+                rows = [(await conn.execute(text(query))).mappings().all() for query in queries]
+        finally:
+            await engine.dispose()
+    settings = {row["key"]: json.loads(row["value"]) for row in rows[0]}
+    agents = []
+    for row in rows[1]:
+        agent = dict(row)
+        agent["tags"] = json.loads(agent.get("tags") or "[]")
+        agent["env"] = json.loads(agent.get("env") or "{}")
+        agent["watches"] = [
+            watch["repo"] for watch in rows[2] if watch["agent_name"] == agent["name"]
+        ]
+        agents.append(agent)
+    return build_config(boot.data_dir, settings=settings, agents=agents_from_rows(agents))
+
+
+async def read_config() -> BackboneConfig:
+    """Fail clearly if existing configuration cannot be inspected safely."""
+    try:
+        return await asyncio.wait_for(_read_config(), timeout=5)
+    except Exception as exc:
+        raise ValueError(
+            "Could not read existing configuration; check database availability and schema"
+        ) from exc

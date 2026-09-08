@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import agent_backbone.help as help_module
-from agent_backbone.help import get_doc, get_topic, list_docs, list_topics, render_agent_brief
+from agent_backbone.help import get_doc, get_topic, list_docs, list_topics
+from agent_backbone.templates import render_agent_brief
 
 
 class TestTopics:
@@ -72,20 +73,3 @@ class TestAgentBrief:
     def test_data_dir_override(self, tmp_path):
         (tmp_path / "agent-brief.md").write_text("hello {agent_name}")
         assert render_agent_brief({"agent_name": "x"}, tmp_path) == "hello x"
-
-
-class TestBriefInjection:
-    def test_brief_file_written_and_passed_for_claude(self, tmp_path):
-        from agent_backbone.services.agents.launch import agent_brief_file
-
-        path = agent_brief_file("orch", "acme/app", tmp_path)
-        assert path is not None and path.read_text().startswith("# agent-backbone environment")
-        assert "**orch**" in path.read_text()
-
-    def test_brief_is_written_for_every_runtime(self, tmp_path):
-        # start_agent decides whether it goes in at launch or as the first
-        # message; the file itself does not depend on the runtime.
-        from agent_backbone.services.agents.launch import agent_brief_file
-
-        path = agent_brief_file("orch", "acme/app", tmp_path)
-        assert path == tmp_path / "briefs" / "orch.md"

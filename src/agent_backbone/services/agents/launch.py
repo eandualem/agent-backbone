@@ -8,18 +8,19 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import session_secret_keys
+from agent_backbone.fs import atomic_write_text
 from agent_backbone.git import git_write_paths
-from agent_backbone.help import render_agent_brief
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
     read_state_file,
     write_starting_marker,
 )
+from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.runtimes import (
     AGENT_ENV_KEY,
@@ -44,48 +45,6 @@ if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
 
 log = logging.getLogger(__name__)
-
-
-def agent_brief_text(
-    name: str, repo: str, data_dir: Path | str, *, policy_names: tuple[str, ...] = ()
-) -> str | None:
-    """Render the common backbone brief for an agent (None when it cannot be read)."""
-    try:
-        return render_agent_brief(
-            {"agent_name": name, "repo": repo or "(no GitHub remote)"},
-            data_dir=Path(data_dir),
-            policy_names=policy_names,
-        )
-    except OSError as exc:
-        if policy_names:
-            raise ValueError(f"Could not render required brief for {name}") from exc
-        log.warning("Could not render the agent brief for %s: %s", name, exc)
-        return None
-
-
-def agent_brief_file(
-    name: str, repo: str, data_dir: Path | str, *, policy_names: tuple[str, ...] = ()
-) -> Path | None:
-    """Render the common backbone brief for an agent under ``<data_dir>/briefs``.
-
-    ``start_agent`` hands it to the runtime at launch or as the first
-    delivered message. Best-effort: on any error the agent simply starts
-    without the brief.
-    """
-    text = agent_brief_text(name, repo, data_dir, policy_names=policy_names)
-    if text is None:
-        return None
-    try:
-        briefs_dir = Path(data_dir) / "briefs"
-        briefs_dir.mkdir(parents=True, exist_ok=True)
-        brief = briefs_dir / f"{name}.md"
-        brief.write_text(text)
-        return brief
-    except OSError as exc:
-        if policy_names:
-            raise ValueError(f"Could not write required brief for {name}") from exc
-        log.warning("Could not write the agent brief for %s: %s", name, exc)
-        return None
 
 
 def launch_environment(
@@ -288,12 +247,12 @@ async def _start_agent(
     )
 
     brief = Path(brief_file) if brief_file else None
-    if brief is None and section.inject_brief and rt.brief_mode != "none":
+    if rt.brief_mode != "none" and (brief is not None or section.inject_brief or spec.swarm):
         try:
-            brief = agent_brief_file(
-                spec.name, spec.repo, config.data_dir, policy_names=section.shared_policy
-            )
-        except ValueError as exc:
+            preview = instruction_preview(replace(spec, runtime=rt.id), config, brief_file=brief)
+            brief = config.data_dir / "briefs" / f"{spec.name}.md"
+            atomic_write_text(brief, preview["content"])
+        except (OSError, ValueError) as exc:
             details.update(reason="brief_failed", error_type=type(exc).__name__)
             return StartResult(ok=False, evidence=(str(exc),))
     resume_target: bool | str = resume

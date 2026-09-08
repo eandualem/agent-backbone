@@ -35,6 +35,7 @@ import sys
 from agent_backbone import __version__
 from agent_backbone.cli.agents import cmd_agent, cmd_hooks, cmd_reply, cmd_tell
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
+from agent_backbone.cli.instructions import add_instruction_commands
 from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_status, cmd_up
 from agent_backbone.cli.service import cmd_service
@@ -107,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_status)
 
     add_diagnostics_parser(sub)
+    add_instruction_commands(sub)
     add_report_parsers(sub)
 
     p = sub.add_parser("config", help="settings (stored in the database)")
@@ -210,6 +212,10 @@ def build_parser() -> argparse.ArgumentParser:
     pu.add_argument("targets", nargs="+", metavar="[NAME] OWNER/REPO")
     pf = asub.add_parser("forget", help="remove an agent from the backbone")
     pf.add_argument("name")
+    for verb in ("tag", "untag"):
+        pt = asub.add_parser(verb, help=f"{verb} an agent for grouping and shared instructions")
+        pt.add_argument("name")
+        pt.add_argument("tags", nargs="+", metavar="TAG")
     p.set_defaults(func=cmd_agent)
 
     p = sub.add_parser("hooks", help="install runtime hooks that report agent state")

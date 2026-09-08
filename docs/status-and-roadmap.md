@@ -41,9 +41,10 @@ Honest inventory of what works, what is missing, and what is next. Updated
   injected role briefs, automatic teardown when the issue closes, and
   `tell <swarm>` reaching the coordinator ([Swarms](swarms.md)).
 - A unit suite that runs with no services (SQLite in memory, tmux mocked) in
-  about 14 seconds in the latest local run: 1,542 passing tests, no warnings.
+  a short local run.
   `make check` is the CI gate (GitHub Actions on 3.11–3.13); `make smoke` checks
-  real tmux independently. See the [sanity check](reviews/2026-09-06-sanity.md).
+  real tmux independently. Historical audits remain in Git history and their
+  linked issues and pull requests.
 - Packaging: published to PyPI by a manual workflow (never on a push or
   merge), which then tags `v<version>`; the wheel carries the documentation
   (`backbone docs`) and the agent playbooks (`backbone help`), so an agent
