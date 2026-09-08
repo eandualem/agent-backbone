@@ -257,7 +257,7 @@ class TestRunServerRestart:
         config = bootstrap_config(tmp_path / "data")
         with (
             patch("agent_backbone.api.app.create_app", return_value=wrapper),
-            patch("uvicorn.Server.run"),
+            patch("uvicorn.Server"),
             patch(f"{_UP.rsplit('.', 1)[0]}.server.os.execv") as execv,
         ):
             server._run_server(config)
@@ -273,7 +273,7 @@ class TestRunServerRestart:
         config = bootstrap_config(tmp_path / "data")
         with (
             patch("agent_backbone.api.app.create_app", return_value=wrapper),
-            patch("uvicorn.Server.run"),
+            patch("uvicorn.Server"),
             patch(f"{_UP.rsplit('.', 1)[0]}.server.os.execv") as execv,
         ):
             server._run_server(config)
@@ -353,3 +353,21 @@ def test_internal_restart_sets_uvicorn_exit_without_a_signal(tmp_path):
         server._run_server(bootstrap_config(tmp_path))
     assert uvicorn_server.return_value.should_exit is True
     execv.assert_called_once()
+
+
+def test_server_startup_failure_is_not_reported_as_success(tmp_path):
+    from types import SimpleNamespace
+
+    from agent_backbone.cli import server
+
+    wrapper = SimpleNamespace(other_asgi_app=SimpleNamespace(state=SimpleNamespace()))
+    with (
+        patch("agent_backbone.api.app.create_app", return_value=wrapper),
+        patch("uvicorn.Server") as uvicorn_server,
+        patch.object(server.os, "execv") as execv,
+    ):
+        uvicorn_server.return_value.started = False
+        with pytest.raises(SystemExit) as exc:
+            server._run_server(bootstrap_config(tmp_path))
+    assert exc.value.code == 3
+    execv.assert_not_called()

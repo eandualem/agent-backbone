@@ -201,7 +201,15 @@ def test_gh_repo_override_scopes_comment(monkeypatch, override):
 def test_gh_default_remote_does_not_acknowledge_origin(monkeypatch, tmp_path):
     monkeypatch.delenv("GH_REPO", raising=False)
     monkeypatch.delenv("GH_HOST", raising=False)
-    with patch.object(bb, "_git_output", return_value="remote.upstream.gh-resolved base"):
+
+    def git_output(_cwd, *args):
+        if args == ("config", "--get-regexp", r"^remote\..*\.gh-resolved$"):
+            return "remote.upstream.gh-resolved base"
+        if args == ("remote", "get-url", "origin"):
+            return "git@github.com:acme/origin.git"
+        raise AssertionError(args)
+
+    with patch.object(bb, "_git_output", side_effect=git_output):
         (action,) = bb.shell_actions("gh issue comment 42 -b done", "/repo", 1)
     assert "repo" not in action
     bb.append_action(tmp_path, "ike", {**action, "phase": "succeeded"})
