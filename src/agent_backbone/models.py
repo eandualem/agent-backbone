@@ -1,4 +1,4 @@
-"""Normalised GitHub event models shared by the webhook, the poller and routing."""
+"""Shared models for GitHub events, deliveries and authored progress reports."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def _report_text(value: str) -> str:
     if not value.strip():
         raise ValueError("write a short sentence; this field cannot be blank")
     if any(
-        unicodedata.category(c) in {"Cc", "Cs"}
+        unicodedata.category(c) in {"Cc", "Cs", "Zl", "Zp"}
         or c in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
         for c in value
     ):

@@ -34,7 +34,9 @@ def test_required_sections_and_explicit_link_lists(section):
         ProgressReport.model_validate(data)
 
 
-@pytest.mark.parametrize("value", ["", "   ", "a\nb", "a\x1bb", "a\x00b", "a\u202eb", "\ud800"])
+@pytest.mark.parametrize(
+    "value", ["", "   ", "a\nb", "a\x1bb", "a\x00b", "a\u202eb", "\ud800", "a\u2028b", "a\u2029b"]
+)
 def test_plain_single_paragraph_without_terminal_or_bidi_controls(value):
     data = report_example()
     data["goal"]["text"] = value

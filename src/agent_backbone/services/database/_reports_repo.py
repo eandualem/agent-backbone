@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
+import secrets
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -45,20 +47,25 @@ def _scope(query: ReportQuery) -> str:
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
-def _decode(query: ReportQuery) -> _Cursor | None:
+def _decode(query: ReportQuery, key: bytes) -> _Cursor | None:
     if not query.cursor:
         return None
     try:
-        raw = base64.b64decode(query.cursor, altchars=b"-_", validate=True)
+        encoded, signature = query.cursor.rsplit(".", 1)
+        raw = base64.b64decode(encoded, altchars=b"-_", validate=True)
+        if not hmac.compare_digest(hmac.digest(key, raw, "sha256"), bytes.fromhex(signature)):
+            raise ValueError
         cursor = _Cursor.model_validate_json(raw)
         if cursor.scope != _scope(query) or cursor.id > cursor.snapshot:
             raise ValueError
         return cursor
     except (ValueError, ValidationError) as exc:
-        raise ValueError("invalid cursor; reuse the original agent/history/member filters") from exc
+        raise ValueError(
+            "invalid cursor; keep the original filters or refresh the view after a service restart"
+        ) from exc
 
 
-def _encode(query: ReportQuery, snapshot: int, row: dict) -> str:
+def _encode(query: ReportQuery, snapshot: int, row: dict, key: bytes) -> str:
     cursor = _Cursor(
         snapshot=snapshot,
         id=row.get("id") or 0,
@@ -66,7 +73,8 @@ def _encode(query: ReportQuery, snapshot: int, row: dict) -> str:
         name=row.get("agent_name") or "",
         scope=_scope(query),
     )
-    return base64.urlsafe_b64encode(cursor.model_dump_json().encode()).decode()
+    raw = cursor.model_dump_json().encode()
+    return base64.urlsafe_b64encode(raw).decode() + "." + hmac.digest(key, raw, "sha256").hex()
 
 
 def _record(row: dict) -> dict:
@@ -84,6 +92,13 @@ def _record(row: dict) -> dict:
 
 
 class ReportRepo(Repo):
+    def __init__(self, engine) -> None:
+        super().__init__(engine)
+        # Navigation is process-local; stored reports are durable. A dedicated
+        # random key never goes in the database or to authenticated API clients.
+        # Restarting the service expires cursors and asks readers to refresh.
+        self._cursor_key = secrets.token_bytes(32)
+
     async def publish(self, publication: PublishReport) -> tuple[dict, bool]:
         # Revalidate even typed values: model_construct/copy must not bypass the
         # database boundary. All callers get the same character and link limits.
@@ -195,7 +210,7 @@ class ReportRepo(Repo):
 
     async def query(self, query: ReportQuery) -> dict:
         query = ReportQuery.model_validate(query.model_dump())
-        cursor = _decode(query)
+        cursor = _decode(query, self._cursor_key)
         async with self._tx() as conn:
             snapshot = (
                 cursor.snapshot if cursor else (await conn.scalar(select(func.max(_R.c.id))) or 0)
@@ -276,7 +291,9 @@ class ReportRepo(Repo):
             "generated_at": now_iso(),
             "stale_after_seconds": STALE_REPORT_SECONDS,
             "has_more": has_more,
-            "next_cursor": _encode(query, snapshot, rows[-1]) if has_more else None,
+            "next_cursor": _encode(query, snapshot, rows[-1], self._cursor_key)
+            if has_more
+            else None,
         }
 
     async def prune(self, days: int) -> int:

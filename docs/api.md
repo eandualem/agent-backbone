@@ -21,7 +21,7 @@ Responses contain `items`, `has_more`, and `next_cursor`. Each item carries
 
 The named OpenAPI operations and [reporting reference](reports.md) describe these
 agent-facing tools, bounded content, stable pagination, identity and retention.
-Reads query stored reports without prompting agents. Author names are supplied by
+Read operations query stored reports without prompting agents. Author names are supplied by
 the authenticated client; there is no separate per-agent authentication boundary.
 
 ## Agents

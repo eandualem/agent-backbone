@@ -1,6 +1,8 @@
 """Reports survive restarts and retain the right author and page boundaries."""
 
 import asyncio
+import base64
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -176,3 +178,31 @@ async def test_installed_schema_repair_adds_reporting_without_losing_agents(
         assert [agent["name"] for agent in await db.agents.list()] == ["writer"]
         assert (await db.deliveries.query(issue_number=42))[0]["id"] == delivery
         assert (await publish(db))["author_id"]
+
+
+@pytest.mark.parametrize("field", ["snapshot", "id", "priority", "name"])
+async def test_cursor_rejects_changes_to_every_boundary_field(db, field):
+    await author(db)
+    for key in ("one", "two", "three"):
+        await publish(db, key=key)
+    page = await db.reports.query(ReportQuery(history=True, limit=1))
+    encoded, signature = page["next_cursor"].rsplit(".", 1)
+    payload = json.loads(base64.urlsafe_b64decode(encoded))
+    payload[field] = "other" if field == "name" else payload[field] + 1
+    altered = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode() + "." + signature
+    with pytest.raises(ValueError, match="invalid cursor"):
+        await db.reports.query(ReportQuery(history=True, limit=1, cursor=altered))
+
+
+async def test_cursor_expires_after_restart_but_reports_remain(tmp_path):
+    url = f"sqlite+aiosqlite:///{tmp_path / 'cursor.db'}"
+    async with BackboneDB.connect(url) as db:
+        await author(db)
+        await publish(db, key="one")
+        await publish(db, key="two")
+        page = await db.reports.query(ReportQuery(history=True, limit=1))
+    async with BackboneDB.connect(url) as db:
+        with pytest.raises(ValueError, match="service restart"):
+            await db.reports.query(ReportQuery(history=True, cursor=page["next_cursor"]))
+        fresh = await db.reports.query(ReportQuery(history=True))
+        assert len(fresh["items"]) == 2

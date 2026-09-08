@@ -76,6 +76,9 @@ an exact next-page command with `--cursor`. JSON readers use `next_cursor` with
 the same filters. New publications do not enter that page sequence: restart the
 query without a cursor to refresh it. History is newest publication ID first.
 Registered-agent changes and retention can remove entries during browsing.
+Cursors authenticate the entire page boundary with a private process key.
+Modified cursors are rejected. A service restart expires cursors; refresh the
+view without `--cursor` to continue. The saved reports and history remain intact.
 
 The shared view shows swarm coordinators and ordinary agents. Select a swarm
 member by name, or use `--members`, to include member reports. Swarms still have
