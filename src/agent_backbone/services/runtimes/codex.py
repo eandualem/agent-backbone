@@ -78,8 +78,8 @@ def _toml_entries(entries: list[dict]) -> str:
 _LOCAL_API_ACCESS = ("-c", "sandbox_workspace_write.network_access=true")
 
 _MODEL_FOR_ACCOUNT = re.compile(
-    r"The '(?P<model>[A-Za-z0-9_./:@+\-]{1,160})' model is not supported "
-    r"when using Codex with a ChatGPT account\.",
+    r"The\s*'(?P<model>[A-Za-z0-9_./:@+\-]{1,160})'\s*model\s*is\s*not\s*supported\s*"
+    r"when\s*using\s*Codex\s*with\s*a\s*ChatGPT\s*account\.",
     re.IGNORECASE,
 )
 _MODEL_CHANGED = re.compile(

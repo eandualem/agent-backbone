@@ -13,6 +13,15 @@ from agent_backbone.services.runtimes import RUNTIMES
 PANE = (Path(__file__).parents[3] / "fixtures" / "codex-model-error.txt").read_text()
 
 
+def test_model_account_error_survives_wrap_at_word_boundary():
+    wrapped = PANE.replace("not supported", "not\nsupported")
+    failure = next(
+        signal for signal in RUNTIMES["codex"].diagnostics(wrapped) if signal.severity == "error"
+    )
+    assert failure.code == "model_account_incompatible"
+    assert failure.model == "example-model" and failure.http_status == 400
+
+
 def test_codex_records_error_and_later_model_change_without_inventing_recovery():
     signals = {item.code: item for item in RUNTIMES["codex"].diagnostics(PANE)}
     assert set(signals) == {"model_account_incompatible", "model_changed"}
