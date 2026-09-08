@@ -561,3 +561,28 @@ async def test_group_tags_are_persistent_and_validated(api_client, auth_headers)
         "/api/agents/missing/tags", headers=auth_headers, json={"tags": ["python"]}
     )
     assert response.status_code == 404
+
+
+async def test_offline_agent_retains_expired_session_end_recap(config):
+    import json
+
+    from agent_backbone.api.session_updates import build_enriched_agent
+
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    (config.state_dir / "ike.json").write_text(
+        json.dumps(
+            {
+                "state": "unknown",
+                "event": "SessionEnd",
+                "runtime": "codex",
+                "ts": 1,
+                "session_id": "saved-conversation",
+                "last_message": "Finished the release checks.",
+            }
+        )
+    )
+    with patch("agent_backbone.services.agents._inference.capture_pane") as capture:
+        agent = await build_enriched_agent("ike", config, set())
+    assert agent.state == "offline"
+    assert agent.last_message == "Finished the release checks."
+    capture.assert_not_called()

@@ -39,7 +39,21 @@ def _run_server(config: BackboneConfig, reload: bool = False) -> None:
     from agent_backbone.api.app import create_app
 
     app = create_app(config)
-    uvicorn.run(app, host=config.backbone.host, port=config.backbone.port, log_level="info")
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app, host=config.backbone.host, port=config.backbone.port, log_level="info", workers=1
+        )
+    )
+    inner = getattr(app, "other_asgi_app", app)
+    # An internal upgrade must not send SIGTERM: Uvicorn replays captured
+    # signals after shutdown, which would kill us before the exec below.
+    inner.state.request_shutdown = lambda: setattr(server, "should_exit", True)
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        return
+    if not server.started:
+        raise SystemExit(3)  # preserve uvicorn.run's startup-failure exit status
     if restart_requested(app):
         # The upgrade watch asked for new code: become a fresh `backbone up`
         # in place, so the login service or tmux session is unchanged.

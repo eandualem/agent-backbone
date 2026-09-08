@@ -272,6 +272,33 @@ class TestCreateSwarm:
                 "research-scout-1",
                 "research-scout-2",
             }
+            # A reused name can have a saved conversation from an old swarm.
+            # Exercise the launch selection and runtime brief path, not just
+            # the keyword: the new issue's brief must reach the new command.
+            from agent_backbone.services.agents import write_state_file
+            from agent_backbone.services.agents.launch import resolve_resume
+            from agent_backbone.services.runtimes import RUNTIMES
+
+            agent = args[0]
+            write_state_file(
+                config.state_dir,
+                agent.name,
+                {
+                    "state": "unknown",
+                    "runtime": agent.runtime,
+                    "session_id": "old-swarm",
+                },
+            )
+            resume = resolve_resume(config, agent.name, agent.runtime, kwargs.get("resume"))
+            with patch(
+                "agent_backbone.services.runtimes.base.resolve_command", return_value="/cli"
+            ):
+                command = RUNTIMES[agent.runtime].build_command(
+                    resume=resume, brief_file=kwargs["brief_file"]
+                )
+            assert resume is False
+            brief = Path(kwargs["brief_file"])
+            assert str(brief) in command or brief.read_text().strip() in command
             return _STARTED
 
         mock_start.side_effect = start_with_registered_roster

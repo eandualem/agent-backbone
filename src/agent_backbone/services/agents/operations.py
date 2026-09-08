@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents import launch, read_state_file
+from agent_backbone.services.agents import launch
 from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.launch import StartResult
@@ -174,17 +174,7 @@ async def start_resolved(
         except ValueError as exc:
             await _record_start_failure(db, req, "preflight", exc, started, spec)
             raise
-        resume = req.resume
-        if resume is None:
-            last = read_state_file(config.state_dir, spec.name)
-            # Automatic continuation must never pick an unrelated conversation
-            # from the same directory, or an ID belonging to a different CLI.
-            resume = bool(
-                RUNTIMES[runtime].supports_exact_resume
-                and last
-                and last.session_id
-                and last.runtime in (None, runtime)
-            )
+        resume = launch.resolve_resume(config, spec.name, runtime, req.resume)
         result = await launch.start_agent(
             spec,
             config,

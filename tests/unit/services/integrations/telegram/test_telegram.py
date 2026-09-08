@@ -790,3 +790,44 @@ class TestDiscoveryAuthorization:
         assert bot._effective_group_chat_id() is None
         sync.assert_not_called()
         update.message.reply_text.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "saved_runtime,expected_resume", [("codex", True), ("claude", False), (None, False)]
+)
+async def test_telegram_start_uses_the_shared_automatic_resume(
+    config, saved_runtime, expected_resume
+):
+    import json
+
+    from agent_backbone.config import AgentsConfig, AgentSpec
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    spec = AgentSpec(
+        name="ike", dir=str(config.data_dir), runtime="codex", model="gpt-6-astra:high"
+    )
+    config = replace(config, agents=AgentsConfig(specs={"ike": spec}))
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    if saved_runtime:
+        (config.state_dir / "ike.json").write_text(
+            json.dumps(
+                {
+                    "state": "unknown",
+                    "session_id": "own-conversation",
+                    "runtime": saved_runtime,
+                    "ts": 1,
+                }
+            )
+        )
+    bot = _bot(config)
+    with (
+        patch(
+            "agent_backbone.services.agents.launch._start_agent",
+            AsyncMock(return_value=StartResult(ok=True)),
+        ) as launch,
+    ):
+        await bot.cmd_start_agent(_update(), _context(["ike"]))
+    assert launch.await_args.kwargs["resume"] is expected_resume
+    assert launch.await_args.args[0].model == "gpt-6-astra:high"
+    assert RUNTIMES["codex"].supports_exact_resume
