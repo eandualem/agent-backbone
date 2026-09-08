@@ -37,6 +37,8 @@ What this environment gives you:
 - **Issues drive work**: unlabelled issues in your repository are yours;
   `for:<agent>` labels route work between agents; acknowledge by
   commenting with a leading `[from:{agent_name}]` tag.
+- **Deep reviews**: `backbone help reviews` explains how to run a separate
+  review process, keep working, and retrieve its saved report.
 - **Swarms**: for breadth-first tasks (research fan-outs, parallelizable
   features) you can put a coordinator plus workers on a single issue.
 

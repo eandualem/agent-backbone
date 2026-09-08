@@ -94,7 +94,7 @@ class TestCodex:
         with patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/c"):
             assert RUNTIMES["codex"].build_command(resume="01a0")[:3] == ["/c", "resume", "01a0"]
             assert RUNTIMES["claude"].build_command(resume="01a0")[:3] == ["/c", "--resume", "01a0"]
-            assert RUNTIMES["gemini"].build_command(resume="01a0")[1:3] == ["--resume", "latest"]
+            assert RUNTIMES["gemini"].build_command(resume="01a0")[1:3] == ["--resume", "01a0"]
 
     def test_install_writes_hooks_json_in_codex_home(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: tmp_path / "home"))
@@ -127,7 +127,9 @@ class TestGemini:
 class TestOpenCode:
     def test_existing_hook_is_not_duplicated(self, tmp_path):
         rt = RUNTIMES["opencode"]
-        env = rt.hook_launch_env(tmp_path, tmp_path / "state")
+        env = rt.hook_launch_env(
+            tmp_path, tmp_path / "state", env={"OPENCODE_CONFIG_CONTENT": "{}"}
+        )
         assert rt.hook_launch_env(tmp_path, tmp_path / "state", env=env) == env
 
     @pytest.mark.parametrize(
@@ -149,7 +151,9 @@ class TestOpenCode:
         assert content not in caplog.text
 
     def test_launch_env_loads_the_plugin_by_file_uri(self, tmp_path):
-        env = RUNTIMES["opencode"].hook_launch_env(tmp_path, tmp_path / "state")
+        env = RUNTIMES["opencode"].hook_launch_env(
+            tmp_path, tmp_path / "state", env={"OPENCODE_CONFIG_CONTENT": "{}"}
+        )
         content = json.loads(env["OPENCODE_CONFIG_CONTENT"])
         plugin = tmp_path / "hooks" / "opencode_hook.js"
         assert content == {"plugin": [plugin.as_uri()]}

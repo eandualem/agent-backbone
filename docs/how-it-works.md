@@ -416,3 +416,11 @@ read stays failed within that snapshot. Arbitrary label queries go directly to
 GitHub with their requested filters and pagination. Status fans out with at most eight
 concurrent reads. Terminal readiness and individual issue retirement checks stay
 fresh at delivery time.
+
+Shell action hooks infer repository and branch from the tool's effective `workdir`
+or `cwd` override when provided, rather than attributing a command to the parent
+conversation directory. Explicit GitHub repository arguments still take precedence.
+OpenCode's launch wrapper merges the state plugin into the environment actually
+inherited by the new process, preserving inline provider settings and permission
+denies. Unsupported inline JSON/JSONC is preserved unchanged and hook injection
+is skipped; terminal state detection remains available.

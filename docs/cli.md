@@ -513,3 +513,16 @@ Completion installers serialize updates to the same resolved rc file using a
 `.backbone-completion.lock` sidecar, retained alongside the file. The backup and
 conflict check protect existing content. Editors and dotfile managers that do not
 use that lock must not write the rc file concurrently with installation.
+
+Automatic resume requires an adapter that can address the saved session exactly.
+Codex, Claude Code, Gemini and OpenCode pass the saved ID; other adapters start
+fresh automatically. Explicit `--resume` may select the runtime's latest session
+when no saved ID is available. Gemini's [session guide](https://geminicli.com/docs/cli/session-management/)
+and OpenCode's [CLI guide](https://opencode.ai/docs/cli/) describe their ID flags.
+
+`upgrade --no-restart` obtains a hold from the running API before installing code.
+The hold lasts until a manual service restart, even if installation fails after
+changing files. It does not change `backbone.restart_on_upgrade`. If the running
+API cannot acknowledge the hold (for example an older release), the CLI refuses
+to install; update/restart that service first. If no API is reachable, there is
+no running API to coordinate; do not start another service during the upgrade.

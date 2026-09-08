@@ -179,7 +179,12 @@ async def start_resolved(
             last = read_state_file(config.state_dir, spec.name)
             # Automatic continuation must never pick an unrelated conversation
             # from the same directory, or an ID belonging to a different CLI.
-            resume = bool(last and last.session_id and last.runtime in (None, runtime))
+            resume = bool(
+                RUNTIMES[runtime].supports_exact_resume
+                and last
+                and last.session_id
+                and last.runtime in (None, runtime)
+            )
         result = await launch.start_agent(
             spec,
             config,

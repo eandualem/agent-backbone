@@ -314,7 +314,21 @@ def tool_actions(tool: str, tool_input: dict, cwd: str | None, now: float) -> li
         return [mcp]
     if tool not in {"Bash", "shell", "shell_command", "exec_command", "run_shell_command"}:
         return []
-    return shell_actions(tool_input.get("command", tool_input.get("cmd", "")), cwd, now)
+    effective_cwd = cwd
+    # Codex shell tools can run elsewhere without changing the hook event cwd.
+    for key in ("workdir", "cwd"):
+        if key in tool_input:
+            override = tool_input[key]
+            if not isinstance(override, str) or not override.strip():
+                return []
+            directory = Path(override)
+            if not directory.is_absolute():
+                if not cwd:
+                    return []
+                directory = Path(cwd) / directory
+            effective_cwd = str(directory.resolve())
+            break
+    return shell_actions(tool_input.get("command", tool_input.get("cmd", "")), effective_cwd, now)
 
 
 def shell_actions(command: str | list[str], cwd: str | None, now: float) -> list[dict]:

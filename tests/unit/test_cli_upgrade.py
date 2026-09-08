@@ -23,6 +23,8 @@ def _run(argv: list[str]) -> int:
 @pytest.fixture(autouse=True)
 def _data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path / "data"))
+    with patch(f"{_UP}._common.api", AsyncMock(return_value=None)):
+        yield
 
 
 class TestUpgradeCommand:
@@ -276,3 +278,55 @@ class TestRunServerRestart:
         ):
             server._run_server(config)
         execv.assert_not_called()
+
+
+@pytest.mark.parametrize("installer_rc", [0, 1])
+async def test_no_restart_holds_watcher_before_installer_even_on_failure(installer_rc):
+    import argparse
+
+    from agent_backbone.services.jobs import UpgradeWatch
+
+    version = ["version:1"]
+    restart = AsyncMock()
+    watch = UpgradeWatch(
+        enabled=lambda: True,
+        restart=restart,
+        in_flight=lambda: 0,
+        identity=lambda install: version[0],
+        install=Installation("uv"),
+    )
+
+    async def api(config, method, path, **kwargs):
+        if path == "/health":
+            return 200, {"ok": True}
+        body = kwargs["json_body"]
+        return 200, watch.set_hold(body["operation_id"], body["enabled"])
+
+    def install(*args, **kwargs):
+        assert watch._holds  # must be acknowledged before any installed files change
+        version[0] = "version:2"
+        return MagicMock(returncode=installer_rc)
+
+    with (
+        patch(f"{_UP}._common.api", side_effect=api),
+        patch(f"{_UP}.installation", return_value=Installation("uv")),
+        patch(f"{_UP}.installed_version", return_value="1"),
+        patch(f"{_UP}.subprocess.run", side_effect=install),
+        patch(f"{_UP}._fresh_version", return_value="2"),
+    ):
+        assert (
+            await upgrade._upgrade(argparse.Namespace(check=False, no_restart=True)) == installer_rc
+        )
+    assert (await watch.run())["restart"] == "held"
+    restart.assert_not_awaited()
+
+
+async def test_no_restart_refuses_unacknowledged_hold_before_install():
+    import argparse
+
+    with (
+        patch(f"{_UP}._common.api", AsyncMock(side_effect=[(200, {}), (404, {})])),
+        patch(f"{_UP}.subprocess.run") as install,
+    ):
+        assert await upgrade._upgrade(argparse.Namespace(check=False, no_restart=True)) == 1
+    install.assert_not_called()
