@@ -30,6 +30,15 @@ The swarm exists to complete one GitHub issue: **{repo}#{issue_number}**
 - The GitHub issue is reserved for the coordinator's communication with
   the swarm's initiator. Do not comment on it unless you are the
   coordinator.
+- Keep a short saved progress report too: read `backbone help reports`,
+  then use `backbone report --file report.json` when accepting substantial
+  work, reaching a useful milestone, encountering or clearing a blocker,
+  changing direction, and finishing. Write for a teammate unfamiliar with
+  the work: goal, progress, blockers, next steps, and a few titled links.
+  Coalesce small changes; the tool enforces section and total length limits.
+  These reports are stored without sending chat or issue messages. The
+  coordinator publishes the whole swarm's update for the shared feed;
+  member reports are available with `backbone updates --agent <name>`.
 
 Full playbooks for any backbone capability: `backbone help` lists the
 topics, `backbone help messaging` (etc.) prints one.
