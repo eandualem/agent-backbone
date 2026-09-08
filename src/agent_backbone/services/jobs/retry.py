@@ -195,6 +195,7 @@ async def _drain_session(config, db, gh, session_name, summary) -> bool:
                 # Still blocked: release every remaining lease of this batch so
                 # the next drain retries in a minute, not after the 5-minute
                 # stale-lease sweep. Stop here to preserve oldest-first order.
+                completed = False
                 break
     finally:
         # Successful/retired rows ignore release; blocked, failed and cancelled

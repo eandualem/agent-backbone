@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from agent_backbone.config import sqlite_url
 from agent_backbone.services.database import build_engine
@@ -151,6 +154,10 @@ async def test_unknown_stamped_revision_is_restamped_after_squash(tmp_path):
     await db2.stop()
 
 
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0),
+    reason="constructing the old schema uses SQLite 3.35+ DROP COLUMN",
+)
 async def test_pre_diagnostics_database_gains_schema_without_losing_history(tmp_path):
     from sqlalchemy import text
 

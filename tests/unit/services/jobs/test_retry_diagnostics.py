@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.jobs.retry import delivery_retry, drain_message_queue
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 
@@ -43,6 +44,35 @@ async def test_a_normal_blocked_queue_is_not_a_job_error(config, db):
             await drain_message_queue(config, db, None, active_sessions={"ike"})
     assert await db.diagnostics.query(category="job") == []
     assert await db.queue.pending_count("ike") == 1
+
+
+@pytest.mark.parametrize(
+    "outcome", [DeliveryOutcome.AGENT_WORKING, DeliveryOutcome.DELIVERY_FAILED]
+)
+async def test_partial_drain_cannot_recover_until_remaining_message_completes(config, db, outcome):
+    for message in ("first message", "second message"):
+        await db.queue.enqueue(session_name="ike", message=message, delivery_kind="direct_message")
+    with patch.object(db.queue, "dequeue", side_effect=RuntimeError("queue unavailable")):
+        await drain_message_queue(config, db, None, active_sessions={"ike"})
+    (failed,) = await db.diagnostics.query(category="job")
+    assert failed["code"] == "queue_drain_failed"
+
+    with patch(
+        f"{_RETRY}.safe_deliver", side_effect=[DeliveryOutcome.DELIVERED, outcome]
+    ) as deliver:
+        summary = await drain_message_queue(config, db, None, active_sessions={"ike"})
+    assert deliver.await_count == 2
+    assert summary["queue_delivered"] == 1
+    assert await db.queue.pending_count("ike") == 1
+    records = await db.diagnostics.query(operation_id=failed["operation_id"])
+    assert [record["code"] for record in records] == ["queue_drain_failed"]
+
+    with patch(f"{_RETRY}.safe_deliver", return_value=DeliveryOutcome.DELIVERED):
+        await drain_message_queue(config, db, None, active_sessions={"ike"})
+    assert await db.queue.pending_count("ike") == 0
+    records = await db.diagnostics.query(operation_id=failed["operation_id"])
+    assert [record["code"] for record in records] == ["queue_drain_recovered", "queue_drain_failed"]
+    assert records[0]["occurrences"] == 1
 
 
 @pytest.mark.parametrize(

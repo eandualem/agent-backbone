@@ -207,18 +207,24 @@ class DeliveryRepo(Repo):
         async with self._tx() as conn:
             result = await conn.execute(
                 text(
-                    f"UPDATE deliveries SET outcome = :outcome "
+                    "UPDATE deliveries SET outcome = :outcome, "
+                    "operation_id = COALESCE(operation_id, :operation_id) "
                     f"WHERE id = :id AND kind = 'issue' AND outcome IN ({placeholders}) RETURNING *"
                 ),
-                {"id": delivery_id, "outcome": outcome},
+                {
+                    "id": delivery_id,
+                    "outcome": outcome,
+                    "operation_id": uuid.uuid5(
+                        uuid.NAMESPACE_URL, f"backbone:delivery:{delivery_id}"
+                    ).hex,
+                },
             )
             row = result.mappings().first()
         if row is not None:
             await DiagnosticRepo(self._engine).record(
                 category="delivery",
                 code=f"retired_{outcome}",
-                operation_id=row["operation_id"]
-                or uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:delivery:{delivery_id}").hex,
+                operation_id=row["operation_id"],
                 severity="info",
                 agent_name=row["session_name"],
                 source=row["source"],

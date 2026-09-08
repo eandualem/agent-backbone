@@ -12,6 +12,9 @@ from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
+_MAX_ENQUEUE_ATTEMPTS = 3
+"""Retry a duplicate that completes between conflict detection and receipt lookup."""
+
 _INSERT_COLUMNS = """(operation_id, session_name, message, repo, issue_number, target_entity,
                 delivery_kind, source, enqueued_at, status, sender, dedup_key)
                VALUES (:operation_id, :session_name, :message, :repo, :issue_number, :target_entity,
@@ -117,9 +120,12 @@ class QueueRepo(Repo):
                        DO NOTHING"""
 
             sql = f"INSERT INTO message_queue {_INSERT_COLUMNS} {conflict} RETURNING id"
-            result = await conn.execute(text(sql), params)
-            row = result.fetchone()
-            if row is None:
+            for _attempt in range(_MAX_ENQUEUE_ATTEMPTS):
+                result = await conn.execute(text(sql), params)
+                row = result.fetchone()
+                if row is not None:
+                    return EnqueueResult("inserted", row._mapping["id"], params["operation_id"])
+
                 # Resolve the exact conflict key, including a row leased by a
                 # drain. Never correlate using a message preview or its age.
                 key = (
@@ -138,9 +144,13 @@ class QueueRepo(Repo):
                     ),
                     params,
                 )
-                stored = existing.mappings().one()
-                return EnqueueResult("already_queued", stored["id"], stored["operation_id"])
-            return EnqueueResult("inserted", row._mapping["id"], params["operation_id"])
+                stored = existing.mappings().one_or_none()
+                if stored is not None:
+                    return EnqueueResult("already_queued", stored["id"], stored["operation_id"])
+                # Under READ COMMITTED the conflicting row can complete before
+                # this statement's snapshot. Recheck insertion instead of
+                # inventing a receipt for a row that is no longer waiting.
+            raise RuntimeError("Queue changed repeatedly during enqueue; retry the message")
 
     async def pending_count(self, session_name: str) -> int:
         """How many messages are waiting for one session."""
