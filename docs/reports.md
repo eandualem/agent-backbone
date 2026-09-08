@@ -112,11 +112,16 @@ not a trigger: a long single issue should have intermediate reports. Coalesce
 small changes. There is no polling prompt, fixed reporting timer, transcript
 summarizer, or forced restart.
 
-New sessions receive the shipped brief. Existing or resumed conversations need
+New ordinary sessions receive the shipped base brief; new swarms receive the
+reporting guidance in their common role brief. Coordinators summarize the whole
+swarm, while each member reports its assigned work for explicit agent views.
+Existing or resumed conversations need
 to read `backbone help reports` once to adopt this protocol; updating a brief on
 disk does not change an existing conversation. At the next natural interaction,
 ask the agent to adopt that playbook. Custom `agent-brief.md` overrides should
-include the same reporting guidance. Reading `backbone updates` alone cannot
+include the same reporting guidance, as should custom `swarm-templates/common.md`
+overrides. Existing swarms reuse their saved role briefs; changing the template
+applies to newly created swarms. Reading `backbone updates` alone cannot
 instruct an agent to start publishing.
 
 ## API tools, retries, identity, and retention
