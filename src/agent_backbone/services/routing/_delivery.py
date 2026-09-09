@@ -43,7 +43,7 @@ _BYPASSABLE = frozenset({SessionIntelligence.HUMAN_TYPING, SessionIntelligence.S
 
 @dataclass(frozen=True)
 class DeliveryReport:
-    """What ``deliver`` did: the outcome, and — when it could not deliver —
+    """What ``safe_deliver`` did: the outcome, and — when it could not deliver —
     whether the message is now in the queue.
 
     ``queue`` is ``stored`` (a new row), ``already_queued`` (the same message
@@ -271,58 +271,8 @@ async def _enqueue(
     return _QueueReceipt("already_queued", queue_id, stored_operation)
 
 
-async def safe_deliver(
-    session_name: str,
-    message: str,
-    config: BackboneConfig,
-    *,
-    db: BackboneDB | None = None,
-    repo: str = "",
-    issue_number: int | None = None,
-    target_entity: str | None = None,
-    source: str = "",
-    priority: bool = False,
-    idle_since: float | None = None,
-    enforce_issue_queue: bool = False,
-    queue_scope: Collection[tuple[str, int]] | None = None,
-    delivery_kind: str = "issue",
-    sender: str = "",
-    source_key: str | None = None,
-    requeue: bool = True,
-    operation_id: str | None = None,
-    queue_id: int | None = None,
-    event_id: int | None = None,
-    on_report: Callable[[DeliveryReport], Awaitable[None]] | None = None,
-) -> DeliveryOutcome:
-    """Deliver safely, optionally persisting its detailed receipt before returning."""
-    report = await deliver(
-        session_name,
-        message,
-        config,
-        db=db,
-        repo=repo,
-        issue_number=issue_number,
-        target_entity=target_entity,
-        source=source,
-        priority=priority,
-        idle_since=idle_since,
-        enforce_issue_queue=enforce_issue_queue,
-        queue_scope=queue_scope,
-        delivery_kind=delivery_kind,
-        sender=sender,
-        source_key=source_key,
-        requeue=requeue,
-        operation_id=operation_id,
-        queue_id=queue_id,
-        event_id=event_id,
-    )
-    if on_report is not None:
-        await on_report(report)
-    return report.outcome
-
-
 @_serialized
-async def deliver(
+async def safe_deliver(
     session_name: str,
     message: str,
     config: BackboneConfig,

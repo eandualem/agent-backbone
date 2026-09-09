@@ -19,7 +19,7 @@ from agent_backbone.models import (
     parse_from_tag,
 )
 from agent_backbone.services.github import API_BASE, GitHubClient
-from agent_backbone.services.routing import list_open_queue_for_target
+from agent_backbone.services.routing import DeliveryReport, list_open_queue_for_target
 from agent_backbone.services.routing._router import issue_dispatcher
 from agent_backbone.services.routing._targets import route_issue
 from tests.conftest import TEST_REPO, make_config
@@ -131,7 +131,7 @@ def _patch_safe_deliver(outcome: DeliveryOutcome = DeliveryOutcome.DELIVERED):
     return patch(
         "agent_backbone.services.routing._router.safe_deliver",
         new_callable=AsyncMock,
-        return_value=outcome,
+        return_value=DeliveryReport(DeliveryOutcome(outcome)),
     )
 
 

@@ -30,15 +30,13 @@ The swarm exists to complete one GitHub issue: **{repo}#{issue_number}**
 - The GitHub issue is reserved for the coordinator's communication with
   the swarm's initiator. Do not comment on it unless you are the
   coordinator.
-- Keep a short saved progress report too: read `backbone help reports`,
-  then use `backbone report --file report.json` when accepting substantial
-  work, reaching a useful milestone, encountering or clearing a blocker,
-  changing direction, and finishing. Write for a teammate unfamiliar with
-  the work: goal, progress, blockers, next steps, and a few titled links.
-  Coalesce small changes; the tool enforces section and total length limits.
-  These reports are stored without sending chat or issue messages. The
-  coordinator publishes the whole swarm's update for the shared feed;
-  member reports are available with `backbone updates --agent <name>`.
+- Do not publish `backbone report` updates or send direct status reports to
+  Telegram or the human owner. This applies to every swarm participant,
+  including the coordinator. Members send findings and blockers to the
+  coordinator with `backbone tell`; the coordinator summarizes them for
+  **{initiator}**, the initiating repository agent. Only the repository agent
+  publishes the human-facing progress report. Historical saved reports remain
+  readable, but swarm publication is refused by the service.
 
 Full playbooks for any backbone capability: `backbone help` lists the
 topics, `backbone help messaging` (etc.) prints one.
@@ -48,7 +46,7 @@ topics, `backbone help messaging` (etc.) prints one.
 - Stay on task; the swarm brief is the whole scope. No scope creep.
 - Commit early and often on `{branch}` with clear messages.
 - If you are blocked and the coordinator does not respond, say so in your
-  next report; do not improvise around the architecture.
+  next message to the coordinator; do not improvise around the architecture.
 
 For a focused independent review, read `backbone help reviews`: a native review
 process can run while you keep working, with its report saved outside the docs.

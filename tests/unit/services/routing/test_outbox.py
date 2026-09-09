@@ -73,14 +73,18 @@ async def test_issue_retry_retires_only_its_recipients_acknowledgment(
         patch(f"{_DELIVERY}.send_message", AsyncMock(return_value=True)) as send,
     ):
         await retry_outbox(config, db, gh)
-    assert send.await_count == (0 if retired else 1)
+    assert send.await_count == (1 if github_available and not retired else 0)
     (stored,) = await db.events.query()
-    assert stored["processed_at"] is not None
+    assert (stored["processed_at"] is not None) == (retired or github_available)
     (receipt,) = await db.outbox.entries(stored["id"])
-    assert receipt["status"] == ("skipped" if retired else "delivered")
+    expected = "skipped" if retired else "delivered" if github_available else "failed"
+    assert receipt["status"] == expected
 
 
 async def test_acknowledgment_does_not_retire_a_pending_comment(config, db):
+    gh = AsyncMock()
+    gh.get_issue.return_value = event().issue
+    gh.list_issues.return_value = [event().issue]
     with patch(f"{_DELIVERY}.get_session_intelligence", side_effect=RuntimeError("unavailable")):
         await dispatch_event(event(), config, db, None)
     await db.acks.record(42, "ike", repo=TEST_REPO)
@@ -88,11 +92,14 @@ async def test_acknowledgment_does_not_retire_a_pending_comment(config, db):
         patch(f"{_DELIVERY}.get_session_intelligence", side_effect=ready),
         patch(f"{_DELIVERY}.send_message", AsyncMock(return_value=True)) as send,
     ):
-        await retry_outbox(config, db, None)
+        await retry_outbox(config, db, gh)
     assert [call.args[0] for call in send.await_args_list] == ["ike", "leo"]
 
 
 async def test_failed_queue_write_retries_only_unresolved_recipient(config, db):
+    gh = AsyncMock()
+    gh.get_issue.return_value = event().issue
+    gh.list_issues.return_value = [event().issue]
     reads = []
 
     async def readiness(session, config, **kwargs):
@@ -124,7 +131,7 @@ async def test_failed_queue_write_retries_only_unresolved_recipient(config, db):
             "failed",
         ]
 
-        summary = await retry_outbox(config, db, None)
+        summary = await retry_outbox(config, db, gh)
         assert summary["outbox_completed"] == 1
         assert reads == ["ike", "leo", "leo"]
         assert [call.args[0] for call in send.await_args_list] == ["ike"]
@@ -134,6 +141,9 @@ async def test_failed_queue_write_retries_only_unresolved_recipient(config, db):
 
 
 async def test_restart_after_first_recipient_does_not_resend_it(config, tmp_path):
+    gh = AsyncMock()
+    gh.get_issue.return_value = event().issue
+    gh.list_issues.return_value = [event().issue]
     calls = 0
 
     async def crash_before_second(**kwargs):
@@ -153,11 +163,11 @@ async def test_restart_after_first_recipient_does_not_resend_it(config, tmp_path
                 patch(f"{_OUTBOX}.safe_deliver", side_effect=crash_before_second),
                 pytest.raises(asyncio.CancelledError),
             ):
-                await dispatch_event(event(), config, db, None)
+                await dispatch_event(event(), config, db, gh)
             assert (await db.events.query())[0]["processed_at"] is None
 
         async with BackboneDB.connect(url) as db:
-            await dispatch_event(event(), config, db, None)
+            await dispatch_event(event(), config, db, gh)
             assert (await db.events.query())[0]["processed_at"] is not None
         assert [call.args[0] for call in send.await_args_list] == ["ike", "leo"]
 
@@ -223,6 +233,9 @@ async def test_event_retention_preserves_unresolved_recipients(config, db):
 
 
 async def test_existing_issue_claim_is_not_a_completed_receipt(config, db):
+    gh = AsyncMock()
+    gh.get_issue.return_value = event().issue
+    gh.list_issues.return_value = [event().issue]
     config = replace(config, agents=AgentsConfig(specs={"ike": config.agents.get("ike")}))
     issue = event().issue.model_copy(update={"labels": ParsedLabels(targets=["ike"])})
     opened = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue, delivery_id="opened-42")
@@ -233,7 +246,7 @@ async def test_existing_issue_claim_is_not_a_completed_receipt(config, db):
         await dispatch_event(opened, config, db, None)
         assert (await db.events.query())[0]["processed_at"] is None
         await db.deliveries.finalize(claim, "delivered")
-        await retry_outbox(config, db, None)
+        await retry_outbox(config, db, gh)
     send.assert_not_awaited()
     assert (await db.events.query())[0]["processed_at"] is not None
 

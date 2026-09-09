@@ -47,17 +47,19 @@ async def create_and_notify(
         if session_name is None:
             continue
         scope = queue_scope(await list_open_queue_for_target(config, target, gh, db=db))
-        outcome = await safe_deliver(
-            session_name,
-            message,
-            config,
-            db=db,
-            repo=repo,
-            issue_number=issue.number,
-            target_entity=target,
-            source=source,
-            enforce_issue_queue=True,
-            queue_scope=scope,
-        )
+        outcome = (
+            await safe_deliver(
+                session_name,
+                message,
+                config,
+                db=db,
+                repo=repo,
+                issue_number=issue.number,
+                target_entity=target,
+                source=source,
+                enforce_issue_queue=True,
+                queue_scope=scope,
+            )
+        ).outcome
         log.info("Direct notification %s#%d → %s: %s", repo, issue.number, session_name, outcome)
     return issue

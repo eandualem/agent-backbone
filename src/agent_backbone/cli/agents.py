@@ -180,10 +180,10 @@ async def _agent(args: argparse.Namespace) -> int:
         config = await _common.read_config()
         specs = [spec for spec in config.agents if not args.tag or args.tag in spec.tags]
         if args.json:
-            from agent_backbone.api.models import AgentConfigResponse
+            from agent_backbone.services.agents import AgentConfigView
 
             _common.print_json(
-                {"items": [AgentConfigResponse.from_spec(s).model_dump() for s in specs]}
+                {"items": [AgentConfigView.from_spec(s).model_dump() for s in specs]}
             )
             return 0
         if not specs:
@@ -227,27 +227,6 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"Update external for:{args.name} labels and scripts to use {args.new_name}.")
         else:
             print(f"{args.name}: tags updated")
-        return 0
-
-    if sub in ("tag", "untag"):
-        if api_up:
-            response = await _common.api(
-                boot,
-                "POST",
-                f"/api/agents/{args.name}/tags",
-                json_body={"tags": args.tags, "remove": sub == "untag"},
-            )
-            if not response or response[0] != 200:
-                print(f"error: {response[1] if response else 'API unreachable'}")
-                return 1
-        else:
-            async with _common.Direct(boot) as direct:
-                try:
-                    await direct.store.tag(args.name, args.tags, remove=sub == "untag")
-                except (KeyError, ValueError) as exc:
-                    print(f"error: {exc}")
-                    return 1
-        print(f"{args.name}: tags updated; preview with backbone templates preview {args.name}")
         return 0
 
     if sub == "stop":

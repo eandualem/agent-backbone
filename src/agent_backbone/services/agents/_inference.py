@@ -171,6 +171,7 @@ async def get_agent_state(
     *,
     runtime_hint: str | None = None,
     pane_content: str | None = None,
+    since: float | None = None,
 ) -> StateSnapshot:
     snapshot = await _get_agent_state(
         state_dir,
@@ -178,10 +179,11 @@ async def get_agent_state(
         stale_threshold,
         runtime_hint=runtime_hint,
         pane_content=pane_content,
+        since=since,
     )
     try:
         submitted = float((state_dir / f"{session}.submitted").read_text())
-        if not math.isfinite(submitted):
+        if not math.isfinite(submitted) or (since is not None and submitted < since):
             return snapshot
     except (OSError, ValueError):
         return snapshot
@@ -220,6 +222,7 @@ async def _get_agent_state(
     *,
     runtime_hint: str | None = None,
     pane_content: str | None = None,
+    since: float | None = None,
 ) -> StateSnapshot:
     """Reconciled agent state.
 
@@ -230,6 +233,10 @@ async def _get_agent_state(
     evidence it was built from.
     """
     push = read_state_file(state_dir, session)
+    # Readiness observes this launch only. Its bookkeeping marker must not
+    # mask the actual prompt; ordinary state reads still honor the marker.
+    if since is not None and push and (push.timestamp < since or push.state == AgentState.STARTING):
+        push = None
     push_age = (time.time() - push.timestamp) if push else None
     if push:
         stale_threshold = _fresh_window(push, stale_threshold)

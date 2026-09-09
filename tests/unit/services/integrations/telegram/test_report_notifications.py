@@ -98,3 +98,34 @@ async def test_maximum_unicode_report_fits_one_telegram_message(config, db):
     parser = VisibleText()
     parser.feed(notification_text(record))
     assert len("".join(parser.parts).encode("utf-16-le")) // 2 <= 4096
+
+
+@pytest.mark.parametrize("role", ["worker", "coordinator", "forgotten"])
+async def test_old_swarm_text_and_audio_jobs_are_retired(config, db, role):
+    # Simulate a report published by the previous version, including a partly
+    # delivered text report with pending audio and an abandoned lease.
+    await author(db)
+    record, _ = await db.reports.publish(publication())
+    # An ordinary agent with no report identity must not turn exclusion into SQL NULL.
+    await author(db, name="ordinary_without_report")
+    if role == "forgotten":
+        async with db.engine.begin() as conn:
+            await conn.execute(text("DELETE FROM agents WHERE name = 'writer'"))
+    else:
+        await author(db, tags=("swarm:demo", f"role:{role}"))
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE reports SET telegram_delivery='sending', telegram_lease='old', "
+                "telegram_retry_at='2099-01-01', telegram_audio_delivery='pending'"
+            )
+        )
+    bot = bot_for(config, db, report_audio=True)
+    bot._app.bot.send_voice = AsyncMock()
+    await bot.flush_reports()
+    await bot.flush_report_audio()
+    bot._app.bot.send_message.assert_not_awaited()
+    bot._app.bot.send_voice.assert_not_awaited()
+    saved = await db.reports.get(record["id"])
+    assert saved["telegram_delivery"] == saved["telegram_audio_delivery"] == "not_requested"
+    assert saved["report"] == publication().report.model_dump()

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from agent_backbone.services.agents import (
     AgentState,
+    AgentStore,
     agent_state,
     approve_agent,
     deny_agent,
@@ -20,14 +21,17 @@ from agent_backbone.services.agents import (
     prompt_id,
     read_plan,
     record_answer,
-    start_agent,
 )
-from agent_backbone.services.agents.operations import stop_agent_session
+from agent_backbone.services.agents.operations import (
+    StartRequest,
+    start_resolved,
+    stop_agent_session,
+)
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     process_message_for_discovery,
 )
-from agent_backbone.services.routing import deliver
+from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.terminal import list_sessions, session_exists
 
 log = logging.getLogger(__name__)
@@ -134,8 +138,24 @@ async def cmd_start_agent(
         await update.message.reply_text(f"Unknown agent `{name}`", parse_mode="Markdown")
         return
 
-    result = await start_agent(spec, bot.config, db=bot._db, wait=False)
-    status = "Started" if result.ok else "Failed to start"
+    if bot._db is None:
+        await update.message.reply_text("Database not available.")
+        return
+    store = AgentStore(bot._db, bot.config.data_dir)
+    try:
+        result = await start_resolved(
+            store, bot.config, spec, StartRequest(name=name, wait=False), db=bot._db
+        )
+    except ValueError as exc:
+        await update.message.reply_text(f"Could not start {name}: {exc}")
+        return
+    status = (
+        "Already running"
+        if result.already_running
+        else "Started"
+        if result.ok
+        else "Failed to start"
+    )
     await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
 
 
@@ -184,7 +204,7 @@ async def cmd_tell(
     raw_message = " ".join(context.args[1:])
     sender = bot._sender_id(update)
     message = f"[via:telegram from:{bot._sender_tag(update)}] {raw_message}"
-    report = await deliver(
+    report = await safe_deliver(
         agent, message, bot.config, db=bot._db, delivery_kind="direct_message", sender=sender
     )
 

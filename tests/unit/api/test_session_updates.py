@@ -6,14 +6,12 @@ import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.api.session_updates import (
     SESSIONS_NAMESPACE,
     SESSIONS_UPDATE_EVENT,
     SessionFeed,
-    build_enriched_agent,
 )
-from agent_backbone.services.agents import write_state_file
+from agent_backbone.services.agents import EnrichedAgent, build_enriched_agent, write_state_file
 
 _BUILD = "agent_backbone.api.session_updates.build_session_snapshot"
 

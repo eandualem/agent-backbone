@@ -199,12 +199,10 @@ question, not a permission: nothing answers it automatically,
 `agent approve` refuses it, and `backbone agent deny <member>` keeps the
 model.
 
-
 Creating a swarm always starts fresh conversations, including when a completed
 or disbanded swarm name is reused. Saved state from an earlier swarm cannot
 replace the new issue’s role briefs and roster. Ordinary agent starts retain
 their automatic continuation behavior.
-
 
 ## Registration, checkpoints and shared tests
 
@@ -232,3 +230,8 @@ all participating sandboxes; keep unit/static work parallel. A lock does not
 remove CPU/process-spawn latency. Generate time-sensitive input gestures without
 slow queries between their events. Retain assertions and product timing budgets;
 record reproduced causes instead of attributing every failure to contention.
+
+Swarm participants never publish human-facing progress reports or send status
+updates directly to Telegram. Members report to the coordinator; the coordinator
+summarizes for the initiating repository agent, which owns the owner-facing
+report. This is enforced at report publication and pending text/audio delivery.

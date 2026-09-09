@@ -119,8 +119,7 @@ async def test_close_replay_notifies_opener_once(config, db):
         from agent_backbone.services.routing._delivery import DeliveryReport
 
         async def receipt(**kwargs):
-            await kwargs["on_report"](DeliveryReport(outcome=DeliveryOutcome.DELIVERED))
-            return DeliveryOutcome.DELIVERED
+            return DeliveryReport(outcome=DeliveryOutcome.DELIVERED)
 
         deliver.side_effect = receipt
         await dispatch_event(event, config, db, AsyncMock())
@@ -166,8 +165,7 @@ async def test_close_replay_keeps_queued_receipt_when_event_mark_failed(config, 
             source_key=kw["source_key"],
             delivery_kind="watch",
         )
-        await kw["on_report"](DeliveryReport(DeliveryOutcome.AGENT_WORKING, queue="stored"))
-        return DeliveryOutcome.AGENT_WORKING
+        return DeliveryReport(DeliveryOutcome.AGENT_WORKING, queue="stored")
 
     with (
         patch(

@@ -9,7 +9,6 @@ import os
 import sys
 import time
 from collections import Counter
-from io import StringIO
 
 from rich import box
 from rich.cells import cell_len
@@ -239,20 +238,6 @@ def status_view(data: dict, *, width: int, plain: bool = False, watch: bool = Fa
     return Group(*parts)
 
 
-def render_status(data: dict, *, width: int = 100, color: bool = False, plain: bool = False) -> str:
-    output = StringIO()
-    console = Console(
-        file=output,
-        width=max(20, width),
-        force_terminal=color,
-        color_system="standard" if color and not plain else None,
-        markup=False,
-        highlight=False,
-    )
-    console.print(status_view(data, width=console.width, plain=plain))
-    return output.getvalue().rstrip("\n")
-
-
 async def snapshot(args: argparse.Namespace) -> dict:
     config = await _common.read_client_config()
     health, response, swarm_response = await asyncio.gather(
@@ -273,7 +258,7 @@ async def snapshot(args: argparse.Namespace) -> dict:
             raise ValueError("unexpected swarm list from the API")
         swarms = swarm_body["items"]
     else:
-        from agent_backbone.api.session_updates import build_session_snapshot
+        from agent_backbone.services.agents import build_session_snapshot
 
         async with _common.Direct(config) as direct:
             agents = [

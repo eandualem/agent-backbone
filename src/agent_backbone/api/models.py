@@ -6,10 +6,9 @@ import math
 import time
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from agent_backbone.config import AgentSpec
-from agent_backbone.services.agents import AgentState
+from agent_backbone.services.agents import AgentState, EnrichedAgent
 
 T = TypeVar("T")
 
@@ -22,42 +21,6 @@ class ListEnvelope(BaseModel, Generic[T]):
 
 
 # --- Agents ---
-
-
-class EnrichedAgent(BaseModel):
-    """Agent with merged static config + live state."""
-
-    name: str
-    session: str
-    configured: bool = True
-    runtime: str | None = None
-    """Runtime the session was launched with (live), else the configured runtime."""
-    model: str | None = None
-    model_source: str = Field(
-        default="configured",
-        description="The saved model selection; the running model is unverified.",
-    )
-    dir: str = ""
-    repo: str = ""
-    tags: list[str] = Field(default_factory=list)
-    description: str = ""
-    watches: list[str] = Field(default_factory=list)
-    state: str = "unknown"
-    reason: str | None = None
-    current_issue: int | None = None
-    current_repo: str | None = None
-    online: bool = False
-    plan_file: str | None = None
-    plan_title: str | None = None
-    tmux_created: str | None = None
-    tmux_attached: bool = False
-    tmux_windows: int = 0
-    last_activity: float | None = None
-    state_since: float | None = None
-    last_message: str | None = None
-    detail: str | None = None
-    state_source: str = "default"
-    evidence: list[str] = Field(default_factory=list)
 
 
 class AgentStartRequest(BaseModel):
@@ -101,6 +64,8 @@ class AgentStartResponse(BaseModel):
 
 class AgentUpdateRequest(BaseModel):
     """Fields that ``PATCH /api/agents/{name}`` may change."""
+
+    model_config = ConfigDict(extra="forbid")
 
     dir: str | None = None
     runtime: str | None = None
@@ -498,33 +463,3 @@ class EventRecord(BaseModel):
     received_at: str = ""
     processed_at: str | None = None
     outcome: str | None = None
-
-
-class AgentConfigResponse(BaseModel):
-    """Non-secret view of a configured agent."""
-
-    name: str
-    dir: str
-    runtime: str
-    model: str | None = None
-    repo: str = ""
-    watches: list[str] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-    description: str = ""
-    always_on: bool = False
-    unattended: bool = False
-
-    @classmethod
-    def from_spec(cls, spec: AgentSpec) -> AgentConfigResponse:
-        return cls(
-            name=spec.name,
-            dir=str(spec.path),
-            runtime=spec.runtime,
-            model=spec.model,
-            repo=spec.repo,
-            watches=list(spec.watches),
-            tags=list(spec.tags),
-            description=spec.description,
-            always_on=spec.always_on,
-            unattended=spec.unattended,
-        )

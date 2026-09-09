@@ -116,18 +116,20 @@ async def deliver_pending_issues(
                 result[name] = "recently_delivered"
                 break
 
-            outcome = await safe_deliver(
-                name,
-                format_next_issue_notification(candidate),
-                config,
-                db=db,
-                repo=repo,
-                issue_number=candidate.number,
-                target_entity=name,
-                source=SOURCE,
-                enforce_issue_queue=True,
-                queue_scope=scope,
-            )
+            outcome = (
+                await safe_deliver(
+                    name,
+                    format_next_issue_notification(candidate),
+                    config,
+                    db=db,
+                    repo=repo,
+                    issue_number=candidate.number,
+                    target_entity=name,
+                    source=SOURCE,
+                    enforce_issue_queue=True,
+                    queue_scope=scope,
+                )
+            ).outcome
             if outcome == DeliveryOutcome.DELIVERED:
                 result[name] = f"delivered_#{candidate.number}"
                 log.info("Delivered pending %s#%d to %s", repo, candidate.number, name)

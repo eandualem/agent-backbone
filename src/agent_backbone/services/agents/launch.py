@@ -20,6 +20,7 @@ from agent_backbone.services.agents._file_reader import (
     read_state_file,
     write_starting_marker,
 )
+from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.runtimes import (
@@ -348,6 +349,7 @@ async def _start_agent(
             state_dir=config.state_dir,
             runtime=rt,
             timeout=config.timing.start_timeout_seconds,
+            stale_threshold=config.timing.stale_threshold_seconds,
             since=launched_at,
             details=details,
             observe=observe,
@@ -389,6 +391,7 @@ async def wait_until_ready(
     runtime: Runtime | str,
     timeout: float = 60.0,
     poll_interval: float = 0.5,
+    stale_threshold: float = 300.0,
     since: float | None = None,
     details: dict | None = None,
     observe: Callable[[str], Awaitable[None]] | None = None,
@@ -414,59 +417,31 @@ async def wait_until_ready(
             clear_starting_marker(state_path, name)
             return "exited", ["tmux session ended before the agent reached its prompt"]
 
-        # Only trust hook state written by *this* start — a leftover idle file
-        # from a quickly-restarted session would otherwise report ready before
-        # the new runtime has emitted anything.
-        snapshot = read_state_file(state_path, name)
-        hook_working = bool(
-            snapshot
-            and snapshot.timestamp >= wall_started
-            and snapshot.state in (AgentState.BUSY, AgentState.BLOCKED)
-        )
-        if snapshot and snapshot.timestamp >= wall_started:
-            details.update(
-                state=snapshot.state.value,
-                state_source=snapshot.source,
-                reason=snapshot.reason
-                if snapshot.reason in {"plan", "permission", "question", "quota", "provider"}
-                else None,
-            )
-            if snapshot.state == AgentState.IDLE:
-                # Claude Code fires SessionStart with its resume picker still
-                # on screen: a dialog the terminal shows beats the hook's idle.
-                pane = await capture_pane(name, lines=60)
-                if pane and observe is not None:
-                    await observe(pane)
-                if pane and rt.detect_active_dialog(pane):
-                    details.update(
-                        state="waiting_for_human", state_source="terminal", reason="question"
-                    )
-                    return "waiting_for_human", [
-                        "hook reported idle, but the terminal shows a dialog:",
-                        *_pane_tail(pane),
-                    ]
-                return "ready", [f"hook reported idle {time.time() - snapshot.timestamp:.0f}s ago"]
-            if snapshot.state == AgentState.WAITING_FOR_HUMAN:
-                return "waiting_for_human", [f"hook reported waiting_for_human ({snapshot.reason})"]
-
         pane = await capture_pane(name, lines=60)
-        if pane and observe is not None:
-            await observe(pane)
-        if pane and not hook_working:
+        if pane:
             last_pane = pane
-            if rt.detect_waiting_for_human(pane):
-                details.update(
-                    state="waiting_for_human", state_source="terminal", reason="question"
-                )
-                clear_starting_marker(state_path, name)
-                return "waiting_for_human", [
-                    "terminal shows a question for the human:",
-                    *_pane_tail(pane),
-                ]
-            if rt.detect_idle(pane):
-                details.update(state="idle", state_source="terminal", reason=None)
-                clear_starting_marker(state_path, name)
-                return "ready", ["terminal shows an empty prompt"]
+            if observe is not None:
+                await observe(pane)
+        snapshot = await get_agent_state(
+            state_path,
+            name,
+            stale_threshold,
+            runtime_hint=rt.id,
+            pane_content=pane,
+            since=wall_started,
+        )
+        details.update(
+            state=snapshot.state.value,
+            state_source=snapshot.source,
+            reason=snapshot.reason
+            if snapshot.reason in {"plan", "permission", "question", "quota", "provider"}
+            else None,
+        )
+        if snapshot.state in {AgentState.IDLE, AgentState.WAITING_FOR_HUMAN}:
+            clear_starting_marker(state_path, name)
+            if snapshot.state == AgentState.IDLE:
+                return "ready", snapshot.evidence
+            return "waiting_for_human", [*snapshot.evidence, *_pane_tail(pane)]
 
         if time.monotonic() - started >= timeout:
             details["reason"] = details.get("reason") or "readiness_timeout"

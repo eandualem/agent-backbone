@@ -156,6 +156,9 @@ class TelegramService(Integration):
 
     async def reply_to_agent(self, agent: str, text: str) -> bool:
         """Post an agent's answer into its topic; False when it has none."""
+        spec = self.config.agents.get(agent)
+        if spec is not None and spec.swarm is not None:
+            return False
         group = self._effective_group_chat_id()
         thread_id = agent_topic(self.config, self._discovery, agent)
         if not group or thread_id is None:

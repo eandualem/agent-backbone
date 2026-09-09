@@ -51,6 +51,10 @@ This page follows real requests through the system. Read
    controls its mode. Folder trust remains controlled by `agents.pre_trust`.
 5. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
+Startup readiness uses the same state reconciliation as inspection and delivery,
+with a launch timestamp fence to exclude old hooks and submission markers.
+Current provider-capacity evidence therefore prevents a false ready result.
+
 Starts with a database handle retain operational diagnostics under one operation
 identity: the requested launch, its final outcome, elapsed time and classified
 failure stage. Request-resolution and preflight rejections are recorded too.
@@ -71,7 +75,8 @@ forget for each agent. Edits update only the supplied database fields, so two
 concurrent edits keep both changes. A start checks its resolved record again
 before launching: if the agent was forgotten or changed meanwhile, it fails
 with that reason. Forget waits for an active start and refuses to remove a
-running session. Swarm startup and teardown use the same per-agent locks.
+running session. Telegram `/start` uses this same operation and records startup
+metadata. Swarm startup and teardown use the same per-agent locks.
 If startup rollback cannot finish cleanup, the swarm stays active so `swarm
 disband` can retry it; cleanup errors do not hide the original startup failure.
 
@@ -214,7 +219,8 @@ may be missed; this is bounded observation rather than a transcript recorder.
 ## 3. Sending a message
 
 `backbone tell`, `POST /api/messages`, Telegram `/tell`, GitHub events and
-agent-to-agent calls all end in the same function, `safe_deliver`:
+agent-to-agent calls all end in the same function, `safe_deliver`. It returns one
+detailed delivery receipt, including the outcome and any durable queue identity:
 
 ```mermaid
 sequenceDiagram
@@ -395,6 +401,9 @@ minutes): writing there talks to that agent, and the agent's `backbone
 reply` lands there. See [Telegram](telegram.md).
 
 ## 7. Dashboards and scripts
+
+Agent snapshot projections live in the agents service; API caching and Socket.IO
+emission consume those projections, as does offline CLI status.
 
 - REST for state and actions (`/api/agents`, `/api/agents/{name}/inspect`,
   `/api/messages`, `/api/issues`, `/api/deliveries`, `/api/events`,

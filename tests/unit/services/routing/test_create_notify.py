@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
+from agent_backbone.services.routing import DeliveryReport
 from agent_backbone.services.routing._create_notify import create_and_notify
 from agent_backbone.services.routing._format import format_issue_notification
 from tests.conftest import TEST_REPO
@@ -26,7 +27,11 @@ def _make_issue(number: int = 99, targets: list[str] | None = None) -> IssueData
 
 
 def _patch_deliver(outcome: str = "delivered"):
-    return patch(f"{_CN}.safe_deliver", new_callable=AsyncMock, return_value=outcome)
+    return patch(
+        f"{_CN}.safe_deliver",
+        new_callable=AsyncMock,
+        return_value=DeliveryReport(DeliveryOutcome(outcome)),
+    )
 
 
 def _patch_queue(numbers: list[int]):

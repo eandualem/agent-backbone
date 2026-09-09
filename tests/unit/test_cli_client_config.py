@@ -92,7 +92,7 @@ async def test_offline_status_uses_registered_agents_and_settings(tmp_path, monk
 
     with (
         patch("agent_backbone.cli._common.api", AsyncMock(return_value=None)),
-        patch("agent_backbone.api.session_updates.build_session_snapshot", side_effect=build),
+        patch("agent_backbone.services.agents.build_session_snapshot", side_effect=build),
     ):
         result = await snapshot(build_parser().parse_args(["status"]))
     assert result["api_online"] is False

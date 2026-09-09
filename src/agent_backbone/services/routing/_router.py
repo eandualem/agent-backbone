@@ -139,22 +139,24 @@ async def _deliver(
             }
         )
         return
-    outcome = await safe_deliver(
-        session,
-        message,
-        config,
-        db=db,
-        repo=repo,
-        issue_number=event.issue.number,
-        target_entity=target,
-        source=SOURCE,
-        priority=priority,
-        enforce_issue_queue=enforce_issue_queue,
-        queue_scope=scope,
-        delivery_kind=kind,
-        sender=_event_sender(event),
-        source_key=_source_key(event, kind),
-    )
+    outcome = (
+        await safe_deliver(
+            session,
+            message,
+            config,
+            db=db,
+            repo=repo,
+            issue_number=event.issue.number,
+            target_entity=target,
+            source=SOURCE,
+            priority=priority,
+            enforce_issue_queue=enforce_issue_queue,
+            queue_scope=scope,
+            delivery_kind=kind,
+            sender=_event_sender(event),
+            source_key=_source_key(event, kind),
+        )
+    ).outcome
     _record(result, session, outcome)
     log.info("Decision: %s#%d → %s (%s) = %s", repo, event.issue.number, target, kind, outcome)
 

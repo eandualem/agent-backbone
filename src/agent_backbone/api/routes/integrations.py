@@ -24,14 +24,23 @@ async def reply_to_humans(
 ):
     """Post an agent's reply into its surface on every enabled integration.
 
-    Telegram: the forum topic mapped to the agent. 503 when no integration
+    Telegram: the forum topic mapped to the agent. 403 for swarm participants.
+    503 when no integration
     is configured at all; 404 when none of them has a surface for this
     agent (e.g. no topic yet); 502 when a surface exists but every post
     failed; otherwise the per-integration result.
     """
     if not body.session or not body.text.strip():
         raise HTTPException(status_code=400, detail="session and text required")
-    registered_agent_or_404(config, body.session)
+    spec = registered_agent_or_404(config, body.session)
+    if any(tag.startswith("swarm:") for tag in spec.tags):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Swarm participants must send findings through the coordinator "
+                "to the repository agent"
+            ),
+        )
     if integrations is None or not integrations.enabled:
         raise HTTPException(status_code=503, detail="no integration is configured")
     results = await integrations.reply_to_agent(body.session, body.text)

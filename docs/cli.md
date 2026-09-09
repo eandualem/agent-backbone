@@ -305,6 +305,9 @@ backbone config set escalation.target orch
 | `agent tag NAME TAG…` / `agent untag NAME TAG…` | Add/remove tags, retaining other tags. `swarm:`, `role:` and `task:` tags are managed by the swarm lifecycle |
 | `agent rename NAME NEW_NAME` | Rename a stopped non-swarm agent, preserving its directory, settings, watches, resume ID, queue and routing receipts. Refuses occupied names or names with existing history, active deliveries and agents participating in an active swarm |
 
+`agent set` rejects unknown field names both online and in direct mode. A typo in
+a mixed update rejects the entire request; no valid fields are partially applied.
+
 Renaming also updates explicit Telegram routes and the escalation target.
 Automatically provisioned Telegram topics follow the existing lifecycle: the
 old topic closes with history retained and the new name gets a topic. Update

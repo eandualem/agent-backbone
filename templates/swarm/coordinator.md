@@ -33,7 +33,9 @@ finishing; the kickoff confirms the roster has been registered and launched.
    For exhausted quota, a longer reset, or continued capacity failure, tell the
    initiator and reassign the task to an available member. Preserve file ownership
    before reassigning. Do not keep sending assignments or restart the blocked member.
-4. **Report outward**: you are the swarm's only voice to the outside.
+4. **Report to the repository agent**: consolidate members' findings for
+   **{initiator}**, who owns human-facing progress reports. Do not publish
+   `backbone report` updates or send status reports directly to Telegram.
    Post progress and questions as comments on issue {repo}#{issue_number}
    (`gh issue comment {issue_number} --repo {repo}`), and you may also
    message the initiating agent directly: `backbone tell {initiator} "..."`.
