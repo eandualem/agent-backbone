@@ -383,3 +383,15 @@ async def test_claude_explanation_is_not_provider_block(config, reply):
 )
 def test_color_context_does_not_hide_later_issue(message):
     assert issue_from_text(message) == (123, None)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Set the color to #444444; then review issue #123",
+        "The background is #444444; review #123",
+        'Set {"color": "#444444"}; review #123',
+    ],
+)
+def test_color_connectors_and_quotes_preserve_real_issue(message):
+    assert issue_from_text(message) == (123, None)

@@ -82,7 +82,8 @@ def issue_from_text(text: str) -> tuple[int | None, str | None]:
         if match.group(0).startswith("#") and len(match.group(1)) in {3, 4, 6, 8}:
             prefix = (text or "")[: match.start()].lower()[-40:]
             if not re.search(r"(?:issue|pr|pull request)\s*$", prefix) and re.search(
-                r"(?:color|background|foreground|theme|fill|stroke|hex)\s*(?:[:=]\s*)?[`\"\']?$",
+                r"(?:color|background|foreground|theme|fill|stroke|hex)\b[\"\']?"
+                r"(?:\s+(?:is|to|as|of|value)){0,2}\s*(?:[:=]\s*)?[`\"\']?$",
                 prefix,
             ):
                 continue
