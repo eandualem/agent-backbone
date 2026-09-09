@@ -731,6 +731,11 @@ class TestDeliveryReplyFallbacks:
                 "failed",
                 "Not delivered and not queued: could not store the message for `ike`.",
             ),
+            (
+                DeliveryOutcome.AWAITING_ACK,
+                "failed",
+                "Not delivered and not queued: could not store the message for `ike`.",
+            ),
             (DeliveryOutcome.DELIVERY_FAILED, None, "Not delivered to `ike` (delivery_failed)."),
         ],
     )

@@ -69,6 +69,8 @@ def _delivery_reply(agent: str, report: DeliveryReport) -> str:
             "Do not resend it before checking."
         )
     outcome = report.outcome
+    if report.queue == "failed":
+        return f"Not delivered and not queued: could not store the message for `{agent}`."
     if outcome == DeliveryOutcome.AWAITING_ACK:
         return (
             f"Delivery to `{agent}` is awaiting inbox acknowledgement. "
@@ -78,8 +80,6 @@ def _delivery_reply(agent: str, report: DeliveryReport) -> str:
         return f"Sent to `{agent}`."
     if report.queue == "already_queued":
         return f"The same message from you is already in the queue, waiting for `{agent}`."
-    if report.queue == "failed":
-        return f"Not delivered and not queued: could not store the message for `{agent}`."
     held = " — queued" if report.queued else ""
     if outcome == DeliveryOutcome.OFFLINE:
         return f"`{agent}` is offline{held}."
