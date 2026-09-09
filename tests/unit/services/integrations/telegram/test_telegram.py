@@ -727,6 +727,11 @@ class TestDeliveryReplyFallbacks:
                 "The same message from you is already in the queue, waiting for `ike`.",
             ),
             (
+                DeliveryOutcome.AWAITING_ACK,
+                "already_queued",
+                "The same message from you is already in the queue, waiting for `ike`.",
+            ),
+            (
                 DeliveryOutcome.AGENT_WORKING,
                 "failed",
                 "Not delivered and not queued: could not store the message for `ike`.",
