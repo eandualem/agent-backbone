@@ -826,6 +826,7 @@ async def test_telegram_start_uses_the_shared_automatic_resume(
     bot = _bot(config)
     bot._db = db
     with (
+        patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
         patch(
             "agent_backbone.services.agents.launch._start_agent",
             AsyncMock(return_value=StartResult(ok=True)),
