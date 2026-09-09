@@ -565,3 +565,28 @@ async def test_restamp_on_old_sqlite_keeps_the_dead_column(tmp_path, monkeypatch
         )
     finally:
         await db2.stop()
+
+
+async def test_migration_holds_checkpoint_dedup_after_old_stamp(tmp_path):
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'checkpoint-upgrade.db'}"
+    async with BackboneDB.connect(url) as db:
+        receipt = await db.queue.enqueue(
+            session_name="worker", message="keep", delivery_kind="direct_message"
+        )
+        await db.queue.checkpoint("worker")
+        async with db.engine.begin() as conn:
+            await conn.execute(text("UPDATE alembic_version SET version_num='d18bd413f432'"))
+    async with BackboneDB.connect(url) as db:
+        duplicate = await db.queue.enqueue(
+            session_name="worker", message="keep", delivery_kind="direct_message"
+        )
+        assert duplicate.id == receipt.id
+        async with db.engine.begin() as conn:
+            sql = (
+                await conn.execute(
+                    text("SELECT sql FROM sqlite_master WHERE name='uq_mq_message_dedup'")
+                )
+            ).scalar_one()
+        assert "checkpoint" in sql and "uncertain" in sql

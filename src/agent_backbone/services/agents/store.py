@@ -260,11 +260,13 @@ class AgentStore:
         if any(
             not tag
             or len(tag) > 100
-            or tag.startswith(("swarm:", "role:"))
+            or tag.startswith(("swarm:", "role:", "task:"))
             or any(not c.isprintable() or c.isspace() for c in tag)
             for tag in tags
         ):
-            raise ValueError("tags must be printable without spaces; swarm: and role: are reserved")
+            raise ValueError(
+                "tags must be printable without spaces; swarm:, role: and task: are reserved"
+            )
         await self.refresh()
         spec = self._agents.get(name)
         if spec is None:

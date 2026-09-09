@@ -85,3 +85,31 @@ approved (`GET /api/events`). Check what is being approved — the evidence
 quotes the command; approving is your decision, the backbone just types it.
 A *choice* dialog (Codex's rate-limit "switch model?") is never approved;
 `backbone agent deny <member>` keeps the model.
+
+
+## Registration, checkpoints and shared tests
+
+Create or clone the remote repository before registering the lead. If the Git
+remote changes afterward, verify it, compare `backbone agent inspect NAME`, and
+update stored ownership with `backbone agent set NAME repo=OWNER/REPO` before
+creating a swarm. The mismatch error includes that supported recovery command;
+Backbone does not silently replace intentionally configured ownership.
+
+Coordinators assign research to scouts, implementation to coders and independent
+verification to reviewers. Scouts are read-only by instruction, not a filesystem
+security boundary. Do not assign every role a production slice. Each shared fix
+has one owner; consuming swarms integrate its reviewed commit rather than editing
+another copy. Work labels for newly registered members use their explicit swarm
+task tag, not incidental issue references or theme color values in output.
+
+Members and coordinators run `backbone inbox` between meaningful steps and before
+commits/handoffs, then acknowledge applied or superseded messages using their `ack_token` with `--ack`. Keep
+current decisions in the issue/shared record and consult it at checkpoints.
+Messages to/from active swarm members do not expire during a long turn; this does
+not interrupt the turn or replace cooperative reads.
+
+Serialize terminal suites sharing host resources with an agreed lock path inside
+all participating sandboxes; keep unit/static work parallel. A lock does not
+remove CPU/process-spawn latency. Generate time-sensitive input gestures without
+slow queries between their events. Retain assertions and product timing budgets;
+record reproduced causes instead of attributing every failure to contention.

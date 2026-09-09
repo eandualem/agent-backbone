@@ -21,7 +21,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents import get_agent_state, read_state_file
+from agent_backbone.services.agents import bind_task, get_agent_state, read_state_file
 from agent_backbone.services.agents.models import WORKING_STATES, AgentState
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.runtimes import resolve_runtime
@@ -77,6 +77,7 @@ async def get_session_intelligence(
         runtime_hint=runtime,
         pane_content=pane_content,
     )
+    state_snap = bind_task(config, session_name, state_snap)
     evidence.extend(state_snap.evidence)
     agent_state = state_snap.state
 

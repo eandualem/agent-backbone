@@ -65,7 +65,8 @@ Honest inventory of what works, what is missing, and what is next. Updated
 - Claude Code's folder-trust prompt is answered by the backbone at
   `agent start` (`agents.pre_trust`, on by default). With it disabled, a
   human answers once per directory (`start` tells you; `tmux attach`).
-- A queued message expires after 30 minutes (`timing.queue_expiry_minutes`)
+- An ordinary queued message expires after 30 minutes (`timing.queue_expiry_minutes`);
+  active swarm coordination and inbox holds are retained
   and leaves a delivery with outcome `expired`. Comments that expire are
   still on GitHub; the agent finds them when it reads the issue.
 - The `shell` runtime treats the `[via:…]` envelope as a glob. It exists for
@@ -85,3 +86,8 @@ Honest inventory of what works, what is missing, and what is next. Updated
   target needed?
 - The GitHub App path: is a one-time App setup acceptable for an open-source
   user, or should the token path stay the primary one?
+
+
+
+See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
+coordination, acknowledgement and retention.

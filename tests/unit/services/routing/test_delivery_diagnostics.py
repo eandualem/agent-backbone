@@ -53,7 +53,7 @@ async def test_repeated_block_then_drain_shares_one_operation_and_groups_deferra
         send.assert_not_awaited()
         evidence = await db.diagnostics.query(operation_id=original.operation_id)
         deferred = next(row for row in evidence if row["code"] == "deferred_agent_working_provider")
-        assert deferred["occurrences"] == 5
+        assert deferred["occurrences"] == 4  # duplicate receipt does not probe readiness again
         assert deferred["details"]["state"] == "blocked"
         assert deferred["details"]["reason"] == "provider"
         assert deferred["details"]["state_source"] == "push"
@@ -83,8 +83,10 @@ async def test_unrelated_success_does_not_recover_a_failed_message(config, db):
         patch(f"{_DELIVERY}.send_message", side_effect=[False, True]),
     ):
         failed = await deliver("ike", _SECRET, config, db=db, delivery_kind="direct_message")
-        # Even identical text is a new attempt when it is delivered immediately.
-        successful = await deliver("ike", _SECRET, config, db=db, delivery_kind="direct_message")
+        # Identical text from a different sender is independent work.
+        successful = await deliver(
+            "ike", _SECRET, config, db=db, delivery_kind="direct_message", sender="bob"
+        )
     assert failed.operation_id != successful.operation_id
     assert failed.queue == "stored"
     evidence = await db.diagnostics.query(operation_id=failed.operation_id)

@@ -748,3 +748,26 @@ class TestAlwaysOnStart:
             assert _run(["agent", "start", "--always-on", "--resume", "--no-wait"]) == 0
         assert seen == [("app", True), ("web", True)]
         assert "starting always_on agents: app, web" in capsys.readouterr().out
+
+
+class TestCheckpointInbox:
+    def test_claim_and_ack_use_agent_identity(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_AGENT", "worker")
+        with patch(
+            "agent_backbone.cli._common.api", AsyncMock(return_value=(200, {"messages": []}))
+        ) as api:
+            assert _run(["inbox"]) == 0
+            assert api.call_args.kwargs["json_body"] == {"session": "worker", "acknowledge": []}
+            assert (
+                _run(["inbox", "--agent", "lead", "--ack", "41:operation-a", "42:operation-b"]) == 0
+            )
+            assert api.call_args.kwargs["json_body"] == {
+                "session": "lead",
+                "acknowledge": ["41:operation-a", "42:operation-b"],
+            }
+
+    def test_missing_identity_does_not_call_api(self, capsys):
+        with patch("agent_backbone.cli._common.api", AsyncMock()) as api:
+            assert _run(["inbox"]) == 1
+            api.assert_not_called()
+        assert "--agent" in capsys.readouterr().out

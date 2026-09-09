@@ -300,7 +300,7 @@ backbone config set escalation.target orch
 | `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object), `always_on` and `unattended` (`true`/`false`; `unattended` launches the runtime with its own no-approval switch — see [configuration](configuration.md#agents)) |
 | `agent watch [NAME] REPO…` / `agent unwatch [NAME] REPO…` | Add / remove watched repositories. Inside an agent session `NAME` defaults to the agent itself (`$BACKBONE_AGENT`), so an agent can subscribe on its own |
 | `agent forget NAME` | Remove a stopped agent from the backbone (refuses while its session is still running) |
-| `agent tag NAME TAG…` / `agent untag NAME TAG…` | Add/remove tags, retaining other tags. `swarm:` and `role:` tags are managed by the swarm lifecycle |
+| `agent tag NAME TAG…` / `agent untag NAME TAG…` | Add/remove tags, retaining other tags. `swarm:`, `role:` and `task:` tags are managed by the swarm lifecycle |
 | `agent rename NAME NEW_NAME` | Rename a stopped non-swarm agent, preserving its directory, settings, watches, resume ID, queue and routing receipts. Refuses occupied names or names with existing history, active deliveries and agents participating in an active swarm |
 
 Renaming also updates explicit Telegram routes and the escalation target.
@@ -454,7 +454,8 @@ message through while a human is typing or the agent is settling; it never
 interrupts a busy agent — that is an invariant, not a gap. A message that
 cannot be delivered now (`agent_working`, `offline`, …) is stored in the
 queue and the monitor delivers it when the agent is ready, oldest first;
-queued messages expire after `timing.queue_expiry_minutes` (default 30).
+ordinary queued messages expire after `timing.queue_expiry_minutes` (default 30);
+active swarm coordination and inbox holds are retained.
 The reply prints one sentence saying what happened: delivered; stored
 (`"queued": true`); the same message from you already waiting
 (`"queue": "already_queued"` — nothing was added); or not stored
@@ -529,3 +530,33 @@ changing files. It does not change `backbone.restart_on_upgrade`. If the running
 API cannot acknowledge the hold (for example an older release), the CLI refuses
 to install; update/restart that service first. If no API is reachable, there is
 no running API to coordinate; do not start another service during the upgrade.
+
+
+## Cooperative message checkpoints
+
+`backbone inbox [--agent NAME]` reads up to ten direct messages at a worker's own
+checkpoint without terminal injection; `backbone inbox --ack TOKEN ...` confirms
+application or deliberate supersession. Unacknowledged receipts are replayed on later
+reads, including after a lost response/restart. Do not repeat work for an
+`uncertain` message until checking whether its earlier paste already arrived.
+Uncertain submissions pause automatic terminal delivery for that session until
+resolved, preventing blind retries from duplicating accepted assignments.
+
+The normal queue expiry remains `timing.queue_expiry_minutes` (30 minutes).
+Messages to or from active swarm members are exempt while that swarm is active;
+checkpoint and uncertain holds remain until acknowledged. Ending the swarm
+removes the active-swarm exemption for ordinary pending rows. These are retention
+rules, not a promise of timely steering: busy agents are never interrupted,
+including by priority messages. Workers must check their inbox between meaningful
+steps and before integration. See [messaging help](../help/messaging.md).
+
+
+The CLI uses `BACKBONE_AGENT` inside a managed session; outside one, pass
+`--agent NAME`. It requires the running API. An empty `messages` list means no rows were available to claim at that instant;
+a queue drainer may temporarily hold a lease. Check again at the next checkpoint. A normal successful terminal submission
+is not also copied here. Uncertain holds can include issue notifications;
+ordinary pending issue notifications retain their GitHub acknowledgement flow.
+
+For `--ack`, copy each complete `ack_token` from the inbox response. Numeric row
+IDs alone cannot acknowledge work; tokens prevent stale acknowledgements from
+consuming a different message after queue cleanup.
