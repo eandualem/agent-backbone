@@ -21,7 +21,12 @@ from agent_backbone.models import (
     report_error_details,
     report_example,
 )
-from agent_backbone.services.database import BackboneDB, ReportConflict, ReportRateLimit
+from agent_backbone.services.database import (
+    BackboneDB,
+    ReportConflict,
+    ReportForbidden,
+    ReportRateLimit,
+)
 
 
 def _validation_errors(exc: ValidationError | RequestValidationError) -> list[dict]:
@@ -121,6 +126,8 @@ async def publish_report(
         record, created = await db.reports.publish(publication)
     except KeyError as exc:
         raise HTTPException(404, "agent is not registered") from exc
+    except ReportForbidden as exc:
+        raise HTTPException(403, str(exc)) from exc
     except ReportConflict as exc:
         raise HTTPException(409, str(exc)) from exc
     except ReportRateLimit as exc:

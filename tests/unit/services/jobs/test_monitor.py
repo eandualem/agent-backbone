@@ -337,7 +337,7 @@ class TestBlocked:
 
         with (
             patch(f"{_ESC}.notify_humans", side_effect=[RuntimeError("offline"), True]) as human,
-            patch(f"{_ESC}.deliver", side_effect=send),
+            patch(f"{_ESC}.safe_deliver", side_effect=send),
         ):
             for _ in range(3):
                 await esc.check_blocked(config, states, db)
@@ -369,6 +369,37 @@ class TestBlocked:
 
 
 class TestPlanWaiting:
+    async def test_delivery_exception_preserves_retry_and_continues_later_plans(
+        self, config, db, caplog
+    ):
+        config = replace(config, escalation=EscalationConfig(target="leo"))
+        states = {
+            "ike": _snap(_WAITING, reason="plan", plan_file="/first.md"),
+            "feynman": _snap(_WAITING, reason="plan", plan_file="/second.md"),
+            "leo": _snap(AgentState.IDLE),
+        }
+        with (
+            patch(f"{_ESC}.notify_humans", return_value=True) as human,
+            patch(
+                f"{_ESC}.safe_deliver",
+                side_effect=[
+                    RuntimeError("delivery unavailable"),
+                    DeliveryReport(DeliveryOutcome.DELIVERED),
+                    DeliveryReport(DeliveryOutcome.DELIVERED),
+                ],
+            ) as send,
+        ):
+            await esc.check_plan_waiting(config, states, db=db)
+            assert send.await_count == 2
+            assert "/second.md" in send.await_args.args[1]
+            await esc.check_plan_waiting(config, states, db=db)
+            assert send.await_count == 3
+            assert "/first.md" in send.await_args.args[1]
+            await esc.check_plan_waiting(config, states, db=db)
+            assert send.await_count == 3
+        assert human.await_count == 2
+        assert "Could not notify leo about waiting plan for ike" in caplog.text
+
     async def test_notifies_telegram_and_target_once(self, config, db):
         config = replace(
             config,
@@ -383,7 +414,7 @@ class TestPlanWaiting:
         with (
             patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
             patch(
-                f"{_ESC}.deliver",
+                f"{_ESC}.safe_deliver",
                 new_callable=AsyncMock,
                 return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
             ) as d,
@@ -409,7 +440,7 @@ class TestPlanWaiting:
         with (
             patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=False),
             patch(
-                f"{_ESC}.deliver",
+                f"{_ESC}.safe_deliver",
                 side_effect=[
                     DeliveryReport(DeliveryOutcome.AGENT_WORKING, "failed"),
                     DeliveryReport(DeliveryOutcome.AGENT_WORKING, queue),
@@ -437,7 +468,7 @@ class TestPlanWaiting:
         states = {"ike": _snap(_WAITING, reason="plan")}
         with (
             patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=False) as tg,
-            patch(f"{_ESC}.deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
         ):
             await esc.check_plan_waiting(config, states, db=db)
             await esc.check_plan_waiting(config, states, db=db)
@@ -447,7 +478,7 @@ class TestPlanWaiting:
     async def test_real_notify_humans_is_false_when_nothing_is_configured(self, config, db):
         states = {"ike": _snap(_WAITING, reason="plan")}
         with (
-            patch(f"{_ESC}.deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
             patch(f"{_ESC}._record_plan_notification") as recorded,
         ):
             await esc.check_plan_waiting(config, states, db=db)
@@ -467,7 +498,7 @@ class TestDeliverPendingIssues:
             patch(
                 f"{_PEND}.safe_deliver",
                 new_callable=AsyncMock,
-                return_value=DeliveryOutcome.DELIVERED,
+                return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
             ) as d,
         ):
             result = await deliver_pending_issues(config, _IDLE, db, gh)
@@ -493,7 +524,7 @@ class TestDeliverPendingIssues:
             patch(
                 f"{_PEND}.safe_deliver",
                 new_callable=AsyncMock,
-                return_value=DeliveryOutcome.DELIVERED,
+                return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
             ) as d,
         ):
             result = await deliver_pending_issues(config, _IDLE, db, gh)

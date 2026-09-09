@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
 
+from agent_backbone.models import RETIREMENT_REASONS
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
@@ -223,13 +224,7 @@ class QueueRepo(Repo):
 
     async def mark_delivered(self, message_id: int, *, reason: str | None = None) -> None:
         """Complete the lease; ``reason`` identifies intentional retirement."""
-        if reason is not None and reason not in {
-            "acknowledged",
-            "no_repo",
-            "issue_closed",
-            "no_longer_targeted",
-            "already_delivered",
-        }:
+        if reason is not None and reason not in RETIREMENT_REASONS | {"already_delivered"}:
             raise ValueError("Invalid queue retirement reason")
         async with self._tx() as conn:
             result = await conn.execute(

@@ -277,3 +277,10 @@ event. Opener notices use durable outbox receipts, so failed queue storage retri
 without repeating a delivered notice. An older close replay cannot retire a
 newer close receipt or repeat its queue purge and next-issue selection. Polling
 ignores closure times older than its replay window.
+
+Before retrying an outbox notification or draining a queued GitHub notice, the
+backbone checks whether its issue or PR still exists and is current. Closed or
+deleted resources retire obsolete notices. Explicit closure notices remain valid
+for that closure; transient GitHub failures leave the work pending. Direct and
+swarm messages do not require a GitHub lookup. Review-start notices also retain
+the existing serialized lifecycle guard when drained from the queue.

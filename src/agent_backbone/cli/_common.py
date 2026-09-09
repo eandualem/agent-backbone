@@ -96,19 +96,6 @@ async def load_config() -> BackboneConfig:
         return direct.config
 
 
-async def client_config() -> BackboneConfig:
-    """Configuration for talking to the running API.
-
-    ``backbone.host``/``backbone.port`` may be stored in the database, so the
-    bootstrap defaults alone could point at the wrong address. Falls back to
-    the bootstrap snapshot when the database cannot be read.
-    """
-    try:
-        return await load_config()
-    except Exception:
-        return bootstrap_config()
-
-
 def parse_value(raw: str) -> Any:
     try:
         return json.loads(raw)

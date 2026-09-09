@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 
 async def _swarm(args: argparse.Namespace) -> int:
-    boot = await _common.client_config()
+    boot = await _common.read_client_config()
     sub = args.swarm_command
 
     if sub == "create":

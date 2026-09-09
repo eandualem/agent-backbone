@@ -2,9 +2,10 @@
 
 
 Newly published reports are queued durably for Telegram and posted to the allowed
-agents group: ordinary agents go to General and their own topic; swarm members
-go to General only, including audio. The shared
-feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
+agents group: ordinary repository agents go to General and their own topic. Swarm
+workers and coordinators send findings to the repository agent, who publishes
+consolidated updates. Swarms cannot publish reports or send direct replies to the
+owner. The shared feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
 bounded batches and retries after failures. `telegram.report_updates=false` pauses
 sending; re-enabling drains retained pending reports. A configured or discovered
 group must be allowlisted; there is no fallback to a private notification chat.
@@ -98,9 +99,11 @@ Cursors authenticate the entire page boundary with a private process key.
 Modified cursors are rejected. A service restart expires cursors; refresh the
 view without `--cursor` to continue. The saved reports and history remain intact.
 
-The shared view shows swarm coordinators and ordinary agents. Select a swarm
-member by name, or use `--members`, to include member reports. Swarms still have
-no separate Telegram topic for every member.
+The shared view shows ordinary repository agents. All swarm participants,
+including coordinators, are excluded. Explicit names or `--members` can inspect
+historical swarm reports; new swarm publications return **403**. Pending text
+and audio for swarm authors are retired without sending, including jobs queued
+before this policy. Pending reports from forgotten authors are also retired.
 
 An orchestrator reads `backbone updates --json` or the API. A report is the
 author's account of its work, not independent verification, a runtime state
@@ -131,15 +134,17 @@ not a trigger: a long single issue should have intermediate reports. Coalesce
 small changes. There is no polling prompt, fixed reporting timer, transcript
 summarizer, or forced restart.
 
-New ordinary sessions receive the shipped base brief; new swarms receive the
-reporting guidance in their common role brief. Coordinators summarize the whole
-swarm, while each member reports its assigned work for explicit agent views.
+New ordinary sessions receive the shipped base brief. Swarm briefs direct members
+to send findings and blockers to their coordinator with `backbone tell`; the
+coordinator summarizes them for the initiating repository agent. Only that
+repository agent publishes the human-facing progress report. The publication
+guard also applies to existing swarms with older saved instructions.
 Existing or resumed conversations need
 to read `backbone help reports` once to adopt this protocol; updating a brief on
 disk does not change an existing conversation. At the next natural interaction,
 ask the agent to adopt that playbook. Custom `templates/base.md` overrides should
-include the same reporting guidance, as should custom `templates/swarm/common.md`
-overrides. Existing swarms reuse their saved role briefs; changing the template
+include the same reporting guidance. Custom `templates/swarm/common.md` overrides
+should instead direct findings to the coordinator and initiating repository agent. Existing swarms reuse their saved role briefs; changing the template
 applies to newly created swarms. Reading `backbone updates` alone cannot
 instruct an agent to start publishing.
 
@@ -184,6 +189,7 @@ The single initial migration and installed-schema repair add the report store
 and nullable author identity to existing databases on service startup.
 
 Ordinary agent reports appear in General and the agent's topic, with separate
-delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
+delivery receipts. Swarm participants, including coordinators, cannot publish human-facing reports.
+Only their repository agent reports consolidated progress to the owner. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.

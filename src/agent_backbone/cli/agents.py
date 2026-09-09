@@ -59,12 +59,12 @@ async def _agent_start(args: argparse.Namespace) -> int:
     ):
         print("--attach requires a single agent")
         return 1
-    boot = await _common.client_config()
+    boot = await _common.read_client_config()
     if getattr(args, "always_on", False):
         if args.names or args.dir:
             print("--always-on selects the always_on agents itself; do not pass names or --dir")
             return 1
-        names = always_on_names(await _common.load_config())
+        names = always_on_names(await _common.read_config())
         if not names:
             print("no always_on agents (set one with `backbone agent set NAME always_on=true`)")
             return 0
@@ -88,7 +88,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
         directory = os.getcwd()
     elif directory is None and name is not None and not getattr(args, "group", False):
         # A bare unknown name registers the current directory under that name.
-        config = await _common.load_config()
+        config = await _common.read_config()
         if config.agents.get(name) is None:
             directory = os.getcwd()
             print(f"'{name}' is new — registering it for {directory}")
@@ -173,17 +173,17 @@ async def _agent(args: argparse.Namespace) -> int:
     if sub in ("start", "resume"):
         return await _agent_start(args)
 
-    boot = await _common.client_config()
+    boot = await _common.read_client_config()
     api_up = await _common.api_up(boot)
 
     if sub == "list":
-        config = boot
+        config = await _common.read_config()
         specs = [spec for spec in config.agents if not args.tag or args.tag in spec.tags]
         if args.json:
-            from agent_backbone.api.models import AgentConfigResponse
+            from agent_backbone.services.agents import AgentConfigView
 
             _common.print_json(
-                {"items": [AgentConfigResponse.from_spec(s).model_dump() for s in specs]}
+                {"items": [AgentConfigView.from_spec(s).model_dump() for s in specs]}
             )
             return 0
         if not specs:
@@ -229,31 +229,12 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"{args.name}: tags updated")
         return 0
 
-    if sub in ("tag", "untag"):
-        if api_up:
-            response = await _common.api(
-                boot,
-                "POST",
-                f"/api/agents/{args.name}/tags",
-                json_body={"tags": args.tags, "remove": sub == "untag"},
-            )
-            if not response or response[0] != 200:
-                print(f"error: {response[1] if response else 'API unreachable'}")
-                return 1
-        else:
-            async with _common.Direct(boot) as direct:
-                try:
-                    await direct.store.tag(args.name, args.tags, remove=sub == "untag")
-                except (KeyError, ValueError) as exc:
-                    print(f"error: {exc}")
-                    return 1
-        print(f"{args.name}: tags updated; preview with backbone templates preview {args.name}")
-        return 0
-
     if sub == "stop":
+        if not api_up:
+            boot = await _common.read_config()
         failed = False
         for name in args.names:
-            if name == boot.backbone.session_name:
+            if not api_up and name == boot.backbone.session_name:
                 print(f"{name}: not stopped (refusing to stop the backbone's own session)")
                 failed = True
                 continue
@@ -369,7 +350,7 @@ async def _agent(args: argparse.Namespace) -> int:
         from agent_backbone.services.agents import agent_state
         from agent_backbone.services.terminal import session_exists
 
-        config = await _common.load_config()
+        config = await _common.read_config()
         online = await session_exists(args.name)
         snapshot = await agent_state(config, args.name)
         if args.json:
@@ -489,7 +470,11 @@ def cmd_agent(args: argparse.Namespace) -> int:
     if attach and not sys.stdin.isatty():
         print("attachment needs an interactive terminal; use `backbone agent inspect NAME`")
         return 1
-    result = 0 if args.agent_command == "attach" else asyncio.run(_agent(args))
+    try:
+        result = 0 if args.agent_command == "attach" else asyncio.run(_agent(args))
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
     if result == 0 and attach:
         from agent_backbone.services.terminal import attach_session
 
@@ -503,7 +488,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
 
 
 async def _tell(args: argparse.Namespace) -> int:
-    boot = await _common.client_config()
+    boot = await _common.read_client_config()
     text = " ".join(args.message)
     payload = {
         "target_session": args.agent,
@@ -540,7 +525,7 @@ def cmd_tell(args: argparse.Namespace) -> int:
 
 
 async def _reply(args: argparse.Namespace) -> int:
-    boot = await _common.client_config()
+    boot = await _common.read_client_config()
     agent = args.agent or os.environ.get("BACKBONE_AGENT", "").strip()
     if not agent:
         print("no agent: pass --agent NAME (inside an agent session $BACKBONE_AGENT is used)")
@@ -610,7 +595,7 @@ async def _inbox(args: argparse.Namespace) -> int:
     if not args.agent:
         print("Use --agent NAME or run inside an agent session ($BACKBONE_AGENT)")
         return 1
-    boot = await _common.client_config()
+    boot = await _common.read_client_config()
     result = await _common.api(
         boot,
         "POST",

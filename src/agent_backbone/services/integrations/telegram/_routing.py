@@ -16,7 +16,7 @@ from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     process_message_for_discovery,
 )
-from agent_backbone.services.routing import DeliveryReport, deliver
+from agent_backbone.services.routing import DeliveryReport, safe_deliver
 
 _hinted = RecentKeys(300)
 """(chat, topic) pairs hinted in the last five minutes — guidance, not noise."""
@@ -132,7 +132,7 @@ async def handle_topic_message(
         await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")
         return
 
-    report = await deliver(
+    report = await safe_deliver(
         agent, message, bot.config, db=bot._db, delivery_kind="direct_message", sender=sender
     )
     await update.message.reply_text(_delivery_reply(agent, report), parse_mode="Markdown")

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from agent_backbone.api.deps import get_config, get_db, registered_agent_or_404
 from agent_backbone.api.models import MessageRequest, MessageResponse
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.routing import checkpoint_inbox, deliver, queue_detail
+from agent_backbone.services.routing import checkpoint_inbox, queue_detail, safe_deliver
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ async def send_message(
     # Only registered agents are typed into — never an arbitrary tmux session.
     registered_agent_or_404(config, target)
 
-    report = await deliver(
+    report = await safe_deliver(
         session_name=target,
         message=envelope,
         config=config,

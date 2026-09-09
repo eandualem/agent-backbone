@@ -8,16 +8,15 @@ import uuid
 from typing import TYPE_CHECKING
 from weakref import WeakValueDictionary
 
-from httpx import HTTPStatusError
-
 from agent_backbone.models import DeliveryOutcome, EventType
-from agent_backbone.services.routing._delivery import DeliveryReport, is_acknowledged, safe_deliver
+from agent_backbone.services.routing._delivery import is_acknowledged, safe_deliver
 from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import (
     list_open_queue_for_target,
     queue_scope,
     route_issue,
 )
+from agent_backbone.services.routing._validity import current_notification_issue
 from agent_backbone.services.routing.models import DispatchResult
 
 if TYPE_CHECKING:
@@ -79,35 +78,13 @@ async def flush_outbox(
                     await db.outbox.set_status(event_id, recipient, "skipped")
                     result.skipped.append(recipient)
                     continue
-                if retry and gh is not None:
-                    try:
-                        issue = await gh.get_issue(
-                            delivery["issue_number"], repo_full_name=delivery["repo"]
-                        )
-                    except HTTPStatusError as exc:
-                        if exc.response.status_code != 404:
-                            raise
-                        await db.outbox.set_status(event_id, recipient, "skipped")
-                        result.skipped.append(recipient)
-                        continue
-                    closure = (delivery.get("source_key") or "").startswith("closed:")
-                    if (
-                        (issue.state == "closed" and not closure)
-                        or (
-                            closure
-                            and (
-                                issue.state != "closed"
-                                or (
-                                    issue.closed_at
-                                    and not source_key.endswith(f"@{issue.closed_at}")
-                                )
-                            )
-                        )
-                        or (
-                            delivery["delivery_kind"] == "issue"
-                            and target
-                            not in route_issue(issue, EventType.ISSUE_OPENED, config).queue
-                        )
+                if retry:
+                    issue, retired = await current_notification_issue(
+                        gh, delivery["repo"], delivery["issue_number"], source_key=source_key
+                    )
+                    if retired or (
+                        delivery["delivery_kind"] == "issue"
+                        and target not in route_issue(issue, EventType.ISSUE_OPENED, config).queue
                     ):
                         await db.outbox.set_status(event_id, recipient, "skipped")
                         result.skipped.append(recipient)
@@ -117,26 +94,26 @@ async def flush_outbox(
                             await list_open_queue_for_target(config, target, gh, db=db)
                         )
 
-                async def receipt(report: DeliveryReport, recipient: str = recipient) -> None:
-                    if not report.unconfirmed and report.outcome in {
-                        DeliveryOutcome.DELIVERED,
-                        DeliveryOutcome.ALREADY_DELIVERED,
-                    }:
-                        status = "delivered"
-                    elif report.queued:
-                        status = "queued"
-                    else:
-                        status = "failed"
-                    await db.outbox.set_status(event_id, recipient, status)
-
-                outcome = await safe_deliver(
+                report = await safe_deliver(
                     **delivery,
                     config=config,
                     db=db,
                     source="github-outbox",
                     event_id=event_id,
-                    on_report=receipt,
                 )
+                # Receipt persistence stays after the serialized delivery has
+                # released its locks, including every early-return receipt.
+                if not report.unconfirmed and report.outcome in {
+                    DeliveryOutcome.DELIVERED,
+                    DeliveryOutcome.ALREADY_DELIVERED,
+                }:
+                    status = "delivered"
+                elif report.queued:
+                    status = "queued"
+                else:
+                    status = "failed"
+                await db.outbox.set_status(event_id, recipient, status)
+                outcome = report.outcome
                 if outcome == DeliveryOutcome.DELIVERED:
                     result.delivered.append(session)
                 elif outcome == DeliveryOutcome.ALREADY_DELIVERED:

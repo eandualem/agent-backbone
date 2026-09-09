@@ -3,7 +3,8 @@
 Audio uses the local Kokoro-82M model through `kokoro-onnx` in the setup below.
 It is optional and off by default. With it enabled, each new report gets a
 playable voice recording below its text in General and, for ordinary agents,
-the agent's topic. Swarm members receive both text and audio in General only.
+the agent's topic. Swarm workers and coordinators cannot publish reports; only
+their repository agent reports consolidated progress to the owner.
 It reads every report section and reference title; URLs remain clickable in the
 text rather than being spelled aloud. Speech is generated locally, then the audio
 is uploaded to the same Telegram group as the text. No paid speech service is used.
@@ -60,15 +61,16 @@ A voice message replies to its corresponding text report so they remain associat
 
 Read `backbone updates show ID --json`: `telegram_delivery` tracks both text copies,
 and `telegram_audio_delivery` tracks the optional audio. `not_requested` means audio
-was not selected. Enable audio before new reports are delivered; old reports are
+was not selected or the pending delivery was retired by the author policy. Enable audio before new reports are delivered; old reports are
 not automatically narrated. To pause audio, set `telegram.report_audio false`;
 pending audio waits until it is re-enabled, within the normal report retention.
 
 A missing agent topic delays that copy while General remains available. Ordinary
-agents receive topics automatically; swarm members intentionally have no topics
-and receive their reports in General only. Renamed or forgotten agents may need
-routing attention if their delivery was already partly sent. Destinations already
-selected for a report are not silently moved to another group.
+repository agents receive topics automatically. Swarm workers and coordinators
+cannot publish reports; they send findings through the coordinator to the repository
+agent. Pending text and audio from swarm participants or forgotten authors are
+retired without sending. Destinations already selected for a report are not silently
+moved to another group.
 
 If audio stays pending, check the local `/health` endpoint, voice name, FFmpeg on
 the service's PATH, and Backbone's log for the report ID and error type. Temporary

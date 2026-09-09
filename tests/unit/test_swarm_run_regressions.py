@@ -18,7 +18,7 @@ from agent_backbone.services.agents import (
     note_submission,
     write_state_file,
 )
-from agent_backbone.services.routing import deliver
+from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.runtimes import RUNTIMES, SubmissionUnconfirmed
 from tests.support import queue_row
@@ -35,13 +35,13 @@ async def test_uncertain_submission_is_held_and_never_retried(db, config):
             AsyncMock(side_effect=SubmissionUnconfirmed("accepted but receipt missing")),
         ) as send,
     ):
-        first = await deliver(
+        first = await safe_deliver(
             "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
         )
         assert first.unconfirmed and first.queued
         assert (await queue_row(db, first.queue_id))["status"] == "uncertain"
         assert await db.queue.dequeue("ike") == []
-        again = await deliver(
+        again = await safe_deliver(
             "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
         )
         assert again.queue_id == first.queue_id and again.unconfirmed
@@ -218,7 +218,7 @@ async def test_different_message_waits_behind_uncertain_paste(db, config):
         ),
         patch("agent_backbone.services.routing._delivery.send_message", AsyncMock()) as send,
     ):
-        receipt = await deliver(
+        receipt = await safe_deliver(
             "ike", "new correction", config, db=db, delivery_kind="direct_message"
         )
         assert receipt.outcome == "awaiting_ack" and receipt.queued
@@ -283,7 +283,7 @@ async def test_uncertain_is_visible_before_delivery_recording(db, config):
         ),
         patch.object(db.deliveries, "record", side_effect=observe),
     ):
-        result = await deliver("ike", "fix", config, db=db, delivery_kind="direct_message")
+        result = await safe_deliver("ike", "fix", config, db=db, delivery_kind="direct_message")
     assert result.unconfirmed
     assert observed and all(row["status"] == "uncertain" for row in observed)
     assert await db.queue.has_uncertain("ike")
@@ -321,7 +321,7 @@ async def test_pending_duplicate_cannot_bypass_checkpoint_claim(db, config):
         ),
     ):
         response, inbox = await asyncio.gather(
-            deliver("ike", "correction", config, db=db, delivery_kind="direct_message"),
+            safe_deliver("ike", "correction", config, db=db, delivery_kind="direct_message"),
             db.queue.checkpoint("ike"),
         )
     assert response.queued and response.queue_id == receipt.id
@@ -347,7 +347,7 @@ async def test_api_checkpoint_waits_for_submission_transaction(db, config):
         ),
     ):
         delivery = asyncio.create_task(
-            deliver("ike", "fix", config, db=db, delivery_kind="direct_message")
+            safe_deliver("ike", "fix", config, db=db, delivery_kind="direct_message")
         )
         await pasted.wait()
         checkpoint = asyncio.create_task(checkpoint_inbox("ike", db=db))

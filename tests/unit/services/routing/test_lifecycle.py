@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import DeliveryOutcome, EventType, IssueData, IssueEvent, ParsedLabels
+from agent_backbone.services.routing import DeliveryReport
 from agent_backbone.services.routing._dedup import clear as clear_dedup
 from agent_backbone.services.routing._lifecycle import find_next_issue, on_issue_closed
 from tests.conftest import TEST_REPO, make_config
@@ -39,7 +40,11 @@ def _patch_find_next(issue):
 
 
 def _patch_deliver(outcome: DeliveryOutcome = DeliveryOutcome.DELIVERED):
-    return patch(f"{_LC}.safe_deliver", new_callable=AsyncMock, return_value=outcome)
+    return patch(
+        f"{_LC}.safe_deliver",
+        new_callable=AsyncMock,
+        return_value=DeliveryReport(DeliveryOutcome(outcome)),
+    )
 
 
 def _issue_calls(mock):

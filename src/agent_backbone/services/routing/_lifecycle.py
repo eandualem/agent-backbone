@@ -61,18 +61,20 @@ async def deliver_next(
     target_entity: str = "",
     scope: set[tuple[str, int]] | None = None,
 ) -> DeliveryOutcome:
-    return await safe_deliver(
-        session_name,
-        format_next_issue_notification(issue),
-        config,
-        db=db,
-        repo=issue.repo_full_name,
-        issue_number=issue.number,
-        target_entity=target_entity,
-        source=SOURCE,
-        enforce_issue_queue=True,
-        queue_scope=scope,
-    )
+    return (
+        await safe_deliver(
+            session_name,
+            format_next_issue_notification(issue),
+            config,
+            db=db,
+            repo=issue.repo_full_name,
+            issue_number=issue.number,
+            target_entity=target_entity,
+            source=SOURCE,
+            enforce_issue_queue=True,
+            queue_scope=scope,
+        )
+    ).outcome
 
 
 async def on_issue_closed(
@@ -157,7 +159,9 @@ async def on_issue_closed(
                     "delivered" if receipt.delivered else "pending_or_recorded"
                 )
             else:
-                outcome = await safe_deliver(**delivery, config=config, db=db, source=SOURCE)
+                outcome = (
+                    await safe_deliver(**delivery, config=config, db=db, source=SOURCE)
+                ).outcome
                 result[f"opener:{sender}"] = outcome.value
 
     if db is not None:

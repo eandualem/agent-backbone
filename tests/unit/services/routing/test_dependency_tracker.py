@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.routing import DeliveryReport
 from agent_backbone.services.routing._dependencies import on_dependency_resolved, sync_dependencies
 
 _DEP = "agent_backbone.services.routing._dependencies"
@@ -41,7 +42,7 @@ class TestOnDependencyResolved:
                 patch(
                     f"{_DEP}.safe_deliver",
                     new_callable=AsyncMock,
-                    return_value=DeliveryOutcome.DELIVERED,
+                    return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
                 ) as d,
             ):
                 result = await on_dependency_resolved(20, "", config, db, AsyncMock())

@@ -21,7 +21,7 @@ def _live(sessions: list[str]):
     """Every agent reads idle; ``sessions`` are the live tmux sessions."""
     with (
         patch(
-            "agent_backbone.api.session_updates.agent_state",
+            "agent_backbone.services.agents.queries.agent_state",
             new_callable=AsyncMock,
             return_value=_idle_snapshot(),
         ),

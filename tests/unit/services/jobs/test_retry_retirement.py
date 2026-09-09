@@ -4,8 +4,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.jobs.retry import delivery_retry
+from agent_backbone.services.routing import DeliveryReport
 from tests.conftest import TEST_REPO
 
 
@@ -71,7 +72,8 @@ async def test_scope_failure_does_not_abort_other_retries_or_direct_queue(config
             AsyncMock(side_effect=[RuntimeError("scope unavailable"), []]),
         ),
         patch(
-            "agent_backbone.services.jobs.retry.safe_deliver", AsyncMock(return_value="delivered")
+            "agent_backbone.services.jobs.retry.safe_deliver",
+            AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED)),
         ) as send,
     ):
         summary = await delivery_retry(config, db, gh)

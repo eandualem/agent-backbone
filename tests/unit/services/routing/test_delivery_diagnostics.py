@@ -8,9 +8,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import text
 
+from agent_backbone.models import IssueData
 from agent_backbone.services.agents import AgentState
 from agent_backbone.services.jobs.retry import drain_message_queue, retry_delivery
-from agent_backbone.services.routing import deliver, retry_outbox
+from agent_backbone.services.routing import retry_outbox, safe_deliver
 from agent_backbone.services.routing._outbox import flush_outbox
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from tests.support import queue_row
@@ -39,14 +40,14 @@ async def test_repeated_block_then_drain_shares_one_operation_and_groups_deferra
         patch(f"{_DELIVERY}.get_session_intelligence", return_value=blocked) as state,
         patch(f"{_DELIVERY}.send_message", return_value=True) as send,
     ):
-        original = await deliver(
+        original = await safe_deliver(
             "ike", _SECRET, config, db=db, delivery_kind="direct_message", sender="alice"
         )
-        duplicate = await deliver(
+        duplicate = await safe_deliver(
             "ike", _SECRET, config, db=db, delivery_kind="direct_message", sender="alice"
         )
         for _ in range(3):
-            await drain_message_queue(config, db, None, active_sessions={"ike"})
+            await drain_message_queue(config, db, AsyncMock(), active_sessions={"ike"})
         assert duplicate.operation_id == original.operation_id
         assert duplicate.queue_id == original.queue_id
         assert duplicate.queue == "already_queued"
@@ -61,7 +62,7 @@ async def test_repeated_block_then_drain_shares_one_operation_and_groups_deferra
         assert _SECRET not in json.dumps(evidence)
 
         state.return_value = profile()
-        await drain_message_queue(config, db, None, active_sessions={"ike"})
+        await drain_message_queue(config, db, AsyncMock(), active_sessions={"ike"})
         send.assert_awaited_once()
     row = await queue_row(db, original.queue_id)
     assert row["status"] == "delivered"
@@ -82,9 +83,9 @@ async def test_unrelated_success_does_not_recover_a_failed_message(config, db):
         patch(f"{_DELIVERY}.get_session_intelligence", return_value=profile()),
         patch(f"{_DELIVERY}.send_message", side_effect=[False, True]),
     ):
-        failed = await deliver("ike", _SECRET, config, db=db, delivery_kind="direct_message")
+        failed = await safe_deliver("ike", _SECRET, config, db=db, delivery_kind="direct_message")
         # Identical text from a different sender is independent work.
-        successful = await deliver(
+        successful = await safe_deliver(
             "ike", _SECRET, config, db=db, delivery_kind="direct_message", sender="bob"
         )
     assert failed.operation_id != successful.operation_id
@@ -102,10 +103,10 @@ async def test_different_senders_with_same_text_have_different_operations(config
         f"{_DELIVERY}.get_session_intelligence",
         return_value=profile(SessionIntelligence.AGENT_WORKING),
     ):
-        first = await deliver(
+        first = await safe_deliver(
             "ike", _SECRET, config, db=db, delivery_kind="direct_message", sender="alice"
         )
-        second = await deliver(
+        second = await safe_deliver(
             "ike", _SECRET, config, db=db, delivery_kind="direct_message", sender="bob"
         )
     assert first.operation_id != second.operation_id
@@ -121,7 +122,7 @@ async def test_queue_write_failure_is_distinct_from_safe_deferral_and_redacted(c
         patch.object(db.queue, "enqueue", side_effect=RuntimeError(_SECRET)),
         patch(f"{_DELIVERY}.send_message") as send,
     ):
-        result = await deliver("ike", _SECRET, config, db=db, delivery_kind="direct_message")
+        result = await safe_deliver("ike", _SECRET, config, db=db, delivery_kind="direct_message")
     send.assert_not_awaited()
     assert result.queue == "failed"
     assert result.queue_id is None
@@ -149,7 +150,7 @@ async def test_delivery_exceptions_leave_evidence_without_claiming_submission(
         failing = state if stage == "readiness" else send
         failing.side_effect = RuntimeError(_SECRET)
         with pytest.raises(RuntimeError, match=_SECRET):
-            await deliver("ike", _SECRET, config, db=db, delivery_kind="direct_message")
+            await safe_deliver("ike", _SECRET, config, db=db, delivery_kind="direct_message")
     evidence = await db.diagnostics.query()
     assert [row["code"] for row in evidence] == [code]
     assert evidence[0]["details"]["stage"] == stage
@@ -247,6 +248,8 @@ async def test_legacy_issue_retry_uses_its_exact_delivery_identity(config, db):
 
 
 async def test_outbox_replay_and_queue_drain_keep_event_correlation(config, db):
+    gh = AsyncMock()
+    gh.get_issue.return_value = IssueData(number=7, repo_full_name="example/test", title="Current")
     event_id = await db.events.record(
         delivery_id="comment:example/test:123", source="webhook", event_type="comment_created"
     )
@@ -274,10 +277,10 @@ async def test_outbox_replay_and_queue_drain_keep_event_correlation(config, db):
         failed = next(
             row for row in await db.diagnostics.query() if row["code"] == "queue_storage_failed"
         )
-        await retry_outbox(config, db, None)
+        await retry_outbox(config, db, gh)
         queue_id = (await db.diagnostics.query(operation_id=failed["operation_id"]))[0]["queue_id"]
         assert queue_id is not None
-        await drain_message_queue(config, db, None, active_sessions={"ike"})
+        await drain_message_queue(config, db, gh, active_sessions={"ike"})
         deferred = next(
             row
             for row in await db.diagnostics.query(operation_id=failed["operation_id"])
@@ -287,7 +290,7 @@ async def test_outbox_replay_and_queue_drain_keep_event_correlation(config, db):
         assert deferred["queue_id"] == queue_id
         assert deferred["occurrences"] == 3
         state.return_value = profile()
-        await drain_message_queue(config, db, None, active_sessions={"ike"})
+        await drain_message_queue(config, db, gh, active_sessions={"ike"})
         send.assert_awaited_once()
     evidence = await db.diagnostics.query(operation_id=failed["operation_id"])
     assert any(row["code"] == "submitted" and row["queue_id"] == queue_id for row in evidence)

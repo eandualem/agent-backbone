@@ -341,14 +341,16 @@ async def create_swarm(
                     log.exception("rollback: could not mark '%s' disbanded; retry disband", name)
         raise
 
-    outcome = await safe_deliver(
-        coordinator,
-        kickoff,
-        config,
-        db=db,
-        source="swarm-kickoff",
-        delivery_kind="direct_message",
-    )
+    outcome = (
+        await safe_deliver(
+            coordinator,
+            kickoff,
+            config,
+            db=db,
+            source="swarm-kickoff",
+            delivery_kind="direct_message",
+        )
+    ).outcome
     log.info("Swarm '%s' started (%d members); kickoff: %s", name, len(all_names), outcome)
     return SwarmResult(
         name=name,

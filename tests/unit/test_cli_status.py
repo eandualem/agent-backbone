@@ -5,10 +5,25 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from rich.cells import cell_len
+from rich.console import Console
 
 from agent_backbone.cli import build_parser
-from agent_backbone.cli.status import _status, render_status, snapshot
+from agent_backbone.cli.status import _status, snapshot, status_view
 from agent_backbone.config import bootstrap_config
+
+
+def render_status(data: dict, *, width: int = 100, color: bool = False, plain: bool = False) -> str:
+    output = StringIO()
+    console = Console(
+        file=output,
+        width=max(20, width),
+        force_terminal=color,
+        color_system="standard" if color and not plain else None,
+        markup=False,
+        highlight=False,
+    )
+    console.print(status_view(data, width=console.width, plain=plain))
+    return output.getvalue().rstrip("\n")
 
 
 def example():
@@ -153,7 +168,7 @@ async def test_filters_and_json_keep_evidence(tmp_path):
 
     with (
         patch(
-            "agent_backbone.cli._common.client_config",
+            "agent_backbone.cli._common.read_client_config",
             AsyncMock(return_value=bootstrap_config(tmp_path)),
         ),
         patch("agent_backbone.cli._common.api", side_effect=api),
@@ -166,7 +181,7 @@ async def test_filters_and_json_keep_evidence(tmp_path):
 async def test_auth_failure_is_not_reported_as_offline(tmp_path):
     with (
         patch(
-            "agent_backbone.cli._common.client_config",
+            "agent_backbone.cli._common.read_client_config",
             AsyncMock(return_value=bootstrap_config(tmp_path)),
         ),
         patch("agent_backbone.cli._common.api", AsyncMock(return_value=(401, {}))),

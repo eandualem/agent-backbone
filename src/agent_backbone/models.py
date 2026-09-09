@@ -228,6 +228,19 @@ def parse_from_tag(comment_body: str) -> str | None:
     return None
 
 
+RETIREMENT_REASONS = frozenset(
+    {
+        "acknowledged",
+        "no_repo",
+        "issue_closed",
+        "issue_deleted",
+        "no_longer_targeted",
+        "superseded_closure",
+    }
+)
+"""Reasons durable issue/notification work is no longer actionable."""
+
+
 class DeliveryOutcome(StrEnum):
     """What happened to one delivery attempt — the ``outcome`` of every ``deliveries`` row."""
 

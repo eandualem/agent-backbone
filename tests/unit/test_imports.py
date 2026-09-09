@@ -152,7 +152,7 @@ _ALLOWED: dict[str, set[str]] = {
 }
 _ALLOWED["services.integrations"] = _ALLOWED["services.routing"] | {"services.routing"}
 _ALLOWED["services.swarm"] = _ALLOWED["services.integrations"] | {"services.integrations"}
-_ALLOWED["services.jobs"] = _ALLOWED["services.swarm"] | {"services.swarm"}
+_ALLOWED["services.jobs"] = set(_ALLOWED["services.swarm"])
 _ALLOWED["api"] = _ALLOWED["services.jobs"] | {
     "services.jobs",
     "services.swarm",
@@ -197,8 +197,9 @@ def _import_edges(path: Path, module: str, root: Path) -> list[tuple[int, str]]:
             test = node.test
             name = test.id if isinstance(test, ast.Name) else getattr(test, "attr", "")
             if name == "TYPE_CHECKING":
-                for inner in ast.walk(node):
-                    type_checking.add(id(inner))
+                for statement in node.body:
+                    for inner in ast.walk(statement):
+                        type_checking.add(id(inner))
     edges: list[tuple[int, str]] = []
     package = module.rsplit(".", 1)[0] if not path.name == "__init__.py" else module
     for node in ast.walk(tree):
@@ -252,3 +253,18 @@ def test_package_imports_only_from_below(module: str):
         m for m in loaded if any(m == f or m.startswith(f + ".") for f in _FORBIDDEN[module])
     ]
     assert not offenders, f"{module} loads packages above it: {offenders}"
+
+
+def test_type_only_body_does_not_hide_runtime_else_imports(tmp_path):
+    root = Path(__file__).resolve().parents[2] / "src" / "agent_backbone"
+    path = tmp_path / "probe.py"
+    path.write_text(
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from agent_backbone.services.agents import AgentStore\n"
+        "else:\n"
+        "    from agent_backbone.api import app\n"
+    )
+    assert _import_edges(path, "agent_backbone.services.jobs.probe", root) == [
+        (5, "agent_backbone.api.app")
+    ]

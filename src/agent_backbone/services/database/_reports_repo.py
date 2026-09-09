@@ -28,6 +28,10 @@ class ReportConflict(ValueError):
     """A reused request key changed meaning, or an unchanged update was resubmitted."""
 
 
+class ReportForbidden(ValueError):
+    """Swarm participants report through their repository agent, not to humans."""
+
+
 class ReportRateLimit(ValueError):
     """An author exhausted the bounded publication allowance."""
 
@@ -124,6 +128,11 @@ class ReportRepo(Repo):
             )
             if author is None:
                 raise KeyError(publication.agent)
+            if any(tag.startswith("swarm:") for tag in json.loads(author["tags"])):
+                raise ReportForbidden(
+                    "Swarm participants cannot publish progress reports; send findings to "
+                    "the coordinator, who reports to the repository agent"
+                )
             identity = author["report_identity"]
             previous = (
                 (
@@ -171,8 +180,6 @@ class ReportRepo(Repo):
                 if report.status == "blocked"
                 else {"active": 2, "complete": 3, "inactive": 4}[report.status]
             )
-            tags = json.loads(author["tags"])
-            member = any(t.startswith("swarm:") for t in tags) and "role:coordinator" not in tags
             row = (
                 (
                     await conn.execute(
@@ -185,7 +192,7 @@ class ReportRepo(Repo):
                             source="api",
                             content=content,
                             priority=priority,
-                            swarm_member=int(member),
+                            swarm_member=0,
                             telegram_delivery="pending",
                         )
                         .returning(*_R.c)
@@ -205,12 +212,30 @@ class ReportRepo(Repo):
         due = and_(state.in_(("pending", "sending")), retry <= now_iso())
         token = uuid4().hex
         async with self._tx() as conn:
-            candidate = select(_R.c.id).where(due).order_by(_R.c.id).limit(1).scalar_subquery()
+            # Retire pre-upgrade jobs as well as reports whose author was removed
+            # or became a swarm participant. Text and audio must obey the same gate.
+            eligible = and_(
+                _R.c.swarm_member == 0,
+                select(_A.c.name)
+                .where(
+                    _A.c.report_identity == _R.c.author_id,
+                    ~_A.c.tags.like('%"swarm:%'),
+                )
+                .exists(),
+            )
+            await conn.execute(
+                update(_R)
+                .where(state.in_(("pending", "sending")), ~eligible)
+                .values({state: "not_requested", lease: None, retry: ""})
+            )
+            candidate = (
+                select(_R.c.id).where(due, eligible).order_by(_R.c.id).limit(1).scalar_subquery()
+            )
             row = (
                 (
                     await conn.execute(
                         update(_R)
-                        .where(_R.c.id == candidate, due)
+                        .where(_R.c.id == candidate, due, eligible)
                         .values(
                             {
                                 state: "sending",
@@ -331,7 +356,10 @@ class ReportRepo(Repo):
                 if query.agents:
                     statement = statement.where(_A.c.name.in_(query.agents))
                 if not query.members and not query.agents and not query.author_id:
-                    statement = statement.where(_R.c.swarm_member == 0)
+                    statement = statement.where(
+                        _R.c.swarm_member == 0,
+                        or_(_A.c.name.is_(None), ~_A.c.tags.like('%"swarm:%')),
+                    )
                 statement = statement.order_by(_R.c.id.desc())
             else:
                 latest = (
@@ -352,9 +380,7 @@ class ReportRepo(Repo):
                 if query.agents:
                     statement = statement.where(_A.c.name.in_(query.agents))
                 elif not query.members:
-                    statement = statement.where(
-                        or_(~_A.c.tags.like('%"swarm:%'), _A.c.tags.like('%"role:coordinator"%'))
-                    )
+                    statement = statement.where(~_A.c.tags.like('%"swarm:%'))
                 if cursor:
                     statement = statement.where(
                         or_(

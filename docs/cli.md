@@ -19,9 +19,11 @@ through the running backbone's API when it is up and fall back to the
 database (and tmux) directly when it is not — except `agent approve`,
 `agent deny` and `tell`, which only work through the API so that every keystroke into an
 agent is audited. `diagnostics` also requires the API and reports unavailable
-when it cannot read a result. Address-only commands such as `updates` use the
-same port precedence as the server: process `BACKBONE_PORT`, then the data
-directory’s `.env`, then `backbone.port`.
+when it cannot read a result. Looking up the API address reads only existing
+address settings; it never creates or repairs the database. All API clients use
+the server’s port precedence: process `BACKBONE_PORT`, then the data directory’s
+`.env`, then `backbone.port`. Commands that need local agent configuration load
+it explicitly; offline database operations retain their normal initialization.
 
 ## Quick reference and Tab completion
 
@@ -302,6 +304,9 @@ backbone config set escalation.target orch
 | `agent forget NAME` | Remove a stopped agent from the backbone (refuses while its session is still running) |
 | `agent tag NAME TAG…` / `agent untag NAME TAG…` | Add/remove tags, retaining other tags. `swarm:`, `role:` and `task:` tags are managed by the swarm lifecycle |
 | `agent rename NAME NEW_NAME` | Rename a stopped non-swarm agent, preserving its directory, settings, watches, resume ID, queue and routing receipts. Refuses occupied names or names with existing history, active deliveries and agents participating in an active swarm |
+
+`agent set` rejects unknown field names both online and in direct mode. A typo in
+a mixed update rejects the entire request; no valid fields are partially applied.
 
 Renaming also updates explicit Telegram routes and the escalation target.
 Automatically provisioned Telegram topics follow the existing lifecycle: the

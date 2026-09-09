@@ -11,7 +11,7 @@ import pytest
 from agent_backbone.services.agents import AgentState, StateSnapshot
 
 _ROUTE = "agent_backbone.api.routes.agents"
-_FEED = "agent_backbone.api.session_updates"
+_FEED = "agent_backbone.services.agents.queries"
 _LAUNCH = "agent_backbone.services.agents.launch"
 _RUNTIME = "agent_backbone.services.runtimes.base.Runtime"
 
@@ -67,7 +67,7 @@ def tmux_svc():
 def _override(api_app, state_svc, tmux_svc):
     with (
         patch(
-            "agent_backbone.api.session_updates.query_environment_var",
+            "agent_backbone.services.agents.queries.query_environment_var",
             new_callable=AsyncMock,
             return_value="claude",
         ),
@@ -566,7 +566,7 @@ async def test_group_tags_are_persistent_and_validated(api_client, auth_headers)
 async def test_offline_agent_retains_expired_session_end_recap(config):
     import json
 
-    from agent_backbone.api.session_updates import build_enriched_agent
+    from agent_backbone.services.agents import build_enriched_agent
 
     config.state_dir.mkdir(parents=True, exist_ok=True)
     (config.state_dir / "ike.json").write_text(
@@ -586,3 +586,12 @@ async def test_offline_agent_retains_expired_session_end_recap(config):
     assert agent.state == "offline"
     assert agent.last_message == "Finished the release checks."
     capture.assert_not_called()
+
+
+@pytest.mark.parametrize("changes", [{"runtme": "shell"}, {"runtime": "shell", "runtme": "shell"}])
+async def test_update_rejects_unknown_fields_atomically(api_app, api_client, auth_headers, changes):
+    before = await api_app.state.db.agents.list()
+    response = await api_client.patch("/api/agents/ike", json=changes, headers=auth_headers)
+    assert response.status_code == 422
+    assert any(error["type"] == "extra_forbidden" for error in response.json()["detail"])
+    assert await api_app.state.db.agents.list() == before
