@@ -154,3 +154,11 @@ async def test_discovery_normalizes_names_before_registration(db, tmp_path, dire
         spec = await store.register_directory(project)
     assert spec.name == expected
     assert store.agents.get(expected).path == project
+
+
+@pytest.mark.parametrize("remove", [False, True])
+async def test_task_tag_cannot_be_added_or_removed_by_tag_command(db, tmp_path, remove):
+    store = await _store(db, tmp_path)
+    with pytest.raises(ValueError, match="task:"):
+        await store.tag("app", ["task:owner/repo#9"], remove=remove)
+    assert store.agents.get("app").tags == ()

@@ -80,9 +80,10 @@ def issue_from_text(text: str) -> tuple[int | None, str | None]:
     for match in _ISSUE_NUMBER_RE.finditer(text or ""):
         # CSS hex colors (including all-digit colors) are not task IDs.
         if match.group(0).startswith("#") and len(match.group(1)) in {3, 4, 6, 8}:
-            prefix = (text or "")[: match.start()].lower()
+            prefix = (text or "")[: match.start()].lower()[-40:]
             if not re.search(r"(?:issue|pr|pull request)\s*$", prefix) and re.search(
-                r"(?:color|background|foreground|theme|fill|stroke|hex)\b[^.\n]*$", prefix
+                r"(?:color|background|foreground|theme|fill|stroke|hex)\s*(?:[:=]\s*)?[`\"\']?$",
+                prefix,
             ):
                 continue
         return int(match.group(1)), None

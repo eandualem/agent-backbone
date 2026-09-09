@@ -371,3 +371,15 @@ async def test_claude_explanation_is_not_provider_block(config, reply):
         config.state_dir, "ike", runtime_hint="claude", pane_content=reply + "\n❯"
     )
     assert state.state == AgentState.IDLE
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "The color scheme is off; please look at `#123`",
+        "Use background #444444; then review #123",
+        "Theme issue #123",
+    ],
+)
+def test_color_context_does_not_hide_later_issue(message):
+    assert issue_from_text(message) == (123, None)

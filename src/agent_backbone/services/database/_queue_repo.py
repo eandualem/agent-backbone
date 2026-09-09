@@ -452,7 +452,8 @@ class QueueRepo(Repo):
                         "(:op,:kind,:repo,:issue,:session,:session,'delivered','agent-checkpoint',:preview,:now)"
                     ),
                     {
-                        **params,
+                        "session": session_name,
+                        "now": params["now"],
                         "op": row["operation_id"],
                         "kind": row["delivery_kind"],
                         "repo": row["repo"],
