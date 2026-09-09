@@ -118,7 +118,7 @@ def cmd_down(args: argparse.Namespace) -> int:
 
 async def _config_cmd(args: argparse.Namespace) -> int:
     sub = args.config_command
-    boot = await _common.client_config()
+    boot = await _common.read_client_config()
 
     if sub == "list":
         async with _common.Direct(boot) as direct:

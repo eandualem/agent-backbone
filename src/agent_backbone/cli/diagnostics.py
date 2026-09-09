@@ -10,11 +10,6 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 from agent_backbone.cli import _common
-from agent_backbone.config import BackboneConfig
-
-
-async def _client_config() -> BackboneConfig:
-    return await _common.read_client_config()
 
 
 def parse_since(value: str) -> str:
@@ -191,7 +186,7 @@ def _print_trace(data: dict) -> None:
 
 
 async def _diagnostics(args: argparse.Namespace) -> int:
-    config = await _client_config()
+    config = await _common.read_client_config()
     show = args.diagnostics_command == "show"
     trace = args.diagnostics_command == "trace"
     if show:

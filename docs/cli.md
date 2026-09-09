@@ -19,9 +19,11 @@ through the running backbone's API when it is up and fall back to the
 database (and tmux) directly when it is not — except `agent approve`,
 `agent deny` and `tell`, which only work through the API so that every keystroke into an
 agent is audited. `diagnostics` also requires the API and reports unavailable
-when it cannot read a result. Address-only commands such as `updates` use the
-same port precedence as the server: process `BACKBONE_PORT`, then the data
-directory’s `.env`, then `backbone.port`.
+when it cannot read a result. Looking up the API address reads only existing
+address settings; it never creates or repairs the database. All API clients use
+the server’s port precedence: process `BACKBONE_PORT`, then the data directory’s
+`.env`, then `backbone.port`. Commands that need local agent configuration load
+it explicitly; offline database operations retain their normal initialization.
 
 ## Quick reference and Tab completion
 

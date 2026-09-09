@@ -153,7 +153,7 @@ async def test_filters_and_json_keep_evidence(tmp_path):
 
     with (
         patch(
-            "agent_backbone.cli._common.client_config",
+            "agent_backbone.cli._common.read_client_config",
             AsyncMock(return_value=bootstrap_config(tmp_path)),
         ),
         patch("agent_backbone.cli._common.api", side_effect=api),
@@ -166,7 +166,7 @@ async def test_filters_and_json_keep_evidence(tmp_path):
 async def test_auth_failure_is_not_reported_as_offline(tmp_path):
     with (
         patch(
-            "agent_backbone.cli._common.client_config",
+            "agent_backbone.cli._common.read_client_config",
             AsyncMock(return_value=bootstrap_config(tmp_path)),
         ),
         patch("agent_backbone.cli._common.api", AsyncMock(return_value=(401, {}))),

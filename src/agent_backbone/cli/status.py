@@ -254,7 +254,7 @@ def render_status(data: dict, *, width: int = 100, color: bool = False, plain: b
 
 
 async def snapshot(args: argparse.Namespace) -> dict:
-    config = await _common.client_config()
+    config = await _common.read_client_config()
     health, response, swarm_response = await asyncio.gather(
         _common.api(config, "GET", "/health", timeout=3),
         _common.api(config, "GET", "/api/agents", timeout=5),
@@ -275,8 +275,10 @@ async def snapshot(args: argparse.Namespace) -> dict:
     else:
         from agent_backbone.api.session_updates import build_session_snapshot
 
-        agents = [a.model_dump(mode="json") for a in await build_session_snapshot(config)]
         async with _common.Direct(config) as direct:
+            agents = [
+                a.model_dump(mode="json") for a in await build_session_snapshot(direct.config)
+            ]
             swarms = await direct.db.swarms.list()
     if args.swarm and not any(s["name"] == args.swarm for s in swarms):
         raise ValueError(f"unknown swarm '{args.swarm}'")
