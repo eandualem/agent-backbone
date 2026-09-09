@@ -130,6 +130,30 @@ def _sqlite_version(sync_conn) -> tuple[int, ...] | None:
     return sqlite3.sqlite_version_info
 
 
+def _sqlite_indexes_current(sync_conn) -> bool:
+    """A migration stamp can outlive stale loaded metadata during an upgrade.
+
+    SQLite exposes the stored DDL, allowing us to check predicates as well as
+    names. Only owned indexes are compared; operator indexes remain untouched.
+    Equivalent alternate formatting may trigger one repair, after which our
+    compiler produces the same definition and later starts are read-only.
+    """
+    if sync_conn.dialect.name != "sqlite":
+        return True
+    from sqlalchemy.schema import CreateIndex
+
+    stored = dict(
+        sync_conn.execute(text("SELECT name, sql FROM sqlite_master WHERE type='index'")).fetchall()
+    )
+    for table in metadata.sorted_tables:
+        for index in table.indexes:
+            expected = str(CreateIndex(index).compile(dialect=sync_conn.dialect))
+            actual = stored.get(index.name) or ""
+            if " ".join(actual.split()) != " ".join(expected.split()):
+                return False
+    return True
+
+
 def _repair_schema(sync_conn) -> None:
     """Bring an existing database up to the model on a re-stamp.
 
@@ -308,7 +332,11 @@ class BackboneDB:
                     # With no Backbone tables, an unknown revision may belong
                     # to another application. Let Alembic reject it unchanged.
                     owns_schema = existing_app_tables or stored in known
-                    if owns_schema and (stored not in known or missing_schema):
+                    if owns_schema and (
+                        stored not in known
+                        or missing_schema
+                        or not _sqlite_indexes_current(sync_conn)
+                    ):
                         # Complete current schemas avoid all index rebuilds.
                         # PostgreSQL also needs any missing tables here; it
                         # does not run SQLite's startup create_all shortcut.
