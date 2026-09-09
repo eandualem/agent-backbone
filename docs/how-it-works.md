@@ -250,8 +250,8 @@ sequenceDiagram
 - **Comments**, including those on the current issue, wait while the agent is
   starting, busy, blocked, or waiting for a human. They are queued and delivered
   when the agent is ready; priority does not bypass these conditions.
-- **Queue hygiene.** Undelivered after `timing.queue_expiry_minutes` (30):
-  expired. Leased by a crashed drain: released after 5 min. A blocked drain
+- **Queue hygiene.** Ordinary pending messages expire after `timing.queue_expiry_minutes`
+  (30). Active swarm coordination and inbox holds are retained. Leased by a crashed drain: released after 5 min. A blocked drain
   keeps the original row, including when displaying its age; completed rows
   are pruned after `timing.delivery_retention_days` from completion.
 - **Everything is recorded**, direct messages included:
@@ -436,3 +436,8 @@ and re-executes after shutdown completes. External termination still stops the
 process normally. A custom ASGI runner that does not install this shutdown
 callback does not perform Backbone’s automatic restart; its supervisor owns
 restart behavior. `--reload` continues to use Uvicorn’s development reloader.
+
+
+
+See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
+coordination, acknowledgement and retention.

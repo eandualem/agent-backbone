@@ -454,7 +454,8 @@ message through while a human is typing or the agent is settling; it never
 interrupts a busy agent — that is an invariant, not a gap. A message that
 cannot be delivered now (`agent_working`, `offline`, …) is stored in the
 queue and the monitor delivers it when the agent is ready, oldest first;
-queued messages expire after `timing.queue_expiry_minutes` (default 30).
+ordinary queued messages expire after `timing.queue_expiry_minutes` (default 30);
+active swarm coordination and inbox holds are retained.
 The reply prints one sentence saying what happened: delivered; stored
 (`"queued": true`); the same message from you already waiting
 (`"queue": "already_queued"` — nothing was added); or not stored
@@ -529,3 +530,29 @@ changing files. It does not change `backbone.restart_on_upgrade`. If the running
 API cannot acknowledge the hold (for example an older release), the CLI refuses
 to install; update/restart that service first. If no API is reachable, there is
 no running API to coordinate; do not start another service during the upgrade.
+
+
+## Cooperative message checkpoints
+
+`backbone inbox [--agent NAME]` reads up to ten direct messages at a worker's own
+checkpoint without terminal injection; `backbone inbox --ack ID ...` confirms
+application or deliberate supersession. Unacknowledged IDs are replayed on later
+reads, including after a lost response/restart. Do not repeat work for an
+`uncertain` message until checking whether its earlier paste already arrived.
+Uncertain submissions pause automatic terminal delivery for that session until
+resolved, preventing blind retries from duplicating accepted assignments.
+
+The normal queue expiry remains `timing.queue_expiry_minutes` (30 minutes).
+Messages to or from active swarm members are exempt while that swarm is active;
+checkpoint and uncertain holds remain until acknowledged. Ending the swarm
+removes the active-swarm exemption for ordinary pending rows. These are retention
+rules, not a promise of timely steering: busy agents are never interrupted,
+including by priority messages. Workers must check their inbox between meaningful
+steps and before integration. See [messaging help](../help/messaging.md).
+
+
+The CLI uses `BACKBONE_AGENT` inside a managed session; outside one, pass
+`--agent NAME`. It requires the running API. An empty `messages` list means
+nothing is waiting in this inbox. A normal successful terminal submission
+is not also copied here. Uncertain holds can include issue notifications;
+ordinary pending issue notifications retain their GitHub acknowledgement flow.

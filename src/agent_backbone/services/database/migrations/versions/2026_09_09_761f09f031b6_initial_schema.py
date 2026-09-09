@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: d18bd413f432
+Revision ID: 761f09f031b6
 Revises:
-Create Date: 2026-09-08 15:01:47.688706
+Create Date: 2026-09-09 10:07:46.158829
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "d18bd413f432"
+revision: str = "761f09f031b6"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -214,10 +214,10 @@ def upgrade() -> None:
             ["session_name", "repo", "issue_number"],
             unique=True,
             postgresql_where=sa.text(
-                "delivery_kind = 'issue' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
+                "delivery_kind = 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain') AND issue_number IS NOT NULL"
             ),
             sqlite_where=sa.text(
-                "delivery_kind = 'issue' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
+                "delivery_kind = 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain') AND issue_number IS NOT NULL"
             ),
         )
         batch_op.create_index(
@@ -225,10 +225,10 @@ def upgrade() -> None:
             ["session_name", "dedup_key"],
             unique=True,
             postgresql_where=sa.text(
-                "delivery_kind != 'issue' AND status IN ('pending','in_progress')"
+                "delivery_kind != 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain')"
             ),
             sqlite_where=sa.text(
-                "delivery_kind != 'issue' AND status IN ('pending','in_progress')"
+                "delivery_kind != 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain')"
             ),
         )
 
@@ -342,19 +342,19 @@ def downgrade() -> None:
         batch_op.drop_index(
             "uq_mq_message_dedup",
             postgresql_where=sa.text(
-                "delivery_kind != 'issue' AND status IN ('pending','in_progress')"
+                "delivery_kind != 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain')"
             ),
             sqlite_where=sa.text(
-                "delivery_kind != 'issue' AND status IN ('pending','in_progress')"
+                "delivery_kind != 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain')"
             ),
         )
         batch_op.drop_index(
             "uq_mq_issue_dedup",
             postgresql_where=sa.text(
-                "delivery_kind = 'issue' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
+                "delivery_kind = 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain') AND issue_number IS NOT NULL"
             ),
             sqlite_where=sa.text(
-                "delivery_kind = 'issue' AND status IN ('pending','in_progress') AND issue_number IS NOT NULL"
+                "delivery_kind = 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain') AND issue_number IS NOT NULL"
             ),
         )
         batch_op.drop_index("idx_mq_status")

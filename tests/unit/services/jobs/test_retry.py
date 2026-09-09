@@ -264,7 +264,7 @@ class TestDeliveryRetryQueueDrain:
         await drain_message_queue(config, db, AsyncMock(), active_sessions=set())
 
         db.queue.expire_stale_leases.assert_awaited_once_with(max_age_minutes=5)
-        db.queue.expire_pending.assert_awaited_once_with(max_age_minutes=30)
+        db.queue.expire_pending.assert_awaited_once_with(max_age_minutes=30, protected_sessions=())
 
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     @patch(

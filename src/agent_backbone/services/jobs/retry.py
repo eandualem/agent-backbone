@@ -70,7 +70,12 @@ async def drain_message_queue(
         await observe_job(db, source=SOURCE, stage="lease_recovery")
 
     try:
-        expired = await db.queue.expire_pending(max_age_minutes=config.timing.queue_expiry_minutes)
+        active_swarms = {row["name"] for row in await db.swarms.list(active_only=True)}
+        protected = tuple(spec.name for spec in config.agents if spec.swarm in active_swarms)
+        expired = await db.queue.expire_pending(
+            max_age_minutes=config.timing.queue_expiry_minutes,
+            protected_sessions=protected,
+        )
         if expired:
             log.info(
                 "Expired %d queued messages (> %d min)",

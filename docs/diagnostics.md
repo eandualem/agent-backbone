@@ -222,3 +222,13 @@ an empty healthy result. Address discovery reads existing host/port settings
 without initializing storage. CLI JSON is intended for local analysis:
 agent names, repositories and model identifiers can still reveal context,
 even though message content and secrets are excluded.
+
+
+Queue summaries include `checkpoint` (claimed by an agent's inbox) and `uncertain`
+(a paste whose acceptance could not be established). Both remain until explicit
+inbox acknowledgement; they are not automatically retried or expired. A delivery
+record of `submitted` is a terminal observation, not proof that the model acted.
+Post-submission state evidence temporarily blocks another paste and invalidates
+an older idle hook until a new hook or terminal observation establishes readiness.
+Claude monthly-spend/session/weekly limit banners are recognized as provider
+blocks; later successful terminal output supersedes historical denial text.

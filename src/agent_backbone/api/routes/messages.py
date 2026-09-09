@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from agent_backbone.api.deps import get_config, get_db, registered_agent_or_404
 from agent_backbone.api.models import MessageRequest, MessageResponse
@@ -64,3 +65,39 @@ async def send_message(
         delivery_id=report.delivery_id,
         queue_id=report.queue_id,
     )
+
+
+class CheckpointRequest(BaseModel):
+    session: str = Field(min_length=1, max_length=100)
+    acknowledge: list[int] = Field(default_factory=list, max_length=20)
+
+
+@router.post("/messages/inbox")
+async def checkpoint_inbox(body: CheckpointRequest, config=Depends(get_config), db=Depends(get_db)):
+    """Cooperative tool checkpoint; never types into a terminal.
+
+    Session identity follows the existing shared-key/self-asserted sender model.
+    Holding a message prevents automatic redelivery; acknowledge after applying
+    or explicitly superseding it, and inspect uncertain sends before repeating work.
+    """
+    registered_agent_or_404(config, body.session)
+    try:
+        if body.acknowledge:
+            return {
+                "acknowledged": await db.queue.acknowledge_checkpoint(
+                    body.session, body.acknowledge
+                )
+            }
+        rows = await db.queue.checkpoint(body.session)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "session": body.session,
+        "messages": [
+            {
+                key: row[key]
+                for key in ("id", "operation_id", "message", "sender", "status", "enqueued_at")
+            }
+            for row in rows
+        ],
+    }

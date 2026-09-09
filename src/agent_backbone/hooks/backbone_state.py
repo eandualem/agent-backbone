@@ -77,8 +77,16 @@ def issue_from_text(text: str) -> tuple[int | None, str | None]:
     ref = _ISSUE_REF_RE.search(text or "")
     if ref:
         return int(ref.group(2)), ref.group(1)
-    match = _ISSUE_NUMBER_RE.search(text or "")
-    return (int(match.group(1)) if match else None), None
+    for match in _ISSUE_NUMBER_RE.finditer(text or ""):
+        # CSS hex colors (including all-digit colors) are not task IDs.
+        if match.group(0).startswith("#") and len(match.group(1)) in {3, 4, 6, 8}:
+            prefix = (text or "")[: match.start()].lower()
+            if not re.search(r"(?:issue|pr|pull request)\s*$", prefix) and re.search(
+                r"(?:color|background|foreground|theme|fill|stroke|hex)\b[^.\n]*$", prefix
+            ):
+                continue
+        return int(match.group(1)), None
+    return None, None
 
 
 def issue_from_prompt(prompt: str, current: dict) -> tuple[int | None, str | None]:

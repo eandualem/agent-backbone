@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import time
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agent_backbone.fs import atomic_write_text
 from agent_backbone.services.agents._file_reader import read_state_file
 from agent_backbone.services.agents.models import (
     REASON_PERMISSION,
@@ -157,7 +159,61 @@ def dialog_ref(pane_content: str) -> str:
     return hashlib.sha256("\n".join(tail[-10:]).encode()).hexdigest()[:12]
 
 
+def note_submission(state_dir: Path, session: str) -> None:
+    """Invalidate idle evidence older than a paste, without overwriting hooks."""
+    atomic_write_text(state_dir / f"{session}.submitted", str(time.time()))
+
+
 async def get_agent_state(
+    state_dir: Path,
+    session: str,
+    stale_threshold: float = 300,
+    *,
+    runtime_hint: str | None = None,
+    pane_content: str | None = None,
+) -> StateSnapshot:
+    snapshot = await _get_agent_state(
+        state_dir,
+        session,
+        stale_threshold,
+        runtime_hint=runtime_hint,
+        pane_content=pane_content,
+    )
+    try:
+        submitted = float((state_dir / f"{session}.submitted").read_text())
+        if not math.isfinite(submitted):
+            return snapshot
+    except (OSError, ValueError):
+        return snapshot
+    hook = read_state_file(state_dir, session)
+    if hook and hook.timestamp > submitted:
+        return snapshot
+    if snapshot.state not in {AgentState.IDLE, AgentState.UNKNOWN}:
+        return snapshot
+    evidence = [*snapshot.evidence, "idle evidence predates the last submission"]
+    if time.time() - submitted < 5:
+        return replace(
+            snapshot,
+            state=AgentState.BUSY,
+            source="delivery",
+            evidence=[*evidence, "waiting for runtime input acknowledgement"],
+        )
+    # With no newer hook, re-read the terminal instead of trusting the idle hook
+    # that preceded the send. This also works for runtimes without hooks.
+    if pane_content is None:
+        pane_content = await capture_pane(session)
+    pull = infer_state_from_pane(pane_content or "", runtime_hint)
+    return replace(
+        snapshot,
+        state=pull.state,
+        reason=pull.reason,
+        detail=pull.detail,
+        source="pull",
+        evidence=[*evidence, *pull.evidence],
+    )
+
+
+async def _get_agent_state(
     state_dir: Path,
     session: str,
     stale_threshold: float = 300.0,
@@ -300,10 +356,29 @@ async def agent_state(
 ) -> StateSnapshot:
     """``get_agent_state`` with the paths and thresholds taken from the configuration."""
     spec = config.agents.get(name)
-    return await get_agent_state(
+    snapshot = await get_agent_state(
         config.state_dir,
         name,
         config.timing.stale_threshold_seconds,
         runtime_hint=spec.runtime if spec else None,
         pane_content=pane_content,
     )
+
+    return bind_task(config, name, snapshot)
+
+
+def bind_task(config: BackboneConfig, name: str, snapshot: StateSnapshot) -> StateSnapshot:
+    """Explicit swarm task identity outranks issue mentions in tools/transcripts."""
+    spec = config.agents.get(name)
+    if spec and spec.swarm:
+        for tag in spec.tags:
+            if tag.startswith("task:") and "#" in tag:
+                repo, number = tag[5:].rsplit("#", 1)
+                if number.isdigit():
+                    return replace(
+                        snapshot,
+                        current_issue=int(number),
+                        current_repo=repo,
+                        evidence=[*snapshot.evidence, "task bound by swarm registration"],
+                    )
+    return snapshot

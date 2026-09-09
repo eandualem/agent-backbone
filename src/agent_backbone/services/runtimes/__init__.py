@@ -17,6 +17,7 @@ from agent_backbone.services.runtimes._pane import GENERIC_BUSY_FRAGMENTS, sanit
 from agent_backbone.services.runtimes.base import (
     Runtime,
     RuntimeDiagnostic,
+    SubmissionUnconfirmed,
     read_brief,
     resolve_command,
     split_model_effort,
@@ -105,6 +106,7 @@ __all__ = [
     "UNKNOWN",
     "Runtime",
     "RuntimeDiagnostic",
+    "SubmissionUnconfirmed",
     "detect_runtime",
     "get_runtime",
     "read_brief",

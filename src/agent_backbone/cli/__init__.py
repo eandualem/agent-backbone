@@ -33,7 +33,7 @@ import os
 import sys
 
 from agent_backbone import __version__
-from agent_backbone.cli.agents import cmd_agent, cmd_hooks, cmd_reply, cmd_tell
+from agent_backbone.cli.agents import cmd_agent, cmd_hooks, cmd_inbox, cmd_reply, cmd_tell
 from agent_backbone.cli.completion import cmd_completion, complete
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
 from agent_backbone.cli.instructions import add_instruction_commands
@@ -324,6 +324,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("docs", help="the documentation shipped with this install")
     p.add_argument("page", nargs="?", default=None)
     p.set_defaults(func=cmd_docs)
+
+    p = sub.add_parser(
+        "inbox", help="read corrections at a safe checkpoint; acknowledge after applying"
+    )
+    p.add_argument("--agent", default=os.environ.get("BACKBONE_AGENT"))
+    p.add_argument("--ack", nargs="+", type=int, default=[])
+    p.set_defaults(func=cmd_inbox)
 
     p = sub.add_parser("tell", help="deliver a message to an agent (via the running API)")
     p.add_argument("agent")

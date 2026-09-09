@@ -128,11 +128,16 @@ class TestRuntimePaste:
             ),
             patch("agent_backbone.services.runtimes.base.asyncio.sleep", AsyncMock()),
         ):
-            assert (
-                await runtime.deliver_message("app", "[via:backbone from:sender] review this")
-                is consumed
-            )
-        assert submit.await_count == 2
+            from agent_backbone.services.runtimes import SubmissionUnconfirmed
+
+            if consumed:
+                assert await runtime.deliver_message(
+                    "app", "[via:backbone from:sender] review this"
+                )
+            else:
+                with pytest.raises(SubmissionUnconfirmed):
+                    await runtime.deliver_message("app", "[via:backbone from:sender] review this")
+        assert submit.await_count == 1
 
     async def test_claude_adapter_submits_with_enter(self):
         runtime = RUNTIMES["claude"]
@@ -185,9 +190,9 @@ class TestRuntimePaste:
             ),
         ):
             assert await runtime.deliver_message("codex-repo", "hello") is True
-        assert mock_submit.await_count == 2
+        assert mock_submit.await_count == 1
 
-    async def test_codex_adapter_interrupts_queued_delivery(self):
+    async def test_codex_adapter_leaves_runtime_queued_delivery_alone(self):
         runtime = RUNTIMES["codex"]
         with (
             patch(
@@ -201,7 +206,7 @@ class TestRuntimePaste:
                 return_value=True,
             ) as mock_submit,
             patch(
-                "agent_backbone.services.runtimes.base.press_escape",
+                "agent_backbone.services.terminal.press_escape",
                 new_callable=AsyncMock,
                 return_value=True,
             ) as mock_escape,
@@ -219,8 +224,8 @@ class TestRuntimePaste:
             ),
         ):
             assert await runtime.deliver_message("codex-repo", "hello") is True
-        mock_escape.assert_awaited_once_with("codex-repo")
-        assert mock_submit.await_count == 2
+        mock_escape.assert_not_awaited()
+        assert mock_submit.await_count == 1
 
     async def test_gemini_adapter_submits_with_enter(self):
         runtime = RUNTIMES["gemini"]

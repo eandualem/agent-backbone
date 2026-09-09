@@ -83,9 +83,12 @@ async def get_system_status(
                         await gh.list_issues(state="open", repo_full_name=repo, all_pages=True)
                     )
 
-            pending_issues = sum(
-                await asyncio.gather(*(count(repo) for repo in config.agents.repos))
-            )
+            # Status is a local control surface: remote API slowness must not
+            # hold the whole response hostage. Unknown is explicit in the UI.
+            async with asyncio.timeout(2.0):
+                pending_issues = sum(
+                    await asyncio.gather(*(count(repo) for repo in config.agents.repos))
+                )
         except Exception:
             log.warning("Failed to fetch pending issues from GitHub")
             pending_issues = None

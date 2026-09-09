@@ -92,3 +92,9 @@ Ordinary agent reports appear in General and the agent's topic, with separate
 delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
+
+
+During long work, agents can read corrections themselves without waiting for
+terminal delivery: `backbone inbox` (or `--agent NAME`). After applying or
+superseding messages, use `backbone inbox --ack ID ...`. Check between meaningful
+steps and before a commit or handoff. Details: `backbone help messaging`.

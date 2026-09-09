@@ -309,11 +309,13 @@ class MessageQueueORM(Base):
             "issue_number",
             unique=True,
             postgresql_where=text(
-                "delivery_kind = 'issue' AND status IN ('pending','in_progress') "
+                "delivery_kind = 'issue' "
+                "AND status IN ('pending','in_progress','checkpoint','uncertain') "
                 "AND issue_number IS NOT NULL"
             ),
             sqlite_where=text(
-                "delivery_kind = 'issue' AND status IN ('pending','in_progress') "
+                "delivery_kind = 'issue' "
+                "AND status IN ('pending','in_progress','checkpoint','uncertain') "
                 "AND issue_number IS NOT NULL"
             ),
         ),
@@ -327,9 +329,13 @@ class MessageQueueORM(Base):
             "dedup_key",
             unique=True,
             postgresql_where=text(
-                "delivery_kind != 'issue' AND status IN ('pending','in_progress')"
+                "delivery_kind != 'issue' "
+                "AND status IN ('pending','in_progress','checkpoint','uncertain')"
             ),
-            sqlite_where=text("delivery_kind != 'issue' AND status IN ('pending','in_progress')"),
+            sqlite_where=text(
+                "delivery_kind != 'issue' "
+                "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+            ),
         ),
     )
 

@@ -52,3 +52,12 @@ topics, `backbone help messaging` (etc.) prints one.
 
 For a focused independent review, read `backbone help reviews`: a native review
 process can run while you keep working, with its report saved outside the docs.
+
+
+Before starting an assignment, between meaningful implementation/test steps, and
+before committing or handing off, run `backbone inbox`. Read corrections and
+check the agreed current decision record. Apply or explicitly supersede each
+message, then `backbone inbox --ack ID ...`; repeat until empty. Unacknowledged
+IDs reappear after a lost response. For `uncertain` messages, inspect your
+transcript before repeating work. This cooperative checkpoint does not interrupt
+your active turn. A priority message still waits while you are busy.

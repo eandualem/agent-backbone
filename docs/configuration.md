@@ -88,7 +88,7 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 |---|---|---|
 | `timing.stale_threshold_seconds` | `300` | Hook state older than this is verified against the terminal |
 | `timing.grace_period_seconds` | `5` | Settle time from the hook-written idle timestamp before delivering (`settling`); terminal-only idle readings have no transition timestamp |
-| `timing.queue_expiry_minutes` | `30` | Queued messages older than this are expired |
+| `timing.queue_expiry_minutes` | `30` | Expiry for ordinary queued messages; active swarm coordination and inbox holds are retained |
 | `timing.stall_threshold_seconds` | `5400` | Busy on one issue for longer than this is a stall |
 | `timing.escalation_dedup_seconds` | `1800` | Do not repeat the same escalation within this window |
 | `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period (must be positive) |
@@ -216,3 +216,8 @@ Reports now appear in both General and the agent's topic, with separate delivery
 receipts. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
+
+
+
+See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
+coordination, acknowledgement and retention.

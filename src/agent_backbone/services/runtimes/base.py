@@ -34,7 +34,6 @@ from agent_backbone.services.runtimes._pane import (
 from agent_backbone.services.terminal import (
     capture_pane,
     paste_message,
-    press_escape,
     press_submit,
     send_keys,
 )
@@ -147,6 +146,10 @@ def split_model_effort(spec: str | None) -> tuple[str | None, str | None]:
     return (model or None), (effort.strip().lower() or None)
 
 
+class SubmissionUnconfirmed(RuntimeError):
+    """Text may already belong to the runtime; never blindly paste it again."""
+
+
 class Runtime:
     """Behavioural contract for one interactive CLI. Subclasses set the data."""
 
@@ -236,8 +239,7 @@ class Runtime:
     Codex, milliseconds for Gemini CLI)."""
 
     # --- paste behaviour ---------------------------------------------------
-    submit_attempts: int = 2
-    interrupt_queued_delivery: bool = False
+    submission_checks: int = 2
     paste_settle_seconds: float = 0.2
 
     def __repr__(self) -> str:
@@ -504,7 +506,29 @@ class Runtime:
 
     def provider_failure(self, pane_content: str) -> str | None:
         """Current provider error, excluding quoted examples and superseded output."""
-        lines = pane_content.splitlines()[-25:]
+        # Join visually wrapped banner continuations before scanning backwards.
+        # A new response glyph or prompt always starts a new logical line.
+        lines: list[str] = []
+        for raw in pane_content.splitlines()[-25:]:
+            clean = sanitize_pane_content(raw)
+            previous = sanitize_pane_content(lines[-1]).strip() if lines else ""
+            banner = previous.lstrip("│┃■●⎿✕✖! ").strip()
+            if (
+                clean.startswith("  ")
+                and clean.strip()
+                and not clean.strip().startswith(
+                    (*self.provider_error_prefixes, *self.prompt_prefixes)
+                )
+                and not self._is_status_chrome_line(clean.strip())
+                and any(re.match(p, banner, re.I) for p in self.provider_error_patterns)
+                and (
+                    previous.startswith(self.provider_error_prefixes)
+                    or _error_foreground(lines[-1])
+                )
+            ):
+                lines[-1] += " " + clean.strip()
+            else:
+                lines.append(raw)
         detail: list[str] = []
         for raw in reversed(lines):
             line = sanitize_pane_content(raw).strip()
@@ -512,7 +536,7 @@ class Runtime:
                 continue
             if line in self.prompt_prefixes or line.lower() in self.placeholder_fragments:
                 continue
-            text = line.lstrip("│┃■●✕✖! ").strip()
+            text = line.lstrip("│┃■●⎿✕✖! ").strip()
             if any(
                 re.match(pattern, text, re.IGNORECASE) for pattern in self.provider_error_patterns
             ):
@@ -749,9 +773,12 @@ class Runtime:
         if self.paste_settle_seconds > 0:
             await asyncio.sleep(self.paste_settle_seconds)
 
-        state = await self._submit(session_name)
+        try:
+            state = await self._submit(session_name)
+        except Exception as exc:
+            raise SubmissionUnconfirmed("Could not confirm pasted text") from exc
 
-        if state == "submitted" or (state == "queued" and not self.interrupt_queued_delivery):
+        if state in {"submitted", "queued"}:
             log.info(
                 "Terminal delivery %s in '%s' via %s",
                 "sent" if state == "submitted" else "queued (runtime will run it next)",
@@ -765,28 +792,20 @@ class Runtime:
             self.id,
             state,
         )
-        return False
+        raise SubmissionUnconfirmed(f"Pasted text has state {state}")
 
     async def _submit(self, session_name: str) -> str:
-        """Press Enter (retrying once where the runtime needs it) and report what happened."""
+        """Submit once, then observe; repeating Enter can interrupt an active turn."""
         state = "submitted"
-        for _attempt in range(self.submit_attempts):
-            if not await press_submit(session_name):
-                return "failed"
+        if not await press_submit(session_name):
+            return "failed"
+        for _attempt in range(self.submission_checks):
             await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)
             state = await self.delivery_submission_state(session_name)
-            if state == "submitted":
+            if state in {"submitted", "queued"}:
+                # Queued means accepted by the runtime. Another Enter or Escape
+                # can steer/interfere with the active turn or submit twice.
                 return state
-            if state == "queued" and self.interrupt_queued_delivery:
-                # The runtime parked the text for its next turn; Escape exposes
-                # it, Enter sends it now.
-                if not await press_escape(session_name):
-                    return "failed"
-                await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)
-                if not await press_submit(session_name):
-                    return "failed"
-                await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)
-                return await self.delivery_submission_state(session_name)
         return state
 
     async def delivery_submission_state(self, session_name: str) -> str:

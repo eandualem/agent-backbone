@@ -74,6 +74,8 @@ class DeliveryHistory(BaseModel):
 class QueueMetadata(BaseModel):
     pending: int = 0
     in_progress: int = 0
+    checkpoint: int = 0
+    uncertain: int = 0
     oldest_pending_at: str | None = None
 
 

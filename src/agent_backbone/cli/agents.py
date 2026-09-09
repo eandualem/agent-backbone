@@ -604,3 +604,29 @@ def cmd_hooks(args: argparse.Namespace) -> int:
         print(f"removed agent-backbone hooks from {settings_path}")
         return 0
     return 1
+
+
+async def _inbox(args: argparse.Namespace) -> int:
+    if not args.agent:
+        print("Use --agent NAME or run inside an agent session ($BACKBONE_AGENT)")
+        return 1
+    boot = await _common.client_config()
+    result = await _common.api(
+        boot,
+        "POST",
+        "/api/messages/inbox",
+        json_body={
+            "session": args.agent,
+            "acknowledge": args.ack,
+        },
+    )
+    if result is None:
+        print("backbone API unreachable; is `backbone up` running?")
+        return 1
+    status, data = result
+    print(json.dumps(data))
+    return 0 if status == 200 else 1
+
+
+def cmd_inbox(args: argparse.Namespace) -> int:
+    return asyncio.run(_inbox(args))
