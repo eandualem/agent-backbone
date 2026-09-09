@@ -56,13 +56,30 @@ async def handle_general_message(
 
 def _delivery_reply(agent: str, report: DeliveryReport) -> str:
     """Map a delivery report to a Telegram reply: what happened, in words."""
+    if report.unconfirmed:
+        if report.queue_id is None:
+            return (
+                f"Submission to `{agent}` is uncertain and was not retained. "
+                "Inspect the terminal before retrying."
+            )
+        return (
+            f"Submission to `{agent}` is uncertain; message {report.queue_id} is held. "
+            "Automatic terminal delivery to this agent is paused. Inspect the transcript, "
+            "then use `backbone inbox` in the agent's session to resolve the held message. "
+            "Do not resend it before checking."
+        )
     outcome = report.outcome
-    if outcome == DeliveryOutcome.DELIVERED:
-        return f"Sent to `{agent}`."
-    if report.queue == "already_queued":
-        return f"The same message from you is already in the queue, waiting for `{agent}`."
     if report.queue == "failed":
         return f"Not delivered and not queued: could not store the message for `{agent}`."
+    if report.queue == "already_queued":
+        return f"The same message from you is already in the queue, waiting for `{agent}`."
+    if outcome == DeliveryOutcome.AWAITING_ACK:
+        return (
+            f"Delivery to `{agent}` is awaiting inbox acknowledgement. "
+            "Use `backbone inbox` in the agent's session to inspect and resolve held messages."
+        )
+    if outcome == DeliveryOutcome.DELIVERED:
+        return f"Sent to `{agent}`."
     held = " — queued" if report.queued else ""
     if outcome == DeliveryOutcome.OFFLINE:
         return f"`{agent}` is offline{held}."
