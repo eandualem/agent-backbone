@@ -91,8 +91,14 @@ nothing to address. The bot creates and maintains those topics itself:
 
 In an agent's topic, plain text is delivered to that agent through the
 normal readiness checks (`[via:telegram from:<you>] …`), and the bot
-answers with the outcome (`Sent to app.` / `app is busy — queued.`). The
-sender recorded for queueing is your stable Telegram user id
+answers with the outcome (`Sent to app.` / `app is busy — queued.`).
+If submission is uncertain, the reply says whether the message was retained.
+A retained uncertain message pauses automatic terminal delivery for that agent:
+inspect its transcript and use `backbone inbox` in the agent's session to resolve
+the hold before resending. The same guidance appears when retrying that message.
+An unretained uncertain submission requires terminal inspection before retrying.
+
+The sender recorded for queueing is your stable Telegram user id
 (`telegram:<id>`), so two people with the same first name never share a
 queue identity; the envelope keeps the readable name. The agent replies
 into the same topic with `backbone reply "…"`, and alerts

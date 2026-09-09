@@ -690,6 +690,29 @@ class TestStatusAndQueue:
 
 
 class TestDeliveryReplyFallbacks:
+    @pytest.mark.parametrize("queue", ["stored", "already_queued"])
+    def test_uncertain_hold_explains_recovery_on_first_send_and_retry(self, queue):
+        outcome = (
+            DeliveryOutcome.DELIVERY_FAILED if queue == "stored" else DeliveryOutcome.AWAITING_ACK
+        )
+        reply = _delivery_reply("ike", DeliveryReport(outcome, queue, True, queue_id=42))
+        assert "uncertain" in reply and "message 42" in reply
+        assert "Automatic terminal delivery to this agent is paused" in reply
+        assert "Inspect the transcript" in reply and "backbone inbox" in reply
+        assert "Not delivered" not in reply and "waiting for" not in reply
+
+    def test_uncertain_unretained_submission_does_not_promise_recovery_from_inbox(self):
+        reply = _delivery_reply(
+            "ike", DeliveryReport(DeliveryOutcome.DELIVERY_FAILED, "failed", True)
+        )
+        assert "uncertain and was not retained" in reply
+        assert "Inspect the terminal before retrying" in reply
+        assert "backbone inbox" not in reply
+
+    def test_other_messages_awaiting_ack_explain_inbox_recovery(self):
+        reply = _delivery_reply("ike", DeliveryReport(DeliveryOutcome.AWAITING_ACK, "stored"))
+        assert "awaiting inbox acknowledgement" in reply and "backbone inbox" in reply
+
     @pytest.mark.parametrize(
         ("status", "queue", "expected"),
         [
