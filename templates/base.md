@@ -53,6 +53,10 @@ backbone help swarms     # e.g. before creating a swarm
 
 At meaningful work checkpoints and before a commit/handoff, run `backbone inbox`
 to read corrections without interrupting your turn. After applying or superseding
-them, `backbone inbox --ack ID ...`; repeat until empty. If marked `uncertain`,
+them, `backbone inbox --ack TOKEN ...`; repeat until empty. If marked `uncertain`,
 check the transcript before repeating work. `backbone help messaging` explains
 receipts, retention and why priority never bypasses a busy agent.
+
+For `--ack`, copy each complete `ack_token` from the inbox response. Numeric row
+IDs alone cannot acknowledge work; tokens prevent stale acknowledgements from
+consuming a different message after queue cleanup.

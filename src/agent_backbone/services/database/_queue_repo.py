@@ -18,7 +18,8 @@ _MAX_ENQUEUE_ATTEMPTS = 3
 _INSERT_COLUMNS = """(operation_id, session_name, message, repo, issue_number, target_entity,
                 delivery_kind, source, enqueued_at, status, sender, dedup_key)
                VALUES (:operation_id, :session_name, :message, :repo, :issue_number, :target_entity,
-                       :delivery_kind, :source, :enqueued_at, 'pending', :sender, :dedup_key)"""
+                       :delivery_kind, :source, :enqueued_at, :initial_status,
+                       :sender, :dedup_key)"""
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,7 @@ class QueueRepo(Repo):
         sender: str = "",
         source_key: str | None = None,
         operation_id: str | None = None,
+        uncertain: bool = False,
     ) -> EnqueueResult:
         """Store a message for later delivery.
 
@@ -102,6 +104,7 @@ class QueueRepo(Repo):
                 "delivery_kind": delivery_kind,
                 "source": source,
                 "enqueued_at": now_iso(),
+                "initial_status": "uncertain" if uncertain else "pending",
                 "sender": sender,
                 "dedup_key": dedup_key_for(message, sender, source_key),
             }
@@ -139,7 +142,9 @@ class QueueRepo(Repo):
                 existing = await conn.execute(
                     text(
                         "UPDATE message_queue SET operation_id = "
-                        "COALESCE(operation_id, :operation_id) "
+                        "COALESCE(operation_id, :operation_id), "
+                        "status = CASE WHEN :initial_status = 'uncertain' "
+                        "THEN 'uncertain' ELSE status END "
                         f"WHERE {key} AND "
                         "status IN ('pending', 'in_progress', 'checkpoint', 'uncertain') "
                         "RETURNING id, operation_id"
@@ -395,29 +400,46 @@ class QueueRepo(Repo):
             rows.extend(dict(r) for r in claimed.mappings())
             for row in rows:
                 await self._ensure_operation_id(conn, row)
+                row["ack_token"] = f"{row['id']}:{row['operation_id']}"
             return sorted(rows, key=lambda r: (r["enqueued_at"], r["id"]))
 
-    async def acknowledge_checkpoint(self, session_name: str, ids: list[int]) -> list[int]:
+    async def acknowledge_checkpoint(self, session_name: str, tokens: list[str]) -> list[str]:
         """Acknowledge only this agent's checkpoint/uncertain rows; repeatable."""
-        if not ids:
+        if not tokens:
             return []
+        params = {"session": session_name, "now": now_iso()}
+        predicates = []
+        for index, token in enumerate(set(tokens)):
+            try:
+                row_id, operation = token.split(":", 1)
+                params[f"id{index}"] = int(row_id)
+                if not operation:
+                    raise ValueError("Missing operation identity")
+            except (ValueError, AttributeError) as exc:
+                raise ValueError(
+                    "Use ack_token from the inbox; numeric IDs are not receipts"
+                ) from exc
+            params[f"op{index}"] = operation
+            predicates.append(f"(id=:id{index} AND operation_id=:op{index})")
+        identity = "(" + " OR ".join(predicates) + ")"
         async with self._tx() as conn:
-            params = {"session": session_name, "ids": ids, "now": now_iso()}
             records = await conn.execute(
                 text(
-                    "SELECT id FROM message_queue WHERE session_name=:session AND id IN :ids "
-                    "AND status IN ('checkpoint','uncertain','delivered')"
-                ).bindparams(bindparam("ids", expanding=True)),
+                    "SELECT id,operation_id FROM message_queue WHERE session_name=:session AND "
+                    + identity
+                    + " AND status IN ('checkpoint','uncertain','delivered')"
+                ),
                 params,
             )
-            if {r[0] for r in records} != set(ids):
-                raise ValueError("IDs must belong to this agent's inbox; read inbox first")
+            if {f"{r[0]}:{r[1]}" for r in records} != set(tokens):
+                raise ValueError("Receipts must match this agent's inbox; read inbox first")
             result = await conn.execute(
                 text(
                     "UPDATE message_queue SET status='delivered', delivered_at=:now "
-                    "WHERE session_name=:session AND id IN :ids "
-                    "AND status IN ('checkpoint','uncertain') RETURNING *"
-                ).bindparams(bindparam("ids", expanding=True)),
+                    "WHERE session_name=:session AND "
+                    + identity
+                    + " AND status IN ('checkpoint','uncertain') RETURNING *"
+                ),
                 params,
             )
             rows = [dict(r) for r in result.mappings()]
@@ -438,7 +460,7 @@ class QueueRepo(Repo):
                         "preview": row["message"][:120],
                     },
                 )
-        return sorted(set(ids))
+        return sorted(set(tokens))
 
     async def held_receipt(
         self,
@@ -454,7 +476,7 @@ class QueueRepo(Repo):
             result = await conn.execute(
                 text(
                     "SELECT id,operation_id,status FROM message_queue WHERE session_name=:session "
-                    "AND status IN ('checkpoint','uncertain') AND "
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain') AND "
                     "((:kind='issue' AND delivery_kind='issue' "
                     "AND repo=:repo AND issue_number=:issue) "
                     "OR (:kind!='issue' AND dedup_key=:dedup)) LIMIT 1"

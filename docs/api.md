@@ -491,8 +491,8 @@ coordination, acknowledgement and retention.
 
 `POST /api/messages/inbox` accepts `{"session":"worker"}` and returns
 `{"session":"worker","messages":[...]}` with `id`, `operation_id`, `message`,
-`sender`, `status`, and `enqueued_at`. Acknowledge with the same endpoint and
-`{"session":"worker","acknowledge":[41,42]}`. Up to 20 IDs per acknowledgement;
-IDs from another session or not in its inbox return 409, unknown session 404.
+`ack_token`, `sender`, `status`, and `enqueued_at`. Acknowledge with the same endpoint and
+`{"session":"worker","acknowledge":["41:operation-id"]}`. Pass each complete `ack_token` returned by the inbox, not a numeric row ID.
+Up to 20 tokens per acknowledgement; stale or mismatched tokens return 409, unknown session 404.
 The existing shared API key is required. Session names are self-asserted, as with
 ordinary messaging; this is not a per-agent authentication boundary.

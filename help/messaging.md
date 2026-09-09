@@ -61,14 +61,14 @@ use `backbone inbox --agent NAME`. This returns up to ten direct messages with
 IDs, sender envelopes and enqueue times. It does not type into any terminal.
 
 Read the whole batch against the latest agreed decisions. Apply relevant changes,
-or explicitly supersede obsolete instructions, then acknowledge their IDs:
+or explicitly supersede obsolete instructions, then acknowledge their `ack_token` values:
 
 ```bash
-backbone inbox --ack 41 42
+backbone inbox --ack '<ack_token from response>'
 ```
 
 Repeat until empty. Reading claims the messages so the terminal retry job cannot
-paste them too. Unacknowledged IDs reappear on the next read, even after a lost
+paste them too. Unacknowledged receipts reappear on the next read, even after a lost
 response or server restart; acknowledgement is idempotent. Issue notifications
 keep their existing GitHub acknowledgement protocol.
 
@@ -84,3 +84,7 @@ running agent to adopt corrections or recover from exhausted provider quota.
 Escape/Enter to force a correction. At a provider reset, old denial text alone
 is not proof of a fresh failure, and elapsed time alone is not proof of recovery.
 An explicitly authorized, bounded readiness probe can establish current access.
+
+For `--ack`, copy each complete `ack_token` from the inbox response. Numeric row
+IDs alone cannot acknowledge work; tokens prevent stale acknowledgements from
+consuming a different message after queue cleanup.

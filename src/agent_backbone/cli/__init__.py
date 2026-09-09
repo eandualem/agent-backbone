@@ -329,7 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
         "inbox", help="read corrections at a safe checkpoint; acknowledge after applying"
     )
     p.add_argument("--agent", default=os.environ.get("BACKBONE_AGENT"))
-    p.add_argument("--ack", nargs="+", type=int, default=[])
+    p.add_argument("--ack", nargs="+", metavar="TOKEN", default=[])
     p.set_defaults(func=cmd_inbox)
 
     p = sub.add_parser("tell", help="deliver a message to an agent (via the running API)")

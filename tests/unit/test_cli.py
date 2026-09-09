@@ -758,8 +758,13 @@ class TestCheckpointInbox:
         ) as api:
             assert _run(["inbox"]) == 0
             assert api.call_args.kwargs["json_body"] == {"session": "worker", "acknowledge": []}
-            assert _run(["inbox", "--agent", "lead", "--ack", "41", "42"]) == 0
-            assert api.call_args.kwargs["json_body"] == {"session": "lead", "acknowledge": [41, 42]}
+            assert (
+                _run(["inbox", "--agent", "lead", "--ack", "41:operation-a", "42:operation-b"]) == 0
+            )
+            assert api.call_args.kwargs["json_body"] == {
+                "session": "lead",
+                "acknowledge": ["41:operation-a", "42:operation-b"],
+            }
 
     def test_missing_identity_does_not_call_api(self, capsys):
         with patch("agent_backbone.cli._common.api", AsyncMock()) as api:

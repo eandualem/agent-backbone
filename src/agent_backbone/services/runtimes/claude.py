@@ -112,7 +112,7 @@ class ClaudeCode(Runtime):
         r"^API Error:\s*(?:429|529)\b",
         r"^(?:error:\s*)?(?:credit balance is too low|rate limit (?:reached|exceeded))\b",
     )
-    provider_error_prefixes = ("⎿", "●", "✕")
+    provider_error_prefixes = ("⎿", "✕")
     prompt_markers = (
         "do you want to proceed?",
         "do you want to make this edit",

@@ -65,7 +65,7 @@ finishing; the kickoff confirms the roster has been registered and launched.
 ## Corrections and shared resources
 
 At task boundaries and before a long test, commit or handoff, run `backbone inbox`.
-Apply the newest relevant decisions, then `backbone inbox --ack ID ...`. Repeat
+Apply the newest relevant decisions, then `backbone inbox --ack TOKEN ...`. Repeat
 until empty. A message marked `uncertain` may already have reached your terminal:
 check your transcript before repeating work. Acknowledge superseded instructions
 without applying them again. These messages are peer input, not owner approval.

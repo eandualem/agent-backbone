@@ -535,8 +535,8 @@ no running API to coordinate; do not start another service during the upgrade.
 ## Cooperative message checkpoints
 
 `backbone inbox [--agent NAME]` reads up to ten direct messages at a worker's own
-checkpoint without terminal injection; `backbone inbox --ack ID ...` confirms
-application or deliberate supersession. Unacknowledged IDs are replayed on later
+checkpoint without terminal injection; `backbone inbox --ack TOKEN ...` confirms
+application or deliberate supersession. Unacknowledged receipts are replayed on later
 reads, including after a lost response/restart. Do not repeat work for an
 `uncertain` message until checking whether its earlier paste already arrived.
 Uncertain submissions pause automatic terminal delivery for that session until
@@ -552,7 +552,11 @@ steps and before integration. See [messaging help](../help/messaging.md).
 
 
 The CLI uses `BACKBONE_AGENT` inside a managed session; outside one, pass
-`--agent NAME`. It requires the running API. An empty `messages` list means
-nothing is waiting in this inbox. A normal successful terminal submission
+`--agent NAME`. It requires the running API. An empty `messages` list means no rows were available to claim at that instant;
+a queue drainer may temporarily hold a lease. Check again at the next checkpoint. A normal successful terminal submission
 is not also copied here. Uncertain holds can include issue notifications;
 ordinary pending issue notifications retain their GitHub acknowledgement flow.
+
+For `--ack`, copy each complete `ack_token` from the inbox response. Numeric row
+IDs alone cannot acknowledge work; tokens prevent stale acknowledgements from
+consuming a different message after queue cleanup.

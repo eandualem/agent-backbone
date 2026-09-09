@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from functools import wraps
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 from weakref import WeakValueDictionary
 
 from agent_backbone.models import BLOCKED_OUTCOMES, SUCCESS_OUTCOMES, DeliveryOutcome
@@ -77,7 +77,10 @@ class _QueueReceipt:
 _session_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDictionary()
 
 
-def _serialized(fn: Callable[..., Awaitable[DeliveryReport]]):
+_Result = TypeVar("_Result")
+
+
+def _serialized(fn: Callable[..., Awaitable[_Result]]):
     """One gate/paste/record transaction per session; idle locks are released.
 
     Each caller holds its lock strongly while waiting or delivering. The weak
@@ -85,7 +88,7 @@ def _serialized(fn: Callable[..., Awaitable[DeliveryReport]]):
     """
 
     @wraps(fn)
-    async def locked(session_name: str, *args, **kwargs) -> DeliveryReport:
+    async def locked(session_name: str, *args, **kwargs):
         key = (id(asyncio.get_running_loop()), session_name)
         lock = _session_locks.setdefault(key, asyncio.Lock())
         async with lock:
@@ -103,6 +106,8 @@ def _serialized(fn: Callable[..., Awaitable[DeliveryReport]]):
 
 def queue_detail(report: DeliveryReport, session_name: str, expiry_minutes: int) -> str:
     """One plain sentence about what happened, for people and agents alike."""
+    if report.unconfirmed and report.queue_id is None:
+        return "Submission is uncertain and was not retained; inspect the terminal before retrying."
     if report.unconfirmed and report.queue_id is not None:
         return (
             f"Submission to {session_name} is uncertain; message {report.queue_id} is held "
@@ -227,6 +232,7 @@ async def _enqueue(
     sender: str,
     source_key: str | None,
     operation_id: str,
+    uncertain: bool = False,
 ) -> _QueueReceipt:
     """Store the message; say what happened (``stored`` / ``already_queued`` /
     ``failed``), or None when there is nothing to store it in."""
@@ -246,6 +252,7 @@ async def _enqueue(
             sender=sender,
             source_key=source_key,
             operation_id=operation_id,
+            **({"uncertain": True} if uncertain else {}),
         )
     except Exception as exc:
         log.error(
@@ -426,7 +433,10 @@ async def deliver(
                 sender=sender,
                 source_key=source_key,
                 operation_id=operation_id,
+                uncertain=uncertain,
             )
+        elif uncertain and db is not None and queue_id is not None:
+            await db.queue.hold_uncertain(queue_id)
         trace = receipt.operation_id or operation_id
         stored_queue_id = receipt.id if receipt.id is not None else queue_id
         delivery_id = await _record(
@@ -577,8 +587,7 @@ async def deliver(
     if await submit():
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
     report = await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)
-    if uncertain and db is not None and report.queue_id is not None:
-        await db.queue.hold_uncertain(report.queue_id)
+    if uncertain:
         return DeliveryReport(
             report.outcome,
             report.queue,
@@ -588,3 +597,13 @@ async def deliver(
             report.queue_id,
         )
     return report
+
+
+@_serialized
+async def checkpoint_inbox(
+    session_name: str, *, db: BackboneDB, acknowledge: list[str] | None = None
+) -> dict:
+    """Read/ack checkpoints under the same session lock as terminal delivery."""
+    if acknowledge:
+        return {"acknowledged": await db.queue.acknowledge_checkpoint(session_name, acknowledge)}
+    return {"session": session_name, "messages": await db.queue.checkpoint(session_name)}

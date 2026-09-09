@@ -517,7 +517,7 @@ class Runtime:
                 clean.startswith("  ")
                 and clean.strip()
                 and not clean.strip().startswith(
-                    (*self.provider_error_prefixes, *self.prompt_prefixes)
+                    ("●", "■", "⎿", "✕", *self.provider_error_prefixes, *self.prompt_prefixes)
                 )
                 and not self._is_status_chrome_line(clean.strip())
                 and any(re.match(p, banner, re.I) for p in self.provider_error_patterns)

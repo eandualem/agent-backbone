@@ -48,7 +48,7 @@ async def test_uncertain_submission_is_held_and_never_retried(db, config):
         assert send.await_count == 1
     held = await db.queue.checkpoint("ike")
     assert held[0]["status"] == "uncertain"
-    await db.queue.acknowledge_checkpoint("ike", [first.queue_id])
+    await db.queue.acknowledge_checkpoint("ike", [f"{first.queue_id}:{first.operation_id}"])
     assert await db.queue.checkpoint("ike") == []
 
 
@@ -72,9 +72,15 @@ async def test_checkpoint_survives_read_response_loss_and_retains_sender(db):
     )
     assert dup.id == receipt.id and dup.status == "already_queued"
     with pytest.raises(ValueError):
-        await db.queue.acknowledge_checkpoint("someone-else", [receipt.id])
-    assert await db.queue.acknowledge_checkpoint("ike", [receipt.id]) == [receipt.id]
-    assert await db.queue.acknowledge_checkpoint("ike", [receipt.id]) == [receipt.id]
+        await db.queue.acknowledge_checkpoint(
+            "someone-else", [f"{receipt.id}:{receipt.operation_id}"]
+        )
+    assert await db.queue.acknowledge_checkpoint(
+        "ike", [f"{receipt.id}:{receipt.operation_id}"]
+    ) == [f"{receipt.id}:{receipt.operation_id}"]
+    assert await db.queue.acknowledge_checkpoint(
+        "ike", [f"{receipt.id}:{receipt.operation_id}"]
+    ) == [f"{receipt.id}:{receipt.operation_id}"]
     assert await db.queue.checkpoint("ike") == []
     deliveries = await db.deliveries.query(session_name="ike")
     assert len(deliveries) == 1 and deliveries[0]["source"] == "agent-checkpoint"
@@ -190,9 +196,11 @@ async def test_inbox_api_claim_ack_and_unknown_agent(api_client, auth_headers, a
     ack = await api_client.post(
         "/api/messages/inbox",
         headers=auth_headers,
-        json={"session": "ike", "acknowledge": [receipt.id]},
+        json={"session": "ike", "acknowledge": [f"{receipt.id}:{receipt.operation_id}"]},
     )
-    assert ack.status_code == 200 and ack.json()["acknowledged"] == [receipt.id]
+    assert ack.status_code == 200 and ack.json()["acknowledged"] == [
+        f"{receipt.id}:{receipt.operation_id}"
+    ]
     assert (
         await api_client.post(
             "/api/messages/inbox", headers=auth_headers, json={"session": "unknown"}
@@ -236,7 +244,7 @@ async def test_checkpoint_survives_database_restart_and_squashed_migration(tmp_p
             session_name="worker", message="durable", delivery_kind="direct_message"
         )
         assert duplicate.id == receipt.id
-        await db.queue.acknowledge_checkpoint("worker", [receipt.id])
+        await db.queue.acknowledge_checkpoint("worker", [f"{receipt.id}:{receipt.operation_id}"])
 
 
 async def test_inbox_does_not_steal_issue_queue_protocol(db):
@@ -254,3 +262,112 @@ def test_wrapped_quota_banner_and_later_output():
     )
     assert "monthly spend" in rt.provider_failure(pane)
     assert rt.provider_failure(pane + "\n  ● Fresh successful reply\n❯") is None
+
+
+async def test_uncertain_is_visible_before_delivery_recording(db, config):
+    observed = []
+    record = db.deliveries.record
+
+    async def observe(**kwargs):
+        observed.extend(await db.queue.checkpoint("ike"))
+        return await record(**kwargs)
+
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.send_message",
+            AsyncMock(side_effect=SubmissionUnconfirmed("missing receipt")),
+        ),
+        patch.object(db.deliveries, "record", side_effect=observe),
+    ):
+        result = await deliver("ike", "fix", config, db=db, delivery_kind="direct_message")
+    assert result.unconfirmed
+    assert observed and all(row["status"] == "uncertain" for row in observed)
+    assert await db.queue.has_uncertain("ike")
+
+
+async def test_old_ack_cannot_consume_reused_sqlite_row_id(db):
+    first = await db.queue.enqueue(
+        session_name="worker", message="first", delivery_kind="direct_message"
+    )
+    (old,) = await db.queue.checkpoint("worker")
+    await db.queue.acknowledge_checkpoint("worker", [old["ack_token"]])
+    async with db.engine.begin() as conn:
+        await conn.execute(text("UPDATE message_queue SET delivered_at='2000-01-01T00:00:00Z'"))
+    assert await db.queue.prune() == 1
+    second = await db.queue.enqueue(
+        session_name="worker", message="second", delivery_kind="direct_message"
+    )
+    assert first.id == second.id  # SQLite reuses the numeric primary key.
+    (new,) = await db.queue.checkpoint("worker")
+    assert old["ack_token"] != new["ack_token"]
+    with pytest.raises(ValueError, match="Receipts"):
+        await db.queue.acknowledge_checkpoint("worker", [old["ack_token"]])
+    assert (await db.queue.checkpoint("worker"))[0]["ack_token"] == new["ack_token"]
+
+
+async def test_pending_duplicate_cannot_bypass_checkpoint_claim(db, config):
+    receipt = await db.queue.enqueue(
+        session_name="ike", message="correction", delivery_kind="direct_message"
+    )
+    with (
+        patch("agent_backbone.services.routing._delivery.send_message", AsyncMock()) as send,
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+    ):
+        response, inbox = await asyncio.gather(
+            deliver("ike", "correction", config, db=db, delivery_kind="direct_message"),
+            db.queue.checkpoint("ike"),
+        )
+    assert response.queued and response.queue_id == receipt.id
+    assert len(inbox) == 1
+    send.assert_not_awaited()
+
+
+async def test_api_checkpoint_waits_for_submission_transaction(db, config):
+    from agent_backbone.services.routing import checkpoint_inbox
+
+    pasted, finish = asyncio.Event(), asyncio.Event()
+
+    async def uncertain(*args, **kwargs):
+        pasted.set()
+        await finish.wait()
+        raise SubmissionUnconfirmed("missing receipt")
+
+    with (
+        patch("agent_backbone.services.routing._delivery.send_message", side_effect=uncertain),
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+    ):
+        delivery = asyncio.create_task(
+            deliver("ike", "fix", config, db=db, delivery_kind="direct_message")
+        )
+        await pasted.wait()
+        checkpoint = asyncio.create_task(checkpoint_inbox("ike", db=db))
+        await asyncio.sleep(0)
+        assert not checkpoint.done()
+        finish.set()
+        report, inbox = await asyncio.gather(delivery, checkpoint)
+    assert report.unconfirmed and inbox["messages"][0]["status"] == "uncertain"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "● API Error: 429 means the service is rate-limiting your requests.",
+        "● You have hit your usage limit in an external service.",
+    ],
+)
+async def test_claude_explanation_is_not_provider_block(config, reply):
+    write_state_file(config.state_dir, "ike", {"state": "idle", "ts": time.time()})
+    state = await get_agent_state(
+        config.state_dir, "ike", runtime_hint="claude", pane_content=reply + "\n❯"
+    )
+    assert state.state == AgentState.IDLE

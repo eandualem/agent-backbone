@@ -222,7 +222,7 @@ another copy. Work labels for newly registered members use their explicit swarm
 task tag, not incidental issue references or theme color values in output.
 
 Members and coordinators run `backbone inbox` between meaningful steps and before
-commits/handoffs, then acknowledge applied or superseded IDs with `--ack`. Keep
+commits/handoffs, then acknowledge applied or superseded messages using their `ack_token` with `--ack`. Keep
 current decisions in the issue/shared record and consult it at checkpoints.
 Messages to/from active swarm members do not expire during a long turn; this does
 not interrupt the turn or replace cooperative reads.

@@ -96,5 +96,9 @@ See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
 
 During long work, agents can read corrections themselves without waiting for
 terminal delivery: `backbone inbox` (or `--agent NAME`). After applying or
-superseding messages, use `backbone inbox --ack ID ...`. Check between meaningful
+superseding messages, use `backbone inbox --ack TOKEN ...`. Check between meaningful
 steps and before a commit or handoff. Details: `backbone help messaging`.
+
+For `--ack`, copy each complete `ack_token` from the inbox response. Numeric row
+IDs alone cannot acknowledge work; tokens prevent stale acknowledgements from
+consuming a different message after queue cleanup.
