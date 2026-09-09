@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 from unittest.mock import AsyncMock, patch
@@ -20,7 +21,7 @@ def _live(sessions: list[str]):
     """Every agent reads idle; ``sessions`` are the live tmux sessions."""
     with (
         patch(
-            "agent_backbone.api.session_updates.agent_state",
+            "agent_backbone.services.agents.queries.agent_state",
             new_callable=AsyncMock,
             return_value=_idle_snapshot(),
         ),
@@ -154,3 +155,28 @@ async def test_upgrade_hold_is_authenticated_scoped_and_refuses_late_requests(
     assert (
         await api_client.post("/api/upgrade/hold", json=body, headers=auth_headers)
     ).status_code == 409
+
+
+async def test_slow_github_does_not_block_local_status(api_client, auth_headers, api_app):
+    cancelled = asyncio.Event()
+
+    async def slow(**kwargs):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.set()
+
+    gh = AsyncMock()
+    gh.list_issues.side_effect = slow
+    api_app.dependency_overrides[get_optional_github] = lambda: gh
+    try:
+        with _live(["ike"]):
+            response = await asyncio.wait_for(
+                api_client.get("/api/status", headers=auth_headers), timeout=4
+            )
+        assert response.status_code == 200
+        assert response.json()["pending_issues"] is None
+        assert response.json()["active_sessions"] == ["ike"]
+        assert cancelled.is_set()
+    finally:
+        api_app.dependency_overrides.clear()

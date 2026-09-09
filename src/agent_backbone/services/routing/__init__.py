@@ -10,7 +10,7 @@ below are the surface the API, the jobs and the integrations use.
 from agent_backbone.services.routing._create_notify import create_and_notify
 from agent_backbone.services.routing._delivery import (
     DeliveryReport,
-    deliver,
+    checkpoint_inbox,
     is_acknowledged,
     queue_detail,
     safe_deliver,
@@ -39,13 +39,15 @@ from agent_backbone.services.routing._targets import (
     queue_scope,
     route_issue,
 )
+from agent_backbone.services.routing._validity import current_notification_issue
 
 __all__ = [
     "DeliveryReport",
     "IssueClosedHook",
+    "checkpoint_inbox",
     "compute_priority_score",
     "create_and_notify",
-    "deliver",
+    "current_notification_issue",
     "dispatch_event",
     "format_next_issue_notification",
     "format_offline_queue_notification",

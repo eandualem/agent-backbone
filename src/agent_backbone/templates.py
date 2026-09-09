@@ -91,10 +91,6 @@ def list_templates(data_dir: Path) -> list[dict]:
     ]
 
 
-def policy_path(data_dir: Path, name: str) -> Path:
-    return template_path(data_dir, f"policy:{name}")
-
-
 def policy_source(data_dir: Path, name: str) -> Path:
     return template_source(f"policy:{name}", data_dir)
 

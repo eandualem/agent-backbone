@@ -12,6 +12,7 @@ import pytest
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import AgentState, AgentStore, StartResult, StateSnapshot
+from agent_backbone.services.routing import DeliveryReport
 from agent_backbone.services.swarm import (
     SwarmError,
     create_swarm,
@@ -237,7 +238,11 @@ def _swarm_config(tmp_path):
 
 class TestCreateSwarm:
     @pytest.mark.parametrize("custom_kickoff", [False, True])
-    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
+    @patch(
+        f"{_IFACE}.safe_deliver",
+        new_callable=AsyncMock,
+        return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+    )
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
@@ -365,7 +370,11 @@ class TestCreateSwarm:
             )
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
-    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
+    @patch(
+        f"{_IFACE}.safe_deliver",
+        new_callable=AsyncMock,
+        return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+    )
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock)
     @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=True)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
@@ -422,7 +431,11 @@ class TestCreateSwarm:
             "active" if occupied else "disbanded"
         )
 
-    @patch(f"{_IFACE}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED)
+    @patch(
+        f"{_IFACE}.safe_deliver",
+        new_callable=AsyncMock,
+        return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+    )
     @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
     @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)

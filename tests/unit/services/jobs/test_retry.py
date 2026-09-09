@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
-from agent_backbone.models import IssueData, ParsedLabels
+from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.jobs.retry import delivery_retry, drain_message_queue, retry_delivery
+from agent_backbone.services.routing import DeliveryReport
 from tests.conftest import TEST_REPO, make_config
 from tests.support import queue_row
 
@@ -64,7 +65,7 @@ class TestRetryDeliveryAckCheck:
         )
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
-        mock_deliver.return_value = "delivered"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
         delivery = {
             "session_name": "ike",
             "issue_number": 154,
@@ -107,7 +108,7 @@ class TestRetryDeliveryAckCheck:
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
         mock_gh.list_issues = AsyncMock(return_value=[mock_issue])
-        mock_deliver.return_value = "delivered"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
         delivery = {
             "session_name": "backbone",
             "issue_number": 77,
@@ -136,9 +137,9 @@ class TestRetryDeliveryAckCheck:
             "repo": TEST_REPO,
         }
 
-        mock_deliver.return_value = "agent_working"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.AGENT_WORKING)
         assert await retry_delivery(config, delivery, db, mock_gh) == "still_busy"
-        mock_deliver.return_value = "offline"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.OFFLINE)
         assert await retry_delivery(config, delivery, db, mock_gh) == "still_offline"
 
 
@@ -151,7 +152,7 @@ class TestDeliveryRetryQueueDrain:
             delivery_kind="direct_message",
             source="api-messages",
         )
-        mock_deliver.return_value = "delivered"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
 
         summary = await drain_message_queue(config, db, AsyncMock(), active_sessions=set())
 
@@ -168,7 +169,7 @@ class TestDeliveryRetryQueueDrain:
             source="api-messages",
         )
         db.queue.release = AsyncMock(wraps=db.queue.release)
-        mock_deliver.return_value = "offline"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.OFFLINE)
 
         summary = await drain_message_queue(config, db, AsyncMock(), active_sessions={"ike"})
 
@@ -188,7 +189,7 @@ class TestDeliveryRetryQueueDrain:
                 delivery_kind="direct_message",
                 source="api-messages",
             )
-        mock_deliver.return_value = "agent_working"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.AGENT_WORKING)
 
         await drain_message_queue(config, db, AsyncMock(), active_sessions={"ike"})
 
@@ -264,7 +265,7 @@ class TestDeliveryRetryQueueDrain:
         await drain_message_queue(config, db, AsyncMock(), active_sessions=set())
 
         db.queue.expire_stale_leases.assert_awaited_once_with(max_age_minutes=5)
-        db.queue.expire_pending.assert_awaited_once_with(max_age_minutes=30)
+        db.queue.expire_pending.assert_awaited_once_with(max_age_minutes=30, protected_sessions=())
 
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     @patch(
@@ -285,7 +286,7 @@ class TestDeliveryRetryQueueDrain:
         )
         mock_list_sessions.return_value = ["ike"]
         mock_queue.return_value = [MagicMock(number=91)]
-        mock_deliver.return_value = "delivered"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
 
         summary = await delivery_retry(config, db, AsyncMock())
 
@@ -309,7 +310,7 @@ class TestDeliveryRetryQueueDrain:
             source="api-messages",
         )
         mock_list_sessions.return_value = ["ike"]
-        mock_deliver.return_value = "delivered"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
 
         summary = await delivery_retry(config, db, AsyncMock())
 
@@ -334,7 +335,7 @@ class TestDeliveryRetryQueueDrain:
         )
         await db.queue.enqueue(session_name="ike", message="hi", delivery_kind="direct_message")
         mock_list_sessions.return_value = ["ike"]
-        mock_deliver.return_value = "delivered"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
 
         summary = await delivery_retry(config, db, None)
 
@@ -396,7 +397,7 @@ class TestDrainKeepsTheRowIdentity:
         async def blocked(*args, **kwargs):
             entered.set()
             await release.wait()
-            return "agent_working"
+            return DeliveryReport(DeliveryOutcome.AGENT_WORKING)
 
         with patch(
             "agent_backbone.services.jobs.retry.safe_deliver", AsyncMock(side_effect=blocked)
@@ -414,6 +415,7 @@ class TestDrainKeepsTheRowIdentity:
                 release.set()
                 await first
         assert await db.queue.pending_count("ike") == 6
+        assert not any(row["code"] == "queue_drain_failed" for row in await db.diagnostics.query())
 
     async def test_cancelled_drain_releases_its_batch(self, config, db):
         import asyncio
@@ -437,7 +439,8 @@ class TestDrainKeepsTheRowIdentity:
                 await task
         assert await db.queue.pending_count("ike") == 1
         with patch(
-            "agent_backbone.services.jobs.retry.safe_deliver", AsyncMock(return_value="delivered")
+            "agent_backbone.services.jobs.retry.safe_deliver",
+            AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED)),
         ):
             assert (await drain_message_queue(config, db, None, active_sessions={"ike"}))[
                 "queue_delivered"
@@ -498,7 +501,8 @@ class TestDrainKeepsTheRowIdentity:
         )
         gh.list_issues.return_value = []
         with patch(
-            "agent_backbone.services.jobs.retry.safe_deliver", AsyncMock(return_value="delivered")
+            "agent_backbone.services.jobs.retry.safe_deliver",
+            AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED)),
         ):
             assert (
                 await retry_delivery(
@@ -533,9 +537,9 @@ class TestDrainKeepsTheRowIdentity:
             source_key=f"comment:{TEST_REPO}#7:100",
         )
         mock_list_sessions.return_value = ["ike"]
-        mock_deliver.return_value = "agent_working"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.AGENT_WORKING)
 
-        await delivery_retry(config, db, None)
+        await delivery_retry(config, db, AsyncMock())
 
         kwargs = mock_deliver.await_args.kwargs
         assert kwargs["sender"] == "leo"
@@ -572,7 +576,7 @@ class TestDrainKeepsTheRowIdentity:
     ):
         await db.queue.enqueue(session_name="ike", message="hi", delivery_kind="direct_message")
         mock_list_sessions.return_value = ["ike"]
-        mock_deliver.return_value = "agent_working"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.AGENT_WORKING)
         await delivery_retry(config, db, None)
         assert mock_deliver.await_args.kwargs["requeue"] is False
 
@@ -691,16 +695,18 @@ class TestDeliveryDedupPrefixedOutcomes:
         )
         mock_send.return_value = True
 
-        outcome = await safe_deliver(
-            "feynman",
-            "New comment on same issue",
-            config,
-            db=db,
-            issue_number=200,
-            target_entity="feynman",
-            source="test",
-            delivery_kind="comment",
-        )
+        outcome = (
+            await safe_deliver(
+                "feynman",
+                "New comment on same issue",
+                config,
+                db=db,
+                issue_number=200,
+                target_entity="feynman",
+                source="test",
+                delivery_kind="comment",
+            )
+        ).outcome
 
         assert outcome == "delivered"
         mock_send.assert_called_once()
@@ -741,12 +747,12 @@ class TestIssueRedeliveryRegression:
                 delivery_kind=kind,
             )
 
-        assert await deliver("issue") == "delivered"
+        assert (await deliver("issue")).outcome == "delivered"
         # A comment on the issue is its own kind and goes through …
-        assert await deliver("comment") == "delivered"
+        assert (await deliver("comment")).outcome == "delivered"
         # … but every re-dispatch of the issue itself is suppressed.
-        assert await deliver("issue") == "already_delivered"
-        assert await deliver("issue") == "already_delivered"
+        assert (await deliver("issue")).outcome == "already_delivered"
+        assert (await deliver("issue")).outcome == "already_delivered"
         assert mock_send.await_count == 2
         # And the retry job no longer sees the issue as failed.
         assert 300 not in [r["issue_number"] for r in await db.deliveries.failed()]
@@ -769,7 +775,7 @@ class TestQueuedAge:
             from sqlalchemy import text
 
             await conn.execute(text("UPDATE message_queue SET enqueued_at = :t"), {"t": old})
-        mock_deliver.return_value = "delivered"
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
 
         await drain_message_queue(config, db, AsyncMock(), active_sessions={"ike"})
 

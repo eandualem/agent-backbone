@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from agent_backbone.models import REPORT_BODY_BYTES, REPORTS_PER_HOUR
+from agent_backbone.models import REPORT_BODY_BYTES, REPORTS_PER_HOUR, ReportQuery
 from tests.report_support import publication, publish
 
 
@@ -145,3 +145,18 @@ async def test_hostile_extra_field_names_cannot_expand_validation_response(
     assert response.status_code == 422
     assert len(response.content) < 500
     assert "\x1b" not in response.json()["detail"][0]["field"]
+
+
+@pytest.mark.parametrize("role", ["worker", "coordinator"])
+async def test_swarm_publication_is_refused(api_app, api_client, auth_headers, role):
+    from tests.report_support import author
+
+    db = api_app.state.db
+    await author(db, "swarm-author", tags=("swarm:task", f"role:{role}"))
+    response = await api_client.post(
+        "/api/reports", headers=auth_headers, json=publication("swarm-author").model_dump()
+    )
+    assert response.status_code == 403
+    assert "repository agent" in response.json()["detail"]
+    assert await db.reports.claim_telegram() is None
+    assert not (await db.reports.query(ReportQuery(history=True, members=True)))["items"]

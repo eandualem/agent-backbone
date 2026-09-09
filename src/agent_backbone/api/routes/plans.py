@@ -23,10 +23,9 @@ from agent_backbone.api.models import (
     PlanRejectRequest,
     PlanRespondRequest,
 )
-from agent_backbone.api.session_updates import listable_sessions
 from agent_backbone.config import BackboneConfig
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.agents import agent_state, plan_control, read_plan
+from agent_backbone.services.agents import agent_state, listable_sessions, plan_control, read_plan
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.terminal import list_sessions
 
@@ -74,14 +73,16 @@ async def _run_plan_control(config: BackboneConfig, session: str, action: str) -
 
 async def _deliver_plan_response(config, db, session: str, message: str) -> DeliveryOutcome:
     """Type an answer into the plan prompt — only while it is on screen, never queued."""
-    outcome = await safe_deliver(
-        session,
-        message,
-        config,
-        db=db,
-        source="api-plans",
-        delivery_kind="plan_response",
-    )
+    outcome = (
+        await safe_deliver(
+            session,
+            message,
+            config,
+            db=db,
+            source="api-plans",
+            delivery_kind="plan_response",
+        )
+    ).outcome
     if outcome != DeliveryOutcome.DELIVERED:
         raise HTTPException(
             status_code=409,
@@ -154,14 +155,16 @@ async def reject_plan(
     registered_agent_or_404(config, session)
     await _require_plan_waiting(config, session)
     await _run_plan_control(config, session, "reject")
-    outcome = await safe_deliver(
-        session,
-        f"[via:backbone] Plan rejected: {body.feedback}",
-        config,
-        db=db,
-        source="api-plans",
-        delivery_kind="direct_message",
-    )
+    outcome = (
+        await safe_deliver(
+            session,
+            f"[via:backbone] Plan rejected: {body.feedback}",
+            config,
+            db=db,
+            source="api-plans",
+            delivery_kind="direct_message",
+        )
+    ).outcome
 
     log.info("Plan rejected for %s: %s (%s)", session, body.feedback[:80], outcome)
     return {

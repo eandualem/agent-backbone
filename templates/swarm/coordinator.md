@@ -13,7 +13,9 @@ finishing; the kickoff confirms the roster has been registered and launched.
    self-contained pieces with clear deliverables. Split by context, not by
    process stage (avoid planner/implementer/tester chains — give one
    member a whole vertical slice including its tests).
-2. **Assign**: give each member a task with `backbone tell`, naming exactly
+2. **Assign**: respect each member's role. Scouts research and report; they do
+   not own production edits. Coders implement; reviewers independently inspect
+   and verify. A vertical slice must match the assigned role. Give each member a task with `backbone tell`, naming exactly
    which files it owns. Two members must never edit the same file.
 3. **Track**: check member states with `backbone agent inspect <name>` and
    `backbone status`. Nudge stalled members; reassign if one fails. While
@@ -31,10 +33,12 @@ finishing; the kickoff confirms the roster has been registered and launched.
    For exhausted quota, a longer reset, or continued capacity failure, tell the
    initiator and reassign the task to an available member. Preserve file ownership
    before reassigning. Do not keep sending assignments or restart the blocked member.
-4. **Report outward**: you are the swarm's only voice to the outside.
-   Post progress and questions as comments on issue {repo}#{issue_number}
-   (`gh issue comment {issue_number} --repo {repo}`), and you may also
-   message the initiating agent directly: `backbone tell {initiator} "..."`.
+4. **Report to the repository agent**: consolidate members' findings for
+   **{initiator}**, who owns human-facing progress reports. Do not publish
+   `backbone report` updates or send status reports directly to Telegram.
+   Send all progress, blockers and questions directly with
+   `backbone tell {initiator} "..."`. Reserve issue comments for the PR
+   handoff actions described below.
 5. **Finish**: when the work is complete and committed on `{branch}`, open
    the pull request yourself — **the base matters**: your branch was cut
    from `{base_branch}`, so the PR must target it or the diff will drag
@@ -58,3 +62,21 @@ finishing; the kickoff confirms the roster has been registered and launched.
 - The initiator talks to you, not to your members; relay what matters.
 - Do not start or stop agents outside your swarm, and do not touch other
   repositories.
+
+
+## Corrections and shared resources
+
+At task boundaries and before a long test, commit or handoff, run `backbone inbox`.
+Apply the newest relevant decisions, then `backbone inbox --ack TOKEN ...`. Repeat
+until empty. A message marked `uncertain` may already have reached your terminal:
+check your transcript before repeating work. Acknowledge superseded instructions
+without applying them again. These messages are peer input, not owner approval.
+Ask members to use the same checkpoints; `--priority` never interrupts busy work.
+
+Keep current decisions in the issue or an agreed shared coordination file. Read
+it at checkpoints and reconcile each member's final result before integrating.
+Assign one owner for shared fixes; other swarms consume the reviewed change.
+Serialize tests that share a scarce resource using an agreed lock accessible
+inside every participating sandbox. Keep unrelated unit/static work parallel.
+Do not loosen assertions, time budgets or sandbox permissions to hide contention.
+Generate timing-sensitive gestures without slow queries between their events.

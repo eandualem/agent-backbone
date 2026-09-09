@@ -44,8 +44,10 @@ and worktree remain available for inspection.
   with `backbone tell` — the ordinary agent-to-agent pipeline (queued
   when busy, audited, provenance-labeled). The issue plays no role here.
 - **Swarm ↔ initiator**: the coordinator is the swarm's only outside
-  voice. It posts progress and questions as comments on the issue, and
-  may also `tell` the initiating agent directly.
+  voice. It sends progress, blockers and questions directly to the initiating
+  repository agent with `backbone tell`. Issue comments are reserved for the
+  coordinator's PR handoff actions; the repository agent publishes human-facing
+  progress reports.
 - **You ↔ swarm**: `backbone tell research "..."` — a swarm's name
   resolves to its coordinator.
 - **GitHub ↔ swarm**: members are registered with the repository for
@@ -199,8 +201,39 @@ question, not a permission: nothing answers it automatically,
 `agent approve` refuses it, and `backbone agent deny <member>` keeps the
 model.
 
-
 Creating a swarm always starts fresh conversations, including when a completed
 or disbanded swarm name is reused. Saved state from an earlier swarm cannot
 replace the new issue’s role briefs and roster. Ordinary agent starts retain
 their automatic continuation behavior.
+
+## Registration, checkpoints and shared tests
+
+Create or clone the remote repository before registering the lead. If the Git
+remote changes afterward, verify it, compare `backbone agent inspect NAME`, and
+update stored ownership with `backbone agent set NAME repo=OWNER/REPO` before
+creating a swarm. The mismatch error includes that supported recovery command;
+Backbone does not silently replace intentionally configured ownership.
+
+Coordinators assign research to scouts, implementation to coders and independent
+verification to reviewers. Scouts are read-only by instruction, not a filesystem
+security boundary. Do not assign every role a production slice. Each shared fix
+has one owner; consuming swarms integrate its reviewed commit rather than editing
+another copy. Work labels for newly registered members use their explicit swarm
+task tag, not incidental issue references or theme color values in output.
+
+Members and coordinators run `backbone inbox` between meaningful steps and before
+commits/handoffs, then acknowledge applied or superseded messages using their `ack_token` with `--ack`. Keep
+current decisions in the issue/shared record and consult it at checkpoints.
+Messages to/from active swarm members do not expire during a long turn; this does
+not interrupt the turn or replace cooperative reads.
+
+Serialize terminal suites sharing host resources with an agreed lock path inside
+all participating sandboxes; keep unit/static work parallel. A lock does not
+remove CPU/process-spawn latency. Generate time-sensitive input gestures without
+slow queries between their events. Retain assertions and product timing budgets;
+record reproduced causes instead of attributing every failure to contention.
+
+Swarm participants never publish human-facing progress reports or send status
+updates directly to Telegram. Members report to the coordinator; the coordinator
+summarizes for the initiating repository agent, which owns the owner-facing
+report. This is enforced at report publication and pending text/audio delivery.

@@ -262,7 +262,9 @@ class DiagnosticRepo(Repo):
         )
         group_rows = grouped.subquery()
         delivery_filters = []
-        queue_filters = [MessageQueueORM.status.in_(("pending", "in_progress"))]
+        queue_filters = [
+            MessageQueueORM.status.in_(("pending", "in_progress", "checkpoint", "uncertain"))
+        ]
         if since is not None:
             delivery_filters.append(DeliveryORM.created_at >= since)
         if agent_name is not None:
@@ -322,7 +324,13 @@ class DiagnosticRepo(Repo):
                     .group_by(MessageQueueORM.status)
                 )
             ).all()
-        queue = {"pending": 0, "in_progress": 0, "oldest_pending_at": None}
+        queue = {
+            "pending": 0,
+            "in_progress": 0,
+            "checkpoint": 0,
+            "uncertain": 0,
+            "oldest_pending_at": None,
+        }
         for status, count, oldest in queue_counts:
             queue[status] = count
             if status == "pending":

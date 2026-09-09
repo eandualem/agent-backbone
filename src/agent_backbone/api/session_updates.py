@@ -4,19 +4,14 @@ pushed to Socket.IO ``/sessions`` subscribers whenever something changed."""
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from agent_backbone.api.models import EnrichedAgent
 from agent_backbone.config import BackboneConfig
-from agent_backbone.services.agents import agent_state, get_agent_state
-from agent_backbone.services.runtimes import RUNTIME_ENV_KEY
-from agent_backbone.services.terminal import list_sessions_rich, query_environment_var
+from agent_backbone.services.agents import EnrichedAgent, build_session_snapshot
 
 if TYPE_CHECKING:
     import socketio
@@ -26,99 +21,6 @@ log = logging.getLogger(__name__)
 SESSIONS_NAMESPACE = "/sessions"
 SESSIONS_UPDATE_EVENT = "sessions:update"
 SNAPSHOT_TTL_SECONDS = 5.0
-
-
-async def build_enriched_agent(
-    session: str,
-    config: BackboneConfig,
-    active_sessions: set[str],
-    tmux_info: dict | None = None,
-) -> EnrichedAgent:
-    """Build an EnrichedAgent for a session (configured agent or ad-hoc session)."""
-    online = session in active_sessions
-    spec = config.agents.get(session)
-    if online:
-        snapshot = await agent_state(config, session)
-    else:
-        # The shared tmux listing already proved the session absent. Reconcile
-        # saved metadata without trying to capture a terminal that cannot exist.
-        snapshot = await get_agent_state(
-            config.state_dir,
-            session,
-            config.timing.stale_threshold_seconds,
-            runtime_hint=spec.runtime if spec else None,
-            pane_content="",
-        )
-
-    tmux_created = None
-    tmux_attached = False
-    tmux_windows = 0
-    last_activity: float | None = None
-    if tmux_info:
-        created_ts = tmux_info.get("created", 0)
-        if created_ts:
-            tmux_created = datetime.fromtimestamp(created_ts, tz=UTC).isoformat()
-        tmux_attached = tmux_info.get("attached", False)
-        tmux_windows = tmux_info.get("windows", 0)
-        activity_ts = tmux_info.get("activity", 0)
-        if activity_ts:
-            last_activity = float(activity_ts)
-
-    state_value = snapshot.state.value if online else "offline"
-
-    runtime: str | None = spec.runtime if spec else None
-    if online:
-        with contextlib.suppress(Exception):
-            runtime = await query_environment_var(session, RUNTIME_ENV_KEY) or runtime
-
-    return EnrichedAgent(
-        name=session,
-        session=session,
-        configured=spec is not None,
-        runtime=runtime,
-        model=spec.model if spec else None,
-        dir=str(spec.path) if spec else "",
-        repo=spec.repo if spec else "",
-        tags=list(spec.tags) if spec else [],
-        description=spec.description if spec else "",
-        watches=list(spec.watches) if spec else [],
-        state=state_value,
-        reason=snapshot.reason if online else None,
-        current_issue=snapshot.current_issue,
-        current_repo=snapshot.current_repo,
-        online=online,
-        plan_file=snapshot.plan_file,
-        plan_title=snapshot.plan_title,
-        tmux_created=tmux_created,
-        tmux_attached=tmux_attached,
-        tmux_windows=tmux_windows,
-        last_activity=last_activity,
-        state_since=snapshot.timestamp if snapshot.timestamp else None,
-        last_message=snapshot.last_message,
-        detail=snapshot.detail,
-        state_source=snapshot.source,
-        evidence=list(snapshot.evidence),
-    )
-
-
-def listable_sessions(config: BackboneConfig, active_sessions: set[str]) -> list[str]:
-    """Configured agents first, then any other active tmux session (minus the backbone's own)."""
-    names = list(config.agents.names)
-    hidden = {config.backbone.session_name}
-    names.extend(sorted(s for s in active_sessions if s not in config.agents and s not in hidden))
-    return names
-
-
-async def build_session_snapshot(config: BackboneConfig) -> list[EnrichedAgent]:
-    """The full enriched snapshot of every listable session, uncached."""
-    rich_sessions = await list_sessions_rich()
-    tmux_lookup = {session["name"]: session for session in rich_sessions}
-    active_sessions = set(tmux_lookup.keys())
-    coros = [
-        build_enriched_agent(session, config, active_sessions, tmux_lookup.get(session))
-        for session in listable_sessions(config, active_sessions)
-    ]
-    return list(await asyncio.gather(*coros))
 
 
 class SessionFeed:

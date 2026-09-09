@@ -51,6 +51,10 @@ This page follows real requests through the system. Read
    controls its mode. Folder trust remains controlled by `agents.pre_trust`.
 5. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
+Startup readiness uses the same state reconciliation as inspection and delivery,
+with a launch timestamp fence to exclude old hooks and submission markers.
+Current provider-capacity evidence therefore prevents a false ready result.
+
 Starts with a database handle retain operational diagnostics under one operation
 identity: the requested launch, its final outcome, elapsed time and classified
 failure stage. Request-resolution and preflight rejections are recorded too.
@@ -71,7 +75,8 @@ forget for each agent. Edits update only the supplied database fields, so two
 concurrent edits keep both changes. A start checks its resolved record again
 before launching: if the agent was forgotten or changed meanwhile, it fails
 with that reason. Forget waits for an active start and refuses to remove a
-running session. Swarm startup and teardown use the same per-agent locks.
+running session. Telegram `/start` uses this same operation and records startup
+metadata. Swarm startup and teardown use the same per-agent locks.
 If startup rollback cannot finish cleanup, the swarm stays active so `swarm
 disband` can retry it; cleanup errors do not hide the original startup failure.
 
@@ -214,7 +219,8 @@ may be missed; this is bounded observation rather than a transcript recorder.
 ## 3. Sending a message
 
 `backbone tell`, `POST /api/messages`, Telegram `/tell`, GitHub events and
-agent-to-agent calls all end in the same function, `safe_deliver`:
+agent-to-agent calls all end in the same function, `safe_deliver`. It returns one
+detailed delivery receipt, including the outcome and any durable queue identity:
 
 ```mermaid
 sequenceDiagram
@@ -250,8 +256,8 @@ sequenceDiagram
 - **Comments**, including those on the current issue, wait while the agent is
   starting, busy, blocked, or waiting for a human. They are queued and delivered
   when the agent is ready; priority does not bypass these conditions.
-- **Queue hygiene.** Undelivered after `timing.queue_expiry_minutes` (30):
-  expired. Leased by a crashed drain: released after 5 min. A blocked drain
+- **Queue hygiene.** Ordinary pending messages expire after `timing.queue_expiry_minutes`
+  (30). Active swarm coordination and inbox holds are retained. Leased by a crashed drain: released after 5 min. A blocked drain
   keeps the original row, including when displaying its age; completed rows
   are pruned after `timing.delivery_retention_days` from completion.
 - **Everything is recorded**, direct messages included:
@@ -396,6 +402,9 @@ reply` lands there. See [Telegram](telegram.md).
 
 ## 7. Dashboards and scripts
 
+Agent snapshot projections live in the agents service; API caching and Socket.IO
+emission consume those projections, as does offline CLI status.
+
 - REST for state and actions (`/api/agents`, `/api/agents/{name}/inspect`,
   `/api/messages`, `/api/issues`, `/api/deliveries`, `/api/events`,
   `/api/plans`, `/api/status`, `/api/config`).
@@ -414,6 +423,8 @@ caught up on restart: poll intake resumes from its durable per-repository cursor
 webhook intake runs its startup backfill. The `agent-monitor` job runs
 its first tick immediately, so hook state for every running session is
 re-read and missed plan-waiting notifications fire right after a restart.
+A failed plan-notification delivery remains retryable on the next monitor cycle;
+it does not prevent notifications for other waiting plans in the same cycle.
 
 Queue lists and sub-issue reads share one complete repository snapshot within a
 monitor tick or close event. Each tick/request starts a new snapshot; a failed
@@ -436,3 +447,8 @@ and re-executes after shutdown completes. External termination still stops the
 process normally. A custom ASGI runner that does not install this shutdown
 callback does not perform Backbone’s automatic restart; its supervisor owns
 restart behavior. `--reload` continues to use Uvicorn’s development reloader.
+
+
+
+See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
+coordination, acknowledgement and retention.

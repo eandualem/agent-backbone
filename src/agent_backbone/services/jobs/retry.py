@@ -8,9 +8,16 @@ from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from agent_backbone.models import BLOCKED_OUTCOMES, DeliveryOutcome, EventType, IssueData
+from agent_backbone.models import (
+    BLOCKED_OUTCOMES,
+    RETIREMENT_REASONS,
+    DeliveryOutcome,
+    EventType,
+    IssueData,
+)
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import (
+    current_notification_issue,
     format_next_issue_notification,
     is_acknowledged,
     list_open_queue_for_target,
@@ -31,7 +38,6 @@ log = logging.getLogger(__name__)
 
 _BUSY_OUTCOMES = BLOCKED_OUTCOMES - {DeliveryOutcome.OFFLINE}
 _QUEUE_DONE = frozenset({DeliveryOutcome.DELIVERED, DeliveryOutcome.ALREADY_DELIVERED})
-_RETIRED = frozenset({"acknowledged", "no_repo", "issue_closed", "no_longer_targeted"})
 SOURCE = "delivery-retry"
 _draining: set[str] = set()
 """Sessions currently draining; removed on completion or cancellation."""
@@ -70,7 +76,12 @@ async def drain_message_queue(
         await observe_job(db, source=SOURCE, stage="lease_recovery")
 
     try:
-        expired = await db.queue.expire_pending(max_age_minutes=config.timing.queue_expiry_minutes)
+        active_swarms = {row["name"] for row in await db.swarms.list(active_only=True)}
+        protected = tuple(spec.name for spec in config.agents if spec.swarm in active_swarms)
+        expired = await db.queue.expire_pending(
+            max_age_minutes=config.timing.queue_expiry_minutes,
+            protected_sessions=protected,
+        )
         if expired:
             log.info(
                 "Expired %d queued messages (> %d min)",
@@ -121,10 +132,45 @@ async def _drain_session(config, db, gh, session_name, summary) -> bool:
         for record in queued:
             target = record.get("target_entity")
             scope: set[tuple[str, int]] | None = None
+            source_key = (record.get("dedup_key") or "").removeprefix("src:")
+            if (
+                record.get("delivery_kind") in {"comment", "review", "pull_request", "watch"}
+                and record.get("repo")
+                and record.get("issue_number")
+            ):
+                try:
+                    _, retired = await current_notification_issue(
+                        gh, record["repo"], record["issue_number"], source_key=source_key
+                    )
+                except Exception as exc:
+                    await observe_job(
+                        db,
+                        source=SOURCE,
+                        stage="notification_validity",
+                        agent_name=session_name,
+                        repo=record["repo"],
+                        issue_number=record["issue_number"],
+                        error_type=type(exc).__name__,
+                    )
+                    summary["queue_deferred"] = summary.get("queue_deferred", 0) + 1
+                    completed = False
+                    continue
+                await observe_job(
+                    db,
+                    source=SOURCE,
+                    stage="notification_validity",
+                    agent_name=session_name,
+                    repo=record["repo"],
+                    issue_number=record["issue_number"],
+                )
+                if retired:
+                    await db.queue.mark_delivered(record["id"], reason=retired)
+                    summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
+                    continue
             if record.get("delivery_kind") == "issue":
                 try:
                     issue, status = await _current_issue(config, record, db, gh)
-                    if status in _RETIRED:
+                    if status in RETIREMENT_REASONS:
                         await db.queue.mark_delivered(record["id"], reason=status)
                         summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
                         continue
@@ -161,29 +207,31 @@ async def _drain_session(config, db, gh, session_name, summary) -> bool:
                         repo=record.get("repo") or "",
                         issue_number=record.get("issue_number"),
                     )
-            outcome = await safe_deliver(
-                session_name,
-                stamp_queued_age(record["message"], _waited_seconds(record)),
-                config,
-                db=db,
-                repo=record.get("repo") or "",
-                issue_number=record.get("issue_number"),
-                target_entity=target,
-                source=f"{SOURCE}-queue",
-                enforce_issue_queue=True,
-                queue_scope=scope,
-                delivery_kind=record.get("delivery_kind", "issue"),
-                sender=record.get("sender") or "",
-                source_key=(
-                    record["dedup_key"].removeprefix("src:")
-                    if (record.get("dedup_key") or "").startswith("src:")
-                    else None
-                ),
-                # The leased row already holds this message, including on failure.
-                requeue=False,
-                operation_id=record.get("operation_id"),
-                queue_id=record["id"],
-            )
+            outcome = (
+                await safe_deliver(
+                    session_name,
+                    stamp_queued_age(record["message"], _waited_seconds(record)),
+                    config,
+                    db=db,
+                    repo=record.get("repo") or "",
+                    issue_number=record.get("issue_number"),
+                    target_entity=target,
+                    source=f"{SOURCE}-queue",
+                    enforce_issue_queue=True,
+                    queue_scope=scope,
+                    delivery_kind=record.get("delivery_kind", "issue"),
+                    sender=record.get("sender") or "",
+                    source_key=(
+                        record["dedup_key"].removeprefix("src:")
+                        if (record.get("dedup_key") or "").startswith("src:")
+                        else None
+                    ),
+                    # The leased row already holds this message, including on failure.
+                    requeue=False,
+                    operation_id=record.get("operation_id"),
+                    queue_id=record["id"],
+                )
+            ).outcome
             if outcome in _QUEUE_DONE:
                 if outcome == DeliveryOutcome.ALREADY_DELIVERED:
                     await db.queue.mark_delivered(record["id"], reason="already_delivered")
@@ -223,7 +271,7 @@ async def _current_issue(
         return None, "fetch_failed"
 
     try:
-        issue = await gh.get_issue(issue_number, repo_full_name=repo)
+        issue, retired = await current_notification_issue(gh, repo, issue_number)
     except Exception as exc:
         log.warning("Failed to fetch %s#%d for retry", repo, issue_number)
         await observe_job(
@@ -245,8 +293,8 @@ async def _current_issue(
             repo=repo,
             issue_number=issue_number,
         )
-    if issue.state == "closed":
-        return None, "issue_closed"
+    if retired:
+        return None, retired
     if (
         issue.labels.sender == target
         or target not in route_issue(issue, EventType.ISSUE_OPENED, config).queue
@@ -271,19 +319,21 @@ async def retry_delivery(
     operation_id = delivery.get("operation_id")
     if not operation_id and delivery.get("id") is not None:
         operation_id = uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:delivery:{delivery['id']}").hex
-    outcome = await safe_deliver(
-        session_name,
-        format_next_issue_notification(issue),
-        config,
-        db=db,
-        repo=repo,
-        issue_number=issue_number,
-        target_entity=target,
-        source=SOURCE,
-        enforce_issue_queue=True,
-        queue_scope=scope,
-        operation_id=operation_id,
-    )
+    outcome = (
+        await safe_deliver(
+            session_name,
+            format_next_issue_notification(issue),
+            config,
+            db=db,
+            repo=repo,
+            issue_number=issue_number,
+            target_entity=target,
+            source=SOURCE,
+            enforce_issue_queue=True,
+            queue_scope=scope,
+            operation_id=operation_id,
+        )
+    ).outcome
     if outcome == DeliveryOutcome.DELIVERED:
         return "retried"
     if outcome == DeliveryOutcome.OFFLINE:
@@ -330,7 +380,7 @@ async def delivery_retry(config: BackboneConfig, db: BackboneDB, gh: GitHubClien
         for delivery in failures:
             try:
                 outcome = await retry_delivery(config, delivery, db, gh)
-                if outcome in _RETIRED:
+                if outcome in RETIREMENT_REASONS:
                     await db.deliveries.retire(delivery["id"], outcome)
                 summary[outcome] = summary.get(outcome, 0) + 1
             except Exception as exc:

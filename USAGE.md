@@ -89,6 +89,17 @@ a stopped agent; active swarm members cannot be renamed.
 - `backbone docs usage` — this page from an installed package.
 
 Ordinary agent reports appear in General and the agent's topic, with separate
-delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
+delivery receipts. Swarm participants, including coordinators, cannot publish human-facing reports.
+Only their repository agent reports consolidated progress to the owner. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
+
+
+During long work, agents can read corrections themselves without waiting for
+terminal delivery: `backbone inbox` (or `--agent NAME`). After applying or
+superseding messages, use `backbone inbox --ack TOKEN ...`. Check between meaningful
+steps and before a commit or handoff. Details: `backbone help messaging`.
+
+For `--ack`, copy each complete `ack_token` from the inbox response. Numeric row
+IDs alone cannot acknowledge work; tokens prevent stale acknowledgements from
+consuming a different message after queue cleanup.

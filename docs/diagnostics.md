@@ -222,3 +222,22 @@ an empty healthy result. Address discovery reads existing host/port settings
 without initializing storage. CLI JSON is intended for local analysis:
 agent names, repositories and model identifiers can still reveal context,
 even though message content and secrets are excluded.
+
+
+Queue summaries include `checkpoint` (claimed by an agent's inbox) and `uncertain`
+(a paste whose acceptance could not be established). Both remain until explicit
+inbox acknowledgement; they are not automatically retried or expired. A delivery
+record of `submitted` is a terminal observation, not proof that the model acted.
+Post-submission state evidence temporarily blocks another paste and invalidates
+an older idle hook until a new hook or terminal observation establishes readiness.
+Claude monthly-spend/session/weekly limit banners are recognized as provider
+blocks; later successful terminal output supersedes historical denial text.
+
+
+SQLite startup verifies the definitions of Backbone-owned indexes as well as
+required tables, columns and the migration stamp. This repairs an upgrade where
+an older process loaded the new migration stamp while retaining old model
+metadata. A current stamp alone does not prove queue conflict indexes are correct.
+Matching schemas avoid rebuilds; operator-added indexes are left in place. This
+additional DDL comparison is SQLite-specific; PostgreSQL continues to use the
+existing revision and required-table/column repair path.

@@ -7,7 +7,7 @@ import uuid
 
 from sqlalchemy import text
 
-from agent_backbone.models import RETRYABLE_OUTCOMES
+from agent_backbone.models import RETIREMENT_REASONS, RETRYABLE_OUTCOMES
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
@@ -201,7 +201,7 @@ class DeliveryRepo(Repo):
         Only retryable attempts can change; an overlapping successful delivery
         or another retirement must never be overwritten.
         """
-        if outcome not in {"acknowledged", "no_repo", "issue_closed", "no_longer_targeted"}:
+        if outcome not in RETIREMENT_REASONS:
             raise ValueError(f"Not a terminal retry outcome: {outcome}")
         placeholders = ",".join(f"'{o.value}'" for o in sorted(RETRYABLE_OUTCOMES))
         async with self._tx() as conn:

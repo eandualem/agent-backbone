@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -423,7 +424,7 @@ class TestStartingState:
 
     async def test_hook_state_newer_than_the_launch_wins(self, tmp_path):
         state_dir = tmp_path / "state"
-        launched = 1_000.0
+        launched = time.time() - 3
         write_state_file(state_dir, "ike", {"state": "idle", "ts": launched + 2})
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
@@ -432,13 +433,13 @@ class TestStartingState:
             outcome, evidence = await wait_until_ready(
                 "ike", state_dir=state_dir, runtime="claude", timeout=1, since=launched
             )
-        assert outcome == "ready" and evidence[0].startswith("hook reported idle")
+        assert outcome == "ready" and "idle" in evidence[0]
 
     async def test_a_dialog_on_screen_beats_the_hooks_idle(self, tmp_path):
         """`claude --resume` fires SessionStart with its picker still up; start
         must report the question, not `ready`."""
         state_dir = tmp_path / "state"
-        launched = 1_000.0
+        launched = time.time() - 3
         write_state_file(state_dir, "ike", {"state": "idle", "ts": launched + 2})
         picker = (
             "  ❯ 1. Resume from summary (recommended)\n"
@@ -453,7 +454,7 @@ class TestStartingState:
                 "ike", state_dir=state_dir, runtime="claude", timeout=1, since=launched
             )
         assert outcome == "waiting_for_human"
-        assert evidence[0].startswith("hook reported idle, but the terminal shows a dialog")
+        assert any("dialog" in line for line in evidence)
         assert any("Resume from summary" in line for line in evidence)
 
 
@@ -535,13 +536,13 @@ class TestResumeBySessionId:
 class TestStartupHookAuthority:
     @pytest.mark.parametrize("state", ["busy", "blocked"])
     async def test_fresh_working_hook_beats_visible_input_prompt(self, tmp_path, state):
-        write_state_file(tmp_path, "app", {"state": state, "ts": 100})
+        write_state_file(tmp_path, "app", {"state": state, "ts": time.time()})
         with (
             patch(f"{_MOD}.session_exists", AsyncMock(return_value=True)),
             patch(f"{_MOD}.capture_pane", AsyncMock(return_value="❯")),
         ):
             outcome, _ = await wait_until_ready(
-                "app", state_dir=tmp_path, runtime="claude", since=90, timeout=0
+                "app", state_dir=tmp_path, runtime="claude", since=time.time() - 1, timeout=0
             )
         assert outcome == "timeout"
 
@@ -552,15 +553,15 @@ class TestStartupHookAuthority:
             patch(f"{_MOD}.session_exists", AsyncMock(return_value=True)),
             patch(f"{_MOD}.capture_pane", AsyncMock(return_value="❯")),
             patch(
-                f"{_MOD}.read_state_file",
+                "agent_backbone.services.agents._inference.read_state_file",
                 side_effect=[
-                    StateSnapshot(AgentState.BUSY, timestamp=100),
-                    StateSnapshot(AgentState.IDLE, timestamp=101),
+                    StateSnapshot(AgentState.BUSY, timestamp=time.time()),
+                    StateSnapshot(AgentState.IDLE, timestamp=time.time()),
                 ],
             ) as read,
         ):
             outcome, _ = await wait_until_ready(
-                "app", state_dir=tmp_path, runtime="claude", since=90, poll_interval=0
+                "app", state_dir=tmp_path, runtime="claude", since=time.time() - 1, poll_interval=0
             )
         assert outcome == "ready"
         assert read.call_count == 2
@@ -690,3 +691,50 @@ async def test_claude_consent_is_preaccepted_only_for_explicit_unattended(tmp_pa
         result = await start_agent(spec, config, db=AsyncMock())
     assert result.ok
     assert consent.call_count == int(unattended)
+
+
+@pytest.mark.parametrize("hook", [None, "idle"])
+async def test_capacity_banner_prevents_ready_even_with_an_idle_hook(tmp_path, hook):
+    launched = time.time() - 1
+    if hook:
+        write_state_file(tmp_path, "app", {"state": hook, "ts": time.time()})
+    details = {}
+    with (
+        patch(f"{_MOD}.session_exists", AsyncMock(return_value=True)),
+        patch(
+            f"{_MOD}.capture_pane",
+            AsyncMock(return_value="■ Selected model is at capacity. Please try again later.\n›"),
+        ),
+    ):
+        outcome, _ = await wait_until_ready(
+            "app", state_dir=tmp_path, runtime="codex", since=launched, timeout=0, details=details
+        )
+    assert outcome == "timeout"
+    assert details["state"] == "blocked" and details["reason"] == "provider"
+
+
+@pytest.mark.parametrize("state", ["idle", "waiting_for_human"])
+async def test_prelaunch_hooks_cannot_finish_startup(tmp_path, state):
+    launched = time.time()
+    write_state_file(tmp_path, "app", {"state": state, "reason": "plan", "ts": launched - 1})
+    with (
+        patch(f"{_MOD}.session_exists", AsyncMock(return_value=True)),
+        patch(f"{_MOD}.capture_pane", AsyncMock(return_value="")),
+    ):
+        outcome, _ = await wait_until_ready(
+            "app", state_dir=tmp_path, runtime="shell", since=launched, timeout=0
+        )
+    assert outcome == "timeout"
+
+
+async def test_previous_submission_does_not_block_new_shell_start(tmp_path):
+    launched = time.time()
+    (tmp_path / "app.submitted").write_text(str(launched - 0.1))
+    with (
+        patch(f"{_MOD}.session_exists", AsyncMock(return_value=True)),
+        patch(f"{_MOD}.capture_pane", AsyncMock(return_value="$ ")),
+    ):
+        outcome, _ = await wait_until_ready(
+            "app", state_dir=tmp_path, runtime="shell", since=launched, timeout=0
+        )
+    assert outcome == "ready"

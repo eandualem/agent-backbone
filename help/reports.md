@@ -2,8 +2,9 @@
 
 
 Newly published reports are queued durably for Telegram and posted to the allowed
-agents group: ordinary agents go to General and their own topic; swarm members
-go to General only, including audio. The shared
+agents group: repository agents go to General and their own topic. Swarm members
+and coordinators send findings through `backbone tell` to their coordinator or
+initiating repository agent; they must not publish reports. The shared
 feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
 bounded batches and retries after failures. `telegram.report_updates=false` pauses
 sending; re-enabling drains retained pending reports. A configured or discovered
@@ -102,14 +103,16 @@ of 30 new reports per agent per rolling hour keeps the shared feed bounded;
 idempotent retries do not consume that allowance. This cap is not a reporting schedule.
 
 Latest views show report age and mark reports at least 24 hours old. They include
-“no report yet” for registered agents without one. The shared feed shows swarm
-coordinators; use `--members` or select a member explicitly for detail. Reading a
+“no report yet” for ordinary registered agents without one. The shared feed hides
+all swarm participants, including coordinators. Historical swarm reports remain
+readable by explicit name or `--members`; new swarm publications return 403. Reading a
 feed is evidence of what agents reported, not an independent verification of it.
 
 Full API, retention, pagination, and existing-session adoption details:
 `backbone docs reports`.
 
 Ordinary agent reports appear in General and the agent's topic, with separate
-delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
+delivery receipts. Swarm participants, including coordinators, cannot publish human-facing reports.
+Only their repository agent reports consolidated progress to the owner. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.

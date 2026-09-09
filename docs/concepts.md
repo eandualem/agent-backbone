@@ -128,7 +128,8 @@ delivered by the background jobs — a message that waited at least two
 minutes is delivered with `(queued N min ago)` (`N h` from two hours) after
 its envelope, so a review or comment drained after a long busy stretch
 does not read as current; queued messages expire after
-`timing.queue_expiry_minutes` (30), and an expired message leaves a
+`timing.queue_expiry_minutes` (30), except active swarm coordination and inbox holds.
+An expired message leaves a
 delivery with outcome `expired` (kind, source and preview kept), so
 `agent inspect` shows what never arrived. The sender is told whether a row
 exists (`stored`), whether the same message from them was already
@@ -196,3 +197,8 @@ Runtime registration is declared in `services/runtimes/catalog.json`: IDs,
 detection order and hook files feed configuration, the runtime registry and
 hook installation from the same data. Runtime behavior remains in each runtime's
 module; shipped hook scripts stay standalone.
+
+
+
+See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
+coordination, acknowledgement and retention.

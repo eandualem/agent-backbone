@@ -11,7 +11,8 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from agent_backbone import cli
-from agent_backbone.cli.diagnostics import _client_config, parse_since
+from agent_backbone.cli._common import read_client_config
+from agent_backbone.cli.diagnostics import parse_since
 
 
 def _run(argv: list[str]) -> int:
@@ -202,7 +203,7 @@ async def test_client_reads_existing_address_without_schema_changes(isolated):
         )
     original = database.read_bytes()
     with patch("agent_backbone.cli._common.Direct") as direct:
-        config = await _client_config()
+        config = await read_client_config()
     assert config.backbone.host == "localhost"
     assert config.backbone.port == 7444
     direct.assert_not_called()

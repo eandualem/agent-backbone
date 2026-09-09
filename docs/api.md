@@ -2,9 +2,10 @@
 
 
 Newly published reports are queued durably for Telegram and posted to the allowed
-agents group: ordinary agents go to General and their own topic; swarm members
-go to General only, including audio. The shared
-feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
+agents group: ordinary repository agents go to General and their own topic. Swarm
+workers and coordinators send findings to the repository agent, who publishes
+consolidated updates. Swarms cannot publish reports or send direct replies to the
+owner. The shared feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
 bounded batches and retries after failures. `telegram.report_updates=false` pauses
 sending; re-enabling drains retained pending reports. A configured or discovered
 group must be allowlisted; there is no fallback to a private notification chat.
@@ -233,7 +234,7 @@ it and `queued` is true **only when a row for it exists**:
 
 | `queue` | `queued` | Meaning |
 |---|---|---|
-| `stored` | true | Kept; delivered when the agent is ready, or expired after `timing.queue_expiry_minutes` |
+| `stored` | true | Kept; delivered when the agent is ready, or expired after `timing.queue_expiry_minutes` unless retained for active swarm coordination or inbox acknowledgement |
 | `already_queued` | true | The same message from this `from_entity` is already waiting; nothing was added |
 | `failed` | false | The database refused it — the message is not held anywhere; send it again later |
 
@@ -406,7 +407,9 @@ reply's `feedback` field is its outcome.
 agent's answer into its surface on every enabled integration (Telegram: the
 topic mapped to it). Response `{"ok": true, "session": "app", "posted":
 {"telegram": true}}`; 503 when no integration is configured, 404 when none
-has a surface for that agent yet. `backbone reply "…"` is the CLI form.
+has a surface for that agent yet. Swarm workers and coordinators receive 403;
+they send findings through the coordinator to the repository agent.
+`backbone reply "…"` is the CLI form.
 See [Integrations](integrations.md).
 
 ## Webhook
@@ -470,7 +473,8 @@ through the existing configuration API using `agents.shared_policy` and
 restart an existing conversation.
 
 Ordinary agent reports appear in General and the agent's topic, with separate
-delivery receipts. Swarm-member reports, including audio, appear in General only. Optional full-report voice messages can be enabled with
+delivery receipts. Swarm participants, including coordinators, cannot publish human-facing reports.
+Only their repository agent reports consolidated progress to the owner. Optional full-report voice messages can be enabled with
 `backbone config set telegram.report_audio true` after local speech setup.
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
 
@@ -482,3 +486,17 @@ the running process's automatic upgrade watcher, without changing saved settings
 `enabled:false` releases only that operation's hold; a manual restart clears all
 holds. A restart already requested returns 409, and an unavailable watcher returns
 503. The CLI uses this handshake before `upgrade --no-restart` changes any files.
+
+
+### Cooperative inbox
+
+See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
+coordination, acknowledgement and retention.
+
+`POST /api/messages/inbox` accepts `{"session":"worker"}` and returns
+`{"session":"worker","messages":[...]}` with `id`, `operation_id`, `message`,
+`ack_token`, `sender`, `status`, and `enqueued_at`. Acknowledge with the same endpoint and
+`{"session":"worker","acknowledge":["41:operation-id"]}`. Pass each complete `ack_token` returned by the inbox, not a numeric row ID.
+Up to 20 tokens per acknowledgement; stale or mismatched tokens return 409, unknown session 404.
+The existing shared API key is required. Session names are self-asserted, as with
+ordinary messaging; this is not a per-agent authentication boundary.

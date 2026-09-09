@@ -83,19 +83,21 @@ async def test_history_pagination_uses_ids_and_excludes_new_publications(db):
 
 async def test_owner_attention_first_and_member_drilldown(db):
     await author(db)
-    await author(db, "coordinator", tags=("swarm:demo", "role:coordinator"))
-    await author(db, "member", tags=("swarm:demo", "role:worker"))
+    await author(db, "coordinator")
+    await author(db, "member")
     await publish(
         db, "writer", blockers={"kind": "owner", "text": "Please choose a design.", "links": []}
     )
     await publish(db, "coordinator")
     await publish(db, "member")
+    await author(db, "coordinator", tags=("swarm:demo", "role:coordinator"))
+    await author(db, "member", tags=("swarm:demo", "role:worker"))
     page = await db.reports.query(ReportQuery())
-    assert [entry["agent_name"] for entry in page["items"]] == ["writer", "coordinator"]
+    assert [entry["agent_name"] for entry in page["items"]] == ["writer"]
     page = await db.reports.query(ReportQuery(agents=["member"]))
     assert [entry["agent_name"] for entry in page["items"]] == ["member"]
     assert len((await db.reports.query(ReportQuery(members=True)))["items"]) == 3
-    assert len((await db.reports.query(ReportQuery(history=True)))["items"]) == 2
+    assert len((await db.reports.query(ReportQuery(history=True)))["items"]) == 1
 
 
 async def test_rename_and_forget_never_reattribute_old_reports(db):

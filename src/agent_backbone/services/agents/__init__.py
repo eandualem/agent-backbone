@@ -10,8 +10,10 @@ from agent_backbone.services.agents._file_reader import (
 )
 from agent_backbone.services.agents._inference import (
     agent_state,
+    bind_task,
     get_agent_state,
     infer_state_from_pane,
+    note_submission,
 )
 from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents.acknowledgement import (
@@ -35,12 +37,17 @@ from agent_backbone.services.agents.models import AgentState, StateSnapshot, pro
 from agent_backbone.services.agents.store import AgentStore
 
 __all__ = [
+    "AgentConfigView",
     "AgentState",
     "AgentStore",
+    "EnrichedAgent",
     "StartResult",
     "StateSnapshot",
     "agent_state",
     "approve_agent",
+    "bind_task",
+    "build_enriched_agent",
+    "build_session_snapshot",
     "clear_starting_marker",
     "deny_agent",
     "find_outgoing_comment",
@@ -50,6 +57,8 @@ __all__ = [
     "infer_state_from_pane",
     "instruction_preview",
     "lifecycle_lock",
+    "listable_sessions",
+    "note_submission",
     "plan_control",
     "prompt_id",
     "read_plan",
@@ -62,3 +71,11 @@ __all__ = [
     "write_starting_marker",
     "write_state_file",
 ]
+
+from agent_backbone.services.agents.queries import (
+    AgentConfigView,
+    EnrichedAgent,
+    build_enriched_agent,
+    build_session_snapshot,
+    listable_sessions,
+)

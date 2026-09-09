@@ -348,6 +348,20 @@ class TestWebhookDispatch:
 
 
 class TestIntegrationReply:
+    @pytest.mark.parametrize("role", ["worker", "coordinator"])
+    async def test_swarm_cannot_reply_to_humans(self, api_client, api_app, auth_headers, role):
+        config = api_app.state.config
+        spec = replace(config.agents.get("ike"), tags=("swarm:demo", f"role:{role}"))
+        api_app.state.config = replace(config, agents=AgentsConfig(specs={"ike": spec}))
+        integration = AsyncMock()
+        api_app.state.integrations = integration
+        resp = await api_client.post(
+            "/api/integrations/reply", json={"session": "ike", "text": "hi"}, headers=auth_headers
+        )
+        assert resp.status_code == 403
+        assert "repository agent" in resp.json()["detail"]
+        integration.reply_to_agent.assert_not_awaited()
+
     async def test_requires_auth(self, api_client):
         resp = await api_client.post(
             "/api/integrations/reply", json={"session": "ike", "text": "hi"}

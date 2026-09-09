@@ -18,7 +18,6 @@ from agent_backbone.api.deps import (
 from agent_backbone.api.models import (
     AgentApproveRequest,
     AgentApproveResponse,
-    AgentConfigResponse,
     AgentDenyResponse,
     AgentInspectResponse,
     AgentStartRequest,
@@ -27,7 +26,6 @@ from agent_backbone.api.models import (
     AgentStopResponse,
     AgentUpdateRequest,
     DeliveryRecord,
-    EnrichedAgent,
     ListEnvelope,
     RuntimeInfo,
     StateUpdateRequest,
@@ -36,7 +34,9 @@ from agent_backbone.api.models import (
 from agent_backbone.api.session_updates import SessionFeed
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import (
+    AgentConfigView,
     AgentStore,
+    EnrichedAgent,
     agent_state,
     approve_agent,
     deny_agent,
@@ -78,7 +78,7 @@ class AgentRenameRequest(BaseModel):
     name: str
 
 
-@router.post("/agents/{name}/tags", response_model=AgentConfigResponse)
+@router.post("/agents/{name}/tags", response_model=AgentConfigView)
 async def tag_agent(
     name: str, body: AgentTagsRequest, store: AgentStore = Depends(get_agent_store)
 ):
@@ -88,10 +88,10 @@ async def tag_agent(
         raise HTTPException(status_code=404, detail=f"unknown agent '{name}'") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return AgentConfigResponse.from_spec(spec)
+    return AgentConfigView.from_spec(spec)
 
 
-@router.post("/agents/{name}/rename", response_model=AgentConfigResponse)
+@router.post("/agents/{name}/rename", response_model=AgentConfigView)
 async def rename_agent(
     name: str, body: AgentRenameRequest, store: AgentStore = Depends(get_agent_store)
 ):
@@ -101,7 +101,7 @@ async def rename_agent(
         raise HTTPException(status_code=404, detail=f"unknown agent '{name}'") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return AgentConfigResponse.from_spec(spec)
+    return AgentConfigView.from_spec(spec)
 
 
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
@@ -374,7 +374,7 @@ async def deny_agent_prompt(
     )
 
 
-@router.patch("/agents/{name}", response_model=AgentConfigResponse)
+@router.patch("/agents/{name}", response_model=AgentConfigView)
 async def update_agent(
     name: str,
     body: AgentUpdateRequest,
@@ -389,26 +389,26 @@ async def update_agent(
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return AgentConfigResponse.from_spec(spec)
+    return AgentConfigView.from_spec(spec)
 
 
-@router.post("/agents/{name}/watch", response_model=AgentConfigResponse)
+@router.post("/agents/{name}/watch", response_model=AgentConfigView)
 async def watch_repo(name: str, body: WatchRequest, store: AgentStore = Depends(get_agent_store)):
     """Make an agent watch a repository (informational notifications + ``for:`` routing)."""
     try:
         spec = await store.watch(name, body.repo)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'") from None
-    return AgentConfigResponse.from_spec(spec)
+    return AgentConfigView.from_spec(spec)
 
 
-@router.post("/agents/{name}/unwatch", response_model=AgentConfigResponse)
+@router.post("/agents/{name}/unwatch", response_model=AgentConfigView)
 async def unwatch_repo(name: str, body: WatchRequest, store: AgentStore = Depends(get_agent_store)):
     await store.unwatch(name, body.repo)
     spec = store.agents.get(name)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'")
-    return AgentConfigResponse.from_spec(spec)
+    return AgentConfigView.from_spec(spec)
 
 
 @router.delete("/agents/{name}")

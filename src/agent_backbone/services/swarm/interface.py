@@ -173,7 +173,9 @@ async def create_swarm(
         repo_dir = init_spec.path
     elif init_spec is not None:
         raise SwarmError(
-            f"'{initiator}' does not own a checkout of {repo} — a swarm runs in its "
+            f"'{initiator}' is registered for {init_spec.repo or 'no repository'}, not {repo}. "
+            f"If you added or changed the Git remote, verify it and run "
+            f"`backbone agent set {initiator} repo={repo}`. A swarm runs in its "
             f"initiator's repository. Create the issue in your own repository instead, "
             f"or ask the agent that owns {repo} to initiate the swarm"
         )
@@ -254,7 +256,7 @@ async def create_swarm(
                 # Whether the member asks before acting is decided at each
                 # launch from `swarm.unattended_members` and its runtime's
                 # sandbox (``start_agent``), never persisted here.
-                tags=(f"swarm:{name}", f"role:{spec.role}"),
+                tags=(f"swarm:{name}", f"role:{spec.role}", f"task:{repo}#{issue_number}"),
             )
             await store.register(agent)
             launches.append((agent, brief_file))
@@ -339,14 +341,16 @@ async def create_swarm(
                     log.exception("rollback: could not mark '%s' disbanded; retry disband", name)
         raise
 
-    outcome = await safe_deliver(
-        coordinator,
-        kickoff,
-        config,
-        db=db,
-        source="swarm-kickoff",
-        delivery_kind="direct_message",
-    )
+    outcome = (
+        await safe_deliver(
+            coordinator,
+            kickoff,
+            config,
+            db=db,
+            source="swarm-kickoff",
+            delivery_kind="direct_message",
+        )
+    ).outcome
     log.info("Swarm '%s' started (%d members); kickoff: %s", name, len(all_names), outcome)
     return SwarmResult(
         name=name,

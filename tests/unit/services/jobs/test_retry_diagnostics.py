@@ -6,6 +6,7 @@ import pytest
 
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.jobs.retry import delivery_retry, drain_message_queue
+from agent_backbone.services.routing import DeliveryReport
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 
 _RETRY = "agent_backbone.services.jobs.retry"
@@ -58,7 +59,8 @@ async def test_partial_drain_cannot_recover_until_remaining_message_completes(co
     assert failed["code"] == "queue_drain_failed"
 
     with patch(
-        f"{_RETRY}.safe_deliver", side_effect=[DeliveryOutcome.DELIVERED, outcome]
+        f"{_RETRY}.safe_deliver",
+        side_effect=[DeliveryReport(DeliveryOutcome.DELIVERED), DeliveryReport(outcome)],
     ) as deliver:
         summary = await drain_message_queue(config, db, None, active_sessions={"ike"})
     assert deliver.await_count == 2
@@ -67,7 +69,7 @@ async def test_partial_drain_cannot_recover_until_remaining_message_completes(co
     records = await db.diagnostics.query(operation_id=failed["operation_id"])
     assert [record["code"] for record in records] == ["queue_drain_failed"]
 
-    with patch(f"{_RETRY}.safe_deliver", return_value=DeliveryOutcome.DELIVERED):
+    with patch(f"{_RETRY}.safe_deliver", return_value=DeliveryReport(DeliveryOutcome.DELIVERED)):
         await drain_message_queue(config, db, None, active_sessions={"ike"})
     assert await db.queue.pending_count("ike") == 0
     records = await db.diagnostics.query(operation_id=failed["operation_id"])

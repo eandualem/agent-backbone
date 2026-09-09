@@ -329,7 +329,7 @@ class TestTell:
         bot = _bot(config)
         update = _update()
         with patch(
-            f"{_CMD}.deliver",
+            f"{_CMD}.safe_deliver",
             new_callable=AsyncMock,
             return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
         ) as d:
@@ -343,7 +343,7 @@ class TestTell:
         bot = _bot(config)
         update = _update()
         with patch(
-            f"{_CMD}.deliver",
+            f"{_CMD}.safe_deliver",
             new_callable=AsyncMock,
             return_value=DeliveryReport(DeliveryOutcome.AGENT_WORKING, "stored"),
         ):
@@ -356,7 +356,7 @@ class TestTell:
         bot = _bot(config)
         update = _update()
         with patch(
-            f"{_CMD}.deliver",
+            f"{_CMD}.safe_deliver",
             new_callable=AsyncMock,
             return_value=DeliveryReport(DeliveryOutcome.AGENT_WORKING, "already_queued"),
         ) as d:
@@ -370,15 +370,15 @@ class TestTell:
     async def test_cmd_tell_refuses_unregistered_session(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.deliver", new_callable=AsyncMock) as deliver:
+        with patch(f"{_CMD}.safe_deliver", new_callable=AsyncMock) as safe_deliver:
             await bot.cmd_tell(update, _context(["stray-tmux", "hi"]))
-        deliver.assert_not_awaited()
+        safe_deliver.assert_not_awaited()
         assert "Unknown agent" in update.message.reply_text.await_args.args[0]
 
     async def test_unauthorized_ignored(self, config):
         bot = _bot(config)
         update = _update(chat_id=999)
-        with patch(f"{_CMD}.deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_CMD}.safe_deliver", new_callable=AsyncMock) as d:
             await bot.cmd_tell(update, _context(["ike", "hi"]))
         d.assert_not_called()
         update.message.reply_text.assert_not_awaited()
@@ -394,7 +394,7 @@ class TestSenderIdentity:
             update = _update()
             update.effective_user.id = user_id
             with patch(
-                f"{_CMD}.deliver",
+                f"{_CMD}.safe_deliver",
                 new_callable=AsyncMock,
                 return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
             ) as d:
@@ -409,7 +409,7 @@ class TestSenderIdentity:
         update = _update()
         update.effective_user.id = None
         with patch(
-            f"{_CMD}.deliver",
+            f"{_CMD}.safe_deliver",
             new_callable=AsyncMock,
             return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
         ) as d:
@@ -420,7 +420,7 @@ class TestSenderIdentity:
         bot = _bot(config, topic_routes={42: "ike"})
         update = _update("do the thing", thread_id=42)
         with patch(
-            f"{_ROUTING}.deliver",
+            f"{_ROUTING}.safe_deliver",
             new_callable=AsyncMock,
             return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
         ) as d:
@@ -439,7 +439,7 @@ class TestGroupScoping:
     async def test_topic_message_from_another_allowed_group_is_ignored(self, config):
         bot = self._group_bot(config)
         update = _update("spill into ike", chat_id=222, thread_id=42)
-        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
             await bot.handle_topic_message(update, MagicMock())
         d.assert_not_called()
         # ... and it taught nothing: the selected group's discovery is intact.
@@ -450,7 +450,7 @@ class TestGroupScoping:
         bot = self._group_bot(config)
         update = _update("do the thing", chat_id=ALLOWED_CHAT, thread_id=42)
         with patch(
-            f"{_ROUTING}.deliver",
+            f"{_ROUTING}.safe_deliver",
             new_callable=AsyncMock,
             return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
         ) as d:
@@ -484,7 +484,7 @@ class TestTopicRouting:
         bot = _bot(config, topic_routes={42: "ike"})
         update = _update("do the thing", thread_id=42)
         with patch(
-            f"{_ROUTING}.deliver",
+            f"{_ROUTING}.safe_deliver",
             new_callable=AsyncMock,
             return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
         ) as d:
@@ -495,7 +495,7 @@ class TestTopicRouting:
         bot = _bot(config, topic_routes={43: CATCH_ALL_TOPIC})
         update = _update("feynman: run tests", thread_id=43)
         with patch(
-            f"{_ROUTING}.deliver",
+            f"{_ROUTING}.safe_deliver",
             new_callable=AsyncMock,
             return_value=DeliveryReport(DeliveryOutcome.OFFLINE, "stored"),
         ) as d:
@@ -508,7 +508,7 @@ class TestTopicRouting:
     async def test_catch_all_topic_without_body(self, config):
         bot = _bot(config, topic_routes={43: CATCH_ALL_TOPIC})
         update = _update("feynman", thread_id=43)
-        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
             await bot.handle_topic_message(update, MagicMock())
         d.assert_not_called()
         assert "Usage" in update.message.reply_text.await_args.args[0]
@@ -516,14 +516,14 @@ class TestTopicRouting:
     async def test_catch_all_topic_refuses_unregistered_session(self, config):
         bot = _bot(config, topic_routes={43: CATCH_ALL_TOPIC})
         update = _update("stray-tmux: run tests", thread_id=43)
-        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as deliver:
+        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as safe_deliver:
             await bot.handle_topic_message(update, MagicMock())
-        deliver.assert_not_awaited()
+        safe_deliver.assert_not_awaited()
         assert "Unknown agent" in update.message.reply_text.await_args.args[0]
 
     async def test_unmapped_topic_ignored(self, config):
         bot = _bot(config)
-        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
             await bot.handle_topic_message(_update("x", thread_id=99), MagicMock())
         d.assert_not_called()
 
@@ -533,16 +533,16 @@ class TestStartStop:
         bot = _bot(config)
         update = _update()
         with patch(
-            f"{_CMD}.start_agent", new_callable=AsyncMock, return_value=StartResult(ok=True)
+            f"{_CMD}.start_resolved", new_callable=AsyncMock, return_value=StartResult(ok=True)
         ) as start:
             await bot.cmd_start_agent(update, _context(["ike"]))
-        assert start.await_args.args[0].name == "ike"
+        assert start.await_args.args[2].name == "ike"
         update.message.reply_text.assert_awaited_once_with("Started `ike`", parse_mode="Markdown")
 
     async def test_start_unknown_agent(self, config):
         bot = _bot(config)
         update = _update()
-        with patch(f"{_CMD}.start_agent", new_callable=AsyncMock) as start:
+        with patch(f"{_CMD}.start_resolved", new_callable=AsyncMock) as start:
             await bot.cmd_start_agent(update, _context(["nobody"]))
         start.assert_not_called()
         assert "Unknown agent" in update.message.reply_text.await_args.args[0]
@@ -690,6 +690,29 @@ class TestStatusAndQueue:
 
 
 class TestDeliveryReplyFallbacks:
+    @pytest.mark.parametrize("queue", ["stored", "already_queued"])
+    def test_uncertain_hold_explains_recovery_on_first_send_and_retry(self, queue):
+        outcome = (
+            DeliveryOutcome.DELIVERY_FAILED if queue == "stored" else DeliveryOutcome.AWAITING_ACK
+        )
+        reply = _delivery_reply("ike", DeliveryReport(outcome, queue, True, queue_id=42))
+        assert "uncertain" in reply and "message 42" in reply
+        assert "Automatic terminal delivery to this agent is paused" in reply
+        assert "Inspect the transcript" in reply and "backbone inbox" in reply
+        assert "Not delivered" not in reply and "waiting for" not in reply
+
+    def test_uncertain_unretained_submission_does_not_promise_recovery_from_inbox(self):
+        reply = _delivery_reply(
+            "ike", DeliveryReport(DeliveryOutcome.DELIVERY_FAILED, "failed", True)
+        )
+        assert "uncertain and was not retained" in reply
+        assert "Inspect the terminal before retrying" in reply
+        assert "backbone inbox" not in reply
+
+    def test_other_messages_awaiting_ack_explain_inbox_recovery(self):
+        reply = _delivery_reply("ike", DeliveryReport(DeliveryOutcome.AWAITING_ACK, "stored"))
+        assert "awaiting inbox acknowledgement" in reply and "backbone inbox" in reply
+
     @pytest.mark.parametrize(
         ("status", "queue", "expected"),
         [
@@ -704,7 +727,17 @@ class TestDeliveryReplyFallbacks:
                 "The same message from you is already in the queue, waiting for `ike`.",
             ),
             (
+                DeliveryOutcome.AWAITING_ACK,
+                "already_queued",
+                "The same message from you is already in the queue, waiting for `ike`.",
+            ),
+            (
                 DeliveryOutcome.AGENT_WORKING,
+                "failed",
+                "Not delivered and not queued: could not store the message for `ike`.",
+            ),
+            (
+                DeliveryOutcome.AWAITING_ACK,
                 "failed",
                 "Not delivered and not queued: could not store the message for `ike`.",
             ),
@@ -747,7 +780,7 @@ class TestGeneralAndUnmapped:
         _routing._hinted.clear()
         bot = _bot(config)
         update = _update("ike: run the tests", thread_id=None)
-        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
             await bot.handle_general_message(update, MagicMock())
             await bot.handle_general_message(update, MagicMock())  # deduped
         d.assert_not_called()
@@ -771,7 +804,7 @@ class TestGeneralAndUnmapped:
         _routing._hinted.clear()
         bot = _bot(config)
         update = _update("x", thread_id=99)
-        with patch(f"{_ROUTING}.deliver", new_callable=AsyncMock) as d:
+        with patch(f"{_ROUTING}.safe_deliver", new_callable=AsyncMock) as d:
             await bot.handle_topic_message(update, MagicMock())
             await bot.handle_topic_message(update, MagicMock())
         d.assert_not_called()
@@ -796,7 +829,7 @@ class TestDiscoveryAuthorization:
     "saved_runtime,expected_resume", [("codex", True), ("claude", False), (None, False)]
 )
 async def test_telegram_start_uses_the_shared_automatic_resume(
-    config, saved_runtime, expected_resume
+    config, db, saved_runtime, expected_resume
 ):
     import json
 
@@ -820,8 +853,13 @@ async def test_telegram_start_uses_the_shared_automatic_resume(
                 }
             )
         )
+    from agent_backbone.services.agents import AgentStore
+
+    await AgentStore(db, config.data_dir).register(spec)
     bot = _bot(config)
+    bot._db = db
     with (
+        patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
         patch(
             "agent_backbone.services.agents.launch._start_agent",
             AsyncMock(return_value=StartResult(ok=True)),
@@ -831,3 +869,50 @@ async def test_telegram_start_uses_the_shared_automatic_resume(
     assert launch.await_args.kwargs["resume"] is expected_resume
     assert launch.await_args.args[0].model == "gpt-6-astra:high"
     assert RUNTIMES["codex"].supports_exact_resume
+
+
+@pytest.mark.parametrize("forgotten", [False, True])
+async def test_telegram_start_waits_for_lifecycle_lock_and_rechecks_registration(
+    config, db, tmp_path, forgotten
+):
+    import asyncio
+
+    from sqlalchemy import text
+
+    from agent_backbone.config import AgentSpec
+    from agent_backbone.services.agents import AgentStore, lifecycle_lock
+    from agent_backbone.services.agents.operations import start_resolved
+
+    store = AgentStore(db, config.data_dir)
+    await store.register(AgentSpec(name="app", dir=str(tmp_path), runtime="shell"))
+    bot = _bot(store.config)
+    bot._db = db
+    entered = asyncio.Event()
+    update = _update()
+
+    async def starting(*args, **kwargs):
+        entered.set()
+        return await start_resolved(*args, **kwargs)
+
+    with (
+        patch(f"{_CMD}.start_resolved", side_effect=starting),
+        patch(
+            "agent_backbone.services.agents.launch.start_agent",
+            AsyncMock(return_value=StartResult(ok=True)),
+        ) as launch,
+    ):
+        async with lifecycle_lock("app"):
+            task = asyncio.create_task(bot.cmd_start_agent(update, _context(["app"])))
+            await asyncio.wait_for(entered.wait(), 1)
+            launch.assert_not_awaited()
+            if forgotten:
+                async with db.engine.begin() as conn:
+                    await conn.execute(text("DELETE FROM agents WHERE name = 'app'"))
+        await asyncio.wait_for(task, 1)
+    if forgotten:
+        launch.assert_not_awaited()
+        assert "forgotten" in update.message.reply_text.await_args.args[0]
+    else:
+        launch.assert_awaited_once()
+        async with db.engine.connect() as conn:
+            assert await conn.scalar(text("SELECT last_started_at FROM agents WHERE name = 'app'"))

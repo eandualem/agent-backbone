@@ -15,7 +15,6 @@ from agent_backbone.recent import RecentKeys
 from agent_backbone.services.agents import AgentState, prompt_id
 from agent_backbone.services.integrations import notify_humans
 from agent_backbone.services.routing import (
-    deliver,
     format_offline_queue_notification,
     format_plan_notification,
     format_stall_notification,
@@ -231,7 +230,12 @@ async def handle_stalls(config: BackboneConfig, states: AgentStates, db: Backbon
                 stall["entity"],
             )
             await safe_deliver(
-                escalation_session, msg, config, db=db, priority=True, delivery_kind="escalation"
+                escalation_session,
+                msg,
+                config,
+                db=db,
+                priority=True,
+                delivery_kind="escalation",
             )
         log.warning(
             "Stall detected: %s on %s#%s (%dm)",
@@ -365,7 +369,7 @@ async def check_blocked(
             if not _should_escalate(name, key, config.timing.escalation_dedup_seconds):
                 continue
             try:
-                report = await deliver(
+                report = await safe_deliver(
                     recipient,
                     f"[via:backbone event:provider-blocked] {message}",
                     config,
@@ -423,14 +427,20 @@ async def check_plan_waiting(
                 orch_msg = format_plan_notification(
                     name, name, plan_file, plan_title, issue_number=snapshot.current_issue
                 )
-                report = await deliver(
-                    escalation_session,
-                    orch_msg,
-                    config,
-                    db=db,
-                    priority=True,
-                    delivery_kind="escalation",
-                )
+                try:
+                    report = await safe_deliver(
+                        escalation_session,
+                        orch_msg,
+                        config,
+                        db=db,
+                        priority=True,
+                        delivery_kind="escalation",
+                    )
+                except Exception:
+                    log.exception(
+                        "Could not notify %s about waiting plan for %s", escalation_session, name
+                    )
+                    continue
                 # Only suppress another attempt when the message arrived or a
                 # durable queue row exists. A failed write must retry next tick.
                 if report.outcome == DeliveryOutcome.DELIVERED or report.queued:

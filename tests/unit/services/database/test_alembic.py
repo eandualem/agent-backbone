@@ -565,3 +565,89 @@ async def test_restamp_on_old_sqlite_keeps_the_dead_column(tmp_path, monkeypatch
         )
     finally:
         await db2.stop()
+
+
+async def test_migration_holds_checkpoint_dedup_after_old_stamp(tmp_path):
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'checkpoint-upgrade.db'}"
+    async with BackboneDB.connect(url) as db:
+        receipt = await db.queue.enqueue(
+            session_name="worker", message="keep", delivery_kind="direct_message"
+        )
+        await db.queue.checkpoint("worker")
+        async with db.engine.begin() as conn:
+            await conn.execute(text("UPDATE alembic_version SET version_num='d18bd413f432'"))
+    async with BackboneDB.connect(url) as db:
+        duplicate = await db.queue.enqueue(
+            session_name="worker", message="keep", delivery_kind="direct_message"
+        )
+        assert duplicate.id == receipt.id
+        async with db.engine.begin() as conn:
+            sql = (
+                await conn.execute(
+                    text("SELECT sql FROM sqlite_master WHERE name='uq_mq_message_dedup'")
+                )
+            ).scalar_one()
+        assert "checkpoint" in sql and "uncertain" in sql
+
+
+@pytest.mark.parametrize("drift", ["predicate", "missing", "columns", "unique"])
+async def test_current_stamp_repairs_drifted_queue_index(tmp_path, drift):
+    from sqlalchemy import event, text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'index-drift.db'}"
+    async with BackboneDB.connect(url) as db:
+        receipt = await db.queue.enqueue(
+            session_name="worker", message="keep", delivery_kind="direct_message"
+        )
+        async with db.engine.begin() as conn:
+            await conn.execute(text("DROP INDEX uq_mq_message_dedup"))
+            if drift != "missing":
+                unique = "" if drift == "unique" else "UNIQUE"
+                columns = (
+                    "dedup_key, session_name" if drift == "columns" else "session_name, dedup_key"
+                )
+                statuses = (
+                    "'pending','in_progress'"
+                    if drift == "predicate"
+                    else "'pending','in_progress','checkpoint','uncertain'"
+                )
+                await conn.execute(
+                    text(
+                        f"CREATE {unique} INDEX uq_mq_message_dedup ON message_queue ({columns}) "
+                        f"WHERE delivery_kind != 'issue' AND status IN ({statuses})"
+                    )
+                )
+            await conn.execute(text("CREATE INDEX operator_queue_index ON message_queue(sender)"))
+        await db._run_migrations()
+        duplicate = await db.queue.enqueue(
+            session_name="worker", message="keep", delivery_kind="direct_message"
+        )
+        assert duplicate.id == receipt.id
+        (row,) = await db.queue.checkpoint("worker")
+        assert row["message"] == "keep"
+        assert (
+            await db.queue.enqueue(
+                session_name="worker", message="keep", delivery_kind="direct_message"
+            )
+        ).id == receipt.id
+        async with db.engine.begin() as conn:
+            assert (
+                await conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE name='operator_queue_index'")
+                )
+            ).scalar_one()
+        statements = []
+
+        def capture(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement.upper())
+
+        event.listen(db.engine.sync_engine, "before_cursor_execute", capture)
+        try:
+            await db._run_migrations()
+        finally:
+            event.remove(db.engine.sync_engine, "before_cursor_execute", capture)
+        assert not any(
+            s.startswith(("DROP INDEX", "CREATE INDEX", "CREATE UNIQUE INDEX")) for s in statements
+        )

@@ -57,17 +57,19 @@ async def on_dependency_resolved(
             session_name = resolve_entity_session(target, config)
             if session_name is None:
                 continue
-            outcome = await safe_deliver(
-                session_name,
-                message,
-                config,
-                db=db,
-                repo=repo,
-                issue_number=parent_num,
-                target_entity=target,
-                source=SOURCE,
-                delivery_kind="watch",
-            )
+            outcome = (
+                await safe_deliver(
+                    session_name,
+                    message,
+                    config,
+                    db=db,
+                    repo=repo,
+                    issue_number=parent_num,
+                    target_entity=target,
+                    source=SOURCE,
+                    delivery_kind="watch",
+                )
+            ).outcome
             if outcome == DeliveryOutcome.DELIVERED:
                 delivered_to.append(session_name)
         result[f"parent_{parent_num}"] = (

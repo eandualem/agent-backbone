@@ -22,13 +22,14 @@ import uuid
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from functools import wraps
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 from weakref import WeakValueDictionary
 
 from agent_backbone.models import BLOCKED_OUTCOMES, SUCCESS_OUTCOMES, DeliveryOutcome
+from agent_backbone.services.agents import note_submission
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
-from agent_backbone.services.runtimes import send_message
+from agent_backbone.services.runtimes import SubmissionUnconfirmed, send_message
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -42,7 +43,7 @@ _BYPASSABLE = frozenset({SessionIntelligence.HUMAN_TYPING, SessionIntelligence.S
 
 @dataclass(frozen=True)
 class DeliveryReport:
-    """What ``deliver`` did: the outcome, and — when it could not deliver —
+    """What ``safe_deliver`` did: the outcome, and — when it could not deliver —
     whether the message is now in the queue.
 
     ``queue`` is ``stored`` (a new row), ``already_queued`` (the same message
@@ -76,7 +77,10 @@ class _QueueReceipt:
 _session_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDictionary()
 
 
-def _serialized(fn: Callable[..., Awaitable[DeliveryReport]]):
+_Result = TypeVar("_Result")
+
+
+def _serialized(fn: Callable[..., Awaitable[_Result]]):
     """One gate/paste/record transaction per session; idle locks are released.
 
     Each caller holds its lock strongly while waiting or delivering. The weak
@@ -84,7 +88,7 @@ def _serialized(fn: Callable[..., Awaitable[DeliveryReport]]):
     """
 
     @wraps(fn)
-    async def locked(session_name: str, *args, **kwargs) -> DeliveryReport:
+    async def locked(session_name: str, *args, **kwargs):
         key = (id(asyncio.get_running_loop()), session_name)
         lock = _session_locks.setdefault(key, asyncio.Lock())
         async with lock:
@@ -102,13 +106,21 @@ def _serialized(fn: Callable[..., Awaitable[DeliveryReport]]):
 
 def queue_detail(report: DeliveryReport, session_name: str, expiry_minutes: int) -> str:
     """One plain sentence about what happened, for people and agents alike."""
+    if report.unconfirmed and report.queue_id is None:
+        return "Submission is uncertain and was not retained; inspect the terminal before retrying."
+    if report.unconfirmed and report.queue_id is not None:
+        return (
+            f"Submission to {session_name} is uncertain; message {report.queue_id} is held "
+            "without automatic retry. Inspect the transcript and use backbone inbox to resolve it."
+        )
     if report.outcome == DeliveryOutcome.DELIVERED:
         return f"Delivered to {session_name}."
     why = report.outcome.value.replace("_", " ")
     if report.queue == "stored":
         return (
             f"Queued: {session_name} is {why}; the message is stored and will be delivered "
-            f"when the agent is ready (it expires after {expiry_minutes} minutes)."
+            f"when the agent is ready (normally expires after {expiry_minutes} minutes; "
+            "active swarm coordination is retained)."
         )
     if report.queue == "already_queued":
         return (
@@ -220,6 +232,7 @@ async def _enqueue(
     sender: str,
     source_key: str | None,
     operation_id: str,
+    uncertain: bool = False,
 ) -> _QueueReceipt:
     """Store the message; say what happened (``stored`` / ``already_queued`` /
     ``failed``), or None when there is nothing to store it in."""
@@ -239,6 +252,7 @@ async def _enqueue(
             sender=sender,
             source_key=source_key,
             operation_id=operation_id,
+            **({"uncertain": True} if uncertain else {}),
         )
     except Exception as exc:
         log.error(
@@ -257,58 +271,8 @@ async def _enqueue(
     return _QueueReceipt("already_queued", queue_id, stored_operation)
 
 
-async def safe_deliver(
-    session_name: str,
-    message: str,
-    config: BackboneConfig,
-    *,
-    db: BackboneDB | None = None,
-    repo: str = "",
-    issue_number: int | None = None,
-    target_entity: str | None = None,
-    source: str = "",
-    priority: bool = False,
-    idle_since: float | None = None,
-    enforce_issue_queue: bool = False,
-    queue_scope: Collection[tuple[str, int]] | None = None,
-    delivery_kind: str = "issue",
-    sender: str = "",
-    source_key: str | None = None,
-    requeue: bool = True,
-    operation_id: str | None = None,
-    queue_id: int | None = None,
-    event_id: int | None = None,
-    on_report: Callable[[DeliveryReport], Awaitable[None]] | None = None,
-) -> DeliveryOutcome:
-    """Deliver safely, optionally persisting its detailed receipt before returning."""
-    report = await deliver(
-        session_name,
-        message,
-        config,
-        db=db,
-        repo=repo,
-        issue_number=issue_number,
-        target_entity=target_entity,
-        source=source,
-        priority=priority,
-        idle_since=idle_since,
-        enforce_issue_queue=enforce_issue_queue,
-        queue_scope=queue_scope,
-        delivery_kind=delivery_kind,
-        sender=sender,
-        source_key=source_key,
-        requeue=requeue,
-        operation_id=operation_id,
-        queue_id=queue_id,
-        event_id=event_id,
-    )
-    if on_report is not None:
-        await on_report(report)
-    return report.outcome
-
-
 @_serialized
-async def deliver(
+async def safe_deliver(
     session_name: str,
     message: str,
     config: BackboneConfig,
@@ -343,6 +307,25 @@ async def deliver(
     operation_id = operation_id or uuid.uuid4().hex
     trackable_issue = db is not None and issue_number is not None and target_entity is not None
     preview = message[:200]
+
+    if db is not None and requeue:
+        held = await db.queue.held_receipt(
+            session_name,
+            message,
+            sender,
+            source_key,
+            repo,
+            issue_number,
+            kind,
+        )
+        if held is not None:
+            return DeliveryReport(
+                DeliveryOutcome.AWAITING_ACK,
+                "already_queued",
+                held["status"] == "uncertain",
+                held["operation_id"],
+                queue_id=held["id"],
+            )
 
     # 1. Issue queue gate
     if kind == "issue" and trackable_issue:
@@ -400,7 +383,10 @@ async def deliver(
                 sender=sender,
                 source_key=source_key,
                 operation_id=operation_id,
+                uncertain=uncertain,
             )
+        elif uncertain and db is not None and queue_id is not None:
+            await db.queue.hold_uncertain(queue_id)
         trace = receipt.operation_id or operation_id
         stored_queue_id = receipt.id if receipt.id is not None else queue_id
         delivery_id = await _record(
@@ -495,9 +481,17 @@ async def deliver(
                 details={"stage": stage, "error_type": type(exc).__name__, "delivery_kind": kind},
             )
 
+    uncertain = False
+
     async def submit() -> bool:
+        nonlocal uncertain
+        note_submission(config.state_dir, session_name)
         try:
             return await send_message(session_name, message, runtime_hint=profile.runtime)
+        except SubmissionUnconfirmed as exc:
+            uncertain = True
+            await record_exception("submission_unconfirmed", "submission", exc)
+            return False
         except Exception as exc:
             await record_exception("submission_unconfirmed", "submission", exc)
             raise
@@ -534,7 +528,32 @@ async def deliver(
                 queue = False
             return await finish(DeliveryOutcome(intel.value), queue=queue)
 
+    if db is not None and await db.queue.has_uncertain(session_name):
+        # A previous paste may still occupy the input box. Hold new messages
+        # too; the cooperative inbox is the safe way to resolve that ambiguity.
+        return await finish(DeliveryOutcome.AWAITING_ACK, queue=True)
+
     # 4. Paste + submit
     if await submit():
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
-    return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)
+    report = await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)
+    if uncertain:
+        return DeliveryReport(
+            report.outcome,
+            report.queue,
+            True,
+            report.operation_id,
+            report.delivery_id,
+            report.queue_id,
+        )
+    return report
+
+
+@_serialized
+async def checkpoint_inbox(
+    session_name: str, *, db: BackboneDB, acknowledge: list[str] | None = None
+) -> dict:
+    """Read/ack checkpoints under the same session lock as terminal delivery."""
+    if acknowledge:
+        return {"acknowledged": await db.queue.acknowledge_checkpoint(session_name, acknowledge)}
+    return {"session": session_name, "messages": await db.queue.checkpoint(session_name)}

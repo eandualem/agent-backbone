@@ -171,7 +171,6 @@ class Codex(Runtime):
     # preselected (live capture, 0.153): Enter changes the model, Escape
     # ("go back") keeps it.
     choice_markers = ("keep current model", "switch to gpt-")
-    interrupt_queued_delivery = True
 
     def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
         """Observe typed error banners, including one still visible after a model change.

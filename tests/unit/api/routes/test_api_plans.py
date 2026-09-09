@@ -12,6 +12,7 @@ import pytest
 from agent_backbone.config import SecurityConfig
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import AgentState, StateSnapshot
+from agent_backbone.services.routing import DeliveryReport
 
 _PLANS = "agent_backbone.api.routes.plans"
 
@@ -174,7 +175,7 @@ class TestPlanControl:
             patch(
                 f"{_PLANS}.safe_deliver",
                 new_callable=AsyncMock,
-                return_value=DeliveryOutcome.DELIVERED,
+                return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
             ) as deliver,
         ):
             resp = await api_client.post(
@@ -199,7 +200,9 @@ class TestPlanControl:
         _enable_plan_control(api_app)
         state_svc.get_state.return_value = _plan_snapshot()
         with patch(
-            f"{_PLANS}.safe_deliver", new_callable=AsyncMock, return_value=DeliveryOutcome.DELIVERED
+            f"{_PLANS}.safe_deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
         ) as deliver:
             resp = await api_client.post(
                 "/api/plans/ike/respond", json={"input": "2"}, headers=auth_headers
@@ -216,7 +219,7 @@ class TestPlanControl:
         with patch(
             f"{_PLANS}.safe_deliver",
             new_callable=AsyncMock,
-            return_value=DeliveryOutcome.AGENT_WORKING,
+            return_value=DeliveryReport(DeliveryOutcome.AGENT_WORKING),
         ):
             resp = await api_client.post(
                 "/api/plans/ike/respond", json={"input": "2"}, headers=auth_headers
