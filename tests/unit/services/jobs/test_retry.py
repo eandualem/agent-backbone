@@ -397,7 +397,7 @@ class TestDrainKeepsTheRowIdentity:
         async def blocked(*args, **kwargs):
             entered.set()
             await release.wait()
-            return "agent_working"
+            return DeliveryReport(DeliveryOutcome.AGENT_WORKING)
 
         with patch(
             "agent_backbone.services.jobs.retry.safe_deliver", AsyncMock(side_effect=blocked)
@@ -415,6 +415,7 @@ class TestDrainKeepsTheRowIdentity:
                 release.set()
                 await first
         assert await db.queue.pending_count("ike") == 6
+        assert not any(row["code"] == "queue_drain_failed" for row in await db.diagnostics.query())
 
     async def test_cancelled_drain_releases_its_batch(self, config, db):
         import asyncio

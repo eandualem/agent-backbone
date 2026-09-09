@@ -423,6 +423,8 @@ caught up on restart: poll intake resumes from its durable per-repository cursor
 webhook intake runs its startup backfill. The `agent-monitor` job runs
 its first tick immediately, so hook state for every running session is
 re-read and missed plan-waiting notifications fire right after a restart.
+A failed plan-notification delivery remains retryable on the next monitor cycle;
+it does not prevent notifications for other waiting plans in the same cycle.
 
 Queue lists and sub-issue reads share one complete repository snapshot within a
 monitor tick or close event. Each tick/request starts a new snapshot; a failed

@@ -369,6 +369,37 @@ class TestBlocked:
 
 
 class TestPlanWaiting:
+    async def test_delivery_exception_preserves_retry_and_continues_later_plans(
+        self, config, db, caplog
+    ):
+        config = replace(config, escalation=EscalationConfig(target="leo"))
+        states = {
+            "ike": _snap(_WAITING, reason="plan", plan_file="/first.md"),
+            "feynman": _snap(_WAITING, reason="plan", plan_file="/second.md"),
+            "leo": _snap(AgentState.IDLE),
+        }
+        with (
+            patch(f"{_ESC}.notify_humans", return_value=True) as human,
+            patch(
+                f"{_ESC}.safe_deliver",
+                side_effect=[
+                    RuntimeError("delivery unavailable"),
+                    DeliveryReport(DeliveryOutcome.DELIVERED),
+                    DeliveryReport(DeliveryOutcome.DELIVERED),
+                ],
+            ) as send,
+        ):
+            await esc.check_plan_waiting(config, states, db=db)
+            assert send.await_count == 2
+            assert "/second.md" in send.await_args.args[1]
+            await esc.check_plan_waiting(config, states, db=db)
+            assert send.await_count == 3
+            assert "/first.md" in send.await_args.args[1]
+            await esc.check_plan_waiting(config, states, db=db)
+            assert send.await_count == 3
+        assert human.await_count == 2
+        assert "Could not notify leo about waiting plan for ike" in caplog.text
+
     async def test_notifies_telegram_and_target_once(self, config, db):
         config = replace(
             config,

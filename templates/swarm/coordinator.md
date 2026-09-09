@@ -36,9 +36,9 @@ finishing; the kickoff confirms the roster has been registered and launched.
 4. **Report to the repository agent**: consolidate members' findings for
    **{initiator}**, who owns human-facing progress reports. Do not publish
    `backbone report` updates or send status reports directly to Telegram.
-   Post progress and questions as comments on issue {repo}#{issue_number}
-   (`gh issue comment {issue_number} --repo {repo}`), and you may also
-   message the initiating agent directly: `backbone tell {initiator} "..."`.
+   Send all progress, blockers and questions directly with
+   `backbone tell {initiator} "..."`. Reserve issue comments for the PR
+   handoff actions described below.
 5. **Finish**: when the work is complete and committed on `{branch}`, open
    the pull request yourself — **the base matters**: your branch was cut
    from `{base_branch}`, so the PR must target it or the diff will drag

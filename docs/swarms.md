@@ -44,8 +44,10 @@ and worktree remain available for inspection.
   with `backbone tell` — the ordinary agent-to-agent pipeline (queued
   when busy, audited, provenance-labeled). The issue plays no role here.
 - **Swarm ↔ initiator**: the coordinator is the swarm's only outside
-  voice. It posts progress and questions as comments on the issue, and
-  may also `tell` the initiating agent directly.
+  voice. It sends progress, blockers and questions directly to the initiating
+  repository agent with `backbone tell`. Issue comments are reserved for the
+  coordinator's PR handoff actions; the repository agent publishes human-facing
+  progress reports.
 - **You ↔ swarm**: `backbone tell research "..."` — a swarm's name
   resolves to its coordinator.
 - **GitHub ↔ swarm**: members are registered with the repository for

@@ -27,9 +27,10 @@ The swarm exists to complete one GitHub issue: **{repo}#{issue_number}**
   blockers and completion to the coordinator — not to the issue.
 - If a message is not delivered immediately (`"queued": true`), it is
   held and delivered when the recipient is ready. Never retry in a loop.
-- The GitHub issue is reserved for the coordinator's communication with
-  the swarm's initiator. Do not comment on it unless you are the
-  coordinator.
+- The GitHub issue is reserved for the coordinator's PR handoff actions.
+  Progress, blockers and questions go through `backbone tell`, including
+  communication with the initiating repository agent. Other members do not
+  comment on the issue.
 - Do not publish `backbone report` updates or send direct status reports to
   Telegram or the human owner. This applies to every swarm participant,
   including the coordinator. Members send findings and blockers to the

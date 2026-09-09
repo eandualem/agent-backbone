@@ -427,14 +427,20 @@ async def check_plan_waiting(
                 orch_msg = format_plan_notification(
                     name, name, plan_file, plan_title, issue_number=snapshot.current_issue
                 )
-                report = await safe_deliver(
-                    escalation_session,
-                    orch_msg,
-                    config,
-                    db=db,
-                    priority=True,
-                    delivery_kind="escalation",
-                )
+                try:
+                    report = await safe_deliver(
+                        escalation_session,
+                        orch_msg,
+                        config,
+                        db=db,
+                        priority=True,
+                        delivery_kind="escalation",
+                    )
+                except Exception:
+                    log.exception(
+                        "Could not notify %s about waiting plan for %s", escalation_session, name
+                    )
+                    continue
                 # Only suppress another attempt when the message arrived or a
                 # durable queue row exists. A failed write must retry next tick.
                 if report.outcome == DeliveryOutcome.DELIVERED or report.queued:
