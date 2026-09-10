@@ -848,3 +848,14 @@ async def test_expired_untrusted_state_keeps_metadata_without_reviving_state(
     assert result.session_id == "saved"
     assert result.last_message == "Done."
     assert result.runtime == "codex"
+
+
+async def test_observed_model_travels_with_the_hook_record(tmp_path):
+    from agent_backbone.services.agents import read_state_file, write_state_file
+
+    write_state_file(tmp_path, "leo", {"state": "idle", "ts": 1.0, "model": "claude-opus-5"})
+    assert read_state_file(tmp_path, "leo").model == "claude-opus-5"
+    write_state_file(tmp_path, "ike", {"state": "idle", "ts": 1.0})
+    assert read_state_file(tmp_path, "ike").model is None
+    write_state_file(tmp_path, "odd", {"state": "idle", "ts": 1.0, "model": {"not": "a string"}})
+    assert read_state_file(tmp_path, "odd").model is None

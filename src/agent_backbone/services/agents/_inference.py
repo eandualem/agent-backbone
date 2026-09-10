@@ -279,6 +279,7 @@ async def _get_agent_state(
                 dialog.session_id = push.session_id
                 dialog.last_message = push.last_message
                 dialog.runtime = push.runtime
+                dialog.model = push.model
                 dialog.evidence.append("the dialog on screen beats the hook's idle")
                 return _with_diagnostics(dialog, pane_content, runtime_hint)
         if push.state == AgentState.WAITING_FOR_HUMAN and push.reason == REASON_PERMISSION:
@@ -298,6 +299,7 @@ async def _get_agent_state(
                 dialog.session_id = push.session_id
                 dialog.last_message = push.last_message
                 dialog.runtime = push.runtime
+                dialog.model = push.model
                 dialog.evidence.append("the choice dialog on screen beats the hook's permission")
                 return _with_diagnostics(dialog, pane_content, runtime_hint)
         return _with_diagnostics(push, pane_content, runtime_hint)
@@ -312,6 +314,7 @@ async def _get_agent_state(
             pull.session_id = push.session_id
             pull.last_message = push.last_message
             pull.runtime = push.runtime
+            pull.model = push.model
             pull.evidence.insert(
                 0, f"hook state '{push.state.value}' is stale ({push_age:.0f}s) — reading terminal"
             )
@@ -347,6 +350,7 @@ async def _get_agent_state(
             session_id=push.session_id if push else None,
             last_message=push.last_message if push else None,
             runtime=push.runtime if push else None,
+            model=push.model if push else None,
             evidence=[
                 "stale hook state is not trustworthy and no terminal output"
                 if push

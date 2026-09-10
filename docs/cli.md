@@ -214,14 +214,22 @@ before enabling it and [configuration](configuration.md#agents) for settings.
 
 ## `backbone status`
 
-Bordered tables show Agent, State, CLI, Model and Work columns, grouped into
-ordinary agents and swarms. At 80 columns each agent occupies one row. Wider
-terminals reveal longer model names and full repository paths; below 80 columns
-CLI/model share a column, and below 60 they move to `--details`. Long cells use
-an ellipsis. Compact views show the repository name without its owner;
-`--details` includes full model/repository names, tags, replies and activity times.
-Work shows the current issue, repository or configured description; an offline
-agent's saved issue is labelled `Last:`.
+Bordered tables show Agent, State, CLI, Model, Tags and Work columns, grouped
+into ordinary agents and swarms. At 80 columns each agent occupies one row. Wider
+terminals reveal longer model names, more tags and full repository paths; below
+80 columns CLI/model share a column and tags move to `--details`, and below 60
+they all do. Long cells use an ellipsis. Compact views show the repository name
+without its owner; `--details` includes full model/repository names, tags,
+replies and activity times.
+
+Model is the model the agent is **actually answering with** when its runtime's
+hook could observe it (Claude Code: read from the transcript after each reply;
+shown bold), otherwise the saved selection, otherwise `default` — the CLI's own
+choice, which the backbone has not seen. `--details` names the source. Tags are
+the group tags that select policies and skills (`backbone agent tag`); swarm
+identity tags are implied by the grouping. Work shows the current issue,
+repository, configured description or, failing those, the directory name; an
+offline agent's saved issue is labelled `Last:`.
 
 Agents needing attention appear first, then busy, starting and idle agents.
 A divider separates offline agents. States have colors as well as text labels;
@@ -524,7 +532,8 @@ directory the agent's CLI reads. `list [--tag TAG] [--json]` shows store skills,
 tags and the agents each reaches; `show NAME` prints one; `path [NAME]` locates
 the store or a skill; `add PATH [--name N] [--tag T]… [--replace]` moves a skill
 directory into the store and tags it; `tag NAME [TAG…]` replaces its tags;
-`preview AGENT [--json]` shows what the next launch links and where;
+`preview AGENT [--json]` — or just `backbone skills AGENT` — shows what the next
+launch links and where;
 `validate [AGENT]` checks the store and every selection. See [Skills](skills.md).
 
 `backbone agent tag NAME TAG...` adds persistent group tags;

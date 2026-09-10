@@ -416,14 +416,54 @@ def plan_title(plan: str) -> str:
     return "Untitled plan"
 
 
+_MODEL_RE = re.compile(r'"model"\s*:\s*"([^"<>]{1,120})"')
+TRANSCRIPT_TAIL_BYTES = 256 * 1024
+
+
+def observed_model(payload: dict, current: dict | None, event: str) -> str | None:
+    """The model the runtime is actually answering with, when it can be known.
+
+    No CLI puts the model in its hook payload today (Claude Code 2.1.267
+    measured 2026-09-10), but Claude Code names the transcript, and every
+    assistant entry there carries ``"model": "…"``. The tail of that file is
+    read on the events that follow a reply; other events carry the last
+    observation forward. A payload ``model`` field, if one appears, wins.
+    """
+    current = current or {}
+    direct = payload.get("model")
+    if isinstance(direct, str) and direct.strip() and not direct.startswith("<"):
+        return direct.strip()
+    if event in ("Stop", "SessionStart", "UserPromptSubmit"):
+        transcript = payload.get("transcript_path")
+        if isinstance(transcript, str) and transcript:
+            found = _model_from_transcript(Path(transcript))
+            if found:
+                return found
+    return current.get("model") or None
+
+
+def _model_from_transcript(path: Path) -> str | None:
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - TRANSCRIPT_TAIL_BYTES))
+            tail = stream.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    matches = _MODEL_RE.findall(tail)
+    return matches[-1] if matches else None
+
+
 def record_factory(payload: dict, current: dict | None, event: str) -> Callable[..., dict]:
     """A ``state(new_state, reason=None, **extra)`` builder that keeps ``issue``,
     ``repo`` and ``started_at`` stable across events and stamps the runtime's
-    session id and the event that produced the record."""
+    session id, the observed model and the event that produced the record."""
     now = time.time()
     current = current or {}
     session_id = payload.get("session_id") or current.get("session_id")
     runtime = os.environ.get("BACKBONE_RUNTIME", "").strip() or current.get("runtime")
+    model = observed_model(payload, current, event)
 
     def state(new_state: str, reason: str | None = None, **extra) -> dict:
         record = {
@@ -439,6 +479,8 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
             record["session_id"] = session_id
         if runtime:
             record["runtime"] = runtime
+        if model:
+            record["model"] = model
         if current.get("last_message") is not None:
             record["last_message"] = current["last_message"]
         record.update(extra)

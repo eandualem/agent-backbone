@@ -21,6 +21,27 @@ from agent_backbone.skills import (
     write_tags,
 )
 
+SKILL_COMMANDS = ("list", "show", "path", "add", "tag", "preview", "validate")
+
+
+def expand_shorthand(argv: list[str]) -> list[str]:
+    """``backbone skills NAME`` means ``backbone skills preview NAME``.
+
+    The everyday question is "what does this agent get?", so the agent's
+    name alone answers it; the verbs stay for everything else.
+    """
+    # Global options (`-v`) may precede the command.
+    index = next((i for i, arg in enumerate(argv) if not arg.startswith("-")), None)
+    if (
+        index is not None
+        and argv[index] == "skills"
+        and len(argv) > index + 1
+        and argv[index + 1] not in SKILL_COMMANDS
+        and not argv[index + 1].startswith("-")
+    ):
+        return [*argv[: index + 1], "preview", *argv[index + 1 :]]
+    return argv
+
 
 def add_skill_commands(sub) -> None:
     parser = sub.add_parser("skills", help="the shared skills store and who receives what")
@@ -48,7 +69,9 @@ def add_skill_commands(sub) -> None:
     p = commands.add_parser("tag", help="replace a store skill's tags; none clears them")
     p.add_argument("name")
     p.add_argument("tags", nargs="*", metavar="TAG")
-    p = commands.add_parser("preview", help="what an agent's next launch links, and where")
+    p = commands.add_parser(
+        "preview", help="what an agent's next launch links, and where (`skills NAME` for short)"
+    )
     p.add_argument("agent")
     p.add_argument("--json", action="store_true")
     p = commands.add_parser("validate", help="check the store and every agent's selection")
