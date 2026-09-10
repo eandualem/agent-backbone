@@ -79,7 +79,7 @@ def _work(agent: dict, *, compact: bool) -> str:
         issue = f"{repo}#{clean(agent['current_issue'])}"
         return issue if agent.get("online") else f"Last: {issue}"
     # Without a repository or a description, the directory still says what it is.
-    folder = clean(agent.get("dir") or "").rstrip("/").rsplit("/", 1)[-1]
+    folder = clean(agent.get("dir") or "").rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
     return repo or clean(agent.get("description")) or folder or "—"
 
 

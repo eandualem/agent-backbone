@@ -221,3 +221,6 @@ def test_tags_observed_model_and_directory_show_in_the_roster():
     web = next(line for line in output.splitlines() if "│ web" in line)
     cells = [part.strip() for part in web.split("│")[1:-1]]
     assert cells[3] == "default" and cells[4] == "" and cells[5] == "web"  # folder, not "—"
+    from agent_backbone.cli.status import _work
+
+    assert _work({"dir": "C:\\work\\web"}, compact=True) == "web"

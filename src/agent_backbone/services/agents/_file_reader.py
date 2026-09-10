@@ -107,7 +107,7 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         plan_title=data.get("plan_title"),
         session_id=data.get("session_id") or None,
         runtime=data.get("runtime") or None,
-        model=data.get("model") or None,
+        model=data["model"] if isinstance(data.get("model"), str) and data["model"] else None,
         last_message=data.get("last_message") or None,
         event=data.get("event") or None,
         detail=data.get("detail") or None,

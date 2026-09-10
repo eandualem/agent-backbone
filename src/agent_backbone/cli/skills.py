@@ -30,13 +30,16 @@ def expand_shorthand(argv: list[str]) -> list[str]:
     The everyday question is "what does this agent get?", so the agent's
     name alone answers it; the verbs stay for everything else.
     """
+    # Global options (`-v`) may precede the command.
+    index = next((i for i, arg in enumerate(argv) if not arg.startswith("-")), None)
     if (
-        len(argv) >= 2
-        and argv[0] == "skills"
-        and argv[1] not in SKILL_COMMANDS
-        and not argv[1].startswith("-")
+        index is not None
+        and argv[index] == "skills"
+        and len(argv) > index + 1
+        and argv[index + 1] not in SKILL_COMMANDS
+        and not argv[index + 1].startswith("-")
     ):
-        return [argv[0], "preview", *argv[1:]]
+        return [*argv[: index + 1], "preview", *argv[index + 1 :]]
     return argv
 
 

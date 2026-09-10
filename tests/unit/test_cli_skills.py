@@ -129,6 +129,7 @@ def test_bare_agent_name_means_preview(config, capsys):
     assert expand_shorthand(["skills", "leo"]) == ["skills", "preview", "leo"]
     assert expand_shorthand(["skills", "leo", "--json"]) == ["skills", "preview", "leo", "--json"]
     assert expand_shorthand(["skills", "list"]) == ["skills", "list"]
+    assert expand_shorthand(["-v", "skills", "leo"]) == ["-v", "skills", "preview", "leo"]
     assert expand_shorthand(["skills", "--help"]) == ["skills", "--help"]
     assert expand_shorthand(["status"]) == ["status"]
     assert run(["skills", "leo"]) == 0

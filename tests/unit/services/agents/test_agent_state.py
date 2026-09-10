@@ -857,3 +857,5 @@ async def test_observed_model_travels_with_the_hook_record(tmp_path):
     assert read_state_file(tmp_path, "leo").model == "claude-opus-5"
     write_state_file(tmp_path, "ike", {"state": "idle", "ts": 1.0})
     assert read_state_file(tmp_path, "ike").model is None
+    write_state_file(tmp_path, "odd", {"state": "idle", "ts": 1.0, "model": {"not": "a string"}})
+    assert read_state_file(tmp_path, "odd").model is None
