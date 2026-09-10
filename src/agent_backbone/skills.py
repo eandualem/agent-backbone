@@ -275,6 +275,9 @@ def add_skill(
     target = store / target_name
     if (target.exists() or target.is_symlink()) and not replace:
         raise ValueError(f"skill {target_name!r} already exists in the store (use --replace)")
+    if replace and not tags and target.is_dir():
+        # A replace without tags is an update of the content, not a re-tag.
+        tags = parse_skill(target).tags
     # Everything that can be checked before touching the filesystem is
     # checked here: a rejected skill leaves the source where it was.
     draft = parse_skill(source)

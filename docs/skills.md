@@ -99,6 +99,8 @@ skills` is the agent-facing version of this page.
 | Codex 0.153.4 | `.agents/skills`, `.codex/skills` | followed | **silently ignored** |
 | OpenCode 1.18.29 | `.claude/skills`, `.agents/skills`, `.opencode/skills` | followed | followed |
 
-The backbone therefore links whole skill directories, never single files.
+The backbone therefore links whole skill directories, never single files. The
+Codex sandbox also refuses writes through such a link (measured the same day);
+reads are fine.
 Re-measure after a CLI upgrade: put a skill with an unguessable name behind a
 link and ask the CLI to list its skills.

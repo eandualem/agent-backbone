@@ -57,9 +57,27 @@ backbone does the move.
 
 ## Change or retag a skill
 
-Edit a linked skill in place (`.claude/skills/<name>/SKILL.md` is the store
-file through the link); every agent tagged for it sees the change at its next
-launch. Change who receives it with:
+How you edit depends on your sandbox — measured, not assumed:
+
+- **Codex** refuses a write through the link (`operation not permitted`): the
+  sandbox stops writes that resolve outside your repository. Copy the skill
+  into your repository, edit the copy, and hand it back:
+
+  ```bash
+  cp -r .agents/skills/my-skill ./my-skill-draft
+  # edit ./my-skill-draft/SKILL.md
+  backbone skills add ./my-skill-draft --name my-skill --replace
+  ```
+
+  `--replace` without `--tag` keeps the existing tags: it is an update, not a
+  re-tag. The draft is moved into the store, so nothing is left behind.
+- **Claude Code** has no such sandbox by default: editing
+  `.claude/skills/<name>/SKILL.md` through the link edits the store file
+  directly. The copy-and-replace path above works there too and leaves a
+  commit with your name, which the in-place edit does not.
+
+Every agent tagged for the skill sees the change at its next launch. Change who
+receives it with:
 
 ```bash
 backbone skills tag my-skill coder python typescript   # replace its tags

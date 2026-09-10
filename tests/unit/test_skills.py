@@ -172,6 +172,15 @@ class TestAdd:
         assert parse_skill(store / "taken").tags == ("all",)
         assert not list(store.glob(".replaced-*"))
 
+    def test_replace_without_tags_keeps_the_existing_ones(self, tmp_path):
+        """The sandboxed update path: copy, edit, add --replace — tags survive."""
+        store = tmp_path / "store"
+        make_skill(store, "shared", tags="coder python", body="# v1\n")
+        draft = make_skill(tmp_path / "repo" / "draft", "shared", body="# v2\n")
+        updated = add_skill(store, draft, name="shared", replace=True)
+        assert updated.tags == ("coder", "python")
+        assert (store / "shared" / "SKILL.md").read_text().endswith("# v2\n")
+
     def test_a_rejected_skill_is_left_where_it_was(self, tmp_path):
         store = tmp_path / "store"
         make_skill(store, "keep", tags="coder")
