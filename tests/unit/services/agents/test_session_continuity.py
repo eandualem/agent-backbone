@@ -1,4 +1,4 @@
-"""Starts preserve the registered identity, runtime and saved conversation."""
+"""Starts keep the registered identity, runtime and model; conversations resume only on request."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -60,18 +60,18 @@ async def test_runtime_switch_only_keeps_an_explicit_model(db, tmp_path, directo
 @pytest.mark.parametrize(
     ("record", "requested", "expected"),
     [
-        ({"runtime": "codex", "session_id": "saved"}, None, True),
-        ({"session_id": "legacy"}, None, True),
-        ({"runtime": "claude", "session_id": "other-cli"}, None, False),
-        ({"runtime": "codex"}, None, False),
-        (None, None, False),
         ({"runtime": "codex", "session_id": "saved"}, False, False),
+        ({"session_id": "legacy"}, False, False),
+        ({"runtime": "codex", "session_id": "saved"}, True, True),
+        ({"runtime": "claude", "session_id": "other-cli"}, True, True),
         (None, True, True),
+        (None, False, False),
     ],
 )
-async def test_automatic_resume_is_scoped_to_the_agents_saved_id(
+async def test_a_start_is_fresh_unless_resume_is_asked_for(
     db, tmp_path, record, requested, expected
 ):
+    """A saved conversation never resumes on its own; runtime and model are reused."""
     store = await store_with_agent(db, tmp_path)
     if record:
         write_state_file(store.config.state_dir, "Feynman", {"state": "idle", "ts": 1, **record})
@@ -90,32 +90,29 @@ async def test_automatic_resume_is_scoped_to_the_agents_saved_id(
     assert launch.await_args.kwargs["model"] == "gpt-6-astra:high"
 
 
-def test_cli_and_api_have_the_same_auto_fresh_and_explicit_resume_choices():
+def test_cli_and_api_default_to_fresh_and_resume_only_explicitly():
     parser = build_parser()
-    assert parser.parse_args(["agent", "start", "app"]).resume is None
+    assert parser.parse_args(["agent", "start", "app"]).resume is False
     assert parser.parse_args(["agent", "start", "app", "--fresh"]).resume is False
     assert parser.parse_args(["agent", "start", "app", "--resume"]).resume is True
+    assert parser.parse_args(["agent", "resume", "app"]).resume is True
     with pytest.raises(SystemExit):
         parser.parse_args(["agent", "start", "app", "--fresh", "--resume"])
-    assert AgentStartRequest().resume is None
-    assert AgentStartRequest(resume=False).resume is False
+    assert AgentStartRequest().resume is False
     assert AgentStartRequest(resume=True).resume is True
+    assert StartRequest().resume is False
 
 
 @pytest.mark.parametrize("runtime", ["gemini", "opencode", "aider"])
-async def test_auto_resume_requires_adapter_exact_id_capability(db, tmp_path, runtime):
+async def test_explicit_resume_uses_the_saved_id_only_with_exact_capability(db, tmp_path, runtime):
     from agent_backbone.services.runtimes import RUNTIMES
 
     store = await store_with_agent(db, tmp_path)
     await store.update("Feynman", runtime=runtime)
-    await store.register(AgentSpec(name="neighbor", dir=str(tmp_path), runtime=runtime))
     write_state_file(
         store.config.state_dir, "Feynman", {"runtime": runtime, "session_id": "own-session"}
     )
-    write_state_file(
-        store.config.state_dir, "neighbor", {"runtime": runtime, "session_id": "different-session"}
-    )
-    req = StartRequest(name="Feynman")
+    req = StartRequest(name="Feynman", resume=True)
     spec = await resolve_agent(store, req)
     with (
         patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
@@ -125,7 +122,7 @@ async def test_auto_resume_requires_adapter_exact_id_capability(db, tmp_path, ru
         ) as launch,
     ):
         await start_resolved(store, store.config, spec, req, db=db)
-    assert launch.await_args.kwargs["resume"] is (runtime != "aider")
+    assert launch.await_args.kwargs["resume"] is True
     if runtime != "aider":
         args = RUNTIMES[runtime].launch_args(
             model=None,

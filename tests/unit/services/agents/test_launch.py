@@ -532,6 +532,55 @@ class TestResumeBySessionId:
             await start_agent(spec, config, resume=True, wait=False)
         assert start.await_args.kwargs["command"][1:3] == ["resume", "--last"]
 
+    async def test_a_plain_start_is_fresh_and_points_at_the_saved_conversation(self, tmp_path):
+        """Resuming is the owner's call: a saved id is never used unless asked
+        for, but the start says it exists so nobody has to wonder."""
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {
+                "state": "idle",
+                "ts": time.time() - 46 * 3600,
+                "session_id": "01a0-sess",
+                "runtime": "claude",
+            },
+        )
+        spec = AgentSpec(name="ike", dir=str(project), runtime="claude")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/claude"),
+        ):
+            result = await start_agent(spec, config, wait=False)
+        command = start.await_args.kwargs["command"]
+        assert "--resume" not in command and "--continue" not in command
+        assert result.evidence == (
+            "fresh conversation; the previous one (1d old) is still available: "
+            "backbone agent resume ike",
+        )
+
+    async def test_a_plain_start_without_history_says_nothing_about_resuming(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {"state": "idle", "ts": 1.0, "session_id": "other", "runtime": "codex"},
+        )
+        spec = AgentSpec(name="ike", dir=str(project), runtime="claude")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/claude"),
+        ):
+            result = await start_agent(spec, config, wait=False)
+        assert "--resume" not in start.await_args.kwargs["command"]
+        assert not any("resume" in line for line in result.evidence)
+
 
 class TestStartupHookAuthority:
     @pytest.mark.parametrize("state", ["busy", "blocked"])

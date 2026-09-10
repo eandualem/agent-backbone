@@ -35,8 +35,8 @@ class AgentStartRequest(BaseModel):
     dir: str | None = None
     runtime: str | None = None
     model: str | None = None
-    resume: bool | None = None
-    """Omitted: resume a matching saved session; false: fresh; true: allow runtime fallback."""
+    resume: bool = False
+    """Continue the saved conversation (the runtime's latest when none is saved); default fresh."""
     watch: list[str] = Field(default_factory=list)
     wait: bool = True
     """Block until the agent is at its prompt (or the start timeout passes)."""

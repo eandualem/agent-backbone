@@ -3,11 +3,13 @@
 `backbone usage` opens the quick guide, including reading and publishing progress.
 
 
-Starting an existing agent reuses its saved CLI and model, and resumes its saved
-conversation when a matching runtime session ID is available. With no saved ID,
-it starts fresh; `--resume` explicitly allows the runtime's own last-conversation
-fallback. Use `backbone agent start NAME --fresh` for a new conversation with the
-same settings (API: `resume: false`; omitted or `null` means automatic).
+Starting an existing agent reuses its saved CLI and model and begins a **new
+conversation**. Continuing the previous one is your call: `backbone agent resume
+NAME` (or `start --resume`; API `resume: true`) reopens the session the backbone
+last saw for that runtime, or the runtime's own last conversation when no ID is
+saved. A fresh start says when a previous conversation is available. Starts are
+fresh by default because a resumed agent trusts its own context over whatever
+happened in the checkout since — another CLI, a swarm, the shared memory.
 Codex resume honors `--model`, including an effort suffix, while retaining the
 saved conversation. Changing runtime without specifying a model clears the previous runtime's model.
 Starting from a directory reuses its registered name, even after a rename;
@@ -292,7 +294,7 @@ backbone config set escalation.target orch
 | Command | Effect |
 |---|---|
 | `agent start [NAME…] [--dir D] [--runtime R] [--model M] [--resume \| --fresh] [--watch REPO]… [--no-wait] [--attach]` | Discover the agent from `--dir` (default: cwd), record it, start its tmux session and **wait until it is at its prompt**. A bare known `NAME` starts from its recorded directory; a bare unknown `NAME` registers the cwd under that name. Several names start a group of known agents (`ab agent start app web orch`). `--attach` opens a single session afterwards |
-| `agent resume NAME… [--attach]` | Start known agents with their saved runtime conversations. An already running session is left running |
+| `agent resume NAME… [--attach]` | Start known agents continuing their saved runtime conversations — the only way a conversation continues; `agent start` is always fresh. An already running session is left running |
 | `agent attach NAME [--read-only]` | Open a session in your terminal. Detach with Ctrl-b, then d. From inside tmux, switch the current client; read-only viewing requires a separate terminal |
 | `agent list [--tag TAG] [--json]` | Known agents with runtime, model, directory and tags |
 | `agent inspect NAME [--json]` | State, reason, current issue, delivery condition, the runtime's session id and the agent's last reply (when its hook reports them), the evidence, the terminal tail, recent deliveries |
@@ -328,8 +330,8 @@ an orchestrator that should spin up workers runs these commands itself.
 | `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `deepcode`, `aider`, or `shell` | yes — later bare starts reuse it |
 | `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent. Write it as `M:EFFORT` (e.g. `gpt-6-astra:high`, `opus:max`) to set the reasoning effort too — such a spec is **not** passed verbatim: it is split, and the CLI gets the bare model plus its own effort switch. A level the runtime does not have, or an effort with no model (`:high`), is refused rather than dropped | yes — later bare starts reuse it |
 | `--watch OWNER/REPO` | Also subscribe to a repository (repeatable) | yes |
-| `--resume` | Allow the runtime's last-conversation fallback when no matching saved ID exists | automatic with a matching saved ID |
-| `--fresh` | New conversation, keeping saved CLI and model | no |
+| `--resume` | Continue the conversation the backbone last saw for this runtime (the runtime's own last conversation when no ID is saved); same as `agent resume` | no |
+| `--fresh` | New conversation, keeping saved CLI and model — the default, spelled out | no |
 | `--always-on` | Instead of names: start every agent marked `always_on` (after a reboot, with `--resume`) | — |
 | `--no-wait` | Return immediately instead of waiting for the prompt | no |
 | `--attach` | Open this one session after startup; an interactive terminal is required | no |
@@ -523,10 +525,10 @@ Completion installers serialize updates to the same resolved rc file using a
 conflict check protect existing content. Editors and dotfile managers that do not
 use that lock must not write the rc file concurrently with installation.
 
-Automatic resume requires an adapter that can address the saved session exactly.
-Codex, Claude Code, Gemini and OpenCode pass the saved ID; other adapters start
-fresh automatically. Explicit `--resume` may select the runtime's latest session
-when no saved ID is available. Gemini's [session guide](https://geminicli.com/docs/cli/session-management/)
+Resuming by saved ID requires an adapter that can address the session exactly.
+Codex, Claude Code, Gemini and OpenCode pass the saved ID; for other adapters
+`--resume` falls back to the runtime's own latest session, as it does for every
+runtime when no ID is saved. Gemini's [session guide](https://geminicli.com/docs/cli/session-management/)
 and OpenCode's [CLI guide](https://opencode.ai/docs/cli/) describe their ID flags.
 
 `upgrade --no-restart` obtains a hold from the running API before installing code.

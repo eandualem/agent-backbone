@@ -825,12 +825,8 @@ class TestDiscoveryAuthorization:
         update.message.reply_text.assert_not_awaited()
 
 
-@pytest.mark.parametrize(
-    "saved_runtime,expected_resume", [("codex", True), ("claude", False), (None, False)]
-)
-async def test_telegram_start_uses_the_shared_automatic_resume(
-    config, db, saved_runtime, expected_resume
-):
+@pytest.mark.parametrize("saved_runtime", ["codex", "claude", None])
+async def test_telegram_start_is_fresh_with_the_saved_runtime_and_model(config, db, saved_runtime):
     import json
 
     from agent_backbone.config import AgentsConfig, AgentSpec
@@ -866,7 +862,7 @@ async def test_telegram_start_uses_the_shared_automatic_resume(
         ) as launch,
     ):
         await bot.cmd_start_agent(_update(), _context(["ike"]))
-    assert launch.await_args.kwargs["resume"] is expected_resume
+    assert launch.await_args.kwargs["resume"] is False
     assert launch.await_args.args[0].model == "gpt-6-astra:high"
     assert RUNTIMES["codex"].supports_exact_resume
 

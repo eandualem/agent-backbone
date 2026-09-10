@@ -181,14 +181,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume",
         dest="resume",
         action="store_true",
-        default=None,
-        help="resume even without a saved session ID, using the runtime's last conversation",
+        default=False,
+        help="continue the conversation the backbone last saw for this agent "
+        "(the runtime's latest when none is saved); same as `backbone agent resume`",
     )
     conversation.add_argument(
         "--fresh",
         dest="resume",
         action="store_false",
-        help="start a new conversation; keep the agent's saved runtime and model",
+        default=False,
+        help="start a new conversation (the default); keep the agent's saved runtime and model",
     )
     ps.add_argument(
         "--always-on",

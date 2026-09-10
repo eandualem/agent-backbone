@@ -88,17 +88,14 @@ class StartResult:
     evidence: tuple[str, ...] = ()
 
 
-def resolve_resume(config: BackboneConfig, name: str, runtime: str, resume: bool | None) -> bool:
-    """Auto-resume only this agent's saved conversation in a capable runtime."""
-    if resume is not None:
-        return resume
-    last = read_state_file(config.state_dir, name)
-    return bool(
-        get_runtime(runtime).supports_exact_resume
-        and last
-        and last.session_id
-        and last.runtime in (None, runtime)
-    )
+def _age(timestamp: float, now: float) -> str:
+    """``"3h"``-style age of a hook timestamp, for the start evidence."""
+    seconds = max(0, int(now - timestamp))
+    if seconds < 3600:
+        return f"{max(1, seconds // 60)}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
 
 
 async def start_agent(
@@ -107,7 +104,7 @@ async def start_agent(
     *,
     runtime: str | None = None,
     model: str | None = None,
-    resume: bool | None = None,
+    resume: bool = False,
     brief_file: Path | str | None = None,
     db: BackboneDB | None = None,
     wait: bool = True,
@@ -115,11 +112,16 @@ async def start_agent(
 ) -> StartResult:
     """Start an agent and retain a bounded record of the attempt and its outcome.
 
+    A start is a fresh conversation unless ``resume`` is asked for: the
+    owner decides when an agent continues, because a resumed agent trusts
+    its own context over what happened in the checkout since (other
+    runtimes, swarms, the shared memory). The saved runtime and model are
+    reused either way.
+
     Diagnostic details contain classifications only. The human-facing result
     may include terminal evidence, paths or a session id; none of those are
     copied into the diagnostic history.
     """
-    resume = resolve_resume(config, spec.name, runtime or spec.runtime, resume)
     operation_id = operation_id or uuid.uuid4().hex
     started = time.monotonic()
     details: dict = {
@@ -272,19 +274,31 @@ async def _start_agent(
             return StartResult(ok=False, evidence=(str(exc),))
     resume_target: bool | str = resume
     resume_evidence: list[str] = []
-    if resume:
-        last = read_state_file(config.state_dir, spec.name)
-        # A session id from *another* runtime means nothing here. A record
-        # without a runtime (an older state file, or a hook wired by hand
-        # outside a backbone session) is this agent's own: still resumed.
-        if last is not None and last.session_id and last.runtime not in (None, rt.id):
-            resume_evidence.append(
-                f"last session id belongs to {last.runtime}; using {rt.id}'s own resume"
-            )
-        elif last is not None and last.session_id and rt.supports_exact_resume:
-            resume_target = last.session_id
-            details["resume_selection"] = "known_session"
-            resume_evidence.append(f"resuming the session the backbone last saw: {last.session_id}")
+    last = read_state_file(config.state_dir, spec.name)
+    # A session id from *another* runtime means nothing here. A record
+    # without a runtime (an older state file, or a hook wired by hand
+    # outside a backbone session) is this agent's own.
+    own_session = (
+        last.session_id
+        if last is not None and last.session_id and last.runtime in (None, rt.id)
+        else None
+    )
+    saved_age = _age(last.timestamp, time.time()) if last is not None else ""
+    if resume and last is not None and last.session_id and own_session is None:
+        resume_evidence.append(
+            f"last session id belongs to {last.runtime}; using {rt.id}'s own resume"
+        )
+    elif resume and own_session and rt.supports_exact_resume:
+        resume_target = own_session
+        details["resume_selection"] = "known_session"
+        resume_evidence.append(
+            f"resuming the session the backbone last saw: {own_session} ({saved_age} old)"
+        )
+    elif not resume and own_session and rt.supports_exact_resume:
+        resume_evidence.append(
+            f"fresh conversation; the previous one ({saved_age} old) is still available: "
+            f"backbone agent resume {spec.name}"
+        )
     details["stage"] = "command"
     try:
         command = rt.build_command(
