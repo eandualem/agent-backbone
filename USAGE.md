@@ -24,8 +24,8 @@ Run `backbone doctor` if setup needs attention.
 cd ~/code/app
 backbone agent start --runtime codex --model gpt-6-astra:high
 backbone agent attach app         # open its terminal; Ctrl-b d detaches
-backbone agent start app          # continue its saved conversation if stopped
-backbone agent start app --fresh  # new conversation, same CLI and model
+backbone agent start app          # new conversation, same CLI and model
+backbone agent resume app         # continue its previous conversation instead
 backbone updates                  # latest progress from the team
 ```
 

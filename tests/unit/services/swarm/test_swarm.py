@@ -281,7 +281,6 @@ class TestCreateSwarm:
             # Exercise the launch selection and runtime brief path, not just
             # the keyword: the new issue's brief must reach the new command.
             from agent_backbone.services.agents import write_state_file
-            from agent_backbone.services.agents.launch import resolve_resume
             from agent_backbone.services.runtimes import RUNTIMES
 
             agent = args[0]
@@ -294,7 +293,7 @@ class TestCreateSwarm:
                     "session_id": "old-swarm",
                 },
             )
-            resume = resolve_resume(config, agent.name, agent.runtime, kwargs.get("resume"))
+            resume = kwargs["resume"]
             with patch(
                 "agent_backbone.services.runtimes.base.resolve_command", return_value="/cli"
             ):

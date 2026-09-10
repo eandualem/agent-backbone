@@ -20,11 +20,13 @@ or `backbone updates show ID`; in Telegram use `/updates`, `/updates NAME`,
 `/updates history NAME`, or `/updates show ID`. `backbone usage` is the quick guide.
 
 
-Starting an existing agent reuses its saved CLI and model, and resumes its saved
-conversation when a matching runtime session ID is available. With no saved ID,
-it starts fresh; `--resume` explicitly allows the runtime's own last-conversation
-fallback. Use `backbone agent start NAME --fresh` for a new conversation with the
-same settings (API: `resume: false`; omitted or `null` means automatic).
+Starting an existing agent reuses its saved CLI and model and begins a **new
+conversation**. Continuing the previous one is your call: `backbone agent resume
+NAME` (or `start --resume`; API `resume: true`) reopens the session the backbone
+last saw for that runtime, or the runtime's own last conversation when no ID is
+saved. A fresh start says when a previous conversation is available. Starts are
+fresh by default because a resumed agent trusts its own context over whatever
+happened in the checkout since — another CLI, a swarm, the shared memory.
 Changing runtime without specifying a model clears the previous runtime's model.
 Starting from a directory reuses its registered name, even after a rename;
 if several agents share that directory, specify a name.
@@ -87,7 +89,7 @@ actually generated a response in the running session.
 
 ```json
 {"dir": "/Users/me/code/app", "name": null, "runtime": null, "model": null,
- "resume": null, "watch": ["acme/web"], "wait": true}
+ "resume": false, "watch": ["acme/web"], "wait": true}
 ```
 
 Discovers (or re-registers) the agent for `dir`, starts it and — with

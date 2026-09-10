@@ -37,7 +37,7 @@ class StartRequest:
     directory: str | None = None
     runtime: str | None = None
     model: str | None = None
-    resume: bool | None = None
+    resume: bool = False
     watch: tuple[str, ...] = ()
     wait: bool = True
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -174,13 +174,12 @@ async def start_resolved(
         except ValueError as exc:
             await _record_start_failure(db, req, "preflight", exc, started, spec)
             raise
-        resume = launch.resolve_resume(config, spec.name, runtime, req.resume)
         result = await launch.start_agent(
             spec,
             config,
             runtime=runtime,
             model=req.model if req.model is not None else spec.model,
-            resume=resume,
+            resume=req.resume,
             db=db,
             wait=req.wait,
             operation_id=req.operation_id,

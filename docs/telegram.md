@@ -174,6 +174,6 @@ Only their repository agent reports consolidated progress to the owner. Optional
 See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
 
 
-`/start NAME` uses the same automatic continuation policy as CLI/API starts: it
-keeps the configured CLI/model and resumes that agent’s saved conversation when
-the runtime supports an exact matching session ID. Without one, it starts fresh.
+`/start NAME` behaves like a CLI/API start: it keeps the configured CLI/model
+and begins a new conversation. Continuing the previous one is a deliberate
+choice made from the CLI (`backbone agent resume NAME`).
