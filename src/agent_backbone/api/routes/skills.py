@@ -8,6 +8,8 @@ commits the store's history.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_backbone.api.deps import get_config, registered_agent_or_404
@@ -54,10 +56,38 @@ async def list_skills(config=Depends(get_config)):
     }
 
 
+def _inside_a_registered_directory(config, path: str) -> bool:
+    """Only an agent workspace may feed the store through the API.
+
+    Every agent holds the API key, so the request cannot prove which agent
+    sent it; what it can guarantee is that the directory being *moved* lies
+    inside some registered agent's checkout — never the store itself, a
+    home directory or anything else the backbone user can reach.
+    """
+    try:
+        source = Path(path).expanduser().resolve()
+    except OSError:
+        return False
+    for spec in config.agents:
+        try:
+            root = spec.path.resolve()
+        except OSError:
+            continue
+        if root in source.parents:
+            return True
+    return False
+
+
 @router.post("/skills", response_model=SkillView)
 async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
     """Move a skill directory into the store and tag it (a move, never a copy)."""
     store = _store_or_400(config)
+    if not _inside_a_registered_directory(config, body.path):
+        raise HTTPException(
+            status_code=422,
+            detail="the skill must live inside a registered agent's directory; "
+            "run `backbone skills add` from the terminal for other paths",
+        )
     try:
         skill = add_skill(
             store, body.path, name=body.name, tags=tuple(body.tags), replace=body.replace

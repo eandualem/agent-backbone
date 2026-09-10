@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -131,6 +132,15 @@ class TestWriteTags:
             )
         )
 
+    def test_inline_metadata_mapping_is_refused_not_destroyed(self, tmp_path):
+        path = tmp_path / "s"
+        path.mkdir()
+        original = "---\nname: s\ndescription: d\nmetadata: {author: me}\n---\n# x\n"
+        (path / "SKILL.md").write_text(original)
+        with pytest.raises(ValueError, match="inline mapping"):
+            write_tags(path, ("all",))
+        assert (path / "SKILL.md").read_text() == original
+
     def test_clearing_removes_an_emptied_metadata_block(self, tmp_path):
         path = make_skill(tmp_path, "s", tags="all")
         write_tags(path, ())
@@ -160,6 +170,31 @@ class TestAdd:
             add_skill(store, tmp_path / "nowhere")
         add_skill(store, source, replace=True, tags=("all",))
         assert parse_skill(store / "taken").tags == ("all",)
+        assert not list(store.glob(".replaced-*"))
+
+    def test_a_rejected_skill_is_left_where_it_was(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "keep", tags="coder")
+        source = tmp_path / "src" / "keep"
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text("# no frontmatter\n")
+        with pytest.raises(ValueError, match="no frontmatter"):
+            add_skill(store, source, replace=True)
+        assert (source / "SKILL.md").is_file()
+        assert parse_skill(store / "keep").tags == ("coder",)
+
+    def test_a_failure_after_the_move_restores_both_sides(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "keep", tags="coder", body="# old\n")
+        source = make_skill(tmp_path / "src", "keep", body="# new\n")
+        with (
+            patch("agent_backbone.skills.write_tags", side_effect=OSError("disk full")),
+            pytest.raises(OSError),
+        ):
+            add_skill(store, source, replace=True, tags=("all",))
+        assert (source / "SKILL.md").read_text().endswith("# new\n")
+        assert (store / "keep" / "SKILL.md").read_text().endswith("# old\n")
+        assert not list(store.glob(".replaced-*"))
 
 
 def _git_repo(path: Path) -> Path:
@@ -211,6 +246,46 @@ class TestMaterialize:
         assert own.is_dir() and foreign_link.is_symlink()
         exclude = (repo / ".git" / "info" / "exclude").read_text()
         assert exclude == f"*.log\n\n{EXCLUDE_BEGIN}\n/.claude/skills/a\n{EXCLUDE_END}\n"
+
+    def test_a_dangling_link_the_repository_made_is_not_ours_to_delete(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        manifest = manifest_path(tmp_path / "data", "leo")
+        materialize(store, repo, (".claude/skills",), read_store(store), manifest)
+        link = repo / ".claude" / "skills" / "a"
+        link.unlink()
+        link.symlink_to(tmp_path / "gone")  # the repository put its own dangling link there
+        result = materialize(store, repo, (".claude/skills",), [], manifest)
+        assert result.removed == [] and link.is_symlink()
+
+    def test_exclude_block_is_the_union_over_agents_sharing_the_git_dir(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="agent:leo")
+        make_skill(store, "b", tags="agent:ike")
+        repo = _git_repo(tmp_path / "repo")
+        manifests = tmp_path / "data" / "skills" / "materialized"
+        entries = read_store(store)
+        materialize(
+            store,
+            repo,
+            (".claude/skills",),
+            select_skills(entries, (), "leo"),
+            manifests / "leo.json",
+        )
+        materialize(
+            store,
+            repo,
+            (".agents/skills",),
+            select_skills(entries, (), "ike"),
+            manifests / "ike.json",
+        )
+        exclude = (repo / ".git" / "info" / "exclude").read_text()
+        assert "/.claude/skills/a" in exclude and "/.agents/skills/b" in exclude
+        # leo leaves: only leo's line goes
+        materialize(store, repo, (".claude/skills",), [], manifests / "leo.json")
+        exclude = (repo / ".git" / "info" / "exclude").read_text()
+        assert "/.claude/skills/a" not in exclude and "/.agents/skills/b" in exclude
 
     def test_repository_owned_name_wins_as_a_conflict(self, tmp_path):
         store = tmp_path / "store"

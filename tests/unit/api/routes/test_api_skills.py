@@ -53,7 +53,13 @@ async def test_list_shows_tags_validity_and_reach(api_client, auth_headers, stor
 
 
 async def test_add_moves_the_directory_and_tags_it(api_client, auth_headers, store):
-    source = _skill(store.parent / "repo" / ".claude" / "skills", "draft")
+    outside = _skill(store.parent / "elsewhere" / ".claude" / "skills", "draft")
+    refused = await api_client.post(
+        "/api/skills", headers=auth_headers, json={"path": str(outside), "tags": ["all"]}
+    )
+    assert refused.status_code == 422 and "registered agent" in refused.json()["detail"]
+    assert outside.exists()
+    source = _skill(store.parent / "project" / ".claude" / "skills", "draft")
     resp = await api_client.post(
         "/api/skills",
         headers=auth_headers,
@@ -63,7 +69,9 @@ async def test_add_moves_the_directory_and_tags_it(api_client, auth_headers, sto
     assert resp.json()["name"] == "my-skill" and resp.json()["tags"] == ["python"]
     assert not source.exists() and (store / "my-skill" / "SKILL.md").is_file()
     again = await api_client.post(
-        "/api/skills", headers=auth_headers, json={"path": str(store.parent / "nowhere")}
+        "/api/skills",
+        headers=auth_headers,
+        json={"path": str(store.parent / "project" / "nowhere")},
     )
     assert again.status_code == 422
 

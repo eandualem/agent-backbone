@@ -10,7 +10,6 @@ import sys
 from pathlib import Path
 
 from agent_backbone.cli import _common
-from agent_backbone.config import bootstrap_config
 from agent_backbone.services.agents import skills_preview
 from agent_backbone.skills import (
     ALL_TAG,
@@ -76,7 +75,7 @@ def _print_preview(view: dict) -> None:
 
 async def _skills(args: argparse.Namespace) -> int:
     sub = args.skills_command
-    config = bootstrap_config() if sub in ("show", "path") else await _common.read_config()
+    config = await _common.read_config()
     store = config.skills.store_path
     if store is None:
         raise ValueError(

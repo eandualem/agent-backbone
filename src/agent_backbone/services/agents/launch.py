@@ -394,8 +394,8 @@ def _materialize_skills(
     store = config.skills.store_path
     if store is None or not rt.skill_dirs:
         return [], None
-    selected = select_skills(read_store(store), spec.tags, spec.name)
     try:
+        selected = select_skills(read_store(store), spec.tags, spec.name)
         outcome = materialize(
             store, spec.path, rt.skill_dirs, selected, manifest_path(config.data_dir, spec.name)
         )

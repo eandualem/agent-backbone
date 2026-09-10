@@ -216,7 +216,12 @@ def write_tags(skill_dir: Path, tags: tuple[str, ...]) -> None:
     handled = False
     while index < len(front):
         line = front[index]
-        if line.split(":", 1)[0].strip() == "metadata" and not line.startswith((" ", "\t")):
+        key, separator, inline = line.partition(":")
+        if key.strip() == "metadata" and not line.startswith((" ", "\t")):
+            if separator and inline.strip():
+                raise ValueError(
+                    "metadata is an inline mapping; write it as an indented block first"
+                )
             out.append("metadata:\n")
             index += 1
             while index < len(front) and (
@@ -270,18 +275,58 @@ def add_skill(
     target = store / target_name
     if (target.exists() or target.is_symlink()) and not replace:
         raise ValueError(f"skill {target_name!r} already exists in the store (use --replace)")
+    # Everything that can be checked before touching the filesystem is
+    # checked here: a rejected skill leaves the source where it was.
+    draft = parse_skill(source)
+    # The name is rewritten on the way in, so a mismatched or invalid one is
+    # tolerated only when the caller renames; everything else is refused now.
+    renaming = name is not None
+    tolerated = draft.error is None or (
+        draft.error.startswith("frontmatter name")
+        or (renaming and draft.error == "directory name is not a valid skill name")
+    )
+    if not tolerated:
+        raise ValueError(f"{source.name}: {draft.error}")
+    _split_frontmatter_or_raise(source / "SKILL.md")
     store.mkdir(parents=True, exist_ok=True)
-    if target.is_symlink() or target.is_file():
-        target.unlink()
-    elif target.is_dir():
-        shutil.rmtree(target)
-    shutil.move(str(source), str(target))
-    _rewrite_name(target, target_name)
-    write_tags(target, tags)
-    skill = parse_skill(target)
-    if not skill.valid:
-        raise ValueError(f"{target_name}: {skill.error}")
+    displaced = store / f".replaced-{target_name}"
+    if displaced.exists() or displaced.is_symlink():
+        _remove(displaced)
+    if target.exists() or target.is_symlink():
+        os.replace(target, displaced) if not target.is_symlink() else target.rename(displaced)
+    try:
+        shutil.move(str(source), str(target))
+    except OSError:
+        if displaced.exists() or displaced.is_symlink():
+            displaced.rename(target)
+        raise
+    try:
+        _rewrite_name(target, target_name)
+        write_tags(target, tags)
+        skill = parse_skill(target)
+        if not skill.valid:
+            raise ValueError(f"{target_name}: {skill.error}")
+    except (OSError, ValueError):
+        # Put both parties back: the source to its origin, the old entry to its name.
+        shutil.move(str(target), str(source))
+        if displaced.exists() or displaced.is_symlink():
+            displaced.rename(target)
+        raise
+    if displaced.exists() or displaced.is_symlink():
+        _remove(displaced)
     return skill
+
+
+def _split_frontmatter_or_raise(skill_file: Path) -> None:
+    if _split_frontmatter(skill_file.read_text(encoding="utf-8")) is None:
+        raise ValueError(f"{skill_file} has no frontmatter")
+
+
+def _remove(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
 
 
 def _rewrite_name(skill_dir: Path, name: str) -> None:
@@ -330,14 +375,34 @@ def _read_manifest(path: Path) -> list[str]:
     return [str(item) for item in links] if isinstance(links, list) else []
 
 
-def _write_manifest(path: Path, links: list[str]) -> None:
+def _write_manifest(path: Path, repo_dir: Path, links: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not links:
         path.unlink(missing_ok=True)
         return
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({"links": sorted(links)}, indent=1) + "\n", encoding="utf-8")
+    body = {"repo": str(repo_dir), "links": sorted(links)}
+    tmp.write_text(json.dumps(body, indent=1) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _links_sharing_git_dir(manifest_dir: Path, git_dir: Path) -> set[str]:
+    """Every manifest's links whose repository uses ``git_dir`` — several
+    agents can share one checkout, and worktrees share one ``info/exclude``."""
+    links: set[str] = set()
+    if not manifest_dir.is_dir():
+        return links
+    for path in manifest_dir.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or not isinstance(data.get("repo"), str):
+            continue
+        other = _common_git_dir(Path(data["repo"]))
+        if other is not None and other == git_dir:
+            links.update(str(item) for item in data.get("links", []) if isinstance(item, str))
+    return links
 
 
 def _points_into(link: Path, store: Path) -> bool:
@@ -381,9 +446,6 @@ def materialize(
         if _points_into(link, store):
             link.unlink()
             result.removed.append(rel)
-        elif not link.exists() and link.is_symlink():
-            link.unlink()  # dangling link we made; its store entry is gone
-            result.removed.append(rel)
     kept: list[str] = []
     for rel, skill in sorted(wanted.items()):
         link = repo_dir / rel
@@ -408,8 +470,10 @@ def materialize(
         else:
             result.broken.append(f"{rel} -> {target} has no SKILL.md")
             kept.append(rel)
-    _write_manifest(manifest, kept)
-    _update_exclude(repo_dir, kept)
+    _write_manifest(manifest, repo_dir, kept)
+    git_dir = _common_git_dir(repo_dir)
+    if git_dir is not None:
+        _update_exclude(git_dir, _links_sharing_git_dir(manifest.parent, git_dir))
     return result
 
 
@@ -430,16 +494,12 @@ def _git_dir(repo_dir: Path) -> Path | None:
     return None
 
 
-def _update_exclude(repo_dir: Path, links: list[str]) -> None:
-    """Rewrite the backbone-owned block of ``.git/info/exclude``.
-
-    ``info/exclude`` is git's per-clone ignore list: never committed, never
-    shared, so the repository's own files are untouched. Only the block
-    between the two markers is replaced; a worktree shares its parent's.
-    """
+def _common_git_dir(repo_dir: Path) -> Path | None:
+    """The git directory whose ``info/exclude`` governs ``repo_dir`` — a
+    worktree's is its parent checkout's."""
     git_dir = _git_dir(repo_dir)
     if git_dir is None:
-        return
+        return None
     common = git_dir / "commondir"
     if common.is_file():
         try:
@@ -447,6 +507,19 @@ def _update_exclude(repo_dir: Path, links: list[str]) -> None:
             git_dir = Path(os.path.normpath(git_dir / rel)) if rel else git_dir
         except OSError:
             pass
+    try:
+        return git_dir.resolve()
+    except OSError:
+        return git_dir
+
+
+def _update_exclude(git_dir: Path, links: set[str]) -> None:
+    """Rewrite the backbone-owned block of ``<git_dir>/info/exclude``.
+
+    ``info/exclude`` is git's per-clone ignore list: never committed, never
+    shared, so the repository's own files are untouched. Only the block
+    between the two markers is replaced.
+    """
     exclude = git_dir / "info" / "exclude"
     try:
         existing = exclude.read_text(encoding="utf-8").splitlines() if exclude.is_file() else []
