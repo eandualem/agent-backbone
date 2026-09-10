@@ -79,6 +79,8 @@ class StateSnapshot:
     """The runtime's own session id, when its hook reports one."""
     runtime: str | None = None
     """The runtime whose hook wrote the record (a session id is only good for that runtime)."""
+    model: str | None = None
+    """The model the runtime was observed answering with, when its hook could tell."""
     last_message: str | None = None
     """The agent's last reply (clipped), when its hook reports one."""
     event: str | None = None

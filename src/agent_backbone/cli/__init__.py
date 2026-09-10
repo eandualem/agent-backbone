@@ -41,7 +41,7 @@ from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
-from agent_backbone.cli.skills import add_skill_commands
+from agent_backbone.cli.skills import add_skill_commands, expand_shorthand
 from agent_backbone.cli.status import add_status_options, cmd_status
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
 from agent_backbone.cli.upgrade import cmd_upgrade
@@ -369,7 +369,7 @@ def main(argv: list[str] | None = None) -> None:
     if argv[:1] == ["_complete"]:
         words = argv[2:] if argv[1:2] == ["--"] else argv[1:]
         sys.exit(complete(parser, words))
-    args = parser.parse_args(argv)
+    args = parser.parse_args(expand_shorthand(argv))
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

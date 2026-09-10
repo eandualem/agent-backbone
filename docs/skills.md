@@ -70,6 +70,7 @@ backbone skills path [NAME]                 # the store, or one skill's director
 backbone skills add PATH [--name N] [--tag T]… [--replace]
 backbone skills tag NAME [TAG…]             # replace tags; none = reaches nobody
 backbone skills preview AGENT [--json]      # next launch: skills, directories, link state
+backbone skills AGENT                       # the same, for short
 backbone skills validate [AGENT]            # store entries and every agent's selection
 ```
 

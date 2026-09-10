@@ -23,9 +23,11 @@ class EnrichedAgent(BaseModel):
     runtime: str | None = None
     """Runtime the session was launched with (live), else the configured runtime."""
     model: str | None = None
+    """The model observed by the runtime's hook while the session is up, else the saved one."""
     model_source: str = Field(
         default="configured",
-        description="The saved model selection; the running model is unverified.",
+        description="``observed`` (the runtime's hook saw it answer), ``configured`` "
+        "(saved selection, unverified) or ``runtime_default`` (nothing saved or seen).",
     )
     dir: str = ""
     repo: str = ""
@@ -123,12 +125,17 @@ async def build_enriched_agent(
         with contextlib.suppress(Exception):
             runtime = await query_environment_var(session, RUNTIME_ENV_KEY) or runtime
 
+    observed = snapshot.model if online else None
+    configured_model = spec.model if spec else None
     return EnrichedAgent(
         name=session,
         session=session,
         configured=spec is not None,
         runtime=runtime,
-        model=spec.model if spec else None,
+        model=observed or configured_model,
+        model_source=(
+            "observed" if observed else "configured" if configured_model else "runtime_default"
+        ),
         dir=str(spec.path) if spec else "",
         repo=spec.repo if spec else "",
         tags=list(spec.tags) if spec else [],

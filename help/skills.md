@@ -38,7 +38,7 @@ name as a store skill wins.
 
 ```bash
 backbone skills list                 # every store skill, its tags, who receives it
-backbone skills preview NAME         # what NAME's next launch links, and where
+backbone skills NAME                 # what NAME's next launch links, and where (= preview)
 backbone skills show SKILL           # print a store skill
 ```
 

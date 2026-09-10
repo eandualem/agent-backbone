@@ -98,6 +98,7 @@ def test_eighty_columns_keeps_ten_agents_in_single_aligned_rows():
         "State",
         "CLI",
         "Model",
+        "Tags",
         "Work",
     ]
     assert "assistant-runtime" in rows[1] and "idle" in rows[1]
@@ -188,3 +189,35 @@ async def test_auth_failure_is_not_reported_as_offline(tmp_path):
         pytest.raises(ValueError, match="HTTP 401"),
     ):
         await snapshot(build_parser().parse_args(["status"]))
+
+
+def test_tags_observed_model_and_directory_show_in_the_roster():
+    data = example()
+    data["agents"] = [
+        {
+            "name": "leo",
+            "state": "idle",
+            "online": True,
+            "runtime": "claude",
+            "model": "claude-opus-5",
+            "model_source": "observed",
+            "tags": ["writer", "research", "swarm:x"],
+            "dir": "/Users/me/ws/leo",
+        },
+        {
+            "name": "web",
+            "state": "offline",
+            "online": False,
+            "runtime": "codex",
+            "model": None,
+            "model_source": "runtime_default",
+            "tags": [],
+            "dir": "/Users/me/ws/web",
+        },
+    ]
+    output = render_status(data, width=110)
+    leo = next(line for line in output.splitlines() if "│ leo" in line)
+    assert "claude-opus-5" in leo and "research writer" in leo and "swarm:" not in leo
+    web = next(line for line in output.splitlines() if "│ web" in line)
+    cells = [part.strip() for part in web.split("│")[1:-1]]
+    assert cells[3] == "default" and cells[4] == "" and cells[5] == "web"  # folder, not "—"

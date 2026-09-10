@@ -300,3 +300,35 @@ class TestActionsAreLoggedBeforeAndAfter:
         )
         _, actions = hook.derive(payload, None)
         assert actions and actions[0]["issue"] == 5
+
+
+class TestObservedModel:
+    def test_stop_reads_the_model_from_the_transcript_tail(self, tmp_path):
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(
+            '{"type":"assistant","message":{"model":"claude-sonnet-5"}}\n'
+            '{"type":"assistant","message":{"model":"<synthetic>"}}\n'
+            '{"type":"assistant","message":{"model":"claude-opus-5"}}\n'
+        )
+        record, _ = hook.derive(
+            _payload("Stop", last_assistant_message="ok", transcript_path=str(transcript)), None
+        )
+        assert record["model"] == "claude-opus-5"
+
+    def test_other_events_carry_the_last_observation_forward(self, tmp_path):
+        record, _ = hook.derive(
+            _payload("PreToolUse", tool_name="Read", tool_input={}), {"model": "claude-opus-5"}
+        )
+        assert record is None  # PreToolUse writes no state record
+        record, _ = hook.derive(
+            _payload("UserPromptSubmit", prompt="hi"), {"model": "claude-opus-5"}
+        )
+        assert record["model"] == "claude-opus-5"
+
+    def test_a_payload_model_wins_and_a_missing_transcript_is_quiet(self, tmp_path):
+        record, _ = hook.derive(
+            _payload("Stop", model="gpt-6-astra", transcript_path=str(tmp_path / "nope")), None
+        )
+        assert record["model"] == "gpt-6-astra"
+        record, _ = hook.derive(_payload("Stop", transcript_path=str(tmp_path / "nope")), None)
+        assert "model" not in record

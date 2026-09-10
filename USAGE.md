@@ -28,6 +28,7 @@ backbone agent start app          # new conversation, same CLI and model
 backbone agent resume app         # continue its previous conversation instead
 backbone updates                  # latest progress from the team
 backbone skills list              # shared skills and which agents receive them
+backbone skills app               # the skills one agent gets, with their tags
 ```
 
 An already running agent stays running. Starting from its directory also finds

@@ -121,3 +121,15 @@ def test_parser_shapes():
     args = parser.parse_args(["skills", "add", "./x", "--tag", "a", "--tag", "b", "--replace"])
     assert args.tag == ["a", "b"] and args.replace
     assert parser.parse_args(["skills", "tag", "n"]).tags == []
+
+
+def test_bare_agent_name_means_preview(config, capsys):
+    from agent_backbone.cli.skills import expand_shorthand
+
+    assert expand_shorthand(["skills", "leo"]) == ["skills", "preview", "leo"]
+    assert expand_shorthand(["skills", "leo", "--json"]) == ["skills", "preview", "leo", "--json"]
+    assert expand_shorthand(["skills", "list"]) == ["skills", "list"]
+    assert expand_shorthand(["skills", "--help"]) == ["skills", "--help"]
+    assert expand_shorthand(["status"]) == ["status"]
+    assert run(["skills", "leo"]) == 0
+    assert "backend [coder] — .claude/skills: will link" in capsys.readouterr().out
