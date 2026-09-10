@@ -37,6 +37,12 @@ What this environment gives you:
 - **Issues drive work**: unlabelled issues in your repository are yours;
   `for:<agent>` labels route work between agents; acknowledge by
   commenting with a leading `[from:{agent_name}]` tag.
+- **Skills**: the shared skills tagged for you appear as links in the
+  directory your CLI reads (`.claude/skills`, `.agents/skills`), beside your
+  repository's own. The store behind the links is not yours to write — a
+  sandbox refusing a write through a link is the design, not an obstacle —
+  and `backbone skills add PATH [--tag …]` is the one sanctioned way to
+  share or update a skill: the backbone does the move. `backbone help skills`.
 - **Deep reviews**: `backbone help reviews` explains how to run a separate
   review process, keep working, and retrieve its saved report.
 - **Swarms**: for breadth-first tasks (research fan-outs, parallelizable

@@ -86,6 +86,31 @@ def reset_module_state():
 
 
 @pytest.fixture(autouse=True)
+def isolated_skills_store(tmp_path, monkeypatch):
+    """The suite never reads or links the developer's own ``~/skills``.
+
+    Both routes to the store are redirected: the settings default (configs
+    built from settings) and the section's own default (configs built
+    directly), so a test config always points into ``tmp_path``.
+    """
+    from agent_backbone.config import SETTINGS_DEFAULTS, SkillsConfig
+
+    default = str(tmp_path / "skills-store")
+    monkeypatch.setitem(SETTINGS_DEFAULTS, "skills.store", default)
+    monkeypatch.setattr(
+        SkillsConfig,
+        "store_path",
+        property(
+            lambda self: (
+                Path(default if self.store == "~/skills" else self.store).expanduser()
+                if self.store
+                else None
+            )
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
 def no_real_tmux():
     """The suite never touches the developer's tmux server.
 

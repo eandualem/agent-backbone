@@ -91,6 +91,7 @@ _MODEL_CHANGED = re.compile(
 class Codex(Runtime):
     supports_exact_resume = True
     id = "codex"
+    skill_dirs = (".agents/skills",)
     fallback_prompts = ("›",)
     display_name = "Codex"
     binary = "codex"

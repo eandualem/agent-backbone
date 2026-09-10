@@ -258,6 +258,18 @@ This is the endpoint agents use to talk to each other.
 | `GET /api/config/{key}` · `PUT /api/config/{key}` `{"value": …}` · `DELETE /api/config/{key}` | Read / set / reset one setting (published live; startup-only consumers require [restart](configuration.md)) |
 | `GET /api/config/agents` | The known agents (non-secret) |
 
+## Skills
+
+The shared skills store ([skills](skills.md)). `GET /api/skills` lists every
+store entry with its tags, validity and the agents it reaches.
+`POST /api/skills` `{path, name?, tags, replace?, actor}` **moves** a skill
+directory into the store and tags it (422 when the directory is not a skill or
+the name is taken without `replace`; 400 when `skills.store` is empty).
+`PUT /api/skills/{name}/tags` `{tags, actor}` replaces its tags (404 for an
+unknown skill). `GET /api/skills/preview/{agent}` returns what that agent's next
+launch links, per directory, with link state and notices. `actor` is recorded in
+the store's commit history when the store is a git repository.
+
 ## Help and documentation
 
 | Route | Purpose |

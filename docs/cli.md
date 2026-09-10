@@ -516,6 +516,17 @@ assignments; `show NAME` prints content; `path [NAME]` locates editable files;
 `validate [AGENT]` checks required instructions. Names are `base`, `swarm:ROLE`,
 or `policy:NAME`. See [Templates](templates.md) for examples and adoption rules.
 
+## `backbone skills`
+
+One shared store of skills (`skills.store`, default `~/skills`), each tagged
+with the agents it is for; at launch the backbone links the right ones into the
+directory the agent's CLI reads. `list [--tag TAG] [--json]` shows store skills,
+tags and the agents each reaches; `show NAME` prints one; `path [NAME]` locates
+the store or a skill; `add PATH [--name N] [--tag T]… [--replace]` moves a skill
+directory into the store and tags it; `tag NAME [TAG…]` replaces its tags;
+`preview AGENT [--json]` shows what the next launch links and where;
+`validate [AGENT]` checks the store and every selection. See [Skills](skills.md).
+
 `backbone agent tag NAME TAG...` adds persistent group tags;
 `backbone agent untag NAME TAG...` removes them. Swarm/role identity tags cannot
 be changed with these commands. Changes take effect at the next fresh launch.

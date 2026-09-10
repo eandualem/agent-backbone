@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 class OpenCode(Runtime):
     supports_exact_resume = True
     id = "opencode"
+    skill_dirs = (".agents/skills",)
     display_name = "OpenCode"
     aliases = ("open-code", "open_code")
     binary = "opencode"

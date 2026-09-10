@@ -34,6 +34,7 @@ from agent_backbone.services.agents.launch import (
     wait_until_ready,
 )
 from agent_backbone.services.agents.models import AgentState, StateSnapshot, prompt_id
+from agent_backbone.services.agents.skills_preview import skills_preview
 from agent_backbone.services.agents.store import AgentStore
 
 __all__ = [
@@ -65,6 +66,7 @@ __all__ = [
     "read_state_file",
     "record_answer",
     "rotate_action_log",
+    "skills_preview",
     "start_agent",
     "stop_agent",
     "wait_until_ready",

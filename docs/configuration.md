@@ -64,6 +64,12 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 | `agents.tag_policy` | `{}` | Policy names by agent tag, as a JSON object of ordered lists; global policies apply first, then matching tags alphabetically, deduplicated |
 | `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Codex, Gemini and OpenCode receive it as the session's initial prompt (not re-sent on `--resume`); `aider` receives it as its first delivered message; plain shells get none. Override the text with `<data_dir>/templates/base.md` |
 
+### `skills.*`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `skills.store` | `~/skills` | Directory holding the one copy of every shared skill. At launch each agent gets the skills tagged for it as symlinks in the directory its CLI reads; `backbone skills` manages the store. Empty disables materialisation. See [Skills](skills.md) |
+
 ### `github.*`
 
 | Key | Default | Meaning |

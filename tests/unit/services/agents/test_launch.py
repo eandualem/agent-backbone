@@ -787,3 +787,91 @@ async def test_previous_submission_does_not_block_new_shell_start(tmp_path):
             "app", state_dir=tmp_path, runtime="shell", since=launched, timeout=0
         )
     assert outcome == "ready"
+
+
+class TestSkillsAtLaunch:
+    def _store(self, tmp_path, name="backend-module-pattern", tags="coder"):
+        store = tmp_path / "skills-store"
+        path = store / name
+        path.mkdir(parents=True)
+        (path / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: d\nmetadata:\n  backbone-tags: {tags}\n---\n# x\n"
+        )
+        return store
+
+    async def _start(self, spec, config):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/claude"),
+        ):
+            result = await start_agent(spec, config, wait=False)
+        return result, start
+
+    async def test_tagged_skills_are_linked_where_the_runtime_reads(self, tmp_path):
+        store = self._store(tmp_path)
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        (project / ".git" / "info").mkdir(parents=True)
+        spec = AgentSpec(name="ike", dir=str(project), runtime="claude", tags=("coder",))
+        result, start = await self._start(spec, config)
+        assert result.ok and start.await_count == 1
+        link = project / ".claude" / "skills" / "backend-module-pattern"
+        assert link.is_symlink() and (link / "SKILL.md").is_file()
+        assert any(
+            line.startswith("skills: backend-module-pattern linked") for line in result.evidence
+        )
+        assert (
+            "/.claude/skills/backend-module-pattern"
+            in (project / ".git" / "info" / "exclude").read_text()
+        )
+        assert str(store) in result.evidence[0]
+
+    async def test_an_untagged_agent_gets_no_links_and_no_noise(self, tmp_path):
+        self._store(tmp_path)
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime="claude")
+        result, _ = await self._start(spec, config)
+        assert result.ok and not (project / ".claude").exists()
+        assert not any("skills" in line for line in result.evidence)
+
+    async def test_a_runtime_without_a_measured_directory_is_left_alone(self, tmp_path):
+        self._store(tmp_path, tags="all")
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime="aider")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True),
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/aider"),
+        ):
+            result = await start_agent(spec, config, wait=False)
+        assert result.ok and not list(project.iterdir())
+
+    async def test_the_repositorys_own_skill_wins_and_the_start_continues(self, tmp_path):
+        self._store(tmp_path, tags="all")
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        own = project / ".claude" / "skills" / "backend-module-pattern"
+        own.mkdir(parents=True)
+        (own / "SKILL.md").write_text("---\nname: backend-module-pattern\ndescription: mine\n---\n")
+        spec = AgentSpec(name="ike", dir=str(project), runtime="claude")
+        result, start = await self._start(spec, config)
+        assert result.ok and start.await_count == 1
+        assert not own.is_symlink()
+        assert any("repository's own skill" in line for line in result.evidence)
+
+    async def test_a_selected_skill_that_does_not_resolve_fails_the_start(self, tmp_path):
+        store = self._store(tmp_path, tags="all")
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime="claude")
+        with patch(f"{_MOD}.select_skills", side_effect=lambda skills, tags, name: skills):
+            (store / "backend-module-pattern" / "SKILL.md").unlink()
+            result, start = await self._start(spec, config)
+        assert not result.ok and start.await_count == 0
+        assert result.evidence[0].startswith("skills: ") and "no SKILL.md" in result.evidence[0]
