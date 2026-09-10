@@ -174,6 +174,9 @@ class Runtime:
     silently dropped."""
     model_tags: bool = False
     """Model IDs use literal colon tags, so ``:suffix`` is not an effort setting."""
+    skill_dirs: tuple[str, ...] = ()
+    """Project-relative directories this CLI reads skills from, measured live
+    (``docs/skills.md``). Empty: the backbone materialises no skills for it."""
     unattended_args: tuple[str, ...] | None = None
     """The CLI's own switch that stops it asking a person before acting — the
     launch arguments for an ``unattended`` agent, as the CLI spells them

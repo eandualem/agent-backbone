@@ -67,6 +67,7 @@ def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = N
 class ClaudeCode(Runtime):
     supports_exact_resume = True
     id = "claude"
+    skill_dirs = (".claude/skills",)
     fallback_prompts = ("❯",)
     display_name = "Claude Code"
     aliases = ("claude-code", "claude code")

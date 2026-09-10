@@ -40,6 +40,7 @@ from agent_backbone.services.terminal import (
     start_session,
     stop_session,
 )
+from agent_backbone.skills import manifest_path, materialize, read_store, select_skills
 
 if TYPE_CHECKING:
     from agent_backbone.config import AgentSpec, BackboneConfig
@@ -272,8 +273,12 @@ async def _start_agent(
         except (OSError, ValueError) as exc:
             details.update(reason="brief_failed", error_type=type(exc).__name__)
             return StartResult(ok=False, evidence=(str(exc),))
+    skill_evidence, skill_error = _materialize_skills(config, spec, rt)
+    if skill_error is not None:
+        details.update(reason="skills_failed")
+        return StartResult(ok=False, evidence=(skill_error, *skill_evidence))
     resume_target: bool | str = resume
-    resume_evidence: list[str] = []
+    resume_evidence: list[str] = skill_evidence
     last = read_state_file(config.state_dir, spec.name)
     # A session id from *another* runtime means nothing here. A record
     # without a runtime (an older state file, or a hook wired by hand
@@ -374,6 +379,36 @@ async def _start_agent(
     if rt.brief_mode == "message" and brief is not None and not resume and ready != "exited":
         await _queue_brief(db, spec.name, brief)
     return StartResult(ok=True, ready=ready, evidence=tuple(resume_evidence + evidence))
+
+
+def _materialize_skills(
+    config: BackboneConfig, spec: AgentSpec, rt: Runtime
+) -> tuple[list[str], str | None]:
+    """Link the skills tagged for this agent into the directories its runtime reads.
+
+    Evidence lines for the start result, and an error when a selected skill
+    does not resolve (the store's referential integrity is checked at every
+    launch, like a missing policy). A name the repository already owns is
+    skipped, not fatal: the repository's own skill wins.
+    """
+    store = config.skills.store_path
+    if store is None or not rt.skill_dirs:
+        return [], None
+    selected = select_skills(read_store(store), spec.tags, spec.name)
+    try:
+        outcome = materialize(
+            store, spec.path, rt.skill_dirs, selected, manifest_path(config.data_dir, spec.name)
+        )
+    except OSError as exc:
+        return [], f"skills: could not link into {spec.path}: {exc}"
+    evidence: list[str] = []
+    if outcome.linked:
+        names = ", ".join(skill.name for skill in selected)
+        evidence.append(f"skills: {names} linked in {', '.join(rt.skill_dirs)} from {store}")
+    evidence.extend(f"skills: {line}" for line in outcome.conflicts)
+    if outcome.broken:
+        return evidence, "skills: " + "; ".join(outcome.broken)
+    return evidence, None
 
 
 def _writable_dirs(agent_dir: Path, configured: tuple[str, ...]) -> tuple[str, ...]:

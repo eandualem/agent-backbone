@@ -309,6 +309,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.plans import router as plans_router
     from agent_backbone.api.routes.reports import router as reports_router
+    from agent_backbone.api.routes.skills import router as skills_router
     from agent_backbone.api.routes.status import router as status_router
     from agent_backbone.api.routes.swarms import router as swarms_router
     from agent_backbone.api.routes.webhook import router as webhook_router
@@ -328,6 +329,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
         messages_router,
         plans_router,
         reports_router,
+        skills_router,
         swarms_router,
     ):
         app.include_router(router, dependencies=[Depends(require_api_key)])

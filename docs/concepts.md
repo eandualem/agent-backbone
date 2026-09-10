@@ -165,6 +165,15 @@ Report age and missing reports are explicit. This authored account is separate
 from the runtime's measured state and from operational diagnostics. See
 [Agent progress reports](reports.md) for publishing tools and enforced length limits.
 
+## Skill
+
+A directory with a `SKILL.md` that an agent's CLI loads on demand. The
+**store** (`skills.store`, `~/skills`) holds the one shared copy of each;
+a skill's frontmatter names the **tags** of the agents that receive it
+(`all` for everyone, `agent:NAME` for one). At launch the backbone links the
+selected skills into the directory the runtime reads and never touches a
+skill the repository owns. See [Skills](skills.md).
+
 ## Settings
 
 Everything tunable is a key in the database with a built-in default:

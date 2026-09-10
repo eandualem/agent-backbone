@@ -463,3 +463,42 @@ class EventRecord(BaseModel):
     received_at: str = ""
     processed_at: str | None = None
     outcome: str | None = None
+
+
+# --- Skills ---
+
+
+class SkillView(BaseModel):
+    """One entry of the shared skills store."""
+
+    name: str
+    path: str
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+    @classmethod
+    def from_skill(cls, skill) -> SkillView:
+        return cls(
+            name=skill.name,
+            path=str(skill.path),
+            description=skill.description,
+            tags=list(skill.tags),
+            error=skill.error,
+        )
+
+
+class SkillAddRequest(BaseModel):
+    """Move a skill directory into the store."""
+
+    path: str
+    name: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    replace: bool = False
+    actor: str = "unknown"
+    """Who is adding it, for the store's commit history."""
+
+
+class SkillTagsRequest(BaseModel):
+    tags: list[str] = Field(default_factory=list)
+    actor: str = "unknown"

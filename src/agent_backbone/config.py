@@ -78,6 +78,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "agents.inject_brief": True,
     "agents.shared_policy": [],
     "agents.tag_policy": {},
+    "skills.store": "~/skills",
     "agents.writable_dirs": [],
     "agents.auto_review": False,
     "github.reviewers": [],
@@ -144,6 +145,10 @@ SETTINGS_HELP: dict[str, str] = {
         "Ordered policy names from <data_dir>/templates/policies/<name>.md (JSON list)"
     ),
     "agents.tag_policy": "Policy names by agent tag (JSON object of ordered lists)",
+    "skills.store": (
+        "Directory holding the shared skills; each agent gets the ones tagged for it as "
+        "links at launch (`backbone skills`). Empty disables"
+    ),
     "agents.writable_dirs": (
         "Directories outside an agent's own that a sandboxed runtime (Codex) may also "
         "write to, e.g. a package cache such as ~/.cache/uv (JSON list)"
@@ -263,6 +268,10 @@ def validate_setting(key: str, value: Any) -> Any:
         if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value):
             raise ValueError("telegram.tts_voice must be a local voice name")
         return value
+    if key == "skills.store":
+        if not isinstance(value, str) or (value and not value.strip()):
+            raise ValueError(f"{key}: expected a directory path, or an empty string to disable")
+        return value.strip()
     if key == "agents.shared_policy":
         if (
             not isinstance(value, list)
@@ -514,6 +523,18 @@ class LaunchConfig:
 
 
 @dataclass(frozen=True)
+class SkillsConfig:
+    """The ``skills.*`` settings."""
+
+    store: str = "~/skills"
+    """Where the shared skills live; empty turns materialisation off."""
+
+    @property
+    def store_path(self) -> Path | None:
+        return Path(self.store).expanduser() if self.store else None
+
+
+@dataclass(frozen=True)
 class GitHubConfig:
     """``github.*`` — intake settings (non-secret). Credentials come from the environment."""
 
@@ -625,6 +646,7 @@ class BackboneConfig:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     """The known agents (the ``agents`` table); ``launch`` holds the ``agents.*`` settings."""
     launch: LaunchConfig = field(default_factory=LaunchConfig)
+    skills: SkillsConfig = field(default_factory=SkillsConfig)
     github: GitHubConfig = field(default_factory=GitHubConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     timing: TimingConfig = field(default_factory=TimingConfig)
@@ -807,6 +829,7 @@ def build_config(
             writable_dirs=tuple(str(d) for d in s["agents.writable_dirs"]),
             auto_review=s["agents.auto_review"],
         ),
+        skills=SkillsConfig(store=str(s["skills.store"])),
         github=GitHubConfig(
             reviewers=tuple(s["github.reviewers"]),
             review_poll_interval_seconds=s["github.review_poll_interval_seconds"],
