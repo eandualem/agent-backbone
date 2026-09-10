@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -35,7 +36,8 @@ def store(api_app, tmp_path):
     )
     _skill(store, "shared", tags="all")
     _skill(store, "backend", tags="coder python")
-    return store
+    with patch("agent_backbone.api.routes.skills.commit_store", AsyncMock(return_value=True)):
+        yield store
 
 
 async def test_list_shows_tags_validity_and_reach(api_client, auth_headers, store):

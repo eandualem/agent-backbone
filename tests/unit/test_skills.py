@@ -335,5 +335,21 @@ class TestMaterialize:
         assert "/.claude/skills/a" in (main / ".git" / "info" / "exclude").read_text()
 
 
-async def test_commit_store_is_a_no_op_outside_git(tmp_path):
-    assert await skills.commit_store(tmp_path, "m") is False
+async def test_commit_store_initialises_history_on_first_use(tmp_path):
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_git(repo_dir, *args, timeout=30.0):
+        calls.append(args)
+        if args == ("init", "-q"):
+            (Path(repo_dir) / ".git").mkdir()
+        if args[:2] == ("diff", "--cached"):
+            return 1, "", ""  # something is staged
+        return 0, "", ""
+
+    with patch("agent_backbone.git.run_git", fake_git):
+        assert await skills.commit_store(tmp_path / "missing", "m") is False
+        assert await skills.commit_store(tmp_path, "add x by leo") is True
+        assert await skills.commit_store(tmp_path, "again") is True
+    assert calls[0] == ("init", "-q")
+    assert calls[1] == ("add", "-A") and calls[3] == ("commit", "-q", "-m", "add x by leo")
+    assert ("init", "-q") not in calls[4:]

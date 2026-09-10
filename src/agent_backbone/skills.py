@@ -554,16 +554,22 @@ def is_git_repository(store: Path) -> bool:
 
 
 async def commit_store(store: Path, message: str) -> bool:
-    """Commit every change in the store when it is a git repository.
+    """Commit every change in the store, initialising it as a git repository first.
 
     The store's history is the audit trail for a skill other agents will
-    load: who changed what, and when. Returns whether a commit was made.
+    load: who changed what, and when — so history starts with the first
+    tool operation, not when someone remembers to ``git init``. Returns
+    whether a commit was made.
     """
     from agent_backbone.git import run_git
 
     store = Path(store)
-    if not is_git_repository(store):
+    if not store.is_dir():
         return False
+    if not is_git_repository(store):
+        rc, _, _ = await run_git(store, "init", "-q")
+        if rc != 0:
+            return False
     rc, _, _ = await run_git(store, "add", "-A")
     if rc != 0:
         return False

@@ -10,9 +10,9 @@ A skill is a directory with a `SKILL.md` (the [Agent Skills](https://agentskills
 format). Claude Code reads `.claude/skills`, Codex reads `.agents/skills`, and a
 skill both should have ends up copied twice per repository, drifting apart. The
 store, `skills.store` (default `~/skills`), holds the only copy; agents use it
-through symlinks. Make it a git repository and every change to a shared skill has
-an author and a date: the backbone commits after each `skills add` and `skills
-tag`.
+through symlinks. The store is a git repository — the backbone initialises it on
+the first `skills add` and commits after each `add` and `tag` — so every change
+to a shared skill has an author and a date.
 
 ## Tags decide who gets what
 

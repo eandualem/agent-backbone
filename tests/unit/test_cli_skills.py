@@ -49,6 +49,7 @@ def config(tmp_path, monkeypatch):
     with (
         patch.object(_common, "read_config", AsyncMock(return_value=config)),
         patch.object(_common, "api_up", AsyncMock(return_value=False)),
+        patch("agent_backbone.cli.skills.commit_store", AsyncMock(return_value=True)),
     ):
         yield config
 
