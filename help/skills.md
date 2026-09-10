@@ -5,7 +5,15 @@ A skill is a directory with a `SKILL.md` that your CLI loads on demand
 one shared store of them — `backbone config get skills.store`, normally
 `~/skills` — and at every launch links the ones tagged for you into the
 directory your CLI reads (`.claude/skills` for Claude Code, `.agents/skills`
-for Codex and OpenCode). You never copy a skill; you use it through the link.
+for Codex, Gemini and OpenCode). You never copy a skill; you use it through
+the link.
+
+**The store is written only through the backbone.** Its directory is outside
+your repository on purpose, and a sandbox that refuses a write through a link
+is enforcing that design, not blocking you. `backbone skills add` and
+`backbone skills tag` are the sanctioned route: the backbone performs the move
+and records who asked. Using them after a refused direct write is the intended
+sequence, not a way around the sandbox.
 
 Which skills reach you is decided by tags. Each store skill names its tags in
 its frontmatter:

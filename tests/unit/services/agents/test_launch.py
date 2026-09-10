@@ -842,11 +842,11 @@ class TestSkillsAtLaunch:
         config = bootstrap_config(tmp_path / "data")
         project = tmp_path / "project"
         project.mkdir()
-        spec = AgentSpec(name="ike", dir=str(project), runtime="gemini")
+        spec = AgentSpec(name="ike", dir=str(project), runtime="aider")
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
             patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True),
-            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/gemini"),
+            patch(f"{_BASE}.resolve_command", return_value="/usr/bin/aider"),
         ):
             result = await start_agent(spec, config, wait=False)
         assert result.ok and not list(project.iterdir())

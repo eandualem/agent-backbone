@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 class Gemini(Runtime):
     supports_exact_resume = True
     id = "gemini"
+    skill_dirs = (".agents/skills",)
     display_name = "Gemini CLI"
     aliases = ("gemini-cli",)
     binary = "gemini"
