@@ -294,7 +294,7 @@ backbone config set escalation.target orch
 | Command | Effect |
 |---|---|
 | `agent start [NAME…] [--dir D] [--runtime R] [--model M] [--resume \| --fresh] [--watch REPO]… [--no-wait] [--attach]` | Discover the agent from `--dir` (default: cwd), record it, start its tmux session and **wait until it is at its prompt**. A bare known `NAME` starts from its recorded directory; a bare unknown `NAME` registers the cwd under that name. Several names start a group of known agents (`ab agent start app web orch`). `--attach` opens a single session afterwards |
-| `agent resume NAME… [--attach]` | Start known agents continuing their saved runtime conversations — the only way a conversation continues; `agent start` is always fresh. An already running session is left running |
+| `agent resume NAME… [--attach]` | Start known agents continuing their saved runtime conversations (the same as `agent start --resume`); a bare `agent start` is always a fresh conversation. An already running session is left running |
 | `agent attach NAME [--read-only]` | Open a session in your terminal. Detach with Ctrl-b, then d. From inside tmux, switch the current client; read-only viewing requires a separate terminal |
 | `agent list [--tag TAG] [--json]` | Known agents with runtime, model, directory and tags |
 | `agent inspect NAME [--json]` | State, reason, current issue, delivery condition, the runtime's session id and the agent's last reply (when its hook reports them), the evidence, the terminal tail, recent deliveries |
