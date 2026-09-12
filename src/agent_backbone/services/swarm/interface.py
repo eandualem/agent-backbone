@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.config import AgentSpec
 from agent_backbone.services.agents import agent_state, lifecycle_lock, start_agent
+from agent_backbone.services.github import actions_checker
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
@@ -276,13 +277,21 @@ async def create_swarm(
                 # Reused names may retain state files from an earlier swarm.
                 # New members must receive this issue's role brief and roster.
                 result = await start_agent(
-                    agent, config, resume=False, brief_file=brief_file, db=db
+                    agent,
+                    config,
+                    resume=False,
+                    brief_file=brief_file,
+                    db=db,
+                    check_actions=actions_checker(config),
                 )
                 if result.already_running:
                     occupied.append(agent_name)
                     raise SwarmError(f"member '{agent_name}' became occupied during startup")
                 if not result.ok:
-                    raise SwarmError(f"failed to start member '{agent_name}'")
+                    raise SwarmError(
+                        f"failed to start member '{agent_name}'"
+                        + (f": {result.failure_detail}" if result.failure_detail else "")
+                    )
                 started.append(agent_name)
                 await store.touch_started(agent_name)
                 if result.ready == "exited":

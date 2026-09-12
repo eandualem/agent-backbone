@@ -123,7 +123,7 @@ GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App*
 | **Webhook → Active** | ✓ |
 | **Webhook URL** | `https://<your host>/webhooks/github` — **include the `/webhooks/github` path**; a bare hostname is the most common mistake (you'll see 530/404 in the delivery log) |
 | **Webhook secret** | generate one: `openssl rand -hex 32` — keep it, step 4 needs the exact same string |
-| **Repository permissions** | *Issues: Read and write* · *Pull requests: Read and write* (Metadata: Read-only is added automatically) |
+| **Repository permissions** | *Issues: Read and write* · *Pull requests: Read and write* · *Administration: Read-only* (required for the Actions startup preflight) (Metadata: Read-only is added automatically) |
 | **Subscribe to events** | *Issues* · *Issue comment* · *Pull request* · *Pull request review* |
 | Where can this app be installed | Only on this account |
 

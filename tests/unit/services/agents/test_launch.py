@@ -15,15 +15,23 @@ from agent_backbone.services.agents import (
     deny_agent,
     plan_control,
     read_state_file,
-    start_agent,
     wait_until_ready,
     write_state_file,
+)
+from agent_backbone.services.agents import (
+    start_agent as launch_agent,
 )
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.runtimes import RUNTIMES
 
 _MOD = "agent_backbone.services.agents.launch"
 _BASE = "agent_backbone.services.runtimes.base"
+
+
+async def start_agent(*args, **kwargs):
+    """Existing launch-behavior tests run with an enabled Actions policy."""
+    kwargs.setdefault("check_actions", AsyncMock(return_value=True))
+    return await launch_agent(*args, **kwargs)
 
 
 class TestApproveAgent:

@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from agent_backbone.config import session_secret_keys
 from agent_backbone.fs import atomic_write_text
-from agent_backbone.git import git_write_paths
+from agent_backbone.git import detect_repo, git_write_paths
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
     read_state_file,
@@ -88,6 +88,8 @@ class StartResult:
     already_running: bool = False
     ready: str = "not_waited"
     evidence: tuple[str, ...] = ()
+    failure_detail: str | None = None
+    """Caller-safe failure text, authored without raw terminal/exception evidence."""
 
 
 def _age(timestamp: float, now: float) -> str:
@@ -111,6 +113,7 @@ async def start_agent(
     db: BackboneDB | None = None,
     wait: bool = True,
     operation_id: str | None = None,
+    check_actions: Callable[[str], Awaitable[bool]] | None = None,
 ) -> StartResult:
     """Start an agent and retain a bounded record of the attempt and its outcome.
 
@@ -186,6 +189,7 @@ async def start_agent(
             wait=wait,
             details=details,
             observe=observe,
+            check_actions=check_actions,
         )
     except Exception as exc:
         details.update(reason="exception", error_type=type(exc).__name__)
@@ -223,6 +227,7 @@ async def _start_agent(
     wait: bool,
     details: dict,
     observe: Callable[[str], Awaitable[None]],
+    check_actions: Callable[[str], Awaitable[bool]] | None,
 ) -> StartResult:
     """Start an agent in its tmux session.
 
@@ -250,6 +255,32 @@ async def _start_agent(
         log.error("Cannot start agent '%s': unknown runtime %s", spec.name, runtime_id)
         return StartResult(ok=False, evidence=(f"unknown runtime: {runtime_id}",))
     rt = RUNTIMES[runtime_id]
+    # Trust the checkout's current origin over a stale registration. A recorded
+    # repository still applies to agents working outside a Git checkout.
+    repo = await detect_repo(spec.path) or spec.repo
+    if repo:
+        try:
+            if check_actions is None:
+                raise RuntimeError("Actions checker is unavailable")
+            enabled = await check_actions(repo)
+            if type(enabled) is not bool:
+                raise ValueError("Actions checker must return a boolean")
+        except Exception as exc:
+            details.update(reason="actions_unverified", error_type=type(exc).__name__)
+            message = (
+                f"Cannot verify GitHub Actions for {repo} ({type(exc).__name__}). "
+                "Check Backbone's GitHub credentials, repository administration read "
+                "access and network connectivity, then retry. "
+                f"GET /repos/{repo}/actions/permissions must return boolean enabled=true."
+            )
+            return StartResult(ok=False, evidence=(message,), failure_detail=message)
+        if not enabled:
+            details["reason"] = "actions_disabled"
+            message = (
+                f"GitHub Actions is disabled for {repo}. Ask the repository owner to "
+                f"enable Actions at https://github.com/{repo}/settings/actions, then retry."
+            )
+            return StartResult(ok=False, evidence=(message,), failure_detail=message)
     effective_model = model if model is not None else spec.model
     section = config.launch
     details["stage"] = "preparation"

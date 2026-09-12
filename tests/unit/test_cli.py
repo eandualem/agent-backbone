@@ -747,7 +747,7 @@ class TestAlwaysOnStart:
         async def _resolve(store, req):
             return AgentSpec(name=req.name, dir=str(tmp_path), runtime="shell")
 
-        async def _start(store, config, spec, req, *, db):
+        async def _start(store, config, spec, req, *, db, check_actions):
             seen.append((spec.name, req.resume))
             return StartResult(ok=True, ready="not_waited")
 
@@ -782,3 +782,25 @@ class TestCheckpointInbox:
             assert _run(["inbox"]) == 1
             api.assert_not_called()
         assert "--agent" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_direct_start_actions_gate(tmp_path, capsys, enabled):
+    check = AsyncMock(return_value=enabled)
+    with (
+        patch(_DETECT_REPO, AsyncMock(return_value="acme/app")),
+        patch("agent_backbone.cli.agents.actions_checker", return_value=check),
+        patch(
+            "agent_backbone.services.agents.launch.session_exists", AsyncMock(return_value=False)
+        ),
+        patch(
+            "agent_backbone.services.agents.launch.start_session", AsyncMock(return_value=True)
+        ) as start,
+    ):
+        assert _run(
+            ["agent", "start", "--dir", str(tmp_path), "--runtime", "shell", "--no-wait"]
+        ) == (0 if enabled else 1)
+    check.assert_awaited_once_with("acme/app")
+    assert start.await_count == int(enabled)
+    if not enabled:
+        assert "Actions is disabled for acme/app" in capsys.readouterr().out
