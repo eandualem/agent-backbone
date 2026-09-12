@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import StateSnapshot, agent_state
 from agent_backbone.services.github import QueueSnapshot
-from agent_backbone.services.jobs.copy_mode import handle_copy_mode_recovery
 from agent_backbone.services.jobs.diagnostics import observe_job, observe_runtime
 from agent_backbone.services.jobs.escalation import (
     check_blocked,
@@ -179,19 +178,6 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="permission_notification")
-
-        try:
-            await handle_copy_mode_recovery(config, active_sessions)
-        except Exception as exc:
-            log.exception("Copy-mode recovery failed (non-fatal)")
-            await observe_job(
-                db,
-                source="agent-monitor",
-                stage="copy_mode",
-                error_type=type(exc).__name__,
-            )
-        else:
-            await observe_job(db, source="agent-monitor", stage="copy_mode")
 
         if on_change is not None:
             try:

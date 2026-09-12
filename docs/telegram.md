@@ -139,7 +139,7 @@ curl -s -X POST http://127.0.0.1:7120/api/integrations/reply \
   -d '{"session": "app", "text": "Done — PR #12 is green."}'
 ```
 
-Alerts about an agent (plan waiting, session died, copy mode stuck) are
+Alerts about an agent (plan waiting, session died) are
 posted into its topic too when it has one; otherwise they go to
 `telegram.notification_chat_id`.
 
@@ -157,8 +157,6 @@ is internal to the agent that runs it, and you talk to that agent.
 - **Agent is blocked on its usage limit** — the runtime paused for its
   quota and will resume on its own (with what it said about the reset);
   once per `timing.escalation_dedup_seconds`.
-- **Copy mode stuck** — a pane sits in tmux copy mode and the automatic
-  cancel did not clear it.
 
 Stall escalations go to the `escalation.target` agent.
 

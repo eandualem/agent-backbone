@@ -73,7 +73,7 @@ preserving its first observation and increasing its count. Runtime
 observations also retain their typed metadata identity: a change to an
 observed model, effort or error metadata leaves a separate record within
 the operation, so the earlier observation remains inspectable. Normal
-`agent_working`, `settling`, `human_typing` and `waiting_for_human` delivery
+`agent_working`, `settling`, `human_typing`, `human_reading` and `waiting_for_human` delivery
 outcomes appear in delivery-history counts instead of creating a problem
 group for each wait. Startup requests and successful outcomes remain
 available through the records endpoint and operation drilldown.

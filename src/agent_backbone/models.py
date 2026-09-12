@@ -252,6 +252,7 @@ class DeliveryOutcome(StrEnum):
     WAITING_FOR_HUMAN = "waiting_for_human"
     AGENT_WORKING = "agent_working"
     HUMAN_TYPING = "human_typing"
+    HUMAN_READING = "human_reading"
     SETTLING = "settling"
     DELIVERY_FAILED = "delivery_failed"
     NOT_WAITING = "not_waiting"
@@ -268,6 +269,7 @@ BLOCKED_OUTCOMES = frozenset(
         DeliveryOutcome.WAITING_FOR_HUMAN,
         DeliveryOutcome.AGENT_WORKING,
         DeliveryOutcome.HUMAN_TYPING,
+        DeliveryOutcome.HUMAN_READING,
         DeliveryOutcome.SETTLING,
     }
 )
