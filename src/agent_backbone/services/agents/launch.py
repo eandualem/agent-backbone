@@ -66,7 +66,7 @@ def launch_environment(
     env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name, "BACKBONE_LAUNCH_ID": uuid4().hex}
     if state_dir:
         env[STATE_DIR_ENV_KEY] = str(state_dir)
-    reserved = {RUNTIME_ENV_KEY, AGENT_ENV_KEY, STATE_DIR_ENV_KEY}
+    reserved = {RUNTIME_ENV_KEY, AGENT_ENV_KEY, STATE_DIR_ENV_KEY, "BACKBONE_LAUNCH_ID"}
     for key, value in (extra or {}).items():
         if key in reserved:
             log.warning("Ignoring reserved variable %s in agent env for '%s'", key, name)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -34,7 +35,7 @@ def _registrations(config: BackboneConfig) -> list[dict]:
             if path.stat().st_size <= 4096:
                 row = json.loads(path.read_text())
                 if isinstance(row, dict):
-                    records.append(row)
+                    records.append({**row, "_registration_path": path})
         except (OSError, ValueError):
             continue
     # Existing sessions are adopted without restarting them or guessing identity
@@ -76,6 +77,11 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     at=timestamp(row["observed_at"]),
                     launch_id=row.get("launch_id"),
                 )
+                # The database has committed this immutable launch identity.
+                # Consume the registration; no age-based deletion or new job needed.
+                if registration := row.get("_registration_path"):
+                    with suppress(OSError):
+                        registration.unlink(missing_ok=True)
             except (ValueError, KeyError, TypeError):
                 errors.append("invalid or conflicting session registration")
         pending = await db.usage.sessions()
@@ -114,6 +120,8 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     if not batch.caught_up
                     else "measured"
                 )
+                if batch.error:
+                    errors.append(f"{session['id']}: {batch.error}")
                 await db.usage.ingest(
                     session,
                     path=str(path),
@@ -138,7 +146,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     )
                     if child_key in processed:
                         continue
-                    child = next(s for s in await db.usage.sessions() if s["id"] == child_key)
+                    child = await db.usage.session(child_key)
                     child["source_path"] = str(child_path)
                     pending.append(child)
             except Exception as exc:

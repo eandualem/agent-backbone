@@ -529,6 +529,8 @@ def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
     directory = state_dir / "usage-sessions"
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / (identity + ".json")
+    if target.exists():
+        return  # identity is immutable; collection consumes it after the DB commit
     value = {
         "agent": agent,
         "runtime": runtime,

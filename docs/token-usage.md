@@ -115,6 +115,9 @@ page the displayed items; totals always cover the full selected time range.
 Only identity, timestamps, token counters, cursor metadata and price evidence go
 into Backbone's own database. No prompts or tool output are retained by the usage
 collector. Registration files live under Backbone's `state/usage-sessions/`.
+They are consumed after their launch identities commit to the database; usage
+history remains in the database. Source failures and recovery are visible in
+the existing operational diagnostics.
 Nothing is required in a user's repository, and existing telemetry/status-line
 configuration is preserved. `usage.enabled=false` stops importing; stored history
 remains queryable. The authenticated `GET /api/usage` exposes the same views.

@@ -22,6 +22,12 @@ def _session(row) -> dict:
 
 
 class UsageRepo(Repo):
+    async def session(self, identity: str) -> dict:
+        """Read one conversation by its indexed identity, including newly remembered children."""
+        async with self._tx() as conn:
+            row = (await conn.execute(select(_S).where(_S.c.id == identity))).mappings().one()
+            return _session(row)
+
     async def sessions(self) -> list[dict]:
         async with self._tx() as conn:
             return [_session(r) for r in (await conn.execute(select(_S))).mappings()]

@@ -94,6 +94,8 @@ async def test_request_revisions_resume_and_cli_switch_are_not_double_counted(
     )
     register(config, launch="launch1")
     await collect_usage(config, db)
+    assert not list((config.state_dir / "usage-sessions").glob("*.json"))
+    assert (await db.usage.sessions())[0]["launches"] == ["launch1"]
     await collect_usage(config, db)
     register(config, launch="launch2")
     await collect_usage(config, db)
@@ -462,3 +464,89 @@ def test_rotation_keeps_session_identity_filter(tmp_path):
     after = RUNTIMES["claude"].read_usage(path, before.offset, before.state)
     assert after.events == [] and after.state["partial"]
     assert after.state["_session_id"] == "current"
+
+
+def test_opencode_malformed_observation_keeps_coverage_partial_after_recovery(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "opencode.db"
+
+    def message(n):
+        return json.dumps(
+            {
+                "role": "assistant",
+                "time": {"created": 1789207200000},
+                "tokens": {"input": n, "output": 1},
+            }
+        )
+
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE TABLE message(id TEXT,session_id TEXT,time_updated INTEGER,data TEXT)")
+        c.executemany(
+            "INSERT INTO message VALUES (?,?,?,?)",
+            [(str(i), "s", 1789207200000, message(n)) for i, n in enumerate([1, -1, 2])],
+        )
+    first = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})
+    assert first.error and first.state["partial"]
+    second = RUNTIMES["opencode"].read_usage(path, first.offset, first.state)
+    assert second.error is None and second.state["partial"]
+    assert [e.input_tokens for e in second.events] == [2]
+
+
+def test_rotation_between_open_and_stat_uses_descriptor(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = tmp_path / "live.jsonl"
+    append(path, claude("old"))
+    stat = path.stat()
+    replacement = tmp_path / "next.jsonl"
+    append(replacement, claude("new", output=100000))
+    original = Path.open
+    rotated = False
+
+    def rotating_open(p, *args, **kwargs):
+        nonlocal rotated
+        stream = original(p, *args, **kwargs)
+        if p == path and not rotated:
+            rotated = True
+            replacement.replace(path)
+        return stream
+
+    monkeypatch.setattr(Path, "open", rotating_open)
+    first = RUNTIMES["claude"].read_usage(path, 0, {})
+    assert first.state["_file"] == f"{stat.st_dev}:{stat.st_ino}"
+    second = RUNTIMES["claude"].read_usage(path, first.offset, first.state)
+    assert [e.key for e in second.events] == ["new"]
+
+
+def test_codex_counter_only_change_has_distinct_event_key(tmp_path):
+    path = tmp_path / "reasoning.jsonl"
+    first = codex()
+    second = codex(
+        last={
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 5,
+        }
+    )
+    second["payload"]["info"]["total_token_usage"]["reasoning_output_tokens"] = 10
+    append(path, first, second)
+    batch = RUNTIMES["codex"].read_usage(path, 0, {})
+    assert len({e.key for e in batch.events}) == 2
+    assert sum(e.total_tokens for e in batch.events) == 120
+
+
+@pytest.mark.parametrize("tokens", ["invalid", {"input": 1, "cache": "invalid"}])
+def test_opencode_invalid_structured_tokens_return_partial_batch(tmp_path, tokens):
+    import sqlite3
+
+    path = tmp_path / "opencode.db"
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE TABLE message(id TEXT,session_id TEXT,time_updated INTEGER,data TEXT)")
+        c.execute(
+            "INSERT INTO message VALUES (?,?,?,?)",
+            ("m", "s", 1789207200000, json.dumps({"role": "assistant", "tokens": tokens})),
+        )
+    batch = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})
+    assert batch.error == "ValueError" and batch.state["partial"]

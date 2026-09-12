@@ -456,7 +456,7 @@ class Codex(Runtime):
             raise ValueError("overlapping input counters")
         at = timestamp(record["timestamp"])
         return UsageEvent(
-            key=at + ":" + str(current["input_tokens"]) + ":" + str(current["output_tokens"]),
+            key=at + ":" + ":".join(str(current[k]) for k in fields),
             at=at,
             model=state.get("model", "unknown"),
             provider=state.get("provider", "unknown"),

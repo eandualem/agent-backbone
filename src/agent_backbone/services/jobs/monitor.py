@@ -100,9 +100,19 @@ async def monitor_agents(
         await observe_runtime(db, config, states)
         await sync_states(db, states)
         try:
-            await collect_usage(config, db)
-        except Exception:
+            usage_result = await collect_usage(config, db)
+        except Exception as exc:
             log.exception("Usage collection failed (non-fatal)")
+            await observe_job(
+                db, source="agent-monitor", stage="usage_collection", error_type=type(exc).__name__
+            )
+        else:
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="usage_collection",
+                error_type="usage_source_errors" if usage_result.get("errors") else None,
+            )
 
         if gh is not None:
             try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,7 +29,7 @@ def read_jsonl(
     batch = UsageBatch(offset, state)
     try:
         with path.open("rb") as stream:
-            stat = path.stat()
+            stat = os.fstat(stream.fileno())
             identity = f"{stat.st_dev}:{stat.st_ino}"
             if offset > stat.st_size or state.get("_file", identity) != identity:
                 session_id = state.get("_session_id")

@@ -158,14 +158,20 @@ class OpenCode(Runtime):
                 ).fetchall()
             batch.caught_up = len(rows) <= 10000
             for key, updated, encoded in rows[:10000]:
-                data = json.loads(encoded)
                 batch.offset = max(batch.offset, updated)
                 state["scan_floor"] = floor
                 state["scan_after"] = (updated, key)
+                data = json.loads(encoded)
+                if not isinstance(data, dict):
+                    raise ValueError("invalid message record")
                 if data.get("role") != "assistant" or not data.get("tokens"):
                     continue
                 tokens = data["tokens"]
+                if not isinstance(tokens, dict):
+                    raise ValueError("invalid token usage")
                 cache = tokens.get("cache") or {}
+                if not isinstance(cache, dict):
+                    raise ValueError("invalid token cache usage")
                 # This runtime reports reasoning separately from text output.
                 event = UsageEvent(
                     key=key,
@@ -191,6 +197,8 @@ class OpenCode(Runtime):
         except (OSError, sqlite3.Error, ValueError, KeyError, TypeError) as exc:
             batch.error = type(exc).__name__
             batch.caught_up = False
+            if isinstance(exc, (ValueError, KeyError, TypeError)):
+                state["partial"] = True
         return batch
 
 
