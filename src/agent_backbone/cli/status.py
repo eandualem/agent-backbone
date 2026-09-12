@@ -236,6 +236,8 @@ def status_view(data: dict, *, width: int, plain: bool = False, watch: bool = Fa
             )
             if work := _work(agent, compact=False):
                 information.append(work)
+            if agent.get("description"):
+                information.append("Purpose: " + clean(agent["description"]))
             if agent.get("tags"):
                 information.append("Tags: " + clean(", ".join(agent["tags"])))
         if reason := agent.get("reason"):

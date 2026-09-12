@@ -73,7 +73,8 @@ class TestConfig:
         assert capsys.readouterr().out.splitlines()[0] == "7999"
         assert _run(["config", "list"]) == 0
         out = capsys.readouterr().out
-        assert "* backbone.port" in out and "timing.grace_period_seconds" in out
+        assert "backbone.port" in out and "7999" in out and "explicit" in out
+        assert "timing.grace_period_seconds" in out and "default" in out
         assert _run(["config", "unset", "backbone.port"]) == 0
         capsys.readouterr()
         assert _run(["config", "get", "backbone.port"]) == 0
@@ -107,7 +108,7 @@ class TestDoctor:
             code = _run(["doctor"])
         out = capsys.readouterr().out
         assert code == 1
-        assert "tmux on PATH" in out and "✗" in out
+        assert "tmux on PATH" in out and "FAIL" in out
 
     def test_passes_with_valid_setup(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
@@ -151,7 +152,10 @@ class TestAgentCommands:
 
         assert _run(["agent", "list"]) == 0
         out = capsys.readouterr().out
-        assert "my-app" in out and str(project) in out
+        assert "my-app" in out and "Purpose" in out
+        assert _run(["agent", "list", "--json"]) == 0
+        listing = json.loads(capsys.readouterr().out)
+        assert listing["items"][0]["dir"] == str(project)
 
     def test_start_unknown_name_registers_cwd(self, tmp_path, monkeypatch, capsys):
         assert _run(["init"]) == 0
@@ -292,7 +296,10 @@ class TestAgentCommands:
         capsys.readouterr()
         assert _run(["agent", "list"]) == 0
         out = capsys.readouterr().out
-        assert str(new_home) in out and str(twin) in out
+        assert "app" in out and "app-2" in out
+        assert _run(["agent", "list", "--json"]) == 0
+        listing = json.loads(capsys.readouterr().out)
+        assert {item["dir"] for item in listing["items"]} == {str(new_home), str(twin)}
 
     def test_set_watch_forget(self, tmp_path, capsys):
         assert _run(["init"]) == 0
@@ -626,7 +633,11 @@ class TestSecrets:
         capsys.readouterr()
         assert _run(["secrets", "list"]) == 0
         out = capsys.readouterr().out
-        assert "✓ BACKBONE_API_KEY" in out and "✓ GITHUB_TOKEN" in out and "- TELEGRAM_TOKEN" in out
+        rows = [line.split("|") for line in out.splitlines() if line.startswith("|")]
+        states = {row[1].strip(): row[2].strip() for row in rows if len(row) == 4}
+        assert states["BACKBONE_API_KEY"] == "set"
+        assert states["GITHUB_TOKEN"] == "set"
+        assert states["TELEGRAM_TOKEN"] == "not set"
         assert _run(["secrets", "unset", "GITHUB_TOKEN"]) == 0
         assert "GITHUB_TOKEN=" not in (_isolated_data_dir / ".env").read_text()
         assert _run(["secrets", "path"]) == 0

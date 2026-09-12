@@ -261,7 +261,10 @@ class TestStartAgent:
         listed = await api_client.get("/api/config/agents", headers=auth_headers)
         assert "scratch-app" in [a["name"] for a in listed.json()]
 
-    async def test_inspect_reports_evidence(self, api_client, auth_headers, tmux_svc):
+    async def test_inspect_reports_evidence(self, api_client, api_app, auth_headers, tmux_svc):
+        await api_app.state.agent_store.update(
+            "ike", description="Maintains Python services", tags=["backend", "python"]
+        )
         tmux_svc.session_exists.return_value = True
         with patch(
             f"{_ROUTE}.get_session_intelligence",
@@ -284,6 +287,8 @@ class TestStartAgent:
         data = resp.json()
         assert data["state"] == "busy" and data["delivery"] == "agent_working"
         assert data["current_issue"] == 4 and data["current_repo"] == "example/ike"
+        assert data["description"] == "Maintains Python services"
+        assert data["tags"] == ["backend", "python"]
         assert data["evidence"] == ["hook state 'busy' written 3s ago (fresh)"]
         assert data["known"] is True and data["online"] is True
 

@@ -1,6 +1,8 @@
 # CLI reference
 
 `backbone usage` opens the quick guide, including reading and publishing progress.
+See [CLI presentation](cli-presentation.md) for the table/detail convention, narrow
+terminal behavior and machine-readable output contracts.
 
 
 Starting an existing agent reuses its saved CLI and model and begins a **new

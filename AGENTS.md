@@ -5,6 +5,46 @@ this file directly; Claude Code imports it from `CLAUDE.md`). A local control
 plane for terminal AI agents. Read `docs/concepts.md` for the model;
 `docs/how-it-works.md` for the flows.
 
+## Product philosophy — apply before proposing or implementing features
+
+Backbone's differentiator is **specialist agents collaborating toward a shared
+goal**. It supplies powerful tools, peer discovery, safe communication and
+evidence; the agents choose collaborators, start peers, make decisions and take
+responsibility for their work and replies.
+
+- **Work without repository setup.** Core use must not require declarations,
+  configuration files, task records or a prescribed working directory layout in
+  the user's repository. Do not add mandatory artifacts or working conventions.
+  Optional capabilities such as shared skills and swarm worktrees have their own
+  explicit scope; they do not justify unrelated repository changes.
+- **Enable judgment; do not encode the agent's workflow.** Backbone observes
+  runtime state and delivery, and preserves agent-authored reports. It does not
+  own task plans, enforce business-task lifecycles, infer completion or prescribe
+  how agents reason. A missing reply is not automatically a missing feature.
+  Check delivery evidence before deciding whether the transport or the agent's
+  handling needs attention; acknowledgement is not proof of completed work.
+- **Prefer small, optional tools and context.** A brief peer introduction or an
+  optional message reference may empower collaboration. Mandatory task schemas,
+  automatic continuation rules and correction-adoption machinery require a
+  demonstrated need and explicit owner agreement. Live discovery tools remain
+  authoritative over startup snapshots.
+- **Do not grow a scheduler product.** Prioritize observed blockers and reliable
+  core behavior over feature accumulation. Review existing recurring mechanisms
+  against their delivery/state/recovery purpose; do not remove necessary safety
+  infrastructure or add scheduled agent workflows by assumption.
+- **Fresh starts, explicit resume.** Project-selected handoffs carry continuity
+  across fresh sessions and CLI changes. Resume only when explicitly requested;
+  an old runtime conversation cannot know intervening work. The shared-memory
+  rules below are for developing this repository, not files Backbone must impose
+  on every user's project.
+- **Cross-machine means agent collaboration as one system.** Remote management
+  alone does not deliver it. Keep the full capability in its deferred issue until
+  prioritized and validate it across real machines and environments.
+- **CLI presentation is product quality.** Follow `docs/cli-presentation.md`:
+  clear tables and labeled details, consistent vocabulary, usable narrow-terminal
+  output and complete machine-readable results. New commands follow the same
+  convention rather than inventing their own presentation.
+
 ## Shared memory — read first, write last
 
 Agents of different runtimes work here in turns, and each runtime keeps its

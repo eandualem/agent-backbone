@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 from agent_backbone.cli import _common
+from agent_backbone.cli.presentation import note, print_record, print_table
 
 
 def parse_since(value: str) -> str:
@@ -82,63 +83,71 @@ def _error(args: argparse.Namespace, detail: str) -> int:
     if args.json:
         _common.print_json({"error": "diagnostics_unavailable", "detail": detail})
     else:
-        print(f"Diagnostics unavailable: {detail}")
+        note(f"Diagnostics unavailable: {detail}")
     return 1
 
 
 def _print_digest(data: dict) -> None:
-    print(f"Diagnostics since {data.get('since') or 'the oldest retained record'}")
+    note(f"Diagnostics since {data.get('since') or 'the oldest retained record'}")
     groups = data["groups"]
-    print(
+    note(
         f"  {data.get('total_groups', len(groups))} problem group(s), "
         f"{data.get('total_occurrences', 0)} retained occurrence(s)"
     )
-    for group in groups:
-        agent = group.get("agent_name") or "backbone"
-        issue = (
-            f" {group.get('repo', '')}#{group['issue_number']}"
-            if group.get("issue_number") is not None
-            else ""
-        )
-        print(
-            f"  [{group['severity']}] {group['code']} — {agent}{issue}: "
-            f"{group['occurrences']} occurrence(s), last {group['last_seen_at']} "
-            f"(show {group['sample_id']})"
-        )
-    if not groups:
-        print("  No recorded problem groups in this interval.")
+    print_table(
+        "Problem groups",
+        ("Severity", "Code", "Agent / Issue", "Occurrences", "Latest / Inspect"),
+        [
+            (
+                group["severity"],
+                group["code"],
+                (group.get("agent_name") or "backbone")
+                + (
+                    f"\n{group.get('repo', '')}#{group['issue_number']}"
+                    if group.get("issue_number") is not None
+                    else ""
+                ),
+                group["occurrences"],
+                f"{group['last_seen_at']}\nshow {group['sample_id']}",
+            )
+            for group in groups
+        ],
+        empty="No recorded problem groups in this interval.",
+    )
     if data.get("has_more"):
-        print("  More groups exist; narrow --since or --agent, or increase --limit.")
+        note("  More groups exist; narrow --since or --agent, or increase --limit.")
     informational = data.get("informational", {})
     if informational:
-        print("  Other recorded outcomes (retained occurrences):")
-        for code, count in sorted(informational.items()):
-            print(f"    {code}: {count}")
+        print_table(
+            "Other recorded outcomes", ("Code", "Occurrences"), sorted(informational.items())
+        )
     deliveries = data.get("deliveries", {})
     if deliveries:
-        print(f"  Delivery history: {deliveries.get('attempts', 0)} attempt(s)")
-        for outcome, count in sorted(deliveries.get("outcomes", {}).items()):
-            print(f"    {outcome}: {count}")
+        note(f"  Delivery history: {deliveries.get('attempts', 0)} attempt(s)")
+        print_table(
+            "Delivery outcomes",
+            ("Outcome", "Attempts"),
+            sorted(deliveries.get("outcomes", {}).items()),
+        )
     queue = data.get("queue", {})
     if queue:
-        print(
+        note(
             f"  Queue now: {queue.get('pending', 0)} pending, {queue.get('in_progress', 0)} leased"
         )
         if queue.get("oldest_pending_at"):
-            print(f"    oldest pending: {queue['oldest_pending_at']}")
-    print(
-        "  Groups were last seen in this interval; their counts include retained earlier repeats."
-    )
+            note(f"    oldest pending: {queue['oldest_pending_at']}")
+    note("  Groups were last seen in this interval; their counts include retained earlier repeats.")
     failures = data.get("coverage", {}).get("write_failures_since_process_start", 0)
     if failures:
-        print(f"  Evidence incomplete: {failures} diagnostic write(s) failed in this process.")
-    print("  An empty result does not establish system health.")
-    print("  Investigation guide: backbone docs diagnostics")
+        note(f"  Evidence incomplete: {failures} diagnostic write(s) failed in this process.")
+    note("  An empty result does not establish system health.")
+    note("  Investigation guide: backbone docs diagnostics")
 
 
 def _print_record(data: dict) -> None:
     record = data["record"]
-    print(f"Diagnostic {record['id']}: {record['code']} ({record['severity']})")
+    note(f"Diagnostic {record['id']}: {record['code']} ({record['severity']})")
+    fields = []
     for key in (
         "agent_name",
         "operation_id",
@@ -156,30 +165,39 @@ def _print_record(data: dict) -> None:
         "occurrences",
     ):
         if record.get(key) is not None and record[key] != "":
-            print(f"  {key}: {record[key]}")
+            fields.append((key, record[key]))
     for key, value in sorted(record.get("details", {}).items()):
-        print(f"  {key}: {json.dumps(value, ensure_ascii=True)}")
+        fields.append((key, json.dumps(value, ensure_ascii=True)))
+    print_record("Evidence", fields)
     records = data.get("operation_records", [])
     if records:
-        print("  Operation records:")
-        for item in records:
-            print(
-                f"    {item['id']}: {item['code']} ({item['severity']}) "
-                f"×{item['occurrences']} — {item['last_seen_at']}"
-            )
+        print_table(
+            "Operation records",
+            ("ID", "Code", "Severity", "Occurrences", "Last seen"),
+            [
+                (
+                    item["id"],
+                    item["code"],
+                    item["severity"],
+                    item["occurrences"],
+                    item["last_seen_at"],
+                )
+                for item in records
+            ],
+        )
     if data.get("has_more"):
-        print(
+        note(
             "  More operation records exist; use GET /api/diagnostics/records to page through them."
         )
 
 
 def _print_trace(data: dict) -> None:
-    print(f"Operation {data['operation_id']}")
-    print(f"  {data['count']} record(s); truncated: {'yes' if data['truncated'] else 'no'}")
+    note(f"Operation {data['operation_id']}")
+    note(f"  {data['count']} record(s); truncated: {'yes' if data['truncated'] else 'no'}")
     for item in data["items"]:
         _print_record({"record": item})
     if data["truncated"]:
-        print(
+        note(
             "  Read the next page using GET /api/diagnostics/records with this operation_id "
             f"and before_id={data['next_before_id']}."
         )

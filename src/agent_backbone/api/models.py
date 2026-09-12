@@ -105,6 +105,8 @@ class AgentInspectResponse(BaseModel):
     known: bool = True
     online: bool = False
     dir: str = ""
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
     runtime: str = ""
     model: str | None = None
     model_source: str = Field(

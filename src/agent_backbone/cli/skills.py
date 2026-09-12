@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from agent_backbone.cli import _common
+from agent_backbone.cli.presentation import note, print_record, print_table
 from agent_backbone.services.agents import skills_preview
 from agent_backbone.skills import (
     ALL_TAG,
@@ -84,16 +85,31 @@ def _actor() -> str:
 
 
 def _print_preview(view: dict) -> None:
-    print(f"{view['name']} / {view['runtime']} · tags: {', '.join(view['tags']) or 'none'}")
-    print(f"  store: {view['store'] or 'disabled'}")
-    print(f"  directories: {', '.join(view['directories']) or 'none for this runtime'}")
-    for skill in view["skills"]:
-        states = ", ".join(f"{d}: {s}" for d, s in skill["links"].items()) or "no directory"
-        print(f"  {skill['name']} [{' '.join(skill['tags'])}] — {states}")
-    if not view["skills"]:
-        print("  no store skill is tagged for this agent")
+    print_record(
+        f"Skills for {view['name']}",
+        [
+            ("CLI", view["runtime"]),
+            ("Tags", ", ".join(view["tags"]) or "none"),
+            ("Store", view["store"] or "disabled"),
+            ("Directories", ", ".join(view["directories"]) or "none for this runtime"),
+        ],
+    )
+    print_table(
+        "Selected skills",
+        ("Skill", "Tags", "Link state"),
+        [
+            (
+                skill["name"],
+                " ".join(skill["tags"]),
+                "\n".join(f"{directory}: {state}" for directory, state in skill["links"].items())
+                or "no directory",
+            )
+            for skill in view["skills"]
+        ],
+        empty="No store skill is tagged for this agent.",
+    )
     for notice in view["notices"]:
-        print(f"  ! {notice}")
+        note(f"Notice: {notice}", style="yellow")
 
 
 async def _skills(args: argparse.Namespace) -> int:
@@ -142,17 +158,23 @@ async def _skills(args: argparse.Namespace) -> int:
                 {"store": str(store), "git": is_git_repository(store), "items": rows}
             )
             return 0
-        print(f"Store: {store}{'' if is_git_repository(store) else ' (not a git repository)'}")
-        if not rows:
-            print("  empty — add one: backbone skills add PATH --tag TAG")
-        for row in rows:
-            if row["error"]:
-                print(f"  {row['name']}: INVALID — {row['error']}")
-                continue
-            tags = " ".join(row["tags"]) or "no tags (reaches nobody)"
-            print(f"  {row['name']} [{tags}] → {', '.join(row['reaches']) or 'no agent'}")
-            print(f"      {row['description'][:100]}")
-        print("\nPreview an agent: backbone skills preview AGENT")
+        note(f"Store: {store}{'' if is_git_repository(store) else ' (not a git repository)'}")
+        print_table(
+            "Skills",
+            ("Skill", "Purpose", "Tags", "Agents", "State"),
+            [
+                (
+                    row["name"],
+                    row["description"],
+                    "\n".join(row["tags"]) or "none",
+                    "\n".join(row["reaches"]) or "none",
+                    f"INVALID: {row['error']}" if row["error"] else "valid",
+                )
+                for row in rows
+            ],
+            empty="No skills match. Add one: backbone skills add PATH --tag TAG",
+        )
+        note("Full skill: backbone skills show NAME\nAgent links: backbone skills preview AGENT")
         return 0
     if sub == "add":
         body = {
@@ -206,6 +228,7 @@ async def _skills(args: argparse.Namespace) -> int:
         raise ValueError(f"unknown agent '{args.agent}'")
     if sub == "validate":
         errors = [f"{entry.name}: {entry.error}" for entry in read_store(store) if not entry.valid]
+        summaries = []
         for spec in specs:
             view = skills_preview(spec, config)
             broken = [
@@ -215,9 +238,8 @@ async def _skills(args: argparse.Namespace) -> int:
                 if "broken" in state
             ]
             errors.extend(broken)
-            print(
-                f"{spec.name}: {len(view['skills'])} skill(s)" + (" — problems" if broken else "")
-            )
+            summaries.append((spec.name, len(view["skills"]), "problems" if broken else "valid"))
+        print_table("Skill validation", ("Agent", "Skills", "Link state"), summaries)
         for error in errors:
             print(error, file=sys.stderr)
         if not errors:

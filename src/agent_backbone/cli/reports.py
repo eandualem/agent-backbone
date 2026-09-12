@@ -9,13 +9,13 @@ import json
 import os
 import shlex
 import sys
-import textwrap
 from pathlib import Path
 from urllib.parse import urlencode
 
 from pydantic import ValidationError
 
 from agent_backbone.cli import _common
+from agent_backbone.cli.presentation import note, print_record
 from agent_backbone.models import (
     REPORT_BODY_BYTES,
     REPORT_LINKS,
@@ -199,26 +199,19 @@ def _age(record: dict) -> str:
     return value + ("; old report" if record["stale"] else "")
 
 
-def _short(value: str, width: int) -> str:
-    return value if len(value) <= width else value[: width - 1].rstrip() + "…"
-
-
 def _print_record(record: dict) -> None:
     name = record["agent_name"] or f"{record['author_name']} (forgotten)"
     report = ProgressReport.model_validate(record["report"])
-    print(f"{name} — {report.status} — report {record['id']} — {_age(record)}")
+    note(f"{name} — {report.status} — report {record['id']} — {_age(record)}")
     print(f"Published {record['created_at']} as {record['author_name']}")
+    fields = []
     for key, section in report.sections():
         label = key.capitalize()
         if key == "blockers":
             label += f" ({report.blockers.kind})"
-        print(
-            textwrap.fill(
-                section.text, width=88, initial_indent=f"  {label}: ", subsequent_indent="    "
-            )
-        )
-        for link in section.links:
-            print(f"    {link.title}: {link.url}")
+        value = "\n".join([section.text, *(f"{link.title}: {link.url}" for link in section.links)])
+        fields.append((label, value))
+    print_record("Report", fields)
     print(f"Author history: backbone updates --history --author-id {record['author_id']}")
 
 
@@ -227,24 +220,18 @@ def _print_page(data: dict, query: ReportQuery) -> None:
     for entry in data["items"]:
         record = entry["record"]
         if record is None:
-            print(f"\n{entry['agent_name']} — no report yet")
+            note(f"\n{entry['agent_name']} — no report yet")
             continue
         report = record["report"]
         name = record["agent_name"] or f"{record['author_name']} (forgotten)"
-        print(f"\n{name} — {report['status']} — {_age(record)} — report {record['id']}")
-        for key, width in (("goal", 100), ("progress", 180), ("blockers", 120), ("next", 120)):
-            text = report[key]["text"]
+        note(f"\n{name} — {report['status']} — {_age(record)} — report {record['id']}")
+        fields = []
+        for key in ("goal", "progress", "blockers", "next"):
             label = key.capitalize()
             if key == "blockers":
                 label += f" ({report[key]['kind']})"
-            print(
-                textwrap.fill(
-                    _short(text, width),
-                    width=88,
-                    initial_indent=f"  {label}: ",
-                    subsequent_indent="    ",
-                )
-            )
+            fields.append((label, report[key]["text"]))
+        print_record("Report", fields)
     if not data["items"]:
         print("No retained reports." if data["history"] else "No agents in this view.")
     print("\nFull report and links: backbone updates show ID")

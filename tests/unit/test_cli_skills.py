@@ -63,7 +63,8 @@ def test_list_show_and_path(config, capsys):
     }
     assert run(["skills", "list", "--tag", "coder"]) == 0
     out = capsys.readouterr().out
-    assert "backend [coder] → leo" in out and "shared" not in out
+    assert all(value in out for value in ("Skill", "Purpose", "Agents", "backend", "coder", "leo"))
+    assert "shared" not in out
     assert run(["skills", "show", "shared"]) == 0
     assert capsys.readouterr().out.startswith("---\nname: shared\n")
     assert run(["skills", "path", "shared"]) == 0
@@ -105,7 +106,17 @@ def test_add_goes_through_the_api_when_the_backbone_runs(config, capsys, tmp_pat
 def test_preview_and_validate(config, capsys):
     assert run(["skills", "preview", "leo"]) == 0
     out = capsys.readouterr().out
-    assert "backend [coder] — .claude/skills: will link" in out
+    assert all(
+        value in out
+        for value in (
+            "Skill",
+            "Tags",
+            "Link state",
+            "backend",
+            "coder",
+            ".claude/skills: will link",
+        )
+    )
     assert run(["skills", "validate"]) == 0
     assert "Skills valid." in capsys.readouterr().out
     broken = config.skills.store_path / "broken"
@@ -133,4 +144,5 @@ def test_bare_agent_name_means_preview(config, capsys):
     assert expand_shorthand(["skills", "--help"]) == ["skills", "--help"]
     assert expand_shorthand(["status"]) == ["status"]
     assert run(["skills", "leo"]) == 0
-    assert "backend [coder] — .claude/skills: will link" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "backend" in out and ".claude/skills: will link" in out
