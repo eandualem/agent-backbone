@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -148,6 +149,7 @@ async def start_resolved(
     req: StartRequest,
     *,
     db: BackboneDB | None,
+    check_actions: Callable[[str], Awaitable[bool]] | None = None,
 ) -> StartResult:
     """Start a resolved agent. Raises ValueError for a runtime or directory that cannot work."""
     started = time.monotonic()
@@ -183,6 +185,7 @@ async def start_resolved(
             db=db,
             wait=req.wait,
             operation_id=req.operation_id,
+            check_actions=check_actions,
         )
         if result.ok and not result.already_running:
             await store.touch_started(spec.name)

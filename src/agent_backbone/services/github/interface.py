@@ -129,6 +129,14 @@ class GitHubClient:
 
     # --- Repo resolution ---
 
+    async def actions_enabled(self, repo_full_name: str) -> bool:
+        """Read Actions permissions; only an explicit boolean is a valid response."""
+        response = await self._request("GET", "/actions/permissions", repo_full_name=repo_full_name)
+        payload = response.json()
+        if not isinstance(payload, dict) or type(payload.get("enabled")) is not bool:
+            raise ValueError("Actions permissions response must contain boolean enabled")
+        return payload["enabled"]
+
     @staticmethod
     def _resolve_repo(repo_full_name: str | None) -> tuple[str, str]:
         candidate = repo_full_name or ""

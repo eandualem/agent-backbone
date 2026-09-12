@@ -54,6 +54,7 @@ from agent_backbone.services.agents.operations import (
     forget_agent as forget_agent_op,
 )
 from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.github import actions_checker
 from agent_backbone.services.routing import get_session_intelligence
 from agent_backbone.services.runtimes import RUNTIMES, sanitize_pane_content
 from agent_backbone.services.terminal import (
@@ -216,7 +217,12 @@ async def _start(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         result = await start_resolved(
-            store, request.app.state.config, spec, req, db=request.app.state.db
+            store,
+            request.app.state.config,
+            spec,
+            req,
+            db=request.app.state.db,
+            check_actions=actions_checker(request.app.state.config),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

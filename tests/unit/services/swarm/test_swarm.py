@@ -749,3 +749,39 @@ async def test_missing_kickoff_fails_before_creating_worktree(db, tmp_path):
             )
     create.assert_not_called()
     assert await db.swarms.get("research") is None
+
+
+async def test_swarm_actions_failure_blocks_real_shared_launch(db, tmp_path):
+    config, repo_dir = _swarm_config(tmp_path)
+    worktree = repo_dir / ".backbone" / "swarms" / "research"
+    worktree.mkdir(parents=True)
+    store = _FakeStore(config)
+    gh = AsyncMock()
+    gh.get_issue.return_value = AsyncMock(state="open", title="Research")
+    check = AsyncMock(return_value=False)
+    with (
+        patch(f"{_IFACE}.is_git_repo", AsyncMock(return_value=True)),
+        patch(f"{_IFACE}.current_branch", AsyncMock(return_value="main")),
+        patch(f"{_IFACE}.create_worktree", AsyncMock(return_value=(worktree, "swarm/research"))),
+        patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_IFACE}.remove_worktree", AsyncMock()),
+        patch(f"{_IFACE}.actions_checker", return_value=check),
+        patch(
+            "agent_backbone.services.agents.launch.session_exists", AsyncMock(return_value=False)
+        ),
+        patch("agent_backbone.services.agents.launch.start_session", AsyncMock()) as start,
+        pytest.raises(SwarmError, match="Actions is disabled for acme/app"),
+    ):
+        await create_swarm(
+            config,
+            db,
+            store,
+            gh,
+            name="research",
+            issue_ref="acme/app#7",
+            member_specs=["scout@shell"],
+            initiator="simon",
+        )
+    check.assert_awaited_once_with("acme/app")
+    start.assert_not_awaited()
+    assert not store.registered

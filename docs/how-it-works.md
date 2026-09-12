@@ -30,19 +30,27 @@ This page follows real requests through the system. Read
 2. **Record.** Upsert the agent (and any `--watch` repositories) in the
    database. The running backbone publishes a new configuration snapshot;
    every job uses it from the next tick.
-3. **Skills.** For a runtime with a measured skills directory, link every
+3. **Actions preflight.** For a new session, resolve the current GitHub origin
+   (falling back to the registered repository) and require boolean `enabled: true`
+   from `GET /repos/OWNER/REPO/actions/permissions`. The shared launch gate checks
+   fresh starts, resumes and swarm workers through an injected authenticated
+   checker. Disabled Actions or unreadable/malformed responses return failure
+   evidence and metadata-only startup diagnostics before trust or session creation.
+   Repo-less agents skip the check; already-running sessions are a no-op. No
+   permissions are changed. This check is independent of GitHub event intake.
+4. **Skills.** For a runtime with a measured skills directory, link every
    store skill tagged for the agent into it (`.claude/skills`, `.agents/skills`),
    drop links no longer selected, hide the link names in `.git/info/exclude`,
    and fail the start if a selected skill does not resolve. Repository-owned
    skills are never touched ([skills](skills.md)).
-4. **Launch.** `tmux new-session -d -s <name> -c <dir>` running the runtime
+5. **Launch.** `tmux new-session -d -s <name> -c <dir>` running the runtime
    command (`claude --model …`), with `BACKBONE_RUNTIME`, `BACKBONE_AGENT`,
    `BACKBONE_STATE_DIR` and the agent's `env` exported into the session.
    For Claude Code the command also carries
    `--settings <data_dir>/hooks/claude-settings.json` — a backbone-owned
    settings file, replaced atomically at every start, that wires the state hooks
    without touching the repository or `~/.claude/settings.json`.
-5. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
+6. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
    fresh hook-written `idle` state, or a visible empty prompt for runtimes
    without hooks. A fresh busy or blocked hook keeps startup waiting even if
    the terminal shows an empty prompt. If the runtime is asking a question (Claude's folder-trust

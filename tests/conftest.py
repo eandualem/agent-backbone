@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -123,6 +123,13 @@ def no_real_tmux():
         raise RuntimeError(f"unpatched tmux call in a test: {' '.join(map(str, args))}")
 
     with patch("agent_backbone.services.terminal._core.asyncio.create_subprocess_exec", _refuse):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def no_launch_git_discovery():
+    """Temporary launch directories have no origin unless a test supplies one."""
+    with patch("agent_backbone.services.agents.launch.detect_repo", AsyncMock(return_value="")):
         yield
 
 

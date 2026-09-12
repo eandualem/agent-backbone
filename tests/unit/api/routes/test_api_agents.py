@@ -85,6 +85,10 @@ def launch():
     """The launch seams under ``start_agent``: no real tmux, no real binaries."""
     with (
         patch(f"{_RUNTIME}.available", return_value=True),
+        patch(
+            "agent_backbone.api.routes.agents.actions_checker",
+            return_value=AsyncMock(return_value=True),
+        ) as checker,
         patch(f"{_LAUNCH}.session_exists", new_callable=AsyncMock, return_value=False) as exists,
         patch(f"{_LAUNCH}.start_session", new_callable=AsyncMock, return_value=True) as start,
         patch(f"{_RUNTIME}.build_command", return_value=["/usr/bin/claude"]) as build,
@@ -92,7 +96,11 @@ def launch():
         patch("agent_backbone.services.runtimes.codex.pre_trust_codex_directory") as trust,
     ):
         yield MagicMock(
-            session_exists=exists, start_session=start, build_command=build, trust=trust
+            session_exists=exists,
+            start_session=start,
+            build_command=build,
+            trust=trust,
+            actions=checker.return_value,
         )
 
 
@@ -600,3 +608,25 @@ async def test_update_rejects_unknown_fields_atomically(api_app, api_client, aut
     assert response.status_code == 422
     assert any(error["type"] == "extra_forbidden" for error in response.json()["detail"])
     assert await api_app.state.db.agents.list() == before
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("unreadable", [False, True])
+async def test_api_actions_failure_has_evidence_and_creates_no_session(
+    api_client, auth_headers, launch, resume, unreadable
+):
+    launch.actions.return_value = False
+    if unreadable:
+        launch.actions.side_effect = RuntimeError("private auth details")
+    response = await api_client.post(
+        "/api/agents/start",
+        json={"name": "ike", "resume": resume, "wait": False},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert not data["ok"]
+    assert "example/ike" in data["evidence"][0]
+    assert "private auth details" not in response.text
+    launch.actions.assert_awaited_once_with("example/ike")
+    launch.start_session.assert_not_awaited()

@@ -912,3 +912,26 @@ async def test_telegram_start_waits_for_lifecycle_lock_and_rechecks_registration
         launch.assert_awaited_once()
         async with db.engine.connect() as conn:
             assert await conn.scalar(text("SELECT last_started_at FROM agents WHERE name = 'app'"))
+
+
+async def test_telegram_actions_failure_reaches_human_without_session(config, db, tmp_path):
+    from agent_backbone.config import AgentSpec
+    from agent_backbone.services.agents import AgentStore
+
+    store = AgentStore(db, config.data_dir)
+    await store.register(AgentSpec(name="app", dir=str(tmp_path), runtime="shell", repo="acme/app"))
+    bot = _bot(store.config)
+    bot._db = db
+    update = _update()
+    check = AsyncMock(return_value=False)
+    with (
+        patch(f"{_CMD}.actions_checker", return_value=check),
+        patch(
+            "agent_backbone.services.agents.launch.session_exists", AsyncMock(return_value=False)
+        ),
+        patch("agent_backbone.services.agents.launch.start_session", AsyncMock()) as start,
+    ):
+        await bot.cmd_start_agent(update, _context(["app"]))
+    check.assert_awaited_once_with("acme/app")
+    start.assert_not_awaited()
+    assert "Actions is disabled for acme/app" in update.message.reply_text.await_args.args[0]
