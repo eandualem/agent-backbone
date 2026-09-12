@@ -80,10 +80,69 @@ interruption, timeout, authentication error or unsupported model is a failed rev
 not a clean review. Findings must be checked against the recorded head. If either
 branch advances, compare its new commit before using the review as a release gate.
 
-Verify each finding with code or a regression test. Create issues for actionable
-findings when authorized, then fix them through ordinary reviewed PRs. Recheck the
-final release diff after fixes; do not treat an older review as covering new code.
-Publish a short progress report with links to issues/PRs, not the raw model log.
+Triage every finding against code or a regression test: record whether it is valid
+or rejected, its severity and the reason. Create issues for actionable findings
+only when authorized. Fix valid findings on a branch, **never on the base**. Open
+a PR to `develop`, address automated review and pass required checks, then merge
+when clear. Recheck the final release diff after fixes; do not treat an older
+review as covering new code.
+
+## Decide whether to run another Ultra round
+
+A person's request to “run an Ultra review” means a findings-based sequence, not
+one pass by definition and not repeated passes until a clean report. Decide after
+each completed round, using its triaged findings:
+
+- **Many valid findings, or any high-severity findings:** assume the pass may have
+  saturated and left other problems unreported. After the fixes have landed in
+  `develop` through ordinary reviewed PRs, run another Ultra pass from the updated
+  head to the intended base. Pin the new head, base and merge-base and use a new
+  run directory. Apply the same decision rule to that round's findings.
+- **Few findings, all minor:** fix them on a branch, PR to `develop`, complete
+  ordinary automated review and required checks, and merge. Then stop the Ultra
+  rounds; do **not** run another Ultra pass merely to obtain a zero-finding report.
+- **No valid findings:** stop the rounds without manufacturing a fix PR.
+
+“Many” and “few” require judgment about the scope and significance of the findings;
+they are not numeric thresholds or a fixed round budget. Explain ambiguous cases
+and why the findings justify continuing or stopping. Changes made after the
+reviewed snapshot still need review; small fixes in the final minor round receive
+ordinary PR review, rather than automatically restarting the Ultra sequence.
+
+### Make each round auditable
+
+Publish a short progress report after every round with:
+
+- The round and reviewed head/base, plus finding counts by severity. Distinguish
+  valid findings from rejected ones so raw model output does not determine the
+  next round.
+- What was fixed and links to the fix PRs, including their landing status.
+- The decision to continue or stop and the findings that justify it.
+- The round's elapsed time and tokens, with their source and attribution limits.
+
+Use `backbone usage` and, when the review has an attributable ledger session,
+`backbone usage session ID` for token details. Retain the review process's start/end
+times and usage events with its saved artifacts. A detached ephemeral reviewer may
+not have a Backbone ledger entry: use its recorded usage when available and state
+that source; otherwise report tokens as unavailable. Never report missing usage
+as zero or attribute a fleet-wide delta to one round while other agents are working.
+Keep the published report within `backbone help reports` limits and link to detailed
+evidence rather than pasting the model log. The per-round reports must make both
+the resource cost and the reason for another pass visible to a human.
+
+### The stop is part of the task
+
+For a requested develop → main release review, once the final round has few, minor
+findings and its fixes have landed (or no valid findings), open the release PR from
+`develop` to `main`. Merge when authorized, after the release PR's required checks
+and review are clear. Verify the PR state and closure of fully completed issues;
+do not describe an open PR or unresolved gate as finished delivery. If the original
+request already authorizes merging, carry it through rather than seeking approval
+again. State the stop in the final report and start nothing else.
+
+For a review whose scope does not include a release, finish the authorized fix PRs
+and report the stop at that boundary. The convergence rule does not authorize an
+unrequested release or additional implementation work.
 
 ## Claude Code
 
