@@ -203,8 +203,10 @@ model.
 
 Creating a swarm always starts fresh conversations, including when a completed
 or disbanded swarm name is reused. Saved state from an earlier swarm cannot
-replace the new issue’s role briefs and roster. Ordinary agent starts retain
-their automatic continuation behavior.
+replace the new issue’s role briefs and roster. Ordinary agent starts also begin
+fresh conversations; only an explicit `agent resume` or `start --resume` requests
+a previous conversation. Project handoffs and shared memory carry progress
+between fresh sessions, including when the next session uses a different CLI.
 
 ## Registration, checkpoints and shared tests
 

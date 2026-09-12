@@ -10,6 +10,10 @@ last saw for that runtime, or the runtime's own last conversation when no ID is
 saved. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
+The project's handoff and shared memory carry progress across fresh sessions,
+including CLI changes. Read them according to the project's instructions. Use
+explicit resume when you intend to return to a previous conversation, for example
+after an unexpected closure; it cannot know what other sessions did in between.
 Codex resume honors `--model`, including an effort suffix, while retaining the
 saved conversation. Changing runtime without specifying a model clears the previous runtime's model.
 Starting from a directory reuses its registered name, even after a rename;
