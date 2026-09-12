@@ -437,6 +437,10 @@ class Codex(Runtime):
         state["total"] = current
         last = info.get("last_token_usage") or {}
         partial = bool(state.get("partial"))
+        if previous is not None and delta != {k: count(last, k) for k in fields}:
+            # Counters may bridge unrecorded requests. Preserve the token delta,
+            # but one last-request context/model cannot price that whole gap.
+            state["partial"] = partial = True
         if any(n < 0 for n in delta.values()):
             # A reset cannot prove what happened in between. Retain the observed
             # last request only, with explicitly incomplete accounting.

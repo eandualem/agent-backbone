@@ -433,3 +433,32 @@ def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path)
     second = RUNTIMES["opencode"].read_usage(path, first.offset, first.state)
     assert second.caught_up and len(second.events) == 2
     assert not {e.key for e in first.events} & {e.key for e in second.events}
+
+
+def test_codex_missing_observations_keep_tokens_but_do_not_price_gap(tmp_path):
+    path = tmp_path / "gap.jsonl"
+    append(
+        path,
+        codex(),
+        codex(
+            total=1000,
+            output=100,
+            at=T2,
+            last={"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10},
+        ),
+    )
+    batch = RUNTIMES["codex"].read_usage(path, 0, {})
+    assert sum(e.total_tokens for e in batch.events) == 1100
+    assert batch.state["partial"] and batch.events[-1].coverage == "partial"
+
+
+def test_rotation_keeps_session_identity_filter(tmp_path):
+    path = tmp_path / "current.jsonl"
+    append(path, {**claude(), "sessionId": "current"})
+    before = RUNTIMES["claude"].read_usage(path, 0, {"_session_id": "current"})
+    replacement = tmp_path / "replacement"
+    append(replacement, {**claude("unrelated"), "sessionId": "other"})
+    replacement.replace(path)
+    after = RUNTIMES["claude"].read_usage(path, before.offset, before.state)
+    assert after.events == [] and after.state["partial"]
+    assert after.state["_session_id"] == "current"

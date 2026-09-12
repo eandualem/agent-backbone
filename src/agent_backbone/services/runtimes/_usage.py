@@ -31,7 +31,10 @@ def read_jsonl(
             stat = path.stat()
             identity = f"{stat.st_dev}:{stat.st_ino}"
             if offset > stat.st_size or state.get("_file", identity) != identity:
+                session_id = state.get("_session_id")
                 state.clear()
+                if session_id:
+                    state["_session_id"] = session_id
                 state["partial"] = True
                 offset = 0
             state["_file"] = identity
