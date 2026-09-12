@@ -29,6 +29,8 @@ _EXPECTED_TABLES = {
     "review_lifecycle",
     "settings",
     "swarms",
+    "usage_sessions",
+    "usage_events",
 }
 
 _EXPECTED_INDEXES = {
@@ -57,6 +59,8 @@ _EXPECTED_INDEXES = {
     "uq_diagnostics_observation",
     "idx_diagnostics_last_seen",
     "idx_diagnostics_agent",
+    "idx_usage_sessions_agent",
+    "idx_usage_events_at",
 }
 
 

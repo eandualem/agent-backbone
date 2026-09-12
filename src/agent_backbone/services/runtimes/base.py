@@ -719,6 +719,28 @@ class Runtime:
         lowered = line.lower()
         return any(fragment in lowered for fragment in self.status_fragments)
 
+    usage_supported = False
+
+    def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
+        """Locate only the conversation explicitly associated with this agent."""
+        return []
+
+    def usage_children(
+        self, path: Path, session_id: str, env: dict[str, str]
+    ) -> list[tuple[str, Path]]:
+        """Runtime-proven child conversations, never inferred from shared directories."""
+        return []
+
+    def read_usage(self, path: Path, offset: int, state: dict):
+        """Read a bounded chunk from this runtime's usage source."""
+        from agent_backbone.services.runtimes._usage import read_jsonl
+
+        return read_jsonl(path, offset, state, self.parse_usage)
+
+    def parse_usage(self, record: dict, state: dict):
+        """Project one source record into numeric usage, updating an opaque cursor."""
+        return None
+
     # --- typing into the session -----------------------------------------------
 
     async def approve_prompt(self, session_name: str) -> bool:

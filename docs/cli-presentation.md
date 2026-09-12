@@ -84,6 +84,12 @@ Descriptions and tags are optional; no extra agent declarations are required.
 
 ## Verification for future changes
 
+Issue 222 adds token usage with the same helpers: separate CLI-session rows,
+request/model details and opt-in cost. Empty sources remain unavailable, coverage
+and pagination stay visible, and JSON bypasses formatting. `backbone help usage`
+preserves access to the quick-start guide; `backbone usage --help` describes the
+new command.
+
 Exercise representative populated, empty and invalid records at 40, 80 and 120+
 columns, including long names, Unicode, markup-like text and terminal controls.
 Verify values survive wrapping, errors remain distinguishable, and data cannot

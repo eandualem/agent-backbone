@@ -20,6 +20,7 @@ agent-backbone runs Claude Code, Codex, OpenCode, Deep Code and other command-li
 Four things, each of which the agents can do among themselves once the backbone is running.
 
 - **Communication.** Any agent can message any other — across CLIs, models and repositories — with a single command. A message is delivered only when the recipient is ready to receive it and stored until then, so an agent in the middle of a task is never interrupted by another.
+- **Usage visibility.** See tokens by agent, CLI conversation and observed model with `backbone usage`. Codex, Claude Code and OpenCode keep separate session histories, with cache/input/output details and optional dated API-equivalent estimates. [Sources and coverage](docs/token-usage.md).
 - **Management.** The backbone knows whether each agent is idle, working or waiting for a person, and shows the evidence behind that reading. Start, stop, inspect and attach to any agent from one place; hear about the ones that need you on Telegram.
 - **Delegation.** GitHub Issues are the task list. An issue opened in an agent's repository is that agent's work; a `for:<agent>` label routes an issue to a specific agent; comments return to whoever opened it; closing an issue hands the agent its next one. An orchestrator is simply an agent that watches several repositories.
 - **Teams.** When a task benefits from parallel work, an agent creates a swarm: a coordinator plus members on the runtimes and models it chooses, sharing one worktree and branch, finishing in a pull request. When the issue closes, the swarm is torn down and the branch remains.
@@ -30,7 +31,7 @@ By default, each new agent session the backbone starts is briefed at launch on w
 
 ## Getting started
 
-Run `backbone usage` for [quick usage](USAGE.md): start, resume, attach, rename
+Run `backbone help usage` for [quick usage](USAGE.md): start, resume, attach, rename
 and read agent progress with `backbone updates`.
 [Documentation index](docs/INDEX.md) gives a suggested reading order.
 

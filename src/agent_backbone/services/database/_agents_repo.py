@@ -146,6 +146,7 @@ class AgentRepo(Repo):
             ("agents", "name"),
             ("agent_watches", "agent_name"),
             ("agent_states", "session_name"),
+            ("usage_sessions", "agent_name"),
             ("acknowledgments", "target_entity"),
             ("deliveries", "session_name"),
             ("deliveries", "target_entity"),

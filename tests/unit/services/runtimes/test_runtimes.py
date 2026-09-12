@@ -279,7 +279,15 @@ class TestLaunchEnvironment:
     def test_includes_agent_runtime_and_state_dir(self):
         from agent_backbone.services.agents.launch import launch_environment
 
-        env = launch_environment("reviewer", "claude", "/data/state", {"FOO": "1"})
+        env = launch_environment(
+            "reviewer", "claude", "/data/state", {"FOO": "1", "BACKBONE_LAUNCH_ID": "spoofed"}
+        )
+        launch_id = env.pop("BACKBONE_LAUNCH_ID")
+        assert len(launch_id) == 32
+        assert (
+            launch_environment("reviewer", "claude", "/data/state", {})["BACKBONE_LAUNCH_ID"]
+            != launch_id
+        )
         assert env == {
             "BACKBONE_RUNTIME": "claude",
             "BACKBONE_AGENT": "reviewer",

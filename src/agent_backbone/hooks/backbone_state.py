@@ -19,6 +19,7 @@ States written (runtime-agnostic vocabulary):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -27,6 +28,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 STATE_IDLE = "idle"
@@ -477,6 +479,8 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
         }
         if session_id:
             record["session_id"] = session_id
+        if launch_id := os.environ.get("BACKBONE_LAUNCH_ID"):
+            record["launch_id"] = launch_id
         if runtime:
             record["runtime"] = runtime
         if model:
@@ -508,6 +512,35 @@ def write_state(state_dir: Path, agent: str, record: dict) -> None:
     target = state_dir / f"{agent}.json"
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")  # never shared with another writer
     tmp.write_text(json.dumps(record))
+    os.replace(tmp, target)
+
+
+def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
+    """Keep session identity after the next start replaces the current state file."""
+    runtime, session_id = record.get("runtime"), record.get("session_id")
+    if not isinstance(runtime, str) or not isinstance(session_id, str):
+        return
+    if not runtime or not session_id or len(runtime) > 100 or len(session_id) > 300:
+        return
+    launch = record.get("launch_id")
+    identity = hashlib.sha256(
+        f"{agent}\0{runtime}\0{session_id}\0{launch or chr(45)}".encode()
+    ).hexdigest()
+    directory = state_dir / "usage-sessions"
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / (identity + ".json")
+    if target.exists():
+        return  # identity is immutable; collection consumes it after the DB commit
+    value = {
+        "agent": agent,
+        "runtime": runtime,
+        "session_id": session_id,
+        "observed_at": record.get("ts") or time.time(),
+    }
+    if launch:
+        value["launch_id"] = launch
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(value))
     os.replace(tmp, target)
 
 
@@ -558,6 +591,8 @@ def run_hook(derive: Derive, argv: list[str] | None = None) -> int:
         record, action = derive(payload, read_current(state_dir, agent))
         if record is not None:
             write_state(state_dir, agent, record)
+            with suppress(OSError):  # history must not suppress acknowledgements
+                remember_usage_session(state_dir, agent, record)
         for entry in action if isinstance(action, list) else ([action] if action else []):
             append_action(state_dir, agent, entry)
     except Exception:  # a hook must never make the CLI fail

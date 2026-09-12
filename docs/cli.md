@@ -1,6 +1,10 @@
 # CLI reference
 
-`backbone usage` opens the quick guide, including reading and publishing progress.
+`backbone help usage` opens the quick guide, including reading and publishing progress.
+`backbone usage` now opens the [token usage overview](token-usage.md). Use
+`--agent NAME --current` for running conversations, `session ID` for requests,
+`--by model` for model totals, `--cost` for optional estimates, and `--json`
+for structured data. `usage limits` shows supported allowance snapshots.
 See [CLI presentation](cli-presentation.md) for the table/detail convention, narrow
 terminal behavior and machine-readable output contracts.
 

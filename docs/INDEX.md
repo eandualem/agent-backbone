@@ -12,6 +12,7 @@ available as `backbone docs PAGE` after installation (for example,
 
 ## 2. Run your team
 
+- [Token usage](token-usage.md) — per-agent CLI sessions, model tokens and optional API estimates.
 - [Report audio](report-audio.md) — optional local read-aloud in Telegram.
 - [Progress reports](reports.md) — goals, progress, blockers and next steps.
 - [Instruction templates](templates.md) — edit base, role and tag instructions.

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
+from agent_backbone.services.runtimes._usage import count
 from agent_backbone.services.runtimes.base import Runtime
+from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
 
@@ -227,6 +230,64 @@ class ClaudeCode(Runtime):
             args.extend(["--append-system-prompt-file", str(brief_file)])
         args.extend(self.hook_launch_args(data_dir, state_dir))
         return args
+
+    usage_supported = True
+
+    def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
+            return []
+        home = Path(
+            env.get("CLAUDE_CONFIG_DIR")
+            or os.environ.get("CLAUDE_CONFIG_DIR")
+            or Path.home() / ".claude"
+        ).expanduser()
+        return sorted(home.glob(f"projects/*/{session_id}.jsonl"))
+
+    def usage_children(
+        self, path: Path, session_id: str, env: dict[str, str]
+    ) -> list[tuple[str, Path]]:
+        return [
+            (session_id + "/" + p.stem, p)
+            for p in sorted((path.parent / path.stem / "subagents").glob("agent-*.jsonl"))
+        ]
+
+    def parse_usage(self, record: dict, state: dict):
+        expected = state.get("_session_id", "").split("/", 1)[0]
+        if expected and record.get("sessionId") and record["sessionId"] != expected:
+            return None  # copied history from another conversation is not new usage
+        message = record.get("message") or {}
+        if record.get("type") == "user":
+            state["turn_id"] = record.get("uuid")
+        if record.get("type") != "assistant" or not isinstance(message.get("usage"), dict):
+            return None
+        if str(message.get("model", "")).startswith("<"):
+            return None  # synthetic transcript notices do not represent API requests
+        u = message["usage"]
+        identity = message.get("id")
+        if not identity:
+            state["partial"] = True
+            return None
+        cache = u.get("cache_creation") or {}
+        return UsageEvent(
+            key=str(identity),
+            at=timestamp(record["timestamp"]),
+            model=message.get("model") or "unknown",
+            provider="anthropic",
+            turn_id=state.get("turn_id"),
+            input_tokens=count(u, "input_tokens"),
+            cache_read_tokens=count(u, "cache_read_input_tokens"),
+            cache_write_tokens=count(u, "cache_creation_input_tokens"),
+            cache_write_1h_tokens=count(cache, "ephemeral_1h_input_tokens"),
+            cache_duration_known=bool(cache) or not count(u, "cache_creation_input_tokens"),
+            output_tokens=count(u, "output_tokens"),
+            reasoning_tokens=(u.get("output_tokens_details") or {}).get("thinking_tokens"),
+            context_tokens=sum(
+                count(u, k)
+                for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+            ),
+            service_tier=u.get("service_tier") or "unknown",
+            coverage="partial" if state.get("partial") else "measured",
+        )
 
 
 RUNTIME = ClaudeCode()

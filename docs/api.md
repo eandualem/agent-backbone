@@ -1,5 +1,26 @@
 # HTTP & Socket.IO API
 
+## Token usage
+
+Authenticated `GET /api/usage` provides the same accounting as `backbone usage`.
+Optional filters: `agent`, `runtime`, `session` (usage ID or unambiguous runtime
+conversation ID), `since` inclusive and `until` exclusive (timezone-qualified
+ISO timestamps), `current_only=true`. `by=session` is the default; `by=model`
+aggregates observed models. Selecting a session returns request observations.
+`refresh=false` reads history only; `reprice=true` previews current configured
+prices without changing stored estimates. `limit=100` (1–1000) and `offset=0`
+page `items`; `totals` always covers the full selection.
+
+The response includes `items`, `sessions`, `totals`, `total_items`, `has_more`,
+`next_offset`, `collection`, `unavailable`, `limits`, and accounting `semantics`.
+Session metadata identifies the agent, CLI, conversation, launches, parent,
+observed models, current state and source coverage. Request details retain
+the disjoint token categories, available turn ID, provider, model and price
+basis. `estimated_usd=null` means unpriced, never free. `limits` contains last
+observed account-window snapshots, not per-session balances. Invalid filters
+return 422; the normal API-key requirement applies. Full semantics and
+coverage boundaries: [Token usage](token-usage.md).
+
 
 Newly published reports are queued durably for Telegram and posted to the allowed
 agents group: ordinary repository agents go to General and their own topic. Swarm
@@ -17,7 +38,7 @@ saved can cause a duplicate bearing the same report ID. Report retention still a
 
 Read reports with `backbone updates`, `backbone updates --agent NAME --history`,
 or `backbone updates show ID`; in Telegram use `/updates`, `/updates NAME`,
-`/updates history NAME`, or `/updates show ID`. `backbone usage` is the quick guide.
+`/updates history NAME`, or `/updates show ID`. `backbone help usage` is the quick guide.
 
 
 Starting an existing agent reuses its saved CLI and model and begins a **new

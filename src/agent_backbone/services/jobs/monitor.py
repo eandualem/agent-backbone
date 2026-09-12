@@ -13,7 +13,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents import StateSnapshot, agent_state
+from agent_backbone.services.agents import StateSnapshot, agent_state, collect_usage
 from agent_backbone.services.github import QueueSnapshot
 from agent_backbone.services.jobs.diagnostics import observe_job, observe_runtime
 from agent_backbone.services.jobs.escalation import (
@@ -99,6 +99,20 @@ async def monitor_agents(
         states = await read_states(config, active_sessions)
         await observe_runtime(db, config, states)
         await sync_states(db, states)
+        try:
+            usage_result = await collect_usage(config, db)
+        except Exception as exc:
+            log.exception("Usage collection failed (non-fatal)")
+            await observe_job(
+                db, source="agent-monitor", stage="usage_collection", error_type=type(exc).__name__
+            )
+        else:
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="usage_collection",
+                error_type="usage_source_errors" if usage_result.get("errors") else None,
+            )
 
         if gh is not None:
             try:

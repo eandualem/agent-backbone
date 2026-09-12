@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from agent_backbone.config import session_secret_keys
 from agent_backbone.fs import atomic_write_text
@@ -62,10 +63,10 @@ def launch_environment(
     backbone's secrets are not part of it and are stripped from the session
     (see ``session_secret_keys`` and ``start_session``'s ``scrub``).
     """
-    env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name}
+    env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name, "BACKBONE_LAUNCH_ID": uuid4().hex}
     if state_dir:
         env[STATE_DIR_ENV_KEY] = str(state_dir)
-    reserved = {RUNTIME_ENV_KEY, AGENT_ENV_KEY, STATE_DIR_ENV_KEY}
+    reserved = {RUNTIME_ENV_KEY, AGENT_ENV_KEY, STATE_DIR_ENV_KEY, "BACKBONE_LAUNCH_ID"}
     for key, value in (extra or {}).items():
         if key in reserved:
             log.warning("Ignoring reserved variable %s in agent env for '%s'", key, name)
@@ -280,6 +281,18 @@ async def _start_agent(
     resume_target: bool | str = resume
     resume_evidence: list[str] = skill_evidence
     last = read_state_file(config.state_dir, spec.name)
+    if last is not None and last.session_id and last.runtime:
+        from agent_backbone.hooks.backbone_state import remember_usage_session
+
+        try:
+            remember_usage_session(
+                config.state_dir,
+                spec.name,
+                {"runtime": last.runtime, "session_id": last.session_id, "ts": last.timestamp},
+            )
+        except OSError:
+            log.warning("Could not retain usage identity for %s", spec.name)
+
     # A session id from *another* runtime means nothing here. A record
     # without a runtime (an older state file, or a hook wired by hand
     # outside a backbone session) is this agent's own.
