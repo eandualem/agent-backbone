@@ -12,7 +12,7 @@ else in the backbone learns a vendor name.
 | **Inbound** | Text from a person becomes an ordinary delivery through `safe_deliver`, with a `[via:<integration> from:<who>]` envelope. An integration never pastes into a terminal itself | a message in an agent's topic, or `/tell` |
 | **Surface per agent** | A place that *is* one agent, so talking there is talking to it | a forum topic mapped to the agent |
 | **Reply** | An agent answers into its surface: `backbone reply "…"` / `POST /api/integrations/reply` | posted into the agent's topic |
-| **Notify** | Alerts to the humans (plan waiting, session died, copy mode stuck) — into the agent's surface when it has one, else a general destination | the topic, else `telegram.notification_chat_id` |
+| **Notify** | Alerts to the humans (plan waiting, session died) — into the agent's surface when it has one, else a general destination | the topic, else `telegram.notification_chat_id` |
 | **Sync** | Re-provision surfaces whenever the set of registered agents changes | topic routes (see [Telegram](telegram.md)) |
 | **Lifecycle** | Started with `backbone up`, reads the live configuration, reports in `GET /api/status/services` under `integrations` | long-polling bot |
 

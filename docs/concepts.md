@@ -94,15 +94,17 @@ Derived from the state plus the terminal, right before anything is pasted:
 | `offline` | no session | no — queued |
 | `waiting_for_human` | agent is asking a person something | no — queued |
 | `agent_working` | starting, busy, or blocked on a usage limit or provider failure | no — queued (never bypassed) |
+| `human_reading` | someone is selecting text or reading tmux scrollback | no — queued, even with `priority` |
 | `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
 | `settling` | hook reported idle less than `timing.grace_period_seconds` ago | not yet, unless `priority` |
 | `ready` | idle, empty prompt | **yes** |
 | `unknown` | no signal either way | yes, best effort |
 
-tmux **copy mode** (someone scrolled the pane) is not a condition: the
-backbone cancels it automatically before delivering and on every monitor
-tick. If the cancel fails, the session is reported as `human_typing`
-(a frozen pane swallows pastes) and the message is queued.
+tmux **copy mode** preserves scrollback and text selection. Backbone observes it
+without cancelling it: otherwise-ready agents report `human_reading`, and
+messages wait until the human leaves copy mode (normally `q` or Escape).
+Monitoring and priority delivery never clear a selection. The agent's own state
+still takes precedence: a busy agent remains `agent_working` while you read.
 
 ## Message
 
@@ -187,7 +189,7 @@ Background loops inside the backbone process:
 
 | Job | Every | Does |
 |---|---|---|
-| `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, read every agent's state once and mirror it to the database, stall and dead-session reports, plan-waiting alerts, copy-mode clear, queue drain, next pending issue to idle agents, Socket.IO snapshot |
+| `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, read every agent's state once and mirror it to the database, stall and dead-session reports, plan-waiting alerts, queue drain, next pending issue to idle agents, Socket.IO snapshot |
 | `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
 | `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
 | `github-backfill` | once at startup | webhook intake only: catch up on what happened while the backbone was down |

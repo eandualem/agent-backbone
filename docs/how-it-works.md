@@ -238,10 +238,10 @@ sequenceDiagram
     C->>B: message for "app"
     B->>B: delivery condition (state + terminal)
     alt ready / unknown
-        B->>T: clear copy mode if needed; paste-buffer; Enter
+        B->>T: paste-buffer; Enter
         B->>T: re-read pane: submitted? still in the box?
         B-->>C: delivered
-    else offline / waiting_for_human / agent_working / human_typing / settling
+    else offline / waiting_for_human / agent_working / human_reading / human_typing / settling
         B->>Q: enqueue (direct messages, comments, notices)
         B-->>C: agent_working (etc.)
         Note over Q: delivered by agent-monitor (60 s) or delivery-retry (5 min)
@@ -263,6 +263,9 @@ sequenceDiagram
 - **Comments**, including those on the current issue, wait while the agent is
   starting, busy, blocked, or waiting for a human. They are queued and delivered
   when the agent is ready; priority does not bypass these conditions.
+- **Human selection.** Copy mode is preserved during monitoring and readiness
+  checks. Messages wait with `human_reading` until the human exits copy mode;
+  priority does not bypass it.
 - **Queue hygiene.** Ordinary pending messages expire after `timing.queue_expiry_minutes`
   (30). Active swarm coordination and inbox holds are retained. Leased by a crashed drain: released after 5 min. A blocked drain
   keeps the original row, including when displaying its age; completed rows
@@ -376,11 +379,9 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 5. **Plan waiting**: Telegram notification (`/viewplan`, `/approve`) and a
    message to `escalation.target`, once per plan after delivery or successful
    queue storage. A failed queue write is retried on the next monitor tick.
-6. **Copy mode**: cancelled in every managed session; Telegram alert if it
-   will not clear.
-7. Socket.IO `/sessions` snapshot if anything changed.
-8. Drains the queue for sessions that are now idle.
-9. **Pending issues**: every idle agent with an empty in-flight slot gets
+6. Socket.IO `/sessions` snapshot if anything changed.
+7. Drains the queue for sessions that are now idle.
+8. **Pending issues**: every idle agent with an empty in-flight slot gets
    the highest-priority unacknowledged open issue from its queue.
 
 Every `timing.retry_interval_seconds` (5 min), `delivery-retry` resumes pending

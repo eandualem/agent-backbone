@@ -592,7 +592,6 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock) as stalls,
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock) as offline,
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock) as plans,
-            patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock) as copy,
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}) as drain,
             patch(
                 f"{_MON}.deliver_pending_issues",
@@ -604,7 +603,7 @@ class TestMonitorAgents:
             result = await monitor_agents(config, db, gh, on_change=on_change)
 
         assert result == {"ike": "no_pending"}
-        for mock in (sync, stalls, offline, plans, copy, on_change, drain, pend):
+        for mock in (sync, stalls, offline, plans, on_change, drain, pend):
             mock.assert_awaited_once()
 
     async def test_step_failure_is_isolated(self, config, db):
@@ -621,7 +620,6 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock, side_effect=RuntimeError("x")),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock),
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}),
             patch(
                 f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}
@@ -643,7 +641,6 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock),
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}) as drain,
             patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock) as pend,
         ):
@@ -660,7 +657,6 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock) as offline,
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock),
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}) as drain,
             patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}),
         ):

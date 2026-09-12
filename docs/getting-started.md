@@ -206,7 +206,10 @@ conversation. See [automatic approval reviews](https://learn.chatgpt.com/docs/ag
 Codex launches in inline mode (`--no-alt-screen`) with tmux mouse handling
 enabled for its session. The wheel scrolls terminal history instead of
 recalling earlier prompts. Press `q` to leave tmux copy mode and return to
-input. Other runtimes retain your tmux mouse setting. For an already running
+input. Backbone preserves copy mode while you read or select text; incoming
+messages wait until you leave it, including priority messages. Mouse selection
+and explicit clipboard shortcuts are controlled by your terminal or workspace
+viewer. Other runtimes retain your tmux mouse setting. For an already running
 Codex session, enable mouse handling with
 `tmux set-option -t '=NAME:' mouse on` (replace `NAME` with the agent name).
 

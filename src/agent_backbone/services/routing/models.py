@@ -22,14 +22,15 @@ class DispatchResult:
 class SessionIntelligence(StrEnum):
     """Why a session can or cannot receive a message right now.
 
-    Derived from the agent state plus terminal conditions. Copy mode is not
-    a value here: it is cleared automatically before the decision is made.
+    Derived from the agent state plus terminal conditions. Copy mode preserves
+    human reading or selection and blocks delivery until the human leaves it.
     The blocking values share their names with ``DeliveryOutcome``.
     """
 
     READY = "ready"
     SETTLING = "settling"
     HUMAN_TYPING = "human_typing"
+    HUMAN_READING = "human_reading"
     AGENT_WORKING = "agent_working"
     WAITING_FOR_HUMAN = "waiting_for_human"
     OFFLINE = "offline"

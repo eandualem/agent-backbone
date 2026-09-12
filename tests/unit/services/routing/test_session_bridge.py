@@ -233,45 +233,17 @@ class TestGetSessionIntelligence:
         assert profile.agent_state == AgentState.UNKNOWN
         assert profile.evidence
 
-    async def test_copy_mode_is_cleared_not_reported(self, config):
-        # tmux reports copy mode until the cancel lands, then a clean pane.
-        in_mode = [{"pane_in_mode": "1"}, {"pane_in_mode": "0"}]
+    async def test_copy_mode_preserves_selection_and_defers_delivery(self, config):
         with (
-            _patch_list_sessions(["ike"]),
-            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
-            patch(f"{_COPY}.query_format_vars", new_callable=AsyncMock, side_effect=in_mode),
-            patch(f"{_COPY}.asyncio.sleep", new_callable=AsyncMock),
-            _patch_get_agent_state(_IDLE_SNAP),
-            patch(
-                f"{_COPY}.cancel_copy_mode",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as exit_copy,
+            _online(),
+            _patch_query_format_vars({"pane_in_mode": "1"}),
+            patch("agent_backbone.services.terminal._core._run_tmux", AsyncMock()) as tmux,
         ):
             profile = await get_session_intelligence("ike", config)
-        exit_copy.assert_awaited_once_with("ike")
-        assert profile.intelligence == SessionIntelligence.READY
-        assert any("copy mode" in line for line in profile.evidence)
-
-    async def test_copy_mode_that_will_not_clear_reads_as_human_typing(self, config):
-        with (
-            _patch_list_sessions(["ike"]),
-            _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
-            patch(
-                f"{_COPY}.query_format_vars",
-                new_callable=AsyncMock,
-                return_value={"pane_in_mode": "1"},
-            ),
-            patch(f"{_COPY}.asyncio.sleep", new_callable=AsyncMock),
-            _patch_get_agent_state(_IDLE_SNAP),
-            patch(
-                f"{_COPY}.cancel_copy_mode",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            profile = await get_session_intelligence("ike", config)
-        assert profile.intelligence == SessionIntelligence.HUMAN_TYPING
+        assert profile.intelligence == SessionIntelligence.HUMAN_READING
+        assert profile.agent_state == AgentState.IDLE
+        assert any("preserving" in line for line in profile.evidence)
+        tmux.assert_not_awaited()
 
     async def test_human_typing_when_prompt_has_buffered_input(self, config):
         with _online(), _patch_capture_pane("› Review the routing fallback logic"):
@@ -318,7 +290,7 @@ class TestGetSessionIntelligence:
             _patch_query_format_vars({"pane_in_mode": "1", "client_activity": "0"}),
             _patch_get_agent_state(snap),
             patch(
-                f"{_COPY}.cancel_copy_mode",
+                f"{_INTEL}.in_copy_mode",
                 new_callable=AsyncMock,
             ) as exit_copy,
         ):
@@ -497,6 +469,30 @@ class TestSafeDeliver:
             ).outcome
         assert result == "human_typing"
         mock_db.queue.enqueue.assert_called_once()
+
+    @pytest.mark.parametrize("priority", [False, True])
+    async def test_selection_queues_messages_until_reading_finishes(self, config, db, priority):
+        from agent_backbone.services.jobs.retry import drain_message_queue
+
+        with _online(), _patch_send_message(True) as send:
+            with _patch_query_format_vars({"pane_in_mode": "1"}):
+                receipt = await safe_deliver(
+                    "ike",
+                    "Wait for my selection",
+                    config,
+                    db=db,
+                    delivery_kind="direct_message",
+                    sender="leo",
+                    priority=priority,
+                )
+                assert receipt.outcome == "human_reading"
+                assert receipt.queued and receipt.queue_id is not None
+                await drain_message_queue(config, db, None, active_sessions={"ike"})
+                send.assert_not_awaited()
+                assert await db.queue.pending_count("ike") == 1
+            await drain_message_queue(config, db, None, active_sessions={"ike"})
+            send.assert_awaited_once()
+            assert await db.queue.pending_count("ike") == 0
 
     async def test_agent_working_blocks_even_priority(self, config):
         with _online(snap=_BUSY_SNAP):
@@ -899,7 +895,7 @@ class TestBlockedAndOfflineMetadata:
             patch(f"{_INTEL}.list_sessions", new_callable=AsyncMock, return_value=["ike"]),
             patch(f"{_INTEL}.capture_pane", new_callable=AsyncMock, return_value="❯ "),
             patch(f"{_INTEL}.get_agent_state", new_callable=AsyncMock, return_value=_BLOCKED_SNAP),
-            patch(f"{_INTEL}.clear_copy_mode", new_callable=AsyncMock, return_value=(False, False)),
+            patch(f"{_INTEL}.in_copy_mode", new_callable=AsyncMock, return_value=False),
         ):
             profile = await get_session_intelligence("ike", config)
         assert profile.intelligence == SessionIntelligence.AGENT_WORKING
