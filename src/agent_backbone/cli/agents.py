@@ -12,11 +12,65 @@ from pathlib import Path
 from typing import Any
 
 from agent_backbone.cli import _common
+from agent_backbone.cli.presentation import note, print_record, print_table
 from agent_backbone.config import (
     bootstrap_config,
 )
 
 log = logging.getLogger(__name__)
+
+
+def _print_inspection(data: dict) -> None:
+    note(
+        f"{data['name']}: {'online' if data['online'] else 'offline'}"
+        f"{'' if data['known'] else ' (not a known agent)'}"
+    )
+    print_record(
+        "Identity",
+        [
+            ("Purpose", data.get("description") or "not described"),
+            ("Tags", ", ".join(data.get("tags", [])) or "none"),
+            ("Directory", data.get("dir")),
+            ("Repository", data.get("repo")),
+            ("Watches", ", ".join(data.get("watches", [])) or "none"),
+            ("CLI", data.get("runtime")),
+            ("Configured model", data.get("model") or "default"),
+        ],
+    )
+    fields = [("State", data["state"]), ("Delivery", data["delivery"])]
+    for key, label in (
+        ("reason", "Reason"),
+        ("detail", "Detail"),
+        ("state_age_seconds", "Hook age (seconds)"),
+        ("session_id", "Session"),
+        ("last_message", "Last reply"),
+    ):
+        if data.get(key) is not None:
+            fields.append((label, data[key]))
+    if data.get("current_issue"):
+        fields.append(
+            ("Current issue", f"{data.get('current_repo') or ''}#{data['current_issue']}")
+        )
+    fields.append(("Evidence", "\n".join(data.get("evidence", []))))
+    print_record("Observation", fields)
+    if data.get("pane_tail"):
+        note("Terminal tail", style="bold")
+        note("\n".join(data["pane_tail"]))
+    if data.get("recent_deliveries"):
+        print_table(
+            "Recent deliveries",
+            ("Time", "Reference", "Outcome"),
+            [
+                (
+                    d["created_at"],
+                    f"{d.get('repo') or ''}#{d['issue_number']}"
+                    if d.get("issue_number")
+                    else d.get("kind"),
+                    d["outcome"],
+                )
+                for d in data["recent_deliveries"]
+            ],
+        )
 
 
 def _print_start_result(data: dict) -> None:
@@ -189,12 +243,20 @@ async def _agent(args: argparse.Namespace) -> int:
         if not specs:
             print("No agents known yet. Run `backbone agent start` from a project directory.")
             return 0
-        width = max(len(name) for name in config.agents.names)
-        for spec in specs:
-            model = f" ({spec.model})" if spec.model else ""
-            print(f"  {spec.name:<{width}s}  {spec.runtime}{model}  {spec.path}")
-            if spec.tags:
-                print(f"    tags: {', '.join(spec.tags)}")
+        print_table(
+            "Agents",
+            ("Agent", "Purpose", "Tags", "CLI / Model"),
+            [
+                (
+                    spec.name,
+                    spec.description or "not described",
+                    "\n".join(spec.tags) or "none",
+                    f"{spec.runtime} / {spec.model or 'default'}",
+                )
+                for spec in sorted(specs, key=lambda spec: spec.name.casefold())
+            ],
+        )
+        note("Live state: backbone status\nFull details and location: backbone agent inspect NAME")
         return 0
 
     if sub in ("tag", "untag", "rename"):
@@ -296,53 +358,7 @@ async def _agent(args: argparse.Namespace) -> int:
                 if args.json:
                     _common.print_json(data)
                     return 0
-                print(
-                    f"{data['name']}: {'online' if data['online'] else 'offline'}"
-                    f"{'' if data['known'] else ' (not a known agent)'}"
-                )
-                print(f"  dir:      {data['dir'] or '-'}")
-                print(
-                    f"  runtime:  {data['runtime'] or '-'}   "
-                    f"configured model: {data['model'] or '-'}"
-                )
-                watches = ", ".join(data["watches"]) or "-"
-                print(f"  repo:     {data['repo'] or '-'}   watches: {watches}")
-                reason = f" ({data['reason']})" if data.get("reason") else ""
-                issue = (
-                    f"   on {data.get('current_repo') or ''}#{data['current_issue']}"
-                    if data.get("current_issue")
-                    else ""
-                )
-                age = (
-                    f" (hook state {data['state_age_seconds']}s old)"
-                    if data.get("state_age_seconds") is not None
-                    else ""
-                )
-                print(f"  state:    {data['state']}{reason}{issue}{age}")
-                if data.get("detail"):
-                    print(f"  detail:   {data['detail']}")
-                print(f"  delivery: {data['delivery']}")
-                if data.get("session_id"):
-                    print(f"  session:  {data['session_id']}")
-                if data.get("last_message"):
-                    reply = " ".join(data["last_message"].split())
-                    print(f"  last reply: {reply[:200]}{'…' if len(reply) > 200 else ''}")
-                print("  evidence:")
-                for line in data["evidence"]:
-                    print(f"    - {line}")
-                if data.get("pane_tail"):
-                    print("  terminal tail:")
-                    for line in data["pane_tail"]:
-                        print(f"    | {line}")
-                if data.get("recent_deliveries"):
-                    print("  recent deliveries:")
-                    for d in data["recent_deliveries"][:5]:
-                        ref = (
-                            f"{d.get('repo') or ''}#{d['issue_number']}"
-                            if d.get("issue_number")
-                            else d.get("kind")
-                        )
-                        print(f"    {d['created_at'][:19]}  {ref:<24s} {d['outcome']}")
+                _print_inspection(data)
                 return 0
             print(f"error: {result[1] if result else 'API unreachable'}")
             return 1
@@ -353,6 +369,7 @@ async def _agent(args: argparse.Namespace) -> int:
         config = await _common.read_config()
         online = await session_exists(args.name)
         snapshot = await agent_state(config, args.name)
+        spec = config.agents.get(args.name)
         if args.json:
             from dataclasses import asdict
 
@@ -365,6 +382,8 @@ async def _agent(args: argparse.Namespace) -> int:
                     "known": spec is not None,
                     "state": snapshot.state.value if online else "offline",
                     "dir": str(spec.path) if spec else "",
+                    "description": spec.description if spec else "",
+                    "tags": list(spec.tags) if spec else [],
                     "model": spec.model if spec else None,
                     "runtime": snapshot.runtime or (spec.runtime if spec else None),
                     "repo": spec.repo if spec else "",
@@ -372,12 +391,26 @@ async def _agent(args: argparse.Namespace) -> int:
                 }
             )
             return 0
-        print(f"{args.name}: {'online' if online else 'offline'} (backbone not running)")
-        print(
-            f"  state: {snapshot.state.value}{f' ({snapshot.reason})' if snapshot.reason else ''}"
+        note(f"{args.name}: {'online' if online else 'offline'} (backbone not running)")
+        print_record(
+            "Identity",
+            [
+                ("Purpose", (spec.description if spec else "") or "not described"),
+                ("Tags", (", ".join(spec.tags) if spec else "") or "none"),
+                ("Directory", str(spec.path) if spec else "-"),
+                ("Repository", spec.repo if spec else "-"),
+                ("CLI", snapshot.runtime or (spec.runtime if spec else "unknown")),
+                ("Configured model", (spec.model if spec else None) or "default"),
+            ],
         )
-        for line in snapshot.evidence:
-            print(f"    - {line}")
+        print_record(
+            "Observation",
+            [
+                ("State", snapshot.state.value if online else "offline"),
+                ("Reason", snapshot.reason),
+                ("Evidence", "\n".join(snapshot.evidence)),
+            ],
+        )
         return 0
 
     if sub == "set":

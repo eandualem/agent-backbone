@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 from agent_backbone.cli import _common
+from agent_backbone.cli.presentation import note, print_record, print_table
 from agent_backbone.config import bootstrap_config, validate_setting
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.services.agents import instruction_preview
@@ -144,17 +145,34 @@ async def _instructions(args: argparse.Namespace) -> int:
         if args.json:
             _common.print_json(view)
             return 0
-        print(f"Editable templates: {view['directory']}")
-        for entry in entries:
-            legacy = " (legacy override)" if entry["legacy"] else ""
-            print(f"  {entry['name']}: {entry['source']}{legacy}")
-        print("\nAssignments (global first, then matching tags alphabetically):")
-        print("  global: " + (", ".join(config.launch.shared_policy) or "none"))
-        for tag, names in sorted(config.launch.tag_policy.items()):
-            print(f"  tag {tag}: {', '.join(names) or 'none'}")
-        print("\nInspect: backbone templates show NAME")
-        print("Edit: backbone templates edit NAME")
-        print("Preview: backbone templates preview AGENT")
+        note(f"Editable templates: {view['directory']}")
+        print_table(
+            "Templates",
+            ("Template", "Source", "Override"),
+            [
+                (
+                    entry["name"],
+                    entry["source"],
+                    "legacy override" if entry["legacy"] else "current",
+                )
+                for entry in entries
+            ],
+        )
+        print_table(
+            "Assignments (global first, then matching tags alphabetically)",
+            ("Scope", "Policies"),
+            [
+                ("global", ", ".join(config.launch.shared_policy) or "none"),
+                *(
+                    (f"tag {tag}", ", ".join(names) or "none")
+                    for tag, names in sorted(config.launch.tag_policy.items())
+                ),
+            ],
+        )
+        note(
+            "Inspect: backbone templates show NAME\nEdit: backbone templates edit NAME\n"
+            "Preview: backbone templates preview AGENT"
+        )
         return 0
     if sub == "use":
         args.policies = [name.removeprefix("policy:") for name in args.policies]
@@ -218,14 +236,23 @@ async def _instructions(args: argparse.Namespace) -> int:
     if args.json:
         _common.print_json(preview)
     else:
-        print(f"{preview['name']} / {preview['runtime']} / {preview['mode']} (next start)")
-        for source in preview["sources"]:
-            print(
-                f"  {'included' if source['applied'] else 'skipped'}: "
-                f"{source['scope']} · {source['path']}"
-            )
+        print_record(
+            f"Instructions for {preview['name']} (next start)",
+            [
+                ("CLI", preview["runtime"]),
+                ("Mode", preview["mode"]),
+            ],
+        )
+        print_table(
+            "Sources",
+            ("State", "Scope", "Path"),
+            [
+                ("included" if source["applied"] else "skipped", source["scope"], source["path"])
+                for source in preview["sources"]
+            ],
+        )
         for notice in preview["notices"]:
-            print(f"  {notice}")
+            note(notice)
         print("\n--- Effective instructions ---\n")
         print(preview["content"])
     return 0

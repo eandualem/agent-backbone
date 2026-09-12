@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from agent_backbone.cli import _common
+from agent_backbone.cli.presentation import note, print_table
 from agent_backbone.config import (
     SETTINGS_DEFAULTS,
     SETTINGS_HELP,
@@ -123,12 +124,19 @@ async def _config_cmd(args: argparse.Namespace) -> int:
     if sub == "list":
         async with _common.Direct(boot) as direct:
             stored = await direct.db.settings.all()
-        width = max(len(k) for k in SETTINGS_DEFAULTS)
-        for key in sorted(SETTINGS_DEFAULTS):
-            value = stored.get(key, SETTINGS_DEFAULTS[key])
-            marker = "*" if key in stored else " "
-            print(f"{marker} {key:<{width}s} = {json.dumps(value)}")
-        print("\n(* = set explicitly; others are defaults)")
+        print_table(
+            "Configuration",
+            ("Setting", "Value", "Source"),
+            [
+                (
+                    key,
+                    json.dumps(stored.get(key, SETTINGS_DEFAULTS[key])),
+                    "explicit" if key in stored else "default",
+                )
+                for key in sorted(SETTINGS_DEFAULTS)
+            ],
+        )
+        note("Setting help: backbone config get KEY")
         return 0
 
     if sub == "get":

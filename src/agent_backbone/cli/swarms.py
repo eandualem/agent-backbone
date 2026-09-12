@@ -8,6 +8,7 @@ import logging
 import os
 
 from agent_backbone.cli import _common
+from agent_backbone.cli.presentation import note, print_record, print_table
 from agent_backbone.config import (
     bootstrap_config,
 )
@@ -59,25 +60,33 @@ async def _swarm(args: argparse.Namespace) -> int:
             print("no swarms")
             return 0
         for swarm in swarms:
-            print(
-                f"{swarm.get('name', '?'):<16s} {swarm.get('status', '?'):<10s} "
-                f"{swarm.get('repo', '?')}#{swarm.get('issue_number', '?')}  "
-                f"branch {swarm.get('branch', '?')}"
+            print_record(
+                f"Swarm {swarm.get('name', '?')}",
+                [
+                    ("State", swarm.get("status", "unknown")),
+                    ("Issue", f"{swarm.get('repo', '?')}#{swarm.get('issue_number', '?')}"),
+                    ("Branch", swarm.get("branch", "?")),
+                ],
             )
             members = swarm.get("members", [])
+            rows = []
             for member in members if isinstance(members, list) else []:
                 if not isinstance(member, dict):
                     continue
-                model = f" ({member['model']})" if member.get("model") else ""
                 state = member.get("state", "unknown")
                 if member.get("reason"):
                     state += f" ({member['reason']})"
-                print(
-                    f"    {member.get('name', '?'):<28s} {member.get('role', '?'):<12s} "
-                    f"{member.get('runtime', '?')}{model}  {state}"
+                rows.append(
+                    (
+                        member.get("name", "?"),
+                        member.get("role", "?"),
+                        f"{member.get('runtime', '?')} / {member.get('model') or 'default'}",
+                        state,
+                        member.get("detail") or "-",
+                    )
                 )
-                if member.get("detail"):
-                    print(f"      {member['detail']}")
+            print_table("Members", ("Agent", "Role", "CLI / Model", "State", "Detail"), rows)
+        note("Live state: backbone swarm status NAME\nDetails: backbone agent inspect NAME")
         return 0
 
     if sub == "disband":
@@ -133,8 +142,11 @@ def cmd_help(args: argparse.Namespace) -> int:
             return 0
     if not args.topic:
         print("backbone capabilities — `backbone help <topic>` for the details:\n")
-        for topic in list_topics(data_dir):
-            print(f"  {topic['name']:<12s} {topic['summary']}")
+        print_table(
+            "Capabilities",
+            ("Topic", "Purpose"),
+            [(topic["name"], topic["summary"]) for topic in list_topics(data_dir)],
+        )
         return 0
     content = get_topic(args.topic, data_dir)
     if content is None:
@@ -156,8 +168,11 @@ def cmd_docs(args: argparse.Namespace) -> int:
         return 1
     if not args.page:
         print("agent-backbone documentation — `backbone docs <page>` prints one page:\n")
-        for page in pages:
-            print(f"  {page['name']:<20s} {page['summary']}")
+        print_table(
+            "Documentation",
+            ("Page", "Purpose"),
+            [(page["name"], page["summary"]) for page in pages],
+        )
         return 0
     content = get_doc(args.page)
     if content is None:

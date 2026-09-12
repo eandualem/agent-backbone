@@ -168,6 +168,8 @@ async def inspect_agent(
         known=spec is not None,
         online=online,
         dir=str(spec.path) if spec else "",
+        description=spec.description if spec else "",
+        tags=list(spec.tags) if spec else [],
         runtime=profile.runtime if online else (spec.runtime if spec else ""),
         model=spec.model if spec else None,
         repo=spec.repo if spec else "",
