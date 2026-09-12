@@ -118,6 +118,9 @@ def cmd_help(args: argparse.Namespace) -> int:
     from agent_backbone.help import get_topic, list_topics
 
     data_dir = bootstrap_config().data_dir
+    if args.topic == "usage" and not getattr(args, "path", []):
+        args.page = "usage"
+        return cmd_docs(args)
     if args.topic and not getattr(args, "path", []):
         content = get_topic(args.topic, data_dir)
         if content is not None:

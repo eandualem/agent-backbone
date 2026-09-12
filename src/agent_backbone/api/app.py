@@ -9,6 +9,7 @@ wires the remaining services against that snapshot.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -185,6 +186,14 @@ async def lifespan(app: FastAPI):
     lifecycle.register("agents", app.state.agent_store)
     await lifecycle.start_all()
     config: BackboneConfig = app.state.config
+    # Refresh only Backbone-owned hook executables, preserving user settings.
+    # Existing sessions can start recording durable usage identities immediately.
+    from agent_backbone.hooks.install import install_hook_files
+
+    try:
+        await asyncio.to_thread(install_hook_files, config.data_dir)
+    except OSError:
+        log.warning("Could not refresh Backbone hook files", exc_info=True)
 
     if config.github.intake == "webhook" and not config.webhook_secret:
         log.warning(
@@ -312,6 +321,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     from agent_backbone.api.routes.skills import router as skills_router
     from agent_backbone.api.routes.status import router as status_router
     from agent_backbone.api.routes.swarms import router as swarms_router
+    from agent_backbone.api.routes.usage import router as usage_router
     from agent_backbone.api.routes.webhook import router as webhook_router
 
     app.include_router(webhook_router)
@@ -331,6 +341,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
         reports_router,
         skills_router,
         swarms_router,
+        usage_router,
     ):
         app.include_router(router, dependencies=[Depends(require_api_key)])
 

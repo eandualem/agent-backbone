@@ -45,6 +45,7 @@ from agent_backbone.cli.skills import add_skill_commands, expand_shorthand
 from agent_backbone.cli.status import add_status_options, cmd_status
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
 from agent_backbone.cli.upgrade import cmd_upgrade
+from agent_backbone.cli.usage import cmd_usage
 from agent_backbone.config import RUNTIMES
 
 
@@ -322,9 +323,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_help)
 
     usage = sub.add_parser(
-        "usage", help="quick guide: start agents, read reports, rename and find help"
+        "usage", help="token usage by agent and CLI session; optional cost estimates"
     )
-    usage.set_defaults(func=cmd_docs, page="usage")
+    usage.add_argument("view", nargs="?", choices=["session", "limits"])
+    usage.add_argument("session", nargs="?")
+    usage.add_argument("--agent")
+    usage.add_argument("--runtime")
+    usage.add_argument(
+        "--current", action="store_true", help="only current conversations and their children"
+    )
+    usage.add_argument("--since", help="ISO timestamp or relative interval, e.g. 24h")
+    usage.add_argument("--until", help="exclusive end timestamp")
+    usage.add_argument("--by", choices=["session", "model"], default="session")
+    usage.add_argument(
+        "--cost", action="store_true", help="show secondary API-equivalent estimates"
+    )
+    usage.add_argument(
+        "--reprice",
+        action="store_true",
+        help="estimate with the current catalog without changing history",
+    )
+    usage.add_argument("--no-refresh", action="store_true", help="read retained accounting only")
+    usage.add_argument("--limit", type=int, default=100)
+    usage.add_argument("--offset", type=int, default=0)
+    usage.add_argument("--json", action="store_true")
+    usage.set_defaults(func=cmd_usage)
     p = sub.add_parser("docs", help="the documentation shipped with this install")
     p.add_argument("page", nargs="?", default=None)
     p.set_defaults(func=cmd_docs)

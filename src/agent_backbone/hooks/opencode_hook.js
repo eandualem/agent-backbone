@@ -12,6 +12,7 @@
 // root session counts: sessions with a parentID are OpenCode's own subagents.
 
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
@@ -58,6 +59,21 @@ function writeState(t, record) {
   const tmp = path.join(t.dir, `.${t.agent}.json.${process.pid}.tmp`);
   fs.writeFileSync(tmp, JSON.stringify(record));
   fs.renameSync(tmp, file);
+  if (record.session_id) {
+    try {
+      const launch = process.env.BACKBONE_LAUNCH_ID || null;
+      const identity = createHash("sha256").update(
+        JSON.stringify([t.agent, record.runtime, record.session_id, launch]),
+      ).digest("hex");
+      const history = path.join(t.dir, "usage-sessions");
+      fs.mkdirSync(history, { recursive: true });
+      const saved = path.join(history, `${identity}.json`);
+      const temporary = `${saved}.${process.pid}.tmp`;
+      fs.writeFileSync(temporary, JSON.stringify({agent: t.agent, runtime: record.runtime,
+        session_id: record.session_id, observed_at: record.ts, launch_id: launch}));
+      fs.renameSync(temporary, saved);
+    } catch { /* Usage history must not interrupt the agent. */ }
+  }
 }
 
 function appendAction(t, action) {

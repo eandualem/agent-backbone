@@ -112,7 +112,7 @@ Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way
   trust dialog and the hook wiring for one CLI are one `Runtime` object;
   no other module names a runtime.
 - **Layering**, bottom up. `config`, `models` and the small helpers
-  (`fs`, `git`, `recent`, `templates`, `help`, `release`, `base`) are
+  (`fs`, `git`, `recent`, `templates`, `help`, `release`, `base`, `usage`) are
   leaves, and so is `hooks` (the shipped hook scripts import nothing from
   the package). `services/terminal` and `services/scheduler` are next and
   import no other service. `services/runtimes` (one module

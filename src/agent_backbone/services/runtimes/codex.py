@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import re
+import time
 import tomllib
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
+from agent_backbone.services.runtimes._usage import count
 from agent_backbone.services.runtimes.base import Runtime, RuntimeDiagnostic, read_brief
+from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
+_usage_lineage: dict[str, tuple[float, dict[str, list[tuple[str, Path]]]]] = {}
 
 
 def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | None = None) -> bool:
@@ -322,6 +328,144 @@ class Codex(Runtime):
         if brief_file is not None and (brief := read_brief(brief_file)):
             args.append(brief)  # positional initial prompt, after every flag
         return args
+
+    usage_supported = True
+
+    def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
+            return []
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+        ).expanduser()
+        return sorted(
+            [
+                *home.glob(f"sessions/**/rollout-*{session_id}.jsonl"),
+                *home.glob(f"archived_sessions/rollout-*{session_id}.jsonl"),
+            ]
+        )
+
+    def usage_children(
+        self, path: Path, session_id: str, env: dict[str, str]
+    ) -> list[tuple[str, Path]]:
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+        ).expanduser()
+        cached = _usage_lineage.get(str(home))
+        if cached and time.monotonic() - cached[0] < 30:
+            return cached[1].get(session_id, [])
+        children: dict[str, list[tuple[str, Path]]] = {}
+        for candidate in [
+            *home.glob("sessions/**/*.jsonl"),
+            *home.glob("archived_sessions/*.jsonl"),
+        ]:
+            try:
+                with candidate.open("rb") as stream:
+                    record = json.loads(stream.readline(256 * 1024))
+                meta = record.get("payload") or {}
+                source = meta.get("source") or {}
+                if not isinstance(source, dict):
+                    continue
+                subagent = source.get("subagent") or {}
+                spawn = subagent.get("thread_spawn") or subagent.get("spawn") or {}
+                parent = spawn.get("parent_thread_id")
+                child = meta.get("id")
+                if isinstance(parent, str) and isinstance(child, str) and child != parent:
+                    children.setdefault(parent, []).append((child, candidate))
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+        _usage_lineage[str(home)] = (time.monotonic(), children)
+        return children.get(session_id, [])
+
+    def parse_usage(self, record: dict, state: dict):
+        p = record.get("payload") or {}
+        kind = record.get("type")
+        if kind == "session_meta":
+            state["has_start"] = True
+            if "born" not in state and p.get("timestamp"):
+                state["born"] = timestamp(p["timestamp"])
+                state["provider"] = p.get("model_provider") or "unknown"
+        if kind == "turn_context":
+            state["model"] = p.get("model") or "unknown"
+            state["turn_id"] = p.get("turn_id")
+            state["service_tier"] = p.get("service_tier") or "unknown"
+        if (
+            state.get("born")
+            and record.get("timestamp")
+            and timestamp(record["timestamp"]) < state["born"]
+        ):
+            return None
+        if kind != "event_msg" or p.get("type") != "token_count":
+            return None
+        if isinstance(p.get("rate_limits"), dict):
+            limits = p["rate_limits"]
+            # Store only quota metadata, never account credentials or raw payloads.
+            state["limits"] = {
+                "observed_at": timestamp(record["timestamp"]),
+                "bucket": str(limits.get("limit_id") or "unknown")[:200],
+                "windows": [
+                    {
+                        "name": key,
+                        **{
+                            k: value[k]
+                            for k in ("used_percent", "window_minutes", "resets_at")
+                            if isinstance(value.get(k), (int, float))
+                            and not isinstance(value[k], bool)
+                            and math.isfinite(value[k])
+                            and value[k] >= 0
+                        },
+                    }
+                    for key in ("primary", "secondary")
+                    if isinstance(value := limits.get(key), dict)
+                ],
+            }
+        info = p.get("info") or {}
+        total = info.get("total_token_usage")
+        if not isinstance(total, dict):
+            return None
+        fields = (
+            "input_tokens",
+            "cached_input_tokens",
+            "cache_write_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        )
+        current = {k: count(total, k) for k in fields}
+        previous = state.get("total")
+        if current == previous:
+            return None
+        delta = {k: current[k] - (previous or {}).get(k, 0) for k in fields}
+        state["total"] = current
+        last = info.get("last_token_usage") or {}
+        partial = bool(state.get("partial"))
+        if any(n < 0 for n in delta.values()):
+            # A reset cannot prove what happened in between. Retain the observed
+            # last request only, with explicitly incomplete accounting.
+            delta = {k: count(last, k) for k in fields}
+            state["partial"] = partial = True
+        if previous is None and current != {k: count(last, k) for k in fields}:
+            delta = {k: count(last, k) for k in fields}
+            state["partial"] = partial = True  # exclude unattributed inherited totals
+        cached = delta["cached_input_tokens"]
+        written = delta["cache_write_input_tokens"]
+        uncached = delta["input_tokens"] - cached - written
+        if uncached < 0:
+            raise ValueError("overlapping input counters")
+        at = timestamp(record["timestamp"])
+        return UsageEvent(
+            key=at + ":" + str(current["input_tokens"]) + ":" + str(current["output_tokens"]),
+            at=at,
+            model=state.get("model", "unknown"),
+            provider=state.get("provider", "unknown"),
+            turn_id=state.get("turn_id"),
+            input_tokens=uncached,
+            cache_read_tokens=cached,
+            cache_write_tokens=written,
+            output_tokens=delta["output_tokens"],
+            reasoning_tokens=delta["reasoning_output_tokens"],
+            context_tokens=count(last, "input_tokens") if last else None,
+            service_tier=state.get("service_tier", "unknown"),
+            coverage="partial" if partial else "measured",
+        )
 
 
 RUNTIME = Codex()

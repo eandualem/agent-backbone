@@ -14,6 +14,7 @@ from importlib import import_module
 from agent_backbone.config import RUNTIME_METADATA
 from agent_backbone.services.runtimes import shell
 from agent_backbone.services.runtimes._pane import GENERIC_BUSY_FRAGMENTS, sanitize_pane_content
+from agent_backbone.services.runtimes._usage import read_jsonl as read_usage_jsonl
 from agent_backbone.services.runtimes.base import (
     Runtime,
     RuntimeDiagnostic,
@@ -110,6 +111,7 @@ __all__ = [
     "detect_runtime",
     "get_runtime",
     "read_brief",
+    "read_usage_jsonl",
     "resolve_command",
     "resolve_runtime",
     "sanitize_pane_content",

@@ -132,6 +132,7 @@ _LEAVES = {
     "release",
     "skills",
     "templates",
+    "usage",
     "services",
 }
 _ALLOWED: dict[str, set[str]] = {

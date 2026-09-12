@@ -9,7 +9,7 @@ numbers.
 
 from __future__ import annotations
 
-from sqlalchemy import Index, Integer, Text, text
+from sqlalchemy import BigInteger, Index, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_backbone.services.database.base import Base
@@ -385,3 +385,36 @@ class DiagnosticORM(Base):
         Index("idx_diagnostics_last_seen", "last_seen_at"),
         Index("idx_diagnostics_agent", "agent_name", "last_seen_at"),
     )
+
+
+class UsageSessionORM(Base):
+    """Durable runtime conversations; changing an agent's CLI never rewrites these."""
+
+    __tablename__ = "usage_sessions"
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    agent_name: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime: Mapped[str] = mapped_column(Text, nullable=False)
+    session_id: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_id: Mapped[str | None] = mapped_column(Text)
+    first_seen: Mapped[str] = mapped_column(Text, nullable=False)
+    last_seen: Mapped[str] = mapped_column(Text, nullable=False)
+    source_path: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    offset: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    cursor: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    coverage: Mapped[str] = mapped_column(Text, nullable=False, server_default="unavailable")
+    detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    launches: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    __table_args__ = (Index("idx_usage_sessions_agent", "agent_name", "last_seen"),)
+
+
+class UsageEventORM(Base):
+    """One request observation, revised idempotently as streaming usage settles."""
+
+    __tablename__ = "usage_events"
+    session: Mapped[str] = mapped_column(Text, primary_key=True)
+    event_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    data: Mapped[str] = mapped_column(Text, nullable=False)
+    cost: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (Index("idx_usage_events_at", "at", "session"),)

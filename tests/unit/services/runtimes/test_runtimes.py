@@ -280,6 +280,12 @@ class TestLaunchEnvironment:
         from agent_backbone.services.agents.launch import launch_environment
 
         env = launch_environment("reviewer", "claude", "/data/state", {"FOO": "1"})
+        launch_id = env.pop("BACKBONE_LAUNCH_ID")
+        assert len(launch_id) == 32
+        assert (
+            launch_environment("reviewer", "claude", "/data/state", {})["BACKBONE_LAUNCH_ID"]
+            != launch_id
+        )
         assert env == {
             "BACKBONE_RUNTIME": "claude",
             "BACKBONE_AGENT": "reviewer",

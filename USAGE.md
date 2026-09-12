@@ -1,6 +1,6 @@
 # Quick usage
 
-**Open this guide in your terminal: `backbone usage`** (`ab usage` works too).
+**Open this guide in your terminal: `backbone help usage`** (`ab help usage` works too).
 `backbone docs usage` opens the same page. Use `backbone --help` for all commands.
 
 Prefer an agent to handle setup? Point it to [README.md](README.md) and ask it
@@ -82,6 +82,20 @@ backbone agent start Feynman --attach
 The directory, settings, watches and saved conversation ID stay with the agent.
 Use the new name in messages, scripts and external `for:` labels. Renaming requires
 a stopped agent; active swarm members cannot be renamed.
+
+## Read token usage
+
+```bash
+backbone usage                         # separate CLI conversations for each agent
+backbone usage --agent planner --current
+backbone usage session ID              # input, cache and output details
+backbone usage --since 1h --by model
+backbone usage --cost                  # optional standard API estimate
+```
+
+Use `--json` for data, or `backbone help token-usage` for sources and coverage.
+Unsupported sources are unavailable, not zero usage. Cost is separate from a
+subscription bill. [Full token usage reference](docs/token-usage.md).
 
 ## Find more
 

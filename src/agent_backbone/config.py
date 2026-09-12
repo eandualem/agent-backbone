@@ -32,6 +32,7 @@ from typing import Any
 from dotenv import dotenv_values
 
 from agent_backbone.models import ISSUE_TYPE_WEIGHTS
+from agent_backbone.usage import DEFAULT_PRICES, Price
 
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
 DEFAULT_PORT = 7120
@@ -67,7 +68,10 @@ from every agent session's environment (see ``session_secret_keys``)."""
 # Settings schema: key -> (default, type)
 # ---------------------------------------------------------------------------
 
+
 SETTINGS_DEFAULTS: dict[str, Any] = {
+    "usage.enabled": True,
+    "usage.prices": DEFAULT_PRICES,
     "backbone.host": "127.0.0.1",
     "backbone.port": DEFAULT_PORT,
     "backbone.session_name": "backbone",
@@ -119,6 +123,8 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
 }
 
 SETTINGS_HELP: dict[str, str] = {
+    "usage.enabled": "Collect numeric usage from identified runtime sessions; no prompt content",
+    "usage.prices": "Dated USD-per-million-token API price catalog; unknown models remain unpriced",
     "backbone.host": (
         "Bind address for the API (keep 127.0.0.1 unless you add TLS+auth in front; "
         "the CLI reaches a non-loopback host over https)"
@@ -231,6 +237,14 @@ def validate_setting(key: str, value: Any) -> Any:
     if key not in SETTINGS_DEFAULTS:
         raise KeyError(f"unknown setting {key!r}")
     default = SETTINGS_DEFAULTS[key]
+    if key == "usage.prices":
+        if not isinstance(value, dict) or len(value) > 1000:
+            raise ValueError("usage.prices: expected at most 1000 model entries")
+        for model, price in value.items():
+            if not isinstance(model, str) or not model or len(model) > 200:
+                raise ValueError("usage.prices: invalid model ID")
+            Price.model_validate(price)
+        return value
     if key == "agents.tag_policy":
         if not isinstance(value, dict) or not all(
             isinstance(tag, str)

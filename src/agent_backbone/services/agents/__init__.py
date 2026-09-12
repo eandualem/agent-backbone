@@ -50,6 +50,7 @@ __all__ = [
     "build_enriched_agent",
     "build_session_snapshot",
     "clear_starting_marker",
+    "collect_usage",
     "deny_agent",
     "find_outgoing_comment",
     "find_outgoing_pull_request",
@@ -69,6 +70,7 @@ __all__ = [
     "skills_preview",
     "start_agent",
     "stop_agent",
+    "usage_view",
     "wait_until_ready",
     "write_starting_marker",
     "write_state_file",
@@ -81,3 +83,4 @@ from agent_backbone.services.agents.queries import (
     build_session_snapshot,
     listable_sessions,
 )
+from agent_backbone.services.agents.usage import collect_usage, usage_view

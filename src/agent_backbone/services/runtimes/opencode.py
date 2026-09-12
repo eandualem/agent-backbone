@@ -7,12 +7,17 @@ without the working spinner's "esc interrupt".
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import sqlite3
 from pathlib import Path
 
 from agent_backbone.hooks import install as hooks
 from agent_backbone.services.runtimes._opencode_launch import merge_config
+from agent_backbone.services.runtimes._usage import UsageBatch, count
 from agent_backbone.services.runtimes.base import Runtime, read_brief
+from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +117,81 @@ class OpenCode(Runtime):
         if brief_file is not None and (brief := read_brief(brief_file)):
             args.extend(["--prompt", brief])
         return args
+
+    usage_supported = True
+
+    def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
+        root = Path(
+            env.get("XDG_DATA_HOME")
+            or os.environ.get("XDG_DATA_HOME")
+            or Path.home() / ".local/share"
+        )
+        path = root / "opencode/opencode.db"
+        if not path.is_file():
+            return []
+        with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+            found = conn.execute("SELECT 1 FROM session WHERE id=?", (session_id,)).fetchone()
+        return [path] if found else []
+
+    def usage_children(
+        self, path: Path, session_id: str, env: dict[str, str]
+    ) -> list[tuple[str, Path]]:
+        with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+            return [
+                (row[0], path)
+                for row in conn.execute("SELECT id FROM session WHERE parent_id=?", (session_id,))
+            ]
+
+    def read_usage(self, path: Path, offset: int, state: dict):
+        state = dict(state)
+        batch = UsageBatch(offset, state)
+        try:
+            with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+                # Replay the boundary timestamp to catch same-millisecond revisions.
+                floor = state.get("scan_floor", max(0, offset - 1000))
+                after_time, after_id = state.get("scan_after", (floor, ""))
+                rows = conn.execute(
+                    "SELECT id,time_updated,data FROM message WHERE session_id=? "
+                    "AND time_updated>=? AND (time_updated>? OR (time_updated=? AND id>?)) "
+                    "ORDER BY time_updated,id LIMIT 10001",
+                    (state["_session_id"], floor, after_time, after_time, after_id),
+                ).fetchall()
+            batch.caught_up = len(rows) <= 10000
+            for key, updated, encoded in rows[:10000]:
+                data = json.loads(encoded)
+                batch.offset = max(batch.offset, updated)
+                state["scan_floor"] = floor
+                state["scan_after"] = (updated, key)
+                if data.get("role") != "assistant" or not data.get("tokens"):
+                    continue
+                tokens = data["tokens"]
+                cache = tokens.get("cache") or {}
+                # This runtime reports reasoning separately from text output.
+                event = UsageEvent(
+                    key=key,
+                    at=timestamp(data["time"]["created"] / 1000),
+                    revision_at=timestamp(updated / 1000),
+                    model=data.get("modelID") or "unknown",
+                    provider=data.get("providerID") or "unknown",
+                    reported_cost_usd=data.get("cost"),
+                    input_tokens=count(tokens, "input"),
+                    output_tokens=count(tokens, "output") + count(tokens, "reasoning"),
+                    reasoning_tokens=count(tokens, "reasoning"),
+                    cache_read_tokens=count(cache, "read"),
+                    cache_write_tokens=count(cache, "write"),
+                    cache_duration_known=not count(cache, "write"),
+                    context_tokens=count(tokens, "input")
+                    + count(cache, "read")
+                    + count(cache, "write"),
+                )
+                batch.events.append(event)
+            if batch.caught_up:
+                state.pop("scan_floor", None)
+                state.pop("scan_after", None)
+        except (OSError, sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+            batch.error = type(exc).__name__
+            batch.caught_up = False
+        return batch
 
 
 RUNTIME = OpenCode()

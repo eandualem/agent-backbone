@@ -42,6 +42,22 @@ not rebuild its indexes on every start.
 the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
 `'{"42":"reviewer"}'`); plain strings need no quoting.
 
+### `usage.*`
+
+- `usage.enabled` (default `true`): import numeric usage from identified runtime
+  sessions on the existing monitor and query refresh. Disabling retains history.
+- `usage.prices`: a JSON object keyed by exact observed model ID. The bundled
+  catalog contains sourced standard API rates dated 2026-09-12. Each entry has
+  `as_of`, `source`, and USD per million `input`, `cache_read`, `cache_write`,
+  `cache_write_1h`, `output`; optional `long_context_above`,
+  `long_input_multiplier`, `long_output_multiplier` define context pricing.
+  Rates must be nonnegative. Setting this object replaces the catalog; omitted
+  models remain unpriced. Keep existing entries when extending it. Stored
+  historical price bases remain unchanged; `usage --reprice --cost` previews
+  the configured catalog against retained tokens.
+
+See [Token usage](token-usage.md) for sources, coverage and cost semantics.
+
 ### `backbone.*`
 
 | Key | Default | Meaning |
