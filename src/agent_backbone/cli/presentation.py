@@ -68,6 +68,24 @@ def collection_view(
     sizes = [min(len(label), 16) for label in columns]
     sizes[0] = max(sizes[0], min(24, max(cell_len(clean(row[0]).split("\n")[0]) for row in values)))
     minimum = sum(sizes) + len(columns) * 5 + 1
+    # Rich measures each Text cell by its longest word, even with overflow=fold.
+    # IDs, model names and timestamps can therefore force a table wider than the
+    # header-based estimate; Console would silently crop its right-hand columns.
+    natural = [
+        max(
+            sizes[index],
+            max(
+                (
+                    cell_len(word)
+                    for value in [label, *(row[index] for row in values)]
+                    for word in clean(value).split()
+                ),
+                default=0,
+            ),
+        )
+        for index, label in enumerate(columns)
+    ]
+    minimum = max(minimum, sum(natural) + len(columns) * 3 + 1)
     if width < max(48, minimum):
         return Group(
             Text(clean(title), "bold cyan"),

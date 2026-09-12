@@ -20,6 +20,8 @@ require files or configuration in a user's repository.
   is redirected, `TERM=dumb`, or `NO_COLOR` is set. Respect the detected terminal
   width (`COLUMNS` may override it). Narrow output retains every field; it can be
   taller, but does not silently discard data.
+  The fallback also accounts for long unbroken values such as session IDs and
+  timestamps, whose minimum cell widths can otherwise push the last column off screen.
 - Keep empty states and errors explicit and actionable. A missing description is
   `not described`; missing data must not be mistaken for a healthy or completed
   state. Preserve command exit codes and established stdout/stderr contracts.

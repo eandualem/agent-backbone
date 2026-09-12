@@ -71,6 +71,29 @@ def test_empty_collection_has_explicit_message():
     assert "No entries." in render(("Name",), [], width=40)
 
 
+@pytest.mark.parametrize("width", [80, 96, 120])
+@pytest.mark.parametrize("plain", [True, False])
+def test_usage_identifiers_do_not_push_last_column_off_screen(width, plain):
+    columns = ("Agent / CLI", "Session", "Models", "Tokens", "Coverage")
+    out = render(
+        columns,
+        [
+            (
+                "agent-backbone / codex",
+                "37f2c1d897eea88eacff7ee4",
+                "gpt-6-astra",
+                "42,784,115",
+                "measured",
+            )
+        ],
+        width=width,
+        plain=plain,
+    )
+    assert "Coverage" in out and "measured" in out
+    assert "42,784,115" in out
+    assert all(cell_len(line) <= width for line in out.splitlines())
+
+
 def test_no_color_is_plain_even_on_a_terminal(monkeypatch):
     class Terminal(StringIO):
         def isatty(self):
