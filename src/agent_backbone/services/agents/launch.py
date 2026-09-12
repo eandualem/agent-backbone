@@ -88,6 +88,8 @@ class StartResult:
     already_running: bool = False
     ready: str = "not_waited"
     evidence: tuple[str, ...] = ()
+    failure_detail: str | None = None
+    """Caller-safe failure text, authored without raw terminal/exception evidence."""
 
 
 def _age(timestamp: float, now: float) -> str:
@@ -265,24 +267,20 @@ async def _start_agent(
                 raise ValueError("Actions checker must return a boolean")
         except Exception as exc:
             details.update(reason="actions_unverified", error_type=type(exc).__name__)
-            return StartResult(
-                ok=False,
-                evidence=(
-                    f"Cannot verify GitHub Actions for {repo} ({type(exc).__name__}). "
-                    "Check Backbone's GitHub credentials, repository administration read "
-                    "access and network connectivity, then retry. "
-                    f"GET /repos/{repo}/actions/permissions must return boolean enabled=true.",
-                ),
+            message = (
+                f"Cannot verify GitHub Actions for {repo} ({type(exc).__name__}). "
+                "Check Backbone's GitHub credentials, repository administration read "
+                "access and network connectivity, then retry. "
+                f"GET /repos/{repo}/actions/permissions must return boolean enabled=true."
             )
+            return StartResult(ok=False, evidence=(message,), failure_detail=message)
         if not enabled:
             details["reason"] = "actions_disabled"
-            return StartResult(
-                ok=False,
-                evidence=(
-                    f"GitHub Actions is disabled for {repo}. Ask the repository owner to "
-                    f"enable Actions at https://github.com/{repo}/settings/actions, then retry.",
-                ),
+            message = (
+                f"GitHub Actions is disabled for {repo}. Ask the repository owner to "
+                f"enable Actions at https://github.com/{repo}/settings/actions, then retry."
             )
+            return StartResult(ok=False, evidence=(message,), failure_detail=message)
     effective_model = model if model is not None else spec.model
     section = config.launch
     details["stage"] = "preparation"

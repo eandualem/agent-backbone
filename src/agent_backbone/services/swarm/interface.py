@@ -289,7 +289,8 @@ async def create_swarm(
                     raise SwarmError(f"member '{agent_name}' became occupied during startup")
                 if not result.ok:
                     raise SwarmError(
-                        f"failed to start member '{agent_name}': " + "; ".join(result.evidence)
+                        f"failed to start member '{agent_name}'"
+                        + (f": {result.failure_detail}" if result.failure_detail else "")
                     )
                 started.append(agent_name)
                 await store.touch_started(agent_name)

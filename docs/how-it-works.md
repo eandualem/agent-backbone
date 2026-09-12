@@ -64,7 +64,7 @@ This page follows real requests through the system. Read
    An explicitly unattended Claude launch pre-records bypass consent in
    `~/.claude.json`; ordinary launches never do. The runtime's bypass flag still
    controls its mode. Folder trust remains controlled by `agents.pre_trust`.
-5. Broadcast a fresh snapshot on Socket.IO `/sessions`.
+7. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
 Startup readiness uses the same state reconciliation as inspection and delivery,
 with a launch timestamp fence to exclude old hooks and submission markers.

@@ -935,3 +935,14 @@ async def test_telegram_actions_failure_reaches_human_without_session(config, db
     check.assert_awaited_once_with("acme/app")
     start.assert_not_awaited()
     assert "Actions is disabled for acme/app" in update.message.reply_text.await_args.args[0]
+
+
+async def test_telegram_does_not_forward_raw_launch_evidence(config):
+    bot = _bot(config)
+    update = _update()
+    with patch(
+        f"{_CMD}.start_resolved",
+        AsyncMock(return_value=StartResult(ok=False, evidence=("PRIVATE_LAUNCH_EVIDENCE",))),
+    ):
+        await bot.cmd_start_agent(update, _context(["ike"]))
+    assert update.message.reply_text.await_args.args[0] == "Failed to start ike"

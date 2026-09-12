@@ -163,7 +163,9 @@ async def cmd_start_agent(
         else "Failed to start"
     )
     if not result.ok:
-        await update.message.reply_text(f"{status} {name}: " + " ".join(result.evidence))
+        await update.message.reply_text(
+            f"{status} {name}" + (f": {result.failure_detail}" if result.failure_detail else "")
+        )
     else:
         await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
 

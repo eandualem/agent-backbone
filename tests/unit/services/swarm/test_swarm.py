@@ -29,7 +29,7 @@ from tests.conftest import make_config
 
 _IFACE = "agent_backbone.services.swarm.interface"
 _STARTED = StartResult(ok=True, ready="ready")
-_FAILED = StartResult(ok=False)
+_FAILED = StartResult(ok=False, evidence=("PRIVATE_LAUNCH_EVIDENCE",))
 
 
 async def test_overview_exposes_provider_block_and_offline_member(db, tmp_path):
@@ -540,7 +540,7 @@ async def test_incomplete_startup_rollback_remains_retryable(db, tmp_path, failu
                 side_effect=OSError("status failed") if failure == "status_error" else status,
             ),
         ),
-        pytest.raises(SwarmError, match="failed to start member"),
+        pytest.raises(SwarmError, match="failed to start member") as error,
     ):
         await create_swarm(
             config,
@@ -552,6 +552,7 @@ async def test_incomplete_startup_rollback_remains_retryable(db, tmp_path, failu
             member_specs=["scout"],
             initiator="simon",
         )
+    assert "PRIVATE_LAUNCH_EVIDENCE" not in str(error.value)
     assert (await db.swarms.get("research"))["status"] == "active"
 
 
