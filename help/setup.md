@@ -33,32 +33,7 @@ To restart after changing secrets: `backbone service install` again (it
 replaces and restarts the service), or `backbone down && backbone up --detach`
 when you run it by hand.
 
-## 3. Connect GitHub (issues become the agents' task list)
-
-```bash
-gh auth token | backbone secrets set GITHUB_TOKEN    # piped: never a token in a command argument
-```
-
-If `gh` is not logged in, ask the human for a token with `repo` scope and
-run `backbone secrets set GITHUB_TOKEN` without a value — it prompts, so
-the token stays out of shell history and out of this conversation. Restart
-(step 2). Check: `backbone status` shows `github intake: poll`.
-
-That is poll intake, every 60 s, for every repository an agent owns or
-watches. Webhooks (instant, plus every repository the human ever creates)
-need a GitHub App and a tunnel — a human task with checkpoints:
-`backbone docs github-app-setup`.
-
-Before a repository agent can start, Backbone must read
-`GET /repos/OWNER/REPO/actions/permissions` and receive boolean `enabled: true`.
-Use Backbone's configured token/App credentials; a classic token needs `repo`
-scope, and a fine-grained token or GitHub App needs repository Administration
-read access. Disabled Actions, authentication/network/API errors and malformed
-responses block both fresh and resumed starts, including swarm workers. Correct
-the reported problem and retry. Backbone never enables Actions or changes allowed
-actions/workflow permissions. Repo-less agents can still start without GitHub.
-
-## 4. Start the first agent from its repository
+## 3. Start the first agent from its repository
 
 ```bash
 cd <repository> && backbone agent start            # default runtime: claude
@@ -95,18 +70,29 @@ lifecycle commands unattended — give them this snippet:
 }
 ```
 
-### Prove repository setup before implementation
+Before the first implementation issue, let the new agent land one small
+reviewed PR with its own runtime and credentials and confirm the merge. Agents
+push and merge with the human's own `gh` login; the backbone's credentials
+only read issues and receive events. For Claude Code, run `gh pr merge` as a
+standalone command — a merge chained with `&&` or `;` can be denied by the
+auto-mode classifier without a prompt. Fix the runtime or credential setup when
+this fails; do not add repo-wide classifier settings to project configs.
 
-Before the first implementation issue, land a successful, reviewed setup or
-configuration PR using the chosen runtime and credentials. Verify the required
-checks and automated review, merge into the intended base, and confirm the merge.
-This proves the configured agent can complete the delivery path. Keep this as a
-setup check; Backbone does not track a setup-task lifecycle.
+## 4. Connect GitHub (issues become the agents' task list)
 
-For Claude Code, run `gh pr merge` as a standalone command. Do not wrap it in a
-compound shell command or add repo-wide command-classifier settings to project
-configs to make it pass. Resolve the runtime/credential setup and repeat the
-setup PR check before assigning implementation work.
+```bash
+gh auth token | backbone secrets set GITHUB_TOKEN    # piped: never a token in a command argument
+```
+
+If `gh` is not logged in, ask the human for a token with `repo` scope and
+run `backbone secrets set GITHUB_TOKEN` without a value — it prompts, so
+the token stays out of shell history and out of this conversation. Restart
+(step 2). Check: `backbone status` shows `github intake: poll`.
+
+That is poll intake, every 60 s, for every repository an agent owns or
+watches. Webhooks (instant, plus every repository the human ever creates)
+need a GitHub App and a tunnel — a human task with checkpoints:
+`backbone docs github-app-setup`.
 
 ## 5. Connect Telegram (optional; the human creates the bot)
 
@@ -123,7 +109,7 @@ topic. Details: `backbone docs telegram`.
 
 ## 6. More agents, an orchestrator, swarms
 
-Start each further agent from its own directory (step 4). An orchestrator is
+Start each further agent from its own directory (step 3). An orchestrator is
 an ordinary agent that watches the other repositories:
 
 ```bash
@@ -139,4 +125,4 @@ cli, api, github, telegram, security, …).
 
 Tell the human what is running (`backbone status`), which agents you
 started, and exactly which steps still need them: the permissions
-allowlist (step 4), a GitHub token or App (step 3), a Telegram bot (step 5).
+allowlist (step 3), a GitHub token or App (step 4), a Telegram bot (step 5).

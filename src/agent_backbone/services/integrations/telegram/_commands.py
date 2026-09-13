@@ -27,7 +27,6 @@ from agent_backbone.services.agents.operations import (
     start_resolved,
     stop_agent_session,
 )
-from agent_backbone.services.github import actions_checker
 from agent_backbone.services.integrations.telegram._routing import _delivery_reply
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     process_message_for_discovery,
@@ -145,12 +144,7 @@ async def cmd_start_agent(
     store = AgentStore(bot._db, bot.config.data_dir)
     try:
         result = await start_resolved(
-            store,
-            bot.config,
-            spec,
-            StartRequest(name=name, wait=False),
-            db=bot._db,
-            check_actions=actions_checker(bot.config),
+            store, bot.config, spec, StartRequest(name=name, wait=False), db=bot._db
         )
     except ValueError as exc:
         await update.message.reply_text(f"Could not start {name}: {exc}")
@@ -162,12 +156,7 @@ async def cmd_start_agent(
         if result.ok
         else "Failed to start"
     )
-    if not result.ok:
-        await update.message.reply_text(
-            f"{status} {name}" + (f": {result.failure_detail}" if result.failure_detail else "")
-        )
-    else:
-        await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
+    await update.message.reply_text(f"{status} `{name}`", parse_mode="Markdown")
 
 
 async def cmd_stop_agent(

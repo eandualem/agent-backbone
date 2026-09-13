@@ -16,7 +16,6 @@ from agent_backbone.cli.presentation import note, print_record, print_table
 from agent_backbone.config import (
     bootstrap_config,
 )
-from agent_backbone.services.github import actions_checker
 
 log = logging.getLogger(__name__)
 
@@ -190,14 +189,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
         )
         try:
             spec = await resolve_agent(direct.store, req)
-            result = await start_resolved(
-                direct.store,
-                direct.config,
-                spec,
-                req,
-                db=direct.db,
-                check_actions=actions_checker(direct.config),
-            )
+            result = await start_resolved(direct.store, direct.config, spec, req, db=direct.db)
         except KeyError as exc:
             print(f"unknown agent '{exc.args[0]}' — pass --dir to register it")
             return 1

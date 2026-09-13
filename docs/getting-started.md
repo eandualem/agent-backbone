@@ -110,19 +110,6 @@ is set). One process. `backbone down` stops it.
 
 ## 5. Start an agent from its directory
 
-For a GitHub repository, configure Backbone's GitHub credentials first (see
-[GitHub setup](github.md) or `backbone help setup`). Each fresh or resumed start,
-including swarm workers, reads the repository's Actions permissions and requires
-boolean `enabled: true`. The checkout's current GitHub `origin` takes precedence
-over a saved repository; otherwise the recorded repository is checked. Agents
-with neither remain repo-less. Already-running sessions are left running.
-
-A disabled setting, failed request or malformed response stops the launch before
-trust preparation or session creation. Fix the reported credentials, repository
-access or connectivity and retry; Backbone never changes Actions settings.
-[GitHub's endpoint](https://docs.github.com/en/rest/actions/permissions#get-github-actions-permissions-for-a-repository)
-requires classic-token `repo` scope or fine-grained/App Administration read access.
-
 ```bash
 cd ~/code/app
 backbone agent start
@@ -188,16 +175,6 @@ offers agent names and commands. To preview Backbone startup instructions and se
 run `backbone instructions preview app` (project/runtime instructions load separately);
 `backbone instructions list` shows
 where to edit shared policies and assign them to tags.
-
-### Verify setup before implementation work
-
-Before assigning the first implementation issue, use the chosen runtime and
-credentials to land a successful reviewed setup/configuration PR: run its checks,
-address automated review, merge to the intended base and verify the merge. For
-Claude Code, invoke `gh pr merge` as a standalone command. Keep repo-wide command
-classifier settings out of project configuration; repair the runtime/credential
-setup when this check fails. This is an onboarding verification step, not a
-Backbone task record or mandatory repository configuration file.
 
 ### Codex permissions and scrolling
 
@@ -332,6 +309,17 @@ Latency is one poll interval (60 s). For instant delivery add a webhook
 (`GITHUB_WEBHOOK_SECRET` + `gh webhook forward` or a cloudflared tunnel);
 the backbone switches to webhook intake by itself. Details and the
 agent-side protocol: [GitHub integration](github.md).
+
+### Prove the delivery path before real work
+
+Before handing a new agent its first implementation issue, let it land one
+small reviewed PR with its own runtime and credentials: run the checks, address
+automated review, merge into the intended base and confirm the merge. Agents
+push, open and merge PRs with the user's own `gh` login, exactly like a human
+developer; the backbone's GitHub credentials are only for reading issues and
+receiving events. For Claude Code, run `gh pr merge` as a standalone command:
+a merge chained with `&&` or `;` is matched piece by piece against the allow
+rules and can be denied by the auto-mode classifier without any prompt.
 
 ## 8. An orchestrator
 
