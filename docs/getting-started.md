@@ -310,6 +310,17 @@ Latency is one poll interval (60 s). For instant delivery add a webhook
 the backbone switches to webhook intake by itself. Details and the
 agent-side protocol: [GitHub integration](github.md).
 
+### Prove the delivery path before real work
+
+Before handing a new agent its first implementation issue, let it land one
+small reviewed PR with its own runtime and credentials: run the checks, address
+automated review, merge into the intended base and confirm the merge. Agents
+push, open and merge PRs with the user's own `gh` login, exactly like a human
+developer; the backbone's GitHub credentials are only for reading issues and
+receiving events. For Claude Code, run `gh pr merge` as a standalone command:
+a merge chained with `&&` or `;` is matched piece by piece against the allow
+rules and can be denied by the auto-mode classifier without any prompt.
+
 ## 8. An orchestrator
 
 An orchestrator is an ordinary agent that watches the repositories it

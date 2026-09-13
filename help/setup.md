@@ -70,6 +70,14 @@ lifecycle commands unattended — give them this snippet:
 }
 ```
 
+Before the first implementation issue, let the new agent land one small
+reviewed PR with its own runtime and credentials and confirm the merge. Agents
+push and merge with the human's own `gh` login; the backbone's credentials
+only read issues and receive events. For Claude Code, run `gh pr merge` as a
+standalone command — a merge chained with `&&` or `;` can be denied by the
+auto-mode classifier without a prompt. Fix the runtime or credential setup when
+this fails; do not add repo-wide classifier settings to project configs.
+
 ## 4. Connect GitHub (issues become the agents' task list)
 
 ```bash
