@@ -86,11 +86,36 @@ def test_policy_use_preserves_other_tags_and_normalizes_selector(tmp_path):
         assert api.call_args.kwargs["json_body"] == {
             "value": {"web": ["css"], "python": ["python"]}
         }
-        assert run(["templates", "use", "--tag", "web"]) == 0
+        assert run(["templates", "use", "--clear", "--tag", "web"]) == 0
         assert api.call_args.kwargs["json_body"] == {"value": {}}
         api.reset_mock()
         assert run(["templates", "use", "missing"]) == 1
         api.assert_not_called()
+
+
+def test_policy_use_without_names_reads_and_never_clears(tmp_path, capsys):
+    config = replace(
+        bootstrap_config(),
+        launch=LaunchConfig(shared_policy=("team-rules",), tag_policy={"web": ("css",)}),
+    )
+    with (
+        patch.object(_common, "read_config", AsyncMock(return_value=config)),
+        patch.object(_common, "api_up", AsyncMock(return_value=True)),
+        patch.object(_common, "api", AsyncMock(return_value=(200, {}))) as api,
+    ):
+        assert run(["templates", "use"]) == 0
+        assert "global: team-rules" in capsys.readouterr().out
+        assert run(["templates", "use", "--tag", "web"]) == 0
+        assert "tag web: css" in capsys.readouterr().out
+        assert run(["templates", "use", "--tag", "python"]) == 0
+        assert "tag python: none" in capsys.readouterr().out
+        api.assert_not_called()
+        assert run(["templates", "use", "--clear", "team-rules"]) == 1
+        assert "not both" in capsys.readouterr().err
+        api.assert_not_called()
+        assert run(["templates", "use", "--clear"]) == 0
+        assert api.call_args.args[2] == "/api/config/agents.shared_policy"
+        assert api.call_args.kwargs["json_body"] == {"value": []}
 
 
 async def test_existing_config_inspection_is_read_only(tmp_path):
