@@ -61,9 +61,11 @@ backbone templates preview api
 ```
 
 Assignments replace that scope's current list; pass several names to keep several
-policies. `backbone templates use --tag python` clears that tag's assignment;
-`backbone templates use` clears global assignments. `backbone agent untag api python`
-removes the tag from that agent. Tags persist across runtime switches. The
+policies. With no names the command only prints the scope's current assignment:
+`backbone templates use` shows the global list, `backbone templates use --tag python`
+that tag's. Clearing takes an explicit `--clear` (`backbone templates use --clear
+--tag python` removes that tag's assignment; `backbone templates use --clear` the
+global one). `backbone agent untag api python` removes the tag from that agent. Tags persist across runtime switches. The
 `python-example` policy ships as an optional starting point and is **not assigned**.
 
 For swarm roles, assign policies with `--tag role:scout` or `--tag role:coordinator`.

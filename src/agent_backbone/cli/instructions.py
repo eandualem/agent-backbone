@@ -52,11 +52,10 @@ def add_instruction_commands(sub) -> None:
     )
     p.add_argument("agent")
     p.add_argument("--json", action="store_true")
-    p = commands.add_parser(
-        "use", help="replace global or tag policy assignment; no names clears it"
-    )
+    p = commands.add_parser("use", help="show or replace the global or tag policy assignment")
     p.add_argument("policies", nargs="*", metavar="POLICY")
     p.add_argument("--tag", help="assign to this tag instead of all agents")
+    p.add_argument("--clear", action="store_true", help="remove the assignment")
     p = commands.add_parser("validate", help="check effective instructions for known agents")
     p.add_argument("agent", nargs="?")
     parser.set_defaults(func=cmd_instructions)
@@ -175,6 +174,20 @@ async def _instructions(args: argparse.Namespace) -> int:
         )
         return 0
     if sub == "use":
+        scope = "tag " + args.tag if args.tag is not None else "global"
+        if args.policies and args.clear:
+            raise ValueError("pass policy names or --clear, not both")
+        if not args.policies and not args.clear:
+            # No names is a read: clearing an assignment takes an explicit --clear.
+            current = (
+                config.launch.tag_policy.get(args.tag, ())
+                if args.tag is not None
+                else config.launch.shared_policy
+            )
+            print(f"{scope}: {', '.join(current) or 'none'}")
+            tag_arg = f" --tag {args.tag}" if args.tag else ""
+            note(f"Clear: backbone templates use --clear{tag_arg}")
+            return 0
         args.policies = [name.removeprefix("policy:") for name in args.policies]
         validate_setting("agents.shared_policy", args.policies)
         append_policies("", config.data_dir, tuple(args.policies))
@@ -200,9 +213,7 @@ async def _instructions(args: argparse.Namespace) -> int:
         else:
             async with _common.Direct(config) as direct:
                 await direct.store.set_setting(key, value)
-        print(
-            f"{'tag ' + args.tag if args.tag else 'global'}: {', '.join(args.policies) or 'none'}"
-        )
+        print(f"{scope}: {', '.join(args.policies) or 'none'}")
         return 0
     specs = [config.agents.get(args.agent)] if args.agent else list(config.agents)
     if any(spec is None for spec in specs):
