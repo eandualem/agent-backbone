@@ -4,9 +4,9 @@ Every ``sources.poll_interval_seconds`` ask each enabled source (Gmail) for
 events newer than its cursor that match any subscription filter, and hand
 them to ``dispatch_source_events``. The cursor per source is persisted in
 ``poll_cursors`` (key ``source:<name>``) before the first fetch and after
-each successful batch, with overlap for late arrivals; the ``events`` table
-dedups what the overlap repeats. A first run starts at *now*: a mailbox has
-years of history and none of it is an event.
+each batch whose events every recipient holds, with overlap for late
+arrivals; the ``events`` table dedups what the overlap repeats. A first run
+starts at *now*: a mailbox has years of history and none of it is an event.
 """
 
 from __future__ import annotations
@@ -92,4 +92,9 @@ class SourcesPoller:
         outcome = await dispatch_source_events(events, config, self._db)
         for name, count in outcome.items():
             summary[name] = summary.get(name, 0) + count
+        if outcome.get("failed"):
+            # Unprocessed events are handed back by the next poll of the same
+            # window; the events table drops what already went through.
+            log.warning("Source poll for %s kept its cursor: %s", source.name, outcome)
+            return
         await self._db.events.save_poll_cursor(key, _iso(poll_started))

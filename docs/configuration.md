@@ -116,7 +116,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 |---|---|---|
 | `timing.stale_threshold_seconds` | `300` | Hook state older than this is verified against the terminal |
 | `timing.grace_period_seconds` | `5` | Settle time from the hook-written idle timestamp before delivering (`settling`); terminal-only idle readings have no transition timestamp |
-| `timing.queue_expiry_minutes` | `30` | Expiry for ordinary queued messages; active swarm coordination and inbox holds are retained |
+| `timing.queue_expiry_minutes` | `30` | Expiry for ordinary queued messages; active swarm coordination, inbox holds and [subscription](sources.md) batches are retained |
 | `timing.stall_threshold_seconds` | `5400` | Busy on one issue for longer than this is a stall |
 | `timing.escalation_dedup_seconds` | `1800` | Do not repeat the same escalation within this window |
 | `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period (must be positive) |

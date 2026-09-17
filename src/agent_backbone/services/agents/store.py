@@ -28,6 +28,7 @@ from agent_backbone.config import (
     validate_setting,
 )
 from agent_backbone.git import detect_repo
+from agent_backbone.hooks.backbone_state import CONTEXT_DIR
 from agent_backbone.services.agents._locks import lifecycle_lock, serialized_mutation
 from agent_backbone.services.agents._validation import validate_agent_spec, validate_repo
 
@@ -328,6 +329,13 @@ class AgentStore:
                 raise
             source.unlink(missing_ok=True)
             (self.config.state_dir / f"{name}.starting").unlink(missing_ok=True)
+            # Pending hook-context offers follow the queue rows just rekeyed.
+            offers = self.config.state_dir / CONTEXT_DIR / name
+            if offers.exists():
+                try:
+                    offers.rename(self.config.state_dir / CONTEXT_DIR / new_name)
+                except OSError as exc:
+                    log.warning("Could not move %s's pending context offers: %s", name, exc)
             await self.refresh()
             return self._agents.get(new_name)
 
@@ -367,6 +375,9 @@ class AgentStore:
 
     @serialized_mutation
     async def unsubscribe(self, name: str, subscription_id: int) -> bool:
+        await self.refresh()
+        if name not in self._agents:
+            raise KeyError(name)
         removed = await self._db.agents.remove_subscription(name, subscription_id)
         await self.refresh()
         return removed

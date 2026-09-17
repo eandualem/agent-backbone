@@ -93,7 +93,7 @@ class TestDispatch:
             "agent_backbone.services.routing._subscriptions.safe_deliver", new_callable=AsyncMock
         ) as deliver:
             deliver.return_value = type(
-                "R", (), {"outcome": DeliveryOutcome.DELIVERED, "queue": None}
+                "R", (), {"outcome": DeliveryOutcome.DELIVERED, "queue": None, "queued": False}
             )()
             summary = await dispatch_source_events(events, config, db)
         assert summary == {"events": 3, "deduped": 1, "delivered": 3}
@@ -103,12 +103,40 @@ class TestDispatch:
         assert high[0].startswith("[via:gmail]")
         assert [line.split(" · ")[0] for line in high[1:]] == ["- a1", "- a2"]
         assert "https://mail.google.com/mail/#all/a1" in high[1]
-        assert '"Recruiter"' in calls[("other", False)]
+        assert "subject «Recruiter»" in calls[("other", False)]
         for call in deliver.await_args_list:
             assert call.kwargs["delivery_kind"] == SUBSCRIPTION_KIND
         stored = await db.events.query(limit=10)
         assert {row["delivery_id"] for row in stored} == {"gmail:a1", "gmail:a2", "gmail:l1"}
         assert all(row["outcome"].startswith("subscription:") for row in stored)
+
+    async def test_an_event_stays_replayable_until_every_recipient_holds_it(self, tmp_path, db):
+        config = _config(tmp_path)
+        shared = _event("l1", _LINKEDIN)  # desk (normal) and other (normal)
+
+        async def deliver(agent, *args, **kwargs):
+            if agent == "other":
+                raise RuntimeError("terminal gone")
+            return type(
+                "R",
+                (),
+                {"outcome": DeliveryOutcome.AGENT_WORKING, "queue": "stored", "queued": True},
+            )()
+
+        with patch(
+            "agent_backbone.services.routing._subscriptions.safe_deliver",
+            AsyncMock(side_effect=deliver),
+        ):
+            summary = await dispatch_source_events([shared, _event("a1", _UPWORK)], config, db)
+        assert summary == {"events": 2, "queued": 2, "failed": 1, "unprocessed": 1}
+        rows = {row["delivery_id"]: row for row in await db.events.query(limit=10)}
+        assert rows["gmail:a1"]["processed_at"] is not None
+        assert rows["gmail:l1"]["processed_at"] is None
+        # The next poll hands the unprocessed event back instead of deduping it.
+        assert (
+            await db.events.record(delivery_id="gmail:l1", source="gmail", event_type="message")
+            == rows["gmail:l1"]["id"]
+        )
 
 
 class TestHighPriorityReachesAWorkingAgent:

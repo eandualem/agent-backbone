@@ -96,6 +96,22 @@ async def test_a_failed_poll_keeps_the_cursor_and_is_observed(tmp_path, db):
     assert failures and failures[0]["details"]["error_type"] == "RuntimeError"
 
 
+async def test_a_failed_handoff_keeps_the_cursor(tmp_path, db):
+    config = _config(tmp_path)
+    await db.events.save_poll_cursor("source:gmail", "2026-09-17T10:00:00Z")
+    event = SourceEvent(
+        "gmail", "a1", "x", "y", datetime.now(UTC), "link", frozenset({"from:upwork.com"})
+    )
+    poller = SourcesPoller(config, db, Sources([_Recorder(config, events=[event])]))
+    with patch(
+        "agent_backbone.services.jobs.sources_poll.dispatch_source_events",
+        new_callable=AsyncMock,
+        return_value={"events": 1, "failed": 1, "unprocessed": 1},
+    ):
+        assert await poller.run() == {"events": 1, "failed": 1, "unprocessed": 1}
+    assert await db.events.poll_cursor("source:gmail") == "2026-09-17T10:00:00Z"
+
+
 async def test_no_subscriptions_means_no_poll(tmp_path, db):
     config = make_config(tmp_path)
     source = _Recorder(config)

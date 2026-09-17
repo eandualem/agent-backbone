@@ -21,6 +21,7 @@ import email.parser
 import imaplib
 import logging
 import re
+import unicodedata
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
@@ -34,10 +35,11 @@ _FETCH_PARTS = "(X-GM-MSGID INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT D
 _MSGID_RE = re.compile(rb"X-GM-MSGID (\d+)")
 _INTERNALDATE_RE = re.compile(rb'INTERNALDATE "([^"]+)"')
 _LIST_RE = re.compile(rb'^\((?P<flags>[^)]*)\) (?:"[^"]*"|NIL) (?P<name>.+)$')
-_MAX_PER_FILTER = 50
-"""Newest matches fetched per filter and poll; a burst beyond this is counted, not lost:
-the cursor only moves to the poll start, so the next poll sees the rest."""
+_FETCH_CHUNK = 50
+"""UIDs per FETCH command; every match in the window is fetched, in chunks."""
 _TEXT_LIMIT = 120
+_TIMEOUT = 30
+"""Seconds per IMAP socket operation: a stalled server must not hang the poll thread."""
 
 
 def message_link(message_id: str) -> str:
@@ -54,8 +56,14 @@ def _quoted(query: str) -> str:
 
 
 def clean_text(value: str | None) -> str:
-    """One printable line, clipped — sender and subject are untrusted text."""
-    text = " ".join((value or "").split())
+    """One printable line, clipped — sender and subject are untrusted text.
+
+    Control and format characters (escape sequences, zero-width marks,
+    bidirectional overrides) are dropped, not just whitespace."""
+    kept = "".join(
+        ch for ch in (value or "") if ch.isspace() or not unicodedata.category(ch).startswith("C")
+    )
+    text = " ".join(kept.split())
     return text[:_TEXT_LIMIT] + ("…" if len(text) > _TEXT_LIMIT else "")
 
 
@@ -113,7 +121,7 @@ class GmailSource(Source):
     # -- blocking IMAP work, run in a thread --------------------------------
 
     def _poll(self, filters: list[str], since: datetime, config: BackboneConfig):
-        client = imaplib.IMAP4_SSL(IMAP_HOST)
+        client = imaplib.IMAP4_SSL(IMAP_HOST, timeout=_TIMEOUT)
         try:
             client.login(config.gmail_address, config.gmail_app_password)
             client.select(self._all_mail(client), readonly=True)
@@ -173,10 +181,11 @@ class GmailSource(Source):
         if status != "OK":
             raise RuntimeError(f"Gmail search failed for a filter: {status}")
         uids = (data[0] or b"").split()
-        if not uids:
-            return []
-        newest = b",".join(uids[-_MAX_PER_FILTER:])
-        status, response = client.uid("FETCH", newest.decode(), _FETCH_PARTS)
-        if status != "OK":
-            raise RuntimeError(f"Gmail fetch failed: {status}")
-        return parse_fetch(response)
+        items: list[tuple[str, datetime, str, str]] = []
+        for offset in range(0, len(uids), _FETCH_CHUNK):
+            chunk = b",".join(uids[offset : offset + _FETCH_CHUNK])
+            status, response = client.uid("FETCH", chunk.decode(), _FETCH_PARTS)
+            if status != "OK":
+                raise RuntimeError(f"Gmail fetch failed: {status}")
+            items.extend(parse_fetch(response))
+        return items

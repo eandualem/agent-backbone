@@ -38,8 +38,9 @@ def test_search_query_is_gmail_syntax_bounded_to_the_window():
     )
 
 
-def test_clean_text_is_one_clipped_line():
+def test_clean_text_is_one_clipped_line_without_control_characters():
     assert clean_text(" a\r\nb\t c ") == "a b c"
+    assert clean_text("x\x1b[31mred\u200b\u202e") == "x[31mred"
     assert clean_text("x" * 200).endswith("…")
 
 
@@ -57,8 +58,9 @@ def test_parse_fetch_decodes_headers_and_ids():
 class _FakeImap:
     instances: list[_FakeImap] = []
 
-    def __init__(self, host):
+    def __init__(self, host, timeout=None):
         self.host = host
+        self.timeout = timeout
         self.calls: list[tuple] = []
         self.literal = None
         _FakeImap.instances.append(self)
@@ -95,6 +97,7 @@ async def test_poll_runs_one_search_per_filter_and_keeps_the_window(tmp_path):
     with patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", _FakeImap):
         events = await source.poll(["from:upwork.com", "from:nobody"], since)
     client = _FakeImap.instances[0]
+    assert client.timeout == 30
     assert ("login", "me@gmail.com") in client.calls
     assert ("select", '"[Gmail]/Tous les messages"', True) in client.calls
     searches = [c for c in client.calls if len(c) > 1 and c[1] == "SEARCH"]

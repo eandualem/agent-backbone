@@ -110,8 +110,10 @@ route issues to your queue.
 
 Sources (Gmail today) deliver references to new items that match a filter
 written in the source's own query language. Several subscriptions per agent;
-`high` reaches you at once even mid-task (as hook context on your next tool
-call), `normal` waits for your prompt and arrives as one batch:
+`high` reaches you mid-task on your next tool call as hook context (Claude
+Code and Codex; on Gemini CLI, OpenCode, Aider and shell it waits, queued,
+until you are ready and then comes first), `normal` waits for your prompt and
+arrives as one batch:
 
 ```bash
 backbone agent subscribe gmail "from:upwork.com subject:job" --priority high

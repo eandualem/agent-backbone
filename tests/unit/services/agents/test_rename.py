@@ -115,3 +115,12 @@ async def test_rename_rejects_name_in_completed_swarm_history(db, store, column)
     assert store.agents.get("api") is not None
     assert not (store.config.state_dir / "taken.json").exists()
     assert (await db.swarms.get("previous"))[column] == "taken"
+
+
+async def test_rename_moves_pending_hook_context_offers(db, store):
+    from agent_backbone.hooks.backbone_state import claim_context, offer_context
+
+    assert offer_context(store.config.state_dir, "api", "7", "[via:gmail] mail")
+    await store.rename("api", "desk")
+    assert claim_context(store.config.state_dir, "api", "7") == "missing"
+    assert claim_context(store.config.state_dir, "desk", "7") == "claimed"

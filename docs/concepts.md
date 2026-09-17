@@ -37,7 +37,8 @@ app: ready — claude repo acme/app
 - **Subscriptions** — inbound events from a [source](sources.md) the agent
   wants (`backbone agent subscribe desk gmail "from:upwork.com" --priority high`):
   a source, a filter in that source's own query language, and a priority
-  (`normal` waits for the prompt, batched; `high` reaches a working agent at once).
+  (`normal` waits for the prompt, batched; `high` reaches a working Claude Code
+  or Codex agent on its next tool call through hook context, other runtimes first when ready).
 
 There are no roles, groups or hierarchies. An orchestrator is an ordinary
 agent whose directory is its own repository and which watches the others.
@@ -121,7 +122,7 @@ knows where it came from:
 [via:github issue:42] New issue targeting you: acme/app#42 [bug] "Fix flaky auth test" (from planner, blocking). Link: https://…
 [via:telegram from:alice] status?
 [via:gmail] New gmail messages matching your subscriptions. …
-- 199a4f2c3d1e0b7a · from Upwork <donotreply@upwork.com> · "New job: Python scraper" · 2026-09-17 14:02Z · https://mail.google.com/mail/#all/199a4f2c3d1e0b7a
+- 199a4f2c3d1e0b7a · from «Upwork <donotreply@upwork.com>» · subject «New job: Python scraper» · 2026-09-17 14:02Z · https://mail.google.com/mail/#all/199a4f2c3d1e0b7a
 ```
 
 ## Delivery
