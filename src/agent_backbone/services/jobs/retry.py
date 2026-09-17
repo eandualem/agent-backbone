@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from agent_backbone.hooks.backbone_state import claim_context, clear_context
 from agent_backbone.models import (
     BLOCKED_OUTCOMES,
     RETIREMENT_REASONS,
+    SUBSCRIPTION_KIND,
     DeliveryOutcome,
     EventType,
     IssueData,
@@ -167,6 +170,29 @@ async def _drain_session(config, db, gh, session_name, summary) -> bool:
                     await db.queue.mark_delivered(record["id"], reason=retired)
                     summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
                     continue
+            if record.get("delivery_kind") == SUBSCRIPTION_KIND:
+                # A high batch may already have reached a working agent as
+                # hook context; withdraw the offer before pasting the same text.
+                claim = await asyncio.to_thread(
+                    claim_context, config.state_dir, session_name, str(record["id"])
+                )
+                if claim == "taken":
+                    await asyncio.to_thread(
+                        clear_context, config.state_dir, session_name, str(record["id"])
+                    )
+                    await db.deliveries.record(
+                        issue_number=None,
+                        target_entity=session_name,
+                        session_name=session_name,
+                        outcome=DeliveryOutcome.DELIVERED.value,
+                        source="hook-context",
+                        kind=SUBSCRIPTION_KIND,
+                        preview=record["message"][:200],
+                        operation_id=record.get("operation_id"),
+                    )
+                    await db.queue.mark_delivered(record["id"])
+                    summary["queue_delivered"] = summary.get("queue_delivered", 0) + 1
+                    continue
             if record.get("delivery_kind") == "issue":
                 try:
                     issue, status = await _current_issue(config, record, db, gh)
@@ -219,6 +245,7 @@ async def _drain_session(config, db, gh, session_name, summary) -> bool:
                     source=f"{SOURCE}-queue",
                     enforce_issue_queue=True,
                     queue_scope=scope,
+                    priority=bool(record.get("priority")),
                     delivery_kind=record.get("delivery_kind", "issue"),
                     sender=record.get("sender") or "",
                     source_key=(

@@ -52,6 +52,22 @@ class EnrichedAgent(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class SubscriptionView(BaseModel):
+    """One subscription: a source, its filter and the priority of matches."""
+
+    id: int
+    source: str
+    filter: str
+    priority: str = "normal"
+
+
+def subscription_views(spec: AgentSpec | None) -> list[SubscriptionView]:
+    return [
+        SubscriptionView(id=sub.id, source=sub.source, filter=sub.filter, priority=sub.priority)
+        for sub in (spec.subscriptions if spec else ())
+    ]
+
+
 class AgentConfigView(BaseModel):
     """Non-secret view of a configured agent."""
 
@@ -61,6 +77,7 @@ class AgentConfigView(BaseModel):
     model: str | None = None
     repo: str = ""
     watches: list[str] = Field(default_factory=list)
+    subscriptions: list[SubscriptionView] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     description: str = ""
     always_on: bool = False
@@ -75,6 +92,7 @@ class AgentConfigView(BaseModel):
             model=spec.model,
             repo=spec.repo,
             watches=list(spec.watches),
+            subscriptions=subscription_views(spec),
             tags=list(spec.tags),
             description=spec.description,
             always_on=spec.always_on,

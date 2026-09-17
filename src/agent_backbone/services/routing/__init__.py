@@ -3,7 +3,8 @@
 The package decides audiences (``_targets``), resolves them to sessions
 (``_resolution``), reads delivery readiness (``_intelligence``), formats the
 envelope (``_format``) and delivers through ``safe_deliver`` (``_delivery``).
-GitHub events enter through ``dispatch_event`` (``_ingest``). The names
+GitHub events enter through ``dispatch_event`` (``_ingest``); subscribed
+source events through ``dispatch_source_events`` (``_subscriptions``). The names
 below are the surface the API, the jobs and the integrations use.
 """
 
@@ -34,6 +35,7 @@ from agent_backbone.services.routing._intelligence import get_session_intelligen
 from agent_backbone.services.routing._outbox import retry_outbox
 from agent_backbone.services.routing._priority import compute_priority_score
 from agent_backbone.services.routing._resolution import validate_issue_targets
+from agent_backbone.services.routing._subscriptions import dispatch_source_events
 from agent_backbone.services.routing._targets import (
     list_open_queue_for_target,
     queue_scope,
@@ -49,6 +51,7 @@ __all__ = [
     "create_and_notify",
     "current_notification_issue",
     "dispatch_event",
+    "dispatch_source_events",
     "format_next_issue_notification",
     "format_offline_queue_notification",
     "format_plan_notification",

@@ -332,6 +332,56 @@ class TestAgentCommands:
             assert _run(["agent", "forget", "orch"]) == 0
             assert _run(["agent", "forget", "orch"]) == 1
 
+    def test_subscribe_and_unsubscribe(self, tmp_path, monkeypatch, capsys):
+        assert _run(["init"]) == 0
+        project = tmp_path / "desk"
+        project.mkdir()
+        with (
+            patch(
+                "agent_backbone.services.agents.launch.start_agent",
+                new_callable=AsyncMock,
+                return_value=StartResult(ok=True),
+            ),
+            patch(_DETECT_REPO, new_callable=AsyncMock, return_value=""),
+        ):
+            assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
+        capsys.readouterr()
+        assert (
+            _run(["agent", "subscribe", "desk", "gmail", "from:upwork.com", "--priority", "high"])
+            == 0
+        )
+        out = capsys.readouterr().out
+        assert "desk: subscribed to gmail (high): from:upwork.com" in out
+        assert "#1 gmail high: from:upwork.com" in out
+        assert _run(["agent", "subscribe", "desk", "pigeon", "x"]) == 1
+        assert "unknown source" in capsys.readouterr().out
+        assert _run(["agent", "subscribe", "desk", "gmail"]) == 1
+        assert "usage:" in capsys.readouterr().out
+        with (
+            patch(
+                "agent_backbone.services.agents.agent_state",
+                new_callable=AsyncMock,
+                return_value=StateSnapshot(state=AgentState.IDLE),
+            ),
+            patch(
+                "agent_backbone.services.terminal.session_exists",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            assert _run(["agent", "inspect", "desk", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["subscriptions"] == [
+            {"id": 1, "source": "gmail", "filter": "from:upwork.com", "priority": "high"}
+        ]
+
+        monkeypatch.setenv("BACKBONE_AGENT", "desk")
+        assert _run(["agent", "subscribe", "gmail", "from:linkedin.com"]) == 0
+        assert "#2 gmail normal: from:linkedin.com" in capsys.readouterr().out
+        assert _run(["agent", "unsubscribe", "1"]) == 0
+        out = capsys.readouterr().out
+        assert "subscription 1 removed" in out and "#1 " not in out
+        assert _run(["agent", "unsubscribe", "1"]) == 1
+
     def test_watch_defaults_to_own_session(self, tmp_path, monkeypatch, capsys):
         """Inside an agent session, the agent can watch repos without naming itself."""
         assert _run(["init"]) == 0

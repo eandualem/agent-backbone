@@ -184,6 +184,11 @@ safe. What it does:
   a link. Comment deliveries carry a truncated preview (up to 500
   characters) after the envelope — still untrusted text. The agent fetches
   the rest with its own tools.
+- Subscribed [source](sources.md) events (`[via:gmail]`) carry only a
+  message id, the sender, a one-line subject and a link, never the body;
+  sender and subject are whatever the mail said and are untrusted text. The
+  backbone reads the mailbox read-only with its own credential; the agent
+  reads a message through its own connector under its own rules.
 - Who can open issues in your repositories and who is in your Telegram
   allowlist are your real access controls.
 

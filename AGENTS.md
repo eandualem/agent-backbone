@@ -103,8 +103,9 @@ Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way
   the package). `services/terminal` and `services/scheduler` are next and
   import no other service. `services/runtimes` (one module
   per CLI: what it looks like, how to paste into it, how to launch it) may
-  import `terminal` and `hooks`. `services/database` and
-  `services/github` are leaves. `services/agents` (the store, state,
+  import `terminal` and `hooks`. `services/database`,
+  `services/github` and `services/sources` (one module per inbound source,
+  Gmail today) are leaves. `services/agents` (the store, state,
   launch, the start operation) may import `runtimes`, `terminal` and
   `database`. `services/routing` may import everything below it.
   `services/integrations` may import `routing`. `services/jobs` (monitor,

@@ -80,8 +80,12 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
     return None, None
 
 
+CONTEXT_EVENTS = frozenset({"PostToolUse"})
+"""Events whose JSON output adds context to the model (``hookSpecificOutput.additionalContext``)."""
+
+
 def main(argv: list[str] | None = None) -> int:
-    return bb.run_hook(derive, argv)
+    return bb.run_hook(derive, argv, context_events=CONTEXT_EVENTS)
 
 
 if __name__ == "__main__":

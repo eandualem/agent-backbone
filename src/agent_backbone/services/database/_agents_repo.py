@@ -10,11 +10,12 @@ from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import now_iso
 
 
-def _row_to_agent(row, watches: list[str]) -> dict:
+def _row_to_agent(row, watches: list[str], subscriptions: list[dict]) -> dict:
     data = dict(row._mapping)
     data["tags"] = json.loads(data.get("tags") or "[]")
     data["env"] = json.loads(data.get("env") or "{}")
     data["watches"] = watches
+    data["subscriptions"] = subscriptions
     data["always_on"] = bool(data.get("always_on"))
     data["unattended"] = bool(data.get("unattended"))
     return data
@@ -31,9 +32,30 @@ class AgentRepo(Repo):
             for row in result.fetchall():
                 watches.setdefault(row._mapping["agent_name"], []).append(row._mapping["repo"])
 
+            subscriptions: dict[str, list[dict]] = {}
+            result = await conn.execute(
+                text(
+                    "SELECT id, agent_name, source, query, priority FROM agent_subscriptions "
+                    "ORDER BY agent_name, id"
+                )
+            )
+            for row in result.mappings():
+                subscriptions.setdefault(row["agent_name"], []).append(
+                    {
+                        "id": row["id"],
+                        "source": row["source"],
+                        "filter": row["query"],
+                        "priority": row["priority"],
+                    }
+                )
+
             result = await conn.execute(text("SELECT * FROM agents ORDER BY name"))
             return [
-                _row_to_agent(row, watches.get(row._mapping["name"], []))
+                _row_to_agent(
+                    row,
+                    watches.get(row._mapping["name"], []),
+                    subscriptions.get(row._mapping["name"], []),
+                )
                 for row in result.fetchall()
             ]
 
@@ -135,6 +157,9 @@ class AgentRepo(Repo):
             await conn.execute(
                 text("DELETE FROM agent_watches WHERE agent_name = :name"), {"name": name}
             )
+            await conn.execute(
+                text("DELETE FROM agent_subscriptions WHERE agent_name = :name"), {"name": name}
+            )
             result = await conn.execute(
                 text("DELETE FROM agents WHERE name = :name"), {"name": name}
             )
@@ -145,6 +170,7 @@ class AgentRepo(Repo):
         references = (
             ("agents", "name"),
             ("agent_watches", "agent_name"),
+            ("agent_subscriptions", "agent_name"),
             ("agent_states", "session_name"),
             ("usage_sessions", "agent_name"),
             ("acknowledgments", "target_entity"),
@@ -240,5 +266,35 @@ class AgentRepo(Repo):
             result = await conn.execute(
                 text("DELETE FROM agent_watches WHERE agent_name = :name AND repo = :repo"),
                 {"name": name, "repo": repo},
+            )
+            return (result.rowcount or 0) > 0
+
+    async def add_subscription(self, name: str, source: str, query: str, priority: str) -> int:
+        """Record a subscription; the same filter again only changes its priority."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    """INSERT INTO agent_subscriptions
+                       (agent_name, source, query, priority, created_at)
+                       VALUES (:name, :source, :query, :priority, :now)
+                       ON CONFLICT(agent_name, source, query)
+                       DO UPDATE SET priority = excluded.priority
+                       RETURNING id"""
+                ),
+                {
+                    "name": name,
+                    "source": source,
+                    "query": query,
+                    "priority": priority,
+                    "now": now_iso(),
+                },
+            )
+            return int(result.scalar_one())
+
+    async def remove_subscription(self, name: str, subscription_id: int) -> bool:
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text("DELETE FROM agent_subscriptions WHERE agent_name = :name AND id = :id"),
+                {"name": name, "id": subscription_id},
             )
             return (result.rowcount or 0) > 0

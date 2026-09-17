@@ -16,6 +16,7 @@ from tests.support import queue_row
 _EXPECTED_TABLES = {
     "acknowledgments",
     "agent_states",
+    "agent_subscriptions",
     "agent_watches",
     "agents",
     "deliveries",
@@ -56,6 +57,7 @@ _EXPECTED_INDEXES = {
     "uq_mq_issue_dedup",
     "uq_mq_message_dedup",
     "uq_swarms_active_issue",
+    "uq_subscriptions_query",
     "uq_diagnostics_observation",
     "idx_diagnostics_last_seen",
     "idx_diagnostics_agent",

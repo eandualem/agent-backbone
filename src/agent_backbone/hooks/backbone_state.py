@@ -550,6 +550,75 @@ def append_action(state_dir: Path, agent: str, action: dict) -> None:
         fh.write(json.dumps({**action, "session": agent}) + "\n")
 
 
+CONTEXT_DIR = "context"
+"""``<state_dir>/context/<agent>/`` — text the backbone offers a *working*
+agent through its runtime's hook, because nothing is ever pasted into a busy
+terminal. The backbone writes ``<key>.md``; whoever renames it first owns it:
+the hook renames it to ``<key>.taken`` and returns the text as hook context,
+the backbone renames it to ``<key>.claimed`` when it is about to paste the
+same message at the prompt instead. ``clear_context`` removes what is left."""
+
+
+def _context_dir(state_dir: Path, agent: str) -> Path:
+    return state_dir / CONTEXT_DIR / agent
+
+
+def offer_context(state_dir: Path, agent: str, key: str, text: str) -> bool:
+    """Backbone side: offer ``text`` under ``key``. False when the hook already took it."""
+    directory = _context_dir(state_dir, agent)
+    directory.mkdir(parents=True, exist_ok=True)
+    if (directory / f"{key}.taken").exists():
+        return False
+    target = directory / f"{key}.md"
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, target)
+    return True
+
+
+def claim_context(state_dir: Path, agent: str, key: str) -> str:
+    """Backbone side, before pasting: ``claimed`` (the offer is withdrawn),
+    ``taken`` (the hook delivered it; do not paste) or ``missing`` (never offered)."""
+    directory = _context_dir(state_dir, agent)
+    try:
+        os.rename(directory / f"{key}.md", directory / f"{key}.claimed")
+    except FileNotFoundError:
+        return "taken" if (directory / f"{key}.taken").exists() else "missing"
+    (directory / f"{key}.claimed").unlink(missing_ok=True)
+    return "claimed"
+
+
+def clear_context(state_dir: Path, agent: str, key: str) -> None:
+    directory = _context_dir(state_dir, agent)
+    for suffix in ("md", "taken", "claimed"):
+        (directory / f"{key}.{suffix}").unlink(missing_ok=True)
+
+
+def take_context(state_dir: Path, agent: str) -> list[str]:
+    """Hook side: claim every offered text (oldest first) and return it."""
+    directory = _context_dir(state_dir, agent)
+    texts: list[str] = []
+    try:
+        offers = sorted(directory.glob("*.md"), key=lambda path: path.stat().st_mtime)
+    except OSError:
+        return texts
+    for offer in offers:
+        taken = offer.with_suffix(".taken")
+        try:
+            os.rename(offer, taken)
+            texts.append(taken.read_text(encoding="utf-8"))
+        except OSError:
+            continue  # the backbone claimed it first, or it is already gone
+    return texts
+
+
+def hook_context_output(event: str, texts: list[str]) -> str:
+    """The JSON a Claude Code / Codex hook prints to add ``texts`` to the model's context."""
+    return json.dumps(
+        {"hookSpecificOutput": {"hookEventName": event, "additionalContext": "\n\n".join(texts)}}
+    )
+
+
 def read_current(state_dir: Path, agent: str) -> dict | None:
     try:
         return json.loads((state_dir / f"{agent}.json").read_text())
@@ -557,8 +626,14 @@ def read_current(state_dir: Path, agent: str) -> dict | None:
         return None
 
 
-def run_hook(derive: Derive, argv: list[str] | None = None) -> int:
+def run_hook(
+    derive: Derive, argv: list[str] | None = None, *, context_events: frozenset[str] = frozenset()
+) -> int:
     """Read the CLI's JSON payload from stdin, derive the state, write it.
+
+    On an event in ``context_events`` (the CLI's hook events whose JSON output
+    may add context to the model) the hook also hands over whatever the
+    backbone offered under ``<state_dir>/context/<agent>/`` — see ``CONTEXT_DIR``.
 
     Usage (as configured by the installer):
         <script> --state-dir /path/to/state [--agent NAME]
@@ -595,6 +670,11 @@ def run_hook(derive: Derive, argv: list[str] | None = None) -> int:
                 remember_usage_session(state_dir, agent, record)
         for entry in action if isinstance(action, list) else ([action] if action else []):
             append_action(state_dir, agent, entry)
+        event = payload.get("hook_event_name", "")
+        if event in context_events:
+            texts = take_context(state_dir, agent)
+            if texts:
+                print(hook_context_output(event, texts))
     except Exception:  # a hook must never make the CLI fail
         # An unexpected payload shape or an unwritable state dir: the
         # backbone falls back to the terminal; the agent is not disturbed.

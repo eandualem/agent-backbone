@@ -29,6 +29,8 @@ from agent_backbone.api.models import (
     ListEnvelope,
     RuntimeInfo,
     StateUpdateRequest,
+    SubscribeRequest,
+    UnsubscribeRequest,
     WatchRequest,
 )
 from agent_backbone.api.session_updates import SessionFeed
@@ -42,6 +44,7 @@ from agent_backbone.services.agents import (
     deny_agent,
     read_state_file,
     record_answer,
+    subscription_views,
     write_state_file,
 )
 from agent_backbone.services.agents.operations import (
@@ -174,6 +177,7 @@ async def inspect_agent(
         model=spec.model if spec else None,
         repo=spec.repo if spec else "",
         watches=list(spec.watches) if spec else [],
+        subscriptions=[view.model_dump() for view in subscription_views(spec)],
         state=profile.agent_state.value if online else "offline",
         reason=profile.reason,
         current_issue=profile.current_issue,
@@ -410,6 +414,34 @@ async def unwatch_repo(name: str, body: WatchRequest, store: AgentStore = Depend
     spec = store.agents.get(name)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'")
+    return AgentConfigView.from_spec(spec)
+
+
+@router.post("/agents/{name}/subscribe", response_model=AgentConfigView)
+async def subscribe(
+    name: str, body: SubscribeRequest, store: AgentStore = Depends(get_agent_store)
+):
+    """Subscribe an agent to events on a source (``gmail``) matching a filter
+    written in that source's own query language, at ``normal`` or ``high`` priority."""
+    try:
+        spec = await store.subscribe(name, body.source, body.filter, body.priority)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AgentConfigView.from_spec(spec)
+
+
+@router.post("/agents/{name}/unsubscribe", response_model=AgentConfigView)
+async def unsubscribe(
+    name: str, body: UnsubscribeRequest, store: AgentStore = Depends(get_agent_store)
+):
+    """Remove one subscription by its id (``agent inspect`` lists them)."""
+    if store.agents.get(name) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'")
+    if not await store.unsubscribe(name, body.id):
+        raise HTTPException(status_code=404, detail=f"No subscription {body.id} on '{name}'")
+    spec = store.agents.get(name)
     return AgentConfigView.from_spec(spec)
 
 

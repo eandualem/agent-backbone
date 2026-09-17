@@ -25,11 +25,17 @@ from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 from weakref import WeakValueDictionary
 
-from agent_backbone.models import BLOCKED_OUTCOMES, SUCCESS_OUTCOMES, DeliveryOutcome
+from agent_backbone.hooks.backbone_state import offer_context
+from agent_backbone.models import (
+    BLOCKED_OUTCOMES,
+    SUBSCRIPTION_KIND,
+    SUCCESS_OUTCOMES,
+    DeliveryOutcome,
+)
 from agent_backbone.services.agents import note_submission
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
-from agent_backbone.services.runtimes import SubmissionUnconfirmed, send_message
+from agent_backbone.services.runtimes import SubmissionUnconfirmed, get_runtime, send_message
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -38,7 +44,9 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _BYPASSABLE = frozenset({SessionIntelligence.HUMAN_TYPING, SessionIntelligence.SETTLING})
-"""Blocking conditions ``priority`` may push through. Busy and waiting never are."""
+"""Blocking conditions ``priority`` may push through. Busy and waiting never are:
+a high-priority subscription batch reaches a *working* agent only as hook
+context (``offer_context``), never as a paste."""
 
 
 @dataclass(frozen=True)
@@ -233,6 +241,7 @@ async def _enqueue(
     source_key: str | None,
     operation_id: str,
     uncertain: bool = False,
+    priority: bool = False,
 ) -> _QueueReceipt:
     """Store the message; say what happened (``stored`` / ``already_queued`` /
     ``failed``), or None when there is nothing to store it in."""
@@ -241,19 +250,31 @@ async def _enqueue(
     if kind == "issue" and (issue_number is None or target_entity is None):
         return _QueueReceipt()
     try:
-        result = await db.queue.enqueue(
-            session_name=session_name,
-            message=message,
-            issue_number=issue_number,
-            target_entity=target_entity,
-            delivery_kind=kind,
-            source=source,
-            repo=repo,
-            sender=sender,
-            source_key=source_key,
-            operation_id=operation_id,
-            **({"uncertain": True} if uncertain else {}),
-        )
+        if kind == SUBSCRIPTION_KIND and not uncertain:
+            # One growing batch per session and priority (docs/sources.md).
+            header, _, body = message.partition("\n")
+            result = await db.queue.enqueue_subscription(
+                session_name=session_name,
+                header=header,
+                lines=body.split("\n") if body else [],
+                priority=int(priority),
+                source=source,
+                operation_id=operation_id,
+            )
+        else:
+            result = await db.queue.enqueue(
+                session_name=session_name,
+                message=message,
+                issue_number=issue_number,
+                target_entity=target_entity,
+                delivery_kind=kind,
+                source=source,
+                repo=repo,
+                sender=sender,
+                source_key=source_key,
+                operation_id=operation_id,
+                **({"uncertain": True} if uncertain else {}),
+            )
     except Exception as exc:
         log.error(
             "Could not store a %s for %s — the sender is told (%s)",
@@ -264,7 +285,7 @@ async def _enqueue(
         return _QueueReceipt("failed", error_type=type(exc).__name__)
     queue_id = result.id if isinstance(result.id, int) else None
     stored_operation = result.operation_id if isinstance(result.operation_id, str) else operation_id
-    if result.status == "inserted":
+    if result.status in ("inserted", "appended"):
         log.info("Queued %s for %s (%s) via %s", kind, session_name, repo or "-", source or "?")
         return _QueueReceipt("stored", queue_id, stored_operation)
     log.info("Same %s for %s already queued (from %s)", kind, session_name, sender or "?")
@@ -384,6 +405,7 @@ async def safe_deliver(
                 source_key=source_key,
                 operation_id=operation_id,
                 uncertain=uncertain,
+                priority=priority,
             )
         elif uncertain and db is not None and queue_id is not None:
             await db.queue.hold_uncertain(queue_id)
@@ -526,7 +548,29 @@ async def safe_deliver(
             queue = kind != "issue" or intel == SessionIntelligence.OFFLINE
             if intel == SessionIntelligence.SETTLING and kind == "issue":
                 queue = False
-            return await finish(DeliveryOutcome(intel.value), queue=queue)
+            report = await finish(DeliveryOutcome(intel.value), queue=queue)
+            if (
+                priority
+                and kind == SUBSCRIPTION_KIND
+                and intel == SessionIntelligence.AGENT_WORKING
+                and report.queue_id is not None
+                and get_runtime(profile.runtime).hook_context
+            ):
+                # The queued batch is also offered to the working agent
+                # through its runtime's hook; the drain reconciles which
+                # of the two paths delivered it (docs/sources.md).
+                try:
+                    offered = await asyncio.to_thread(
+                        offer_context, config.state_dir, session_name, str(report.queue_id), message
+                    )
+                except OSError as exc:
+                    await record_exception("context_offer_failed", "context", exc)
+                else:
+                    if offered:
+                        log.info(
+                            "Offered batch %s to %s as hook context", report.queue_id, session_name
+                        )
+            return report
 
     if db is not None and await db.queue.has_uncertain(session_name):
         # A previous paste may still occupy the input box. Hold new messages

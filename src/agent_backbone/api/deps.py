@@ -14,6 +14,7 @@ from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.integrations import Integrations
 from agent_backbone.services.routing import IssueClosedHook
 from agent_backbone.services.scheduler import PeriodicScheduler
+from agent_backbone.services.sources import Sources
 
 
 def get_config(request: Request) -> BackboneConfig:
@@ -70,3 +71,7 @@ def get_scheduler(request: Request) -> PeriodicScheduler | None:
 
 def get_integrations(request: Request) -> Integrations | None:
     return getattr(request.app.state, "integrations", None)
+
+
+def get_sources(request: Request) -> Sources | None:
+    return getattr(request.app.state, "sources", None)

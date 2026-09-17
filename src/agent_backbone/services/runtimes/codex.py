@@ -134,6 +134,7 @@ class Codex(Runtime):
         ("Interrupt", None),
     )
     hook_timeout = 10  # seconds
+    hook_context = True  # PostToolUse additionalContext
 
     prompt_prefixes = ("›",)
     runtime_markers = ("openai codex", "gpt-5.", "context left")

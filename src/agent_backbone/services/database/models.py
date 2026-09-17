@@ -104,6 +104,25 @@ class AgentWatchORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class AgentSubscriptionORM(Base):
+    """Inbound events an agent wants: a source, a filter in that source's own
+    query language, and the priority of what matches (``normal`` / ``high``)."""
+
+    __tablename__ = "agent_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_name: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[str] = mapped_column(Text, nullable=False, server_default="normal")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("uq_subscriptions_query", "agent_name", "source", "query", unique=True),
+        {"sqlite_autoincrement": True},
+    )
+
+
 class SwarmORM(Base):
     """A swarm: one coordinator plus members sharing a worktree, working one issue.
 
@@ -292,6 +311,9 @@ class MessageQueueORM(Base):
     dedup_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     """What makes a non-issue message *the same* message: the source event's
     identity when the caller has one, else a hash of sender and text."""
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    """1 for a high-priority subscription batch: drained ahead of the rest and
+    offered to a working agent through its runtime's hook context."""
 
     __table_args__ = (
         Index("idx_mq_status", "status"),

@@ -65,7 +65,8 @@ lifecycle commands unattended — give them this snippet:
     "Bash(backbone agent start)", "Bash(backbone agent start *)",
     "Bash(backbone agent stop *)", "Bash(backbone agent inspect *)",
     "Bash(backbone agent approve *)", "Bash(backbone agent watch *)",
-    "Bash(backbone agent unwatch *)", "Bash(backbone tell *)", "Bash(backbone reply *)"
+    "Bash(backbone agent unwatch *)", "Bash(backbone agent subscribe *)",
+    "Bash(backbone agent unsubscribe *)", "Bash(backbone tell *)", "Bash(backbone reply *)"
   ]
 }
 ```

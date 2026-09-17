@@ -4,8 +4,8 @@ agent-backbone is a **control plane for terminal AI agents** on one machine.
 You run Claude Code, Codex, Gemini CLI, OpenCode, Deep Code or Aider in tmux sessions;
 the backbone starts those sessions, knows whether each one is ready to
 receive input, delivers text to them safely, and connects them to GitHub
-Issues, to people through **integrations** (Telegram today), and to each
-other.
+Issues, to inbound **sources** they subscribe to (Gmail today), to people
+through **integrations** (Telegram today), and to each other.
 
 It is *not* an agent framework (it does not call models), not a workflow
 engine (there are no DAGs), and not a dashboard (it feeds one).
@@ -34,6 +34,10 @@ app: ready — claude repo acme/app
   (`backbone agent watch orch acme/app acme/web`). Inside its own session
   an agent can subscribe itself: `backbone agent watch acme/app` (the name
   defaults to `$BACKBONE_AGENT`).
+- **Subscriptions** — inbound events from a [source](sources.md) the agent
+  wants (`backbone agent subscribe desk gmail "from:upwork.com" --priority high`):
+  a source, a filter in that source's own query language, and a priority
+  (`normal` waits for the prompt, batched; `high` reaches a working agent at once).
 
 There are no roles, groups or hierarchies. An orchestrator is an ordinary
 agent whose directory is its own repository and which watches the others.
@@ -116,13 +120,15 @@ knows where it came from:
 [via:backbone from:elias] review PR 12 and summarise the risks
 [via:github issue:42] New issue targeting you: acme/app#42 [bug] "Fix flaky auth test" (from planner, blocking). Link: https://…
 [via:telegram from:alice] status?
+[via:gmail] New gmail messages matching your subscriptions. …
+- 199a4f2c3d1e0b7a · from Upwork <donotreply@upwork.com> · "New job: Python scraper" · 2026-09-17 14:02Z · https://mail.google.com/mail/#all/199a4f2c3d1e0b7a
 ```
 
 ## Delivery
 
 One attempt to hand a message to a session, recorded with its **kind**
 (`issue`, `comment`, `review`, `pull_request`, `direct_message`, `watch`,
-`escalation`, `plan_response`), repository, outcome and a preview — direct
+`escalation`, `plan_response`, `subscription`), repository, outcome and a preview — direct
 messages included. A `plan_response` (an answer typed into a plan prompt)
 is the one kind that is **never queued**: it goes in only while the agent
 is waiting for a plan decision, and is refused as `not_waiting` otherwise. What cannot be delivered now is **queued** in the database and
@@ -130,7 +136,9 @@ delivered by the background jobs — a message that waited at least two
 minutes is delivered with `(queued N min ago)` (`N h` from two hours) after
 its envelope, so a review or comment drained after a long busy stretch
 does not read as current; queued messages expire after
-`timing.queue_expiry_minutes` (30), except active swarm coordination and inbox holds.
+`timing.queue_expiry_minutes` (30), except active swarm coordination, inbox holds
+and `subscription` batches (facts, not conversation: they grow while the agent
+is busy and are retired only when delivered).
 An expired message leaves a
 delivery with outcome `expired` (kind, source and preview kept), so
 `agent inspect` shows what never arrived. The sender is told whether a row
@@ -147,7 +155,8 @@ leased row instead of inserting an age-stamped copy.
 
 ## Event
 
-Every inbound GitHub event (webhook or poll) is stored before it is
+Every inbound GitHub event (webhook or poll) and every subscribed source
+item (a matched Gmail message) is stored before it is
 routed, with what the backbone did about it. That table is the activity
 feed (`GET /api/events`, `backbone status` shows the last event per
 repository) and the dedup record used by overlapping polls. A separate durable
@@ -192,6 +201,7 @@ Background loops inside the backbone process:
 | `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, read every agent's state once and mirror it to the database, stall and dead-session reports, plan-waiting alerts, queue drain, next pending issue to idle agents, Socket.IO snapshot |
 | `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
 | `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
+| `sources-poll` | `sources.poll_interval_seconds` (60 s) | only with a configured [source](sources.md): search each source for new items matching any subscription filter and deliver them |
 | `github-backfill` | once at startup | webhook intake only: catch up on what happened while the backbone was down |
 | `prune` | 6 h | delete old deliveries, events and completed queue bodies; rotate the hook action log |
 

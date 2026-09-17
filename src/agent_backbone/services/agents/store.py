@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import (
+    SOURCES,
+    SUBSCRIPTION_PRIORITIES,
     AgentsConfig,
     AgentSpec,
     BackboneConfig,
@@ -172,6 +174,7 @@ class AgentStore:
             repo=await detect_repo(path)
             or (existing.repo if existing and existing.path != path else ""),
             watches=existing.watches if existing else (),
+            subscriptions=existing.subscriptions if existing else (),
             tags=existing.tags if existing else (),
             env=dict(existing.env) if existing else {},
             description=existing.description if existing else "",
@@ -341,6 +344,30 @@ class AgentStore:
     @serialized_mutation
     async def unwatch(self, name: str, repo: str) -> bool:
         removed = await self._db.agents.remove_watch(name, repo)
+        await self.refresh()
+        return removed
+
+    @serialized_mutation
+    async def subscribe(self, name: str, source: str, filter_text: str, priority: str) -> AgentSpec:
+        """Subscribe ``name`` to events on ``source`` matching ``filter_text``
+        (the source's own query language) at ``priority``."""
+        if source not in SOURCES:
+            raise ValueError(f"unknown source '{source}' (expected one of {', '.join(SOURCES)})")
+        if priority not in SUBSCRIPTION_PRIORITIES:
+            raise ValueError(f"priority must be one of {', '.join(SUBSCRIPTION_PRIORITIES)}")
+        filter_text = " ".join(filter_text.split())
+        if not filter_text or len(filter_text) > 500:
+            raise ValueError("filter must be 1-500 characters")
+        await self.refresh()
+        if name not in self._agents:
+            raise KeyError(name)
+        await self._db.agents.add_subscription(name, source, filter_text, priority)
+        await self.refresh()
+        return self._agents.get(name)  # type: ignore[return-value]
+
+    @serialized_mutation
+    async def unsubscribe(self, name: str, subscription_id: int) -> bool:
+        removed = await self._db.agents.remove_subscription(name, subscription_id)
         await self.refresh()
         return removed
 
