@@ -13,7 +13,7 @@ backbone runtimes                    supported CLIs, installed or not, example m
 backbone service install|uninstall|status   start the backbone at login (launchd / systemd --user)
 backbone config list|get|set|unset   settings (stored in the database)
 backbone agent start [--dir D]       discover + start an agent (waits for its prompt)
-backbone agent list|stop|inspect|set|watch|unwatch|forget
+backbone agent list|stop|inspect|set|watch|unwatch|subscribe|unsubscribe|forget
 backbone swarm create|list|status|disband   coordinator+members on one issue
 backbone tell <agent> <msg>          deliver a message to an agent (or a swarm)
 backbone reply <text>                answer the humans on their channel (Telegram topic, …)
@@ -259,6 +259,24 @@ def build_parser() -> argparse.ArgumentParser:
         "unwatch", help="stop watching repositories (NAME optional inside an agent session)"
     )
     pu.add_argument("targets", nargs="+", metavar="[NAME] OWNER/REPO")
+    psub = asub.add_parser(
+        "subscribe",
+        help="subscribe to inbound events (NAME optional inside an agent session)",
+        description=(
+            "Subscribe an agent to events from a source, matched by a filter written in the "
+            "source's own query language (gmail: Gmail search syntax such as "
+            "'from:upwork.com subject:job'). High priority reaches a working agent at once; "
+            "normal waits for its prompt, batched."
+        ),
+    )
+    psub.add_argument("targets", nargs="+", metavar="[NAME] SOURCE FILTER")
+    psub.add_argument(
+        "--priority", choices=("normal", "high"), default="normal", help="default: normal"
+    )
+    puns = asub.add_parser(
+        "unsubscribe", help="remove a subscription by id (NAME optional inside an agent session)"
+    )
+    puns.add_argument("targets", nargs="+", metavar="[NAME] ID")
     pf = asub.add_parser("forget", help="remove an agent from the backbone")
     pf.add_argument("name")
     for verb in ("tag", "untag"):

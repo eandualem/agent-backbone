@@ -97,6 +97,12 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `github.backfill_on_start` | `true` | Webhook intake: run one poll at startup to catch missed events |
 | `github.backfill_lookback_hours` | `24` | How far back the first poll looks for a repository with no durable poll cursor (including the first start after upgrading to cursor storage) |
 
+### `sources.*`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `sources.poll_interval_seconds` | `60` | How often subscribed [sources](sources.md) (Gmail) are searched for new items matching subscriptions; the job runs only when a source is configured (must be positive) |
+
 ### `routing.*`
 
 | Key | Default | Meaning |
@@ -110,7 +116,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 |---|---|---|
 | `timing.stale_threshold_seconds` | `300` | Hook state older than this is verified against the terminal |
 | `timing.grace_period_seconds` | `5` | Settle time from the hook-written idle timestamp before delivering (`settling`); terminal-only idle readings have no transition timestamp |
-| `timing.queue_expiry_minutes` | `30` | Expiry for ordinary queued messages; active swarm coordination and inbox holds are retained |
+| `timing.queue_expiry_minutes` | `30` | Expiry for ordinary queued messages; active swarm coordination, inbox holds and [subscription](sources.md) batches are retained |
 | `timing.stall_threshold_seconds` | `5400` | Busy on one issue for longer than this is a stall |
 | `timing.escalation_dedup_seconds` | `1800` | Do not repeat the same escalation within this window |
 | `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period (must be positive) |
@@ -192,6 +198,7 @@ secrets are stripped from the session, including anything you added to
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | GitHub App alternative to a token |
 | `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret; setting it switches intake to webhook |
 | `TELEGRAM_TOKEN` | Bot token |
+| `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD` | The mailbox and its app password for the read-only Gmail [source](sources.md); both unset means no mailbox |
 | `BACKBONE_DATA_DIR` | Data directory (default `~/.local/share/agent-backbone`) |
 | `BACKBONE_DATABASE_URL` | Any SQLAlchemy async URL, e.g. `postgresql+asyncpg://user:pw@host/db` (install the `postgres` extra) |
 

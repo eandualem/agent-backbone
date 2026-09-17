@@ -219,6 +219,7 @@ async def _drain_session(config, db, gh, session_name, summary) -> bool:
                     source=f"{SOURCE}-queue",
                     enforce_issue_queue=True,
                     queue_scope=scope,
+                    priority=bool(record.get("priority")),
                     delivery_kind=record.get("delivery_kind", "issue"),
                     sender=record.get("sender") or "",
                     source_key=(

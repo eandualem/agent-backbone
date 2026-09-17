@@ -264,8 +264,10 @@ async def api_app(config):
     app.state.feed = SessionFeed(lambda: app.state.config)
     app.state.issue_closed_hooks = ()
     from agent_backbone.services.integrations import build_integrations
+    from agent_backbone.services.sources import build_sources
 
     app.state.integrations = build_integrations(lambda: app.state.config, db=db)
+    app.state.sources = build_sources(lambda: app.state.config)
     app.state.scheduler = None
 
     yield app

@@ -49,6 +49,19 @@ _FORBIDDEN: dict[str, tuple[str, ...]] = {
         "agent_backbone.api",
         "agent_backbone.cli",
     ),
+    _S + "sources": (
+        _S + "terminal",
+        _S + "runtimes",
+        _S + "agents",
+        _S + "routing",
+        _S + "jobs",
+        _S + "database",
+        _S + "github",
+        _S + "integrations",
+        _S + "swarm",
+        "agent_backbone.api",
+        "agent_backbone.cli",
+    ),
     _S + "database": (
         _S + "terminal",
         _S + "runtimes",
@@ -142,6 +155,7 @@ _ALLOWED: dict[str, set[str]] = {
     "services.runtimes": _LEAVES | {"services.terminal"},
     "services.database": set(_LEAVES),
     "services.github": set(_LEAVES),
+    "services.sources": set(_LEAVES),
     "services.agents": _LEAVES | {"services.terminal", "services.runtimes", "services.database"},
     "services.routing": _LEAVES
     | {
@@ -149,6 +163,7 @@ _ALLOWED: dict[str, set[str]] = {
         "services.runtimes",
         "services.database",
         "services.github",
+        "services.sources",
         "services.agents",
     },
 }

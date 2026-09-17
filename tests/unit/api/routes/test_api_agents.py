@@ -327,6 +327,32 @@ class TestStartAgent:
             "/api/agents/ike/unwatch", json={"repo": "acme/web"}, headers=auth_headers
         )
         assert "acme/web" not in resp.json()["watches"]
+        resp = await api_client.post(
+            "/api/agents/ike/subscribe",
+            json={"source": "gmail", "filter": "from:upwork.com  subject:job", "priority": "high"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        (sub,) = resp.json()["subscriptions"]
+        assert (sub["source"], sub["filter"], sub["priority"]) == (
+            "gmail",
+            "from:upwork.com subject:job",
+            "high",
+        )
+        bad = await api_client.post(
+            "/api/agents/ike/subscribe",
+            json={"source": "carrier-pigeon", "filter": "x"},
+            headers=auth_headers,
+        )
+        assert bad.status_code == 400 and "unknown source" in bad.json()["detail"]
+        missing = await api_client.post(
+            "/api/agents/ike/unsubscribe", json={"id": sub["id"] + 1}, headers=auth_headers
+        )
+        assert missing.status_code == 404
+        resp = await api_client.post(
+            "/api/agents/ike/unsubscribe", json={"id": sub["id"]}, headers=auth_headers
+        )
+        assert resp.json()["subscriptions"] == []
         tmux_svc.session_exists.return_value = True
         assert (await api_client.delete("/api/agents/ike", headers=auth_headers)).status_code == 409
         tmux_svc.session_exists.return_value = False

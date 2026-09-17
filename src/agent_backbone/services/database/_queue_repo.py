@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
 
-from agent_backbone.models import RETIREMENT_REASONS
+from agent_backbone.models import RETIREMENT_REASONS, SUBSCRIPTION_KIND
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
@@ -17,17 +17,21 @@ _MAX_ENQUEUE_ATTEMPTS = 3
 """Retry a duplicate that completes between conflict detection and receipt lookup."""
 
 _INSERT_COLUMNS = """(operation_id, session_name, message, repo, issue_number, target_entity,
-                delivery_kind, source, enqueued_at, status, sender, dedup_key)
+                delivery_kind, source, enqueued_at, status, sender, dedup_key, priority)
                VALUES (:operation_id, :session_name, :message, :repo, :issue_number, :target_entity,
                        :delivery_kind, :source, :enqueued_at, :initial_status,
-                       :sender, :dedup_key)"""
+                       :sender, :dedup_key, :priority)"""
+
+SUBSCRIPTION_BATCH_LIMIT = 25
+"""Lines one subscription batch lists; further lines open the next batch."""
 
 
 @dataclass(frozen=True)
 class EnqueueResult:
-    """What ``enqueue`` did: ``inserted`` (a new row) or
-    ``already_queued`` (the same message is already waiting — nothing added).
-    Both return the stored row's id and operation identity.
+    """What ``enqueue`` did: ``inserted`` (a new row), ``already_queued`` (the
+    same message is already waiting — nothing added) or, for a subscription
+    batch, ``appended`` (the open batch grew). All return the stored row's id
+    and operation identity.
     A database error is raised, never swallowed: the caller decides what to
     tell the sender."""
 
@@ -38,7 +42,7 @@ class EnqueueResult:
     @property
     def stored(self) -> bool:
         """Whether a row for this message now exists in the queue."""
-        return self.status in ("inserted", "already_queued")
+        return self.status in ("inserted", "already_queued", "appended")
 
 
 def dedup_key_for(message: str, sender: str, source_key: str | None) -> str:
@@ -53,6 +57,14 @@ def dedup_key_for(message: str, sender: str, source_key: str | None) -> str:
         return f"src:{source_key}"
     digest = hashlib.sha256(f"{sender}\x00{message}".encode()).hexdigest()
     return f"msg:{digest}"
+
+
+def _fill_batch(message: str, lines: list[str]) -> tuple[str, list[str]]:
+    """``message`` (a header, then listed lines) with as many of ``lines`` as fit
+    under ``SUBSCRIPTION_BATCH_LIMIT``, and the lines that did not."""
+    parts = message.split("\n")
+    room = max(0, SUBSCRIPTION_BATCH_LIMIT - (len(parts) - 1))
+    return "\n".join(parts + lines[:room]), lines[room:]
 
 
 class QueueRepo(Repo):
@@ -87,6 +99,7 @@ class QueueRepo(Repo):
         source_key: str | None = None,
         operation_id: str | None = None,
         uncertain: bool = False,
+        priority: int = 0,
     ) -> EnqueueResult:
         """Store a message for later delivery.
 
@@ -108,6 +121,7 @@ class QueueRepo(Repo):
                 "initial_status": "uncertain" if uncertain else "pending",
                 "sender": sender,
                 "dedup_key": dedup_key_for(message, sender, source_key),
+                "priority": priority,
             }
 
             if delivery_kind == "issue" and issue_number is not None:
@@ -160,6 +174,83 @@ class QueueRepo(Repo):
                 # inventing a receipt for a row that is no longer waiting.
             raise RuntimeError("Queue changed repeatedly during enqueue; retry the message")
 
+    async def enqueue_subscription(
+        self,
+        *,
+        session_name: str,
+        header: str,
+        lines: list[str],
+        priority: int,
+        source: str = "",
+        operation_id: str | None = None,
+    ) -> EnqueueResult:
+        """Add subscribed events to the session's open normal batch, or open one.
+
+        One pending normal batch per session: later events append to it so
+        the agent reads one message, not a stream. A batch already leased for
+        delivery is left alone and a new one opens behind it; a batch with
+        ``SUBSCRIPTION_BATCH_LIMIT`` lines is full and the rest open the next,
+        so every event keeps its id and link. A high batch is always its own
+        row: its text may already be offered to a working agent as hook
+        context, and an offer never changes under the hook's feet (the hook
+        hands over every pending offer at once). Returns ``appended`` (only an
+        existing row grew) or ``inserted`` (the last row opened).
+        """
+        async with self._tx() as conn:
+            lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
+            rest = list(lines)
+            grown: EnqueueResult | None = None
+            if not priority:
+                existing = await conn.execute(
+                    text(
+                        "SELECT id, operation_id, message FROM message_queue "
+                        "WHERE session_name = :session AND delivery_kind = :kind "
+                        "AND priority = 0 AND status = 'pending' ORDER BY id DESC LIMIT 1" + lock
+                    ),
+                    {"session": session_name, "kind": SUBSCRIPTION_KIND},
+                )
+                row = existing.mappings().first()
+                if row is not None:
+                    message, rest = _fill_batch(row["message"], rest)
+                    if message != row["message"]:
+                        result = await conn.execute(
+                            text(
+                                "UPDATE message_queue SET message = :message "
+                                "WHERE id = :id AND status = 'pending'"
+                            ),
+                            {"id": row["id"], "message": message},
+                        )
+                        if result.rowcount:
+                            grown = EnqueueResult("appended", row["id"], row["operation_id"])
+                        else:
+                            rest = list(lines)  # leased meanwhile: open a new batch
+            if grown is not None and not rest:
+                return grown
+            while True:
+                message, rest = _fill_batch(header, rest)
+                params = {
+                    "operation_id": operation_id or uuid.uuid4().hex,
+                    "session_name": session_name,
+                    "message": message,
+                    "repo": "",
+                    "issue_number": None,
+                    "target_entity": session_name,
+                    "delivery_kind": SUBSCRIPTION_KIND,
+                    "source": source,
+                    "enqueued_at": now_iso(),
+                    "initial_status": "pending",
+                    "sender": "",
+                    "dedup_key": f"sub:{uuid.uuid4().hex}",
+                    "priority": priority,
+                }
+                result = await conn.execute(
+                    text(f"INSERT INTO message_queue {_INSERT_COLUMNS} RETURNING id"), params
+                )
+                inserted = EnqueueResult("inserted", result.scalar_one(), params["operation_id"])
+                if not rest:
+                    return inserted
+                operation_id = None
+
     async def pending_count(self, session_name: str) -> int:
         """How many messages are waiting for one session."""
         async with self._tx() as conn:
@@ -180,7 +271,8 @@ class QueueRepo(Repo):
             return [row._mapping["session_name"] for row in result.fetchall()]
 
     async def dequeue(self, session_name: str, limit: int = 10) -> list[dict]:
-        """Atomically claim pending messages for a session, oldest first."""
+        """Atomically claim pending messages for a session: high-priority
+        subscription batches first, then oldest first."""
         async with self._tx() as conn:
             now = now_iso()
             lock = "FOR UPDATE SKIP LOCKED" if conn.dialect.name == "postgresql" else ""
@@ -188,7 +280,7 @@ class QueueRepo(Repo):
                      WHERE id IN (
                          SELECT id FROM message_queue
                          WHERE session_name=:session AND status='pending'
-                         ORDER BY enqueued_at ASC LIMIT :lim
+                         ORDER BY priority DESC, enqueued_at ASC LIMIT :lim
                          {lock}
                      ) RETURNING *"""
             result = await conn.execute(
@@ -197,7 +289,7 @@ class QueueRepo(Repo):
             rows = [dict(row._mapping) for row in result.fetchall()]
             for row in rows:
                 await self._ensure_operation_id(conn, row)
-            rows.sort(key=lambda row: row["enqueued_at"])
+            rows.sort(key=lambda row: (-(row.get("priority") or 0), row["enqueued_at"]))
             return rows
 
     async def release(self, message_id: int) -> None:
@@ -283,6 +375,7 @@ class QueueRepo(Repo):
 
         Leased rows are not considered: ``expire_stale_leases`` returns them to
         ``pending`` long before this cutoff, so they expire on the next sweep.
+        Subscription batches never expire: they are facts, not conversation.
         """
         async with self._tx() as conn:
             now = now_iso()
@@ -290,6 +383,7 @@ class QueueRepo(Repo):
                 text(
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE status = 'pending' AND enqueued_at < :cutoff
+                         AND delivery_kind != 'subscription'
                          AND session_name NOT IN :protected
                          AND COALESCE(sender, '') NOT IN :protected
                        RETURNING *"""

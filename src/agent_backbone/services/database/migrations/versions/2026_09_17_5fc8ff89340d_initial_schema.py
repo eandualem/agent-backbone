@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 5027baa69b8d
+Revision ID: 5fc8ff89340d
 Revises:
-Create Date: 2026-09-12 15:10:28.634371
+Create Date: 2026-09-17 19:12:43.746353
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "5027baa69b8d"
+revision: str = "5fc8ff89340d"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -43,6 +43,22 @@ def upgrade() -> None:
         sa.Column("plan_title", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("session_name", name=op.f("pk_agent_states")),
     )
+    op.create_table(
+        "agent_subscriptions",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("agent_name", sa.Text(), nullable=False),
+        sa.Column("source", sa.Text(), nullable=False),
+        sa.Column("query", sa.Text(), nullable=False),
+        sa.Column("priority", sa.Text(), server_default="normal", nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_agent_subscriptions")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("agent_subscriptions", schema=None) as batch_op:
+        batch_op.create_index(
+            "uq_subscriptions_query", ["agent_name", "source", "query"], unique=True
+        )
+
     op.create_table(
         "agent_watches",
         sa.Column("agent_name", sa.Text(), nullable=False),
@@ -197,6 +213,7 @@ def upgrade() -> None:
         sa.Column("leased_at", sa.Text(), nullable=True),
         sa.Column("sender", sa.Text(), server_default="", nullable=False),
         sa.Column("dedup_key", sa.Text(), nullable=True),
+        sa.Column("priority", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_message_queue")),
     )
     with op.batch_alter_table("message_queue", schema=None) as batch_op:
@@ -448,6 +465,10 @@ def downgrade() -> None:
 
     op.drop_table("agents")
     op.drop_table("agent_watches")
+    with op.batch_alter_table("agent_subscriptions", schema=None) as batch_op:
+        batch_op.drop_index("uq_subscriptions_query")
+
+    op.drop_table("agent_subscriptions")
     op.drop_table("agent_states")
     op.drop_table("acknowledgments")
     # ### end Alembic commands ###

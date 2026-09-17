@@ -37,6 +37,7 @@ def _register_jobs(app: FastAPI):
     from agent_backbone.services.agents import rotate_action_log
     from agent_backbone.services.jobs import (
         GitHubPoller,
+        SourcesPoller,
         UpgradeWatch,
         delivery_retry,
         monitor_agents,
@@ -129,10 +130,28 @@ def _register_jobs(app: FastAPI):
         elif config.github_intake == "webhook" and config.github.backfill_on_start:
             scheduler.add("github-backfill", 0, poller.run, run_immediately=True, once=True)
 
+    sources = getattr(state, "sources", None)
+    sources_poller = SourcesPoller(lambda: state.config, state.db, sources) if sources else None
+    if sources_poller is not None and sources.enabled:
+        scheduler.add(
+            "sources-poll",
+            config.sources.poll_interval_seconds,
+            sources_poller.run,
+            run_immediately=True,
+        )
+
     def reconcile_jobs():
         current = state.config
         scheduler.configure("agent-monitor", current.timing.monitor_interval_seconds, _monitor)
         scheduler.configure("delivery-retry", current.timing.retry_interval_seconds, _retry)
+        if sources_poller is not None:
+            scheduler.configure(
+                "sources-poll",
+                current.sources.poll_interval_seconds,
+                sources_poller.run,
+                enabled=bool(sources.enabled),
+                run_immediately=True,
+            )
         if poller is not None:
             scheduler.configure(
                 "github-poll",
@@ -155,6 +174,7 @@ async def lifespan(app: FastAPI):
     from agent_backbone.services.database import BackboneDB
     from agent_backbone.services.github import GitHubClient
     from agent_backbone.services.integrations import build_integrations
+    from agent_backbone.services.sources import build_sources
     from agent_backbone.services.swarm import SwarmError, teardown_for_issue
 
     boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
@@ -208,6 +228,7 @@ async def lifespan(app: FastAPI):
     app.state.feed = SessionFeed(lambda: app.state.config, getattr(app.state, "sio", None))
     app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
     lifecycle.register("integrations", app.state.integrations)
+    app.state.sources = build_sources(lambda: app.state.config)
 
     # A closed issue ends the swarm that was working it (PR merged -> issue
     # closed via "Closes #N" -> teardown). Handed to ingest as a hook so
@@ -232,7 +253,8 @@ async def lifespan(app: FastAPI):
     try:
         await lifecycle.start_all()
         log.info(
-            "agent-backbone %s on http://%s:%d — data %s, %d agent(s), github=%s, integrations=%s",
+            "agent-backbone %s on http://%s:%d — data %s, %d agent(s), github=%s, "
+            "integrations=%s, sources=%s",
             API_VERSION,
             config.backbone.host,
             config.backbone.port,
@@ -240,6 +262,7 @@ async def lifespan(app: FastAPI):
             len(config.agents),
             config.github_intake,
             ", ".join(i.name for i in app.state.integrations.enabled) or "none",
+            ", ".join(s.name for s in app.state.sources.enabled) or "none",
         )
         yield
     finally:

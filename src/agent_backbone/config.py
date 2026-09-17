@@ -50,6 +50,10 @@ RUNTIME_METADATA = tuple(
 )
 RUNTIMES: tuple[str, ...] = tuple(entry["id"] for entry in RUNTIME_METADATA)
 
+SOURCES: tuple[str, ...] = ("gmail",)
+"""Inbound event sources agents can subscribe to (``services/sources``)."""
+SUBSCRIPTION_PRIORITIES: tuple[str, ...] = ("normal", "high")
+
 
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "BACKBONE_API_KEY",
@@ -58,6 +62,8 @@ SECRET_ENV_KEYS: tuple[str, ...] = (
     "GITHUB_APP_ID",
     "GITHUB_APP_PRIVATE_KEY_PATH",
     "TELEGRAM_TOKEN",
+    "GMAIL_ADDRESS",
+    "GMAIL_APP_PASSWORD",
     "BACKBONE_DATABASE_URL",  # a PostgreSQL URL carries the database password
 )
 """Secrets the backbone reads. Listed in `backbone secrets list`, and stripped
@@ -91,6 +97,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "github.poll_interval_seconds": 60,
     "github.backfill_on_start": True,
     "github.backfill_lookback_hours": 24,
+    "sources.poll_interval_seconds": 60,
     "routing.ignore_targets": [],
     "routing.notification_dedup_seconds": 10,
     "timing.stale_threshold_seconds": 300,
@@ -167,6 +174,9 @@ SETTINGS_HELP: dict[str, str] = {
     "github.poll_interval_seconds": "Poll frequency when intake resolves to poll",
     "github.backfill_on_start": "Fetch events missed while the backbone was down",
     "github.backfill_lookback_hours": "Lookback when a repository has no durable poll cursor",
+    "sources.poll_interval_seconds": (
+        "How often subscribed sources (Gmail) are asked for new events matching subscriptions"
+    ),
     "routing.ignore_targets": "for:/from: values that are people, not agents (JSON list)",
     "routing.notification_dedup_seconds": (
         "Do not announce the same issue to the same agent twice within this window"
@@ -226,6 +236,7 @@ _POSITIVE_SETTINGS = frozenset(
     {
         "github.poll_interval_seconds",
         "github.review_poll_interval_seconds",
+        "sources.poll_interval_seconds",
         "timing.monitor_interval_seconds",
         "timing.retry_interval_seconds",
     }
@@ -371,6 +382,27 @@ def validate_setting(key: str, value: Any) -> Any:
 
 
 @dataclass(frozen=True)
+class Subscription:
+    """One thing an agent wants to hear about from an inbound source.
+
+    ``filter`` is written in the source's own query language (Gmail search
+    syntax for ``gmail``) and evaluated by the source, never by the backbone.
+    ``priority`` is ``normal`` (delivered when the agent is ready, batched
+    with anything else that arrived meanwhile) or ``high`` (offered to a
+    working agent at once through its runtime's hook, or first when ready).
+    """
+
+    id: int
+    source: str
+    filter: str
+    priority: str = "normal"
+
+    @property
+    def high(self) -> bool:
+        return self.priority == "high"
+
+
+@dataclass(frozen=True)
 class AgentSpec:
     """A known agent.
 
@@ -386,6 +418,8 @@ class AgentSpec:
     model: str | None = None
     repo: str = ""
     watches: tuple[str, ...] = ()
+    subscriptions: tuple[Subscription, ...] = ()
+    """Inbound events the agent asked for (``backbone agent subscribe``)."""
     tags: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     description: str = ""
@@ -566,6 +600,13 @@ class GitHubConfig:
 
 
 @dataclass(frozen=True)
+class SourcesConfig:
+    """``sources.*`` — inbound event sources agents subscribe to (non-secret)."""
+
+    poll_interval_seconds: int = 60
+
+
+@dataclass(frozen=True)
 class RoutingConfig:
     """``routing.*``"""
 
@@ -655,6 +696,8 @@ class BackboneConfig:
     github_app_id: int | None = None
     github_app_private_key_path: str = ""
     telegram_token: str = ""
+    gmail_address: str = ""
+    gmail_app_password: str = ""
 
     backbone: BackboneSection = field(default_factory=BackboneSection)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
@@ -662,6 +705,7 @@ class BackboneConfig:
     launch: LaunchConfig = field(default_factory=LaunchConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     github: GitHubConfig = field(default_factory=GitHubConfig)
+    sources: SourcesConfig = field(default_factory=SourcesConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     timing: TimingConfig = field(default_factory=TimingConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
@@ -727,6 +771,11 @@ class BackboneConfig:
     @property
     def telegram_ready(self) -> bool:
         return bool(self.telegram_token)
+
+    @property
+    def gmail_ready(self) -> bool:
+        """Whether the Gmail source has its read-only credential."""
+        return bool(self.gmail_address and self.gmail_app_password)
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +874,8 @@ def build_config(
         github_app_id=_opt_int(env.get("GITHUB_APP_ID", "")),
         github_app_private_key_path=env.get("GITHUB_APP_PRIVATE_KEY_PATH", ""),
         telegram_token=env.get("TELEGRAM_TOKEN", ""),
+        gmail_address=env.get("GMAIL_ADDRESS", ""),
+        gmail_app_password=env.get("GMAIL_APP_PASSWORD", ""),
         backbone=BackboneSection(
             data_dir=str(data_dir),
             host=s["backbone.host"],
@@ -852,6 +903,7 @@ def build_config(
             backfill_on_start=s["github.backfill_on_start"],
             backfill_lookback_hours=s["github.backfill_lookback_hours"],
         ),
+        sources=SourcesConfig(poll_interval_seconds=s["sources.poll_interval_seconds"]),
         routing=RoutingConfig(
             ignore_targets=frozenset(s["routing.ignore_targets"]),
             notification_dedup_seconds=s["routing.notification_dedup_seconds"],
@@ -910,6 +962,15 @@ def agents_from_rows(rows: list[dict]) -> AgentsConfig:
             model=row.get("model") or None,
             repo=row.get("repo") or "",
             watches=tuple(row.get("watches") or ()),
+            subscriptions=tuple(
+                Subscription(
+                    id=int(sub["id"]),
+                    source=str(sub["source"]),
+                    filter=str(sub["filter"]),
+                    priority=str(sub.get("priority") or "normal"),
+                )
+                for sub in row.get("subscriptions") or ()
+            ),
             tags=tuple(row.get("tags") or ()),
             env=dict(row.get("env") or {}),
             description=row.get("description") or "",

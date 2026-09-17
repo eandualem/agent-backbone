@@ -2,8 +2,10 @@
 
 An **integration** is a channel where people meet their agents outside the
 terminal. Telegram is the one that ships today; the contract is written so
-that Slack, Discord, e-mail or a web inbox plug in the same way, and nothing
-else in the backbone learns a vendor name.
+that Slack, Discord or a web inbox plug in the same way, and nothing
+else in the backbone learns a vendor name. Events that arrive from outside
+without a person behind them — mail, and GitHub as its sibling — are
+[sources](sources.md), a separate group with its own contract.
 
 ## What every integration does
 

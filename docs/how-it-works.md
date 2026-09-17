@@ -259,7 +259,9 @@ sequenceDiagram
   box, including an envelope still buffered in the prompt. If the runtime queued it for its next turn (Claude does), that
   counts as delivered.
 - **Busy is never bypassed.** `priority: true` (and issues labelled
-  `blocking`) only get through `human_typing` and `settling`.
+  `blocking`) only get through `human_typing` and `settling`. The one thing
+  that reaches a *working* agent is a high-priority [subscription](sources.md)
+  batch, and it does so as hook context, never as a paste.
 - **Comments**, including those on the current issue, wait while the agent is
   starting, busy, blocked, or waiting for a human. They are queued and delivered
   when the agent is ready; priority does not bypass these conditions.
@@ -362,6 +364,19 @@ anchored to the reviewed commit. See [review lifecycle](github.md#review-lifecyc
 ### Pull requests
 
 Opened in R: owners and watchers of R are told (informational).
+
+### Subscribed sources (Gmail)
+
+An agent's subscriptions name a [source](sources.md), a filter in that
+source's own query language and a priority. Every
+`sources.poll_interval_seconds` the `sources-poll` job runs each distinct
+filter as one Gmail search bounded to the poll window, fetches the headers of
+what matched, stores each message in `events` (dedup) and delivers one
+`subscription` batch per agent and priority through `safe_deliver`: a
+reference per message — id, sender, subject, time, link — never the body.
+Normal batches grow in the queue while the agent is busy and never expire;
+a high batch for a working Claude Code or Codex agent is offered through the
+runtime's PostToolUse hook and arrives on the agent's next tool call.
 
 ## 5. Background monitoring
 

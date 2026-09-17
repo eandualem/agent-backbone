@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent_backbone.models import IssueEvent
 from agent_backbone.services.github import review_started_event, review_status_event
+from agent_backbone.services.jobs._cursor import OVERLAP, iso, parse, saved_cursor
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import IssueClosedHook, dispatch_event
 
@@ -35,19 +36,6 @@ if TYPE_CHECKING:
     from agent_backbone.services.github import GitHubClient
 
 log = logging.getLogger(__name__)
-
-_OVERLAP = timedelta(minutes=2)
-
-
-def _iso(dt: datetime) -> str:
-    return dt.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _parse(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        raise ValueError("poll timestamps must include a timezone")
-    return parsed.astimezone(UTC)
 
 
 def issue_event_from_api(
@@ -121,21 +109,14 @@ class GitHubPoller:
     async def _since_for(self, repo: str) -> str:
         if repo in self._since:
             return self._since[repo]
-        saved = await self._db.events.poll_cursor(repo)
         now = datetime.now(UTC)
-        if saved is not None:
-            try:
-                boundary = _parse(saved)
-                if boundary > now:
-                    raise ValueError("poll cursor is in the future")
-                since = _iso(boundary)
-            except (TypeError, AttributeError, ValueError, OverflowError):
-                log.warning("Invalid poll cursor for %s; resetting to configured lookback", repo)
-            else:
-                self._since[repo] = since
-                return since
+        boundary = await saved_cursor(self._db, repo, now, reset="resetting to configured lookback")
+        if boundary is not None:
+            since = iso(boundary)
+            self._since[repo] = since
+            return since
         lookback = timedelta(hours=self._config.github.backfill_lookback_hours)
-        since = _iso(now - lookback)
+        since = iso(now - lookback)
         # Receipt times from partial dispatch are not a safe restart boundary.
         # Persist the initial window before any GitHub request or event write.
         await self._db.events.save_poll_cursor(repo, since)
@@ -186,13 +167,13 @@ class GitHubPoller:
                     due = True
                 else:
                     due = (
-                        poll_started - _parse(saved)
+                        poll_started - parse(saved)
                     ).total_seconds() >= config.github.review_poll_interval_seconds
                 if due:
                     events.extend(
-                        await self._review_events(repo, _iso(_parse(saved) - _OVERLAP), config)
+                        await self._review_events(repo, iso(parse(saved) - OVERLAP), config)
                     )
-                    review_boundary = _iso(poll_started)
+                    review_boundary = iso(poll_started)
             except Exception:
                 log.exception("Review poll failed for %s (issues/comments continue)", repo)
                 had_errors = True
@@ -246,8 +227,8 @@ class GitHubPoller:
                 await self._db.events.save_poll_cursor(review_cursor_key, review_boundary)
             boundary = max(
                 since,
-                _iso(poll_started - _OVERLAP),
-                _iso(_parse(newest) - _OVERLAP),
+                iso(poll_started - OVERLAP),
+                iso(parse(newest) - OVERLAP),
             )
             if boundary > since:
                 # Commit first: a failed write leaves both caches at the

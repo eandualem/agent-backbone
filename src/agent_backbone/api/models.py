@@ -82,6 +82,16 @@ class WatchRequest(BaseModel):
     repo: str
 
 
+class SubscribeRequest(BaseModel):
+    source: str = Field(min_length=1, max_length=40)
+    filter: str = Field(min_length=1, max_length=500)
+    priority: str = "normal"
+
+
+class UnsubscribeRequest(BaseModel):
+    id: int
+
+
 class DeliveryRecord(BaseModel):
     """A single delivery attempt record."""
 
@@ -115,6 +125,8 @@ class AgentInspectResponse(BaseModel):
     )
     repo: str = ""
     watches: list[str] = Field(default_factory=list)
+    subscriptions: list[dict] = Field(default_factory=list)
+    """``{id, source, filter, priority}`` per subscription (``backbone agent subscribe``)."""
     state: str = "unknown"
     reason: str | None = None
     current_issue: int | None = None
@@ -426,6 +438,8 @@ class ServiceHealth(BaseModel):
     scheduler: str = "unknown"
     integrations: dict[str, str] = Field(default_factory=dict)
     """Per integration (``telegram``, …): ``up`` | ``down`` | ``disabled``."""
+    sources: dict[str, str] = Field(default_factory=dict)
+    """Per subscribed source (``gmail``, …): ``enabled`` | ``disabled``."""
     github: str = "disabled"
     jobs: list[JobStatusResponse] = Field(default_factory=list)
 

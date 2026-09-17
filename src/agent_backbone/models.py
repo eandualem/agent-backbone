@@ -261,6 +261,11 @@ class DeliveryOutcome(StrEnum):
     """A queued message dropped after ``timing.queue_expiry_minutes`` — terminal, never retried."""
 
 
+SUBSCRIPTION_KIND = "subscription"
+"""The delivery kind of a batch of subscribed source events (``docs/sources.md``):
+one message per agent and priority, grown while the agent is not ready."""
+
+
 SUCCESS_OUTCOMES = frozenset({DeliveryOutcome.DELIVERED, DeliveryOutcome.RETRIED})
 """The message reached the agent."""
 BLOCKED_OUTCOMES = frozenset(

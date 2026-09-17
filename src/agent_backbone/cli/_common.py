@@ -166,6 +166,12 @@ async def _read_config() -> BackboneConfig:
         "SELECT * FROM agents ORDER BY name",
         "SELECT agent_name, repo FROM agent_watches ORDER BY agent_name, repo",
     )
+    # A database from before subscriptions existed has no such table; it is
+    # still inspectable (the running backbone creates the table on its start).
+    optional = (
+        "SELECT id, agent_name, source, query, priority FROM agent_subscriptions "
+        "ORDER BY agent_name, id"
+    )
     if url.get_backend_name() == "sqlite":
         if not url.database or url.database == ":memory:":
             return boot
@@ -178,7 +184,12 @@ async def _read_config() -> BackboneConfig:
             conn.row_factory = sqlite3.Row
             try:
                 conn.execute("BEGIN")
-                return [[dict(row) for row in conn.execute(query)] for query in queries]
+                found = [[dict(row) for row in conn.execute(query)] for query in queries]
+                try:
+                    found.append([dict(row) for row in conn.execute(optional)])
+                except sqlite3.OperationalError:
+                    found.append([])
+                return found
             finally:
                 conn.close()
 
@@ -188,6 +199,10 @@ async def _read_config() -> BackboneConfig:
         try:
             async with engine.connect() as conn:
                 rows = [(await conn.execute(text(query))).mappings().all() for query in queries]
+                try:
+                    rows.append((await conn.execute(text(optional))).mappings().all())
+                except Exception:
+                    rows.append([])
         finally:
             await engine.dispose()
     settings = {row["key"]: json.loads(row["value"]) for row in rows[0]}
@@ -198,6 +213,16 @@ async def _read_config() -> BackboneConfig:
         agent["env"] = json.loads(agent.get("env") or "{}")
         agent["watches"] = [
             watch["repo"] for watch in rows[2] if watch["agent_name"] == agent["name"]
+        ]
+        agent["subscriptions"] = [
+            {
+                "id": sub["id"],
+                "source": sub["source"],
+                "filter": sub["query"],
+                "priority": sub["priority"],
+            }
+            for sub in rows[3]
+            if sub["agent_name"] == agent["name"]
         ]
         agents.append(agent)
     return build_config(boot.data_dir, settings=settings, agents=agents_from_rows(agents))

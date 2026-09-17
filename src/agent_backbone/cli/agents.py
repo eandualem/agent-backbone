@@ -20,6 +20,10 @@ from agent_backbone.config import (
 log = logging.getLogger(__name__)
 
 
+def _subscription_line(sub: dict) -> str:
+    return f"#{sub['id']} {sub['source']} {sub['priority']}: {sub['filter']}"
+
+
 def _print_inspection(data: dict) -> None:
     note(
         f"{data['name']}: {'online' if data['online'] else 'offline'}"
@@ -33,6 +37,10 @@ def _print_inspection(data: dict) -> None:
             ("Directory", data.get("dir")),
             ("Repository", data.get("repo")),
             ("Watches", ", ".join(data.get("watches", [])) or "none"),
+            (
+                "Subscriptions",
+                "\n".join(_subscription_line(s) for s in data.get("subscriptions", [])) or "none",
+            ),
             ("CLI", data.get("runtime")),
             ("Configured model", data.get("model") or "default"),
         ],
@@ -363,7 +371,7 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"error: {result[1] if result else 'API unreachable'}")
             return 1
         # Offline inspection: state file + tmux only.
-        from agent_backbone.services.agents import agent_state
+        from agent_backbone.services.agents import agent_state, subscription_views
         from agent_backbone.services.terminal import session_exists
 
         config = await _common.read_config()
@@ -388,6 +396,7 @@ async def _agent(args: argparse.Namespace) -> int:
                     "runtime": snapshot.runtime or (spec.runtime if spec else None),
                     "repo": spec.repo if spec else "",
                     "watches": list(spec.watches) if spec else [],
+                    "subscriptions": [asdict(sub) for sub in (spec.subscriptions if spec else ())],
                 }
             )
             return 0
@@ -399,6 +408,13 @@ async def _agent(args: argparse.Namespace) -> int:
                 ("Tags", (", ".join(spec.tags) if spec else "") or "none"),
                 ("Directory", str(spec.path) if spec else "-"),
                 ("Repository", spec.repo if spec else "-"),
+                (
+                    "Subscriptions",
+                    "\n".join(
+                        _subscription_line(view.model_dump()) for view in subscription_views(spec)
+                    )
+                    or "none",
+                ),
                 ("CLI", snapshot.runtime or (spec.runtime if spec else "unknown")),
                 ("Configured model", (spec.model if spec else None) or "default"),
             ],
@@ -473,6 +489,65 @@ async def _agent(args: argparse.Namespace) -> int:
                         print(f"unknown agent '{name}'")
                         return 1
             print(f"{name}: {'now watching' if sub == 'watch' else 'stopped watching'} {repo}")
+        return 0
+
+    if sub in ("subscribe", "unsubscribe"):
+        # Inside an agent session the name defaults to the agent itself; a
+        # name is recognised only when more arguments than the verb needs follow.
+        targets = list(args.targets)
+        needed = 2 if sub == "subscribe" else 1
+        name = targets.pop(0) if len(targets) > needed else os.environ.get("BACKBONE_AGENT", "")
+        name = name.strip()
+        if not name or len(targets) != needed:
+            usage = "[NAME] SOURCE FILTER [--priority high]" if sub == "subscribe" else "[NAME] ID"
+            print(f"usage: backbone agent {sub} {usage}")
+            print("(without NAME, $BACKBONE_AGENT must be set — it is inside agent sessions)")
+            return 1
+        if sub == "subscribe":
+            body: dict[str, Any] = {
+                "source": targets[0],
+                "filter": targets[1],
+                "priority": args.priority,
+            }
+        else:
+            try:
+                body = {"id": int(targets[0])}
+            except ValueError:
+                print("ID must be a subscription number (see backbone agent inspect NAME)")
+                return 1
+        if api_up:
+            result = await _common.api(boot, "POST", f"/api/agents/{name}/{sub}", json_body=body)
+            if not result or result[0] != 200:
+                print(f"error: {result[1] if result else 'API unreachable'}")
+                return 1
+            spec_view = result[1]
+        else:
+            async with _common.Direct(boot) as direct:
+                try:
+                    if sub == "subscribe":
+                        spec = await direct.store.subscribe(
+                            name, body["source"], body["filter"], body["priority"]
+                        )
+                    else:
+                        if not await direct.store.unsubscribe(name, body["id"]):
+                            print(f"no subscription {body['id']} on {name}")
+                            return 1
+                        spec = direct.store.agents.get(name)
+                except KeyError:
+                    print(f"unknown agent '{name}'")
+                    return 1
+                except ValueError as exc:
+                    print(f"error: {exc}")
+                    return 1
+            from agent_backbone.services.agents import subscription_views
+
+            spec_view = {"subscriptions": [v.model_dump() for v in subscription_views(spec)]}
+        if sub == "subscribe":
+            print(f"{name}: subscribed to {body['source']} ({args.priority}): {body['filter']}")
+        else:
+            print(f"{name}: subscription {body['id']} removed")
+        for s in spec_view.get("subscriptions", []):
+            print(f"  {_subscription_line(s)}")
         return 0
 
     if sub == "forget":

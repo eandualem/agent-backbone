@@ -97,6 +97,7 @@ class ClaudeCode(Runtime):
         ("PostToolUse", ""),
     )
     hook_timeout = 10  # seconds
+    hook_context = True  # PostToolUse additionalContext
 
     prompt_prefixes = ("❯",)
     prompt_suffixes = ("$", "%")

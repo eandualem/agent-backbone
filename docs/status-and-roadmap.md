@@ -23,6 +23,11 @@ Honest inventory of what works, what is missing, and what is next. Updated
   message; see [delivery receipts](github.md#delivery-receipts-and-retries).
 - Database-only configuration: settings with defaults, edited live with
   `backbone config`; secrets only in `.env`.
+- Event subscriptions ([sources](sources.md)): agents subscribe to Gmail
+  with Gmail search filters and a priority; normal events batch in the queue
+  until the agent is ready, high events reach a working Claude Code or Codex
+  agent through its hook context. Unit-tested end to end with the IMAP
+  client mocked; the live mailbox run is recorded on issue #233.
 - GitHub per repository: owner / `for:` / `from:` / watch routing,
   one-issue-at-a-time with acknowledgement, close-then-next, sub-issue
   unblock, poll intake with a durable replay cursor, webhook intake

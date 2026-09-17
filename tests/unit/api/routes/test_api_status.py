@@ -106,6 +106,7 @@ class TestGetServiceHealth:
         data = resp.json()
         assert data["api"] == "up"
         assert data["database"] == "up"
+        assert data["sources"] == {"gmail": "disabled"}
         assert data["scheduler"] in ("up", "degraded")
         assert [job["name"] for job in data["jobs"]] == ["agent-monitor"]
         assert data["integrations"] == {"telegram": "disabled"}

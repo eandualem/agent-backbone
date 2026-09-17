@@ -237,6 +237,10 @@ class Runtime:
     source of state."""
     hook_events: hooks.Events = ()
     """``(event, matcher)`` pairs the hook listens to, in the CLI's own names."""
+    hook_context: bool = False
+    """The hook can add context to the model mid-turn (``hookSpecificOutput.
+    additionalContext``): how a high-priority subscription batch reaches a
+    working agent without a paste. False: it waits for the prompt."""
     hook_timeout: int = 10
     """Per-hook timeout in the unit the CLI uses (seconds for Claude Code and
     Codex, milliseconds for Gemini CLI)."""

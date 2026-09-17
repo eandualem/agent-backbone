@@ -223,6 +223,14 @@ returns 409. External GitHub labels and scripts are not changed. See the
 
 Watch / stop watching a repository; forget a stopped agent (409 if running).
 
+### `POST /api/agents/{name}/subscribe` `{"source": "gmail", "filter": "from:upwork.com", "priority": "high"}` · `/unsubscribe` `{"id": 3}`
+
+Subscribe to inbound events from a [source](sources.md), matched by a filter in
+the source's own query language, at `normal` (default) or `high` priority; the
+same filter again only changes its priority. Both return the agent's
+configuration view with `subscriptions: [{id, source, filter, priority}]`;
+400 for an unknown source or priority, 404 for an unknown agent or id.
+
 ### `GET /api/runtimes`, `GET /api/sessions`, `GET /api/sessions/{name}/terminal?lines=50`
 
 Supported runtimes with availability; raw tmux session names; a one-shot
@@ -434,7 +442,7 @@ reply's `feedback` field is its outcome.
 |---|---|
 | `GET /health` (no auth) | Per-component health |
 | `GET /api/status` | Digest: sessions, agents with state, GitHub intake mode, tracked repositories (owners, watchers, last event), pending issues, failed deliveries |
-| `GET /api/status/services` | api/database/scheduler/github, `integrations: {telegram: up \| down \| disabled}`, plus per-job run counts and last errors |
+| `GET /api/status/services` | api/database/scheduler/github, `integrations: {telegram: up \| down \| disabled}`, `sources: {gmail: enabled \| disabled}`, plus per-job run counts and last errors |
 
 ## Integrations
 

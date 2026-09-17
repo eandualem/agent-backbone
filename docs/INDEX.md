@@ -27,6 +27,7 @@ available as `backbone docs PAGE` after installation (for example,
 - [GitHub](github.md) — issue routing and review notifications.
 - [GitHub App setup](github-app-setup.md) — configure webhook intake.
 - [Telegram](telegram.md) — talk to agents and read updates from your phone.
+- [Sources and subscriptions](sources.md) — agents subscribe to inbound events (Gmail) with filters and priority.
 - [API reference](api.md) — build scripts and dashboards.
 - [Integrations](integrations.md) — add another communication channel.
 

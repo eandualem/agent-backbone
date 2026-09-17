@@ -70,6 +70,7 @@ __all__ = [
     "skills_preview",
     "start_agent",
     "stop_agent",
+    "subscription_views",
     "usage_view",
     "wait_until_ready",
     "write_starting_marker",
@@ -82,5 +83,6 @@ from agent_backbone.services.agents.queries import (
     build_enriched_agent,
     build_session_snapshot,
     listable_sessions,
+    subscription_views,
 )
 from agent_backbone.services.agents.usage import collect_usage, usage_view
