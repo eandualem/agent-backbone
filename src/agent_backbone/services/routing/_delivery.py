@@ -274,6 +274,7 @@ async def _enqueue(
                 source_key=source_key,
                 operation_id=operation_id,
                 **({"uncertain": True} if uncertain else {}),
+                **({"priority": 1} if priority else {}),
             )
     except Exception as exc:
         log.error(
@@ -346,50 +347,6 @@ async def safe_deliver(
                 held["status"] == "uncertain",
                 held["operation_id"],
                 queue_id=held["id"],
-            )
-
-    if kind == SUBSCRIPTION_KIND and queue_id is not None and db is not None:
-        # A drained high batch may already have reached the working agent as
-        # hook context. Settle that here, under the session lock that also
-        # serializes the offer, so the same text is never pasted as well.
-        claim = await asyncio.to_thread(
-            claim_context, config.state_dir, session_name, str(queue_id)
-        )
-        if claim == "taken":
-            await asyncio.to_thread(clear_context, config.state_dir, session_name, str(queue_id))
-            delivery_id = await _record(
-                db,
-                claim_id=None,
-                repo=repo,
-                issue_number=None,
-                target_entity=target_entity,
-                session_name=session_name,
-                outcome=DeliveryOutcome.DELIVERED,
-                source="hook-context",
-                kind=kind,
-                preview=preview,
-                operation_id=operation_id,
-            )
-            await db.diagnostics.record(
-                category="delivery",
-                code="submitted",
-                severity="info",
-                operation_id=operation_id,
-                agent_name=session_name,
-                source="hook-context",
-                runtime="",
-                repo=repo,
-                issue_number=None,
-                delivery_id=delivery_id,
-                queue_id=queue_id,
-                event_id=event_id,
-                details={"delivery_kind": kind, "priority": priority, "requeue": requeue},
-            )
-            return DeliveryReport(
-                DeliveryOutcome.DELIVERED,
-                operation_id=operation_id,
-                delivery_id=delivery_id,
-                queue_id=queue_id,
             )
 
     # 1. Issue queue gate
@@ -620,6 +577,51 @@ async def safe_deliver(
         # A previous paste may still occupy the input box. Hold new messages
         # too; the cooperative inbox is the safe way to resolve that ambiguity.
         return await finish(DeliveryOutcome.AWAITING_ACK, queue=True)
+
+    if kind == SUBSCRIPTION_KIND and queue_id is not None and db is not None:
+        # A drained high batch may already have reached the working agent as
+        # hook context. Settle that right before pasting, under the session
+        # lock that also serializes the offer, so the same text is never
+        # pasted as well — and an offer outlives a drain that could not paste.
+        claim = await asyncio.to_thread(
+            claim_context, config.state_dir, session_name, str(queue_id)
+        )
+        if claim == "taken":
+            await asyncio.to_thread(clear_context, config.state_dir, session_name, str(queue_id))
+            delivery_id = await _record(
+                db,
+                claim_id=None,
+                repo=repo,
+                issue_number=None,
+                target_entity=target_entity,
+                session_name=session_name,
+                outcome=DeliveryOutcome.DELIVERED,
+                source="hook-context",
+                kind=kind,
+                preview=preview,
+                operation_id=operation_id,
+            )
+            await db.diagnostics.record(
+                category="delivery",
+                code="submitted",
+                severity="info",
+                operation_id=operation_id,
+                agent_name=session_name,
+                source="hook-context",
+                runtime="",
+                repo=repo,
+                issue_number=None,
+                delivery_id=delivery_id,
+                queue_id=queue_id,
+                event_id=event_id,
+                details={"delivery_kind": kind, "priority": priority, "requeue": requeue},
+            )
+            return DeliveryReport(
+                DeliveryOutcome.DELIVERED,
+                operation_id=operation_id,
+                delivery_id=delivery_id,
+                queue_id=queue_id,
+            )
 
     # 4. Paste + submit
     if await submit():

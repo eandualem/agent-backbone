@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from agent_backbone.services.jobs._cursor import OVERLAP, iso, saved_cursor
 from agent_backbone.services.jobs.diagnostics import observe_job
-from agent_backbone.services.jobs.github_poll import _iso, _parse
 from agent_backbone.services.routing import dispatch_source_events
 
 if TYPE_CHECKING:
@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 SOURCE = "sources-poll"
-_OVERLAP = timedelta(minutes=2)
 
 
 def subscription_filters(config: BackboneConfig, source: str) -> list[str]:
@@ -59,36 +58,34 @@ class SourcesPoller:
             if not filters:
                 continue
             try:
-                await self._poll_source(source, filters, config, summary)
+                handed = await self._poll_source(source, filters, config, summary)
             except Exception as exc:
                 log.exception("Source poll failed for %s (non-fatal)", source.name)
                 await observe_job(
                     self._db, source=SOURCE, stage="source", error_type=type(exc).__name__
                 )
             else:
-                await observe_job(self._db, source=SOURCE, stage="source")
+                await observe_job(
+                    self._db,
+                    source=SOURCE,
+                    stage="source",
+                    error_type=None if handed else "HandoffFailed",
+                )
         if summary:
             log.info("Sources poll: %s", summary)
         return summary
 
-    async def _poll_source(self, source, filters, config, summary) -> None:
+    async def _poll_source(self, source, filters, config, summary) -> bool:
+        """Poll one source and dispatch; False when a recipient was not handed
+        its events (the cursor then stays for the next poll to hand them back)."""
         key = f"source:{source.name}"
         poll_started = datetime.now(UTC)
-        saved = await self._db.events.poll_cursor(key)
-        since = None
-        if saved is not None:
-            try:
-                since = _parse(saved)
-                if since > poll_started:
-                    raise ValueError("source cursor is in the future")
-            except (TypeError, AttributeError, ValueError, OverflowError):
-                log.warning("Invalid source cursor for %s; starting now", source.name)
-                since = None
+        since = await saved_cursor(self._db, key, poll_started, reset="starting now")
         if since is None:
             since = poll_started
             # Persist before the first fetch: a crash mid-batch replays this window.
-            await self._db.events.save_poll_cursor(key, _iso(since))
-        events = await source.poll(filters, since - _OVERLAP)
+            await self._db.events.save_poll_cursor(key, iso(since))
+        events = await source.poll(filters, since - OVERLAP)
         outcome = await dispatch_source_events(events, config, self._db)
         for name, count in outcome.items():
             summary[name] = summary.get(name, 0) + count
@@ -96,5 +93,6 @@ class SourcesPoller:
             # Unprocessed events are handed back by the next poll of the same
             # window; the events table drops what already went through.
             log.warning("Source poll for %s kept its cursor: %s", source.name, outcome)
-            return
-        await self._db.events.save_poll_cursor(key, _iso(poll_started))
+            return False
+        await self._db.events.save_poll_cursor(key, iso(poll_started))
+        return True

@@ -126,12 +126,22 @@ class GmailSource(Source):
             client.login(config.gmail_address, config.gmail_app_password)
             client.select(self._all_mail(client), readonly=True)
             found: dict[str, tuple[datetime, str, str, set[str]]] = {}
+            failed = 0
             for filter_text in filters:
-                for msgid, received_at, sender, subject in self._search(client, filter_text, since):
+                try:
+                    matches = self._search(client, filter_text, since)
+                except Exception as exc:
+                    # One agent's unusable filter must not starve the others.
+                    failed += 1
+                    log.warning("Gmail search failed for filter %r: %s", filter_text, exc)
+                    continue
+                for msgid, received_at, sender, subject in matches:
                     if received_at < since:
                         continue  # the search window is a hint; the cursor is the rule
                     entry = found.setdefault(msgid, (received_at, sender, subject, set()))
                     entry[3].add(filter_text)
+            if failed and failed == len(filters):
+                raise RuntimeError("every Gmail search failed")
         finally:
             try:
                 client.logout()

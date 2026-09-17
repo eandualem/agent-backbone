@@ -58,8 +58,10 @@ matched message is stored in the `events` table (`source=gmail`, delivery id
 `gmail:<message id>`), which is the activity feed and the dedup record: the
 overlap never delivers a message twice. An event is marked processed only when
 every matched agent holds it (delivered or stored in the queue); otherwise the
-cursor stays and the next poll hands it back. Every match in the window is
-fetched, in chunks; each IMAP operation has a 30-second timeout.
+agents that do hold it are noted, the cursor stays, and the next poll hands the
+event back for the others only. Every match in the window is fetched, in
+chunks; each IMAP operation has a 30-second timeout, and one agent's filter
+that Gmail rejects is skipped (logged) rather than starving the rest.
 
 ## What the agent receives
 
@@ -83,7 +85,8 @@ the highest of their priorities.
 **Normal** waits for the agent through the ordinary queue. While it waits,
 later normal events for that agent **append to the same queue row**, so an
 agent that was busy for an hour reads one message, not a stream. A batch
-lists at most 25 items and then counts the rest. Subscription batches are
+lists at most 25 items; further items open the next batch, so every item
+keeps its id and link. Subscription batches are
 **never expired** by `timing.queue_expiry_minutes`: they are facts, not
 conversation, and are retired only when delivered.
 

@@ -132,11 +132,20 @@ class TestDispatch:
         rows = {row["delivery_id"]: row for row in await db.events.query(limit=10)}
         assert rows["gmail:a1"]["processed_at"] is not None
         assert rows["gmail:l1"]["processed_at"] is None
-        # The next poll hands the unprocessed event back instead of deduping it.
-        assert (
-            await db.events.record(delivery_id="gmail:l1", source="gmail", event_type="message")
-            == rows["gmail:l1"]["id"]
-        )
+        assert rows["gmail:l1"]["outcome"] == "subscription-partial: desk"
+
+        # The next poll hands the event back for the agent that missed it only.
+        with patch(
+            "agent_backbone.services.routing._subscriptions.safe_deliver", new_callable=AsyncMock
+        ) as deliver:
+            deliver.return_value = type(
+                "R", (), {"outcome": DeliveryOutcome.DELIVERED, "queue": None, "queued": False}
+            )()
+            summary = await dispatch_source_events([shared], config, db)
+        assert summary == {"events": 1, "delivered": 1}
+        assert [c.args[0] for c in deliver.await_args_list] == ["other"]
+        row = await db.events.get(rows["gmail:l1"]["id"])
+        assert row["processed_at"] is not None and row["outcome"] == "subscription: desk, other"
 
 
 class TestHighPriorityReachesAWorkingAgent:

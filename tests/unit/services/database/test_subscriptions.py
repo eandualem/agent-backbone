@@ -96,18 +96,22 @@ class TestSubscriptionBatches:
         assert second.id != first.id
         assert (await queue_row(db, first.id))["message"] == "h\n- a"
 
-    async def test_batch_counts_beyond_the_limit(self, db):
+    async def test_a_full_batch_opens_the_next_one(self, db):
         lines = [f"- {n}" for n in range(SUBSCRIPTION_BATCH_LIMIT + 3)]
         result = await db.queue.enqueue_subscription(
             session_name="desk", header="h", lines=lines, priority=0
         )
-        await db.queue.enqueue_subscription(
+        assert result.status == "inserted"
+        later = await db.queue.enqueue_subscription(
             session_name="desk", header="h", lines=["- more"], priority=0
         )
-        message = (await queue_row(db, result.id))["message"].split("\n")
-        assert len(message) == SUBSCRIPTION_BATCH_LIMIT + 2
-        assert message[-1] == "… and 4 more not listed"
-        assert "- more" not in message
+        assert later.status == "appended" and later.id == result.id
+        rows = await db.queue.dequeue("desk")
+        assert [len(row["message"].split("\n")) - 1 for row in rows] == [
+            SUBSCRIPTION_BATCH_LIMIT,
+            4,
+        ]
+        assert rows[1]["message"].split("\n")[-1] == "- more"
 
     async def test_batches_never_expire(self, db):
         batch = await db.queue.enqueue_subscription(

@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import patch
 
+import pytest
+
 from agent_backbone.services.sources import build_sources
 from agent_backbone.services.sources.gmail import (
     GmailSource,
@@ -81,6 +83,8 @@ class _FakeImap:
     def uid(self, command, *args):
         self.calls.append(("uid", command, *args))
         if command == "SEARCH":
+            if "broken" in args[-1]:
+                return "BAD", [b"Could not parse command"]
             return "OK", [b"1 2" if "upwork" in args[-1] else b""]
         return "OK", _FETCH
 
@@ -95,13 +99,13 @@ async def test_poll_runs_one_search_per_filter_and_keeps_the_window(tmp_path):
     assert source.enabled
     since = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
     with patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", _FakeImap):
-        events = await source.poll(["from:upwork.com", "from:nobody"], since)
+        events = await source.poll(["from:upwork.com", "subject:(broken", "from:nobody"], since)
     client = _FakeImap.instances[0]
     assert client.timeout == 30
     assert ("login", "me@gmail.com") in client.calls
     assert ("select", '"[Gmail]/Tous les messages"', True) in client.calls
     searches = [c for c in client.calls if len(c) > 1 and c[1] == "SEARCH"]
-    assert len(searches) == 2
+    assert len(searches) == 3  # the rejected filter is skipped, not fatal
     assert searches[0][2:] == ("X-GM-RAW", f'"(from:upwork.com) after:{int(since.timestamp())}"')
     assert client.calls[-1] == ("logout",)
     # The older message is inside the reply but outside the window.
@@ -111,6 +115,15 @@ async def test_poll_runs_one_search_per_filter_and_keeps_the_window(tmp_path):
     assert event.filters == frozenset({"from:upwork.com"})
     assert event.link.endswith(event.id)
     assert event.subject == "New job: Python scraper"
+
+
+async def test_every_search_failing_is_an_error(tmp_path):
+    config = make_config(tmp_path, gmail_address="me@gmail.com", gmail_app_password="pw")
+    with (
+        patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", _FakeImap),
+        pytest.raises(RuntimeError, match="every Gmail search failed"),
+    ):
+        await GmailSource(config).poll(["subject:(broken"], datetime.now(UTC))
 
 
 async def test_unconfigured_source_is_disabled_and_polls_nothing(tmp_path):

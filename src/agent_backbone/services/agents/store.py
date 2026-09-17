@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
@@ -286,6 +287,9 @@ class AgentStore:
     async def forget(self, name: str) -> bool:
         removed = await self._db.agents.delete(name)
         await self.refresh()
+        if removed:
+            # A pending hook-context offer must not reach the next agent of this name.
+            shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
         return removed
 
     async def rename(self, name: str, new_name: str) -> AgentSpec:
@@ -364,8 +368,8 @@ class AgentStore:
         if priority not in SUBSCRIPTION_PRIORITIES:
             raise ValueError(f"priority must be one of {', '.join(SUBSCRIPTION_PRIORITIES)}")
         filter_text = " ".join(filter_text.split())
-        if not filter_text or len(filter_text) > 500:
-            raise ValueError("filter must be 1-500 characters")
+        if not filter_text or len(filter_text) > 500 or not filter_text.isprintable():
+            raise ValueError("filter must be 1-500 printable characters")
         await self.refresh()
         if name not in self._agents:
             raise KeyError(name)

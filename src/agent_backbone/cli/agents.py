@@ -20,6 +20,10 @@ from agent_backbone.config import (
 log = logging.getLogger(__name__)
 
 
+def _subscription_line(sub: dict) -> str:
+    return f"#{sub['id']} {sub['source']} {sub['priority']}: {sub['filter']}"
+
+
 def _print_inspection(data: dict) -> None:
     note(
         f"{data['name']}: {'online' if data['online'] else 'offline'}"
@@ -35,11 +39,7 @@ def _print_inspection(data: dict) -> None:
             ("Watches", ", ".join(data.get("watches", [])) or "none"),
             (
                 "Subscriptions",
-                "\n".join(
-                    f"#{s['id']} {s['source']} {s['priority']}: {s['filter']}"
-                    for s in data.get("subscriptions", [])
-                )
-                or "none",
+                "\n".join(_subscription_line(s) for s in data.get("subscriptions", [])) or "none",
             ),
             ("CLI", data.get("runtime")),
             ("Configured model", data.get("model") or "default"),
@@ -371,7 +371,7 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"error: {result[1] if result else 'API unreachable'}")
             return 1
         # Offline inspection: state file + tmux only.
-        from agent_backbone.services.agents import agent_state
+        from agent_backbone.services.agents import agent_state, subscription_views
         from agent_backbone.services.terminal import session_exists
 
         config = await _common.read_config()
@@ -411,8 +411,7 @@ async def _agent(args: argparse.Namespace) -> int:
                 (
                     "Subscriptions",
                     "\n".join(
-                        f"#{s.id} {s.source} {s.priority}: {s.filter}"
-                        for s in (spec.subscriptions if spec else ())
+                        _subscription_line(view.model_dump()) for view in subscription_views(spec)
                     )
                     or "none",
                 ),
@@ -540,18 +539,15 @@ async def _agent(args: argparse.Namespace) -> int:
                 except ValueError as exc:
                     print(f"error: {exc}")
                     return 1
-            spec_view = {
-                "subscriptions": [
-                    {"id": s.id, "source": s.source, "filter": s.filter, "priority": s.priority}
-                    for s in (spec.subscriptions if spec else ())
-                ]
-            }
+            from agent_backbone.services.agents import subscription_views
+
+            spec_view = {"subscriptions": [v.model_dump() for v in subscription_views(spec)]}
         if sub == "subscribe":
             print(f"{name}: subscribed to {body['source']} ({args.priority}): {body['filter']}")
         else:
             print(f"{name}: subscription {body['id']} removed")
         for s in spec_view.get("subscriptions", []):
-            print(f"  #{s['id']} {s['source']} {s['priority']}: {s['filter']}")
+            print(f"  {_subscription_line(s)}")
         return 0
 
     if sub == "forget":

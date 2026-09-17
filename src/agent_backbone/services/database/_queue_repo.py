@@ -23,8 +23,7 @@ _INSERT_COLUMNS = """(operation_id, session_name, message, repo, issue_number, t
                        :sender, :dedup_key, :priority)"""
 
 SUBSCRIPTION_BATCH_LIMIT = 25
-"""Lines one subscription batch lists before it only counts the rest."""
-_MORE_PREFIX = "… and "
+"""Lines one subscription batch lists; further lines open the next batch."""
 
 
 @dataclass(frozen=True)
@@ -60,19 +59,12 @@ def dedup_key_for(message: str, sender: str, source_key: str | None) -> str:
     return f"msg:{digest}"
 
 
-def _grow_batch(message: str, lines: list[str]) -> str:
-    """``message`` (a header, then listed lines) with ``lines`` added, capped."""
+def _fill_batch(message: str, lines: list[str]) -> tuple[str, list[str]]:
+    """``message`` (a header, then listed lines) with as many of ``lines`` as fit
+    under ``SUBSCRIPTION_BATCH_LIMIT``, and the lines that did not."""
     parts = message.split("\n")
-    counted = 0
-    if len(parts) > 1 and parts[-1].startswith(_MORE_PREFIX):
-        counted = int(parts.pop().removeprefix(_MORE_PREFIX).split(" ", 1)[0])
-    listed = len(parts) - 1
-    room = max(0, SUBSCRIPTION_BATCH_LIMIT - listed)
-    parts.extend(lines[:room])
-    counted += len(lines) - min(room, len(lines))
-    if counted:
-        parts.append(f"{_MORE_PREFIX}{counted} more not listed")
-    return "\n".join(parts)
+    room = max(0, SUBSCRIPTION_BATCH_LIMIT - (len(parts) - 1))
+    return "\n".join(parts + lines[:room]), lines[room:]
 
 
 class QueueRepo(Repo):
@@ -107,6 +99,7 @@ class QueueRepo(Repo):
         source_key: str | None = None,
         operation_id: str | None = None,
         uncertain: bool = False,
+        priority: int = 0,
     ) -> EnqueueResult:
         """Store a message for later delivery.
 
@@ -128,7 +121,7 @@ class QueueRepo(Repo):
                 "initial_status": "uncertain" if uncertain else "pending",
                 "sender": sender,
                 "dedup_key": dedup_key_for(message, sender, source_key),
-                "priority": 0,
+                "priority": priority,
             }
 
             if delivery_kind == "issue" and issue_number is not None:
@@ -195,55 +188,68 @@ class QueueRepo(Repo):
 
         One pending normal batch per session: later events append to it so
         the agent reads one message, not a stream. A batch already leased for
-        delivery is left alone and a new one opens behind it. After
-        ``SUBSCRIPTION_BATCH_LIMIT`` lines the batch only counts the rest.
-        A high batch is always its own row: its text may already be offered
-        to a working agent as hook context, and an offer never changes under
-        the hook's feet (the hook hands over every pending offer at once).
-        Returns ``appended`` (an existing row grew) or ``inserted``.
+        delivery is left alone and a new one opens behind it; a batch with
+        ``SUBSCRIPTION_BATCH_LIMIT`` lines is full and the rest open the next,
+        so every event keeps its id and link. A high batch is always its own
+        row: its text may already be offered to a working agent as hook
+        context, and an offer never changes under the hook's feet (the hook
+        hands over every pending offer at once). Returns ``appended`` (only an
+        existing row grew) or ``inserted`` (the last row opened).
         """
         async with self._tx() as conn:
             lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
-            row = None
+            rest = list(lines)
+            grown: EnqueueResult | None = None
             if not priority:
                 existing = await conn.execute(
                     text(
                         "SELECT id, operation_id, message FROM message_queue "
                         "WHERE session_name = :session AND delivery_kind = :kind "
-                        "AND priority = 0 AND status = 'pending' ORDER BY id LIMIT 1" + lock
+                        "AND priority = 0 AND status = 'pending' ORDER BY id DESC LIMIT 1" + lock
                     ),
                     {"session": session_name, "kind": SUBSCRIPTION_KIND},
                 )
                 row = existing.mappings().first()
-            if row is not None:
+                if row is not None:
+                    message, rest = _fill_batch(row["message"], rest)
+                    if message != row["message"]:
+                        result = await conn.execute(
+                            text(
+                                "UPDATE message_queue SET message = :message "
+                                "WHERE id = :id AND status = 'pending'"
+                            ),
+                            {"id": row["id"], "message": message},
+                        )
+                        if result.rowcount:
+                            grown = EnqueueResult("appended", row["id"], row["operation_id"])
+                        else:
+                            rest = list(lines)  # leased meanwhile: open a new batch
+            if grown is not None and not rest:
+                return grown
+            while True:
+                message, rest = _fill_batch(header, rest)
+                params = {
+                    "operation_id": operation_id or uuid.uuid4().hex,
+                    "session_name": session_name,
+                    "message": message,
+                    "repo": "",
+                    "issue_number": None,
+                    "target_entity": session_name,
+                    "delivery_kind": SUBSCRIPTION_KIND,
+                    "source": source,
+                    "enqueued_at": now_iso(),
+                    "initial_status": "pending",
+                    "sender": "",
+                    "dedup_key": f"sub:{uuid.uuid4().hex}",
+                    "priority": priority,
+                }
                 result = await conn.execute(
-                    text(
-                        "UPDATE message_queue SET message = :message "
-                        "WHERE id = :id AND status = 'pending'"
-                    ),
-                    {"id": row["id"], "message": _grow_batch(row["message"], lines)},
+                    text(f"INSERT INTO message_queue {_INSERT_COLUMNS} RETURNING id"), params
                 )
-                if result.rowcount:
-                    return EnqueueResult("appended", row["id"], row["operation_id"])
-            params = {
-                "operation_id": operation_id or uuid.uuid4().hex,
-                "session_name": session_name,
-                "message": _grow_batch(header, lines),
-                "repo": "",
-                "issue_number": None,
-                "target_entity": session_name,
-                "delivery_kind": SUBSCRIPTION_KIND,
-                "source": source,
-                "enqueued_at": now_iso(),
-                "initial_status": "pending",
-                "sender": "",
-                "dedup_key": f"sub:{uuid.uuid4().hex}",
-                "priority": priority,
-            }
-            result = await conn.execute(
-                text(f"INSERT INTO message_queue {_INSERT_COLUMNS} RETURNING id"), params
-            )
-            return EnqueueResult("inserted", result.scalar_one(), params["operation_id"])
+                inserted = EnqueueResult("inserted", result.scalar_one(), params["operation_id"])
+                if not rest:
+                    return inserted
+                operation_id = None
 
     async def pending_count(self, session_name: str) -> int:
         """How many messages are waiting for one session."""

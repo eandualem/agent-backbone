@@ -29,6 +29,9 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 SOURCE = "sources-poll"
+_PARTIAL = "subscription-partial: "
+"""Outcome prefix of a stored event some, not all, matched agents hold: the
+agents named after it are skipped when the next poll hands the event back."""
 
 
 def match_subscriptions(agents: AgentsConfig, event: SourceEvent) -> dict[str, bool]:
@@ -48,13 +51,14 @@ async def dispatch_source_events(
     """Store new events, group them per agent and priority, deliver each group once.
 
     An event is marked processed only when every matched agent holds it —
-    delivered, or stored in the queue. Otherwise it stays replayable: the
-    poller keeps its cursor and the next poll hands the event back.
+    delivered, or stored in the queue. Otherwise it stays replayable with the
+    agents that do hold it noted: the poller keeps its cursor and the next
+    poll hands the event back for the others only.
     """
     summary: dict[str, int] = {}
     batches: dict[tuple[str, bool, str], list[str]] = {}
     recipients: dict[int, list[tuple[str, bool, str]]] = {}
-    labels: dict[int, str] = {}
+    held_before: dict[int, set[str]] = {}
     for event in events:
         matched = match_subscriptions(config.agents, event)
         if not matched:
@@ -71,12 +75,22 @@ async def dispatch_source_events(
             # Already delivered, or the overlap repeated it inside this poll.
             summary["deduped"] = summary.get("deduped", 0) + 1
             continue
+        stored = await db.events.get(event_id)
+        outcome = (stored or {}).get("outcome") or ""
+        already = (
+            set(outcome.removeprefix(_PARTIAL).split(", "))
+            if outcome.startswith(_PARTIAL)
+            else set()
+        )
+        held_before[event_id] = already & set(matched)
         line = format_source_event(event)
+        recipients[event_id] = []
         for agent, high in matched.items():
+            if agent in already:
+                continue
             key = (agent, high, event.source)
             batches.setdefault(key, []).append(line)
-            recipients.setdefault(event_id, []).append(key)
-        labels[event_id] = ", ".join(sorted(matched))
+            recipients[event_id].append(key)
         summary["events"] = summary.get("events", 0) + 1
 
     handed: dict[tuple[str, bool, str], bool] = {}
@@ -115,8 +129,12 @@ async def dispatch_source_events(
             f" ({report.queue})" if report.queue else "",
         )
     for event_id, keys in recipients.items():
+        holders = held_before[event_id] | {key[0] for key in keys if handed.get(key)}
         if all(handed.get(key) for key in keys):
-            await db.events.mark_processed(event_id, f"subscription: {labels[event_id]}")
+            await db.events.mark_processed(event_id, f"subscription: {', '.join(sorted(holders))}")
         else:
+            await db.events.mark_processed(
+                event_id, _PARTIAL + ", ".join(sorted(holders)), processed=False
+            )
             summary["unprocessed"] = summary.get("unprocessed", 0) + 1
     return summary

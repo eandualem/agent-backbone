@@ -599,7 +599,16 @@ def take_context(state_dir: Path, agent: str) -> list[str]:
     directory = _context_dir(state_dir, agent)
     texts: list[str] = []
     try:
-        offers = sorted(directory.glob("*.md"), key=lambda path: path.stat().st_mtime)
+        # Queue ids are monotonic; no stat, so a file the backbone claims
+        # meanwhile cannot abort the whole take.
+        offers = sorted(
+            directory.glob("*.md"),
+            key=lambda path: (
+                not path.stem.isdigit(),
+                int(path.stem) if path.stem.isdigit() else 0,
+                path.stem,
+            ),
+        )
     except OSError:
         return texts
     for offer in offers:
