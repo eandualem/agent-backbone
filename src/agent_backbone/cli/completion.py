@@ -242,7 +242,7 @@ def _catalog() -> dict[str, list[str]]:
     read-only connection also avoids waiting for the API or a provider on Tab.
     Non-SQLite installations still have command/option/path completion.
     """
-    result: dict[str, list[str]] = {"agents": [], "swarms": [], "tags": []}
+    result: dict[str, list[str]] = {"agents": [], "swarms": [], "tags": [], "templates_dir": []}
     config = bootstrap_config()
     prefix = "sqlite+aiosqlite:///"
     if not config.database_url.startswith(prefix):
@@ -256,6 +256,9 @@ def _catalog() -> dict[str, list[str]]:
                 if isinstance(tags, list):
                     result["tags"].extend(tag for tag in tags if isinstance(tag, str))
             result["swarms"] = [r[0] for r in conn.execute("SELECT name FROM swarms")]
+            for (raw,) in conn.execute("SELECT value FROM settings WHERE key = 'templates.dir'"):
+                if isinstance(value := json.loads(raw), str) and value:
+                    result["templates_dir"] = [value]
     except (OSError, sqlite3.Error, ValueError, TypeError):
         pass
     return result
@@ -275,9 +278,16 @@ def _values(action: argparse.Action, context: list[str]) -> list[str]:
         items = list_docs() if dest == "page" else list_topics(bootstrap_config().data_dir)
         return [item["name"] for item in items]
     if context[:1] in (["templates"], ["instructions"]) and dest in ("name", "names", "policies"):
-        from agent_backbone.templates import list_templates
+        from agent_backbone.templates import TemplateDirs, list_templates
 
-        entries = list_templates(bootstrap_config().data_dir)
+        data_dir = bootstrap_config().data_dir
+        configured = _catalog()["templates_dir"]
+        dirs = (
+            TemplateDirs(Path(configured[0]).expanduser(), data_dir)
+            if configured
+            else TemplateDirs.default(data_dir)
+        )
+        entries = list_templates(dirs)
         if dest == "policies":
             return [
                 row["name"].removeprefix("policy:")

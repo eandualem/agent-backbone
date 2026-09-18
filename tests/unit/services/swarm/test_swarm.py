@@ -25,6 +25,7 @@ from agent_backbone.services.swarm import (
     teardown_swarm,
 )
 from agent_backbone.services.swarm._roster import MemberSpec, member_names
+from agent_backbone.templates import TemplateDirs
 from tests.conftest import make_config
 
 _IFACE = "agent_backbone.services.swarm.interface"
@@ -178,7 +179,7 @@ class TestBriefs:
         override = tmp_path / "swarm-templates"
         override.mkdir()
         (override / "scout.md").write_text("custom scout for {swarm_name}")
-        brief = render_brief("scout", {"swarm_name": "x"}, data_dir=tmp_path)
+        brief = render_brief("scout", {"swarm_name": "x"}, dirs=TemplateDirs.default(tmp_path))
         assert "custom scout for x" in brief
         assert "Your role: scout" not in brief
 

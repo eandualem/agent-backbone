@@ -34,12 +34,27 @@ Names are `base`, `swarm:ROLE`, or `policy:NAME`. Bare names also select policie
 `swarm:worker`. `swarm:kickoff` is the coordinator's initial work message; its
 provenance envelope is supplied by code. `instructions` remains a command alias.
 
-Edits go to `<data_dir>/templates/`, normally
-`~/.local/share/agent-backbone/templates/`. `path NAME` prints the editable target;
-`list` shows the effective source and any legacy override. Edit an individual file,
-or use `backbone templates init` to copy all available templates there. You can
-also name specific templates, such as `backbone templates init base swarm:scout`.
-Existing copies are never overwritten. Copies are pinned: future package updates
+Edits go to your **configuration directory**: the `templates.dir` setting, or
+`<data_dir>/templates/` (normally `~/.local/share/agent-backbone/templates/`) when
+it is empty. It holds only what you author — `base.md`, `swarm/`, `policies/` — so
+point it at a directory of its own and make that a git repository:
+
+```bash
+backbone config set templates.dir ~/backbone-config
+backbone templates init                       # copies the bundled defaults there
+```
+
+`templates path` prints the directory; `path NAME` prints the editable target;
+`list` shows the effective source and any legacy override; `backbone doctor`
+reports the directory. Policy assignments stay database settings (below); a
+fresh machine restores them with `backbone templates use`. Nothing in this
+repository is user-specific: it ships generic defaults and one example policy,
+and the [templates README](../templates/README.md) explains which kind of text
+belongs where.
+
+Edit an individual file, or use `backbone templates init` to copy all available
+templates there; you can also name specific templates, such as
+`backbone templates init base swarm:scout`. Existing copies are never overwritten. Copies are pinned: future package updates
 change bundled defaults, not your local instructions. Delete an override to follow
 the bundled default again (or a legacy override, if one still exists).
 
@@ -73,6 +88,12 @@ Swarm members automatically receive their role and `swarm:NAME` tags. The tag/un
 commands cannot change these identity tags. New rules apply when a new conversation
 starts; tagging does not interrupt or send messages to an existing session.
 
+The base brief tells every agent what the `## Shared policy:` sections are: fleet
+rules injected at each fresh start and selected by tags, maintained by
+`templates.maintainer` (rendered as `{policy_maintainer}`; empty reads "the owner
+of this backbone"), changed by proposing to that maintainer rather than copying a
+rule into a repository.
+
 Composition is deterministic:
 
 1. The base brief, or the swarm's common preamble plus role brief.
@@ -88,7 +109,7 @@ braces in examples. Keep them short and review them with `preview`.
 
 ## Placeholders and launch behavior
 
-The base brief supports `{agent_name}` and `{repo}`. Swarm role/common templates
+The base brief supports `{agent_name}`, `{repo}` and `{policy_maintainer}`. Swarm role/common templates
 support `{swarm_name}`, `{agent_name}`, `{role}`, `{repo}`, `{issue_number}`, `{issue_url}`,
 `{branch}`, `{worktree}`, `{base_branch}`, `{coordinator}`, `{initiator}`,
 and `{members}`. The kickoff supports `{swarm}`, `{repo}`, `{issue_number}`, `{title}`,

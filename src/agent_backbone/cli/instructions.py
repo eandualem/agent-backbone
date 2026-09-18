@@ -13,7 +13,7 @@ from pathlib import Path
 
 from agent_backbone.cli import _common
 from agent_backbone.cli.presentation import note, print_record, print_table
-from agent_backbone.config import bootstrap_config, validate_setting
+from agent_backbone.config import validate_setting
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.services.agents import instruction_preview
 from agent_backbone.templates import (
@@ -87,21 +87,19 @@ def edit_file(path: Path, initial: str, *, source: Path | None = None) -> None:
 
 async def _instructions(args: argparse.Namespace) -> int:
     sub = args.instructions_command
-    config = (
-        bootstrap_config()
-        if sub in ("show", "path", "edit", "init")
-        else await _common.read_config()
-    )
+    # A read-only look at the database: `templates.dir` names the directory.
+    config = await _common.read_config()
+    dirs = config.template_dirs
     if sub in ("show", "path", "edit"):
         if sub == "path" and args.name is None:
-            print(config.data_dir / "templates")
+            print(dirs.editable)
             return 0
-        path = template_path(config.data_dir, args.name)
-        source = template_source(args.name, config.data_dir)
+        path = template_path(dirs, args.name)
+        source = template_source(args.name, dirs)
         if sub == "path":
             print(path)
         elif sub == "show":
-            print(read_template(args.name, config.data_dir), end="")
+            print(read_template(args.name, dirs), end="")
         else:
             initial = source.read_text() if source.is_file() else f"# {args.name}\n\n"
             edit_file(path, initial, source=source)
@@ -114,14 +112,14 @@ async def _instructions(args: argparse.Namespace) -> int:
                 )
         return 0
     if sub == "init":
-        names = args.names or [row["name"] for row in list_templates(config.data_dir)]
+        names = args.names or [row["name"] for row in list_templates(dirs)]
         # Validate every name before writing any file.
-        targets = [(name, template_path(config.data_dir, name)) for name in names]
+        targets = [(name, template_path(dirs, name)) for name in names]
         for name, target in targets:
             if target.exists() or target.is_symlink():
                 print(f"Kept {target}")
                 continue
-            text = read_template(name, config.data_dir)
+            text = read_template(name, dirs)
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
                 with target.open("x") as stream:
@@ -133,9 +131,9 @@ async def _instructions(args: argparse.Namespace) -> int:
         print("Editable copies are preserved on upgrades. Preview before a fresh start.")
         return 0
     if sub == "list":
-        entries = list_templates(config.data_dir)
+        entries = list_templates(dirs)
         view = {
-            "directory": str(config.data_dir / "templates"),
+            "directory": str(dirs.editable),
             "injection_enabled": config.launch.inject_brief,
             "global": list(config.launch.shared_policy),
             "tags": {tag: list(names) for tag, names in config.launch.tag_policy.items()},
@@ -144,7 +142,8 @@ async def _instructions(args: argparse.Namespace) -> int:
         if args.json:
             _common.print_json(view)
             return 0
-        note(f"Editable templates: {view['directory']}")
+        where = "templates.dir" if config.templates.dir else "default; set templates.dir to move"
+        note(f"Editable templates: {view['directory']} ({where})")
         print_table(
             "Templates",
             ("Template", "Source", "Override"),
@@ -190,7 +189,7 @@ async def _instructions(args: argparse.Namespace) -> int:
             return 0
         args.policies = [name.removeprefix("policy:") for name in args.policies]
         validate_setting("agents.shared_policy", args.policies)
-        append_policies("", config.data_dir, tuple(args.policies))
+        append_policies("", dirs, tuple(args.policies))
         if args.tag is not None:
             validate_setting("agents.tag_policy", {args.tag: args.policies})
             value = {tag: list(names) for tag, names in config.launch.tag_policy.items()}
@@ -223,13 +222,13 @@ async def _instructions(args: argparse.Namespace) -> int:
         if not args.agent:
             try:
                 append_policies(
-                    "", config.data_dir, config.launch.policy_names(tuple(config.launch.tag_policy))
+                    "", dirs, config.launch.policy_names(tuple(config.launch.tag_policy))
                 )
             except (OSError, ValueError) as exc:
                 errors.append(str(exc))
-            for entry in list_templates(config.data_dir):
+            for entry in list_templates(dirs):
                 try:
-                    read_template(entry["name"], config.data_dir)
+                    read_template(entry["name"], dirs)
                 except (OSError, ValueError) as exc:
                     errors.append(str(exc))
         for spec in specs:

@@ -7,6 +7,7 @@ import pytest
 
 from agent_backbone.cli.instructions import edit_file
 from agent_backbone.services.swarm import list_brief_templates, render_brief, template_paths
+from agent_backbone.templates import TemplateDirs
 
 
 @pytest.mark.parametrize("failure", ["exit", "empty", "concurrent"])
@@ -31,15 +32,14 @@ def test_failed_edit_preserves_original(tmp_path, monkeypatch, failure):
 
 
 def test_swarm_template_path_matches_new_swarm_rendering(tmp_path):
-    source, override = template_paths("scout", tmp_path)
+    dirs = TemplateDirs.default(tmp_path)
+    source, override = template_paths("scout", dirs)
     assert source.is_file() and not override.exists()
     override.parent.mkdir(parents=True)
     override.write_text("Custom scout for {agent_name}")
-    assert template_paths("scout", tmp_path)[0] == override
-    assert "Custom scout for scout-1" in render_brief(
-        "scout", {"agent_name": "scout-1"}, data_dir=tmp_path
-    )
-    entry = next(t for t in list_brief_templates(tmp_path) if t["name"] == "scout")
+    assert template_paths("scout", dirs)[0] == override
+    assert "Custom scout for scout-1" in render_brief("scout", {"agent_name": "scout-1"}, dirs=dirs)
+    entry = next(t for t in list_brief_templates(dirs) if t["name"] == "scout")
     assert entry["source"] == str(override)
     with pytest.raises(ValueError):
-        template_paths("../escape", tmp_path)
+        template_paths("../escape", dirs)

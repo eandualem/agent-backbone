@@ -76,7 +76,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `agents.pre_trust` | `true` | Answer the runtime's folder-trust dialog before starting, so it never blocks an unattended start: Claude Code and Codex get the same trust record their own dialog writes; Gemini is launched with `--skip-trust`. Starting an agent in a directory is treated as the trust decision; set `false` to answer the dialog yourself |
 | `agents.writable_dirs` | `[]` | Machine-wide directories that every Codex agent may write outside its own checkout (`--add-dir`; JSON list, `~` allowed). Use for deliberately shared tooling caches; for a project-specific cache, set `UV_CACHE_DIR` inside the agent's worktree. Other runtimes ignore this setting. See [permission boundaries and cache options](security.md#unattended-agents-and-writable-directories) |
 | `agents.auto_review` | `false` | Use automatic permission review where the runtime supports it (currently Codex, `--approve-for-me`, with its workspace sandbox). Routine requests can proceed after review; refusals return to the agent. Applies on the next start/resume. Unattended agents keep their no-prompt policy; other runtimes are unaffected. Set `false` to use your own runtime approval configuration |
-| `agents.shared_policy` | `[]` | Ordered policy names under `<data_dir>/templates/policies/`, composed with base and swarm briefs; see [templates](templates.md) |
+| `agents.shared_policy` | `[]` | Ordered policy names under `<templates.dir>/policies/`, composed with base and swarm briefs; see [templates](templates.md) |
 | `agents.tag_policy` | `{}` | Policy names by agent tag, as a JSON object of ordered lists; global policies apply first, then matching tags alphabetically, deduplicated |
 | `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Codex, Gemini and OpenCode receive it as the session's initial prompt (not re-sent on `--resume`); `aider` receives it as its first delivered message; plain shells get none. Override the text with `<data_dir>/templates/base.md` |
 
@@ -85,6 +85,8 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | Key | Default | Meaning |
 |---|---|---|
 | `skills.store` | `~/skills` | Directory holding the one copy of every shared skill. At launch each agent gets the skills tagged for it as symlinks in the directory its CLI reads; `backbone skills` manages the store. Empty disables materialisation. See [Skills](skills.md) |
+| `templates.dir` | `""` | Your configuration directory: edited `base.md`, `swarm/` and `policies/` are read from and written to it (`backbone templates`). Empty means `<data_dir>/templates`; set it to a directory outside the data dir to keep it as a git repository of its own — no secrets, database or logs live there. See [templates](templates.md) |
+| `templates.maintainer` | `""` | Who maintains the shared policies (an agent name or a person); the base brief tells agents to propose policy changes there. Empty renders as "the owner of this backbone" |
 
 ### `github.*`
 

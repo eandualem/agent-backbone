@@ -32,6 +32,7 @@ from typing import Any
 from dotenv import dotenv_values
 
 from agent_backbone.models import ISSUE_TYPE_WEIGHTS
+from agent_backbone.templates import TemplateDirs
 from agent_backbone.usage import DEFAULT_PRICES, Price
 
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
@@ -89,6 +90,8 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "agents.shared_policy": [],
     "agents.tag_policy": {},
     "skills.store": "~/skills",
+    "templates.dir": "",
+    "templates.maintainer": "",
     "agents.writable_dirs": [],
     "agents.auto_review": False,
     "github.reviewers": [],
@@ -155,12 +158,20 @@ SETTINGS_HELP: dict[str, str] = {
         "Give each agent the backbone's brief at launch (system prompt or initial prompt)"
     ),
     "agents.shared_policy": (
-        "Ordered policy names from <data_dir>/templates/policies/<name>.md (JSON list)"
+        "Ordered policy names from <templates.dir>/policies/<name>.md (JSON list)"
     ),
     "agents.tag_policy": "Policy names by agent tag (JSON object of ordered lists)",
     "skills.store": (
         "Directory holding the shared skills; each agent gets the ones tagged for it as "
         "links at launch (`backbone skills`). Empty disables"
+    ),
+    "templates.dir": (
+        "Directory holding your edited templates and policies (base.md, swarm/, policies/); "
+        "make it a git repository of its own. Empty: <data_dir>/templates"
+    ),
+    "templates.maintainer": (
+        "Who maintains the shared policies (an agent or a person); the base brief tells "
+        "agents to propose policy changes there. Empty: the owner of this backbone"
     ),
     "agents.writable_dirs": (
         "Directories outside an agent's own that a sandboxed runtime (Codex) may also "
@@ -297,6 +308,14 @@ def validate_setting(key: str, value: Any) -> Any:
         if not isinstance(value, str) or (value and not value.strip()):
             raise ValueError(f"{key}: expected a directory path, or an empty string to disable")
         return value.strip()
+    if key == "templates.dir":
+        if not isinstance(value, str) or (value and not value.strip()):
+            raise ValueError(f"{key}: expected a directory path, or an empty string for default")
+        return value.strip()
+    if key == "templates.maintainer":
+        if not isinstance(value, str) or len(value) > 100 or value.strip() != value:
+            raise ValueError(f"{key}: expected a name of at most 100 characters")
+        return value
     if key == "agents.shared_policy":
         if (
             not isinstance(value, list)
@@ -583,6 +602,16 @@ class SkillsConfig:
 
 
 @dataclass(frozen=True)
+class TemplatesConfig:
+    """The ``templates.*`` settings."""
+
+    dir: str = ""
+    """The user's configuration directory; empty means ``<data_dir>/templates``."""
+    maintainer: str = ""
+    """Who agents propose shared-policy changes to; empty names the backbone's owner."""
+
+
+@dataclass(frozen=True)
 class GitHubConfig:
     """``github.*`` — intake settings (non-secret). Credentials come from the environment."""
 
@@ -704,6 +733,7 @@ class BackboneConfig:
     """The known agents (the ``agents`` table); ``launch`` holds the ``agents.*`` settings."""
     launch: LaunchConfig = field(default_factory=LaunchConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
+    templates: TemplatesConfig = field(default_factory=TemplatesConfig)
     github: GitHubConfig = field(default_factory=GitHubConfig)
     sources: SourcesConfig = field(default_factory=SourcesConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
@@ -727,6 +757,13 @@ class BackboneConfig:
     @property
     def state_dir(self) -> Path:
         return self.data_dir / "state"
+
+    @property
+    def template_dirs(self) -> TemplateDirs:
+        """The configuration directory (``templates.dir``) plus legacy overrides."""
+        if self.templates.dir:
+            return TemplateDirs(Path(self.templates.dir).expanduser(), self.data_dir)
+        return TemplateDirs.default(self.data_dir)
 
     @property
     def action_log_path(self) -> Path:
@@ -895,6 +932,9 @@ def build_config(
             auto_review=s["agents.auto_review"],
         ),
         skills=SkillsConfig(store=str(s["skills.store"])),
+        templates=TemplatesConfig(
+            dir=str(s["templates.dir"]), maintainer=str(s["templates.maintainer"])
+        ),
         github=GitHubConfig(
             reviewers=tuple(s["github.reviewers"]),
             review_poll_interval_seconds=s["github.review_poll_interval_seconds"],
