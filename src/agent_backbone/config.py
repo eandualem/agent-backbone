@@ -311,7 +311,10 @@ def validate_setting(key: str, value: Any) -> Any:
     if key == "templates.dir":
         if not isinstance(value, str) or (value and not value.strip()):
             raise ValueError(f"{key}: expected a directory path, or an empty string for default")
-        return value.strip()
+        value = value.strip()
+        if value and not Path(value).expanduser().is_absolute():
+            raise ValueError(f"{key}: expected an absolute path (CLI and service run elsewhere)")
+        return value
     if key == "templates.maintainer":
         if not isinstance(value, str) or len(value) > 100 or value.strip() != value:
             raise ValueError(f"{key}: expected a name of at most 100 characters")

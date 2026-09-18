@@ -37,16 +37,19 @@ provenance envelope is supplied by code. `instructions` remains a command alias.
 Edits go to your **configuration directory**: the `templates.dir` setting, or
 `<data_dir>/templates/` (normally `~/.local/share/agent-backbone/templates/`) when
 it is empty. It holds only what you author — `base.md`, `swarm/`, `policies/` — so
-point it at a directory of its own and make that a git repository:
+give it a directory of its own and make that a git repository. Move the files
+first, then point the setting at them (only one directory is read):
 
 ```bash
-backbone config set templates.dir ~/backbone-config
-backbone templates init                       # copies the bundled defaults there
+mv ~/.local/share/agent-backbone/templates ~/backbone-config   # or copy, then git init
+backbone config set templates.dir ~/backbone-config              # absolute path
+backbone templates init                       # adds bundled defaults you have not edited
 ```
 
 `templates path` prints the directory; `path NAME` prints the editable target;
 `list` shows the effective source and any legacy override; `backbone doctor`
-reports the directory. Policy assignments stay database settings (below); a
+reports the directory. Both warn when files are left under the old default
+location, where they are no longer read. Policy assignments stay database settings (below); a
 fresh machine restores them with `backbone templates use`. Nothing in this
 repository is user-specific: it ships generic defaults and one example policy,
 and the [templates README](../templates/README.md) explains which kind of text

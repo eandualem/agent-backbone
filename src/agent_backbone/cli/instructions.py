@@ -144,6 +144,11 @@ async def _instructions(args: argparse.Namespace) -> int:
             return 0
         where = "templates.dir" if config.templates.dir else "default; set templates.dir to move"
         note(f"Editable templates: {view['directory']} ({where})")
+        if unread := dirs.unread_default_files():
+            note(
+                f"! {len(unread)} file(s) still under {dirs.data_dir / 'templates'} are not read; "
+                f"move them into {dirs.editable}"
+            )
         print_table(
             "Templates",
             ("Template", "Source", "Override"),

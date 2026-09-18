@@ -250,3 +250,19 @@ def test_base_brief_names_the_policy_maintainer(tmp_path):
     with pytest.raises(ValueError):
         validate_setting("templates.dir", "   ")
     assert validate_setting("templates.dir", " ~/fleet ") == "~/fleet"
+
+
+def test_relocated_dir_warns_about_files_left_at_the_default(tmp_path, capsys):
+    data, custom = tmp_path / "data", tmp_path / "fleet-config"
+    (data / "templates" / "policies").mkdir(parents=True)
+    (data / "templates" / "policies" / "old.md").write_text("Edited before the move")
+    config = replace(bootstrap_config(), templates=TemplatesConfig(dir=str(custom)))
+    assert config.template_dirs.unread_default_files() == [
+        data / "templates" / "policies" / "old.md"
+    ]
+    assert bootstrap_config().template_dirs.unread_default_files() == []
+    with patch.object(_common, "read_config", AsyncMock(return_value=config)):
+        assert run(["templates", "list"]) == 0
+    assert "not read" in capsys.readouterr().out
+    with pytest.raises(ValueError, match="absolute"):
+        validate_setting("templates.dir", "fleet-config")

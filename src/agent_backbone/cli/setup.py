@@ -269,6 +269,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             templates.is_dir() or origin == "default",
             "create it, or `backbone config set templates.dir ''` for the default",
         )
+        if unread := config.template_dirs.unread_default_files():
+            note(
+                f"  ! {len(unread)} template file(s) left under "
+                f"{boot.data_dir / 'templates'} are not read"
+            )
 
         note("Agents")
         if not config.agents:

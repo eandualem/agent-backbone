@@ -85,7 +85,12 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | Key | Default | Meaning |
 |---|---|---|
 | `skills.store` | `~/skills` | Directory holding the one copy of every shared skill. At launch each agent gets the skills tagged for it as symlinks in the directory its CLI reads; `backbone skills` manages the store. Empty disables materialisation. See [Skills](skills.md) |
-| `templates.dir` | `""` | Your configuration directory: edited `base.md`, `swarm/` and `policies/` are read from and written to it (`backbone templates`). Empty means `<data_dir>/templates`; set it to a directory outside the data dir to keep it as a git repository of its own — no secrets, database or logs live there. See [templates](templates.md) |
+
+### `templates.*`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `templates.dir` | `""` | Your configuration directory: edited `base.md`, `swarm/` and `policies/` are read from and written to it (`backbone templates`). Empty means `<data_dir>/templates`. Set an absolute path outside the data dir to keep it as a git repository of its own — no secrets, database or logs live there; move the existing files there first. See [templates](templates.md) |
 | `templates.maintainer` | `""` | Who maintains the shared policies (an agent name or a person); the base brief tells agents to propose policy changes there. Empty renders as "the owner of this backbone" |
 
 ### `github.*`

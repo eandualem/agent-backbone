@@ -22,6 +22,16 @@ class TemplateDirs:
     def default(cls, data_dir: Path) -> TemplateDirs:
         return cls(data_dir / "templates", data_dir)
 
+    def unread_default_files(self) -> list[Path]:
+        """Files left at the default location once ``templates.dir`` points elsewhere.
+
+        They are not read any more; move them before or after setting the
+        directory, but move them."""
+        default = self.data_dir / "templates"
+        if self.editable.resolve() == default.resolve() or not default.is_dir():
+            return []
+        return sorted(p for p in default.rglob("*.md") if p.is_file())
+
 
 def bundled_dir(kind: str) -> Path:
     """Top-level resources in a checkout, packaged resources after install."""
