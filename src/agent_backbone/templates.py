@@ -3,9 +3,34 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,40}")
+
+
+@dataclass(frozen=True)
+class TemplateDirs:
+    """Where one installation's user-authored templates are read and written."""
+
+    editable: Path
+    """The configuration directory: `templates.dir`, default ``<data_dir>/templates``."""
+    data_dir: Path
+    """Legacy overrides (``agent-brief.md``, ``swarm-templates/``, ``policies/``) live here."""
+
+    @classmethod
+    def default(cls, data_dir: Path) -> TemplateDirs:
+        return cls(data_dir / "templates", data_dir)
+
+    def unread_default_files(self) -> list[Path]:
+        """Files left at the default location once ``templates.dir`` points elsewhere.
+
+        They are not read any more; move them before or after setting the
+        directory, but move them."""
+        default = self.data_dir / "templates"
+        if self.editable.resolve() == default.resolve() or not default.is_dir():
+            return []
+        return sorted(p for p in default.rglob("*.md") if p.is_file())
 
 
 def bundled_dir(kind: str) -> Path:
@@ -34,31 +59,31 @@ def template_relative(name: str) -> Path:
     return Path("swarm" if category == "swarm" else "policies") / f"{item}.md"
 
 
-def template_path(data_dir: Path, name: str) -> Path:
+def template_path(dirs: TemplateDirs, name: str) -> Path:
     """The editable installed path; never a file inside Python source."""
-    return data_dir / "templates" / template_relative(name)
+    return dirs.editable / template_relative(name)
 
 
-def legacy_template_path(data_dir: Path, name: str) -> Path:
+def legacy_template_path(dirs: TemplateDirs, name: str) -> Path:
     relative = template_relative(name)
     if name == "base":
-        return data_dir / "agent-brief.md"
+        return dirs.data_dir / "agent-brief.md"
     directory = "swarm-templates" if relative.parts[0] == "swarm" else "policies"
-    return data_dir / directory / relative.name
+    return dirs.data_dir / directory / relative.name
 
 
-def template_source(name: str, data_dir: Path | None = None) -> Path:
+def template_source(name: str, dirs: TemplateDirs | None = None) -> Path:
     """Canonical override, legacy override, then the bundled default."""
     relative = template_relative(name)
-    if data_dir is not None:
-        for path in (template_path(data_dir, name), legacy_template_path(data_dir, name)):
+    if dirs is not None:
+        for path in (template_path(dirs, name), legacy_template_path(dirs, name)):
             if path.exists() or path.is_symlink():
                 return path
     return bundled_dir("templates") / relative
 
 
-def read_template(name: str, data_dir: Path | None = None) -> str:
-    source = template_source(name, data_dir)
+def read_template(name: str, dirs: TemplateDirs | None = None) -> str:
+    source = template_source(name, dirs)
     try:
         text = source.read_text()
     except OSError as exc:
@@ -68,14 +93,14 @@ def read_template(name: str, data_dir: Path | None = None) -> str:
     return text
 
 
-def list_templates(data_dir: Path) -> list[dict]:
+def list_templates(dirs: TemplateDirs) -> list[dict]:
     names = {"base"}
     for category, directory in (("swarm", "swarm"), ("policy", "policies")):
-        legacy = data_dir / ("swarm-templates" if category == "swarm" else "policies")
+        legacy = dirs.data_dir / ("swarm-templates" if category == "swarm" else "policies")
         for root in (
             bundled_dir("templates") / directory,
             legacy,
-            data_dir / "templates" / directory,
+            dirs.editable / directory,
         ):
             names.update(
                 f"{category}:{p.stem}" for p in root.glob("*.md") if NAME_RE.fullmatch(p.stem)
@@ -83,25 +108,25 @@ def list_templates(data_dir: Path) -> list[dict]:
     return [
         {
             "name": name,
-            "source": str(template_source(name, data_dir)),
-            "path": str(template_path(data_dir, name)),
-            "legacy": template_source(name, data_dir) == legacy_template_path(data_dir, name),
+            "source": str(template_source(name, dirs)),
+            "path": str(template_path(dirs, name)),
+            "legacy": template_source(name, dirs) == legacy_template_path(dirs, name),
         }
         for name in sorted(names)
     ]
 
 
-def policy_source(data_dir: Path, name: str) -> Path:
-    return template_source(f"policy:{name}", data_dir)
+def policy_source(dirs: TemplateDirs, name: str) -> Path:
+    return template_source(f"policy:{name}", dirs)
 
 
-def append_policies(brief: str, data_dir: Path | None, policy_names: tuple[str, ...]) -> str:
+def append_policies(brief: str, dirs: TemplateDirs | None, policy_names: tuple[str, ...]) -> str:
     """Required policies compose even with a customized base brief."""
     sections = []
     for name in dict.fromkeys(policy_names):
-        if data_dir is None or not NAME_RE.fullmatch(name):
+        if dirs is None or not NAME_RE.fullmatch(name):
             raise ValueError(f"Invalid shared policy name: {name!r}")
-        path = policy_source(data_dir, name)
+        path = policy_source(dirs, name)
         try:
             policy = path.read_text().strip()
         except OSError as exc:
@@ -118,10 +143,10 @@ def append_policies(brief: str, data_dir: Path | None, policy_names: tuple[str, 
 
 
 def render_agent_brief(
-    facts: dict[str, str], data_dir: Path | None = None, *, policy_names: tuple[str, ...] = ()
+    facts: dict[str, str], dirs: TemplateDirs | None = None, *, policy_names: tuple[str, ...] = ()
 ) -> str:
-    return append_policies(render(read_template("base", data_dir), facts), data_dir, policy_names)
+    return append_policies(render(read_template("base", dirs), facts), dirs, policy_names)
 
 
-def brief_source(data_dir: Path) -> Path:
-    return template_source("base", data_dir)
+def brief_source(dirs: TemplateDirs) -> Path:
+    return template_source("base", dirs)

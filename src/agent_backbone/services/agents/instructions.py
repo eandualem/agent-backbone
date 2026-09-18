@@ -25,8 +25,9 @@ def instruction_preview(
     # and previews, including runtime switches, rather than losing its role.
     if brief_file is None and spec.swarm:
         brief_file = config.data_dir / "swarms" / spec.swarm / f"{spec.name}.md"
-    source = brief_file or brief_source(config.data_dir)
-    legacy = not brief_file and source == legacy_template_path(config.data_dir, "base")
+    dirs = config.template_dirs
+    source = brief_file or brief_source(dirs)
+    legacy = not brief_file and source == legacy_template_path(dirs, "base")
     enabled = runtime.brief_mode != "none" and (
         brief_file is not None or config.launch.inject_brief
     )
@@ -47,21 +48,22 @@ def instruction_preview(
         sources.append(
             {
                 "name": name,
-                "path": str(policy_source(config.data_dir, name)),
+                "path": str(policy_source(dirs, name)),
                 "scope": ", ".join(scopes),
                 "applied": enabled,
             }
         )
     content = ""
     if enabled:
+        facts = {
+            "agent_name": spec.name,
+            "repo": spec.repo or "(no GitHub remote)",
+            "policy_maintainer": config.templates.maintainer or "the owner of this backbone",
+        }
         content = (
-            append_policies(source.read_text(), config.data_dir, names)
+            append_policies(source.read_text(), dirs, names)
             if brief_file
-            else render_agent_brief(
-                {"agent_name": spec.name, "repo": spec.repo or "(no GitHub remote)"},
-                config.data_dir,
-                policy_names=names,
-            )
+            else render_agent_brief(facts, dirs, policy_names=names)
         )
     notices = []
     if brief_file:

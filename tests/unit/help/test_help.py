@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import agent_backbone.help as help_module
 from agent_backbone.help import get_doc, get_topic, list_docs, list_topics
-from agent_backbone.templates import render_agent_brief
+from agent_backbone.templates import TemplateDirs, render_agent_brief
 
 
 class TestTopics:
@@ -75,7 +75,7 @@ class TestAgentBrief:
 
     def test_data_dir_override(self, tmp_path):
         (tmp_path / "agent-brief.md").write_text("hello {agent_name}")
-        assert render_agent_brief({"agent_name": "x"}, tmp_path) == "hello x"
+        assert render_agent_brief({"agent_name": "x"}, TemplateDirs.default(tmp_path)) == "hello x"
 
 
 def test_instructions_alias_preserves_explicit_help_overrides(tmp_path):

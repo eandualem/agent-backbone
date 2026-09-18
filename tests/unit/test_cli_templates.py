@@ -11,8 +11,22 @@ import pytest
 from agent_backbone import cli
 from agent_backbone.cli import _common
 from agent_backbone.cli.instructions import edit_file
-from agent_backbone.config import AgentsConfig, AgentSpec, LaunchConfig, bootstrap_config
-from agent_backbone.templates import append_policies, read_template, render, template_path
+from agent_backbone.config import (
+    AgentsConfig,
+    AgentSpec,
+    LaunchConfig,
+    TemplatesConfig,
+    bootstrap_config,
+    validate_setting,
+)
+from agent_backbone.services.agents import instruction_preview
+from agent_backbone.templates import (
+    TemplateDirs,
+    append_policies,
+    read_template,
+    render,
+    template_path,
+)
 
 
 def run(args):
@@ -49,7 +63,7 @@ def test_init_copies_legacy_and_never_overwrites(tmp_path, capsys):
     data.mkdir()
     (data / "agent-brief.md").write_text("Legacy {agent_name}")
     assert run(["templates", "init", "base", "swarm:scout"]) == 0
-    base = template_path(data, "base")
+    base = template_path(TemplateDirs.default(data), "base")
     assert base.read_text() == "Legacy {agent_name}"
     base.write_text("My own base")
     assert run(["templates", "init"]) == 0
@@ -61,7 +75,7 @@ def test_init_copies_legacy_and_never_overwrites(tmp_path, capsys):
 
 
 def test_empty_override_and_bad_name_fail_clearly(tmp_path, capsys):
-    base = template_path(tmp_path / "data", "base")
+    base = template_path(TemplateDirs.default(tmp_path / "data"), "base")
     base.parent.mkdir(parents=True)
     base.write_text("  ")
     assert run(["templates", "validate"]) == 1
@@ -72,7 +86,7 @@ def test_empty_override_and_bad_name_fail_clearly(tmp_path, capsys):
 
 def test_policy_use_preserves_other_tags_and_normalizes_selector(tmp_path):
     data = tmp_path / "data"
-    policy = template_path(data, "policy:python")
+    policy = template_path(TemplateDirs.default(data), "policy:python")
     policy.parent.mkdir(parents=True)
     policy.write_text("Required Python practice")
     config = replace(bootstrap_config(), launch=LaunchConfig(tag_policy={"web": ("css",)}))
@@ -166,7 +180,7 @@ def test_preview_cli_reports_effective_sources(tmp_path, capsys):
 def test_inherited_source_concurrent_edit_is_preserved(tmp_path, monkeypatch):
     legacy = tmp_path / "agent-brief.md"
     legacy.write_text("Old")
-    target = template_path(tmp_path, "base")
+    target = template_path(TemplateDirs.default(tmp_path), "base")
     monkeypatch.setenv("VISUAL", "editor")
 
     def edit(args):
@@ -182,18 +196,19 @@ def test_inherited_source_concurrent_edit_is_preserved(tmp_path, monkeypatch):
 
 
 def test_literal_policy_text_and_nonrecursive_facts(tmp_path):
-    path = template_path(tmp_path, "policy:rules")
+    dirs = TemplateDirs.default(tmp_path)
+    path = template_path(dirs, "policy:rules")
     path.parent.mkdir(parents=True)
     path.write_text("Use {agent_name} and {shared_policy} literally.")
     brief = render("Agent {agent_name}: {repo}", {"agent_name": "{repo}", "repo": "acme/app"})
     assert brief == "Agent {repo}: acme/app"
-    content = append_policies(brief, tmp_path, ("rules", "rules"))
+    content = append_policies(brief, dirs, ("rules", "rules"))
     assert content.count("Use {agent_name}") == 1
     with pytest.raises(ValueError, match="at most once"):
-        append_policies("{shared_policy}\n{shared_policy}", tmp_path, ("rules",))
+        append_policies("{shared_policy}\n{shared_policy}", dirs, ("rules",))
     path.write_text("")
     with pytest.raises(ValueError, match="empty"):
-        read_template("policy:rules", tmp_path)
+        read_template("policy:rules", dirs)
 
 
 def test_validate_checks_assigned_rules_even_without_agents(capsys):
@@ -201,3 +216,53 @@ def test_validate_checks_assigned_rules_even_without_agents(capsys):
     with patch.object(_common, "read_config", AsyncMock(return_value=config)):
         assert run(["templates", "validate"]) == 1
     assert "Cannot read configured shared policy" in capsys.readouterr().err
+
+
+def test_templates_dir_setting_relocates_edits_and_keeps_legacy_reads(tmp_path, capsys):
+    data, custom = tmp_path / "data", tmp_path / "fleet-config"
+    data.mkdir()
+    (data / "policies").mkdir()
+    (data / "policies" / "legacy.md").write_text("Legacy rule")
+    config = replace(bootstrap_config(), templates=TemplatesConfig(dir=str(custom)))
+    dirs = config.template_dirs
+    assert dirs.editable == custom and dirs.data_dir == data
+    assert read_template("policy:legacy", dirs) == "Legacy rule"
+    with patch.object(_common, "read_config", AsyncMock(return_value=config)):
+        assert run(["templates", "path"]) == 0
+        assert capsys.readouterr().out.strip() == str(custom)
+        assert run(["templates", "init", "base", "policy:legacy"]) == 0
+    assert (custom / "base.md").is_file()
+    assert (custom / "policies" / "legacy.md").read_text() == "Legacy rule"
+    assert not (data / "templates").exists()
+    assert not list(data.glob("*.db"))
+    (custom / "policies" / "legacy.md").write_text("Edited in the configuration repo")
+    assert read_template("policy:legacy", dirs) == "Edited in the configuration repo"
+
+
+def test_base_brief_names_the_policy_maintainer(tmp_path):
+    spec = AgentSpec(name="api", dir=str(tmp_path))
+    unnamed = instruction_preview(spec, bootstrap_config())["content"]
+    assert "maintained by the owner of this backbone" in unnamed
+    config = replace(bootstrap_config(), templates=TemplatesConfig(maintainer="Leo"))
+    assert "maintained by Leo" in instruction_preview(spec, config)["content"]
+    with pytest.raises(ValueError):
+        validate_setting("templates.maintainer", " padded ")
+    with pytest.raises(ValueError):
+        validate_setting("templates.dir", "   ")
+    assert validate_setting("templates.dir", " ~/fleet ") == "~/fleet"
+
+
+def test_relocated_dir_warns_about_files_left_at_the_default(tmp_path, capsys):
+    data, custom = tmp_path / "data", tmp_path / "fleet-config"
+    (data / "templates" / "policies").mkdir(parents=True)
+    (data / "templates" / "policies" / "old.md").write_text("Edited before the move")
+    config = replace(bootstrap_config(), templates=TemplatesConfig(dir=str(custom)))
+    assert config.template_dirs.unread_default_files() == [
+        data / "templates" / "policies" / "old.md"
+    ]
+    assert bootstrap_config().template_dirs.unread_default_files() == []
+    with patch.object(_common, "read_config", AsyncMock(return_value=config)):
+        assert run(["templates", "list"]) == 0
+    assert "not read" in capsys.readouterr().out
+    with pytest.raises(ValueError, match="absolute"):
+        validate_setting("templates.dir", "fleet-config")

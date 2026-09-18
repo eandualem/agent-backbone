@@ -15,7 +15,7 @@ from agent_backbone.services.integrations import Integration, Integrations
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.runtimes.claude import pre_accept_bypass
 from agent_backbone.services.scheduler import PeriodicScheduler
-from agent_backbone.templates import render_agent_brief
+from agent_backbone.templates import TemplateDirs, render_agent_brief
 
 
 @pytest.mark.parametrize("question", ["Choose a session", "Quick safety check", "Unknown picker"])
@@ -48,21 +48,22 @@ def test_bypass_consent_preserves_config_and_handles_invalid_json(tmp_path):
 
 
 def test_policy_order_literal_content_and_full_override(tmp_path):
+    dirs = TemplateDirs.default(tmp_path)
     policies = tmp_path / "policies"
     policies.mkdir()
     (policies / "pr.md").write_text("Review {literal} before merging.")
     (policies / "work.md").write_text("Record the result.")
-    brief = render_agent_brief({"agent_name": "a"}, tmp_path, policy_names=("pr", "work"))
+    brief = render_agent_brief({"agent_name": "a"}, dirs, policy_names=("pr", "work"))
     assert "backbone help" in brief
     assert brief.index("{literal}") < brief.index("Record the result")
     with pytest.raises(ValueError, match="Cannot read configured"):
-        render_agent_brief({}, tmp_path, policy_names=("missing",))
+        render_agent_brief({}, dirs, policy_names=("missing",))
     with pytest.raises(ValueError):
         validate_setting("agents.shared_policy", ["../secrets"])
     (tmp_path / "agent-brief.md").write_text("Full control")
     with pytest.raises(ValueError, match="Cannot read configured shared policy"):
-        render_agent_brief({}, tmp_path, policy_names=("missing",))
-    assert "Review {literal}" in render_agent_brief({}, tmp_path, policy_names=("pr",))
+        render_agent_brief({}, dirs, policy_names=("missing",))
+    assert "Review {literal}" in render_agent_brief({}, dirs, policy_names=("pr",))
 
 
 @pytest.mark.parametrize(

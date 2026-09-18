@@ -48,6 +48,15 @@ What this environment gives you:
 - **Swarms**: for breadth-first tasks (research fan-outs, parallelizable
   features) you can put a coordinator plus workers on a single issue.
 
+**Shared policies.** Any `## Shared policy:` sections below are fleet rules
+this backbone injects at every fresh start — the global ones plus those
+assigned to your tags — maintained by {policy_maintainer}, outside any
+repository. Follow them; do not restate them in your own instructions. To
+change one, or when you notice a practice your whole group should share,
+propose it to {policy_maintainer} (an issue, or `backbone tell` when the
+maintainer is an agent) — never by copying the rule into a repository's
+instructions or your own configuration.
+
 The full playbook for each capability is one command away — read it
 before first use:
 

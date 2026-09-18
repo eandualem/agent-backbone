@@ -152,7 +152,7 @@ async def create_swarm(
     title = await _verify_issue(gh, repo, issue_number)
     try:
         kickoff_body = render(
-            read_template("swarm:kickoff", config.data_dir),
+            read_template("swarm:kickoff", config.template_dirs),
             {
                 "repo": repo,
                 "issue_number": str(issue_number),
@@ -245,7 +245,7 @@ async def create_swarm(
                 base_branch=base_branch,
             )
             brief_file = briefs_dir / f"{agent_name}.md"
-            brief_file.write_text(render_brief(spec.role, facts, data_dir=config.data_dir))
+            brief_file.write_text(render_brief(spec.role, facts, dirs=config.template_dirs))
 
             agent = AgentSpec(
                 name=agent_name,
