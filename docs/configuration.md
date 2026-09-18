@@ -78,7 +78,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `agents.auto_review` | `false` | Use automatic permission review where the runtime supports it (currently Codex, `--approve-for-me`, with its workspace sandbox). Routine requests can proceed after review; refusals return to the agent. Applies on the next start/resume. Unattended agents keep their no-prompt policy; other runtimes are unaffected. Set `false` to use your own runtime approval configuration |
 | `agents.shared_policy` | `[]` | Ordered policy names under `<templates.dir>/policies/`, composed with base and swarm briefs; see [templates](templates.md) |
 | `agents.tag_policy` | `{}` | Policy names by agent tag, as a JSON object of ordered lists; global policies apply first, then matching tags alphabetically, deduplicated |
-| `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Codex, Gemini and OpenCode receive it as the session's initial prompt (not re-sent on `--resume`); `aider` receives it as its first delivered message; plain shells get none. Override the text with `<data_dir>/templates/base.md` |
+| `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Codex, Gemini and OpenCode receive it as the session's initial prompt (not re-sent on `--resume`); `aider` receives it as its first delivered message; plain shells get none. Override the text with `base.md` in `templates.dir` (`backbone templates edit base`) |
 
 ### `skills.*`
 
@@ -218,7 +218,7 @@ out of agent sessions rather than exported into them.
 Use `backbone templates edit policy:NAME` to create a policy, then
 `backbone templates use NAME` to assign it globally, or add `--tag TAG` for a group.
 Assignments are stored in the database; Markdown files live in
-`<data_dir>/templates/policies/`. `backbone templates preview AGENT` shows the
+`<templates.dir>/policies/` (default `<data_dir>/templates/policies/`). `backbone templates preview AGENT` shows the
 actual next-launch content and sources. Missing or empty selected rules fail
 launch, including when the base brief is customized. See [Agent instruction
 templates](templates.md) for ordering, migration from legacy paths, placeholders,

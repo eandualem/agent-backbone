@@ -89,7 +89,8 @@ commands cannot change these identity tags. New rules apply when a new conversat
 starts; tagging does not interrupt or send messages to an existing session.
 
 The base brief tells every agent what the `## Shared policy:` sections are: fleet
-rules injected at each fresh start and selected by tags, maintained by
+rules injected at each fresh start (global assignments plus the agent's tags),
+maintained by
 `templates.maintainer` (rendered as `{policy_maintainer}`; empty reads "the owner
 of this backbone"), changed by proposing to that maintainer rather than copying a
 rule into a repository.

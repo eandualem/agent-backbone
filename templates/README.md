@@ -23,8 +23,9 @@ rules) belongs in this repository.
   every ordinary agent is told; it is not the place for team rules.
 - **Swarm briefs** (`swarm/`): the same for swarm members, split into the common
   preamble and one file per role.
-- **Policy** (`policies/NAME.md`): one short rule set shared by a group, injected
-  after the brief as `## Shared policy: NAME`. A policy is *global* when assigned
+- **Policy** (`policies/NAME.md`): one short rule set shared by a group, composed
+  into the brief as `## Shared policy: NAME` — at the brief's `{shared_policy}`
+  placeholder, or appended when it has none. A policy is *global* when assigned
   with `backbone templates use NAME`, or *tag-scoped* when assigned with
   `--tag TAG` to the agents carrying that tag. Write it as rules, not a
   description; keep it to what the whole group must do the same way; name no

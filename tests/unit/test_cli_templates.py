@@ -235,6 +235,8 @@ def test_templates_dir_setting_relocates_edits_and_keeps_legacy_reads(tmp_path, 
     assert (custom / "policies" / "legacy.md").read_text() == "Legacy rule"
     assert not (data / "templates").exists()
     assert not list(data.glob("*.db"))
+    (custom / "policies" / "legacy.md").write_text("Edited in the configuration repo")
+    assert read_template("policy:legacy", dirs) == "Edited in the configuration repo"
 
 
 def test_base_brief_names_the_policy_maintainer(tmp_path):
