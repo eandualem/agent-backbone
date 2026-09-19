@@ -1,8 +1,8 @@
 # agent-backbone — agent instructions
 
-Instructions for every coding agent working in this repository (Codex reads
-this file directly; Claude Code imports it from `CLAUDE.md`). A local control
-plane for terminal AI agents. Read `docs/concepts.md` for the model;
+Instructions for every coding agent working in this repository — the one
+instruction file; every runtime reads it directly. A local control plane for
+terminal AI agents. Read `docs/concepts.md` for the model;
 `docs/how-it-works.md` for the flows.
 
 ## Product philosophy — apply before proposing or implementing features
