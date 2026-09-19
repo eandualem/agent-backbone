@@ -92,19 +92,14 @@ class TestBuildCommand:
             else:
                 raise AssertionError("expected RuntimeError")
 
-    def test_codex_brief_becomes_initial_prompt(self, tmp_path):
+    def test_codex_brief_stays_off_the_command_line(self, tmp_path):
+        # tmux caps a launch command at 16 KB; the brief is queued as the first
+        # message instead of riding along as the initial prompt.
         brief = tmp_path / "brief.md"
         brief.write_text("You are agent x.")
         with _resolve("/bin/codex"):
             command = RUNTIMES["codex"].build_command(model="gpt-5.2", brief_file=brief)
-        assert command == [
-            "/bin/codex",
-            *_NET,
-            "--no-alt-screen",
-            "--model",
-            "gpt-5.2",
-            "You are agent x.",
-        ]
+        assert command == ["/bin/codex", *_NET, "--no-alt-screen", "--model", "gpt-5.2"]
 
     def test_codex_resume_is_a_subcommand(self):
         with _resolve("/bin/codex"):
@@ -422,13 +417,9 @@ class TestUnattended:
                 == RUNTIMES[runtime].build_command()
             )
 
-    def test_codex_never_asks_and_keeps_its_sandbox(self, tmp_path):
-        brief = tmp_path / "brief.md"
-        brief.write_text("You are a scout.")
+    def test_codex_never_asks_and_keeps_its_sandbox(self):
         with _resolve("/bin/codex"):
-            command = RUNTIMES["codex"].build_command(
-                model="gpt-6-astra:high", brief_file=brief, unattended=True
-            )
+            command = RUNTIMES["codex"].build_command(model="gpt-6-astra:high", unattended=True)
         assert command == [
             "/bin/codex",
             "-c",
@@ -438,7 +429,6 @@ class TestUnattended:
             "--no-alt-screen",
             "--model",
             "gpt-6-astra",
-            "You are a scout.",
         ]
         assert not any(arg.startswith("--dangerously-bypass") for arg in command)
         assert RUNTIMES["codex"].sandboxed

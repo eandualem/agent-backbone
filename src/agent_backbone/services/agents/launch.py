@@ -230,9 +230,9 @@ async def _start_agent(
     (``agents.pre_trust``). The agent's brief — the common backbone brief
     (``agents.inject_brief``), or ``brief_file`` when the caller has its own,
     such as a swarm role brief — reaches the runtime the way its
-    ``brief_mode`` says: at launch (Claude Code, Codex, Gemini, OpenCode) or
+    ``brief_mode`` says: at launch (Claude Code, Gemini, OpenCode) or
     queued as the first message the agent receives once it is at its prompt
-    (Aider). A resumed session already has its brief; a plain shell has
+    (Codex, Aider). A resumed session already has its brief; a plain shell has
     nobody to brief (pasting it would run it as commands).
     """
     if await session_exists(spec.name):
