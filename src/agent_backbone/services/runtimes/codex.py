@@ -101,7 +101,10 @@ class Codex(Runtime):
     fallback_prompts = ("›",)
     display_name = "Codex"
     binary = "codex"
-    brief_mode = "initial_prompt"
+    # Codex takes its first prompt only on the command line, and tmux caps a
+    # launch command at 16 KB — a brief with a few policies plus the sandbox
+    # and hook flags crosses it. So the brief is queued as the first message.
+    brief_mode = "message"
     models = ("gpt-5.6-sol", "gpt-6-astra")  # as shown by codex's own status line (live capture)
     # Codex has no effort flag; the level is a config override. Levels as
     # gpt-6-astra reports them in codex 0.153 (`~/.codex/models_cache.json`).

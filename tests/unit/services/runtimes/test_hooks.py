@@ -74,19 +74,17 @@ class TestCodex:
             assert entry["hooks"][0]["timeout"] == 10
         assert (tmp_path / "hooks" / "codex_hook.py").is_file()
 
-    def test_launch_command_carries_the_overrides_before_the_prompt(self, tmp_path):
-        brief = tmp_path / "brief.md"
-        brief.write_text("You are cx.")
+    def test_launch_command_carries_the_overrides(self, tmp_path):
         with patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/c"):
             command = RUNTIMES["codex"].build_command(
-                model="gpt-5.6-sol", brief_file=brief, data_dir=tmp_path, state_dir=tmp_path / "s"
+                model="gpt-5.6-sol", data_dir=tmp_path, state_dir=tmp_path / "s"
             )
             resumed = RUNTIMES["codex"].build_command(
                 resume=True, data_dir=tmp_path, state_dir=tmp_path / "s"
             )
         assert command[0] == "/c" and command[1] == "-c"
         assert "--dangerously-bypass-hook-trust" in command
-        assert command[-3:] == ["--model", "gpt-5.6-sol", "You are cx."]
+        assert command[-2:] == ["--model", "gpt-5.6-sol"]
         assert resumed[:3] == ["/c", "resume", "--last"] and resumed[3] == "-c"
         assert resumed[-1] == "--dangerously-bypass-hook-trust"
 

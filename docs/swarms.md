@@ -28,8 +28,8 @@ That single command:
    the coordinator last — here a
    `research-coordinator` (added automatically), `research-scout-1..3`
    on Sonnet, and a `research-coder` on Opus. **Role briefs** are injected
-   at launch for Claude Code, Codex, Gemini and OpenCode; Aider receives a
-   queued first message, and plain shell sessions receive no brief.
+   at launch for Claude Code, Gemini and OpenCode; Codex and Aider receive
+   a queued first message, and plain shell sessions receive no brief.
    Nothing is ever written into the repository,
 4. delivers the kickoff to the coordinator. Its brief tells it to wait for
    this message before assigning work, so assignments cannot race registration.
