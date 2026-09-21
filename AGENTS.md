@@ -47,12 +47,14 @@ responsibility for their work and replies.
 
 ## Repository handoff context
 
-Project state lives in this checkout's git-ignored `.backbone/memory/`.
-Start with `HANDOFF.md`, then the relevant notes in `INDEX.md`:
+This repository's memory lives in its git-ignored `.backbone/memory/`.
+Read `HANDOFF.md` first, then use `INDEX.md` to select relevant notes.
+Write the active scratchpad to `HANDOFF.md`; the injected `project-context`
+policy owns the shared memory protocol.
 
 ```
 .backbone/memory/
-├── HANDOFF.md      START HERE: current state, what is in flight, what comes next
+├── HANDOFF.md      START HERE: compact active scratchpad
 ├── INDEX.md        one line per note — what it is, when it was last true
 └── notes/          one topic per file (decisions, incidents, assessments, owner rules)
 ```
