@@ -741,6 +741,17 @@ def steer_offers(state_dir: Path, agent: str | None = None) -> list[SteerOffer]:
     return found
 
 
+def expire_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) -> bool:
+    """Backbone side: claim an offer nobody took, atomically against the
+    hook's own rename. False when the hook took it first."""
+    offer = _steer_dir(state_dir, agent, launch_id) / f"{steer_key(delivery_id)}.md"
+    try:
+        os.rename(offer, offer.with_suffix(".missed"))
+    except OSError:
+        return False
+    return True
+
+
 def clear_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) -> None:
     directory = _steer_dir(state_dir, agent, launch_id)
     for suffix in ("md", "taken", "missed"):

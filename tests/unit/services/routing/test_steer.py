@@ -110,6 +110,16 @@ class TestSettle:
         assert not path.exists()
         assert take_context(config.state_dir, "ike", launch_id="L1") == []
 
+    async def test_an_expired_offer_the_hook_takes_meanwhile_is_handed_off(
+        self, config, db, working
+    ):
+        report = await steer_agent("ike", "x", config, db=db, sender="leo")
+        stale = [("ike", "L1", report.delivery_id, "offered", 1000.0)]
+        take_context(config.state_dir, "ike", launch_id="L1")  # after the listing
+        with patch(f"{_STEER}.steer_offers", return_value=stale):
+            assert await settle_steers(config, db) == {}
+        assert await settle_steers(config, db) == {"handed_off": 1}
+
     async def test_an_offer_missed_by_the_turn_is_not_taken(self, config, db, working):
         await steer_agent("ike", "x", config, db=db, sender="leo")
         retire_steers(config.state_dir, "ike", launch_id="L1")
