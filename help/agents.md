@@ -54,21 +54,24 @@ backbone help agent start                  # recall command options
 - Claude Code's folder-trust dialog is answered automatically for
   directories you start agents in (`agents.pre_trust`).
 
-## Reading what an agent is doing
+## Reading what an agent has said
 
 ```bash
-backbone agent output NAME                 # recent transcript entries (Claude Code, Codex)
-backbone agent output NAME --lines 100
-backbone agent output NAME --since 5506468 # continue from the cursor printed last time
-backbone agent output NAME --screen        # the visible terminal instead
+backbone agent output NAME                  # its last 20 messages, complete
+backbone agent output NAME --lines 50
+backbone agent output NAME --before 5120    # earlier messages (offset printed by the last page)
+backbone agent output NAME --since 6301     # later messages (continue from the last page)
+backbone agent output NAME --since 5120 --end 9000   # a range
+backbone agent output NAME --screen         # the visible terminal instead
 ```
 
 Reads only: nothing is typed, pasted or attached. Claude Code and Codex keep
-their own transcript, which the backbone tails from the end — prompts,
-replies, tool calls and the first line of each result, one clipped line each,
-bounded (40 entries by default, 500 at most), never a whole session. Other
-runtimes show the visible terminal. The first line says which you got. A
-transcript shows activity the screen never did; `agent inspect` remains the
+their own transcript; the backbone shows the agent's user-facing messages
+from it — progress, commentary, replies — complete, never shortened. Tool
+calls, results and thinking are not messages and are not shown. Each page
+prints the commands for the earlier and later pages and says when more
+exists, so read as far back as you need. Other runtimes show the visible
+terminal; the first line says which you got. `agent inspect` remains the
 place for state, delivery readiness and the last reply.
 
 ## Handing over to a fresh session — including your own

@@ -285,21 +285,40 @@ def build_parser() -> argparse.ArgumentParser:
     pst.add_argument("names", nargs="+", metavar="NAME")
     po = asub.add_parser(
         "output",
-        help="recent activity: a tail of the agent's own transcript, else its screen",
+        help="what the agent has said: its messages in full, else its screen",
         description=(
-            "Reads only. Claude Code and Codex keep a transcript the backbone can tail; "
-            "other runtimes and --screen show the visible terminal. NAME defaults to "
-            "$BACKBONE_AGENT."
+            "Reads only. Claude Code and Codex keep a transcript; the backbone shows the "
+            "agent's user-facing messages from it, complete, a page at a time: the last "
+            "--lines by default, earlier ones with --before OFFSET, later ones with --since "
+            "OFFSET (--end OFFSET bounds a range). Each page prints the offsets to continue "
+            "either way. Tool calls, results and thinking are not shown; --screen shows the "
+            "terminal instead. NAME defaults to $BACKBONE_AGENT."
         ),
     )
     po.add_argument("name", nargs="?", default=None, metavar="NAME")
-    po.add_argument("--lines", type=int, default=40, help="entries to show (default 40, max 500)")
+    po.add_argument(
+        "--lines", type=int, default=20, help="messages per page (default 20, max 200)"
+    )
+    po.add_argument(
+        "--before",
+        type=int,
+        default=None,
+        metavar="OFFSET",
+        help="go back: the messages ending at or before this offset",
+    )
     po.add_argument(
         "--since",
         type=int,
         default=None,
-        metavar="CURSOR",
-        help="continue from the cursor printed by a previous call (transcript only)",
+        metavar="OFFSET",
+        help="continue: the messages starting at or after this offset",
+    )
+    po.add_argument(
+        "--end",
+        type=int,
+        default=None,
+        metavar="OFFSET",
+        help="with --since: stop at this offset (a start/end range)",
     )
     po.add_argument("--screen", action="store_true", help="show the terminal instead")
     po.add_argument("--json", action="store_true")

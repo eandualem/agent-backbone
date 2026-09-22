@@ -390,29 +390,49 @@ class TestStopAgent:
 
 
 class TestAgentOutput:
-    async def test_transcript_tail_with_cursor(self, api_client, auth_headers, tmux_svc):
-        from agent_backbone.services.agents.transcript import OutputTail
+    async def test_a_page_of_messages_with_navigation(self, api_client, auth_headers, tmux_svc):
+        from agent_backbone.services.agents.transcript import OutputPage
+        from agent_backbone.services.runtimes import TranscriptEntry
 
-        tail = OutputTail("ike", "transcript", "claude", ["10:00:00 assistant: hi"], 123, ["t"])
-        with patch(f"{_ROUTE}.output_tail", new_callable=AsyncMock, return_value=tail) as read:
+        page = OutputPage(
+            "ike",
+            "transcript",
+            "claude",
+            [TranscriptEntry("10:00:00", "assistant", "hi " * 2000, 100, 6200)],
+            100,
+            6200,
+            True,
+            False,
+            [],
+            ["t"],
+        )
+        with patch(f"{_ROUTE}.output_page", new_callable=AsyncMock, return_value=page) as read:
             resp = await api_client.get(
-                "/api/sessions/ike/output?lines=3&since=7", headers=auth_headers
+                "/api/sessions/ike/output?lines=3&before=7", headers=auth_headers
             )
         assert resp.status_code == 200, resp.text
-        assert resp.json() == {
-            "session": "ike",
-            "source": "transcript",
-            "runtime": "claude",
-            "lines": ["10:00:00 assistant: hi"],
-            "cursor": 123,
-            "evidence": ["t"],
+        data = resp.json()
+        assert data["source"] == "transcript" and data["messages"][0]["text"] == "hi " * 2000
+        assert (data["range_start"], data["range_end"]) == (100, 6200)
+        assert data["more_before"] is True and data["more_after"] is False
+        assert read.await_args.kwargs == {
+            "limit": 3,
+            "since": None,
+            "before": 7,
+            "end": None,
+            "screen": False,
         }
-        assert read.await_args.kwargs == {"lines": 3, "since": 7, "screen": False}
 
-    async def test_bounds_and_registration(self, api_client, auth_headers):
+    async def test_bounds_directions_and_registration(self, api_client, auth_headers):
         assert (
-            await api_client.get("/api/sessions/ike/output?lines=501", headers=auth_headers)
+            await api_client.get("/api/sessions/ike/output?lines=201", headers=auth_headers)
         ).status_code == 422
+        resp = await api_client.get(
+            "/api/sessions/ike/output?since=1&before=2", headers=auth_headers
+        )
+        assert resp.status_code == 400 and "not both" in resp.json()["detail"]
+        resp = await api_client.get("/api/sessions/ike/output?end=5", headers=auth_headers)
+        assert resp.status_code == 400 and "needs since" in resp.json()["detail"]
         resp = await api_client.get("/api/sessions/stray/output", headers=auth_headers)
         assert resp.status_code == 404
 

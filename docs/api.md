@@ -269,27 +269,34 @@ same filter again only changes its priority. Both return the agent's
 configuration view with `subscriptions: [{id, source, filter, priority}]`;
 400 for an unknown source or priority, 404 for an unknown agent or id.
 
-### `GET /api/sessions/{name}/output?lines=40&since=CURSOR&screen=false`
+### `GET /api/sessions/{name}/output?lines=20&before=OFFSET|since=OFFSET&end=OFFSET&screen=false`
 
-Recent activity of a registered agent, reads only. `source` is `transcript`
-when the runtime keeps a record the backbone can tail (Claude Code, Codex;
-located from the session id the hook recorded, only when that record's
-runtime is the live one) and `screen` otherwise (`--screen`, no transcript,
-an unsupported runtime): the visible terminal with ANSI stripped, `cursor`
-null. A transcript tail is bounded: at most `lines` entries (max 500) read
-backwards from the end of the file within a 4 MiB look-back — never a whole
-session. `cursor` is the byte offset after the last record returned; pass it
-as `since` to read what followed (at most `lines` entries, 256 KiB forward).
-`evidence` says where the lines came from or why the screen was used.
+A page of a registered agent's user-facing messages, reads only. `source` is
+`transcript` when the runtime keeps a record the backbone can read (Claude
+Code, Codex; located from the session id the hook recorded, only when that
+record's runtime is the live one) and `screen` otherwise (`screen=true`, no
+transcript, an unsupported runtime): the visible terminal with ANSI stripped
+in `lines`.
+
+Messages are the agent's own text to the person — progress, commentary and
+replies — **complete**; tool calls, tool results and thinking are not
+messages and are never included. A page holds at most `lines` messages
+(max 200) and never cuts one. Navigation is by byte offset into the
+append-only file: by default the last `lines` messages; `before=OFFSET`
+the messages ending at or before it (earlier pages); `since=OFFSET` the
+messages starting at or after it (later pages), with `end=OFFSET` bounding a
+range. `range_start`/`range_end` are the page's offsets, `more_before` /
+`more_after` say whether messages exist beyond it. One read scans at most
+64 MiB of file; a page that hit that bound says so in `evidence` with the
+offset to continue from. `400` when `since` and `before` are both given or
+`end` comes without `since`; `404` for an unregistered agent.
 
 ```json
 {"session": "app", "source": "transcript", "runtime": "claude",
- "lines": ["10:00:00 user: Fix the bug …", "10:00:05 tool: Bash pytest -q", "10:00:09 result: 3 passed"],
- "cursor": 5506468, "evidence": ["transcript /Users/me/.claude/projects/-Users-me-code-app/<session>.jsonl"]}
+ "messages": [{"time": "10:00:05", "role": "assistant", "text": "Looking at it now.", "start": 5120, "end": 6301}],
+ "range_start": 5120, "range_end": 6301, "more_before": true, "more_after": false,
+ "lines": [], "evidence": ["transcript /Users/me/.claude/projects/-Users-me-code-app/<session>.jsonl"]}
 ```
-
-Transcript entries include prompts, replies and tool activity that never
-appeared on screen; thinking and bookkeeping records are skipped.
 
 ### `GET /api/runtimes`, `GET /api/sessions`, `GET /api/sessions/{name}/terminal?lines=50`
 

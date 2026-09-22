@@ -1,38 +1,27 @@
-"""Each runtime reads its own transcript format into plain, bounded entries."""
+"""Each runtime reads its own transcript into the agent's complete user-facing messages."""
 
 from __future__ import annotations
 
-import json
-
 from agent_backbone.services.runtimes import get_runtime
-from agent_backbone.services.runtimes.base import (
-    transcript_argument,
-    transcript_clip,
-    transcript_clock,
-)
+from agent_backbone.services.runtimes.base import transcript_clock
+
+LONG = "A" * 5000 + "\nsecond paragraph " + "B" * 3000
 
 
-def test_helpers_clip_summarise_and_tell_the_time():
+def test_clock():
     assert transcript_clock("2026-09-22T16:50:54.123Z") == "16:50:54"
     assert transcript_clock(None) == "" and transcript_clock("nope") == ""
-    assert transcript_clip("  first line\nsecond") == "first line …"
-    assert transcript_clip("x" * 300).endswith("…") and len(transcript_clip("x" * 300)) == 200
-    assert transcript_clip("") == "" and transcript_clip(None) == ""
-    assert transcript_argument({"command": "ls -la", "description": "List files"}) == "List files"
-    assert transcript_argument({"file_path": "/a/b.py"}) == "/a/b.py"
-    assert transcript_argument('{"cmd": ["git", "status"]}') == "git status"
-    assert transcript_argument("plain text") == "plain text"
-    assert transcript_argument({"n": 3}) == '{"n": 3}'
-    assert transcript_argument(None) == ""
 
 
-def test_claude_entries_skip_thinking_and_bookkeeping():
+def test_claude_keeps_only_assistant_text_complete():
     records = [
-        {"type": "ai-title", "aiTitle": "x"},
+        {"type": "ai-title", "aiTitle": "x", "_start": 0, "_end": 10},
         {
             "type": "user",
             "timestamp": "2026-09-22T10:00:00.000Z",
-            "message": {"role": "user", "content": "Fix the bug\nplease"},
+            "message": {"role": "user", "content": "Fix the bug"},
+            "_start": 10,
+            "_end": 20,
         },
         {
             "type": "assistant",
@@ -41,47 +30,52 @@ def test_claude_entries_skip_thinking_and_bookkeeping():
                 "role": "assistant",
                 "content": [
                     {"type": "thinking", "thinking": "private"},
-                    {"type": "text", "text": "Looking."},
+                    {"type": "text", "text": "Looking at it now."},
                     {"type": "tool_use", "name": "Bash", "input": {"command": "pytest -q"}},
                 ],
             },
+            "_start": 20,
+            "_end": 30,
         },
         {
             "type": "user",
             "timestamp": "2026-09-22T10:00:09.000Z",
             "message": {
                 "role": "user",
-                "content": [
-                    {"type": "tool_result", "content": "3 passed\n", "is_error": False},
-                    {
-                        "type": "tool_result",
-                        "content": [{"type": "text", "text": ""}],
-                        "is_error": True,
-                    },
-                ],
+                "content": [{"type": "tool_result", "content": "3 passed"}],
             },
+            "_start": 30,
+            "_end": 40,
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-09-22T10:00:12.000Z",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": LONG}]},
+            "_start": 40,
+            "_end": 9000,
         },
         {
             "type": "assistant",
             "isSidechain": True,
-            "message": {"content": [{"type": "text", "text": "sub"}]},
+            "message": {"content": [{"type": "text", "text": "sub-agent"}]},
+        },
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "tool_use", "name": "Read", "input": {}}]},
         },
     ]
     entries = get_runtime("claude").transcript_entries(records)
-    assert [(e.time, e.role, e.text) for e in entries] == [
-        ("10:00:00", "user", "Fix the bug …"),
-        ("10:00:05", "assistant", "Looking."),
-        ("10:00:05", "tool", "Bash pytest -q"),
-        ("10:00:09", "result", "3 passed"),
-        ("10:00:09", "result", "error"),
+    assert [(e.time, e.role, e.start, e.end) for e in entries] == [
+        ("10:00:05", "assistant", 20, 30),
+        ("10:00:12", "assistant", 40, 9000),
     ]
+    assert entries[0].text == "Looking at it now."
+    assert entries[1].text == LONG  # never shortened
 
 
-def test_codex_entries_read_messages_calls_and_outputs():
-    output = json.dumps([{"type": "input_text", "text": "Script completed\nWall time 1s"}])
+def test_codex_keeps_assistant_messages_complete_and_nothing_else():
     records = [
         {"type": "session_meta", "payload": {"id": "s"}},
-        {"type": "event_msg", "payload": {"type": "token_count"}},
         {
             "type": "response_item",
             "timestamp": "2026-09-22T18:00:00.000Z",
@@ -91,68 +85,55 @@ def test_codex_entries_read_messages_calls_and_outputs():
                 "content": [{"type": "input_text", "text": "hi"}],
             },
         },
-        {"type": "response_item", "payload": {"type": "reasoning", "summary": []}},
+        {"type": "response_item", "payload": {"type": "reasoning", "summary": [{"text": "think"}]}},
         {
             "type": "response_item",
-            "timestamp": "2026-09-22T18:00:01.000Z",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "arguments": '{"cmd": "git status"}',
-            },
+            "payload": {"type": "custom_tool_call", "name": "exec", "input": "ls"},
         },
-        {
-            "type": "response_item",
-            "timestamp": "2026-09-22T18:00:02.000Z",
-            "payload": {"type": "custom_tool_call_output", "call_id": "c", "output": output},
-        },
+        {"type": "response_item", "payload": {"type": "custom_tool_call_output", "output": "a.py"}},
         {
             "type": "response_item",
             "timestamp": "2026-09-22T18:00:03.000Z",
             "payload": {
                 "type": "message",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "Done."}],
+                "phase": "commentary",
+                "content": [{"type": "output_text", "text": "Checking the lock first."}],
             },
+            "_start": 100,
+            "_end": 200,
+        },
+        {
+            "type": "response_item",
+            "timestamp": "2026-09-22T18:00:09.000Z",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": LONG}],
+            },
+            "_start": 200,
+            "_end": 9000,
         },
         {
             "type": "response_item",
             "payload": {"type": "message", "role": "developer", "content": "sys"},
         },
         {
-            "type": "response_item",
-            "timestamp": "2026-09-22T18:00:04.000Z",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "input": "text(await tools.ls())",
-            },
-        },
-        {
-            "type": "response_item",
-            "timestamp": "2026-09-22T18:00:05.000Z",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "output": [
-                    {"type": "input_text", "text": "a.py\nb.py"},
-                    {"type": "input_text", "text": "{}"},
-                ],
-            },
+            "type": "event_msg",
+            "payload": {"type": "agent_message", "message": "not a response item"},
         },
     ]
     entries = get_runtime("codex").transcript_entries(records)
-    assert [(e.time, e.role, e.text) for e in entries] == [
-        ("18:00:00", "user", "hi"),
-        ("18:00:01", "tool", "exec git status"),
-        ("18:00:02", "result", "Script completed …"),
-        ("18:00:03", "assistant", "Done."),
-        ("18:00:04", "tool", "exec text(await tools.ls())"),
-        ("18:00:05", "result", "a.py …"),
+    assert [(e.time, e.text[:8], e.start, e.end) for e in entries] == [
+        ("18:00:03", "Checking", 100, 200),
+        ("18:00:09", "AAAAAAAA", 200, 9000),
     ]
+    assert entries[1].text == LONG
 
 
 def test_other_runtimes_keep_no_readable_transcript():
     for runtime in ("gemini", "opencode", "aider", "shell"):
         rt = get_runtime(runtime)
         assert rt.transcript_supported is False
-        assert rt.transcript_entries([{"type": "user", "message": {"content": "x"}}]) == []
+        assert rt.transcript_entries([{"type": "assistant", "message": {"content": "x"}}]) == []

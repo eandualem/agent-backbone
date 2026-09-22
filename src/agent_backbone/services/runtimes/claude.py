@@ -12,13 +12,7 @@ from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import count
-from agent_backbone.services.runtimes.base import (
-    Runtime,
-    TranscriptEntry,
-    transcript_argument,
-    transcript_clip,
-    transcript_clock,
-)
+from agent_backbone.services.runtimes.base import Runtime, TranscriptEntry, transcript_clock
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
@@ -253,49 +247,33 @@ class ClaudeCode(Runtime):
     transcript_supported = True
 
     def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
-        """``user``/``assistant`` records of Claude Code's per-session JSONL:
-        prompt text, replies, tool calls and the first line of each result.
-        Thinking blocks and the bookkeeping record types are skipped."""
+        """The ``text`` blocks of ``assistant`` records in Claude Code's
+        per-session JSONL: what the agent said to the person, complete.
+        Thinking, tool use, tool results, user records and the bookkeeping
+        record types are not messages."""
         entries: list[TranscriptEntry] = []
         for record in records:
-            kind = record.get("type")
-            if kind not in ("user", "assistant") or record.get("isSidechain"):
+            if record.get("type") != "assistant" or record.get("isSidechain"):
                 continue
-            clock = transcript_clock(record.get("timestamp"))
             message = record.get("message")
             content = message.get("content") if isinstance(message, dict) else None
-            if isinstance(content, str):
-                if content.strip():
-                    entries.append(TranscriptEntry(clock, "user", transcript_clip(content)))
-                continue
             if not isinstance(content, list):
                 continue
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                block_type = block.get("type")
-                if block_type == "text" and kind == "assistant":
-                    if text := transcript_clip(block.get("text")):
-                        entries.append(TranscriptEntry(clock, "assistant", text))
-                elif block_type == "text" and kind == "user":
-                    if text := transcript_clip(block.get("text")):
-                        entries.append(TranscriptEntry(clock, "user", text))
-                elif block_type == "tool_use":
-                    name = block.get("name") or "tool"
-                    summary = transcript_argument(block.get("input"))
-                    entries.append(TranscriptEntry(clock, "tool", f"{name} {summary}".rstrip()))
-                elif block_type == "tool_result":
-                    result = block.get("content")
-                    if isinstance(result, list):
-                        result = "\n".join(
-                            part.get("text", "")
-                            for part in result
-                            if isinstance(part, dict) and part.get("type") == "text"
-                        )
-                    text = transcript_clip(result)
-                    if block.get("is_error"):
-                        text = f"error: {text}" if text else "error"
-                    entries.append(TranscriptEntry(clock, "result", text or "(no output)"))
+            clock = transcript_clock(record.get("timestamp"))
+            text = "\n\n".join(
+                block["text"]
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                and block["text"].strip()
+            )
+            if text:
+                entries.append(
+                    TranscriptEntry(
+                        clock, "assistant", text, record.get("_start", 0), record.get("_end", 0)
+                    )
+                )
         return entries
 
     def usage_children(

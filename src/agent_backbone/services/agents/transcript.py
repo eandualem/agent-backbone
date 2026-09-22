@@ -1,11 +1,15 @@
-"""What an agent has been doing: a bounded tail of its runtime's own
-conversation record (``backbone agent output``), or the screen when the
-runtime keeps none.
+"""What an agent has been saying: its user-facing messages, complete, out of
+its runtime's own conversation record (``backbone agent output``), or the
+screen when the runtime keeps none.
 
 The transcript is located from the session id the runtime's hook recorded
 (only when that record's runtime is the live one) through the runtime's
-``usage_paths``; the runtime parses its own format. Reads are bounded to
-the tail of the file and to a number of entries: never a whole session.
+``usage_paths``; the runtime parses its own format and returns only the
+messages the agent addressed to the person, never shortened. Navigation is
+by byte offset into the append-only file: a page is a bounded number of
+messages, read backwards from the end (or from ``before``) or forwards from
+``since`` (optionally up to ``end``); every page says whether more lies
+before or after it, so nothing is silently dropped.
 """
 
 from __future__ import annotations
@@ -23,29 +27,36 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agent_backbone.config import BackboneConfig
-    from agent_backbone.services.runtimes import Runtime
+    from agent_backbone.services.runtimes import Runtime, TranscriptEntry
 
-DEFAULT_ENTRIES = 40
-MAX_ENTRIES = 500
-TAIL_BYTES = 256 * 1024
-"""One read step backwards through the file (a forward read from a cursor
-reads at most this much)."""
-MAX_TAIL_BYTES = 4 * 1024 * 1024
-"""How far back a tail read may look in total: bounded recent content, never
-the whole session (Codex records can carry whole command outputs)."""
+DEFAULT_MESSAGES = 20
+MAX_MESSAGES = 200
+STEP_BYTES = 1024 * 1024
+"""One read step through the file."""
+MAX_SCAN_BYTES = 64 * 1024 * 1024
+"""How much of the file one page read may scan for messages (Codex records
+can carry whole command outputs between two messages); a page that hits
+this bound says so with ``more_before``/``more_after`` and its evidence."""
 
 
 @dataclass(frozen=True)
-class OutputTail:
-    """The lines, where they came from and how to continue from here."""
+class OutputPage:
+    """One page of messages (or the screen), with how to reach the rest."""
 
     session: str
     source: str
     """``transcript`` (the runtime's own record) or ``screen`` (``capture-pane``)."""
     runtime: str
+    messages: list[TranscriptEntry] = field(default_factory=list)
+    """Complete user-facing messages, oldest first (transcript source)."""
+    range_start: int | None = None
+    """Byte offset of the first message on the page; ``--before`` it to go back."""
+    range_end: int | None = None
+    """Byte offset after the last message; ``--since`` it to continue."""
+    more_before: bool = False
+    more_after: bool = False
     lines: list[str] = field(default_factory=list)
-    cursor: int | None = None
-    """Byte offset after the last transcript record returned; None for the screen."""
+    """The visible terminal, ANSI stripped (screen source)."""
     evidence: list[str] = field(default_factory=list)
 
 
@@ -73,65 +84,119 @@ def locate_transcript(
     return newest, rt, [f"transcript {newest}"]
 
 
-def read_transcript_tail(
-    path: Path, rt: Runtime, *, lines: int, since: int | None
-) -> tuple[list[str], int]:
-    """The last ``lines`` entries (or every entry after byte ``since``, up to
-    ``lines``) and the byte offset to continue from."""
-    size = path.stat().st_size
-    if since is not None:
-        start = min(max(since, 0), size)
-        with path.open("rb") as stream:
-            stream.seek(start)
-            raw = stream.read(TAIL_BYTES)
-        end = start + len(raw)
-        if raw and not raw.endswith(b"\n") and end < size:
-            raw, _, partial = raw.rpartition(b"\n")
-            raw += b"\n"
-            end -= len(partial)
-        entries = rt.transcript_entries(_records(raw))[:lines]
-    else:
-        # Walk backwards a step at a time until there are enough entries or
-        # the look-back bound is reached; the first record of a step that did
-        # not start at the file's beginning is cut mid-line and dropped.
-        start = size
-        entries = []
-        with path.open("rb") as stream:
-            while start > 0 and len(entries) < lines and size - start < MAX_TAIL_BYTES:
-                start = max(0, start - TAIL_BYTES)
-                stream.seek(start)
-                raw = stream.read(size - start)
-                if start:
-                    raw = raw.partition(b"\n")[2]
-                entries = rt.transcript_entries(_records(raw))
-        entries = entries[-lines:]
-        end = size
-    rendered = [f"{entry.time} {entry.role}: {entry.text}".strip() for entry in entries]
-    return rendered, end
-
-
-def _records(raw: bytes) -> list[dict]:
+def _records(raw: bytes, base: int) -> list[dict]:
+    """Parsed JSON records of ``raw`` (which starts at file offset ``base``),
+    each stamped with its ``_start``/``_end`` byte offsets."""
     records: list[dict] = []
-    for line in raw.decode("utf-8", "replace").splitlines():
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(record, dict):
-            records.append(record)
+    offset = base
+    lines = raw.split(b"\n")
+    for index, line in enumerate(lines):
+        length = len(line) + (1 if index < len(lines) - 1 else 0)
+        if line.strip():
+            try:
+                record = json.loads(line.decode("utf-8", "replace"))
+            except ValueError:
+                record = None
+            if isinstance(record, dict):
+                record["_start"] = offset
+                record["_end"] = offset + length
+                records.append(record)
+        offset += length
     return records
 
 
-async def output_tail(
+def read_messages(
+    path: Path,
+    rt: Runtime,
+    *,
+    limit: int,
+    since: int | None = None,
+    before: int | None = None,
+    end: int | None = None,
+) -> tuple[list[TranscriptEntry], bool, bool, list[str]]:
+    """A page of complete messages and whether more exist before and after it.
+
+    Backwards (the default, or from ``before``): the last ``limit`` messages
+    ending at or before that offset. Forwards (``since``): the first ``limit``
+    messages starting at or after it, up to ``end``. Returns
+    ``(messages, more_before, more_after, evidence)``."""
+    size = path.stat().st_size
+    evidence: list[str] = []
+    with path.open("rb") as stream:
+        if since is not None:
+            pos = min(max(since, 0), size)
+            stop = min(max(end, pos), size) if end is not None else size
+            collected: list[TranscriptEntry] = []
+            scanned = 0
+            while pos < stop and len(collected) <= limit and scanned < MAX_SCAN_BYTES:
+                chunk = _forward_chunk(stream, pos, stop)
+                collected.extend(rt.transcript_entries(_records(chunk, pos)))
+                pos += len(chunk)
+                scanned += len(chunk)
+            messages = collected[:limit]
+            more_after = len(collected) > limit or pos < stop
+            if pos < stop and len(collected) <= limit:
+                evidence.append(f"scan bound reached at offset {pos}; continue with --since {pos}")
+            more_before = since > 0
+            return messages, more_before, more_after, evidence
+        stop = min(max(before, 0), size) if before is not None else size
+        pos = stop
+        collected = []
+        scanned = 0
+        while pos > 0 and len(collected) <= limit and scanned < MAX_SCAN_BYTES:
+            start, chunk = _backward_chunk(stream, pos)
+            collected = rt.transcript_entries(_records(chunk, start)) + collected
+            scanned += pos - start
+            pos = start
+        messages = collected[-limit:]
+        more_before = len(collected) > limit or pos > 0
+        if pos > 0 and len(collected) <= limit:
+            evidence.append(f"scan bound reached at offset {pos}; go back with --before {pos}")
+        more_after = stop < size
+        return messages, more_before, more_after, evidence
+
+
+def _forward_chunk(stream, pos: int, stop: int) -> bytes:
+    """Whole records from ``pos`` towards ``stop``: about one step, extended
+    as far as needed to end on a record boundary (a record may be longer
+    than a step)."""
+    stream.seek(pos)
+    chunk = stream.read(min(STEP_BYTES, stop - pos))
+    while pos + len(chunk) < stop:
+        cut = chunk.rfind(b"\n")
+        if cut >= 0:
+            return chunk[: cut + 1]
+        chunk += stream.read(min(STEP_BYTES, stop - pos - len(chunk)))
+    return chunk
+
+
+def _backward_chunk(stream, pos: int) -> tuple[int, bytes]:
+    """Whole records ending at ``pos``: about one step back, extended as far
+    as needed to begin on a record boundary. Returns ``(start, chunk)``."""
+    start = max(0, pos - STEP_BYTES)
+    while True:
+        stream.seek(start)
+        chunk = stream.read(pos - start)
+        if start == 0:
+            return 0, chunk
+        head, sep, rest = chunk.partition(b"\n")
+        if sep and rest:  # the window holds at least one whole record
+            return start + len(head) + len(sep), rest
+        start = max(0, start - STEP_BYTES)  # only the tail of a long record: widen
+
+
+async def output_page(
     config: BackboneConfig,
     name: str,
     *,
-    lines: int = DEFAULT_ENTRIES,
+    limit: int = DEFAULT_MESSAGES,
     since: int | None = None,
+    before: int | None = None,
+    end: int | None = None,
     screen: bool = False,
-) -> OutputTail:
-    """Recent activity of a registered agent: its transcript, else its screen."""
-    lines = max(1, min(lines, MAX_ENTRIES))
+) -> OutputPage:
+    """A page of a registered agent's messages, else its screen."""
+    limit = max(1, min(limit, MAX_MESSAGES))
     online = await session_exists(name)
     live_runtime = await query_environment_var(name, "BACKBONE_RUNTIME") if online else None
     evidence: list[str] = []
@@ -140,25 +205,36 @@ async def output_tail(
         evidence.extend(why)
         if path is not None:
             try:
-                rendered, cursor = await asyncio.to_thread(
-                    read_transcript_tail, path, rt, lines=lines, since=since
+                messages, more_before, more_after, notes = await asyncio.to_thread(
+                    read_messages, path, rt, limit=limit, since=since, before=before, end=end
                 )
             except OSError as exc:
                 evidence.append(f"transcript unreadable: {type(exc).__name__}")
             else:
-                return OutputTail(name, "transcript", rt.id, rendered, cursor, evidence)
+                return OutputPage(
+                    name,
+                    "transcript",
+                    rt.id,
+                    messages,
+                    messages[0].start if messages else (since if since is not None else before),
+                    messages[-1].end if messages else (since if since is not None else before),
+                    more_before,
+                    more_after,
+                    [],
+                    [*evidence, *notes],
+                )
     else:
         evidence.append("screen requested")
     if not online:
-        return OutputTail(name, "screen", live_runtime or "", [], None, [*evidence, "offline"])
-    pane = await capture_pane(name, lines=lines)
+        return OutputPage(name, "screen", live_runtime or "", evidence=[*evidence, "offline"])
+    pane = await capture_pane(name, lines=limit)
     text = sanitize_pane_content(pane)
     visible = [line.rstrip() for line in text.splitlines()]
     while visible and not visible[-1]:
         visible.pop()
     spec = config.agents.get(name)
     runtime_id = live_runtime or (spec.runtime if spec is not None else "")
-    return OutputTail(name, "screen", runtime_id, visible[-lines:], None, evidence)
+    return OutputPage(name, "screen", runtime_id, lines=visible[-limit:], evidence=evidence)
 
 
-__all__ = ["DEFAULT_ENTRIES", "MAX_ENTRIES", "OutputTail", "output_tail", "read_transcript_tail"]
+__all__ = ["DEFAULT_MESSAGES", "MAX_MESSAGES", "OutputPage", "output_page", "read_messages"]

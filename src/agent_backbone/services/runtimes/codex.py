@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import math
@@ -19,8 +18,6 @@ from agent_backbone.services.runtimes.base import (
     Runtime,
     RuntimeDiagnostic,
     TranscriptEntry,
-    transcript_argument,
-    transcript_clip,
     transcript_clock,
 )
 from agent_backbone.usage import UsageEvent, timestamp
@@ -343,51 +340,36 @@ class Codex(Runtime):
     transcript_supported = True
 
     def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
-        """``response_item`` records of a Codex rollout: user and assistant
-        messages, tool calls and the first line of each output. Reasoning,
-        token counts and the other event records are skipped."""
+        """Assistant ``message`` items of a Codex rollout — commentary during
+        the turn and the final answer — complete. Reasoning, tool calls and
+        outputs, user items and event records are not messages."""
         entries: list[TranscriptEntry] = []
         for record in records:
             if record.get("type") != "response_item":
                 continue
             payload = record.get("payload")
-            if not isinstance(payload, dict):
+            if not isinstance(payload, dict) or payload.get("type") != "message":
                 continue
-            clock = transcript_clock(record.get("timestamp"))
-            kind = payload.get("type")
-            if kind == "message":
-                role = payload.get("role")
-                if role not in ("user", "assistant"):
-                    continue
-                content = payload.get("content")
-                if isinstance(content, list):
-                    content = "\n".join(
-                        part.get("text", "")
-                        for part in content
-                        if isinstance(part, dict) and isinstance(part.get("text"), str)
-                    )
-                if text := transcript_clip(content):
-                    entries.append(TranscriptEntry(clock, role, text))
-            elif kind in ("custom_tool_call", "function_call", "local_shell_call"):
-                name = payload.get("name") or kind.removesuffix("_call")
-                arguments = payload.get("arguments")
-                if arguments is None:
-                    arguments = payload.get("input") or payload.get("action")
-                summary = transcript_argument(arguments)
-                entries.append(TranscriptEntry(clock, "tool", f"{name} {summary}".rstrip()))
-            elif kind in ("custom_tool_call_output", "function_call_output"):
-                output = payload.get("output")
-                if isinstance(output, str) and output.startswith("["):
-                    with contextlib.suppress(ValueError):
-                        output = json.loads(output)
-                if isinstance(output, list):
-                    output = "\n".join(
-                        part.get("text", "")
-                        for part in output
-                        if isinstance(part, dict) and isinstance(part.get("text"), str)
-                    )
+            if payload.get("role") != "assistant":
+                continue
+            content = payload.get("content")
+            if isinstance(content, list):
+                content = "\n\n".join(
+                    part["text"]
+                    for part in content
+                    if isinstance(part, dict)
+                    and isinstance(part.get("text"), str)
+                    and part["text"].strip()
+                )
+            if isinstance(content, str) and content.strip():
                 entries.append(
-                    TranscriptEntry(clock, "result", transcript_clip(output) or "(no output)")
+                    TranscriptEntry(
+                        transcript_clock(record.get("timestamp")),
+                        "assistant",
+                        content,
+                        record.get("_start", 0),
+                        record.get("_end", 0),
+                    )
                 )
         return entries
 
