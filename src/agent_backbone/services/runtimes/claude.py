@@ -12,7 +12,7 @@ from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import count
-from agent_backbone.services.runtimes.base import Runtime
+from agent_backbone.services.runtimes.base import Runtime, TranscriptEntry, transcript_clock
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
@@ -243,6 +243,38 @@ class ClaudeCode(Runtime):
             or Path.home() / ".claude"
         ).expanduser()
         return sorted(home.glob(f"projects/*/{session_id}.jsonl"))
+
+    transcript_supported = True
+
+    def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
+        """The ``text`` blocks of ``assistant`` records in Claude Code's
+        per-session JSONL: what the agent said to the person, complete.
+        Thinking, tool use, tool results, user records and the bookkeeping
+        record types are not messages."""
+        entries: list[TranscriptEntry] = []
+        for record in records:
+            if record.get("type") != "assistant" or record.get("isSidechain"):
+                continue
+            message = record.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            clock = transcript_clock(record.get("timestamp"))
+            text = "\n\n".join(
+                block["text"]
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                and block["text"].strip()
+            )
+            if text:
+                entries.append(
+                    TranscriptEntry(
+                        clock, "assistant", text, record.get("_start", 0), record.get("_end", 0)
+                    )
+                )
+        return entries
 
     def usage_children(
         self, path: Path, session_id: str, env: dict[str, str]

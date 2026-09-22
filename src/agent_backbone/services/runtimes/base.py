@@ -144,6 +144,30 @@ class SubmissionUnconfirmed(RuntimeError):
     """Text may already belong to the runtime; never blindly paste it again."""
 
 
+@dataclass(frozen=True)
+class TranscriptEntry:
+    """One user-facing message of the agent, complete, from its runtime's own record."""
+
+    time: str
+    """``HH:MM:SS`` (UTC) when the record carries a timestamp, else empty."""
+    role: str
+    """``assistant`` — the agent speaking to the person (progress, commentary, replies)."""
+    text: str
+    """The whole message text, never shortened."""
+    start: int = 0
+    """Byte offset where the record begins in the transcript file."""
+    end: int = 0
+    """Byte offset just after the record (the cursor to continue from)."""
+
+
+def transcript_clock(timestamp: object) -> str:
+    """``HH:MM:SS`` out of an ISO 8601 timestamp, or empty."""
+    if not isinstance(timestamp, str) or "T" not in timestamp:
+        return ""
+    clock = timestamp.split("T", 1)[1]
+    return clock[:8] if len(clock) >= 8 and clock[2] == ":" else ""
+
+
 class Runtime:
     """Behavioural contract for one interactive CLI. Subclasses set the data."""
 
@@ -721,6 +745,17 @@ class Runtime:
 
     def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
         """Locate only the conversation explicitly associated with this agent."""
+        return []
+
+    transcript_supported = False
+    """The runtime keeps its own conversation record that ``usage_paths``
+    locates and ``transcript_entries`` can read (``backbone agent output``)."""
+
+    def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
+        """The agent's user-facing messages out of parsed JSONL records, oldest
+        first and complete. Each record carries ``_start``/``_end`` byte
+        offsets. Tool calls, tool results, reasoning and bookkeeping records
+        are not messages and are left out."""
         return []
 
     def usage_children(

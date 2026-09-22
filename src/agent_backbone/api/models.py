@@ -109,6 +109,36 @@ class AgentTransitionView(BaseModel):
         return cls(session=row["agent_name"], **{k: v for k, v in row.items() if k != "agent_name"})
 
 
+class OutputMessage(BaseModel):
+    """One complete user-facing message of the agent."""
+
+    time: str = ""
+    role: str = "assistant"
+    text: str
+    start: int
+    end: int
+
+
+class AgentOutputResponse(BaseModel):
+    """A page of an agent's messages, or its screen (``backbone agent output``)."""
+
+    session: str
+    source: str
+    """``transcript`` (the runtime's own record) or ``screen`` (``capture-pane``)."""
+    runtime: str = ""
+    messages: list[OutputMessage] = Field(default_factory=list)
+    """Complete messages, oldest first (transcript source only)."""
+    range_start: int | None = None
+    """Byte offset of the first message; ``before=`` it to read earlier ones."""
+    range_end: int | None = None
+    """Byte offset after the last message; ``since=`` it to continue."""
+    more_before: bool = False
+    more_after: bool = False
+    lines: list[str] = Field(default_factory=list)
+    """The visible terminal, ANSI stripped (screen source only)."""
+    evidence: list[str] = Field(default_factory=list)
+
+
 class AgentUpdateRequest(BaseModel):
     """Fields that ``PATCH /api/agents/{name}`` may change."""
 

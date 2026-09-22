@@ -20,6 +20,7 @@ from agent_backbone.api.models import (
     AgentApproveResponse,
     AgentDenyResponse,
     AgentInspectResponse,
+    AgentOutputResponse,
     AgentRestartRequest,
     AgentStartRequest,
     AgentStartResponse,
@@ -29,6 +30,7 @@ from agent_backbone.api.models import (
     AgentUpdateRequest,
     DeliveryRecord,
     ListEnvelope,
+    OutputMessage,
     RuntimeInfo,
     StateUpdateRequest,
     SubscribeRequest,
@@ -58,6 +60,7 @@ from agent_backbone.services.agents.operations import (
 from agent_backbone.services.agents.operations import (
     forget_agent as forget_agent_op,
 )
+from agent_backbone.services.agents.transcript import MAX_MESSAGES, output_page
 from agent_backbone.services.agents.transitions import (
     TransitionPending,
     TransitionRequest,
@@ -529,6 +532,49 @@ async def get_terminal_output(
     if not output and not await session_exists(name):
         raise HTTPException(status_code=404, detail=f"Session '{name}' not found")
     return {"session": name, "lines": lines, "content": output}
+
+
+@router.get("/sessions/{name}/output", response_model=AgentOutputResponse)
+async def get_agent_output(
+    name: str,
+    lines: int = Query(default=20, ge=1, le=MAX_MESSAGES),
+    since: int | None = Query(default=None, ge=0),
+    before: int | None = Query(default=None, ge=0),
+    end: int | None = Query(default=None, ge=0),
+    screen: bool = Query(default=False),
+    config: BackboneConfig = Depends(get_config),
+):
+    """A page of a registered agent's user-facing messages, complete, out of
+    its runtime's own transcript (Claude Code, Codex), else its visible
+    screen. Reads only. Default: the last ``lines`` messages; ``before``
+    reads the messages ending at or before that offset; ``since`` reads
+    forward from an offset, optionally up to ``end``; ``screen`` forces a
+    pane read. Every page says whether more lies before or after it."""
+    registered_agent_or_404(config, name)
+    if since is not None and before is not None:
+        raise HTTPException(
+            status_code=400, detail="give since (forward) or before (back), not both"
+        )
+    if end is not None and since is None:
+        raise HTTPException(status_code=400, detail="end needs since (a forward range)")
+    page = await output_page(
+        config, name, limit=lines, since=since, before=before, end=end, screen=screen
+    )
+    return AgentOutputResponse(
+        session=page.session,
+        source=page.source,
+        runtime=page.runtime,
+        messages=[
+            OutputMessage(time=m.time, role=m.role, text=m.text, start=m.start, end=m.end)
+            for m in page.messages
+        ],
+        range_start=page.range_start,
+        range_end=page.range_end,
+        more_before=page.more_before,
+        more_after=page.more_after,
+        lines=page.lines,
+        evidence=page.evidence,
+    )
 
 
 @router.post("/agents/{session}/state")

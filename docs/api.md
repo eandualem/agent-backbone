@@ -269,6 +269,35 @@ same filter again only changes its priority. Both return the agent's
 configuration view with `subscriptions: [{id, source, filter, priority}]`;
 400 for an unknown source or priority, 404 for an unknown agent or id.
 
+### `GET /api/sessions/{name}/output?lines=20&before=OFFSET|since=OFFSET&end=OFFSET&screen=false`
+
+A page of a registered agent's user-facing messages, reads only. `source` is
+`transcript` when the runtime keeps a record the backbone can read (Claude
+Code, Codex; located from the session id the hook recorded, only when that
+record's runtime is the live one) and `screen` otherwise (`screen=true`, no
+transcript, an unsupported runtime): the visible terminal with ANSI stripped
+in `lines`.
+
+Messages are the agent's own text to the person — progress, commentary and
+replies — **complete**; tool calls, tool results and thinking are not
+messages and are never included. A page holds at most `lines` messages
+(max 200) and never cuts one. Navigation is by byte offset into the
+append-only file: by default the last `lines` messages; `before=OFFSET`
+the messages ending at or before it (earlier pages); `since=OFFSET` the
+messages starting at or after it (later pages), with `end=OFFSET` bounding a
+range. `range_start`/`range_end` are the page's offsets, `more_before` /
+`more_after` say whether messages exist beyond it. One read scans at most
+64 MiB of file; a page that hit that bound says so in `evidence` with the
+offset to continue from. `400` when `since` and `before` are both given or
+`end` comes without `since`; `404` for an unregistered agent.
+
+```json
+{"session": "app", "source": "transcript", "runtime": "claude",
+ "messages": [{"time": "10:00:05", "role": "assistant", "text": "Looking at it now.", "start": 5120, "end": 6301}],
+ "range_start": 5120, "range_end": 6301, "more_before": true, "more_after": false,
+ "lines": [], "evidence": ["transcript /Users/me/.claude/projects/-Users-me-code-app/<session>.jsonl"]}
+```
+
 ### `GET /api/runtimes`, `GET /api/sessions`, `GET /api/sessions/{name}/terminal?lines=50`
 
 Supported runtimes with availability; raw tmux session names; a one-shot

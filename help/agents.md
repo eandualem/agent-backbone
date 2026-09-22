@@ -54,6 +54,26 @@ backbone help agent start                  # recall command options
 - Claude Code's folder-trust dialog is answered automatically for
   directories you start agents in (`agents.pre_trust`).
 
+## Reading what an agent has said
+
+```bash
+backbone agent output NAME                  # its last 20 messages, complete
+backbone agent output NAME --lines 50
+backbone agent output NAME --before 5120    # earlier messages (offset printed by the last page)
+backbone agent output NAME --since 6301     # later messages (continue from the last page)
+backbone agent output NAME --since 5120 --end 9000   # a range
+backbone agent output NAME --screen         # the visible terminal instead
+```
+
+Reads only: nothing is typed, pasted or attached. Claude Code and Codex keep
+their own transcript; the backbone shows the agent's user-facing messages
+from it — progress, commentary, replies — complete, never shortened. Tool
+calls, results and thinking are not messages and are not shown. Each page
+prints the commands for the earlier and later pages and says when more
+exists, so read as far back as you need. Other runtimes show the visible
+terminal; the first line says which you got. `agent inspect` remains the
+place for state, delivery readiness and the last reply.
+
 ## Handing over to a fresh session — including your own
 
 `backbone agent restart` is how you switch CLI or model, start over with a

@@ -958,3 +958,53 @@ class TestAgentRestart:
         )
         failed = {"id": 5, "status": "failed", "start": False, "result": {"reason": "boom"}}
         assert _transition_line(failed) == "#5 failed: stop — boom"
+
+
+class TestAgentOutput:
+    def test_prints_complete_messages_and_both_directions(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        long = "word " * 500
+        data = {
+            "session": "orch",
+            "source": "transcript",
+            "runtime": "claude",
+            "messages": [
+                {"time": "10:00:00", "role": "assistant", "text": "first", "start": 10, "end": 20},
+                {"time": "10:00:01", "role": "assistant", "text": long, "start": 20, "end": 3000},
+            ],
+            "range_start": 10,
+            "range_end": 3000,
+            "more_before": True,
+            "more_after": True,
+            "lines": [],
+            "evidence": ["transcript /x.jsonl"],
+        }
+        with (
+            patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=True),
+            patch(
+                "agent_backbone.cli._common.api", new_callable=AsyncMock, return_value=(200, data)
+            ) as api,
+        ):
+            assert _run(["agent", "output", "--lines", "2", "--before", "7"]) == 0
+        assert api.await_args.args[1:] == (
+            "GET",
+            "/api/sessions/orch/output?lines=2&screen=false&before=7",
+        )
+        out = capsys.readouterr().out
+        assert "orch: transcript (claude) — 2 message(s), offsets 10–3000" in out
+        assert long in out  # printed whole
+        assert "--before 10" in out and "later: backbone agent output orch --since 3000" in out
+
+    def test_flag_conflicts_and_direct_mode(self, tmp_path, capsys):
+        assert _run(["agent", "output", "app", "--since", "1", "--before", "2"]) == 1
+        assert "not both" in capsys.readouterr().out
+        assert _run(["agent", "output", "app", "--end", "5"]) == 1
+        assert "--end needs --since" in capsys.readouterr().out
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        with patch(
+            "agent_backbone.services.agents.transcript.output_page", new_callable=AsyncMock
+        ) as read:
+            assert _run(["agent", "output", "nobody", "--screen"]) == 1
+            assert "unknown agent" in capsys.readouterr().out
+            read.assert_not_awaited()

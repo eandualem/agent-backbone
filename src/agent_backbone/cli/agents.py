@@ -123,6 +123,101 @@ def _transition_line(row: dict) -> str:
     return line
 
 
+async def _agent_output(args: argparse.Namespace) -> int:
+    name = args.name or os.environ.get("BACKBONE_AGENT", "").strip()
+    if not name:
+        print("usage: backbone agent output [NAME] …")
+        print("(without NAME, $BACKBONE_AGENT must be set — it is inside agent sessions)")
+        return 1
+    if args.since is not None and args.before is not None:
+        print("give --since (forward) or --before (back), not both")
+        return 1
+    if args.end is not None and args.since is None:
+        print("--end needs --since (a forward range)")
+        return 1
+    boot = await _common.read_client_config()
+    if await _common.api_up(boot):
+        query = f"lines={args.lines}&screen={'true' if args.screen else 'false'}"
+        for key in ("since", "before", "end"):
+            value = getattr(args, key)
+            if value is not None:
+                query += f"&{key}={value}"
+        result = await _common.api(boot, "GET", f"/api/sessions/{name}/output?{query}")
+        if result is None:
+            print("backbone API unreachable")
+            return 1
+        status, data = result
+        if status != 200:
+            print(f"error {status}: {data.get('detail') if isinstance(data, dict) else data}")
+            return 1
+    else:
+        from agent_backbone.services.agents.transcript import output_page
+
+        config = await _common.read_config()
+        if config.agents.get(name) is None:
+            print(f"unknown agent '{name}'")
+            return 1
+        page = await output_page(
+            config,
+            name,
+            limit=args.lines,
+            since=args.since,
+            before=args.before,
+            end=args.end,
+            screen=args.screen,
+        )
+        data = {
+            "session": page.session,
+            "source": page.source,
+            "runtime": page.runtime,
+            "messages": [
+                {"time": m.time, "role": m.role, "text": m.text, "start": m.start, "end": m.end}
+                for m in page.messages
+            ],
+            "range_start": page.range_start,
+            "range_end": page.range_end,
+            "more_before": page.more_before,
+            "more_after": page.more_after,
+            "lines": page.lines,
+            "evidence": page.evidence,
+        }
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0
+    _print_output_page(name, data)
+    return 0
+
+
+def _print_output_page(name: str, data: dict) -> None:
+    runtime = data.get("runtime") or "unknown runtime"
+    if data.get("source") != "transcript":
+        note(f"{name}: screen ({runtime})")
+        for line in data.get("lines") or []:
+            print(line)
+        if not data.get("lines"):
+            print("(nothing yet)")
+    else:
+        messages = data.get("messages") or []
+        span = f", offsets {data.get('range_start')}–{data.get('range_end')}" if messages else ""
+        note(f"{name}: transcript ({runtime}) — {len(messages)} message(s){span}")
+        for message in messages:
+            stamp = f" {message['time']}" if message.get("time") else ""
+            print(f"──{stamp} {message.get('role', 'assistant')} [{message['start']}]")
+            print(message["text"])
+            print()
+        if not messages:
+            print("(no messages in this range)")
+        if data.get("more_before") and data.get("range_start") is not None:
+            note(f"earlier: backbone agent output {name} --before {data['range_start']}")
+        elif messages:
+            note("(start of transcript)")
+        if data.get("range_end") is not None:
+            verb = "later" if data.get("more_after") else "continue"
+            note(f"{verb}: backbone agent output {name} --since {data['range_end']}")
+    for line in data.get("evidence") or []:
+        note(f"  - {line}")
+
+
 async def _agent_restart(args: argparse.Namespace) -> int:
     name = args.name or os.environ.get("BACKBONE_AGENT", "").strip()
     if not name:
@@ -408,6 +503,9 @@ async def _agent(args: argparse.Namespace) -> int:
 
     if sub == "restart":
         return await _agent_restart(args)
+
+    if sub == "output":
+        return await _agent_output(args)
 
     if sub == "stop":
         if not api_up:

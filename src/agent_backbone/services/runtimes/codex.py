@@ -14,7 +14,12 @@ from pathlib import Path
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import count
-from agent_backbone.services.runtimes.base import Runtime, RuntimeDiagnostic
+from agent_backbone.services.runtimes.base import (
+    Runtime,
+    RuntimeDiagnostic,
+    TranscriptEntry,
+    transcript_clock,
+)
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
@@ -332,6 +337,41 @@ class Codex(Runtime):
         return args
 
     usage_supported = True
+    transcript_supported = True
+
+    def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
+        """Assistant ``message`` items of a Codex rollout — commentary during
+        the turn and the final answer — complete. Reasoning, tool calls and
+        outputs, user items and event records are not messages."""
+        entries: list[TranscriptEntry] = []
+        for record in records:
+            if record.get("type") != "response_item":
+                continue
+            payload = record.get("payload")
+            if not isinstance(payload, dict) or payload.get("type") != "message":
+                continue
+            if payload.get("role") != "assistant":
+                continue
+            content = payload.get("content")
+            if isinstance(content, list):
+                content = "\n\n".join(
+                    part["text"]
+                    for part in content
+                    if isinstance(part, dict)
+                    and isinstance(part.get("text"), str)
+                    and part["text"].strip()
+                )
+            if isinstance(content, str) and content.strip():
+                entries.append(
+                    TranscriptEntry(
+                        transcript_clock(record.get("timestamp")),
+                        "assistant",
+                        content,
+                        record.get("_start", 0),
+                        record.get("_end", 0),
+                    )
+                )
+        return entries
 
     def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
