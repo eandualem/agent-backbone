@@ -26,16 +26,20 @@ Starting from a directory reuses its registered name, even after a rename;
 if several agents share that directory, specify a name.
 
 `backbone --help` lists everything; `ab` is the same command under a short
-name; `-v` enables debug logging. Commands go
-through the running backbone's API when it is up and fall back to the
-database (and tmux) directly when it is not — except `agent approve`,
-`agent deny` and `tell`, which only work through the API so that every keystroke into an
-agent is audited. `diagnostics` also requires the API and reports unavailable
-when it cannot read a result. Looking up the API address reads only existing
+name; `-v` enables debug logging. Commands with offline support fall back to the local database and tmux when
+the API is unavailable. Delivery, approvals, inbox operations, reports, replies
+and diagnostics require the running API; their sections below describe failures.
+Looking up the API address reads only existing
 address settings; it never creates or repairs the database. All API clients use
 the server’s port precedence: process `BACKBONE_PORT`, then the data directory’s
 `.env`, then `backbone.port`. Commands that need local agent configuration load
 it explicitly; offline database operations retain their normal initialization.
+
+Resuming by saved ID requires an adapter that can address the session exactly.
+Codex, Claude Code, Gemini and OpenCode pass the saved ID; for other adapters
+`--resume` falls back to the runtime's own latest session, as it does for every
+runtime when no ID is saved. Gemini's [session guide](https://geminicli.com/docs/cli/session-management/)
+and OpenCode's [CLI guide](https://opencode.ai/docs/cli/) describe their ID flags.
 
 ## Quick reference and Tab completion
 
@@ -108,6 +112,11 @@ names rather than an error in your prompt. PostgreSQL installations currently
 get static command/option completion; name discovery uses local SQLite only.
 Directory arguments complete directories, and `--rc-file` completes files.
 Unknown agent names and free-text messages do not fall back to unrelated files.
+
+Completion installers serialize updates to the same resolved rc file using a
+`.backbone-completion.lock` sidecar, retained alongside the file. The backup and
+conflict check protect existing content. Editors and dotfile managers that do not
+use that lock must not write the rc file concurrently with installation.
 
 ## `backbone report` · `backbone updates`
 
@@ -197,6 +206,13 @@ done now. A development checkout switched to another branch is left
 alone — that is development, not an upgrade; the restart happens when
 the branch the backbone started on moves. `backbone service restart` is
 the plain building block.
+
+`upgrade --no-restart` obtains a hold from the running API before installing code.
+The hold lasts until a manual service restart, even if installation fails after
+changing files. It does not change `backbone.restart_on_upgrade`. If the running
+API cannot acknowledge the hold (for example an older release), the CLI refuses
+to install; update/restart that service first. If no API is reachable, there is
+no running API to coordinate; do not start another service during the upgrade.
 
 ## `backbone runtimes`
 
@@ -359,7 +375,7 @@ Examples:
 
 ```bash
 backbone agent start                                  # this repo, defaults
-backbone agent start --model opus                     # this repo, cheaper model
+backbone agent start --runtime claude --model opus    # this repo, explicit Claude model
 backbone agent start orch --dir ~/ws/orch --watch acme/app
 backbone agent start --dir ~/ws/api --runtime codex --model gpt-5.2
 backbone agent start recruiter-desk                   # known agent, recorded settings
@@ -400,7 +416,8 @@ completed swarms. Open a member with `backbone agent attach MEMBER`.
 
 ## `backbone instructions …`
 
-Startup instructions are Markdown files in the data directory. Assignments are
+Startup instructions are Markdown files in `templates.dir` (by default
+`<data_dir>/templates/`). Assignments are
 settings in the database. Preview an agent's next launch before changing it:
 
 ```bash
@@ -423,16 +440,17 @@ backbone instructions validate
 nonempty edit is saved atomically; editor failure or a concurrent edit leaves
 the original untouched. Set the editor first, for example `export EDITOR=vi`.
 `path` prints the file to edit with any other tool. Editing a policy does not
-assign it automatically. `use` replaces the ordered list for its scope; omit
-policy names to clear that scope. Policies are deduplicated after composing
+assign it automatically. `use NAME...` replaces the ordered list for its scope; omit
+policy names to inspect that scope, or pass `--clear` to empty it. Policies are
+deduplicated after composing
 global names, then matching tags in alphabetical order. Runtime changes retain
 tags and assignments. Use `role:scout` or `swarm:audit` as a policy scope when
 appropriate; membership in those tags is managed by the swarm.
 
 `base` refers to the common environment brief. Editing it for the first time
 copies the shipped template and adds `{shared_policy}`, where global/tag
-instructions will be inserted. Existing overrides without that placeholder
-continue to replace the whole brief; preview explicitly marks policies skipped.
+instructions will be inserted. Overrides without that placeholder
+have selected policies appended. A custom base does not suppress them.
 Swarm members use their saved role brief plus selected policies on each fresh
 start. Preview reports the sources, paths, injection mode and effective content;
 it describes the next launch, not the contents of an existing conversation.
@@ -530,7 +548,8 @@ running sessions afterwards.
 Find, edit and preview injected instructions. `list [--json]` shows sources and
 assignments; `show NAME` prints content; `path [NAME]` locates editable files;
 `edit NAME` opens the editor; `init [NAME...]` copies defaults without overwriting.
-`use [POLICY...] [--tag TAG]` replaces global or tag assignments;
+`use [POLICY...] [--tag TAG] [--clear]` shows assignments without names,
+replaces them with names, or empties them with `--clear`;
 `preview AGENT [--json]` shows effective next-launch content;
 `validate [AGENT]` checks required instructions. Names are `base`, `swarm:ROLE`,
 or `policy:NAME`. See [Templates](templates.md) for examples and adoption rules.
@@ -550,25 +569,6 @@ launch links and where;
 `backbone agent tag NAME TAG...` adds persistent group tags;
 `backbone agent untag NAME TAG...` removes them. Swarm/role identity tags cannot
 be changed with these commands. Changes take effect at the next fresh launch.
-
-Completion installers serialize updates to the same resolved rc file using a
-`.backbone-completion.lock` sidecar, retained alongside the file. The backup and
-conflict check protect existing content. Editors and dotfile managers that do not
-use that lock must not write the rc file concurrently with installation.
-
-Resuming by saved ID requires an adapter that can address the session exactly.
-Codex, Claude Code, Gemini and OpenCode pass the saved ID; for other adapters
-`--resume` falls back to the runtime's own latest session, as it does for every
-runtime when no ID is saved. Gemini's [session guide](https://geminicli.com/docs/cli/session-management/)
-and OpenCode's [CLI guide](https://opencode.ai/docs/cli/) describe their ID flags.
-
-`upgrade --no-restart` obtains a hold from the running API before installing code.
-The hold lasts until a manual service restart, even if installation fails after
-changing files. It does not change `backbone.restart_on_upgrade`. If the running
-API cannot acknowledge the hold (for example an older release), the CLI refuses
-to install; update/restart that service first. If no API is reachable, there is
-no running API to coordinate; do not start another service during the upgrade.
-
 
 ## Cooperative message checkpoints
 

@@ -1,60 +1,11 @@
 # HTTP & Socket.IO API
 
-## Token usage
-
-Authenticated `GET /api/usage` provides the same accounting as `backbone usage`.
-Optional filters: `agent`, `runtime`, `session` (usage ID or unambiguous runtime
-conversation ID), `since` inclusive and `until` exclusive (timezone-qualified
-ISO timestamps), `current_only=true`. `by=session` is the default; `by=model`
-aggregates observed models. Selecting a session returns request observations.
-`refresh=false` reads history only; `reprice=true` previews current configured
-prices without changing stored estimates. `limit=100` (1–1000) and `offset=0`
-page `items`; `totals` always covers the full selection.
-
-The response includes `items`, `sessions`, `totals`, `total_items`, `has_more`,
-`next_offset`, `collection`, `unavailable`, `limits`, and accounting `semantics`.
-Session metadata identifies the agent, CLI, conversation, launches, parent,
-observed models, current state and source coverage. Request details retain
-the disjoint token categories, available turn ID, provider, model and price
-basis. `estimated_usd=null` means unpriced, never free. `limits` contains last
-observed account-window snapshots, not per-session balances. Invalid filters
-return 422; the normal API-key requirement applies. Full semantics and
-coverage boundaries: [Token usage](token-usage.md).
-
-
-Newly published reports are queued durably for Telegram and posted to the allowed
-agents group: ordinary repository agents go to General and their own topic. Swarm
-workers and coordinators send findings to the repository agent, who publishes
-consolidated updates. Swarms cannot publish reports or send direct replies to the
-owner. The shared feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
-bounded batches and retries after failures. `telegram.report_updates=false` pauses
-sending; re-enabling drains retained pending reports. A configured or discovered
-group must be allowlisted; there is no fallback to a private notification chat.
-Existing reports from before this feature remain readable and are not broadcast.
-`telegram_delivery` in report JSON distinguishes pending, sending, sent and
-not_requested. The saved report survives delivery failures. Retries are normally
-deduplicated; a crash after Telegram accepts a message but before its receipt is
-saved can cause a duplicate bearing the same report ID. Report retention still applies.
-
-Read reports with `backbone updates`, `backbone updates --agent NAME --history`,
-or `backbone updates show ID`; in Telegram use `/updates`, `/updates NAME`,
-`/updates history NAME`, or `/updates show ID`. `backbone help usage` is the quick guide.
-
-
-Starting an existing agent reuses its saved CLI and model and begins a **new
-conversation**. Continuing the previous one is your call: `backbone agent resume
-NAME` (or `start --resume`; API `resume: true`) reopens the session the backbone
-last saw for that runtime, or the runtime's own last conversation when no ID is
-saved. A fresh start says when a previous conversation is available. Starts are
-fresh by default because a resumed agent trusts its own context over whatever
-happened in the checkout since — another CLI, a swarm, the shared memory.
-Changing runtime without specifying a model clears the previous runtime's model.
-Starting from a directory reuses its registered name, even after a rename;
-if several agents share that directory, specify a name.
-
 Base URL `http://127.0.0.1:7120`. Interactive OpenAPI docs at `/docs` while
 running. Every route except `GET /health` and the webhook requires
 `Authorization: Bearer <BACKBONE_API_KEY>`.
+
+Response examples below show selected fields. Use the running OpenAPI schema
+for complete request and response models.
 
 ## Progress reports
 
@@ -75,6 +26,27 @@ The named OpenAPI operations and [reporting reference](reports.md) describe thes
 agent-facing tools, bounded content, stable pagination, identity and retention.
 Read operations query stored reports without prompting agents. Author names are supplied by
 the authenticated client; there is no separate per-agent authentication boundary.
+
+## Token usage
+
+Authenticated `GET /api/usage` provides the same accounting as `backbone usage`.
+Optional filters: `agent`, `runtime`, `session` (usage ID or unambiguous runtime
+conversation ID), `since` inclusive and `until` exclusive (timezone-qualified
+ISO timestamps), `current_only=true`. `by=session` is the default; `by=model`
+aggregates observed models. Selecting a session returns request observations.
+`refresh=false` reads history only; `reprice=true` previews current configured
+prices without changing stored estimates. `limit=100` (1–1000) and `offset=0`
+page `items`; `totals` always covers the full selection.
+
+The response includes `items`, `sessions`, `totals`, `total_items`, `has_more`,
+`next_offset`, `collection`, `unavailable`, `limits`, and accounting `semantics`.
+Session metadata identifies the agent, CLI, conversation, launches, parent,
+observed models, current state and source coverage. Request details retain
+the disjoint token categories, available turn ID, provider, model and price
+basis. `estimated_usd=null` means unpriced, never free. `limits` contains last
+observed account-window snapshots, not per-session balances. Invalid filters
+return 422; the normal API-key requirement applies. Full semantics and
+coverage boundaries: [Token usage](token-usage.md).
 
 ## Agents
 
@@ -98,7 +70,7 @@ saved issue metadata without attempting a terminal capture.
 
 `state` is `offline`, `starting`, `idle`, `busy`, `waiting_for_human`,
 `blocked` or `unknown`; `reason` is `plan`, `permission` or `question` when
-waiting, `quota` when blocked. `GET /api/agents/{name}/inspect` also carries
+waiting, `quota` or `provider` when blocked. `GET /api/agents/{name}/inspect` also carries
 `session_id` (the runtime's own) and `last_message` (the agent's last reply,
 clipped) when the runtime's hook reports them.
 The `always_on` and `unattended` settings are exposed by `GET /api/config/agents`.
@@ -107,6 +79,17 @@ That model is configuration metadata, not proof of which model or provider
 actually generated a response in the running session.
 
 ### `POST /api/agents/start`
+
+Starting an existing agent reuses its saved CLI and model and begins a **new
+conversation**. Continuing the previous one is your call: `backbone agent resume
+NAME` (or `start --resume`; API `resume: true`) reopens the session the backbone
+last saw for that runtime, or the runtime's own last conversation when no ID is
+saved. A fresh start says when a previous conversation is available. Starts are
+fresh by default because a resumed agent trusts its own context over whatever
+happened in the checkout since — another CLI, a swarm, the shared memory.
+Changing runtime without specifying a model clears the previous runtime's model.
+Starting from a directory reuses its registered name, even after a rename;
+if several agents share that directory, specify a name.
 
 ```json
 {"dir": "/Users/me/code/app", "name": null, "runtime": null, "model": null,
@@ -506,22 +489,7 @@ const sio = io("http://127.0.0.1:7120/sessions", { auth: { api_key: KEY } });
 sio.on("sessions:update", agents => render(agents));
 ```
 
-### Agent group tags
-
-`POST /api/agents/{name}/tags` accepts `{"tags": ["python"], "remove": false}`.
-It adds tags without duplicates, or removes them when `remove` is true. Unknown
-agents return 404; invalid or reserved swarm/role tags return 400. Assign policies
-through the existing configuration API using `agents.shared_policy` and
-`agents.tag_policy`; see [Templates](templates.md). This does not message or
-restart an existing conversation.
-
-Ordinary agent reports appear in General and the agent's topic, with separate
-delivery receipts. Swarm participants, including coordinators, cannot publish human-facing reports.
-Only their repository agent reports consolidated progress to the owner. Optional full-report voice messages can be enabled with
-`backbone config set telegram.report_audio true` after local speech setup.
-See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
-
-### Hold automatic upgrade restarts
+## Hold automatic upgrade restarts
 
 `POST /api/upgrade/hold` accepts `{"operation_id":"<UUID>","enabled":true}` and
 returns `{"held":true,"operation_held":true}`. This authenticated operation holds
@@ -531,7 +499,7 @@ holds. A restart already requested returns 409, and an unavailable watcher retur
 503. The CLI uses this handshake before `upgrade --no-restart` changes any files.
 
 
-### Cooperative inbox
+## Cooperative inbox
 
 See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
 coordination, acknowledgement and retention.

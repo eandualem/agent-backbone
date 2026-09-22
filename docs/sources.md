@@ -40,15 +40,15 @@ create one for "agent-backbone". Then:
 ```bash
 backbone secrets set GMAIL_ADDRESS you@gmail.com
 backbone secrets set GMAIL_APP_PASSWORD            # prompted
-backbone status --services                          # sources: gmail enabled
+backbone service restart                           # reload credentials
 ```
 
-Without the two variables the source is `disabled` and the backbone runs
+Check `GET /api/status/services` for `sources.gmail: enabled` using the
+[authenticated API](api.md). Without the two variables the source is `disabled` and the backbone runs
 exactly as before. Like every secret, they live in the data-dir `.env` and
-are kept out of every agent session. The Gmail REST API (a Google Cloud
-project, an OAuth client and a refresh token) is not required; it fits
-Workspace accounts that forbid app passwords and can be added as a second
-backend behind the same contract.
+are kept out of launched agent environments. If you run Backbone manually, stop
+and restart that process instead of using `service restart`. Accounts that
+forbid app passwords cannot use this IMAP source; no OAuth backend is shipped.
 
 `sources.poll_interval_seconds` (60) sets the cadence. The cursor per source
 is persisted in `poll_cursors` (`source:gmail`) before the first fetch and

@@ -4,9 +4,10 @@
 `backbone docs usage` opens the same page. Use `backbone --help` for all commands.
 
 Prefer an agent to handle setup? Point it to [README.md](README.md) and ask it
-to follow `backbone help setup`.
+to follow `backbone help setup`. For prerequisites and a first task, use
+[Getting started](docs/getting-started.md).
 
-## Start Backbone manually
+## Install and start Backbone
 
 ```bash
 uv tool install "agent-backbone[github-app]"
@@ -22,7 +23,8 @@ Run `backbone doctor` if setup needs attention.
 
 ```bash
 cd ~/code/app
-backbone agent start --runtime codex --model gpt-6-astra:high
+backbone agent start --runtime codex
+backbone tell app "Summarise this repository in three sentences."
 backbone agent attach app         # open its terminal; Ctrl-b d detaches
 backbone agent start app          # new conversation, same CLI and model
 backbone agent resume app         # continue its previous conversation instead
@@ -39,8 +41,8 @@ changing CLI without a model clears the old CLI's model setting.
 
 ```bash
 backbone updates                              # latest reports from the team
-backbone updates --agent Feynman               # one agent's latest report
-backbone updates --agent Feynman --history     # its earlier reports
+backbone updates --agent app                   # one agent's latest report
+backbone updates --agent app --history         # its earlier reports
 backbone updates show 12                       # full report and links (use an ID shown above)
 backbone updates --limit 20                    # a larger page
 ```
@@ -51,10 +53,12 @@ has not published one. Reading reports does not interrupt agents or ask them to
 produce one. `backbone status` shows whether agents are working; `backbone updates`
 shows what they say they have accomplished.
 
-In Telegram, use `/updates`, `/updates Feynman`, `/updates history Feynman`, or
-`/updates show 12`. Each new report is also posted automatically to the configured
-agents group and, for ordinary agents, the agent’s own topic, with buttons for the full report and team feed. Delivery retries
-when Telegram is unavailable; older reports from before this feature are not sent.
+In Telegram, use `/updates`, `/updates app`, `/updates history app`, or
+`/updates show 12`. New reports appear in General and the ordinary agent's topic,
+with buttons for the full report and team feed. Delivery retries when Telegram
+is unavailable. Swarm participants send findings to their repository agent,
+which publishes the consolidated report. Optional voice messages need
+[local speech setup](docs/report-audio.md).
 
 ## Publish your progress (for agents)
 
@@ -69,14 +73,23 @@ The author defaults to the current agent; use `--agent NAME` outside an agent
 session. Reports must be short; oversized reports are rejected. See
 `backbone help reports` for the section limits and when to publish.
 
+During long work, agents can read corrections themselves without waiting for
+terminal delivery: `backbone inbox` (or `--agent NAME`). After applying or
+superseding messages, use `backbone inbox --ack TOKEN ...`. Check between meaningful
+steps and before a commit or handoff. Details: `backbone help messaging`.
+
+For `--ack`, copy each complete `ack_token` from the inbox response. Numeric row
+IDs alone cannot acknowledge work; tokens prevent stale acknowledgements from
+consuming a different message after queue cleanup.
+
 ## Rename an agent
 
 Wait until the agent finishes its work, then:
 
 ```bash
-backbone agent stop planner
-backbone agent rename planner Feynman
-backbone agent start Feynman --attach
+backbone agent stop app
+backbone agent rename app backend
+backbone agent start backend --attach
 ```
 
 The directory, settings, watches and saved conversation ID stay with the agent.
@@ -87,7 +100,7 @@ a stopped agent; active swarm members cannot be renamed.
 
 ```bash
 backbone usage                         # separate CLI conversations for each agent
-backbone usage --agent planner --current
+backbone usage --agent backend --current
 backbone usage session ID              # input, cache and output details
 backbone usage --since 1h --by model
 backbone usage --cost                  # optional standard API estimate
@@ -103,19 +116,3 @@ subscription bill. [Full token usage reference](docs/token-usage.md).
 - `backbone templates list` — injected instructions you can inspect and edit.
 - `backbone docs index` — the [documentation reading guide](docs/INDEX.md).
 - `backbone docs usage` — this page from an installed package.
-
-Ordinary agent reports appear in General and the agent's topic, with separate
-delivery receipts. Swarm participants, including coordinators, cannot publish human-facing reports.
-Only their repository agent reports consolidated progress to the owner. Optional full-report voice messages can be enabled with
-`backbone config set telegram.report_audio true` after local speech setup.
-See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
-
-
-During long work, agents can read corrections themselves without waiting for
-terminal delivery: `backbone inbox` (or `--agent NAME`). After applying or
-superseding messages, use `backbone inbox --ack TOKEN ...`. Check between meaningful
-steps and before a commit or handoff. Details: `backbone help messaging`.
-
-For `--ack`, copy each complete `ack_token` from the inbox response. Numeric row
-IDs alone cannot acknowledge work; tokens prevent stale acknowledgements from
-consuming a different message after queue cleanup.

@@ -59,7 +59,7 @@ and worktree remain available for inspection.
 
 ## The lifecycle
 
-Work ends when the coordinator opens a pull request from the swarm
+The coordinator opens a pull request from the swarm
 branch with `Closes #N` in the body. When the PR's base is the
 repository's default branch, merging it closes the issue automatically;
 for any other base branch GitHub does not auto-close, so the
@@ -113,14 +113,14 @@ backbone swarm create review --issue OWNER/REPO#7 \
     --member 'scout*2@codex/gpt-6-astra'
 ```
 
-Omitting the suffix means the CLI's own default, which is not always the
-cheap end — GPT-6-Astra defaults to `low`. `backbone runtimes` lists the
+Omitting the suffix uses the CLI's own default. Set an effort explicitly
+when it matters for review depth or resource use. `backbone runtimes` lists the
 levels each runtime accepts.
 
 ## Roles and briefs
 
 Shipped role briefs: `coordinator` (plans, assigns file ownership,
-tracks, reports on the issue, opens the PR), `scout` (read-only
+tracks, reports to the initiating agent, opens the PR), `scout` (read-only
 research), `coder` (implements an owned vertical slice), `reviewer`
 (verifies by running, never fixes). Any other role name gets a generic
 worker brief driven by the coordinator's instructions.
@@ -221,7 +221,7 @@ verification to reviewers. Scouts are read-only by instruction, not a filesystem
 security boundary. Do not assign every role a production slice. Each shared fix
 has one owner; consuming swarms integrate its reviewed commit rather than editing
 another copy. Work labels for newly registered members use their explicit swarm
-task tag, not incidental issue references or theme color values in output.
+task tag.
 
 Members and coordinators run `backbone inbox` between meaningful steps and before
 commits/handoffs, then acknowledge applied or superseded messages using their `ack_token` with `--ack`. Keep
@@ -230,10 +230,9 @@ Messages to/from active swarm members do not expire during a long turn; this doe
 not interrupt the turn or replace cooperative reads.
 
 Serialize terminal suites sharing host resources with an agreed lock path inside
-all participating sandboxes; keep unit/static work parallel. A lock does not
-remove CPU/process-spawn latency. Generate time-sensitive input gestures without
-slow queries between their events. Retain assertions and product timing budgets;
-record reproduced causes instead of attributing every failure to contention.
+all participating sandboxes; keep unit/static work parallel. Keep assertions
+and product timing budgets unchanged when diagnosing
+resource contention.
 
 Swarm participants never publish human-facing progress reports or send status
 updates directly to Telegram. Members report to the coordinator; the coordinator

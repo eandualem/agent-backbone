@@ -11,17 +11,20 @@ This is the recommended production setup, written as a checklist. At the end:
 
 Time: ~15 minutes, once. Every step ends with a checkpoint so you know it
 worked before moving on. (If you just want to try the backbone without any
-of this: put `GITHUB_TOKEN=$(gh auth token)` in `<data_dir>/.env` and
-restart — that is poll intake, ≤60 s latency, zero exposure, done.)
+of this: run `gh auth token | backbone secrets set GITHUB_TOKEN`, then
+`backbone service restart` — that enables polling every 60 seconds without
+a public endpoint. Terminal delivery still waits for agent readiness.)
 
 ## 0. Prerequisites
 
 - The CLI installed **with the `github-app` extra** (App auth needs it):
-  `uv tool install "agent-backbone[github-app] @ git+https://github.com/eandualem/agent-backbone"`.
+  `uv tool install "agent-backbone[github-app]"`.
   Missing it fails at startup with a message naming the extra; `backbone
   doctor` checks it too.
 - The backbone initialised and running: `backbone init && backbone up --detach`.
-- `backbone status` shows the API up on `127.0.0.1:7120`.
+- `backbone doctor` reports the API up on `127.0.0.1:7120`.
+- The tunnel commands below use Homebrew on macOS. On Linux, install the
+  tunnel client with its provider’s Linux instructions.
 - A GitHub account. A domain on Cloudflare is ideal but **not required** —
   step 1 has an ngrok variant.
 
@@ -30,7 +33,7 @@ restart — that is poll intake, ≤60 s latency, zero exposure, done.)
 GitHub must be able to reach `http://127.0.0.1:7120/webhooks/github` from
 the internet, at an address that never changes. Pick **one**:
 
-### 1a. Cloudflare Tunnel (free, permanent — use this if you have a domain on Cloudflare)
+### 1a. Cloudflare Tunnel (with a domain on Cloudflare)
 
 ```bash
 brew install cloudflared
@@ -65,51 +68,38 @@ cloudflared tunnel run backbone
 > If curl says *could not resolve host*, your local DNS cached an earlier
 > failure — wait a minute or test with `dig @1.1.1.1 hooks.example.com`.
 
-Then make it survive reboots. `sudo cloudflared service install` creates a
-launchd daemon, but on macOS it misses two things — the daemon reads
-`/etc/cloudflared/`, and its plist lacks the `tunnel run` arguments:
+For persistence, follow Cloudflare's service instructions for
+[macOS](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/as-a-service/macos/)
+or [Linux](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/as-a-service/linux/).
+On macOS, a login agent uses `~/.cloudflared/`; a boot daemon uses
+`/etc/cloudflared/`. Place the configuration and credentials in the location
+for the service you choose, and verify the credentials path in `config.yml`.
 
-```bash
-sudo cloudflared service install
-sudo mkdir -p /etc/cloudflared
-sudo cp ~/.cloudflared/config.yml ~/.cloudflared/<TUNNEL-ID>.json /etc/cloudflared/
-sudo sed -i '' 's|/Users/you/.cloudflared/|/etc/cloudflared/|' /etc/cloudflared/config.yml
-sudo /usr/libexec/PlistBuddy \
-     -c "Add :ProgramArguments:1 string tunnel" \
-     -c "Add :ProgramArguments:2 string run" \
-     /Library/LaunchDaemons/com.cloudflare.cloudflared.plist
-sudo launchctl kickstart -k system/com.cloudflare.cloudflared
-```
-
-> **Checkpoint** — `cloudflared tunnel info backbone` lists a connector
-> created *after* the kickstart. You can now stop any foreground
-> `cloudflared` you had running. (If the daemon log
-> `/Library/Logs/com.cloudflare.cloudflared.err.log` repeats
-> ``use `cloudflared tunnel run` to start tunnel``, the PlistBuddy step was
-> skipped.)
+> **Checkpoint** — after stopping the foreground tunnel, confirm
+> `cloudflared tunnel info backbone` still lists the service's connector and
+> repeat both URL checks above. Consult the service log if it does not.
 
 ### 1b. ngrok (no domain needed — fine for testing and evaluation)
 
-ngrok's free tier includes **one static domain**, so the
-URL-changes-on-every-restart problem does not apply anymore:
+The free plan supplies an assigned development domain. Check
+[ngrok's current limits](https://ngrok.com/docs/pricing-limits/free-plan-limits)
+and use the domain shown for your account:
 
 ```bash
 brew install ngrok
 ngrok config add-authtoken <token>        # from dashboard.ngrok.com
-# claim your free static domain on the dashboard (e.g. your-name.ngrok-free.app), then:
-ngrok http --url=your-name.ngrok-free.app 7120
+ngrok http 7120
 ```
 
-Your webhook URL is `https://your-name.ngrok-free.app/webhooks/github`.
+Append `/webhooks/github` to the HTTPS forwarding URL ngrok prints.
 
-> **Checkpoint** — same as above: `curl -i -X POST <url>/webhooks/github`
-> → 403.
+> **Checkpoint** — `curl -i -X POST <url>/webhooks/github` should reach the
+> backbone's signature check once its webhook secret is configured.
 
-Caveats vs the tunnel: ngrok free cannot path-filter, so the whole API is
-reachable at that hostname — it stays protected by the `BACKBONE_API_KEY`
-bearer check, but the surface is larger; and the process must stay running.
-Good for seeing the system work; move to 1a (or a paid ngrok domain) for
-something permanent.
+This simple command forwards the whole API, so routes other than the webhook
+are also reachable at that hostname. The API key still applies. Use the
+Cloudflare path-filtered example if you only want the webhook exposed. Keep the
+ngrok process running while receiving events.
 
 ## 2. Create the GitHub App
 
@@ -162,15 +152,16 @@ GITHUB_WEBHOOK_SECRET=<the exact secret from step 2>
 # remove or comment out GITHUB_TOKEN — a token takes precedence over the App
 ```
 
-Restart and check:
+Restart and check (use `backbone service restart` if installed as a login service):
 
 ```bash
 backbone down && backbone up --detach
-backbone status        # → github intake: webhook
 backbone doctor        # → ✓ GitHub credentials found — intake: webhook
 ```
 
-> **Checkpoint** — the backbone can read GitHub as the app:
+> **Checkpoint** — the backbone can read GitHub as the app. For the curl
+> examples, set `BACKBONE_API_KEY` in your shell to the key in the file printed
+> by `backbone secrets path`; the CLI reads it automatically, curl does not.
 > ```bash
 > curl -s -H "Authorization: Bearer $BACKBONE_API_KEY" \
 >   "http://127.0.0.1:7120/api/issues?repo=you/some-repo" | head -c 200
@@ -186,13 +177,13 @@ cd ~/code/some-repo && backbone agent start
 gh issue create -R you/some-repo --title "[task] webhook test (safe to close)" --body "test"
 ```
 
-Within a second or two:
+After GitHub delivers the event:
 
 ```bash
-curl -s -H "Authorization: Bearer $BACKBONE_API_KEY" http://127.0.0.1:7120/api/events?limit=3
+curl -s -H "Authorization: Bearer $BACKBONE_API_KEY" "http://127.0.0.1:7120/api/events?limit=3"
 ```
 
-shows `webhook issue_opened …`, and the agent's terminal
+shows an `issue_opened` event. Once the agent is ready, its terminal
 (`tmux attach -t some-repo`) shows the `[via:github issue:N] New issue…`
 message. Comment on the issue → the agent gets the comment. Close it →
 the agent gets its next issue. Done.
@@ -209,8 +200,8 @@ in the backbone's `GET /api/events`.
 | `404` | URL missing the `/webhooks/github` path (or path filter typo) | add the path |
 | `403 Invalid signature` | the secret in the app form ≠ `GITHUB_WEBHOOK_SECRET` in `.env` | re-paste one of them so they're byte-identical, redeliver |
 | `couldn't connect` | tunnel/ngrok not running, or backbone down | `cloudflared tunnel info`, `backbone status` |
-| `200` but nothing happens | event's repository has no owning/watching agent | `backbone status` shows the tracked repositories |
-| Events arrive but only every ~60 s | intake is still `poll` (no `GITHUB_WEBHOOK_SECRET` at restart) | `backbone status` → intake; check `.env`, restart |
+| `200` but nothing happens | event's repository has no owning/watching agent | `backbone agent list` shows registered repositories and watches |
+| Events arrive but only every ~60 s | intake is still `poll` (no `GITHUB_WEBHOOK_SECRET` at restart) | `backbone doctor` → intake; check `.env`, restart |
 
 Missed events while the backbone or tunnel was down are not lost: on
 startup the backbone runs one poll over every tracked repository

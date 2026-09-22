@@ -89,9 +89,8 @@ review as covering new code.
 
 ## Decide whether to run another Ultra round
 
-A person's request to “run an Ultra review” means a findings-based sequence, not
-one pass by definition and not repeated passes until a clean report. Decide after
-each completed round, using its triaged findings:
+For an iterative review, decide whether another round is useful from the
+triaged findings and the authorized scope:
 
 - **Many valid findings, or any high-severity findings:** assume the pass may have
   saturated and left other problems unreported. After the fixes have landed in
@@ -130,19 +129,12 @@ Keep the published report within `backbone help reports` limits and link to deta
 evidence rather than pasting the model log. The per-round reports must make both
 the resource cost and the reason for another pass visible to a human.
 
-### The stop is part of the task
+### Finish within the review scope
 
-For a requested develop → main release review, once the final round has few, minor
-findings and its fixes have landed (or no valid findings), open the release PR from
-`develop` to `main`. Merge when authorized, after the release PR's required checks
-and review are clear. Verify the PR state and closure of fully completed issues;
-do not describe an open PR or unresolved gate as finished delivery. If the original
-request already authorizes merging, carry it through rather than seeking approval
-again. State the stop in the final report and start nothing else.
-
-For a review whose scope does not include a release, finish the authorized fix PRs
-and report the stop at that boundary. The convergence rule does not authorize an
-unrequested release or additional implementation work.
+Report the reviewed commits, remaining findings and whether fixes have landed.
+A review does not itself authorize a release. When release work is in scope,
+follow the repository's [promotion process](../CONTRIBUTING.md#releasing-maintainers)
+and verify the resulting PR state before reporting completion.
 
 ## Claude Code
 
@@ -150,7 +142,7 @@ unrequested release or additional implementation work.
 capability. `--json` returns findings, and `--timeout MINUTES` bounds how long the
 command waits. It is not ordinary Claude `--effort max`. Check local help and account
 availability first. Backbone does not silently replace the requested Codex review
-with this service. No Claude review was executed for the Codex verification.
+with this service.
 
 The full tracked review-job API, cancellation and automatic completion notices
 are follow-up work in [issue #171](https://github.com/eandualem/agent-backbone/issues/171); this guide describes the native CLI workflow.

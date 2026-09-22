@@ -2,8 +2,9 @@
 
 GitHub Issues is the task ledger: durable, visible to humans, editable from
 any client. The backbone turns issue activity into messages for agents and
-keeps each agent working one issue at a time — **per repository, with
-nothing to configure per repository**.
+offers each agent one unacknowledged issue at a time. Acknowledgement and
+closure drive issue notifications; agents remain responsible for their work.
+Routing is per repository, with no required repository configuration.
 
 ## Setup — once
 
@@ -27,9 +28,9 @@ gh auth token | backbone secrets set GITHUB_TOKEN   # → ~/.local/share/agent-b
 (Piped, so the token never appears in a process argument list. `.env`
 holds plain values — the token itself, or a PAT with `repo` scope.)
 
-Restart the backbone. `backbone status` now shows `github intake: poll` and
-the tracked repositories: every repository an agent owns (its directory's
-`origin`) or watches. Nothing is exposed and there is no URL to maintain —
+Restart the backbone. `backbone doctor` reports GitHub credentials and poll
+intake. Every repository an agent owns (its directory’s `origin`) or watches
+is tracked. Nothing is exposed and there is no URL to maintain —
 this is the right starting point when you do not have a domain.
 
 ### Recommended: GitHub App + webhook — [full walkthrough](github-app-setup.md)
@@ -47,7 +48,7 @@ GITHUB_WEBHOOK_SECRET=<the app's webhook secret>
 # remove GITHUB_TOKEN — a token takes precedence over the App
 ```
 
-`backbone status` then shows `github intake: webhook`. The walkthrough has
+`backbone doctor` then reports webhook intake. The walkthrough has
 a checkpoint after every step and the troubleshooting table (530 = wrong
 hostname/path, 403 = secret mismatch, …).
 

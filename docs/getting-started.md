@@ -1,9 +1,9 @@
 # Getting started
 
-Ten minutes from install to two agents talking, on one machine, with nothing
-but tmux and SQLite.
+Install Backbone, send your first agent a task, then connect a second agent.
+GitHub and Telegram are optional.
 
-Prefer to delegate? Give any agent with a shell this and skip to step 7:
+Prefer to delegate? Give any agent with a shell this and continue at [GitHub setup](#7-github-issues-as-the-task-list):
 *"Install agent-backbone from PyPI (`uv tool install "agent-backbone[github-app]"`),
 then run `backbone help setup` and follow it."* The `setup` playbook covers
 steps 1–6 and says where it needs you.
@@ -11,9 +11,10 @@ steps 1–6 and says where it needs you.
 ## 0. Requirements
 
 - macOS or Linux, Python 3.11+, `tmux`
-- [uv](https://docs.astral.sh/uv/) (or plain `pip`)
+- [uv](https://docs.astral.sh/uv/) (or `pipx`)
 - At least one agent CLI on your `PATH`: `claude`, `codex`, `gemini`,
-  `opencode`, `deepcode`, `aider`. (`shell` works for trying the plumbing.)
+  `opencode`, `deepcode`, `aider`. Sign in through that CLI before starting it
+  here. See [runtime support](status-and-roadmap.md#runtimes) for limits.
 
 ## 1. Install the CLI
 
@@ -56,73 +57,35 @@ Creates the data directory (`~/.local/share/agent-backbone`, or
 - `backbone.db` — settings, agents, events, deliveries (SQLite)
 - `state/` — where hooks report agent state
 
-There is no configuration file. Settings have defaults and are changed with
+Settings live in the database and are changed with
 `backbone config set` (see [Configuration](configuration.md)).
 
-## 3. State hooks — nothing to install
-
-With hooks, the runtime tells the backbone the moment the agent becomes
-busy, idle, or waits for a person (plan approval, permission prompt,
-question). Without them the backbone reads the terminal, which works but
-is less precise.
-
-Every session the backbone starts gets the hooks automatically, wired for
-that launch only — no repository and none of the CLI's own configuration
-is touched:
-
-| Runtime | How the hooks reach the session |
-|---|---|
-| Claude Code | `--settings <data_dir>/hooks/claude-settings.json` |
-| Codex | `-c hooks.<Event>=…` overrides, with the hook-trust prompt bypassed for the backbone's own hooks |
-| Gemini CLI | `GEMINI_CLI_SYSTEM_SETTINGS_PATH=<data_dir>/hooks/gemini-settings.json` |
-| OpenCode | `OPENCODE_CONFIG_CONTENT` loading the `opencode_hook.js` plugin |
-
-The files under `<data_dir>/hooks/` are the backbone's and are regenerated
-on every start. Deep Code, Aider and `shell` are read from the terminal.
-
-For OpenCode, an agent's existing `OPENCODE_CONFIG_CONTENT` is preserved:
-the backbone appends its hook to the plugin array without replacing provider
-settings or permission rules. If the inline configuration cannot be merged as
-a JSON object (for example, JSONC), the backbone logs a warning, leaves it
-unchanged and falls back to terminal state detection. JSONC configuration files
-remain managed by OpenCode itself.
-
-For sessions you start *outside* the backbone, an optional one-time install
-adds the same hooks to the CLI's own settings:
+## 3. Run the backbone
 
 ```bash
-backbone hooks install claude                    # ~/.claude/settings.json
-backbone hooks install claude --dir ~/code/app   # or one project
-backbone hooks install codex                     # ~/.codex/hooks.json (then accept them once with /hooks)
-backbone hooks install gemini                    # ~/.gemini/settings.json
+backbone service install    # starts now and at login
+backbone doctor             # tmux, runtimes, credentials, API reachable
 ```
 
-## 4. Run the backbone
+Without launchd or systemd (for example, in a container), use
+`backbone up --detach` instead.
 
-```bash
-backbone up --detach    # inside a tmux session named "backbone"
-backbone doctor         # tmux, runtimes, credentials, API reachable
-```
-
-`up` starts the HTTP/Socket.IO API on `127.0.0.1:7120`, the background
+The service starts the HTTP/Socket.IO API on `127.0.0.1:7120`, the background
 jobs, the Telegram bot (if a token is set) and the GitHub intake (if a token
-is set). One process. `backbone down` stops it.
+is set). Use `backbone service uninstall` to stop and remove a login service, or
+`backbone down` for a manually started process.
 
-## 5. Start an agent from its directory
+## 4. Start an agent from its directory
 
 ```bash
 cd ~/code/app
 backbone agent start
 ```
 
-```
-app: ready — claude repo acme/app
-  dir: /Users/me/code/app
-  - hook reported idle 0s ago
-```
-
-The agent is named after the directory, its repository was read from
-`git remote origin`, and `start` returned when Claude was at its prompt.
+The directory supplies the name `app`; `git remote origin` supplies the
+repository. The result reports whether the agent is ready, waiting for you,
+or still starting. If it needs attention, run `backbone agent inspect app`
+and attach to answer its prompt.
 
 A bare `agent start` launches the default runtime (Claude Code). If you
 use a different CLI, pass it explicitly the first time —
@@ -133,8 +96,8 @@ Pick the CLI and model per agent — both are recorded and reused by later
 starts (full reference: [CLI](cli.md)):
 
 ```bash
-backbone agent start --model opus                  # cheaper model, same repo
-backbone agent start --runtime codex --model gpt-5.2
+backbone runtimes                       # installed CLIs and example models
+backbone agent start --runtime claude --model opus
 ```
 
 > **Folder trust**: Claude Code, Codex and Gemini each ask once per new
@@ -146,25 +109,26 @@ backbone agent start --runtime codex --model gpt-5.2
 > interactive dialog — `start` then reports `started, waiting for you`
 > and you answer with `tmux attach -t <name>`.
 
-Useful right away:
+## 5. Send a task and read the reply
 
 ```bash
-backbone status                 # agents, their state, repositories
-backbone status --watch          # live roster; Ctrl-C exits
-backbone agent attach app        # open the session; Ctrl-b d detaches
-backbone agent inspect app      # state + delivery readiness + evidence
 backbone tell app "Summarise what this repository does in three sentences."
+backbone agent attach app       # read the reply; Ctrl-b d detaches
+backbone agent inspect app      # state, delivery readiness and evidence
+backbone status                 # the team roster; add --watch for a live view
 ```
 
-`tell` returns the delivery outcome:
+`tell` reports the delivery outcome. `delivered` means the text reached the
+terminal, not that the agent has finished the task. If the agent is busy,
+`agent_working` with `queued: true` means Backbone stored the message for later.
+Do not resend it. Read the `detail` field: only `queue: failed` means storage
+failed. A queued send exits with status 2, so scripts should inspect the result
+rather than retry every nonzero exit.
 
-```json
-{"ok": true, "session": "app", "outcome": "delivered"}
-```
-
-If the agent is busy you get `"outcome": "agent_working"` and the message
-is queued; the monitor delivers it when the agent is idle (within a
-minute). Watch it happen: `backbone agent attach app`.
+The monitor retries when delivery is safe. A permission prompt or tmux copy
+mode can keep the message waiting even after the task finishes. `inspect`
+shows the reason; ordinary queued messages expire after 30 minutes by default.
+See [messaging](../help/messaging.md#delivery-semantics--read-this-once-then-trust-it) for delivery details.
 
 Later, `backbone agent start app` opens a new conversation with the same CLI
 and model; `backbone agent resume app --attach` reopens the previous one instead
@@ -176,89 +140,6 @@ run `backbone instructions preview app` (project/runtime instructions load separ
 `backbone instructions list` shows
 where to edit shared policies and assign them to tags.
 
-### Codex permissions and scrolling
-
-The backbone grants Codex access to Git commit data: objects, refs, logs,
-the index, and commit bookkeeping files and locks. For linked worktrees, it
-validates Git's reciprocal pointers before opening shared and private commit
-paths. Codex normally protects `.git` even inside a writable checkout; these grants let
-ordinary `git add` and `git commit` run inside the sandbox. Source files,
-configured tooling directories (`agents.writable_dirs`) and the network are
-also available. Git hooks and configuration, `.codex`, `.agents`, and unrelated
-directories keep their existing protection. A `.git` symlink or unverified
-worktree pointer receives no automatic Git grant. Directory resolution errors
-(including symlink loops) also yield no automatic grant. See [Codex's protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).
-
-To have Codex review remaining permission requests automatically:
-
-```bash
-backbone config set agents.auto_review true
-```
-
-This selects Codex's `--approve-for-me` mode with its workspace sandbox.
-Requests needing extra permission go to Codex's reviewer, which can approve
-routine actions or refuse them. It does not guarantee every request will
-run. Set the setting to `false` to use your own Codex approval configuration.
-Unattended agents keep their no-prompt policy; other runtimes are unaffected.
-The change applies on the next start or resume, including for an existing
-conversation. See [automatic approval reviews](https://learn.chatgpt.com/docs/agent-approvals-security#automatic-approval-reviews).
-
-Codex launches in inline mode (`--no-alt-screen`) with tmux mouse handling
-enabled for its session. The wheel scrolls terminal history instead of
-recalling earlier prompts. Press `q` to leave tmux copy mode and return to
-input. Backbone preserves copy mode while you read or select text; incoming
-messages wait until you leave it, including priority messages. Mouse selection
-and explicit clipboard shortcuts are controlled by your terminal or workspace
-viewer. Other runtimes retain your tmux mouse setting. For an already running
-Codex session, enable mouse handling with
-`tmux set-option -t '=NAME:' mouse on` (replace `NAME` with the agent name).
-
-### The thing worth trying first
-
-The queue is the whole point, so provoke it deliberately. Give the agent
-something slow, and while it is still working, message it:
-
-```bash
-backbone tell app "Read every file under src/ and list the modules."
-backbone agent inspect app      # repeat until it says state: busy (a few seconds)
-backbone tell app "…and then tell me which one is the largest."   # while it works
-```
-
-The second `tell` returns `"outcome": "agent_working"` — the text was **not**
-typed into a working terminal. (The first `tell` returns as soon as the text
-is submitted; the hook reports `busy` a moment later, which is what the
-`inspect` in between waits for.) Ask why:
-
-```bash
-backbone agent inspect app
-```
-
-```text
-app: online
-  dir:      /Users/me/code/app
-  runtime:  claude   model: -
-  repo:     acme/app   watches: -
-  state:    busy (hook state 4s old)
-  delivery: agent_working
-  evidence:
-    - runtime: claude
-    - hook state 'busy' written 4s ago (fresh)
-  terminal tail:
-    | ✽ Reading files… (24s)
-  recent deliveries:
-    2026-05-04T10:22:31  direct_message           agent_working
-    2026-05-04T10:21:07  direct_message           delivered
-```
-
-`delivery: agent_working` with the hook's own evidence underneath is the
-backbone refusing to type, and telling you exactly why.
-
-Now leave it alone. When the agent reaches its prompt, the monitor pastes
-the queued message and it lands as if you had been sitting there waiting —
-`agent inspect` then shows it as `delivered`. That is the guarantee the
-rest of this document builds on: **you can address a live terminal agent
-from outside it, at any moment, without corrupting what it is doing.**
-
 ## 6. A second agent, and agents talking to each other
 
 ```bash
@@ -269,10 +150,10 @@ Agents message each other with the same command you use. Inside its
 session, `app` runs:
 
 ```bash
-backbone tell web "Auth tests pass; please rebase your branch."
+backbone tell web "Please summarise the web app entry points."
 ```
 
-and `web` receives `[via:backbone from:app] Auth tests pass; …` — the
+and `web` receives `[via:backbone from:app] Please summarise …` — the
 sender's name comes from `$BACKBONE_AGENT`, which every backbone-started
 session carries. Nothing to hand over: the CLI reads the API key from the
 data directory, which any session on the machine can read (there is one
@@ -294,8 +175,8 @@ calls the HTTP API directly (`POST /api/messages`) rather than the CLI.
 
 ```bash
 gh auth token | backbone secrets set GITHUB_TOKEN   # piped: never in a process argument list
-backbone down && backbone up --detach
-backbone status               # github intake: poll
+backbone service restart          # or down, then up --detach for a manual process
+backbone doctor               # GitHub credentials and intake mode
 ```
 
 Now, in every repository an agent owns or watches:
@@ -305,21 +186,16 @@ Now, in every repository an agent owns or watches:
 - comments go to the other participants; closing an issue hands the agent
   its next one.
 
-Latency is one poll interval (60 s). For instant delivery add a webhook
+Polling runs every 60 s; terminal delivery still waits for the agent. To receive
+events without waiting for a poll, add a webhook
 (`GITHUB_WEBHOOK_SECRET` + `gh webhook forward` or a cloudflared tunnel);
 the backbone switches to webhook intake by itself. Details and the
 agent-side protocol: [GitHub integration](github.md).
 
-### Prove the delivery path before real work
-
-Before handing a new agent its first implementation issue, let it land one
-small reviewed PR with its own runtime and credentials: run the checks, address
-automated review, merge into the intended base and confirm the merge. Agents
-push, open and merge PRs with the user's own `gh` login, exactly like a human
-developer; the backbone's GitHub credentials are only for reading issues and
-receiving events. For Claude Code, run `gh pr merge` as a standalone command:
-a merge chained with `&&` or `;` is matched piece by piece against the allow
-rules and can be denied by the auto-mode classifier without any prompt.
+Agents use their own GitHub CLI credentials for commits and pull requests.
+The backbone's credentials support issue intake and its issue API; supplying
+them does not sign an agent into `gh`. Check that CLI separately before assigning
+work that needs it. See [GitHub authentication](github.md).
 
 ## 8. An orchestrator
 
@@ -343,9 +219,7 @@ backbone agent watch acme/api        # NAME defaults to $BACKBONE_AGENT
 ```
 
 The same goes for the rest of the lifecycle: an orchestrator with shell
-access can run `backbone agent start`, `stop`, `inspect` and `tell` itself
-— delegating "start the recruiter desk on an Opus model" is just
-`backbone agent start recruiter-desk --model opus`.
+access can run `backbone agent start`, `stop`, `inspect` and `tell` itself.
 
 Every backbone-started Claude agent also knows all of this without being
 told: a short brief is appended to its system prompt at start (its name,
@@ -359,20 +233,22 @@ commands once in `~/.claude/settings.json` (a human edit — agents cannot
 grant themselves permissions):
 
 ```json
-"permissions": {
-  "allow": [
-    "Bash(backbone help)",
-    "Bash(backbone help *)",
-    "Bash(backbone status)",
-    "Bash(backbone agent list)",
-    "Bash(backbone agent start)",
-    "Bash(backbone agent start *)",
-    "Bash(backbone agent stop *)",
-    "Bash(backbone agent inspect *)",
-    "Bash(backbone agent watch *)",
-    "Bash(backbone agent unwatch *)",
-    "Bash(backbone tell *)"
-  ]
+{
+  "permissions": {
+    "allow": [
+      "Bash(backbone help)",
+      "Bash(backbone help *)",
+      "Bash(backbone status)",
+      "Bash(backbone agent list)",
+      "Bash(backbone agent start)",
+      "Bash(backbone agent start *)",
+      "Bash(backbone agent stop *)",
+      "Bash(backbone agent inspect *)",
+      "Bash(backbone agent watch *)",
+      "Bash(backbone agent unwatch *)",
+      "Bash(backbone tell *)"
+    ]
+  }
 }
 ```
 
@@ -384,7 +260,8 @@ keep prompting.
 
 When one issue deserves parallel workers, put a [swarm](swarms.md) on
 it: a coordinator plus members sharing one worktree and branch,
-finishing in a single PR whose merge tears everything down.
+working toward a single PR. Closing the issue tears down its sessions; merging
+a PR closes the issue only when GitHub applies its closing reference.
 
 ```bash
 backbone swarm create research --issue acme/app#42 --member 'scout*3@claude/sonnet'
@@ -433,6 +310,81 @@ backbone upgrade --check          # installed vs newest on PyPI
 The running backbone notices new code on its own (a `uv tool upgrade`, or
 a pull of a development checkout) and restarts onto it within a minute,
 once nothing is being routed. Agents keep running through it.
+
+## State hooks — nothing to install
+
+With hooks, the runtime tells the backbone the moment the agent becomes
+busy, idle, or waits for a person (plan approval, permission prompt,
+question). Without them the backbone reads the terminal, which works but
+is less precise.
+
+Every session the backbone starts gets the hooks automatically, wired for
+that launch only — no repository and none of the CLI's own configuration
+is touched:
+
+| Runtime | How the hooks reach the session |
+|---|---|
+| Claude Code | `--settings <data_dir>/hooks/claude-settings.json` |
+| Codex | `-c hooks.<Event>=…` overrides, with the hook-trust prompt bypassed for the backbone's own hooks |
+| Gemini CLI | `GEMINI_CLI_SYSTEM_SETTINGS_PATH=<data_dir>/hooks/gemini-settings.json` |
+| OpenCode | `OPENCODE_CONFIG_CONTENT` loading the `opencode_hook.js` plugin |
+
+The files under `<data_dir>/hooks/` are the backbone's and are regenerated
+on every start. Deep Code, Aider and `shell` are read from the terminal.
+
+For OpenCode, an agent's existing `OPENCODE_CONFIG_CONTENT` is preserved:
+the backbone appends its hook to the plugin array without replacing provider
+settings or permission rules. If the inline configuration cannot be merged as
+a JSON object (for example, JSONC), the backbone logs a warning, leaves it
+unchanged and falls back to terminal state detection. JSONC configuration files
+remain managed by OpenCode itself.
+
+For sessions you start *outside* the backbone, an optional one-time install
+adds the same hooks to the CLI's own settings:
+
+```bash
+backbone hooks install claude                    # ~/.claude/settings.json
+backbone hooks install claude --dir ~/code/app   # or one project
+backbone hooks install codex                     # ~/.codex/hooks.json (then accept them once with /hooks)
+backbone hooks install gemini                    # ~/.gemini/settings.json
+```
+
+## Codex permissions and scrolling
+
+The backbone grants Codex access to Git commit data: objects, refs, logs,
+the index, and commit bookkeeping files and locks. For linked worktrees, it
+validates Git's reciprocal pointers before opening shared and private commit
+paths. Codex normally protects `.git` even inside a writable checkout; these grants let
+ordinary `git add` and `git commit` run inside the sandbox. Source files,
+configured tooling directories (`agents.writable_dirs`) and the network are
+also available. Git hooks and configuration, `.codex`, `.agents`, and unrelated
+directories keep their existing protection. A `.git` symlink or unverified
+worktree pointer receives no automatic Git grant. Directory resolution errors
+(including symlink loops) also yield no automatic grant. See [Codex's protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).
+
+To have Codex review remaining permission requests automatically:
+
+```bash
+backbone config set agents.auto_review true
+```
+
+This selects Codex's `--approve-for-me` mode with its workspace sandbox.
+Requests needing extra permission go to Codex's reviewer, which can approve
+routine actions or refuse them. It does not guarantee every request will
+run. Set the setting to `false` to use your own Codex approval configuration.
+Unattended agents keep their no-prompt policy; other runtimes are unaffected.
+The change applies on the next start or resume, including for an existing
+conversation. See [automatic approval reviews](https://learn.chatgpt.com/docs/agent-approvals-security#automatic-approval-reviews).
+
+Codex launches in inline mode (`--no-alt-screen`) with tmux mouse handling
+enabled for its session. The wheel scrolls terminal history instead of
+recalling earlier prompts. Press `q` to leave tmux copy mode and return to
+input. Backbone preserves copy mode while you read or select text; incoming
+messages wait until you leave it, including priority messages. Mouse selection
+and explicit clipboard shortcuts are controlled by your terminal or workspace
+viewer. Other runtimes retain your tmux mouse setting. For an already running
+Codex session, enable mouse handling with
+`tmux set-option -t '=NAME:' mouse on` (replace `NAME` with the agent name).
 
 ## Where things are
 
