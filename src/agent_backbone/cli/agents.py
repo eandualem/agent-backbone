@@ -198,11 +198,7 @@ def _print_output_page(name: str, data: dict) -> None:
             print("(nothing yet)")
     else:
         messages = data.get("messages") or []
-        span = (
-            f", offsets {data.get('range_start')}–{data.get('range_end')}"
-            if messages
-            else ""
-        )
+        span = f", offsets {data.get('range_start')}–{data.get('range_end')}" if messages else ""
         note(f"{name}: transcript ({runtime}) — {len(messages)} message(s){span}")
         for message in messages:
             stamp = f" {message['time']}" if message.get("time") else ""

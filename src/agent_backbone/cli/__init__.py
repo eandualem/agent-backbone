@@ -296,9 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     po.add_argument("name", nargs="?", default=None, metavar="NAME")
-    po.add_argument(
-        "--lines", type=int, default=20, help="messages per page (default 20, max 200)"
-    )
+    po.add_argument("--lines", type=int, default=20, help="messages per page (default 20, max 200)")
     po.add_argument(
         "--before",
         type=int,
