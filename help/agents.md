@@ -54,6 +54,41 @@ backbone help agent start                  # recall command options
 - Claude Code's folder-trust dialog is answered automatically for
   directories you start agents in (`agents.pre_trust`).
 
+## Handing over to a fresh session — including your own
+
+`backbone agent restart` is how you switch CLI or model, start over with a
+clean context, or stop now and continue later. The backbone owns the
+transition: it accepts the request first, stops the session on its next
+tick and starts the replacement when the wait is over, so asking for your
+own session is safe. `backbone agent stop` on yourself is not: it kills the
+shell that would run your next command.
+
+Before you ask, write your canonical memory — the current objective, the
+decisions made, what is unfinished and the next concrete step — where the
+project keeps it (its `.backbone/memory/` handoff, or whatever its
+instructions prescribe). The replacement is a fresh session with the normal
+startup instructions; it knows nothing you did not write down. `--message`
+is a short pointer to that context, not a substitute for it.
+
+```bash
+backbone agent restart                                 # stop me; fresh session one minute later
+backbone agent restart --runtime claude --model opus   # continue in Claude Code with Opus
+backbone agent restart --in 3h20m --message "Resume from HANDOFF.md, section 'PR 12'"
+backbone agent restart --at 2026-09-23T09:00           # local time; an offset is honoured
+backbone agent restart --resume                        # same CLI, previous conversation
+backbone agent restart --stop-only                     # save and stop; nothing starts
+backbone agent inspect $BACKBONE_AGENT                 # the transition's status and result
+```
+
+- The wait is between the stop and the start; the stop itself is immediate.
+- `--resume` needs the same CLI; a cross-CLI resume is refused with the reason.
+- `--runtime` and `--model` are recorded on the agent, as with `agent start`.
+- One open transition per agent; a second request is refused until it ends.
+- The result is `pending`, `completed` (with the launch's readiness and the
+  message outcome) or `failed` with the reason. A session someone started by
+  hand during the wait counts as failed — it is never claimed as the
+  transition's work.
+
 ## Choosing a model — never ask a human for an id
 
 `backbone runtimes` prints example model ids per runtime: Claude Code

@@ -40,3 +40,22 @@ async def test_only_terminal_rows_completed_before_cutoff_are_pruned(db, status,
     assert count == int(removed)
     assert (await queue_row(db, result.id) is None) == removed
     assert await db.deliveries.query() == []
+
+
+async def test_a_restart_continuation_never_expires(db):
+    note = await db.queue.enqueue(
+        session_name="app",
+        message="[via:backbone from:app] carry on",
+        delivery_kind="direct_message",
+        source="agent-restart",
+    )
+    chat = await db.queue.enqueue(
+        session_name="app", message="[via:backbone from:leo] hi", delivery_kind="direct_message"
+    )
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE message_queue SET enqueued_at='2020-01-01T00:00:00.000000Z'")
+        )
+    expired = await db.queue.expire_pending(max_age_minutes=30)
+    assert [row["id"] for row in expired] == [chat.id]
+    assert (await queue_row(db, note.id))["status"] == "pending"

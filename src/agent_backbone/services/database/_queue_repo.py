@@ -381,6 +381,8 @@ class QueueRepo(Repo):
         Leased rows are not considered: ``expire_stale_leases`` returns them to
         ``pending`` long before this cutoff, so they expire on the next sweep.
         Subscription batches never expire: they are facts, not conversation.
+        Nor does a restart's continuation message (source ``agent-restart``):
+        it belongs to the transition and waits for its replacement session.
         """
         async with self._tx() as conn:
             now = now_iso()
@@ -389,6 +391,7 @@ class QueueRepo(Repo):
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE status = 'pending' AND enqueued_at < :cutoff
                          AND delivery_kind != 'subscription'
+                         AND source != 'agent-restart'
                          AND session_name NOT IN :protected
                          AND COALESCE(sender, '') NOT IN :protected
                        RETURNING *"""

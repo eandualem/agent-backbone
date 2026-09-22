@@ -42,7 +42,9 @@ def _register_jobs(app: FastAPI):
         delivery_retry,
         monitor_agents,
         observe_job,
+        run_transitions,
     )
+    from agent_backbone.services.jobs.transitions import INTERVAL_SECONDS as _TRANSITION_TICK
     from agent_backbone.services.routing import routing_in_flight
     from agent_backbone.services.scheduler import PeriodicScheduler
 
@@ -86,6 +88,12 @@ def _register_jobs(app: FastAPI):
         "agent-monitor", config.timing.monitor_interval_seconds, _monitor, run_immediately=True
     )
     scheduler.add("delivery-retry", config.timing.retry_interval_seconds, _retry)
+
+    async def _transitions():
+        return await run_transitions(lambda: state.config, state.agent_store, state.db)
+
+    # Explicit one-time stop/restart requests (`backbone agent restart`).
+    scheduler.add("agent-transitions", _TRANSITION_TICK, _transitions)
     scheduler.add("prune", 6 * 3600, _prune)
     scheduler.add("report-audio", 30, state.integrations.flush_report_audio, run_immediately=True)
     # Integrations re-provision their per-agent surfaces (Telegram topics):

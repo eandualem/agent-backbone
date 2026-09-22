@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,8 @@ def _print_inspection(data: dict) -> None:
         fields.append(
             ("Current issue", f"{data.get('current_repo') or ''}#{data['current_issue']}")
         )
+    if data.get("restart"):
+        fields.append(("Restart", _transition_line(data["restart"])))
     fields.append(("Evidence", "\n".join(data.get("evidence", []))))
     print_record("Observation", fields)
     if data.get("pane_tail"):
@@ -79,6 +82,110 @@ def _print_inspection(data: dict) -> None:
                 for d in data["recent_deliveries"]
             ],
         )
+
+
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def parse_duration(text: str) -> int:
+    """``90``, ``90s``, ``20m``, ``3h20m`` or ``1d`` as seconds (``ValueError`` otherwise)."""
+    value = text.strip().lower()
+    if value.isdigit():
+        return int(value)
+    parts = re.findall(r"(\d+)([smhd])", value)
+    if not parts or "".join(n + u for n, u in parts) != value:
+        raise ValueError(f"'{text}' is not a duration such as 90s, 20m or 3h20m")
+    return sum(int(number) * _DURATION_UNITS[unit] for number, unit in parts)
+
+
+def _transition_line(row: dict) -> str:
+    """One line for a transition: what it is, where it stands, how it ended."""
+    what = "stop" if not row.get("start") else "resume" if row.get("resume") else "fresh start"
+    chosen = [value for value in (row.get("runtime"), row.get("model")) if value]
+    if chosen:
+        what += f" ({', '.join(chosen)})"
+    line = f"#{row['id']} {row['status']}: {what}"
+    if row["status"] == "pending":
+        line += (
+            f", starts at {row['start_at'][:16]}Z"
+            if row.get("start_at")
+            else f", starts {row.get('delay_seconds', 60)}s after the stop"
+            if row.get("start")
+            else ", stopping"
+        )
+    result = row.get("result") or {}
+    if result.get("reason"):
+        line += f" — {result['reason']}"
+    elif result.get("ready"):
+        line += f" — {result['ready']}"
+    if result.get("message"):
+        line += f"; message {result['message']}"
+    return line
+
+
+async def _agent_restart(args: argparse.Namespace) -> int:
+    name = args.name or os.environ.get("BACKBONE_AGENT", "").strip()
+    if not name:
+        print("usage: backbone agent restart [NAME] …")
+        print("(without NAME, $BACKBONE_AGENT must be set — it is inside agent sessions)")
+        return 1
+    body: dict[str, Any] = {
+        "runtime": args.runtime,
+        "model": args.model,
+        "resume": args.resume,
+        "start": not args.stop_only,
+        "start_at": args.start_at,
+        "message": args.message,
+        "from_entity": args.sender,
+    }
+    if args.delay is not None:
+        try:
+            body["delay_seconds"] = parse_duration(args.delay)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 1
+    boot = await _common.read_client_config()
+    if not await _common.api_up(boot):
+        print("backbone API unreachable; is `backbone up` running?")
+        print("(a restart is owned by the running backbone; there is no direct-tmux fallback)")
+        return 1
+    result = await _common.api(
+        boot, "POST", f"/api/agents/{name}/restart", json_body=body, timeout=30.0
+    )
+    if result is None:
+        print("backbone API unreachable; is `backbone up` running?")
+        return 1
+    status, data = result
+    if status != 200:
+        print(f"error {status}: {data.get('detail') if isinstance(data, dict) else data}")
+        return 1
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0
+    print(f"{name}: restart #{data['id']} accepted")
+    print_record(
+        "Transition",
+        [
+            ("Status", data["status"]),
+            ("Stop", "on the backbone's next tick"),
+            (
+                "Start",
+                "none (stop only)"
+                if not data["start"]
+                else f"at {data['start_at']}"
+                if data.get("start_at")
+                else f"{data['delay_seconds']}s after the stop",
+            ),
+            ("CLI", data.get("runtime") or "saved runtime"),
+            ("Model", data.get("model") or "saved model"),
+            ("Conversation", "resume" if data.get("resume") else "fresh"),
+            ("Message", "yes" if data.get("message") else "none"),
+            ("Result", f"backbone agent inspect {name}"),
+        ],
+    )
+    if name == os.environ.get("BACKBONE_AGENT", "").strip():
+        print("This session ends on that tick: finish writing your memory before it does.")
+    return 0
 
 
 def _print_start_result(data: dict) -> None:
@@ -298,6 +405,9 @@ async def _agent(args: argparse.Namespace) -> int:
         else:
             print(f"{args.name}: tags updated")
         return 0
+
+    if sub == "restart":
+        return await _agent_restart(args)
 
     if sub == "stop":
         if not api_up:

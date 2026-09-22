@@ -123,7 +123,8 @@ Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way
   `docs/configuration.md`. Secrets never go in the database — `.env` only.
 - Busy agents are never interrupted; `priority` only bypasses
   `human_typing` and `settling`. The backbone reports dead sessions, never
-  restarts them.
+  restarts them; the one restart it performs is an explicit `agent restart`
+  request, executed by the `agent-transitions` job.
 - Issue-scoped data is keyed by `(repo, issue_number)` — never by issue
   number alone.
 - **Never trade a runtime's sandbox for fewer prompts.** A member of a swarm
