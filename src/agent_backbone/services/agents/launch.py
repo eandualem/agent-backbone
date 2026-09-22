@@ -16,6 +16,7 @@ from uuid import uuid4
 from agent_backbone.config import session_secret_keys
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.git import git_write_paths
+from agent_backbone.hooks.backbone_state import clear_agent_context
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
     read_state_file,
@@ -355,6 +356,10 @@ async def _start_agent(
     # trusting it after a short window regardless.
     details["stage"] = "launch"
     launched_at = time.time()
+    # Hook-context offers belong to the session they were written for: the
+    # new session must not have the old one's guidance injected on its
+    # first tool call. Queue rows behind a batch survive and are pasted.
+    clear_agent_context(config.state_dir, spec.name)
     write_starting_marker(config.state_dir, spec.name, launched_at)
     ok = await start_session(
         spec.name,

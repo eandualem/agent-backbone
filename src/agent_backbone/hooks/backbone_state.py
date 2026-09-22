@@ -24,6 +24,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -605,6 +606,13 @@ def clear_context(state_dir: Path, agent: str, key: str) -> None:
     directory = _context_dir(state_dir, agent)
     for suffix in ("md", "taken", "claimed"):
         (directory / f"{key}.{suffix}").unlink(missing_ok=True)
+
+
+def clear_agent_context(state_dir: Path, agent: str) -> None:
+    """Backbone side, before a new session: drop every offer left for the
+    previous one. An offer is meant for the session it was written for; the
+    queue row behind a batch survives and is pasted at the new prompt."""
+    shutil.rmtree(_context_dir(state_dir, agent), ignore_errors=True)
 
 
 def take_context(state_dir: Path, agent: str) -> list[str]:

@@ -59,3 +59,13 @@ def test_claude_and_codex_hooks_hand_offers_over_on_post_tool_use(tmp_path, monk
         assert _run(hook, tmp_path, {"hook_event_name": "PostToolUse", "session_id": "s"}) == ""
         for key in ("1", "2"):
             bb.clear_context(tmp_path, "desk", key)
+
+
+def test_clear_agent_context_drops_every_offer_left_for_a_previous_session(tmp_path):
+    bb.offer_context(tmp_path, "desk", "7", "batch")
+    (tmp_path / "context" / "desk" / "launch-1").mkdir()
+    (tmp_path / "context" / "desk" / "launch-1" / "steer-1.md").write_text("old guidance")
+    bb.clear_agent_context(tmp_path, "desk")
+    assert not (tmp_path / "context" / "desk").exists()
+    assert bb.take_context(tmp_path, "desk") == []
+    bb.clear_agent_context(tmp_path, "nobody")  # nothing to clear is not an error

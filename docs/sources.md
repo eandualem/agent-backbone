@@ -106,7 +106,10 @@ conversation, and are retired only when delivered.
    sees that the hook took it, records the delivery with source
    `hook-context`, and pastes nothing. If the agent reaches its prompt first,
    the drain withdraws the offer and pastes normally. Whoever renames the
-   offer file first owns it, so the batch arrives exactly once. A poll with more
+   offer file first owns it, so the batch arrives exactly once. An offer
+   belongs to the session it was written for: starting a new session for the
+   agent (a restart included) removes any offer left untaken, and the batch's
+   queue row is pasted at the new prompt instead. A poll with more
    than 25 matches gets one offer and receipt per queued batch, preserving every
    item without repeating earlier batches at the prompt.
 3. A runtime whose hook cannot add context (Gemini CLI, OpenCode, Aider,
