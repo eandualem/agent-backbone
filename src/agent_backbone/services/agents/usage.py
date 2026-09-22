@@ -5,15 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from contextlib import suppress
+from collections import deque
+from contextlib import aclosing, suppress
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents._file_reader import read_state_file
-from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.usage import (
     DEFAULT_PRICES,
@@ -23,6 +25,9 @@ from agent_backbone.usage import (
     timestamp,
     usage_id,
 )
+
+if TYPE_CHECKING:
+    from agent_backbone.services.database import BackboneDB
 
 log = logging.getLogger(__name__)
 _locks: WeakKeyDictionary = WeakKeyDictionary()
@@ -84,27 +89,30 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                         registration.unlink(missing_ok=True)
             except (ValueError, KeyError, TypeError):
                 errors.append("invalid or conflicting session registration")
-        pending = await db.usage.sessions()
+        known = {s["id"]: s for s in await db.usage.sessions()}
+        pending = deque(known.values())
         processed = set()
+        unchanged = []
         prices = config.settings.get("usage.prices", DEFAULT_PRICES)
         while pending:
-            session = pending.pop(0)
+            session = pending.popleft()
             if session["id"] in processed:
                 continue
-            processed.add(session["id"])
             rt = RUNTIMES.get(session["runtime"])
             if rt is None or not rt.usage_supported:
                 continue
             spec = config.agents.get(session["agent_name"])
             env = spec.env if spec else {}
             try:
-                path = Path(session["source_path"]) if session["source_path"] else None
+                source_path = session.get("_discovered_path", session["source_path"])
+                path = Path(source_path) if source_path else None
                 if not path or not path.is_file():
                     paths = await asyncio.to_thread(rt.usage_paths, session["session_id"], env)
                     if len(paths) == 1:
                         path = paths[0]
                 if path is None:
                     continue
+                processed.add(session["id"])
                 batch = await asyncio.to_thread(
                     rt.read_usage,
                     path,
@@ -122,57 +130,91 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 )
                 if batch.error:
                     errors.append(f"{session['id']}: {batch.error}")
-                await db.usage.ingest(
-                    session,
-                    path=str(path),
-                    offset=batch.offset,
-                    cursor=batch.state,
-                    events=batch.events,
-                    coverage=coverage,
-                    detail=batch.error or ("source read incomplete" if not batch.caught_up else ""),
-                    prices=prices,
-                    observed_at=now,
-                )
+                detail = batch.error or ("source read incomplete" if not batch.caught_up else "")
+                if (
+                    not batch.events
+                    and session["source_path"] == str(path)
+                    and session["offset"] == batch.offset
+                    and session["cursor"] == batch.state
+                    and session["coverage"] == coverage
+                    and session["detail"] == detail
+                ):
+                    unchanged.append(session["id"])
+                else:
+                    await db.usage.ingest(
+                        session,
+                        path=str(path),
+                        offset=batch.offset,
+                        cursor=batch.state,
+                        events=batch.events,
+                        coverage=coverage,
+                        detail=detail,
+                        prices=prices,
+                        observed_at=now,
+                    )
                 children = await asyncio.to_thread(
                     rt.usage_children, path, session["session_id"], env
                 )
                 for child_id, child_path in children:
-                    child_key = await db.usage.remember(
-                        session["agent_name"],
-                        session["runtime"],
-                        child_id,
-                        at=now,
-                        parent_id=session["id"],
-                    )
+                    child_key = usage_id(session["runtime"], child_id)
+                    child = known.get(child_key)
+                    if (
+                        child is None
+                        or child["parent_id"] != session["id"]
+                        or child["agent_name"] != session["agent_name"]
+                    ):
+                        await db.usage.remember(
+                            session["agent_name"],
+                            session["runtime"],
+                            child_id,
+                            at=now,
+                            parent_id=session["id"],
+                        )
+                        if child is None:
+                            child = known[child_key] = {}
+                        child.update(await db.usage.session(child_key))
                     if child_key in processed:
                         continue
-                    child = await db.usage.session(child_key)
-                    child["source_path"] = str(child_path)
+                    child["_discovered_path"] = str(child_path)
                     pending.append(child)
             except Exception as exc:
                 errors.append(f"{session['id']}: {type(exc).__name__}")
                 log.warning("Usage collection failed for %s: %s", session["id"], type(exc).__name__)
+        await db.usage.observed(unchanged, now)
         return {"enabled": True, "errors": errors, "observed_at": now}
 
 
-def totals(events: list[dict]) -> dict:
-    counts = {key: sum(e[key] for e in events) for key in TOKEN_FIELDS}
-    priced = [e for e in events if e["cost"]["usd"] is not None]
-    return {
-        **counts,
-        "total_tokens": sum(counts.values()),
-        "observations": len(events),
-        "reasoning_tokens": sum(e.get("reasoning_tokens") or 0 for e in events),
-        "priced_observations": len(priced),
-        "estimated_usd": str(sum((Decimal(e["cost"]["usd"]) for e in priced), Decimal(0)))
-        if priced
-        else None,
-        "cost_coverage": "complete"
-        if events and len(priced) == len(events)
-        else "partial"
-        if priced
-        else "unpriced",
-    }
+@dataclass
+class _Totals:
+    counts: dict = field(default_factory=lambda: dict.fromkeys(TOKEN_FIELDS, 0))
+    observations: int = 0
+    reasoning: int = 0
+    priced: int = 0
+    usd: Decimal = Decimal(0)
+
+    def add(self, event: dict) -> None:
+        for key in TOKEN_FIELDS:
+            self.counts[key] += event[key]
+        self.observations += 1
+        self.reasoning += event.get("reasoning_tokens") or 0
+        if event["cost"]["usd"] is not None:
+            self.priced += 1
+            self.usd += Decimal(event["cost"]["usd"])
+
+    def result(self) -> dict:
+        return {
+            **self.counts,
+            "total_tokens": sum(self.counts.values()),
+            "observations": self.observations,
+            "reasoning_tokens": self.reasoning,
+            "priced_observations": self.priced,
+            "estimated_usd": str(self.usd) if self.priced else None,
+            "cost_coverage": "complete"
+            if self.observations and self.priced == self.observations
+            else "partial"
+            if self.priced
+            else "unpriced",
+        }
 
 
 async def usage_view(
@@ -225,20 +267,6 @@ async def usage_view(
     ]
     if agent and agent not in config.agents.names and not selected:
         raise ValueError("unknown agent")
-    events = await db.usage.events(
-        agent=agent, runtime=runtime, session=session, since=since, until=until
-    )
-    if reprice:
-        for e in events:
-            e["cost"] = estimate(
-                UsageEvent.model_validate(
-                    {k: v for k, v in e.items() if k in UsageEvent.model_fields}
-                ),
-                config.settings.get("usage.prices", DEFAULT_PRICES),
-            )
-    grouped = {}
-    for e in events:
-        grouped.setdefault(e["session"], []).append(e)
     current = set()
     for name in {s["agent_name"] for s in selected}:
         if name in config.agents.names and await session_exists(name):
@@ -253,11 +281,54 @@ async def usage_view(
                 break
             included = expanded
         selected = [s for s in selected if s["id"] in included]
-        events = [e for e in events if e["session"] in included]
+    summaries = {}
+    models = {}
+    total = _Totals()
+    page = []
+
+    def summarize(batch):
+        # One bounded batch at a time: JSON and Decimal work must not hold up
+        # delivery on the event loop, and full price bases are kept only for the page.
+        for raw in batch:
+            e = {"session": raw["session"], **json.loads(raw["data"])}
+            e["cost"] = (
+                estimate(
+                    UsageEvent.model_validate_json(raw["data"]),
+                    config.settings.get("usage.prices", DEFAULT_PRICES),
+                )
+                if reprice
+                else json.loads(raw["cost"])
+            )
+            if session and offset <= total.observations < offset + limit:
+                page.append(e)
+            total.add(e)
+            summary = summaries.get(e["session"])
+            if summary is None:
+                summary = summaries[e["session"]] = {"totals": _Totals(), "models": set()}
+            summary["totals"].add(e)
+            summary["models"].add(e["model"])
+            summary["last_usage_at"] = e["at"]
+            if by == "model" and not session:
+                if e["model"] not in models:
+                    models[e["model"]] = _Totals()
+                models[e["model"]].add(e)
+
+    async with aclosing(
+        db.usage.event_batches(
+            agent=agent,
+            runtime=runtime,
+            session=session,
+            sessions={s["id"] for s in selected} if current_only else None,
+            since=since,
+            until=until,
+        )
+    ) as batches:
+        async for batch in batches:
+            await asyncio.to_thread(summarize, batch)
     rows = []
     for s in selected:
-        es = grouped.get(s["id"], [])
-        if (since or until) and not es:
+        summary = summaries.get(s["id"])
+        if (since or until) and summary is None:
             continue
         rows.append(
             {
@@ -277,21 +348,22 @@ async def usage_view(
             }
             | {
                 "current": s["id"] in current,
-                "models": sorted({e["model"] for e in es}),
-                "last_usage_at": max((e["at"] for e in es), default=None),
-                **totals(es),
+                "models": sorted(summary["models"]) if summary else [],
+                "last_usage_at": summary["last_usage_at"] if summary else None,
+                **(summary["totals"] if summary else _Totals()).result(),
             }
         )
     rows.sort(key=lambda s: (not s["current"], s["agent_name"], s["first_seen"], s["id"]))
     if session:
-        items = events
+        total_items = total.observations
+        items = page
     elif by == "model":
-        groups = {}
-        for e in events:
-            groups.setdefault(e["model"], []).append(e)
-        items = [{"model": m, **totals(es)} for m, es in sorted(groups.items())]
+        items = [{"model": m, **counts.result()} for m, counts in sorted(models.items())]
+        total_items = len(items)
+        items = items[offset : offset + limit]
     else:
-        items = rows
+        total_items = len(rows)
+        items = rows[offset : offset + limit]
     now_epoch = datetime.now(UTC).timestamp()
     limits = [
         {
@@ -328,10 +400,10 @@ async def usage_view(
         and (not runtime or spec.runtime == runtime)
         and not any(s["agent_name"] == spec.name and s["runtime"] == spec.runtime for s in selected)
     ]
-    total = totals(events)
+    total = total.result()
     total["coverage"] = (
         "unavailable"
-        if not events
+        if not total["observations"]
         else "partial"
         if unavailable or any(s["coverage"] != "measured" for s in rows)
         else "measured"
@@ -342,10 +414,10 @@ async def usage_view(
         "generated_at": timestamp(datetime.now(UTC).isoformat()),
         "collection": collection,
         "sessions": rows,
-        "items": items[offset : offset + limit],
-        "total_items": len(items),
-        "has_more": offset + limit < len(items),
-        "next_offset": offset + limit if offset + limit < len(items) else None,
+        "items": items,
+        "total_items": total_items,
+        "has_more": offset + limit < total_items,
+        "next_offset": offset + limit if offset + limit < total_items else None,
         "totals": total,
         "limits": limits,
         "unavailable": unavailable,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import bindparam, insert, select, update
 
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database.models import UsageEventORM, UsageSessionORM
@@ -12,6 +12,7 @@ from agent_backbone.usage import Price, UsageEvent, estimate, timestamp, usage_i
 
 _S = UsageSessionORM.__table__
 _E = UsageEventORM.__table__
+_BATCH_SIZE = 500
 
 
 def _session(row) -> dict:
@@ -64,6 +65,17 @@ class UsageRepo(Repo):
             row = (await conn.execute(select(_S).where(_S.c.id == identity))).mappings().one()
             if row["agent_name"] != agent:
                 raise ValueError("runtime session already attributed to another agent")
+            if parent_id and row["parent_id"] != parent_id:
+                if row["parent_id"] is not None or parent_id == identity:
+                    raise ValueError("runtime session has conflicting parent lineage")
+                await conn.execute(
+                    update(_S)
+                    .where(_S.c.id == identity, _S.c.parent_id.is_(None))
+                    .values(parent_id=parent_id)
+                )
+                parent = await conn.scalar(select(_S.c.parent_id).where(_S.c.id == identity))
+                if parent != parent_id:
+                    raise ValueError("runtime session has conflicting parent lineage")
             launches = json.loads(row["launches"])
             if launch_id and launch_id not in launches:
                 launches.append(launch_id)
@@ -106,19 +118,21 @@ class UsageRepo(Repo):
             )
             if result.rowcount != 1:
                 return False
+            keys = list({event.key for event in events})
+            existing = {}
+            for start in range(0, len(keys), _BATCH_SIZE):
+                rows = await conn.execute(
+                    select(_E).where(
+                        _E.c.session == session["id"],
+                        _E.c.event_key.in_(keys[start : start + _BATCH_SIZE]),
+                    )
+                )
+                existing.update((row["event_key"], dict(row)) for row in rows.mappings())
+            original_keys = set(existing)
+            changed = {}
             for event in events:
                 event = UsageEvent.model_validate(event.model_dump())
-                old = (
-                    (
-                        await conn.execute(
-                            select(_E).where(
-                                _E.c.session == session["id"], _E.c.event_key == event.key
-                            )
-                        )
-                    )
-                    .mappings()
-                    .first()
-                )
+                old = existing.get(event.key)
                 selected_prices = prices
                 if old:
                     previous = UsageEvent.model_validate_json(old["data"])
@@ -144,27 +158,41 @@ class UsageRepo(Repo):
                     "data": event.model_dump_json(),
                     "cost": json.dumps(cost),
                 }
-                if old:
-                    await conn.execute(
-                        update(_E)
-                        .where(_E.c.session == session["id"], _E.c.event_key == event.key)
-                        .values(**values)
-                    )
-                else:
-                    await conn.execute(
-                        insert(_E).values(session=session["id"], event_key=event.key, **values)
-                    )
+                if old is None or any(old[key] != value for key, value in values.items()):
+                    existing[event.key] = values
+                    changed[event.key] = values
+            new = [
+                {"session": session["id"], "event_key": key, **values}
+                for key, values in changed.items()
+                if key not in original_keys
+            ]
+            revised = [
+                {"_key": key, **values} for key, values in changed.items() if key in original_keys
+            ]
+            if new:
+                await conn.execute(insert(_E), new)
+            if revised:
+                await conn.execute(
+                    update(_E)
+                    .where(_E.c.session == session["id"], _E.c.event_key == bindparam("_key"))
+                    .values({key: bindparam(key) for key in ("at", "model", "data", "cost")}),
+                    revised,
+                )
         return True
 
-    async def events(
+    async def event_batches(
         self,
         *,
         agent: str | None = None,
         runtime: str | None = None,
         session: str | None = None,
+        sessions: set[str] | None = None,
         since: str | None = None,
         until: str | None = None,
-    ) -> list[dict]:
+    ):
+        """Stream one ordered selection in bounded batches under one read transaction."""
+        if sessions is not None and not sessions:
+            return
         statement = select(_E).join(_S, _S.c.id == _E.c.session)
         if agent:
             statement = statement.where(_S.c.agent_name == agent)
@@ -172,14 +200,36 @@ class UsageRepo(Repo):
             statement = statement.where(_S.c.runtime == runtime)
         if session:
             statement = statement.where(_S.c.id == session)
+        if sessions is not None:
+            statement = statement.where(_S.c.id.in_(sessions))
         if since:
             statement = statement.where(_E.c.at >= since)
         if until:
             statement = statement.where(_E.c.at < until)
+        async with (
+            self._tx() as conn,
+            conn.stream(statement.order_by(_E.c.at, _E.c.event_key)) as result,
+        ):
+            async for batch in result.mappings().partitions(_BATCH_SIZE):
+                yield batch
+
+    async def events(self, **filters) -> list[dict]:
+        return [
+            {"session": r["session"], **json.loads(r["data"]), "cost": json.loads(r["cost"])}
+            async for batch in self.event_batches(**filters)
+            for r in batch
+        ]
+
+    async def observed(self, identities: list[str], at: str) -> None:
+        """Refresh collection timestamps without rewriting unchanged checkpoints."""
+        if not identities:
+            return
         async with self._tx() as conn:
-            return [
-                {"session": r["session"], **json.loads(r["data"]), "cost": json.loads(r["cost"])}
-                for r in (
-                    await conn.execute(statement.order_by(_E.c.at, _E.c.event_key))
-                ).mappings()
-            ]
+            for start in range(0, len(identities), _BATCH_SIZE):
+                await conn.execute(
+                    update(_S)
+                    .where(
+                        _S.c.id.in_(identities[start : start + _BATCH_SIZE]), _S.c.last_seen < at
+                    )
+                    .values(last_seen=at)
+                )

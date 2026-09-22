@@ -320,20 +320,44 @@ class TelegramService(Integration):
             )
             return
         app = self.build_app()
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling()
-        self._running = True
+        try:
+            await app.initialize()
+            await app.start()
+            await app.updater.start_polling()
+            self._running = True
+            await self.sync_agents()
+        except BaseException:
+            try:
+                await self.stop()
+            except BaseException:
+                log.exception("Telegram startup cleanup failed")
+            raise
         log.info("Telegram bot polling started")
-        await self.sync_agents()
 
     async def stop(self) -> None:
-        if self._app is None or not self._running:
+        app = self._app
+        if app is None:
             return
+        failure: BaseException | None = None
         try:
-            await self._app.updater.stop()
-            await self._app.stop()
-            await self._app.shutdown()
+            # Application.shutdown skips cleanup when getMe failed during initialize.
+            # Bot.shutdown still closes its initialized requests and is idempotent.
+            for needed, cleanup in (
+                (app.updater.running, app.updater.stop),
+                (app.running, app.stop),
+                (True, app.shutdown),
+                (True, app.bot.shutdown),
+            ):
+                if needed:
+                    try:
+                        await cleanup()
+                    except BaseException as exc:
+                        # A failed phase must not prevent the remaining resources
+                        # from closing, including when shutdown was cancelled.
+                        if failure is None:
+                            failure = exc
+            if failure is not None:
+                raise failure
         finally:
             self._running = False
             self._app = None

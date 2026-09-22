@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 
 from agent_backbone.api.app import _register_jobs
-from agent_backbone.config import bootstrap_config
+from agent_backbone.config import AgentsConfig, AgentSpec, bootstrap_config
 
 
 @pytest.mark.parametrize("intake,backfill", [("webhook", True), ("webhook", False), ("poll", True)])
@@ -44,7 +44,7 @@ def test_only_enabled_webhook_backfill_is_a_one_shot(tmp_path, intake, backfill)
     elif backfill:
         job = jobs["github-backfill"]
         assert job.once and job.run_immediately
-        assert job.fn is poller.return_value.run
+        assert job.fn is poller.return_value.backfill
         assert job.interval == 0
     else:
         assert "github-backfill" not in jobs and "github-poll" not in jobs
@@ -70,3 +70,61 @@ async def test_upgrade_requests_server_exit_without_sending_a_signal(tmp_path):
     kill.assert_not_called()
     del app.state.request_shutdown
     assert not watch.call_args.kwargs["enabled"]()
+
+
+async def test_failed_startup_backfill_retries_only_unfinished_repos_on_existing_retry_job(
+    tmp_path, db
+):
+    config = bootstrap_config(tmp_path)
+    config = replace(
+        config,
+        github_token="test-token",
+        webhook_secret="test-secret",
+        github=replace(config.github, intake="webhook", reviewers=()),
+        agents=AgentsConfig(
+            {"a": AgentSpec(name="a", dir=str(tmp_path), repo="acme/bad", watches=("acme/good",))}
+        ),
+    )
+    gh = AsyncMock()
+    failed = False
+
+    async def issues(repo, since):
+        nonlocal failed
+        if repo == "acme/bad" and not failed:
+            failed = True
+            raise TimeoutError("startup outage")
+        return []
+
+    gh.list_issues_since.side_effect = issues
+    gh.list_comments_since.return_value = []
+    app = FastAPI()
+    app.state.config = config
+    app.state.db = db
+    app.state.github = gh
+    app.state.issue_closed_hooks = ()
+    app.state.integrations = SimpleNamespace(
+        reconcile=AsyncMock(), flush_reports=AsyncMock(), flush_report_audio=AsyncMock()
+    )
+    with (
+        patch("agent_backbone.services.jobs.UpgradeWatch"),
+        patch(
+            "agent_backbone.services.jobs.delivery_retry", return_value={"normal_retry": 1}
+        ) as retry,
+    ):
+        scheduler = _register_jobs(app)
+    backfill = scheduler._jobs["github-backfill"]
+    await scheduler._run_once(backfill)
+    assert backfill.status.failures == 1 and backfill.status.last_error
+    assert await scheduler._jobs["delivery-retry"].fn() == {"normal_retry": 1}
+    assert backfill.status.runs == 2 and backfill.status.last_error is None
+    await scheduler._jobs["delivery-retry"].fn()
+    assert retry.await_count == 2
+    assert [call.args[0] for call in gh.list_issues_since.await_args_list] == [
+        "acme/bad",
+        "acme/good",
+        "acme/bad",
+    ]
+    observations = [
+        row for row in await db.diagnostics.query() if row["source"] == "github-backfill"
+    ]
+    assert {row["code"] for row in observations} == {"run_failed", "run_recovered"}

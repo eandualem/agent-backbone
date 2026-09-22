@@ -80,6 +80,7 @@ class _QueueReceipt:
     id: int | None = None
     operation_id: str | None = None
     error_type: str | None = None
+    context_offers: tuple[tuple[int, str], ...] = ()
 
 
 _session_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDictionary()
@@ -288,7 +289,9 @@ async def _enqueue(
     stored_operation = result.operation_id if isinstance(result.operation_id, str) else operation_id
     if result.status in ("inserted", "appended"):
         log.info("Queued %s for %s (%s) via %s", kind, session_name, repo or "-", source or "?")
-        return _QueueReceipt("stored", queue_id, stored_operation)
+        return _QueueReceipt(
+            "stored", queue_id, stored_operation, context_offers=result.context_offers
+        )
     log.info("Same %s for %s already queued (from %s)", kind, session_name, sender or "?")
     return _QueueReceipt("already_queued", queue_id, stored_operation)
 
@@ -478,6 +481,21 @@ async def safe_deliver(
                     details={**details, "error_type": receipt.error_type},
                     **metadata,
                 )
+        if (
+            receipt.context_offers
+            and profile is not None
+            and profile.intelligence == SessionIntelligence.AGENT_WORKING
+            and get_runtime(profile.runtime).hook_context
+        ):
+            # One offer per stored row: an oversized poll may have opened
+            # several batches, and each receipt must cover only its own text.
+            for batch_id, batch_text in receipt.context_offers:
+                try:
+                    await asyncio.to_thread(
+                        offer_context, config.state_dir, session_name, str(batch_id), batch_text
+                    )
+                except OSError as exc:
+                    await record_exception("context_offer_failed", "context", exc)
         return DeliveryReport(
             outcome,
             receipt.status,
@@ -549,29 +567,7 @@ async def safe_deliver(
             queue = kind != "issue" or intel == SessionIntelligence.OFFLINE
             if intel == SessionIntelligence.SETTLING and kind == "issue":
                 queue = False
-            report = await finish(DeliveryOutcome(intel.value), queue=queue)
-            if (
-                priority
-                and kind == SUBSCRIPTION_KIND
-                and intel == SessionIntelligence.AGENT_WORKING
-                and report.queue_id is not None
-                and get_runtime(profile.runtime).hook_context
-            ):
-                # The queued batch is also offered to the working agent
-                # through its runtime's hook; the drain reconciles which
-                # of the two paths delivered it (docs/sources.md).
-                try:
-                    offered = await asyncio.to_thread(
-                        offer_context, config.state_dir, session_name, str(report.queue_id), message
-                    )
-                except OSError as exc:
-                    await record_exception("context_offer_failed", "context", exc)
-                else:
-                    if offered:
-                        log.info(
-                            "Offered batch %s to %s as hook context", report.queue_id, session_name
-                        )
-            return report
+            return await finish(DeliveryOutcome(intel.value), queue=queue)
 
     if db is not None and await db.queue.has_uncertain(session_name):
         # A previous paste may still occupy the input box. Hold new messages

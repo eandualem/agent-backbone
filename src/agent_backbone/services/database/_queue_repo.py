@@ -38,6 +38,8 @@ class EnqueueResult:
     status: str
     id: int | None = None
     operation_id: str | None = None
+    context_offers: tuple[tuple[int, str], ...] = ()
+    """Exact immutable high-batch rows, each offered under its own receipt ID."""
 
     @property
     def stored(self) -> bool:
@@ -199,6 +201,7 @@ class QueueRepo(Repo):
         async with self._tx() as conn:
             lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
             rest = list(lines)
+            offers: list[tuple[int, str]] = []
             grown: EnqueueResult | None = None
             if not priority:
                 existing = await conn.execute(
@@ -246,9 +249,11 @@ class QueueRepo(Repo):
                 result = await conn.execute(
                     text(f"INSERT INTO message_queue {_INSERT_COLUMNS} RETURNING id"), params
                 )
-                inserted = EnqueueResult("inserted", result.scalar_one(), params["operation_id"])
+                row_id = result.scalar_one()
+                if priority:
+                    offers.append((row_id, message))
                 if not rest:
-                    return inserted
+                    return EnqueueResult("inserted", row_id, params["operation_id"], tuple(offers))
                 operation_id = None
 
     async def pending_count(self, session_name: str) -> int:

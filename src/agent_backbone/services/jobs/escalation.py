@@ -259,28 +259,47 @@ async def handle_offline(
     for agent in await check_for_unexpected_offline(config, active_sessions, db, gh):
         spec = config.agents.get(agent["session"])
         expected_up = spec is not None and spec.always_on
-        if expected_up and _should_escalate(
-            agent["session"], "offline", config.timing.escalation_dedup_seconds
+        key = (agent["session"], "offline")
+        if expected_up and not _escalated.seen(
+            key, ttl_seconds=config.timing.escalation_dedup_seconds
         ):
+            accepted = False
             escalation_session = _escalation_session(config, agent["session"])
             if escalation_session and escalation_session in active_sessions:
                 msg = format_unexpected_offline_notification(
                     agent["session"], agent["entity"], agent["pending_count"]
                 )
-                await safe_deliver(
-                    escalation_session,
-                    msg,
+                try:
+                    report = await safe_deliver(
+                        escalation_session,
+                        msg,
+                        config,
+                        db=db,
+                        priority=True,
+                        delivery_kind="escalation",
+                    )
+                    accepted = report.outcome == DeliveryOutcome.DELIVERED or report.queued
+                except Exception:
+                    log.exception(
+                        "Could not report offline agent %s to %s",
+                        agent["entity"],
+                        escalation_session,
+                    )
+            try:
+                notified = await notify_humans(
                     config,
-                    db=db,
-                    priority=True,
-                    delivery_kind="escalation",
+                    f"Agent {agent['entity']} went offline unexpectedly "
+                    f"({agent['pending_count']} pending). It was not restarted.",
+                    agent=agent["session"],
                 )
-            await notify_humans(
-                config,
-                f"Agent {agent['entity']} went offline unexpectedly "
-                f"({agent['pending_count']} pending). It was not restarted.",
-                agent=agent["session"],
-            )
+                accepted = accepted or notified
+            except Exception:
+                log.exception("Could not report offline agent %s to humans", agent["entity"])
+            if not accepted:
+                # Keep the transition discoverable next tick. Dedup only
+                # accepted alerts, including durable queue handoffs.
+                continue
+            _escalated.mark(key)
             log.warning("Agent offline unexpectedly: %s", agent["entity"])
         elif not expected_up:
             log.info("Agent %s is offline (not always_on; not reported)", agent["entity"])

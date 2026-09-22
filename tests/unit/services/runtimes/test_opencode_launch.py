@@ -12,14 +12,17 @@ from agent_backbone.services.runtimes import _opencode_launch
 
 
 @pytest.mark.parametrize(
-    "raw",
+    "raw,mergeable",
     [
-        None,
-        '{"permission":{"bash":"deny"},"provider":{"custom":{}},"plugin":["other"]}',
-        '{/* JSONC */"permission":{"bash":"deny"}}',
+        (None, True),
+        ('{"permission":{"bash":"deny"},"provider":{"custom":{}},"plugin":["other"]}', True),
+        ('{/* JSONC */"permission":{"bash":"deny"}}', False),
+        ('{"permission":{"bash":"deny"},"plugin":"unexpected"}', False),
+        ('["unexpected"]', False),
+        ("invalid config", False),
     ],
 )
-def test_child_launcher_preserves_effective_environment(tmp_path, raw):
+def test_child_launcher_preserves_effective_environment(tmp_path, raw, mergeable):
     plugin = tmp_path / "hook.js"
     env = dict(os.environ)
     env.pop("OPENCODE_CONFIG_CONTENT", None)
@@ -39,8 +42,9 @@ def test_child_launcher_preserves_effective_environment(tmp_path, raw):
         text=True,
         check=True,
     )
-    if raw and "JSONC" in raw:
+    if not mergeable:
         assert result.stdout.strip() == raw
+        assert "Skipping OpenCode hook injection" in result.stderr
         assert raw not in result.stderr
     else:
         content = json.loads(result.stdout)
@@ -49,3 +53,9 @@ def test_child_launcher_preserves_effective_environment(tmp_path, raw):
             assert content["permission"] == {"bash": "deny"}
             assert content["provider"] == {"custom": {}}
             assert "other" in content["plugin"]
+
+
+def test_child_launcher_keeps_an_existing_hook_once(tmp_path):
+    plugin = (tmp_path / "hook with spaces.js").as_uri()
+    raw = json.dumps({"plugin": [plugin], "permission": {"bash": "deny"}})
+    assert json.loads(_opencode_launch.merge_config(raw, plugin)) == json.loads(raw)

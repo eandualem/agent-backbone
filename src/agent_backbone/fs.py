@@ -13,8 +13,7 @@ def atomic_write_text(path: Path, text: str) -> None:
 
     Readers never see a torn file, and concurrent writers (a hook and the
     API updating the same agent) never share a temp name. An existing file
-    keeps its mode; a new one is private (0600) — these files hold state,
-    trust records and configuration, never anything meant to be shared.
+    keeps its mode; a new one is private (0600).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -24,7 +23,7 @@ def atomic_write_text(path: Path, text: str) -> None:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.monotonic_ns()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             os.fchmod(fd, mode)
             fh.write(text)
         os.replace(tmp, path)

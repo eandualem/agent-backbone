@@ -26,7 +26,10 @@ def api_url(config: BackboneConfig, path: str) -> str:
     (``backbone.host`` help text).
     """
     scheme = "http" if config.backbone.host in _LOOPBACK else "https"
-    return f"{scheme}://{config.backbone.host}:{config.backbone.port}{path}"
+    host = config.backbone.host
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{scheme}://{host}:{config.backbone.port}{path}"
 
 
 def headers(config: BackboneConfig) -> dict[str, str]:

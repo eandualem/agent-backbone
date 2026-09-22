@@ -68,8 +68,10 @@ repository.
 
 Setting `GITHUB_WEBHOOK_SECRET` switches intake from poll to webhook
 (`github.intake` is `auto`). In webhook intake the backbone still runs
-**one poll at startup** (`github.backfill_on_start`) to catch what happened
-while it was down, and the monitor independently notices new open issues in
+**startup catch-up** (`github.backfill_on_start`) to catch what happened
+while it was down. An incomplete catch-up is reported as failed and the existing
+delivery-retry job retries only unfinished repositories; successful repositories
+stop polling. The monitor independently notices new open issues in
 agents' queues. Polling persists a replay cursor per repository before its
 first fetch. With no cursor, it starts at `github.backfill_lookback_hours`
 (including the first start after upgrading to cursor storage). A complete batch

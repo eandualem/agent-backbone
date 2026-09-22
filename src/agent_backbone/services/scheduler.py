@@ -108,6 +108,12 @@ class PeriodicScheduler:
     def jobs(self) -> list[JobStatus]:
         return [job.status for job in self._jobs.values() if job.enabled]
 
+    async def retry_failed_once(self, name: str) -> None:
+        """Retry an unsuccessful one-shot using its existing lock and status."""
+        job = self._jobs.get(name)
+        if job is not None and job.enabled and job.once and job.status.last_error is not None:
+            await self._run_once(job)
+
     # --- LifecycleAware ---
 
     async def start(self) -> None:

@@ -303,6 +303,35 @@ class TestActionsAreLoggedBeforeAndAfter:
 
 
 class TestObservedModel:
+    def test_model_comes_from_assistant_metadata_not_nested_tool_data(self, tmp_path):
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "model": "claude-opus-5",
+                        "content": [{"type": "tool_use", "input": {"model": "gpt-6-astra"}}],
+                    },
+                }
+            )
+            + '\n{"type":"user","message":{"model":"untrusted"}}\n'
+            '{"type":"assistant","message":{"model":"<synthetic>"}}\n'
+            '{"type":"assistant","message":{"model":"unfinished'
+        )
+        record, _ = hook.derive(_payload("Stop", transcript_path=str(transcript)), None)
+        assert record["model"] == "claude-opus-5"
+
+    def test_truncated_tail_record_does_not_supply_an_observed_model(self, tmp_path):
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(
+            '{"type":"assistant","message":{"model":"outside-tail"},"content":"'
+            + "x" * hook.bb.TRANSCRIPT_TAIL_BYTES
+            + '"}\n{"type":"assistant","message":{"model":"claude-opus-5"}}\n'
+        )
+        record, _ = hook.derive(_payload("Stop", transcript_path=str(transcript)), None)
+        assert record["model"] == "claude-opus-5"
+
     def test_stop_reads_the_model_from_the_transcript_tail(self, tmp_path):
         transcript = tmp_path / "t.jsonl"
         transcript.write_text(

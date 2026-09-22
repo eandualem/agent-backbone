@@ -62,6 +62,13 @@ class TestPeriodicScheduler:
             assert scheduler.jobs[0].runs == 1
             assert scheduler.jobs[0].failures == int(fail)
             assert (await scheduler.health_check())["healthy"] is not fail
+            if fail:
+                fail = False
+                await scheduler.retry_failed_once("backfill")
+                assert calls == 2
+                assert (await scheduler.health_check())["healthy"] is True
+                await scheduler.retry_failed_once("backfill")
+                assert calls == 2  # successful catch-up stays finished
         finally:
             await scheduler.stop()
 

@@ -550,3 +550,162 @@ def test_opencode_invalid_structured_tokens_return_partial_batch(tmp_path, token
         )
     batch = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})
     assert batch.error == "ValueError" and batch.state["partial"]
+
+
+async def test_batch_revisions_keep_original_identity_prices_and_atomic_checkpoint(db):
+    key = await db.usage.remember("worker", "claude", "batch", at=T)
+    args = dict(
+        path="source",
+        offset=1,
+        cursor={},
+        coverage="measured",
+        detail="",
+        prices=DEFAULT_PRICES,
+        observed_at=T,
+    )
+    original = UsageEvent(key="old", at=T, model="claude-opus-5", input_tokens=1_000_000)
+    await db.usage.ingest(await db.usage.session(key), events=[original], **args)
+    new = original.model_copy(update={"key": "new", "turn_id": "first-turn"})
+    prices = {"claude-opus-5": {**DEFAULT_PRICES["claude-opus-5"], "input": 99}}
+    await db.usage.ingest(
+        await db.usage.session(key),
+        events=[
+            original.model_copy(update={"at": T2, "output_tokens": 1_000_000}),
+            new,
+            new.model_copy(update={"at": T2, "output_tokens": 2, "turn_id": "later-turn"}),
+            new.model_copy(update={"output_tokens": 999}),  # stale within the same batch
+            original,  # stale compared with the existing request's new revision
+        ],
+        **{**args, "offset": 2, "prices": prices},
+    )
+    rows = {e["key"]: e for e in await db.usage.events(session=key)}
+    assert Decimal(rows["old"]["cost"]["usd"]) == 30
+    assert Decimal(rows["new"]["cost"]["usd"]) == Decimal("99.00005")
+    assert rows["new"]["at"] == T and rows["new"]["turn_id"] == "first-turn"
+    with pytest.raises(ValueError):
+        await db.usage.ingest(
+            await db.usage.session(key),
+            events=[
+                new.model_copy(update={"key": "extra"}),
+                new.model_copy(update={"input_tokens": -1}),
+            ],
+            **{**args, "offset": 3},
+        )
+    assert (await db.usage.session(key))["offset"] == 2
+    assert len(await db.usage.events(session=key)) == 2
+
+
+@pytest.mark.parametrize("already_linked", [False, True])
+async def test_current_usage_links_previously_registered_children(
+    tmp_path, db, monkeypatch, already_linked
+):
+    from agent_backbone.services.agents import AgentState, StateSnapshot
+    from agent_backbone.usage import usage_id
+
+    config = config_for(tmp_path)
+    path = tmp_path / "s1.jsonl"
+    append(path, claude())
+    children = tmp_path / "s1" / "subagents"
+    children.mkdir(parents=True)
+    append(children / "agent-child.jsonl", claude("child"))
+    await db.usage.remember(
+        "worker",
+        "claude",
+        "s1/agent-child",
+        at=T,
+        parent_id=usage_id("claude", "s1") if already_linked else None,
+    )
+    monkeypatch.setattr(
+        RUNTIMES["claude"], "usage_paths", lambda sid, env: [path] if sid == "s1" else []
+    )
+    register(config)
+    with (
+        patch("agent_backbone.services.terminal.session_exists", AsyncMock(return_value=True)),
+        patch(
+            "agent_backbone.services.agents._inference.agent_state",
+            AsyncMock(
+                return_value=StateSnapshot(state=AgentState.BUSY, runtime="claude", session_id="s1")
+            ),
+        ),
+    ):
+        view = await usage_view(config, db, current_only=True)
+    child = next(s for s in view["sessions"] if s["session_id"] == "s1/agent-child")
+    assert child["parent_id"] and view["totals"]["observations"] == 2
+    with pytest.raises(ValueError, match="conflicting parent"):
+        await db.usage.remember("worker", "claude", "s1/agent-child", at=T, parent_id="other")
+
+
+def test_jsonl_oversized_record_progress_preserves_following_and_partial_lines(tmp_path):
+    path = tmp_path / "large.jsonl"
+    valid = json.dumps(claude()).encode() + b"\n"
+    budget = len(valid) + 10
+    path.write_bytes(
+        json.dumps({"tool_output": "x" * (budget * 3)}).encode() + b"\n" + valid + valid[:-1]
+    )
+    offset, state, events = 0, {}, []
+    for _ in range(8):
+        batch = read_usage_jsonl(path, offset, state, RUNTIMES["claude"].parse_usage, budget=budget)
+        assert 0 <= batch.offset - offset <= budget
+        offset, state = batch.offset, batch.state
+        events.extend(batch.events)
+    assert len(events) == 1 and state["partial"] and not batch.caught_up
+    with path.open("ab") as stream:
+        stream.write(b"\n")
+    last = read_usage_jsonl(path, offset, state, RUNTIMES["claude"].parse_usage, budget=budget)
+    assert len(last.events) == 1 and last.caught_up and last.state["partial"]
+
+
+def test_jsonl_rotation_while_skipping_and_unchanged_eof(tmp_path):
+    from pathlib import Path
+
+    path = tmp_path / "large.jsonl"
+    path.write_bytes(b"x" * 2000)
+    first = read_usage_jsonl(path, 0, {}, RUNTIMES["claude"].parse_usage, budget=1000)
+    assert first.state["_skip_line"]
+    replacement = tmp_path / "replacement.jsonl"
+    append(replacement, claude("replacement"))
+    replacement.replace(path)
+    changed = read_usage_jsonl(path, first.offset, first.state, RUNTIMES["claude"].parse_usage)
+    assert [e.key for e in changed.events] == ["replacement"]
+    assert changed.state["partial"] and "_skip_line" not in changed.state
+    with patch.object(Path, "open", side_effect=AssertionError("unchanged source reopened")):
+        same = read_usage_jsonl(path, changed.offset, changed.state, RUNTIMES["claude"].parse_usage)
+    assert same.caught_up and not same.events
+    append(path, claude("appended"))
+    later = read_usage_jsonl(path, same.offset, same.state, RUNTIMES["claude"].parse_usage)
+    assert [e.key for e in later.events] == ["appended"]
+
+
+async def test_streamed_usage_page_preserves_full_exact_totals(tmp_path, db):
+    from sqlalchemy import insert
+
+    from agent_backbone.services.database.models import UsageEventORM
+
+    key = await db.usage.remember("past-worker", "claude", "large", at=T)
+    event = UsageEvent(key="request", at=T, model="claude-opus-5", input_tokens=1)
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            insert(UsageEventORM),
+            [
+                dict(
+                    session=key,
+                    event_key=f"{i:04}",
+                    at=T,
+                    model=event.model,
+                    data=event.model_copy(update={"key": f"{i:04}"}).model_dump_json(),
+                    cost=json.dumps(
+                        {"usd": "0.000000000000000000001", "basis": None, "reason": None}
+                    ),
+                )
+                for i in range(1001)
+            ],
+        )
+    config = config_for(tmp_path)
+    view = await usage_view(config, db, session=key, refresh=False, offset=999, limit=1)
+    assert [e["key"] for e in view["items"]] == ["0999"]
+    assert view["total_items"] == 1001 and view["next_offset"] == 1000
+    assert view["totals"]["input_tokens"] == 1001
+    assert Decimal(view["totals"]["estimated_usd"]) == Decimal("0.000000000000000001001")
+    assert view["sessions"][0]["observations"] == 1001
+    current = await usage_view(config, db, refresh=False, current_only=True)
+    assert current["items"] == [] and current["totals"]["observations"] == 0

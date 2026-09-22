@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from agent_backbone.config import AgentsConfig, AgentSpec, Subscription
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.jobs.sources_poll import SourcesPoller, subscription_filters
+from agent_backbone.services.routing import DeliveryReport
 from agent_backbone.services.sources import Source, SourceEvent, Sources
+from agent_backbone.services.sources.gmail import GmailSource
 from tests.conftest import make_config
 
 
@@ -117,3 +121,38 @@ async def test_no_subscriptions_means_no_poll(tmp_path, db):
     source = _Recorder(config)
     assert await SourcesPoller(config, db, Sources([source])).run() == {}
     assert source.calls == []
+
+
+async def test_partial_search_failure_keeps_complete_recipient_matching_replayable(tmp_path, db):
+    config = replace(
+        _config(tmp_path), gmail_address="test@example.invalid", gmail_app_password="test"
+    )
+    source = GmailSource(config)
+    poller = SourcesPoller(config, db, Sources([source]))
+    boundary = "2026-09-17T10:00:00Z"
+    await db.events.save_poll_cursor("source:gmail", boundary)
+    fail = True
+
+    def search(client, filter_text, since):
+        if fail and filter_text == "from:upwork.com":
+            raise TimeoutError("transient second-filter error")
+        return [("shared", datetime.now(UTC), "sender", "subject")]
+
+    client = MagicMock()
+    client.list.return_value = ("OK", [])
+    with (
+        patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", return_value=client),
+        patch.object(GmailSource, "_search", side_effect=search),
+        patch(
+            "agent_backbone.services.routing._subscriptions.safe_deliver",
+            return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+        ) as deliver,
+    ):
+        assert await poller.run() == {}
+        assert await db.events.poll_cursor("source:gmail") == boundary
+        assert await db.events.query() == []
+        deliver.assert_not_awaited()
+        fail = False
+        await poller.run()
+        await poller.run()
+    assert sorted(call.args[0] for call in deliver.await_args_list) == ["desk", "other"]

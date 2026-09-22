@@ -5,8 +5,8 @@ Used two ways:
 * **poll intake** (no webhook secret): every ``github.poll_interval_seconds``
   ask GitHub for issues and comments updated since the last run in every
   repository an agent owns or watches.
-* **backfill** (webhook intake): run once at startup to catch what happened
-  while the backbone was down.
+* **backfill** (webhook intake): catch what happened while the backbone was
+  down; the existing retry job retries unfinished startup repositories.
 
 Both produce the same ``IssueEvent`` objects the webhook produces and hand
 them to ``dispatch_event``. Delivery ids are synthesised from the item id and
@@ -20,7 +20,7 @@ successful batch, with overlap for late arrivals in the same timestamp second.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -101,6 +101,7 @@ class GitHubPoller:
         self._gh = gh
         self._issue_closed_hooks = tuple(issue_closed_hooks)
         self._since: dict[str, str] = {}
+        self._backfill_pending: set[str] | None = None
 
     @property
     def _config(self) -> BackboneConfig:
@@ -125,11 +126,36 @@ class GitHubPoller:
 
     async def run(self) -> dict[str, int]:
         config = self._config
+        summary, _ = await self._run_repos(config, config.agents.repos)
+        return summary
+
+    async def backfill(self) -> dict[str, int]:
+        """Complete startup catch-up; later attempts visit only unfinished repos."""
+        config = self._config
+        if self._backfill_pending is None:
+            self._backfill_pending = set(config.agents.repos)
+        configured = {repo.casefold() for repo in config.agents.repos}
+        # Keep the startup spelling and replay cursor across case-only edits.
+        self._backfill_pending = {
+            repo for repo in self._backfill_pending if repo.casefold() in configured
+        }
+        summary, incomplete = await self._run_repos(config, sorted(self._backfill_pending))
+        self._backfill_pending = incomplete
+        if incomplete:
+            raise RuntimeError(f"GitHub startup backfill incomplete for {len(incomplete)} repos")
+        return summary
+
+    async def _run_repos(
+        self, config: BackboneConfig, repos: Collection[str]
+    ) -> tuple[dict[str, int], set[str]]:
         summary: dict[str, int] = {}
-        for repo in config.agents.repos:
+        incomplete: set[str] = set()
+        for repo in repos:
             try:
-                await self._poll_repo(repo, config, summary)
+                if not await self._poll_repo(repo, config, summary):
+                    incomplete.add(repo)
             except Exception as exc:
+                incomplete.add(repo)
                 # A read, fetch, conversion or cursor save failure must not
                 # move this boundary or prevent another repository's poll.
                 log.exception("GitHub poll failed for %s (non-fatal)", repo)
@@ -144,9 +170,9 @@ class GitHubPoller:
                 await observe_job(self._db, source="github-poll", stage="repository", repo=repo)
         if summary:
             log.info("GitHub poll: %s", summary)
-        return summary
+        return summary, incomplete
 
-    async def _poll_repo(self, repo: str, config: BackboneConfig, summary: dict[str, int]) -> None:
+    async def _poll_repo(self, repo: str, config: BackboneConfig, summary: dict[str, int]) -> bool:
         since = await self._since_for(repo)
         poll_started = datetime.now(UTC)
         newest = since
@@ -242,6 +268,7 @@ class GitHubPoller:
             repo=repo,
             error_type="IncompleteBatch" if had_errors else None,
         )
+        return not had_errors
 
     async def _review_events(self, repo, since, config) -> list[IssueEvent]:
         events = []

@@ -363,20 +363,18 @@ class ReportRepo(Repo):
                 statement = statement.order_by(_R.c.id.desc())
             else:
                 latest = (
-                    select(_R.c.author_id, func.max(_R.c.id).label("latest_id"))
-                    .where(_R.c.id <= snapshot)
-                    .group_by(_R.c.author_id)
-                    .subquery()
+                    select(_R.c.id)
+                    .where(_R.c.author_id == _A.c.report_identity, _R.c.id <= snapshot)
+                    .order_by(_R.c.id.desc())
+                    .limit(1)
+                    .correlate(_A)
+                    .scalar_subquery()
                 )
                 priority = func.coalesce(_R.c.priority, 5)
                 row_id = func.coalesce(_R.c.id, 0)
                 statement = select(
                     _R, _A.c.name.label("agent_name"), _A.c.report_identity.label("current_author")
-                ).select_from(
-                    _A.outerjoin(latest, latest.c.author_id == _A.c.report_identity).outerjoin(
-                        _R, _R.c.id == latest.c.latest_id
-                    )
-                )
+                ).select_from(_A.outerjoin(_R, _R.c.id == latest))
                 if query.agents:
                     statement = statement.where(_A.c.name.in_(query.agents))
                 elif not query.members:

@@ -71,6 +71,9 @@ and every commit on it — always survives teardown, but **uncommitted
 edits in the worktree are removed with it**, so make sure members have
 committed before disbanding.
 
+If teardown fails, the swarm stays active. Resolve the reported error and run
+`backbone swarm disband <name>` again to finish the remaining cleanup.
+
 ```bash
 backbone swarm list              # every swarm with roster and status
 backbone swarm status research   # one swarm

@@ -20,6 +20,10 @@ without a person behind them — mail, and GitHub as its sibling — are
 
 Every integration is inert until its credentials exist (`TELEGRAM_TOKEN` in
 `.env`); an unconfigured one shows as `disabled` and does nothing.
+Telegram cleans up a failed or cancelled startup before another attempt, so a
+polling outage does not leave background bot tasks running. If a shutdown phase
+fails, it still attempts the remaining cleanup before reporting the first failure;
+a failed startup keeps its original error.
 
 ## How the pieces connect
 

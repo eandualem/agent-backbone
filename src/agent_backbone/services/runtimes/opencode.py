@@ -14,7 +14,6 @@ import sqlite3
 from pathlib import Path
 
 from agent_backbone.hooks import install as hooks
-from agent_backbone.services.runtimes._opencode_launch import merge_config
 from agent_backbone.services.runtimes._usage import UsageBatch, count
 from agent_backbone.services.runtimes.base import Runtime, read_brief
 from agent_backbone.usage import UsageEvent, timestamp
@@ -52,44 +51,6 @@ class OpenCode(Runtime):
 
     def hook_settings(self, data_dir, state_dir, *, python=None):
         raise RuntimeError("OpenCode state comes from a plugin, not a command hook")
-
-    def hook_launch_env(
-        self,
-        data_dir: Path | str | None,
-        state_dir: Path | str | None,
-        *,
-        env: dict[str, str] | None = None,
-    ) -> dict[str, str]:
-        """``OPENCODE_CONFIG_CONTENT`` → ``{"plugin": ["file://…/opencode_hook.js"]}``.
-
-        OpenCode merges that inline configuration over the user's own, so
-        the plugin loads for this session only; nothing in
-        ``~/.config/opencode`` or the repository is touched. The plugin reads
-        ``BACKBONE_AGENT`` and ``BACKBONE_STATE_DIR`` from the session.
-        Verified live against OpenCode 1.18 (TUI).
-        """
-        if data_dir is None or state_dir is None:
-            return {}
-        # Inline config has higher precedence than the user's files. Preserve
-        # its provider options, permission denies and existing plugins. If we
-        # cannot compose it (e.g. JSONC), leave it intact for OpenCode to read
-        # and use terminal state detection instead of dropping configuration.
-        # When no explicit value is supplied, only the launched process knows
-        # the effective tmux-server environment. Its wrapper composes it there.
-        if env is None or "OPENCODE_CONFIG_CONTENT" not in env:
-            return {}
-        try:
-            plugin = hooks.install_hook_files(Path(data_dir)) / self.hook_script
-        except OSError as exc:
-            log.warning("Could not write the hook files: %s", exc)
-            return {}
-        content = merge_config(env["OPENCODE_CONFIG_CONTENT"], plugin.as_uri())
-        if content is None:
-            log.warning(
-                "Skipping OpenCode hook injection: preserving unsupported inline configuration"
-            )
-            return {}
-        return {"OPENCODE_CONFIG_CONTENT": content}
 
     def build_command(self, **kwargs):
         command = super().build_command(**kwargs)

@@ -64,7 +64,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `backbone.host` | `127.0.0.1` | Bind address. Keep it local unless you put auth and TLS in front |
+| `backbone.host` | `127.0.0.1` | Bind address; IPv6 loopback is `::1` (the CLI adds URL brackets). Keep it local unless you put auth and TLS in front |
 | `backbone.port` | `7120` | API port |
 | `backbone.session_name` | `backbone` | tmux session used by `backbone up --detach` |
 | `backbone.cors_origins` | `[]` | Browser origins allowed to call the API; empty disables CORS |
@@ -103,7 +103,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `github.reviewers` | `[]` | Reviewer logins or GitHub App slugs (with or without `[bot]`); replace their PR comments with commit-anchored review lifecycle notices. Enables review polling; see [GitHub](github.md#review-lifecycle) |
 | `github.intake` | `auto` | `auto` (webhook if `GITHUB_WEBHOOK_SECRET` is set, else poll), `webhook` (falls back to poll, with a startup warning, when the secret is missing), `poll`, `off` |
 | `github.poll_interval_seconds` | `60` | Poll frequency in poll intake (must be positive) |
-| `github.backfill_on_start` | `true` | Webhook intake: run one poll at startup to catch missed events |
+| `github.backfill_on_start` | `true` | Webhook intake: start catch-up at startup; the delivery-retry job retries unfinished repositories until complete |
 | `github.backfill_lookback_hours` | `24` | How far back the first poll looks for a repository with no durable poll cursor (including the first start after upgrading to cursor storage) |
 
 ### `sources.*`

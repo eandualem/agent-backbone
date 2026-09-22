@@ -30,6 +30,7 @@ from agent_backbone.services.runtimes._pane import (
     prompt_tail_line_pairs,
     runtime_analysis_text,
     sanitize_pane_content,
+    sgr_attributes,
 )
 from agent_backbone.services.terminal import (
     capture_pane,
@@ -83,26 +84,19 @@ def _error_foreground(raw: str) -> bool:
             if red and any(ch.isalpha() for ch in part):
                 return True
             continue
-        codes = [int(value or 0) for value in part[2:-1].split(";")]
-        i = 0
-        while i < len(codes):
-            code = codes[i]
+        for attribute in sgr_attributes(part[2:-1]):
+            code = attribute[0]
             if code in (0, 39) or 30 <= code <= 37 or 90 <= code <= 97:
                 red = code in (31, 91)
-            elif code in (38, 48) and codes[i + 1 : i + 2] == [2] and i + 4 < len(codes):
-                r, g, b = codes[i + 2 : i + 5]
-                if code == 38:
-                    red = r > 100 and r > g * 1.3 and r > b * 1.3
-                i += 4
-            elif code in (38, 48) and codes[i + 1 : i + 2] == [5] and i + 2 < len(codes):
-                color = codes[i + 2]
-                if code == 38:
-                    cube = color - 16
-                    red = color in (1, 9) or (
-                        16 <= color <= 231 and cube // 36 > max(cube // 6 % 6, cube % 6)
-                    )
-                i += 2
-            i += 1
+            elif code == 38 and len(attribute) == 5 and attribute[1] == 2:
+                r, g, b = attribute[2:]
+                red = r > 100 and r > g * 1.3 and r > b * 1.3
+            elif code == 38 and len(attribute) == 3 and attribute[1] == 5:
+                color = attribute[2]
+                cube = color - 16
+                red = color in (1, 9) or (
+                    16 <= color <= 231 and cube // 36 > max(cube // 6 % 6, cube % 6)
+                )
     return False
 
 

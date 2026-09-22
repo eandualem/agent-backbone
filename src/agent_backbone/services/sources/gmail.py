@@ -42,6 +42,10 @@ _TIMEOUT = 30
 """Seconds per IMAP socket operation: a stalled server must not hang the poll thread."""
 
 
+class _FilterRejected(RuntimeError):
+    """Gmail rejected SEARCH syntax; other filters can still be evaluated."""
+
+
 def message_link(message_id: str) -> str:
     return f"https://mail.google.com/mail/#all/{message_id}"
 
@@ -130,7 +134,7 @@ class GmailSource(Source):
             for filter_text in filters:
                 try:
                     matches = self._search(client, filter_text, since)
-                except Exception as exc:
+                except _FilterRejected as exc:
                     # One agent's unusable filter must not starve the others.
                     failed += 1
                     log.warning("Gmail search failed for filter %r: %s", filter_text, exc)
@@ -182,12 +186,23 @@ class GmailSource(Source):
     def _search(client: imaplib.IMAP4, filter_text: str, since: datetime):
         query = search_query(filter_text, since)
         try:
-            query.encode("ascii")
-        except UnicodeEncodeError:
-            client.literal = query.encode("utf-8")
-            status, data = client.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
-        else:
-            status, data = client.uid("SEARCH", "X-GM-RAW", _quoted(query))
+            try:
+                query.encode("ascii")
+            except UnicodeEncodeError:
+                client.literal = query.encode("utf-8")
+                status, data = client.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
+            else:
+                status, data = client.uid("SEARCH", "X-GM-RAW", _quoted(query))
+        except imaplib.IMAP4.abort:
+            raise  # Connection failures must retain the entire poll window.
+        except imaplib.IMAP4.error as exc:
+            # imaplib also uses error for protocol and response-size failures;
+            # only its explicit BAD command response rejects this filter.
+            if not str(exc).startswith("UID command error: BAD "):
+                raise
+            raise _FilterRejected(str(exc)) from exc
+        if status == "BAD":
+            raise _FilterRejected("Gmail rejected the search filter")
         if status != "OK":
             raise RuntimeError(f"Gmail search failed for a filter: {status}")
         uids = (data[0] or b"").split()

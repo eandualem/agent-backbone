@@ -6,8 +6,29 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.cli._common import read_client_config
+from agent_backbone.cli._common import api_url, read_client_config
 from agent_backbone.config import AgentsConfig, build_config
+
+
+@pytest.mark.parametrize(
+    "host,expected",
+    [
+        ("127.0.0.1", "http://127.0.0.1:7120/health"),
+        ("localhost", "http://localhost:7120/health"),
+        ("::1", "http://[::1]:7120/health"),
+        ("2001:db8::1", "https://[2001:db8::1]:7120/health"),
+        ("example.test", "https://example.test:7120/health"),
+    ],
+)
+def test_client_formats_ipv6_authorities_without_changing_tls(
+    host, expected, tmp_path, monkeypatch
+):
+    import httpx
+
+    monkeypatch.delenv("BACKBONE_PORT", raising=False)
+    config = build_config(tmp_path, settings={"backbone.host": host}, agents=AgentsConfig())
+    assert api_url(config, "/health") == expected
+    assert httpx.URL(expected).host == host
 
 
 @pytest.mark.parametrize(

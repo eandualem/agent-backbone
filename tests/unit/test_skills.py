@@ -171,6 +171,12 @@ class TestAdd:
         add_skill(store, source, replace=True, tags=("all",))
         assert parse_skill(store / "taken").tags == ("all",)
         assert not list(store.glob(".replaced-*"))
+        recovery = make_skill(store, ".replaced-taken", body="# recover me\n")
+        before = (recovery / "SKILL.md").read_bytes()
+        retry = make_skill(tmp_path / "retry", "taken")
+        with pytest.raises(ValueError, match="recover it first"):
+            add_skill(store, retry, replace=True)
+        assert retry.is_dir() and (recovery / "SKILL.md").read_bytes() == before
 
     def test_replace_without_tags_keeps_the_existing_ones(self, tmp_path):
         """The sandboxed update path: copy, edit, add --replace — tags survive."""
@@ -192,18 +198,146 @@ class TestAdd:
         assert (source / "SKILL.md").is_file()
         assert parse_skill(store / "keep").tags == ("coder",)
 
-    def test_a_failure_after_the_move_restores_both_sides(self, tmp_path):
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            OSError("disk full"),
+            KeyboardInterrupt(),
+            UnicodeEncodeError("ascii", "é", 0, 1, "ascii"),
+        ],
+    )
+    def test_a_failure_after_the_move_restores_both_sides(self, tmp_path, failure):
         store = tmp_path / "store"
         make_skill(store, "keep", tags="coder", body="# old\n")
-        source = make_skill(tmp_path / "src", "keep", body="# new\n")
+        source = make_skill(tmp_path / "src", "renamed", body="# new\n")
+        skill_file = source / "SKILL.md"
+        skill_file.write_bytes(skill_file.read_bytes().replace(b"\n", b"\r\n"))
+        before_source = (source / "SKILL.md").read_bytes()
+        before_target = (store / "keep" / "SKILL.md").read_bytes()
         with (
-            patch("agent_backbone.skills.write_tags", side_effect=OSError("disk full")),
-            pytest.raises(OSError),
+            patch("agent_backbone.skills.atomic_write_text", side_effect=failure),
+            pytest.raises(type(failure)) as error,
         ):
-            add_skill(store, source, replace=True, tags=("all",))
-        assert (source / "SKILL.md").read_text().endswith("# new\n")
-        assert (store / "keep" / "SKILL.md").read_text().endswith("# old\n")
+            add_skill(store, source, name="keep", replace=True, tags=("all",))
+        assert error.value is failure
+        assert (source / "SKILL.md").read_bytes() == before_source
+        assert (store / "keep" / "SKILL.md").read_bytes() == before_target
         assert not list(store.glob(".replaced-*"))
+        assert not list(store.glob(".incoming-*"))
+
+    def test_interrupted_write_preserves_cancellation_when_restoration_fails(self, tmp_path):
+        store = tmp_path / "store"
+        previous = make_skill(store, "keep", body="# previous\n")
+        source = make_skill(tmp_path / "src", "incoming", body="# incoming\n").resolve()
+        before_source = (source / "SKILL.md").read_bytes()
+        before_target = (previous / "SKILL.md").read_bytes()
+        move = skills.shutil.move
+        cancellation = KeyboardInterrupt()
+
+        def fail_restore(src, dst):
+            if Path(dst) == source:
+                raise OSError("source restoration failed")
+            return move(src, dst)
+
+        with (
+            patch("agent_backbone.skills.atomic_write_text", side_effect=cancellation),
+            patch("agent_backbone.skills.shutil.move", side_effect=fail_restore),
+            pytest.raises(KeyboardInterrupt) as error,
+        ):
+            add_skill(store, source, name="keep", replace=True)
+        (staged,) = store.glob(".incoming-*/keep")
+        assert error.value is cancellation
+        assert "source restoration failed" in " ".join(error.value.__notes__)
+        assert str(staged) in " ".join(error.value.__notes__)
+        assert (staged / "SKILL.md").read_bytes() == before_source
+        assert (previous / "SKILL.md").read_bytes() == before_target
+
+    def test_cleanup_failure_keeps_the_installed_skill_and_reports_backup(self, tmp_path, caplog):
+        store = tmp_path / "store"
+        previous = make_skill(store, "keep", body="# previous\n")
+        source = make_skill(tmp_path / "src", "incoming", body="# incoming\n")
+        before_target = (previous / "SKILL.md").read_bytes()
+        with patch("agent_backbone.skills._remove", side_effect=OSError("backup cleanup failed")):
+            installed = add_skill(store, source, name="keep", replace=True)
+        backup = store / ".replaced-keep"
+        assert installed.valid and installed.path == previous
+        assert (previous / "SKILL.md").read_text().endswith("# incoming\n")
+        assert (backup / "SKILL.md").read_bytes() == before_target
+        assert not source.exists() and not list(store.glob(".incoming-*"))
+        assert str(previous) in caplog.text and str(backup) in caplog.text
+        assert "backup cleanup failed" in caplog.text
+
+    @pytest.mark.parametrize("failure", ["copy", "source_cleanup"])
+    def test_cross_device_failure_retains_complete_source_and_old_store(self, tmp_path, failure):
+        import errno
+
+        store = tmp_path / "store"
+        previous = make_skill(store, "keep", body="# previous\n")
+        source = make_skill(tmp_path / "source", "incoming", body="# incoming\n").resolve()
+        (source / "support.txt").write_bytes(b"support data")
+        originals = {p.name: p.read_bytes() for p in source.iterdir()}
+        before_target = (previous / "SKILL.md").read_bytes()
+        rename, move = os.rename, skills.shutil.move
+        copy, remove = skills.shutil.copy2, skills.shutil.rmtree
+
+        def cross_device(src, dst, *args, **kwargs):
+            if Path(src) == source:
+                raise OSError(errno.EXDEV, "cross-device move")
+            return rename(src, dst, *args, **kwargs)
+
+        def copy_file(src, dst):
+            if failure == "copy" and Path(src).name == "support.txt":
+                raise OSError("copy failed")
+            return copy(src, dst)
+
+        def remove_source(path, *args, **kwargs):
+            if failure == "source_cleanup" and Path(path) == source:
+                (source / "SKILL.md").unlink()
+                raise OSError("source cleanup failed")
+            return remove(path, *args, **kwargs)
+
+        with (
+            patch("os.rename", side_effect=cross_device),
+            patch("agent_backbone.skills.shutil.rmtree", side_effect=remove_source),
+            patch(
+                "agent_backbone.skills.shutil.move",
+                side_effect=lambda src, dst: move(src, dst, copy_function=copy_file),
+            ),
+            pytest.raises(OSError) as error,
+        ):
+            add_skill(store, source, name="keep", replace=True)
+        (staged,) = store.glob(".incoming-*/keep")
+        complete_source = source if failure == "copy" else staged
+        assert {p.name: p.read_bytes() for p in complete_source.iterdir()} == originals
+        assert (previous / "SKILL.md").read_bytes() == before_target
+        assert str(staged) in str(error.value)
+        assert [skill.name for skill in skills.read_store(store)] == ["keep"]
+        assert not list(store.glob(".replaced-*"))
+
+    def test_renaming_preserves_nested_names_and_literal_description(self, tmp_path):
+        source = make_skill(tmp_path / "source", "old")
+        before = (
+            "---\nname: old\ndescription: |\n  An example:\n  name: keep this text\n"
+            "metadata:\n  name: keep this metadata\n  author: somebody\n---\n# body\n"
+        )
+        (source / "SKILL.md").write_text(before)
+        result = add_skill(tmp_path / "store", source, name="new")
+        assert result.valid
+        assert (result.path / "SKILL.md").read_text() == before.replace(
+            "name: old\n", "name: new\n", 1
+        )
+
+    def test_unsupported_metadata_rejects_before_moving_or_rewriting(self, tmp_path):
+        source = make_skill(tmp_path / "source", "old")
+        before = b"---\nname: old\ndescription: d\nmetadata: {author: me}\n---\n# body\n"
+        (source / "SKILL.md").write_bytes(before)
+        store = tmp_path / "store"
+        previous = make_skill(store, "new", tags="all")
+        before_target = (previous / "SKILL.md").read_bytes()
+        with pytest.raises(ValueError, match="inline mapping"):
+            add_skill(store, source, name="new", replace=True)
+        assert (source / "SKILL.md").read_bytes() == before
+        assert (previous / "SKILL.md").read_bytes() == before_target
 
 
 def _git_repo(path: Path) -> Path:

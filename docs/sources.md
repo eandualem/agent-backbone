@@ -62,6 +62,9 @@ agents that do hold it are noted, the cursor stays, and the next poll hands the
 event back for the others only. Every match in the window is fetched, in
 chunks; each IMAP operation has a 30-second timeout, and one agent's filter
 that Gmail rejects is skipped (logged) rather than starving the rest.
+Connection, timeout and message-fetch failures keep the whole poll window for
+retry. Partial matches are not committed, so a temporary failure of one filter
+cannot hide another agent's matching message.
 
 ## What the agent receives
 
@@ -103,7 +106,9 @@ conversation, and are retired only when delivered.
    sees that the hook took it, records the delivery with source
    `hook-context`, and pastes nothing. If the agent reaches its prompt first,
    the drain withdraws the offer and pastes normally. Whoever renames the
-   offer file first owns it, so the batch arrives exactly once.
+   offer file first owns it, so the batch arrives exactly once. A poll with more
+   than 25 matches gets one offer and receipt per queued batch, preserving every
+   item without repeating earlier batches at the prompt.
 3. A runtime whose hook cannot add context (Gemini CLI, OpenCode, Aider,
    `shell`) gets the batch first thing when it is ready, ahead of everything
    else in its queue.

@@ -406,10 +406,7 @@ async def teardown_swarm(
                 f"disband '{name}' again"
             )
         for member in members:
-            try:
-                await store.forget(member.name)
-            except Exception:
-                log.warning("Could not forget swarm member %s", member.name)
+            await store.forget(member.name)
         await db.swarms.set_status(name, status)
         log.info("Swarm '%s' torn down (%s): %d members", name, status, len(members))
         return [m.name for m in members]

@@ -45,7 +45,8 @@ The most recent authoritative request revision wins, including corrections
 that lower a count. Original request timestamps remain stable for filtering.
 
 Runtime-proven children have separate rows linked by `parent_id`; the parent row
-contains only its own requests. Overall totals include each row once. Codex's
+contains only its own requests. A child identified before its parent is linked
+when runtime evidence becomes available. Overall totals include each row once. Codex's
 inherited pre-fork history is excluded. A missing cumulative baseline or counter
 reset is marked partial instead of attributing inherited tokens to new work.
 
@@ -107,9 +108,13 @@ saved environment; already discovered source paths are retained.
 
 Collection uses the existing monitor and refreshes on query, without typing into
 or interrupting a terminal. JSONL reads are bounded to 8 MiB per source per pass;
-incomplete final lines retry. Child discovery may lag by up to 30 seconds.
+incomplete final lines retry. Oversized records are skipped in bounded chunks,
+marking coverage partial so later observations can still be collected. Unchanged
+JSONL files are checked without reopening them. Child discovery may lag by up to 30 seconds.
 `--no-refresh` reads retained history. `--limit` (1–1000, default 100) and `--offset`
 page the displayed items; totals always cover the full selected time range.
+Each view computes its totals and request page from the same database read,
+processing history in bounded batches.
 `--json` exposes the complete structured response for the selected page.
 
 Only identity, timestamps, token counters, cursor metadata and price evidence go

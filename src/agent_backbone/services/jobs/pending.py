@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.models import SUCCESS_OUTCOMES, DeliveryOutcome, parse_from_tag
 from agent_backbone.services.agents import AgentState, has_commented_on_issue
+from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import (
     format_next_issue_notification,
     is_acknowledged,
@@ -96,16 +97,10 @@ async def deliver_pending_issues(
             )
         return False
 
-    for name, snapshot in states.items():
-        if snapshot.state != AgentState.IDLE:  # only a confirmed idle agent gets new work
-            result[name] = "deferred"
-            log.debug("Deferred delivery to %s (state=%s)", name, snapshot.state.value)
-            continue
-
+    async def deliver_one(name: str) -> str:
         pending_issues = await list_open_queue_for_target(config, name, gh, db=db)
         if not pending_issues:
-            result[name] = "no_pending"
-            continue
+            return "no_pending"
         scope = queue_scope(pending_issues)
 
         for candidate in pending_issues:
@@ -113,8 +108,7 @@ async def deliver_pending_issues(
             if await acknowledged(repo, candidate.number, name):
                 continue
             if await was_recently_delivered(repo, candidate.number, name, name):
-                result[name] = "recently_delivered"
-                break
+                return "recently_delivered"
 
             outcome = (
                 await safe_deliver(
@@ -131,12 +125,32 @@ async def deliver_pending_issues(
                 )
             ).outcome
             if outcome == DeliveryOutcome.DELIVERED:
-                result[name] = f"delivered_#{candidate.number}"
                 log.info("Delivered pending %s#%d to %s", repo, candidate.number, name)
-            else:
-                result[name] = outcome.value
-            break
-        else:
-            result[name] = "no_deliverable"
+                return f"delivered_#{candidate.number}"
+            return outcome.value
+        return "no_deliverable"
+
+    for name, snapshot in states.items():
+        if snapshot.state != AgentState.IDLE:  # only a confirmed idle agent gets new work
+            result[name] = "deferred"
+            log.debug("Deferred delivery to %s (state=%s)", name, snapshot.state.value)
+            continue
+        error_type = None
+        try:
+            result[name] = await deliver_one(name)
+        except Exception as exc:
+            result[name] = "failed"
+            log.exception("Pending issue delivery failed for %s (other agents continue)", name)
+            error_type = type(exc).__name__
+        try:
+            await observe_job(
+                db,
+                source=SOURCE,
+                stage="pending_issues",
+                agent_name=name,
+                error_type=error_type,
+            )
+        except Exception:
+            log.exception("Failed to record pending issue diagnostic for %s", name)
 
     return result

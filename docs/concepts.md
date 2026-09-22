@@ -203,7 +203,7 @@ Background loops inside the backbone process:
 | `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
 | `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
 | `sources-poll` | `sources.poll_interval_seconds` (60 s) | only with a configured [source](sources.md): search each source for new items matching any subscription filter and deliver them |
-| `github-backfill` | once at startup | webhook intake only: catch up on what happened while the backbone was down |
+| `github-backfill` | starts at startup | webhook intake only: catch up on downtime; `delivery-retry` retries unfinished repositories until catch-up succeeds |
 | `prune` | 6 h | delete old deliveries, events and completed queue bodies; rotate the hook action log |
 
 ## What the backbone does not decide
