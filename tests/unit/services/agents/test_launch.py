@@ -221,6 +221,27 @@ class TestStartAgentScrubsSecrets:
         assert start.await_args.kwargs["environment"]["BACKBONE_AGENT"] == "ike"
 
 
+class TestStartAgentContext:
+    async def test_offers_left_for_the_previous_session_are_cleared_before_launch(self, tmp_path):
+        """An untaken hook-context offer must not reach the replacement session."""
+        from agent_backbone.hooks.backbone_state import offer_context, take_context
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime="shell")
+        config = bootstrap_config(data_dir)
+        offer_context(config.state_dir, "ike", "12", "[via:gmail] stale batch")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True),
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok is True
+        assert take_context(config.state_dir, "ike") == []
+        assert not (config.state_dir / "context" / "ike").exists()
+
+
 class TestStartAgentBrief:
     """One launch path: the brief reaches every runtime, at launch or as a message."""
 
