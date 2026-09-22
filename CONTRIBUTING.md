@@ -28,9 +28,9 @@ Tests run against SQLite in memory and mock tmux; nothing external is needed.
 
 ## Branches and pull requests
 
-- `develop` is the integration branch and the default: **every pull
-  request targets `develop`.** `main` holds what has been released and
-  only receives merges from `develop`.
+- `develop` is the integration branch and the default: **implementation and documentation PRs
+  target `develop`.** `main` holds released code and only receives
+  owner-authorized promotion PRs from `develop`. Never push to either directly.
 - One logical change per PR, with a message that says why.
 - `make check` must pass; CI runs the same on 3.11–3.13.
 - Update the docs page that describes the behaviour you changed.
@@ -40,20 +40,23 @@ Tests run against SQLite in memory and mock tmux; nothing external is needed.
 Publishing to [PyPI](https://pypi.org/project/agent-backbone/) happens
 only when someone triggers it — never on a push, a merge or a tag.
 
+When a release is authorized, bump the version on a topic branch and merge its
+reviewed PR into `develop`. Promote `develop` through a reviewed PR to `main`;
+run the merge as a standalone command and verify its result. Then dispatch the
+release workflow on `main`, using the version now in `pyproject.toml`:
+
 ```bash
-uv version 0.1.1                              # bump pyproject.toml on develop; commit and merge it
-git checkout main && git merge --ff-only develop && git push   # main = what is released
-gh workflow run release.yml -f version=0.1.1  # or Actions → Release → Run workflow
+gh workflow run release.yml --ref main -f version=VERSION
 ```
+
+Replace `VERSION` with that exact version. In the Actions UI, select `main`
+when running the workflow.
 
 `.github/workflows/release.yml` publishes `main` only (it refuses any
 other ref, and a version that does not match `pyproject.toml`), runs the
 tests, builds with `uv build`, publishes with `uv publish` and then tags
 `v<version>`. It uses the `PYPI_API_TOKEN` repository secret. The token is
 never in the repository or in the data directory's `.env`.
-
-To publish from a laptop instead: `uv build && UV_PUBLISH_TOKEN=… uv publish`,
-then `git tag v<version> && git push origin v<version>`.
 
 `docs/` ships inside the wheel (`backbone docs`), so a docs-only change is
 still worth a release.

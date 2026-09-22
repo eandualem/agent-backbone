@@ -17,7 +17,7 @@ This page follows real requests through the system. Read
 
 ## 1. Starting an agent
 
-`backbone agent start [--dir D] [--name N] [--runtime R] [--watch REPO]`
+`backbone agent start [NAME] [--dir D] [--runtime R] [--watch REPO]`
 (or `POST /api/agents/start`, or `/start name` on Telegram):
 
 1. **Discover.** Resolve the directory (default: cwd), derive the name from
@@ -56,7 +56,7 @@ This page follows real requests through the system. Read
    An explicitly unattended Claude launch pre-records bypass consent in
    `~/.claude.json`; ordinary launches never do. The runtime's bypass flag still
    controls its mode. Folder trust remains controlled by `agents.pre_trust`.
-5. Broadcast a fresh snapshot on Socket.IO `/sessions`.
+6. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
 Startup readiness uses the same state reconciliation as inspection and delivery,
 with a launch timestamp fence to exclude old hooks and submission markers.
@@ -180,7 +180,7 @@ is distinct from its failure hook; Codex's
 [completion hook](https://learn.chatgpt.com/docs/hooks#posttooluse) also fires
 for nonzero exits, so its result is checked explicitly.
 How hooks reach a session is the runtime's business
-([Getting started §3](getting-started.md#3-state-hooks--nothing-to-install)).
+([Getting started §3](getting-started.md#state-hooks--nothing-to-install)).
 
 A fresh hook state is **authoritative**: these CLIs keep their input box
 on screen while working, so the terminal alone would say "idle" while
@@ -432,7 +432,7 @@ emission consume those projections, as does offline CLI status.
   `/api/messages`, `/api/issues`, `/api/deliveries`, `/api/events`,
   `/api/plans`, `/api/status`, `/api/config`).
 - Socket.IO `/sessions`: a full snapshot of all agents (`sessions:update`)
-  whenever anything changes, and at least every minute.
+  after API changes and when monitoring finds a changed snapshot.
 - Socket.IO `/terminal`: a **read-only** live stream of any session's
   terminal output. Nothing typed in a browser reaches an agent.
 
@@ -440,8 +440,9 @@ See [API](api.md).
 
 ## 8. When the backbone is down
 
-Agents keep running — they are tmux sessions. API calls fail. Messages
-sent by other agents are lost (they should retry). GitHub events are
+Agents keep running — they are tmux sessions. New sends fail while the API is
+unreachable; retry those failed sends after it returns. Messages already accepted
+into the durable queue remain stored. GitHub events are
 caught up on restart: poll intake resumes from its durable per-repository cursor;
 webhook intake runs its startup backfill. The `agent-monitor` job runs
 its first tick immediately, so hook state for every running session is

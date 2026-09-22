@@ -1,8 +1,10 @@
 # Documentation index
 
-Start with [Quick usage](../USAGE.md) for everyday commands. Each page is also
+New here? Start with [Getting started](getting-started.md) to install and send
+a first task. [Quick usage](../USAGE.md) covers everyday commands. Each page is also
 available as `backbone docs PAGE` after installation (for example,
-`backbone docs getting-started`). Filenames stay stable so saved links keep working.
+`backbone docs getting-started`). Installed help describes your installed version; GitHub pages describe the
+branch or tag you are viewing. Relative links keep you on that same revision.
 
 ## 1. Get started
 

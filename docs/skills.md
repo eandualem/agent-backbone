@@ -56,7 +56,7 @@ Everything the repository owns is left alone. A real directory with the same
 name as a store skill is the repository's skill and wins; the start reports it
 and continues. A repository that ships its own skills keeps them, with or
 without the backbone; with the backbone absent, a project simply has fewer
-skills and a few dangling links that git and the CLIs both ignore.
+skills. Store links remain and need their original shared store to resolve.
 
 Cursor is not materialised: it is not a backbone runtime and was not measured.
 Plain shells, `aider` and `deepcode` receive nothing.
@@ -99,8 +99,8 @@ skills` is the agent-facing version of this page.
 | OpenCode 1.18.29 | `.claude/skills`, `.agents/skills`, `.opencode/skills` | followed | followed |
 | Gemini 0.46.0 | `.agents/skills` (needs folder trust) | followed | not measured |
 
-Gemini was measured by Feynman with `gemini skills list` (issue 213); the other
-three by asking the running CLI to name its skills.
+Gemini was checked with `gemini skills list`; the other three were checked
+by asking the running CLI to name its skills.
 The backbone therefore links whole skill directories, never single files. The
 Codex sandbox also refuses writes through such a link (measured the same day);
 reads are fine.

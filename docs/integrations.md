@@ -30,9 +30,8 @@ jobs   ──▶ notify_humans(config, text, agent=…) ──▶ every configur
 ```
 
 `notify_humans` is config-driven (no running instance needed) so the
-scheduler's monitor jobs can alert from a configuration snapshot. It is the
-only thing `agents` and `terminal` know about integrations, and they import
-it lazily — `integrations` sits *above* `routing` in the layering.
+scheduler's monitor jobs can alert from a configuration snapshot. Jobs call it; `agents` and `terminal` do not import integrations.
+`integrations` sits above `routing` in the layering.
 
 ## Adding one
 

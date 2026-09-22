@@ -25,9 +25,9 @@ Any agent may start other agents; you do not need a human for this.
 backbone agent start                       # this directory becomes an agent
 backbone agent start NAME                  # known agent: its recorded settings
 backbone agent start NAME --dir D          # register a directory under a name
-backbone agent start --runtime codex --model gpt-5.2
-backbone agent start --model opus          # model recorded, reused next start
-backbone agent start --model gpt-6-astra:high   # model *and* reasoning effort
+backbone agent start --runtime codex
+backbone agent start --runtime claude --model opus          # model recorded, reused next start
+backbone agent start --runtime codex --model gpt-6-astra:high   # model *and* reasoning effort
 backbone agent stop NAME…                  # kill sessions
 backbone agent forget NAME                 # remove a stopped agent's record
 backbone agent resume NAME --attach        # reopen a stopped conversation
@@ -70,7 +70,7 @@ Reasoning effort is part of the model spec, `model:effort`, everywhere a
 model can be named. There is no separate flag to forget:
 
 ```bash
-backbone agent start --model gpt-6-astra:high     # one agent
+backbone agent start --runtime codex --model gpt-6-astra:high     # one agent
 backbone agent set NAME model=opus:max            # change it later
 backbone swarm create rev --issue O/R#7 \
     --member coordinator@codex/gpt-6-astra:high \
@@ -83,9 +83,8 @@ takes `ultra`. The backbone translates the level into whatever that CLI
 wants (`--effort high` for Claude Code, `-c model_reasoning_effort=high`
 for Codex) — never write those flags yourself.
 
-Omit the suffix and the CLI uses its own default, which is not always the
-cheap one: GPT-6-Astra defaults to `low`, so a coordinator that has to
-validate and implement wants an explicit `:high` or better.
+Omit the suffix and the CLI uses its own default. Set an effort explicitly
+when review depth or resource use matters; defaults can vary by CLI version.
 
 OpenCode and Aider interpret colons as literal model tags, so
 `ollama/qwen3:8b` is passed through unchanged; `:high` would also be part of

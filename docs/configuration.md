@@ -1,13 +1,15 @@
 # Configuration
 
-There is no configuration file. The **data directory** is the configuration:
+Settings live in the database, secrets in `.env`, and editable startup
+instructions in Markdown files. The default **data directory** contains:
 
 ```
 ~/.local/share/agent-backbone/      # $BACKBONE_DATA_DIR to move it
 ├── .env            secrets only (API key, tokens) — never in the database
 ├── backbone.db     settings, agents, watches, events, deliveries, queue, state
 ├── state/          hook-written agent state, actions.jsonl, plans/
-└── hooks/          the installed hook script
+├── hooks/          installed runtime hooks
+└── templates/      editable instructions (unless templates.dir relocates them)
 ```
 
 - **Settings** are keys with built-in defaults, stored in the database and
@@ -28,7 +30,7 @@ There is no configuration file. The **data directory** is the configuration:
   environment, which wins. Only that one file is read — a `.env` in the current
   working directory is ignored.
 
-Only two knobs live outside the directory: `BACKBONE_DATA_DIR` (where it
+Use environment variables to select storage: `BACKBONE_DATA_DIR` (where it
 is) and `BACKBONE_DATABASE_URL` (PostgreSQL instead of the SQLite file).
 
 Persistent database startup checks that required tables and columns exist,

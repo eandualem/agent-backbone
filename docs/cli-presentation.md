@@ -49,7 +49,7 @@ Descriptions and tags are optional; no extra agent declarations are required.
   existing template preview commands. Hook-provided replies and terminal captures
   may already be bounded at their source; formatting cannot recover unseen text.
 
-## Command audit for issue 220
+## Command conventions
 
 - **Skills:** list has purpose, tags, receiving agents and validity; preview has
   directories and per-link state; validation has per-agent counts and link state.
@@ -86,7 +86,7 @@ Descriptions and tags are optional; no extra agent declarations are required.
 
 ## Verification for future changes
 
-Issue 222 adds token usage with the same helpers: separate CLI-session rows,
+Token usage uses the same helpers: separate CLI-session rows,
 request/model details and opt-in cost. Empty sources remain unavailable, coverage
 and pagination stay visible, and JSON bypasses formatting. `backbone help usage`
 preserves access to the quick-start guide; `backbone usage --help` describes the

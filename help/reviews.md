@@ -35,8 +35,8 @@ need to use the same runtime as the reviewer. No managed agent or swarm is creat
    minor findings are fixed and merged (or there are no valid findings), open the
    release PR from `develop` to `main`, or merge it when authorized and checks and
    review are clear. Verify the PR's state and any completed issue's closure,
-   report completion or the concrete pending gate, and start nothing else. A
-   person's request to “run an Ultra review” means this findings-based sequence.
+   report completion or the concrete pending gate. A review alone does not
+   authorize a release; finish within the scope agreed with the operator.
 
 Read the guide before first use, especially its sandbox initialization guidance.
 Never stop the caller's session or bypass the reviewer's sandbox to launch a review.

@@ -12,8 +12,6 @@ short required rules with a group of tagged agents.
 - `docs/` contains the user reference, read with `backbone docs PAGE`.
 
 These directories are at the repository root and ship in the installed package.
-Historical review snapshots live in Git history; their actionable work is tracked
-in issues and pull requests, rather than mixed into the current reference.
 
 ## Find and edit
 

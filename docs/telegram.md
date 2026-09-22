@@ -1,24 +1,6 @@
 # Telegram
 
 
-Newly published reports are queued durably for Telegram and posted to the allowed
-agents group: ordinary repository agents go to General and their own topic. Swarm
-workers and coordinators send findings to the repository agent, who publishes
-consolidated updates. Swarms cannot publish reports or send direct replies to the
-owner. The shared feed has full-report and team-view buttons. Delivery runs every 30 seconds, with
-bounded batches and retries after failures. `telegram.report_updates=false` pauses
-sending; re-enabling drains retained pending reports. A configured or discovered
-group must be allowlisted; there is no fallback to a private notification chat.
-Existing reports from before this feature remain readable and are not broadcast.
-`telegram_delivery` in report JSON distinguishes pending, sending, sent and
-not_requested. The saved report survives delivery failures. Retries are normally
-deduplicated; a crash after Telegram accepts a message but before its receipt is
-saved can cause a duplicate bearing the same report ID. Report retention still applies.
-
-Read reports with `backbone updates`, `backbone updates --agent NAME --history`,
-or `backbone updates show ID`; in Telegram use `/updates`, `/updates NAME`,
-`/updates history NAME`, or `/updates show ID`. `backbone help usage` is the quick guide.
-
 A phone-sized control surface: see who is running, talk to an agent,
 approve a plan, get told when an agent is stuck or died.
 
@@ -43,7 +25,7 @@ backbone config set telegram.allowed_chat_ids '[123456789]'
 backbone config set telegram.notification_chat_id 123456789
 ```
 
-4. Restart `backbone up`. The bot runs inside the backbone process and reads
+4. Run `backbone service restart` (or stop and restart a manual `backbone up`). The bot runs inside the backbone process and reads
    the live configuration; there is nothing else to start.
 
 **The bot will not start with an empty `telegram.allowed_chat_ids`.** Every
@@ -69,6 +51,22 @@ reads never ask an agent to regenerate a report or create a new topic.
 | *buttons on alerts* | A permission alert carries **Allow** / **Deny**, a plan alert **Approve plan** / **Reject plan** (see below). A button is bound to the prompt it was raised for: once the agent has moved on it answers nothing. Pressing one is answered once; the alert is edited with the outcome and who pressed it (name and Telegram user id), and a successful answer is recorded under the user id |
 | `/identify` | Print this chat/topic id and its current mapping |
 | `/help` | Command list |
+
+`/start NAME` behaves like a CLI/API start: it keeps the configured CLI/model
+and begins a new conversation. Continuing the previous one is a deliberate
+choice made from the CLI (`backbone agent resume NAME`).
+
+## Progress reports
+
+Ordinary agent reports appear in General and the agent's topic, with separate
+delivery receipts. Swarm participants, including coordinators, cannot publish human-facing reports.
+Only their repository agent reports consolidated progress to the owner. Optional full-report voice messages can be enabled with
+`backbone config set telegram.report_audio true` after local speech setup.
+See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
+
+New reports are queued for an allowlisted group and retried after failures.
+`telegram.report_updates=false` pauses delivery; re-enabling drains retained
+reports. See [Reports](reports.md) for receipts, retention and duplicate limits.
 
 ## One topic per agent
 
@@ -155,7 +153,7 @@ is internal to the agent that runs it, and you talk to that agent.
 - **Agent went offline unexpectedly** — an `always_on` agent's session died; it was not restarted.
 - **Agent is offline with N queued messages** — messages are waiting for an agent that is not running (agents without `always_on`, which were not reported when they died; once per `timing.escalation_dedup_seconds`); it was not restarted.
 - **Agent is blocked on its usage limit** — the runtime paused for its
-  quota and will resume on its own (with what it said about the reset);
+  quota (with what it said about the reset). Recovery depends on the runtime;
   once per `timing.escalation_dedup_seconds`.
 
 Stall escalations go to the `escalation.target` agent.
@@ -164,14 +162,3 @@ Telegram limits each button's [callback data](https://core.telegram.org/bots/api
 to 64 bytes. If an agent name makes a button too large, the full alert is sent
 without its button row and directs you to the agent's terminal. Prompt identities
 are never shortened; buttons that fit retain the same stale-prompt protection.
-
-Ordinary agent reports appear in General and the agent's topic, with separate
-delivery receipts. Swarm participants, including coordinators, cannot publish human-facing reports.
-Only their repository agent reports consolidated progress to the owner. Optional full-report voice messages can be enabled with
-`backbone config set telegram.report_audio true` after local speech setup.
-See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
-
-
-`/start NAME` behaves like a CLI/API start: it keeps the configured CLI/model
-and begins a new conversation. Continuing the previous one is a deliberate
-choice made from the CLI (`backbone agent resume NAME`).
