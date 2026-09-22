@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import imaplib
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -124,6 +125,49 @@ async def test_every_search_failing_is_an_error(tmp_path):
         pytest.raises(RuntimeError, match="every Gmail search failed"),
     ):
         await GmailSource(config).poll(["subject:(broken"], datetime.now(UTC))
+
+
+@pytest.mark.parametrize("failure", ["timeout", "abort", "fetch", "oversized", "state"])
+async def test_transient_failure_after_a_good_filter_fails_the_whole_poll(tmp_path, failure):
+    class FailingImap(_FakeImap):
+        def uid(self, command, *args):
+            if command == "SEARCH" and "second" in args[-1]:
+                if failure == "timeout":
+                    raise TimeoutError("socket stalled")
+                if failure == "abort":
+                    raise imaplib.IMAP4.abort("connection closed")
+                if failure == "oversized":
+                    raise imaplib.IMAP4.error("command: UID => got more than 1000000 bytes")
+                if failure == "state":
+                    raise imaplib.IMAP4.error("command SEARCH illegal in state AUTH")
+                return "OK", [b"99"]
+            if command == "FETCH" and args[0] == "99":
+                return "NO", [b"transient fetch failure"]
+            return super().uid(command, *args)
+
+    config = make_config(tmp_path, gmail_address="me@gmail.com", gmail_app_password="pw")
+    with (
+        patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", FailingImap),
+        pytest.raises((TimeoutError, imaplib.IMAP4.error, RuntimeError)),
+    ):
+        await GmailSource(config).poll(
+            ["from:upwork.com", "second"], datetime(2026, 9, 17, 12, tzinfo=UTC)
+        )
+
+
+async def test_imaplib_bad_search_response_only_rejects_that_filter(tmp_path):
+    class RejectingImap(_FakeImap):
+        def uid(self, command, *args):
+            if command == "SEARCH" and "broken" in args[-1]:
+                raise imaplib.IMAP4.error("UID command error: BAD invalid search")
+            return super().uid(command, *args)
+
+    config = make_config(tmp_path, gmail_address="me@gmail.com", gmail_app_password="pw")
+    with patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", RejectingImap):
+        events = await GmailSource(config).poll(
+            ["subject:(broken", "from:upwork.com"], datetime(2026, 9, 17, 12, tzinfo=UTC)
+        )
+    assert len(events) == 1
 
 
 async def test_unconfigured_source_is_disabled_and_polls_nothing(tmp_path):

@@ -4,6 +4,7 @@ dim-placeholder detection. Pure functions over captured terminal text."""
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
@@ -25,6 +26,18 @@ DIALOG_CURSOR_RE = re.compile(r"^[❯›●▶]\s*\d{1,2}\.\s")
 def sanitize_pane_content(pane_content: str) -> str:
     """Strip ANSI escape sequences for prompt/runtime analysis."""
     return _ANSI_ESCAPE_RE.sub("", pane_content).replace("\xa0", " ")
+
+
+def sgr_attributes(parameters: str) -> Iterator[tuple[int, ...]]:
+    """Group each SGR attribute with its color operands, which are not attributes."""
+    codes = [int(part or 0) for part in parameters.split(";")]
+    index = 0
+    while index < len(codes):
+        size = 1
+        if codes[index] in (38, 48, 58) and index + 1 < len(codes):
+            size = {2: 5, 5: 3}.get(codes[index + 1], 2)
+        yield tuple(codes[index : index + size])
+        index += size
 
 
 def is_box_line(stripped: str) -> bool:
@@ -63,9 +76,8 @@ def prompt_line_is_dim_placeholder(raw_prompt_line: str) -> bool:
         if raw_prompt_line[i] == "\x1b":
             match = _ANSI_SGR_RE.match(raw_prompt_line, i)
             if match:
-                params = match.group(1)
-                codes = [0] if params == "" else [int(part or 0) for part in params.split(";")]
-                for code in codes:
+                for attribute in sgr_attributes(match.group(1)):
+                    code = attribute[0]
                     if code == 0:
                         dim = False
                     elif code == 2:

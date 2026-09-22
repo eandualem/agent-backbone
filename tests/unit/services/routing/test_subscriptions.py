@@ -6,6 +6,8 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent_backbone.config import AgentsConfig, AgentSpec, Subscription
 from agent_backbone.hooks.backbone_state import take_context
 from agent_backbone.models import SUBSCRIPTION_KIND, DeliveryOutcome
@@ -149,6 +151,41 @@ class TestDispatch:
 
 
 class TestHighPriorityReachesAWorkingAgent:
+    @pytest.mark.parametrize("count", [26, 51])
+    @pytest.mark.parametrize("hook_first", [False, True])
+    async def test_oversized_poll_has_one_receipt_per_chunk(self, tmp_path, db, count, hook_first):
+        config = _config(tmp_path)
+        lines = [f"- item-{i}" for i in range(count)]
+        with patch(
+            f"{_DELIVERY}.get_session_intelligence",
+            return_value=_profile(SessionIntelligence.AGENT_WORKING),
+        ):
+            await safe_deliver(
+                "desk",
+                "[via:gmail] mail\n" + "\n".join(lines),
+                config,
+                db=db,
+                priority=True,
+                delivery_kind=SUBSCRIPTION_KIND,
+                sender="gmail",
+            )
+        received = take_context(config.state_dir, "desk") if hook_first else []
+        with (
+            patch(
+                f"{_DELIVERY}.get_session_intelligence",
+                return_value=_profile(SessionIntelligence.READY),
+            ),
+            patch(f"{_DELIVERY}.send_message", return_value=True) as send,
+        ):
+            await drain_message_queue(config, db, None, active_sessions={"desk"})
+        received.extend(call.args[1] for call in send.await_args_list)
+        assert [line for batch in received for line in batch.splitlines()[1:]] == lines
+        assert all(len(batch.splitlines()) <= 26 for batch in received)
+        assert await db.queue.pending_count("desk") == 0
+        assert take_context(config.state_dir, "desk") == []
+        if hook_first:
+            send.assert_not_awaited()
+
     async def test_working_claude_agent_is_offered_hook_context(self, tmp_path, db):
         config = _config(tmp_path)
         message = "[via:gmail] mail\n- a1 · x"

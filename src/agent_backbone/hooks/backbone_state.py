@@ -418,7 +418,6 @@ def plan_title(plan: str) -> str:
     return "Untitled plan"
 
 
-_MODEL_RE = re.compile(r'"model"\s*:\s*"([^"<>]{1,120})"')
 TRANSCRIPT_TAIL_BYTES = 256 * 1024
 
 
@@ -445,16 +444,30 @@ def observed_model(payload: dict, current: dict | None, event: str) -> str | Non
 
 
 def _model_from_transcript(path: Path) -> str | None:
+    """The last Claude assistant record's model, never a nested tool argument."""
     try:
         with path.open("rb") as stream:
             stream.seek(0, os.SEEK_END)
             size = stream.tell()
-            stream.seek(max(0, size - TRANSCRIPT_TAIL_BYTES))
+            start = max(0, size - TRANSCRIPT_TAIL_BYTES)
+            stream.seek(start)
             tail = stream.read().decode("utf-8", "replace")
     except OSError:
         return None
-    matches = _MODEL_RE.findall(tail)
-    return matches[-1] if matches else None
+    if start:
+        tail = tail.partition("\n")[2]  # the first record may be truncated
+    for line in reversed(tail.splitlines()):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or record.get("type") != "assistant":
+            continue
+        message = record.get("message")
+        model = message.get("model") if isinstance(message, dict) else None
+        if isinstance(model, str) and 0 < len(model) <= 120 and not any(c in model for c in "<>"):
+            return model
+    return None
 
 
 def record_factory(payload: dict, current: dict | None, event: str) -> Callable[..., dict]:

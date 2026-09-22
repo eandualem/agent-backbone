@@ -320,20 +320,32 @@ class TelegramService(Integration):
             )
             return
         app = self.build_app()
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling()
-        self._running = True
+        try:
+            await app.initialize()
+            await app.start()
+            await app.updater.start_polling()
+            self._running = True
+            await self.sync_agents()
+        except BaseException:
+            try:
+                await self.stop()
+            except Exception:
+                log.exception("Telegram startup cleanup failed")
+            raise
         log.info("Telegram bot polling started")
-        await self.sync_agents()
 
     async def stop(self) -> None:
-        if self._app is None or not self._running:
+        if self._app is None:
             return
         try:
-            await self._app.updater.stop()
-            await self._app.stop()
+            if self._app.updater.running:
+                await self._app.updater.stop()
+            if self._app.running:
+                await self._app.stop()
             await self._app.shutdown()
+            # Application.shutdown skips cleanup when getMe failed during initialize.
+            # Bot.shutdown still closes its initialized requests and is idempotent.
+            await self._app.bot.shutdown()
         finally:
             self._running = False
             self._app = None

@@ -28,6 +28,10 @@ def read_jsonl(
     state = dict(state)
     batch = UsageBatch(offset, state)
     try:
+        stat = path.stat()
+        if offset == stat.st_size and state.get("_file") == f"{stat.st_dev}:{stat.st_ino}":
+            batch.caught_up = not state.get("_skip_line", False)
+            return batch
         with path.open("rb") as stream:
             stat = os.fstat(stream.fileno())
             identity = f"{stat.st_dev}:{stat.st_ino}"
@@ -43,12 +47,18 @@ def read_jsonl(
             end = min(stat.st_size, offset + budget)
             while stream.tell() < end:
                 start = stream.tell()
-                line = stream.readline(budget + 1)
+                line = stream.readline(end - start)
+                if state.get("_skip_line"):
+                    if line.endswith(b"\n"):
+                        state.pop("_skip_line")
+                    continue
                 if not line.endswith(b"\n"):
-                    stream.seek(start)
                     batch.caught_up = False
-                    if len(line) > budget:
+                    if start == offset and len(line) == budget and stat.st_size > end:
+                        state["_skip_line"] = state["partial"] = True
                         batch.error = "source record exceeds read budget"
+                    else:
+                        stream.seek(start)
                     break
                 try:
                     raw = json.loads(line)
@@ -64,7 +74,9 @@ def read_jsonl(
                     state["partial"] = True
                 batch.offset = stream.tell()
             batch.offset = stream.tell()
-            batch.caught_up = batch.caught_up and batch.offset >= stat.st_size
+            batch.caught_up = (
+                batch.caught_up and batch.offset >= stat.st_size and not state.get("_skip_line")
+            )
     except OSError as exc:
         batch.error = type(exc).__name__
         batch.caught_up = False

@@ -121,11 +121,6 @@ class TestBuildCommand:
         assert fresh[1:3] == _NET
         assert resumed[1:3] == ["resume", "sess-1"] and resumed[3:5] == _NET
 
-    def test_codex_unreadable_brief_degrades(self, tmp_path):
-        with _resolve("/bin/codex"):
-            command = RUNTIMES["codex"].build_command(brief_file=tmp_path / "missing.md")
-        assert command == ["/bin/codex", *_NET, "--no-alt-screen"]
-
     def test_gemini_flags(self, tmp_path):
         brief = tmp_path / "brief.md"
         brief.write_text("You are agent y.")

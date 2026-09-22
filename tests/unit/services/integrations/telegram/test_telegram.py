@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from telegram.error import NetworkError
+from telegram.ext import Application
+from telegram.request import BaseRequest
 
 from agent_backbone.config import SecurityConfig, TelegramConfig
 from agent_backbone.models import DeliveryOutcome
@@ -322,6 +326,75 @@ class TestAuthorization:
         await bot.start()
         assert bot.running is False
         assert (await bot.health_check())["healthy"] is True
+
+
+@pytest.mark.parametrize(
+    ("stage", "error", "cleanup_error"),
+    [
+        ("polling", TimeoutError, False),
+        ("polling", asyncio.CancelledError, False),
+        ("sync", asyncio.CancelledError, False),
+        ("polling", TimeoutError, True),
+        ("sync", asyncio.CancelledError, True),
+    ],
+)
+async def test_failed_start_closes_partial_application(config, stage, error, cleanup_error, caplog):
+    bot = _bot(replace(config, telegram_token="t"))
+    failure = error("startup failed")
+    app = MagicMock(
+        initialize=AsyncMock(), start=AsyncMock(), stop=AsyncMock(), shutdown=AsyncMock()
+    )
+    app.bot.shutdown = AsyncMock(
+        side_effect=RuntimeError("cleanup failed") if cleanup_error else None
+    )
+    app.running = True
+    app.updater.running = stage == "sync"
+    app.updater.stop = AsyncMock()
+    app.updater.start_polling = AsyncMock(side_effect=failure if stage == "polling" else None)
+    bot.sync_agents = AsyncMock(side_effect=failure if stage == "sync" else None)
+    bot._app = app
+    with patch.object(bot, "build_app", return_value=app), pytest.raises(error) as raised:
+        await bot.start()
+    assert raised.value is failure
+    assert not bot.running and bot._app is None
+    app.stop.assert_awaited_once()
+    app.shutdown.assert_awaited_once()
+    app.bot.shutdown.assert_awaited_once()
+    assert app.updater.stop.await_count == (stage == "sync")
+    if cleanup_error:
+        assert "Telegram startup cleanup failed" in caplog.text
+
+
+@pytest.mark.parametrize("error", [NetworkError, asyncio.CancelledError])
+async def test_failed_get_me_closes_initialized_requests(config, error):
+    bot = _bot(replace(config, telegram_token="123:fake"))
+    failure = error("getMe failed")
+    requests = [
+        MagicMock(
+            spec=BaseRequest,
+            initialize=AsyncMock(),
+            shutdown=AsyncMock(),
+            post=AsyncMock(side_effect=failure),
+            read_timeout=1,
+        )
+        for _ in range(2)
+    ]
+    app = (
+        Application.builder()
+        .token("123:fake")
+        .request(requests[0])
+        .get_updates_request(requests[1])
+        .build()
+    )
+    bot._app = app
+    with patch.object(bot, "build_app", return_value=app), pytest.raises(error) as raised:
+        await bot.start()
+    assert raised.value is failure
+    assert not bot.running and bot._app is None
+    await bot.stop()  # Repeated cleanup is harmless.
+    for request in requests:
+        request.initialize.assert_awaited_once()
+        request.shutdown.assert_awaited_once()
 
 
 class TestTell:

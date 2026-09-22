@@ -75,9 +75,16 @@ backbone skills validate [AGENT]            # store entries and every agent's se
 ```
 
 `add` **moves** the directory into the store — the source is gone afterwards,
-so no second copy survives — rewrites its frontmatter `name` if `--name` renames
-it, writes the tags, and commits. It goes through the API when the backbone is
-running, so an agent inside a sandbox that cannot write to `~/skills` still has
+so no second copy survives — rewrites its top-level frontmatter `name` if `--name`
+renames it, writes the tags, and commits. Nested metadata and description text are
+preserved. The edited frontmatter is validated before either directory moves;
+a failed file replacement restores the source and any previous store entry with
+their original contents. A cross-device copy or source-removal failure leaves
+the previous store entry in place and reports where incoming recovery data was
+retained. If restoration itself fails, that recovery copy is kept too. An
+existing replacement backup must be recovered before another replacement can
+proceed; it is never discarded automatically. The command goes through the API
+when the backbone is running, so an agent inside a sandbox that cannot write to `~/skills` still has
 a sanctioned path; the backbone does the move. The API is
 `GET /api/skills`, `POST /api/skills`, `PUT /api/skills/{name}/tags` and
 `GET /api/skills/preview/{agent}`.

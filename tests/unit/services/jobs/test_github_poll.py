@@ -120,6 +120,21 @@ def config(tmp_path):
 
 
 class TestGitHubPoller:
+    async def test_backfill_retries_an_incomplete_batch_then_stops(self, config, db, dispatch):
+        gh = AsyncMock()
+        gh.list_issues_since.return_value = []
+        gh.list_comments_since.return_value = [_comment(9, 7, "hello")]
+        gh.get_issue_raw.side_effect = [TimeoutError("temporary hydration error"), _issue(7)]
+        poller = GitHubPoller(config, db, gh)
+        with pytest.raises(RuntimeError, match="backfill incomplete"):
+            await poller.backfill()
+        boundary = await db.events.poll_cursor(TEST_REPO)
+        await poller.backfill()
+        await poller.backfill()
+        assert gh.list_comments_since.await_count == 2
+        assert gh.list_comments_since.await_args_list[1].args[1] == boundary
+        dispatch.issue_dispatcher.assert_awaited_once()
+
     async def test_dispatches_new_issue_and_comment_once(self, config, db, dispatch, frozen_now):
         gh = AsyncMock()
         gh.list_issues_since = AsyncMock(return_value=[_issue(1, labels=["for:ike"])])

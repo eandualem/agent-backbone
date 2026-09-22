@@ -65,7 +65,10 @@ def _register_jobs(app: FastAPI):
         return await monitor_agents(state.config, state.db, state.github, on_change=_broadcast)
 
     async def _retry():
-        return await delivery_retry(state.config, state.db, state.github)
+        result = await delivery_retry(state.config, state.db, state.github)
+        if state.config.github_intake == "webhook" and state.config.github.backfill_on_start:
+            await scheduler.retry_failed_once("github-backfill")
+        return result
 
     async def _prune():
         days = state.config.timing.delivery_retention_days
@@ -128,7 +131,7 @@ def _register_jobs(app: FastAPI):
                 "github-poll", config.github.poll_interval_seconds, poller.run, run_immediately=True
             )
         elif config.github_intake == "webhook" and config.github.backfill_on_start:
-            scheduler.add("github-backfill", 0, poller.run, run_immediately=True, once=True)
+            scheduler.add("github-backfill", 0, poller.backfill, run_immediately=True, once=True)
 
     sources = getattr(state, "sources", None)
     sources_poller = SourcesPoller(lambda: state.config, state.db, sources) if sources else None

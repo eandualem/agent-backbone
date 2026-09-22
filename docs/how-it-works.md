@@ -71,11 +71,12 @@ identifiers and error types, without command arguments, directories, environment
 values, brief text, terminal output or exception messages. See
 [Learning from local usage](diagnostics.md) for the digest and investigation flow.
 
-The model returned by agent APIs is the saved selection, labelled
-`model_source: configured`. It does not confirm which model accepted a request
-or produced a response. Startup can observe a provider error independently of
-its readiness result: an input prompt and a rejected model request can both be
-visible. The observation history keeps that distinction.
+Session views label runtime-reported model metadata `model_source: observed`.
+Without that evidence they show the saved selection as `configured`, or
+`runtime_default` when no model is saved. A configured selection does not confirm
+which model accepted a request. Startup can observe a provider error independently
+of readiness: an input prompt and a rejected model request can both be visible.
+The observation history keeps that distinction.
 
 The running backbone serializes registration, edits, watches, start, stop and
 forget for each agent. Edits update only the supplied database fields, so two
@@ -282,7 +283,7 @@ sequenceDiagram
 | Intake | When | How |
 |---|---|---|
 | `poll` | `GITHUB_TOKEN` (or App credentials) and no webhook secret | every `github.poll_interval_seconds`, list issues and comments from the durable replay cursor for each tracked repository |
-| `webhook` | `GITHUB_WEBHOOK_SECRET` is set | GitHub posts to `/webhooks/github`; signature verified; **one backfill poll at startup** catches what happened while the backbone was down |
+| `webhook` | `GITHUB_WEBHOOK_SECRET` is set | GitHub posts to `/webhooks/github`; signature verified; startup backfill catches downtime and retries unfinished repositories through the delivery-retry job |
 | `off` | no credentials, or `github.intake = off` | — |
 
 Tracked repositories = every repository any agent owns or watches. Both
@@ -390,7 +391,8 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
    `timing.escalation_dedup_seconds` (30 min).
 4. **Dead sessions**: an agent that had a live state and has no session now
    → reported to `escalation.target` and Telegram, once; state reset.
-   Never restarted.
+   Never restarted. If no notification route accepts the alert, the transition
+   stays pending for the next monitor tick.
 5. **Plan waiting**: Telegram notification (`/viewplan`, `/approve`) and a
    message to `escalation.target`, once per plan after delivery or successful
    queue storage. A failed queue write is retried on the next monitor tick.
@@ -398,6 +400,8 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 7. Drains the queue for sessions that are now idle.
 8. **Pending issues**: every idle agent with an empty in-flight slot gets
    the highest-priority unacknowledged open issue from its queue.
+   A failed queue lookup or delivery for one agent leaves the others running;
+   diagnostics record that agent's failure and later recovery.
 
 Every `timing.retry_interval_seconds` (5 min), `delivery-retry` resumes pending
 GitHub outbox recipients, re-attempts older issue delivery records that ended

@@ -51,10 +51,16 @@ async def _run_tmux(
             async with asyncio.timeout(10.0):
                 stdout, stderr = await proc.communicate(input=stdin_data)
         except TimeoutError:
-            with contextlib.suppress(OSError):
-                proc.kill()
-            log.error("tmux command timed out: %s", " ".join(args))
+            # Launch arguments can contain agent environment values and prompts.
+            log.error("tmux %s timed out", args[0] if args else "command")
             return -1, b"", b"tmux command timed out"
+        finally:
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                # Reap and drain before releasing the concurrency slot, including
+                # when the caller cancels a delivery or shuts down the service.
+                await proc.communicate()
 
         return proc.returncode, stdout or b"", stderr or b""
 

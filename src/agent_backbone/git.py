@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 from pathlib import Path
@@ -35,9 +36,12 @@ async def run_git(repo_dir: Path | str, *args: str, timeout: float = 30.0) -> tu
         async with asyncio.timeout(timeout):
             out, err = await proc.communicate()
     except TimeoutError:
-        proc.kill()
-        await proc.wait()
         return 1, "", f"git {' '.join(args)} timed out"
+    finally:
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.communicate()
     return proc.returncode or 0, out.decode().strip(), err.decode().strip()
 
 

@@ -32,8 +32,12 @@ import json
 import os
 import re
 import shutil
+import tempfile
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from agent_backbone.fs import atomic_write_text
 
 TAGS_KEY = "backbone-tags"
 """The ``metadata`` key carrying a skill's tags (space-separated)."""
@@ -160,6 +164,10 @@ def parse_skill(path: Path) -> Skill:
         text = skill_file.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return Skill(name, path, error=f"unreadable SKILL.md: {exc}")
+    return _parse_skill_text(name, path, text)
+
+
+def _parse_skill_text(name: str, path: Path, text: str) -> Skill:
     parts = _split_frontmatter(text)
     if parts is None:
         return Skill(name, path, error="SKILL.md has no frontmatter")
@@ -202,21 +210,30 @@ def select_skills(skills: list[Skill], tags: tuple[str, ...], agent_name: str) -
 
 def write_tags(skill_dir: Path, tags: tuple[str, ...]) -> None:
     """Set ``metadata.backbone-tags`` in ``SKILL.md``, leaving every other line as it is."""
-    validate_tags(tags)
     skill_file = Path(skill_dir) / "SKILL.md"
     text = skill_file.read_text(encoding="utf-8")
+    atomic_write_text(skill_file, _edit_frontmatter(text, tags))
+
+
+def _edit_frontmatter(text: str, tags: tuple[str, ...], *, name: str | None = None) -> str:
+    """Prepare a complete edit before a skill is moved or its file is replaced."""
+    validate_tags(tags)
     parts = _split_frontmatter(text)
     if parts is None:
-        raise ValueError(f"{skill_file} has no frontmatter")
+        raise ValueError("SKILL.md has no frontmatter")
     front, body = parts
     value = " ".join(tags)
     tag_line = f"  {TAGS_KEY}: {json.dumps(value)}\n" if tags else None
     out: list[str] = []
     index = 0
     handled = False
+    named = False
     while index < len(front):
         line = front[index]
         key, separator, inline = line.partition(":")
+        if name is not None and key.strip() == "name" and not line.startswith((" ", "\t")):
+            line = f"name: {name}\n"
+            named = True
         if key.strip() == "metadata" and not line.startswith((" ", "\t")):
             if separator and inline.strip():
                 raise ValueError(
@@ -245,7 +262,9 @@ def write_tags(skill_dir: Path, tags: tuple[str, ...]) -> None:
     if not handled and tag_line:
         out.append("metadata:\n")
         out.append(tag_line)
-    skill_file.write_text("---\n" + "".join(out) + "---\n" + body, encoding="utf-8")
+    if name is not None and not named:
+        out.insert(0, f"name: {name}\n")
+    return "---\n" + "".join(out) + "---\n" + body
 
 
 def add_skill(
@@ -290,39 +309,47 @@ def add_skill(
     )
     if not tolerated:
         raise ValueError(f"{source.name}: {draft.error}")
-    _split_frontmatter_or_raise(source / "SKILL.md")
+    edited = _edit_frontmatter(
+        (source / "SKILL.md").read_text(encoding="utf-8"), tags, name=target_name
+    )
+    skill = _parse_skill_text(target_name, target, edited)
+    if not skill.valid:
+        raise ValueError(f"{target_name}: {skill.error}")
     store.mkdir(parents=True, exist_ok=True)
     displaced = store / f".replaced-{target_name}"
     if displaced.exists() or displaced.is_symlink():
-        _remove(displaced)
-    if target.exists() or target.is_symlink():
-        os.replace(target, displaced) if not target.is_symlink() else target.rename(displaced)
+        raise ValueError(f"previous replacement data remains at {displaced}; recover it first")
+    staging = Path(tempfile.mkdtemp(prefix=f".incoming-{target_name}-", dir=store))
+    staged = staging / target_name
     try:
-        shutil.move(str(source), str(target))
-    except OSError:
-        if displaced.exists() or displaced.is_symlink():
-            displaced.rename(target)
+        # Cross-device move can fail after copying, while removing the source.
+        # Keep that complete copy in staging and the existing store entry intact.
+        shutil.move(str(source), str(staged))
+        if target.exists() or target.is_symlink():
+            target.rename(displaced)
+        published = False
+        try:
+            staged.rename(target)
+            published = True
+            atomic_write_text(target / "SKILL.md", edited)
+        except OSError:
+            if published:
+                target.rename(staged)
+            if displaced.exists() or displaced.is_symlink():
+                displaced.rename(target)
+            shutil.move(str(staged), str(source))
+            raise
+    except OSError as exc:
+        if staged.exists():
+            raise OSError(f"{exc}; incoming skill data retained at {staged}") from exc
         raise
-    try:
-        _rewrite_name(target, target_name)
-        write_tags(target, tags)
-        skill = parse_skill(target)
-        if not skill.valid:
-            raise ValueError(f"{target_name}: {skill.error}")
-    except (OSError, ValueError):
-        # Put both parties back: the source to its origin, the old entry to its name.
-        shutil.move(str(target), str(source))
-        if displaced.exists() or displaced.is_symlink():
-            displaced.rename(target)
-        raise
+    finally:
+        # Remove only an empty staging parent, never a recovery copy.
+        with suppress(OSError):
+            staging.rmdir()
     if displaced.exists() or displaced.is_symlink():
         _remove(displaced)
     return skill
-
-
-def _split_frontmatter_or_raise(skill_file: Path) -> None:
-    if _split_frontmatter(skill_file.read_text(encoding="utf-8")) is None:
-        raise ValueError(f"{skill_file} has no frontmatter")
 
 
 def _remove(path: Path) -> None:
@@ -330,19 +357,6 @@ def _remove(path: Path) -> None:
         path.unlink()
     elif path.is_dir():
         shutil.rmtree(path)
-
-
-def _rewrite_name(skill_dir: Path, name: str) -> None:
-    skill_file = skill_dir / "SKILL.md"
-    text = skill_file.read_text(encoding="utf-8")
-    parts = _split_frontmatter(text)
-    if parts is None:
-        raise ValueError(f"{skill_file} has no frontmatter")
-    front, body = parts
-    out = [f"name: {name}\n" if line.split(":", 1)[0].strip() == "name" else line for line in front]
-    if not any(line.split(":", 1)[0].strip() == "name" for line in front):
-        out.insert(0, f"name: {name}\n")
-    skill_file.write_text("---\n" + "".join(out) + "---\n" + body, encoding="utf-8")
 
 
 # --- Materialisation ---------------------------------------------------------

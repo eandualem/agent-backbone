@@ -340,6 +340,22 @@ class TestClaudeCodeUi:
         pane = self._IDLE.replace("\u276f \n", "\u276f fix the flaky test\n")
         assert runtime.prompt_has_pending_input(pane) is True
 
+    @pytest.mark.parametrize(
+        "style,pending",
+        [
+            ("38;2;180;180;180", True),
+            ("48;2;180;180;180", True),
+            ("38;5;2", True),
+            ("2;38;2;0;22;180", False),
+            ("2;48;5;22", False),
+            ("2;38;2;180;180;180;22", True),
+            ("2;38;5;180;0", True),
+        ],
+    )
+    def test_color_operands_do_not_change_whether_prompt_text_is_dim(self, style, pending):
+        pane = self._IDLE.replace("❯ \n", f"❯ \x1b[{style}mReview this change\x1b[0m\n")
+        assert RUNTIMES["claude"].prompt_has_pending_input(pane) is pending
+
     async def test_input_buffered_while_busy_counts_as_queued(self):
         runtime = RUNTIMES["claude"]
         busy_with_input = self._BUSY.replace(

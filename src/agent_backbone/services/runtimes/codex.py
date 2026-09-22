@@ -14,7 +14,7 @@ from pathlib import Path
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import count
-from agent_backbone.services.runtimes.base import Runtime, RuntimeDiagnostic, read_brief
+from agent_backbone.services.runtimes.base import Runtime, RuntimeDiagnostic
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
@@ -329,8 +329,6 @@ class Codex(Runtime):
         args: list[str] = [*_LOCAL_API_ACCESS, "--no-alt-screen", *hook]
         if model:
             args.extend(["--model", model])
-        if brief_file is not None and (brief := read_brief(brief_file)):
-            args.append(brief)  # positional initial prompt, after every flag
         return args
 
     usage_supported = True

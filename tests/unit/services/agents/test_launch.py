@@ -642,10 +642,8 @@ class TestHookWiringReachesTheSession:
         launched = start.await_args.kwargs
         assert "--auto" in launched["command"]
         content = json.loads(launched["environment"]["OPENCODE_CONFIG_CONTENT"])
-        assert content == {
-            **original,
-            "plugin": ["existing-plugin", (config.data_dir / "hooks/opencode_hook.js").as_uri()],
-        }
+        assert content == original  # the wrapper composes the final inherited environment
+        assert launched["command"][1].endswith("_opencode_launch.py")
         assert json.loads(spec.env["OPENCODE_CONFIG_CONTENT"]) == original
 
     async def test_gemini_and_opencode_get_their_hook_environment(self, tmp_path):

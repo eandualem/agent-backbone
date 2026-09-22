@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 import pytest
 
-from agent_backbone.hooks import install
 from agent_backbone.services.runtimes import RUNTIMES
 
 
@@ -123,40 +122,6 @@ class TestGemini:
 
 
 class TestOpenCode:
-    def test_existing_hook_is_not_duplicated(self, tmp_path):
-        rt = RUNTIMES["opencode"]
-        env = rt.hook_launch_env(
-            tmp_path, tmp_path / "state", env={"OPENCODE_CONFIG_CONTENT": "{}"}
-        )
-        assert rt.hook_launch_env(tmp_path, tmp_path / "state", env=env) == env
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            '{/* JSONC */ "permission": {"bash": "deny"}}',
-            '{"permission": {"bash": "deny"}, "plugin": "unexpected"}',
-            '["unexpected"]',
-            "invalid config",
-        ],
-    )
-    def test_unmergeable_config_is_left_to_opencode_without_exposing_it(
-        self, tmp_path, content, caplog
-    ):
-        env = {"OPENCODE_CONFIG_CONTENT": content}
-        assert RUNTIMES["opencode"].hook_launch_env(tmp_path, tmp_path / "s", env=env) == {}
-        assert env["OPENCODE_CONFIG_CONTENT"] == content
-        assert "Skipping OpenCode hook injection" in caplog.text
-        assert content not in caplog.text
-
-    def test_launch_env_loads_the_plugin_by_file_uri(self, tmp_path):
-        env = RUNTIMES["opencode"].hook_launch_env(
-            tmp_path, tmp_path / "state", env={"OPENCODE_CONFIG_CONTENT": "{}"}
-        )
-        content = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-        plugin = tmp_path / "hooks" / "opencode_hook.js"
-        assert content == {"plugin": [plugin.as_uri()]}
-        assert plugin.read_text() == install.hook_source("opencode_hook.js").read_text()
-
     def test_no_settings_file_to_install_into(self, tmp_path):
         assert RUNTIMES["opencode"].install_hooks(tmp_path, tmp_path / "s") is None
         assert RUNTIMES["opencode"].uninstall_hooks() is None

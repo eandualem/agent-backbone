@@ -21,7 +21,6 @@ from agent_backbone.config import (
     bootstrap_config,
     env_file_keys,
 )
-from agent_backbone.services.database.engine import redact_url
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +42,8 @@ BACKBONE_API_KEY={api_key}
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    from agent_backbone.services.database.engine import redact_url
+
     config = bootstrap_config(args.data_dir)
     data_dir = config.data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -235,6 +236,7 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    from agent_backbone.services.database.engine import redact_url
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
 
     ok = True

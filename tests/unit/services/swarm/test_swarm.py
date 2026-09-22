@@ -667,11 +667,12 @@ class TestTeardown:
         assert store.forgotten == ["research-coordinator"]
         assert (await db.swarms.get("research"))["status"] == "done"
 
+    @pytest.mark.parametrize("failure", ["stop", "forget"])
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
-    @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=False)
+    @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=True)
-    async def test_failed_member_stop_preserves_worktree_and_registration(
-        self, _exists, _stop, remove_worktree, db, tmp_path
+    async def test_incomplete_teardown_remains_active(
+        self, _exists, _stop, remove_worktree, db, tmp_path, failure
     ):
         config, repo_dir = _swarm_config(tmp_path)
         worktree = repo_dir / ".backbone" / "swarms" / "research"
@@ -693,10 +694,14 @@ class TestTeardown:
             )
         ]
 
-        with pytest.raises(SwarmError, match="could not stop swarm member"):
+        _stop.return_value = failure != "stop"
+        if failure == "forget":
+            store.forget = AsyncMock(side_effect=OSError("database unavailable"))
+
+        with pytest.raises(SwarmError if failure == "stop" else OSError):
             await teardown_for_issue(config, db, store, "acme/app", 7)
 
-        remove_worktree.assert_not_awaited()
+        assert remove_worktree.await_count == (failure == "forget")
         assert store.forgotten == []
         assert (await db.swarms.get("research"))["status"] == "active"
 
