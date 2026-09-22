@@ -30,8 +30,9 @@ a public endpoint. Terminal delivery still waits for agent readiness.)
 
 ## 1. A stable public URL for the webhook
 
-GitHub must be able to reach `http://127.0.0.1:7120/webhooks/github` from
-the internet, at an address that never changes. Pick **one**:
+Give GitHub a stable public URL: `https://<host>/webhooks/github`. The tunnel
+forwards requests from that URL to the local origin
+`http://127.0.0.1:7120/webhooks/github`. Pick **one** tunnel below:
 
 ### 1a. Cloudflare Tunnel (with a domain on Cloudflare)
 
