@@ -298,6 +298,35 @@ offset to continue from. `400` when `since` and `before` are both given or
  "lines": [], "evidence": ["transcript /Users/me/.claude/projects/-Users-me-code-app/<session>.jsonl"]}
 ```
 
+### `POST /api/steer`
+
+```json
+{"target_session": "app", "from_entity": "leo", "message": "the lock is taken by the retry job; wait for it"}
+```
+
+Guidance for the agent's **current task**, handed over through its runtime's
+hook as a transient offer — never a queue row, never a paste. Accepted only
+when the registered agent is `agent_working` on a runtime whose hook can add
+context (Claude Code, Codex) in a session the backbone started; the offer is
+written for that session only (`<state_dir>/context/<agent>/<launch_id>/`)
+and the hook returns it as `additionalContext` on the next tool call, with the
+envelope `[via:backbone from:<from_entity>] (steer for your current task) …`.
+
+```json
+{"ok": true, "session": "app", "outcome": "offered", "reason": null, "delivery_id": 9,
+ "operation_id": "…", "launch_id": "…", "evidence": ["…"], "detail": "Offered to app's current turn; …"}
+```
+
+`outcome` is `offered`, `refused` (`reason` `not_working`, `unsupported_runtime`,
+`offline` or `no_launch_id`; nothing is queued — send an ordinary message) or
+`failed` (the offer could not be written). Status lives in the delivery log
+(`kind` `steer`, `GET /api/deliveries?kind=steer&session=app`, `agent inspect`):
+`offered` → `handed_off` once the hook took it, `not_taken` when the turn
+ended first or no further tool call took it within 300 s (the offer is removed), or `cancelled` when the
+session was replaced first. At-most-once handoff; a handoff is not
+incorporation. `404` for an unregistered agent; `422` for a sender that does
+not fit the envelope.
+
 ### `GET /api/runtimes`, `GET /api/sessions`, `GET /api/sessions/{name}/terminal?lines=50`
 
 Supported runtimes with availability; raw tmux session names; a one-shot

@@ -112,6 +112,20 @@ class DeliveryRepo(Repo):
                 {"id": delivery_id, "outcome": outcome, "operation_id": operation_id},
             )
 
+    async def settle(self, delivery_id: int, outcome: str, *, expected: str) -> bool:
+        """Move a delivery from ``expected`` to ``outcome`` (a steer's
+        ``offered`` → ``handed_off`` | ``not_taken`` | ``cancelled``). False when
+        the row was not in the expected state."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "UPDATE deliveries SET outcome = :outcome"
+                    " WHERE id = :id AND outcome = :expected"
+                ),
+                {"id": delivery_id, "outcome": outcome, "expected": expected},
+            )
+            return result.rowcount > 0
+
     async def reclaim_stale(
         self,
         max_age_minutes: int = 5,

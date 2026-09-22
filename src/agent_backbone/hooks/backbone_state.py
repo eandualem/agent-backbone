@@ -615,31 +615,147 @@ def clear_agent_context(state_dir: Path, agent: str) -> None:
     shutil.rmtree(_context_dir(state_dir, agent), ignore_errors=True)
 
 
-def take_context(state_dir: Path, agent: str) -> list[str]:
-    """Hook side: claim every offered text (oldest first) and return it."""
-    directory = _context_dir(state_dir, agent)
+def take_context(state_dir: Path, agent: str, launch_id: str | None = None) -> list[str]:
+    """Hook side: claim every offered text (oldest first) and return it.
+
+    Offers for the agent (subscription batches) come first, then the offers
+    scoped to this session (steers under ``<agent>/<launch_id>/``, see
+    ``offer_steer``); ``launch_id`` defaults to the session's own
+    ``BACKBONE_LAUNCH_ID``, so a steer written for another session of the
+    same agent is never taken here."""
+    launch_id = launch_id or os.environ.get("BACKBONE_LAUNCH_ID", "").strip()
+    directories = [_context_dir(state_dir, agent)]
+    if launch_id:
+        directories.append(_steer_dir(state_dir, agent, launch_id))
     texts: list[str] = []
-    try:
-        # Queue ids are monotonic; no stat, so a file the backbone claims
-        # meanwhile cannot abort the whole take.
-        offers = sorted(
-            directory.glob("*.md"),
-            key=lambda path: (
-                not path.stem.isdigit(),
-                int(path.stem) if path.stem.isdigit() else 0,
-                path.stem,
-            ),
-        )
-    except OSError:
-        return texts
-    for offer in offers:
-        taken = offer.with_suffix(".taken")
+    for directory in directories:
         try:
-            os.rename(offer, taken)
-            texts.append(taken.read_text(encoding="utf-8"))
+            # Queue ids are monotonic; no stat, so a file the backbone claims
+            # meanwhile cannot abort the whole take.
+            offers = sorted(
+                directory.glob("*.md"),
+                key=lambda path: (
+                    not path.stem.isdigit(),
+                    int(path.stem) if path.stem.isdigit() else 0,
+                    path.stem,
+                ),
+            )
         except OSError:
-            continue  # the backbone claimed it first, or it is already gone
+            continue
+        for offer in offers:
+            taken = offer.with_suffix(".taken")
+            try:
+                # Read before renaming: once it is ``.taken`` the backbone may
+                # settle and remove it.
+                text = offer.read_text(encoding="utf-8")
+                os.rename(offer, taken)
+                texts.append(text)
+            except OSError:
+                continue  # the backbone claimed it first, or it is already gone
     return texts
+
+
+STEER_PREFIX = "steer-"
+"""Offer files under ``<agent>/<launch_id>/`` are ``steer-<8-digit delivery id>``:
+a namespace of their own, so they never collide with a batch's numeric key."""
+
+
+def _steer_dir(state_dir: Path, agent: str, launch_id: str) -> Path:
+    return _context_dir(state_dir, agent) / launch_id
+
+
+def steer_key(delivery_id: int) -> str:
+    return f"{STEER_PREFIX}{delivery_id:08d}"
+
+
+def offer_steer(state_dir: Path, agent: str, launch_id: str, key: str, text: str) -> bool:
+    """Backbone side: offer a steer to one session of the agent. False when
+    that key was already taken."""
+    directory = _steer_dir(state_dir, agent, launch_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    if (directory / f"{key}.taken").exists():
+        return False
+    target = directory / f"{key}.md"
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, target)
+    return True
+
+
+def retire_steers(state_dir: Path, agent: str, launch_id: str | None = None) -> None:
+    """Hook side, when the turn ends: steers still offered to this session
+    are for the task that just ended, never the next one; mark them
+    ``.missed`` for the backbone to record as ``not_taken``."""
+    launch_id = launch_id or os.environ.get("BACKBONE_LAUNCH_ID", "").strip()
+    if not launch_id:
+        return
+    try:
+        offers = list(_steer_dir(state_dir, agent, launch_id).glob(f"{STEER_PREFIX}*.md"))
+    except OSError:
+        return
+    for offer in offers:
+        with suppress(OSError):
+            os.rename(offer, offer.with_suffix(".missed"))
+
+
+SteerOffer = tuple[str, str, int, str, float]
+"""``(agent, launch_id, delivery_id, state, age_seconds)`` of one steer file."""
+
+
+def steer_offers(state_dir: Path, agent: str | None = None) -> list[SteerOffer]:
+    """Backbone side: every steer offer on disk as
+    ``(agent, launch_id, delivery_id, state, age_seconds)``; ``state`` is
+    ``offered`` (``.md``), ``taken`` (``.taken``) or ``missed`` (``.missed``,
+    the turn ended first)."""
+    root = state_dir / CONTEXT_DIR
+    found: list[SteerOffer] = []
+    now = time.time()
+    try:
+        agents = [root / agent] if agent else [p for p in root.iterdir() if p.is_dir()]
+    except OSError:
+        return found
+    for agent_dir in agents:
+        try:
+            launches = [p for p in agent_dir.iterdir() if p.is_dir()]
+        except OSError:
+            continue
+        for launch_dir in launches:
+            try:
+                files = [
+                    path
+                    for suffix in ("md", "taken", "missed")
+                    for path in launch_dir.glob(f"{STEER_PREFIX}*.{suffix}")
+                ]
+            except OSError:
+                continue
+            for path in files:
+                digits = path.stem[len(STEER_PREFIX) :]
+                if not digits.isdigit():
+                    continue
+                try:
+                    age = now - path.stat().st_mtime
+                except OSError:
+                    continue
+                state = {".taken": "taken", ".missed": "missed"}.get(path.suffix, "offered")
+                found.append((agent_dir.name, launch_dir.name, int(digits), state, age))
+    return found
+
+
+def expire_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) -> bool:
+    """Backbone side: claim an offer nobody took, atomically against the
+    hook's own rename. False when the hook took it first."""
+    offer = _steer_dir(state_dir, agent, launch_id) / f"{steer_key(delivery_id)}.md"
+    try:
+        os.rename(offer, offer.with_suffix(".missed"))
+    except OSError:
+        return False
+    return True
+
+
+def clear_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) -> None:
+    directory = _steer_dir(state_dir, agent, launch_id)
+    for suffix in ("md", "taken", "missed"):
+        (directory / f"{steer_key(delivery_id)}.{suffix}").unlink(missing_ok=True)
 
 
 def hook_context_output(event: str, texts: list[str]) -> str:
@@ -657,13 +773,18 @@ def read_current(state_dir: Path, agent: str) -> dict | None:
 
 
 def run_hook(
-    derive: Derive, argv: list[str] | None = None, *, context_events: frozenset[str] = frozenset()
+    derive: Derive,
+    argv: list[str] | None = None,
+    *,
+    context_events: frozenset[str] = frozenset(),
+    turn_end_events: frozenset[str] = frozenset(),
 ) -> int:
     """Read the CLI's JSON payload from stdin, derive the state, write it.
 
     On an event in ``context_events`` (the CLI's hook events whose JSON output
     may add context to the model) the hook also hands over whatever the
     backbone offered under ``<state_dir>/context/<agent>/`` — see ``CONTEXT_DIR``.
+    On an event in ``turn_end_events`` it retires this session's open steers.
 
     Usage (as configured by the installer):
         <script> --state-dir /path/to/state [--agent NAME]
@@ -705,6 +826,8 @@ def run_hook(
             texts = take_context(state_dir, agent)
             if texts:
                 print(hook_context_output(event, texts))
+        if event in turn_end_events:
+            retire_steers(state_dir, agent)
     except Exception:  # a hook must never make the CLI fail
         # An unexpected payload shape or an unwritable state dir: the
         # backbone falls back to the terminal; the agent is not disturbed.

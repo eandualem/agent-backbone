@@ -35,6 +35,12 @@ from agent_backbone.services.routing._intelligence import get_session_intelligen
 from agent_backbone.services.routing._outbox import retry_outbox
 from agent_backbone.services.routing._priority import compute_priority_score
 from agent_backbone.services.routing._resolution import validate_issue_targets
+from agent_backbone.services.routing._steer import (
+    STEER_TTL_SECONDS,
+    SteerReport,
+    settle_steers,
+    steer_agent,
+)
 from agent_backbone.services.routing._subscriptions import dispatch_source_events
 from agent_backbone.services.routing._targets import (
     list_open_queue_for_target,
@@ -44,8 +50,10 @@ from agent_backbone.services.routing._targets import (
 from agent_backbone.services.routing._validity import current_notification_issue
 
 __all__ = [
+    "STEER_TTL_SECONDS",
     "DeliveryReport",
     "IssueClosedHook",
+    "SteerReport",
     "checkpoint_inbox",
     "compute_priority_score",
     "create_and_notify",
@@ -67,7 +75,9 @@ __all__ = [
     "route_issue",
     "routing_in_flight",
     "safe_deliver",
+    "settle_steers",
     "stamp_queued_age",
+    "steer_agent",
     "sync_dependencies",
     "validate_issue_targets",
 ]

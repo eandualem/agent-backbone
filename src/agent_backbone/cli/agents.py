@@ -806,6 +806,11 @@ def cmd_agent(args: argparse.Namespace) -> int:
 async def _tell(args: argparse.Namespace) -> int:
     boot = await _common.read_client_config()
     text = " ".join(args.message)
+    if getattr(args, "steer", False):
+        if args.priority:
+            print("--steer and --priority are different things; use one")
+            return 1
+        return await _steer(boot, args.agent, text, args.sender)
     payload = {
         "target_session": args.agent,
         "from_entity": args.sender,
@@ -834,6 +839,25 @@ async def _tell(args: argparse.Namespace) -> int:
     if data.get("operation_id"):
         print(f"trace: backbone diagnostics trace {data['operation_id']}")
     return 2 if data.get("queued") else 1
+
+
+async def _steer(boot, agent: str, text: str, sender: str) -> int:
+    payload = {"target_session": agent, "from_entity": sender, "message": text}
+    result = await _common.api(boot, "POST", "/api/steer", json_body=payload, timeout=30.0)
+    if result is None:
+        print("backbone API unreachable; is `backbone up` running?")
+        return 1
+    status, data = result
+    if status != 200 or not isinstance(data, dict):
+        print(f"error {status}: {data.get('detail') if isinstance(data, dict) else data}")
+        return 1
+    print(json.dumps(data))
+    if data.get("detail"):
+        print(data["detail"])
+    if data.get("ok"):
+        print(f"status: backbone agent inspect {agent} (steer, delivery {data['delivery_id']})")
+        return 0
+    return 1
 
 
 def cmd_tell(args: argparse.Namespace) -> int:

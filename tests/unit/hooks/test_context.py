@@ -69,3 +69,52 @@ def test_clear_agent_context_drops_every_offer_left_for_a_previous_session(tmp_p
     assert not (tmp_path / "context" / "desk").exists()
     assert bb.take_context(tmp_path, "desk") == []
     bb.clear_agent_context(tmp_path, "nobody")  # nothing to clear is not an error
+
+
+def test_steer_offers_are_scoped_to_the_session_that_they_were_written_for(tmp_path, monkeypatch):
+    key = bb.steer_key(12)
+    assert key == "steer-00000012"
+    assert bb.offer_steer(tmp_path, "desk", "launch-a", key, "guidance a")
+    bb.offer_context(tmp_path, "desk", "7", "batch")
+    # Another session of the same agent never sees it.
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-b")
+    assert bb.take_context(tmp_path, "desk") == ["batch"]
+    bb.clear_context(tmp_path, "desk", "7")
+    # The session it was written for takes it after the batches, once.
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-a")
+    bb.offer_context(tmp_path, "desk", "8", "batch 2")
+    assert bb.take_context(tmp_path, "desk") == ["batch 2", "guidance a"]
+    assert bb.take_context(tmp_path, "desk") == []
+    assert not bb.offer_steer(tmp_path, "desk", "launch-a", key, "again")  # taken already
+    offers = bb.steer_offers(tmp_path)
+    assert [(a, launch, i, state) for a, launch, i, state, _ in offers] == [
+        ("desk", "launch-a", 12, "taken")
+    ]
+    bb.clear_steer(tmp_path, "desk", "launch-a", 12)
+    assert bb.steer_offers(tmp_path, "desk") == []
+
+
+def test_hooks_hand_launch_scoped_steers_over_on_post_tool_use(tmp_path, monkeypatch):
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    for hook in (claude_hook, codex_hook):
+        bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:leo] go")
+        bb.offer_steer(tmp_path, "desk", "launch-y", bb.steer_key(4), "not for this session")
+        out = _run(hook, tmp_path, {"hook_event_name": "PostToolUse", "session_id": "s"})
+        data = json.loads(out)
+        assert data["hookSpecificOutput"]["additionalContext"] == "[via:backbone from:leo] go"
+        assert [i for _, _, i, state, _ in bb.steer_offers(tmp_path) if state == "taken"] == [3]
+        bb.clear_steer(tmp_path, "desk", "launch-x", 3)
+        bb.clear_steer(tmp_path, "desk", "launch-y", 4)
+
+
+def test_a_steer_left_when_the_turn_ends_never_reaches_the_next_task(tmp_path, monkeypatch):
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    for hook, end in ((claude_hook, "Stop"), (codex_hook, "Stop"), (codex_hook, "Interrupt")):
+        bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "for the old task")
+        assert _run(hook, tmp_path, {"hook_event_name": end, "session_id": "s"}) == ""
+        assert _run(hook, tmp_path, {"hook_event_name": "PostToolUse", "session_id": "s"}) == ""
+        assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(5, "missed")]
+        bb.clear_steer(tmp_path, "desk", "launch-x", 5)
+        assert bb.steer_offers(tmp_path) == []
