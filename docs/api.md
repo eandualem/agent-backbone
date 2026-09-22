@@ -269,6 +269,28 @@ same filter again only changes its priority. Both return the agent's
 configuration view with `subscriptions: [{id, source, filter, priority}]`;
 400 for an unknown source or priority, 404 for an unknown agent or id.
 
+### `GET /api/sessions/{name}/output?lines=40&since=CURSOR&screen=false`
+
+Recent activity of a registered agent, reads only. `source` is `transcript`
+when the runtime keeps a record the backbone can tail (Claude Code, Codex;
+located from the session id the hook recorded, only when that record's
+runtime is the live one) and `screen` otherwise (`--screen`, no transcript,
+an unsupported runtime): the visible terminal with ANSI stripped, `cursor`
+null. A transcript tail is bounded: at most `lines` entries (max 500) read
+backwards from the end of the file within a 4 MiB look-back — never a whole
+session. `cursor` is the byte offset after the last record returned; pass it
+as `since` to read what followed (at most `lines` entries, 256 KiB forward).
+`evidence` says where the lines came from or why the screen was used.
+
+```json
+{"session": "app", "source": "transcript", "runtime": "claude",
+ "lines": ["10:00:00 user: Fix the bug …", "10:00:05 tool: Bash pytest -q", "10:00:09 result: 3 passed"],
+ "cursor": 5506468, "evidence": ["transcript /Users/me/.claude/projects/-Users-me-code-app/<session>.jsonl"]}
+```
+
+Transcript entries include prompts, replies and tool activity that never
+appeared on screen; thinking and bookkeeping records are skipped.
+
 ### `GET /api/runtimes`, `GET /api/sessions`, `GET /api/sessions/{name}/terminal?lines=50`
 
 Supported runtimes with availability; raw tmux session names; a one-shot

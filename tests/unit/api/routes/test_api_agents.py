@@ -389,6 +389,34 @@ class TestStopAgent:
         assert resp.status_code == 400
 
 
+class TestAgentOutput:
+    async def test_transcript_tail_with_cursor(self, api_client, auth_headers, tmux_svc):
+        from agent_backbone.services.agents.transcript import OutputTail
+
+        tail = OutputTail("ike", "transcript", "claude", ["10:00:00 assistant: hi"], 123, ["t"])
+        with patch(f"{_ROUTE}.output_tail", new_callable=AsyncMock, return_value=tail) as read:
+            resp = await api_client.get(
+                "/api/sessions/ike/output?lines=3&since=7", headers=auth_headers
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {
+            "session": "ike",
+            "source": "transcript",
+            "runtime": "claude",
+            "lines": ["10:00:00 assistant: hi"],
+            "cursor": 123,
+            "evidence": ["t"],
+        }
+        assert read.await_args.kwargs == {"lines": 3, "since": 7, "screen": False}
+
+    async def test_bounds_and_registration(self, api_client, auth_headers):
+        assert (
+            await api_client.get("/api/sessions/ike/output?lines=501", headers=auth_headers)
+        ).status_code == 422
+        resp = await api_client.get("/api/sessions/stray/output", headers=auth_headers)
+        assert resp.status_code == 404
+
+
 class TestRestartAgent:
     async def test_accepts_and_persists_without_stopping_anything(
         self, api_client, auth_headers, api_app, tmux_svc, launch

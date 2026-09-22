@@ -123,6 +123,59 @@ def _transition_line(row: dict) -> str:
     return line
 
 
+async def _agent_output(args: argparse.Namespace) -> int:
+    name = args.name or os.environ.get("BACKBONE_AGENT", "").strip()
+    if not name:
+        print("usage: backbone agent output [NAME] …")
+        print("(without NAME, $BACKBONE_AGENT must be set — it is inside agent sessions)")
+        return 1
+    boot = await _common.read_client_config()
+    if await _common.api_up(boot):
+        query = f"lines={args.lines}&screen={'true' if args.screen else 'false'}"
+        if args.since is not None:
+            query += f"&since={args.since}"
+        result = await _common.api(boot, "GET", f"/api/sessions/{name}/output?{query}")
+        if result is None:
+            print("backbone API unreachable")
+            return 1
+        status, data = result
+        if status != 200:
+            print(f"error {status}: {data.get('detail') if isinstance(data, dict) else data}")
+            return 1
+    else:
+        from agent_backbone.services.agents.transcript import output_tail
+
+        config = await _common.read_config()
+        if config.agents.get(name) is None:
+            print(f"unknown agent '{name}'")
+            return 1
+        tail = await output_tail(
+            config, name, lines=args.lines, since=args.since, screen=args.screen
+        )
+        data = {
+            "session": tail.session,
+            "source": tail.source,
+            "runtime": tail.runtime,
+            "lines": tail.lines,
+            "cursor": tail.cursor,
+            "evidence": tail.evidence,
+        }
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0
+    source = "transcript" if data.get("source") == "transcript" else "screen"
+    note(f"{name}: {source} ({data.get('runtime') or 'unknown runtime'})")
+    for line in data.get("lines") or []:
+        print(line)
+    if not data.get("lines"):
+        print("(nothing yet)")
+    if data.get("cursor") is not None:
+        note(f"continue: backbone agent output {name} --since {data['cursor']}")
+    for line in data.get("evidence") or []:
+        note(f"  - {line}")
+    return 0
+
+
 async def _agent_restart(args: argparse.Namespace) -> int:
     name = args.name or os.environ.get("BACKBONE_AGENT", "").strip()
     if not name:
@@ -408,6 +461,9 @@ async def _agent(args: argparse.Namespace) -> int:
 
     if sub == "restart":
         return await _agent_restart(args)
+
+    if sub == "output":
+        return await _agent_output(args)
 
     if sub == "stop":
         if not api_up:

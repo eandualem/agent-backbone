@@ -958,3 +958,46 @@ class TestAgentRestart:
         )
         failed = {"id": 5, "status": "failed", "start": False, "result": {"reason": "boom"}}
         assert _transition_line(failed) == "#5 failed: stop — boom"
+
+
+class TestAgentOutput:
+    def test_prints_the_tail_and_the_cursor_hint(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        data = {
+            "session": "orch",
+            "source": "transcript",
+            "runtime": "claude",
+            "lines": ["10:00:00 user: hi", "10:00:01 assistant: hello"],
+            "cursor": 42,
+            "evidence": ["transcript /x.jsonl"],
+        }
+        with (
+            patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=True),
+            patch(
+                "agent_backbone.cli._common.api", new_callable=AsyncMock, return_value=(200, data)
+            ) as api,
+        ):
+            assert _run(["agent", "output", "--lines", "2", "--since", "7"]) == 0
+        assert api.await_args.args[1:] == (
+            "GET",
+            "/api/sessions/orch/output?lines=2&screen=false&since=7",
+        )
+        out = capsys.readouterr().out
+        assert "orch: transcript (claude)" in out
+        assert "10:00:01 assistant: hello" in out
+        assert "--since 42" in out
+
+    def test_screen_flag_and_direct_mode(self, tmp_path, capsys):
+        from agent_backbone.services.agents.transcript import OutputTail
+
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        tail = OutputTail("app", "screen", "shell", ["❯"], None, ["screen requested"])
+        with patch(
+            "agent_backbone.services.agents.transcript.output_tail",
+            new_callable=AsyncMock,
+            return_value=tail,
+        ) as read:
+            assert _run(["agent", "output", "nobody", "--screen"]) == 1
+            assert "unknown agent" in capsys.readouterr().out
+            read.assert_not_awaited()

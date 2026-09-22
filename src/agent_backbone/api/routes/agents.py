@@ -20,6 +20,7 @@ from agent_backbone.api.models import (
     AgentApproveResponse,
     AgentDenyResponse,
     AgentInspectResponse,
+    AgentOutputResponse,
     AgentRestartRequest,
     AgentStartRequest,
     AgentStartResponse,
@@ -58,6 +59,7 @@ from agent_backbone.services.agents.operations import (
 from agent_backbone.services.agents.operations import (
     forget_agent as forget_agent_op,
 )
+from agent_backbone.services.agents.transcript import MAX_ENTRIES, output_tail
 from agent_backbone.services.agents.transitions import (
     TransitionPending,
     TransitionRequest,
@@ -529,6 +531,29 @@ async def get_terminal_output(
     if not output and not await session_exists(name):
         raise HTTPException(status_code=404, detail=f"Session '{name}' not found")
     return {"session": name, "lines": lines, "content": output}
+
+
+@router.get("/sessions/{name}/output", response_model=AgentOutputResponse)
+async def get_agent_output(
+    name: str,
+    lines: int = Query(default=40, ge=1, le=MAX_ENTRIES),
+    since: int | None = Query(default=None, ge=0),
+    screen: bool = Query(default=False),
+    config: BackboneConfig = Depends(get_config),
+):
+    """Recent activity of a registered agent: a bounded tail of its runtime's
+    own transcript (Claude Code, Codex), else the visible screen. ``since``
+    continues from a previous ``cursor``; ``screen`` forces a pane read."""
+    registered_agent_or_404(config, name)
+    tail = await output_tail(config, name, lines=lines, since=since, screen=screen)
+    return AgentOutputResponse(
+        session=tail.session,
+        source=tail.source,
+        runtime=tail.runtime,
+        lines=tail.lines,
+        cursor=tail.cursor,
+        evidence=tail.evidence,
+    )
 
 
 @router.post("/agents/{session}/state")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -14,7 +15,14 @@ from pathlib import Path
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import count
-from agent_backbone.services.runtimes.base import Runtime, RuntimeDiagnostic
+from agent_backbone.services.runtimes.base import (
+    Runtime,
+    RuntimeDiagnostic,
+    TranscriptEntry,
+    transcript_argument,
+    transcript_clip,
+    transcript_clock,
+)
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
@@ -332,6 +340,56 @@ class Codex(Runtime):
         return args
 
     usage_supported = True
+    transcript_supported = True
+
+    def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
+        """``response_item`` records of a Codex rollout: user and assistant
+        messages, tool calls and the first line of each output. Reasoning,
+        token counts and the other event records are skipped."""
+        entries: list[TranscriptEntry] = []
+        for record in records:
+            if record.get("type") != "response_item":
+                continue
+            payload = record.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            clock = transcript_clock(record.get("timestamp"))
+            kind = payload.get("type")
+            if kind == "message":
+                role = payload.get("role")
+                if role not in ("user", "assistant"):
+                    continue
+                content = payload.get("content")
+                if isinstance(content, list):
+                    content = "\n".join(
+                        part.get("text", "")
+                        for part in content
+                        if isinstance(part, dict) and isinstance(part.get("text"), str)
+                    )
+                if text := transcript_clip(content):
+                    entries.append(TranscriptEntry(clock, role, text))
+            elif kind in ("custom_tool_call", "function_call", "local_shell_call"):
+                name = payload.get("name") or kind.removesuffix("_call")
+                arguments = payload.get("arguments")
+                if arguments is None:
+                    arguments = payload.get("input") or payload.get("action")
+                summary = transcript_argument(arguments)
+                entries.append(TranscriptEntry(clock, "tool", f"{name} {summary}".rstrip()))
+            elif kind in ("custom_tool_call_output", "function_call_output"):
+                output = payload.get("output")
+                if isinstance(output, str) and output.startswith("["):
+                    with contextlib.suppress(ValueError):
+                        output = json.loads(output)
+                if isinstance(output, list):
+                    output = "\n".join(
+                        part.get("text", "")
+                        for part in output
+                        if isinstance(part, dict) and isinstance(part.get("text"), str)
+                    )
+                entries.append(
+                    TranscriptEntry(clock, "result", transcript_clip(output) or "(no output)")
+                )
+        return entries
 
     def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):

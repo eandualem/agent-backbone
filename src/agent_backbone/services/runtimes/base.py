@@ -144,6 +144,64 @@ class SubmissionUnconfirmed(RuntimeError):
     """Text may already belong to the runtime; never blindly paste it again."""
 
 
+@dataclass(frozen=True)
+class TranscriptEntry:
+    """One readable line of a runtime's own conversation record."""
+
+    time: str
+    """``HH:MM:SS`` (UTC) when the record carries a timestamp, else empty."""
+    role: str
+    """``user`` | ``assistant`` | ``tool`` | ``result``."""
+    text: str
+
+
+TRANSCRIPT_LINE_LIMIT = 200
+"""Characters kept per transcript entry: enough to read, never a dump."""
+
+
+def transcript_clock(timestamp: object) -> str:
+    """``HH:MM:SS`` out of an ISO 8601 timestamp, or empty."""
+    if not isinstance(timestamp, str) or "T" not in timestamp:
+        return ""
+    clock = timestamp.split("T", 1)[1]
+    return clock[:8] if len(clock) >= 8 and clock[2] == ":" else ""
+
+
+def transcript_clip(text: object, limit: int = TRANSCRIPT_LINE_LIMIT) -> str:
+    """The first non-empty line of ``text``, clipped, with an ellipsis when shortened."""
+    if not isinstance(text, str):
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    first = lines[0]
+    more = len(lines) > 1
+    if len(first) > limit:
+        return first[: limit - 1] + "…"
+    return first + (" …" if more else "")
+
+
+def transcript_argument(arguments: object) -> str:
+    """A one-line summary of a tool call's arguments: the most telling field."""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            return transcript_clip(arguments)
+    if isinstance(arguments, dict):
+        for key in ("description", "command", "cmd", "file_path", "path", "pattern", "query"):
+            value = arguments.get(key)
+            if isinstance(value, str) and value.strip():
+                return transcript_clip(value)
+            if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
+                return transcript_clip(" ".join(value))
+        for value in arguments.values():
+            if isinstance(value, str) and value.strip():
+                return transcript_clip(value)
+        return transcript_clip(json.dumps(arguments, sort_keys=True))
+    return transcript_clip(str(arguments)) if arguments else ""
+
+
 class Runtime:
     """Behavioural contract for one interactive CLI. Subclasses set the data."""
 
@@ -721,6 +779,15 @@ class Runtime:
 
     def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
         """Locate only the conversation explicitly associated with this agent."""
+        return []
+
+    transcript_supported = False
+    """The runtime keeps its own conversation record that ``usage_paths``
+    locates and ``transcript_entries`` can read (``backbone agent output``)."""
+
+    def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
+        """Readable entries out of parsed JSONL records, oldest first.
+        Thinking and bookkeeping records are skipped."""
         return []
 
     def usage_children(

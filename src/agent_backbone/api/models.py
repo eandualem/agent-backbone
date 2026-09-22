@@ -109,6 +109,19 @@ class AgentTransitionView(BaseModel):
         return cls(session=row["agent_name"], **{k: v for k, v in row.items() if k != "agent_name"})
 
 
+class AgentOutputResponse(BaseModel):
+    """Recent activity of an agent (``backbone agent output``)."""
+
+    session: str
+    source: str
+    """``transcript`` (the runtime's own record) or ``screen`` (``capture-pane``)."""
+    runtime: str = ""
+    lines: list[str] = Field(default_factory=list)
+    cursor: int | None = None
+    """Byte offset to pass as ``since`` to read what follows; None for the screen."""
+    evidence: list[str] = Field(default_factory=list)
+
+
 class AgentUpdateRequest(BaseModel):
     """Fields that ``PATCH /api/agents/{name}`` may change."""
 
