@@ -645,8 +645,11 @@ def take_context(state_dir: Path, agent: str, launch_id: str | None = None) -> l
         for offer in offers:
             taken = offer.with_suffix(".taken")
             try:
+                # Read before renaming: once it is ``.taken`` the backbone may
+                # settle and remove it.
+                text = offer.read_text(encoding="utf-8")
                 os.rename(offer, taken)
-                texts.append(taken.read_text(encoding="utf-8"))
+                texts.append(text)
             except OSError:
                 continue  # the backbone claimed it first, or it is already gone
     return texts
@@ -679,6 +682,22 @@ def offer_steer(state_dir: Path, agent: str, launch_id: str, key: str, text: str
     return True
 
 
+def retire_steers(state_dir: Path, agent: str, launch_id: str | None = None) -> None:
+    """Hook side, when the turn ends: steers still offered to this session
+    are for the task that just ended, never the next one; mark them
+    ``.missed`` for the backbone to record as ``not_taken``."""
+    launch_id = launch_id or os.environ.get("BACKBONE_LAUNCH_ID", "").strip()
+    if not launch_id:
+        return
+    try:
+        offers = list(_steer_dir(state_dir, agent, launch_id).glob(f"{STEER_PREFIX}*.md"))
+    except OSError:
+        return
+    for offer in offers:
+        with suppress(OSError):
+            os.rename(offer, offer.with_suffix(".missed"))
+
+
 SteerOffer = tuple[str, str, int, str, float]
 """``(agent, launch_id, delivery_id, state, age_seconds)`` of one steer file."""
 
@@ -686,7 +705,8 @@ SteerOffer = tuple[str, str, int, str, float]
 def steer_offers(state_dir: Path, agent: str | None = None) -> list[SteerOffer]:
     """Backbone side: every steer offer on disk as
     ``(agent, launch_id, delivery_id, state, age_seconds)``; ``state`` is
-    ``offered`` (``.md``) or ``taken`` (``.taken``)."""
+    ``offered`` (``.md``), ``taken`` (``.taken``) or ``missed`` (``.missed``,
+    the turn ended first)."""
     root = state_dir / CONTEXT_DIR
     found: list[SteerOffer] = []
     now = time.time()
@@ -701,9 +721,11 @@ def steer_offers(state_dir: Path, agent: str | None = None) -> list[SteerOffer]:
             continue
         for launch_dir in launches:
             try:
-                files = list(launch_dir.glob(f"{STEER_PREFIX}*.md")) + list(
-                    launch_dir.glob(f"{STEER_PREFIX}*.taken")
-                )
+                files = [
+                    path
+                    for suffix in ("md", "taken", "missed")
+                    for path in launch_dir.glob(f"{STEER_PREFIX}*.{suffix}")
+                ]
             except OSError:
                 continue
             for path in files:
@@ -714,14 +736,14 @@ def steer_offers(state_dir: Path, agent: str | None = None) -> list[SteerOffer]:
                     age = now - path.stat().st_mtime
                 except OSError:
                     continue
-                state = "taken" if path.suffix == ".taken" else "offered"
+                state = {".taken": "taken", ".missed": "missed"}.get(path.suffix, "offered")
                 found.append((agent_dir.name, launch_dir.name, int(digits), state, age))
     return found
 
 
 def clear_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) -> None:
     directory = _steer_dir(state_dir, agent, launch_id)
-    for suffix in ("md", "taken"):
+    for suffix in ("md", "taken", "missed"):
         (directory / f"{steer_key(delivery_id)}.{suffix}").unlink(missing_ok=True)
 
 
@@ -740,13 +762,18 @@ def read_current(state_dir: Path, agent: str) -> dict | None:
 
 
 def run_hook(
-    derive: Derive, argv: list[str] | None = None, *, context_events: frozenset[str] = frozenset()
+    derive: Derive,
+    argv: list[str] | None = None,
+    *,
+    context_events: frozenset[str] = frozenset(),
+    turn_end_events: frozenset[str] = frozenset(),
 ) -> int:
     """Read the CLI's JSON payload from stdin, derive the state, write it.
 
     On an event in ``context_events`` (the CLI's hook events whose JSON output
     may add context to the model) the hook also hands over whatever the
     backbone offered under ``<state_dir>/context/<agent>/`` — see ``CONTEXT_DIR``.
+    On an event in ``turn_end_events`` it retires this session's open steers.
 
     Usage (as configured by the installer):
         <script> --state-dir /path/to/state [--agent NAME]
@@ -788,6 +815,8 @@ def run_hook(
             texts = take_context(state_dir, agent)
             if texts:
                 print(hook_context_output(event, texts))
+        if event in turn_end_events:
+            retire_steers(state_dir, agent)
     except Exception:  # a hook must never make the CLI fail
         # An unexpected payload shape or an unwritable state dir: the
         # backbone falls back to the terminal; the agent is not disturbed.

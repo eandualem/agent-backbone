@@ -321,8 +321,8 @@ envelope `[via:backbone from:<from_entity>] (steer for your current task) …`.
 `offline` or `no_launch_id`; nothing is queued — send an ordinary message) or
 `failed` (the offer could not be written). Status lives in the delivery log
 (`kind` `steer`, `GET /api/deliveries?kind=steer&session=app`, `agent inspect`):
-`offered` → `handed_off` once the hook took it, `not_taken` when no further
-tool call took it within 300 s (the offer is removed), or `cancelled` when the
+`offered` → `handed_off` once the hook took it, `not_taken` when the turn
+ended first or no further tool call took it within 300 s (the offer is removed), or `cancelled` when the
 session was replaced first. At-most-once handoff; a handoff is not
 incorporation. `404` for an unregistered agent; `422` for a sender that does
 not fit the envelope.

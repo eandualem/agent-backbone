@@ -284,7 +284,7 @@ sequenceDiagram
   both do so as hook context, never as a paste. A steer is written for the
   live session only (`<state_dir>/context/<agent>/<launch_id>/`), is never
   queued for a later prompt, and is recorded as `handed_off`, `not_taken`
-  (300 s without another tool call) or `cancelled` (the session was replaced).
+  (the turn ended, or 300 s without another tool call) or `cancelled` (the session was replaced).
 - **Comments**, including those on the current issue, wait while the agent is
   starting, busy, blocked, or waiting for a human. They are queued and delivered
   when the agent is ready; priority does not bypass these conditions.

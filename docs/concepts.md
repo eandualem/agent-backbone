@@ -203,7 +203,7 @@ Background loops inside the backbone process:
 |---|---|---|
 | `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, read every agent's state once and mirror it to the database, stall and dead-session reports, plan-waiting alerts, queue drain, next pending issue to idle agents, Socket.IO snapshot |
 | `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
-| `steer-settle` | 15 s | record what became of each steer offer: `handed_off`, `not_taken` after 300 s, `cancelled` when the session was replaced |
+| `steer-settle` | 15 s | record what became of each steer offer: `handed_off`, `not_taken` when the turn ended first or after 300 s, `cancelled` when the session was replaced |
 | `agent-transitions` | 5 s | explicit one-time stop/restart requests (`agent restart`): stop the session, start the replacement when its wait is over, hand it the continuation message |
 | `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
 | `sources-poll` | `sources.poll_interval_seconds` (60 s) | only with a configured [source](sources.md): search each source for new items matching any subscription filter and deliver them |

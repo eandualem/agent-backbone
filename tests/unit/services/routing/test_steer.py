@@ -9,7 +9,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import text
 
-from agent_backbone.hooks.backbone_state import steer_key, steer_offers, take_context
+from agent_backbone.hooks.backbone_state import (
+    retire_steers,
+    steer_key,
+    steer_offers,
+    take_context,
+)
 from agent_backbone.services.agents import AgentState
 from agent_backbone.services.routing import settle_steers, steer_agent
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
@@ -104,6 +109,14 @@ class TestSettle:
         assert rows[0]["outcome"] == "not_taken"
         assert not path.exists()
         assert take_context(config.state_dir, "ike", launch_id="L1") == []
+
+    async def test_an_offer_missed_by_the_turn_is_not_taken(self, config, db, working):
+        await steer_agent("ike", "x", config, db=db, sender="leo")
+        retire_steers(config.state_dir, "ike", launch_id="L1")
+        assert await settle_steers(config, db) == {"not_taken": 1}
+        rows = await db.deliveries.query(session_name="ike", kind="steer")
+        assert rows[0]["outcome"] == "not_taken"
+        assert steer_offers(config.state_dir) == []
 
     async def test_an_offer_removed_by_a_restart_is_cancelled_after_a_grace(
         self, config, db, working

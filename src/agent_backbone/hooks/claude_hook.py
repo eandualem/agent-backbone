@@ -105,7 +105,9 @@ CONTEXT_EVENTS = frozenset({"PostToolUse"})
 
 
 def main(argv: list[str] | None = None) -> int:
-    return bb.run_hook(derive, argv, context_events=CONTEXT_EVENTS)
+    return bb.run_hook(
+        derive, argv, context_events=CONTEXT_EVENTS, turn_end_events=frozenset({"Stop"})
+    )
 
 
 if __name__ == "__main__":

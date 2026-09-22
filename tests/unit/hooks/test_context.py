@@ -106,3 +106,15 @@ def test_hooks_hand_launch_scoped_steers_over_on_post_tool_use(tmp_path, monkeyp
         assert [i for _, _, i, state, _ in bb.steer_offers(tmp_path) if state == "taken"] == [3]
         bb.clear_steer(tmp_path, "desk", "launch-x", 3)
         bb.clear_steer(tmp_path, "desk", "launch-y", 4)
+
+
+def test_a_steer_left_when_the_turn_ends_never_reaches_the_next_task(tmp_path, monkeypatch):
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    for hook, end in ((claude_hook, "Stop"), (codex_hook, "Stop"), (codex_hook, "Interrupt")):
+        bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "for the old task")
+        assert _run(hook, tmp_path, {"hook_event_name": end, "session_id": "s"}) == ""
+        assert _run(hook, tmp_path, {"hook_event_name": "PostToolUse", "session_id": "s"}) == ""
+        assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(5, "missed")]
+        bb.clear_steer(tmp_path, "desk", "launch-x", 5)
+        assert bb.steer_offers(tmp_path) == []

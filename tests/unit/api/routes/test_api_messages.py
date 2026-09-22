@@ -257,7 +257,8 @@ class TestSteer:
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["ok"] is True and data["outcome"] == "offered" and data["delivery_id"] == 9
-        assert data["launch_id"] == "L1" and "not_taken after 300s" in data["detail"]
+        assert data["launch_id"] == "L1"
+        assert "not_taken when the turn ends or after 300s" in data["detail"]
         assert steer.await_args.args[:2] == ("ike", "use the lock")
         assert steer.await_args.kwargs["sender"] == "leo"
 

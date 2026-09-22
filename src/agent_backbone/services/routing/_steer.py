@@ -5,7 +5,8 @@ paste. It is accepted only for a session that is working right now on a
 runtime whose hook can add context (Claude Code, Codex), written under
 ``<state_dir>/context/<agent>/<launch_id>/`` so only that session can take
 it, and settled by ``settle_steers``: ``handed_off`` once the hook took it,
-``not_taken`` when the turn ended without another tool call inside the TTL,
+``not_taken`` when the turn ended first (the hook marks it ``.missed``) or no
+tool call took it inside the TTL,
 ``cancelled`` when the session was replaced. At-most-once handoff; a handoff
 is not incorporation.
 """
@@ -144,7 +145,7 @@ async def settle_steers(config: BackboneConfig, db: BackboneDB) -> dict[str, int
             await db.deliveries.settle(delivery_id, "handed_off", expected="offered")
             await asyncio.to_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
             summary["handed_off"] = summary.get("handed_off", 0) + 1
-        elif age > STEER_TTL_SECONDS:
+        elif state == "missed" or age > STEER_TTL_SECONDS:
             await asyncio.to_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
             await db.deliveries.settle(delivery_id, "not_taken", expected="offered")
             summary["not_taken"] = summary.get("not_taken", 0) + 1
