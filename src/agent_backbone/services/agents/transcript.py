@@ -77,10 +77,16 @@ def locate_transcript(
     if last.runtime and last.runtime != rt.id:
         return None, rt, [f"the recorded session id belongs to {last.runtime}, not {rt.id}"]
     env = dict(spec.env) if spec is not None else {}
-    paths = [p for p in rt.usage_paths(last.session_id, env) if p.is_file()]
-    if not paths:
+    stamped = []
+    for p in rt.usage_paths(last.session_id, env):
+        try:
+            if p.is_file():
+                stamped.append((p.stat().st_mtime, p))
+        except OSError:  # archived or removed while we looked
+            continue
+    if not stamped:
         return None, rt, [f"no transcript file found for session {last.session_id}"]
-    newest = max(paths, key=lambda p: p.stat().st_mtime)
+    newest = max(stamped, key=lambda item: item[0])[1]
     return newest, rt, [f"transcript {newest}"]
 
 
@@ -166,6 +172,8 @@ def _forward_chunk(stream, pos: int, stop: int) -> bytes:
         cut = chunk.rfind(b"\n")
         if cut >= 0:
             return chunk[: cut + 1]
+        if len(chunk) >= MAX_SCAN_BYTES:
+            raise ValueError(f"a record at offset {pos} exceeds the scan bound")
         chunk += stream.read(min(STEP_BYTES, stop - pos - len(chunk)))
     return chunk
 
@@ -182,6 +190,8 @@ def _backward_chunk(stream, pos: int) -> tuple[int, bytes]:
         head, sep, rest = chunk.partition(b"\n")
         if sep and rest:  # the window holds at least one whole record
             return start + len(head) + len(sep), rest
+        if pos - start >= MAX_SCAN_BYTES:
+            raise ValueError(f"a record ending at offset {pos} exceeds the scan bound")
         start = max(0, start - STEP_BYTES)  # only the tail of a long record: widen
 
 
@@ -210,6 +220,8 @@ async def output_page(
                 )
             except OSError as exc:
                 evidence.append(f"transcript unreadable: {type(exc).__name__}")
+            except ValueError as exc:
+                evidence.append(f"transcript unreadable: {exc}")
             else:
                 return OutputPage(
                     name,

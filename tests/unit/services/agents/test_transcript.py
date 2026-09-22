@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -97,6 +97,15 @@ class TestReadMessages:
         assert 0 < len(page) < 20 and more_before is True
         assert evidence and evidence[0].startswith("scan bound reached")
 
+    def test_a_record_past_the_scan_bound_is_refused_not_loaded(self, tmp_path):
+        path = _transcript(tmp_path, 3, texts=["a", "L" * 50_000, "c"])
+        rt = get_runtime("claude")
+        with patch(f"{_MOD}.STEP_BYTES", 4096), patch(f"{_MOD}.MAX_SCAN_BYTES", 20_000):
+            with pytest.raises(ValueError, match="exceeds the scan bound"):
+                read_messages(path, rt, limit=3)
+            with pytest.raises(ValueError, match="exceeds the scan bound"):
+                read_messages(path, rt, limit=3, since=0)
+
     def test_malformed_lines_are_skipped(self, tmp_path):
         path = tmp_path / "s.jsonl"
         path.write_text("not json\n" + _assistant(1, "ok") + '\n{"type": 3}\n')
@@ -135,6 +144,16 @@ class TestOutputPage:
         assert page.more_before is True and page.more_after is False
         assert page.evidence == [f"transcript {path}"]
         live[2].assert_not_awaited()
+
+    async def test_a_candidate_that_vanishes_is_skipped(self, config, tmp_path, live):
+        path = _transcript(tmp_path, 3, name="abc.jsonl")
+        gone = MagicMock(**{"is_file.return_value": True, "stat.side_effect": FileNotFoundError})
+        write_state_file(
+            config.state_dir, "ike", {"state": "idle", "session_id": "abc", "runtime": "claude"}
+        )
+        with patch(_CLAUDE, return_value=[gone, path]):
+            page = await output_page(config, "ike")
+        assert page.source == "transcript" and page.evidence == [f"transcript {path}"]
 
     async def test_screen_when_there_is_no_transcript_and_why(self, config, live):
         page = await output_page(config, "ike", limit=5)
