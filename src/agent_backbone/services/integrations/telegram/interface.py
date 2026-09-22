@@ -329,23 +329,35 @@ class TelegramService(Integration):
         except BaseException:
             try:
                 await self.stop()
-            except Exception:
+            except BaseException:
                 log.exception("Telegram startup cleanup failed")
             raise
         log.info("Telegram bot polling started")
 
     async def stop(self) -> None:
-        if self._app is None:
+        app = self._app
+        if app is None:
             return
+        failure: BaseException | None = None
         try:
-            if self._app.updater.running:
-                await self._app.updater.stop()
-            if self._app.running:
-                await self._app.stop()
-            await self._app.shutdown()
             # Application.shutdown skips cleanup when getMe failed during initialize.
             # Bot.shutdown still closes its initialized requests and is idempotent.
-            await self._app.bot.shutdown()
+            for needed, cleanup in (
+                (app.updater.running, app.updater.stop),
+                (app.running, app.stop),
+                (True, app.shutdown),
+                (True, app.bot.shutdown),
+            ):
+                if needed:
+                    try:
+                        await cleanup()
+                    except BaseException as exc:
+                        # A failed phase must not prevent the remaining resources
+                        # from closing, including when shutdown was cancelled.
+                        if failure is None:
+                            failure = exc
+            if failure is not None:
+                raise failure
         finally:
             self._running = False
             self._app = None

@@ -198,20 +198,74 @@ class TestAdd:
         assert (source / "SKILL.md").is_file()
         assert parse_skill(store / "keep").tags == ("coder",)
 
-    def test_a_failure_after_the_move_restores_both_sides(self, tmp_path):
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            OSError("disk full"),
+            KeyboardInterrupt(),
+            UnicodeEncodeError("ascii", "é", 0, 1, "ascii"),
+        ],
+    )
+    def test_a_failure_after_the_move_restores_both_sides(self, tmp_path, failure):
         store = tmp_path / "store"
         make_skill(store, "keep", tags="coder", body="# old\n")
         source = make_skill(tmp_path / "src", "renamed", body="# new\n")
+        skill_file = source / "SKILL.md"
+        skill_file.write_bytes(skill_file.read_bytes().replace(b"\n", b"\r\n"))
         before_source = (source / "SKILL.md").read_bytes()
         before_target = (store / "keep" / "SKILL.md").read_bytes()
         with (
-            patch("agent_backbone.skills.atomic_write_text", side_effect=OSError("disk full")),
-            pytest.raises(OSError),
+            patch("agent_backbone.skills.atomic_write_text", side_effect=failure),
+            pytest.raises(type(failure)) as error,
         ):
             add_skill(store, source, name="keep", replace=True, tags=("all",))
+        assert error.value is failure
         assert (source / "SKILL.md").read_bytes() == before_source
         assert (store / "keep" / "SKILL.md").read_bytes() == before_target
         assert not list(store.glob(".replaced-*"))
+        assert not list(store.glob(".incoming-*"))
+
+    def test_interrupted_write_preserves_cancellation_when_restoration_fails(self, tmp_path):
+        store = tmp_path / "store"
+        previous = make_skill(store, "keep", body="# previous\n")
+        source = make_skill(tmp_path / "src", "incoming", body="# incoming\n").resolve()
+        before_source = (source / "SKILL.md").read_bytes()
+        before_target = (previous / "SKILL.md").read_bytes()
+        move = skills.shutil.move
+        cancellation = KeyboardInterrupt()
+
+        def fail_restore(src, dst):
+            if Path(dst) == source:
+                raise OSError("source restoration failed")
+            return move(src, dst)
+
+        with (
+            patch("agent_backbone.skills.atomic_write_text", side_effect=cancellation),
+            patch("agent_backbone.skills.shutil.move", side_effect=fail_restore),
+            pytest.raises(KeyboardInterrupt) as error,
+        ):
+            add_skill(store, source, name="keep", replace=True)
+        (staged,) = store.glob(".incoming-*/keep")
+        assert error.value is cancellation
+        assert "source restoration failed" in " ".join(error.value.__notes__)
+        assert str(staged) in " ".join(error.value.__notes__)
+        assert (staged / "SKILL.md").read_bytes() == before_source
+        assert (previous / "SKILL.md").read_bytes() == before_target
+
+    def test_cleanup_failure_keeps_the_installed_skill_and_reports_backup(self, tmp_path, caplog):
+        store = tmp_path / "store"
+        previous = make_skill(store, "keep", body="# previous\n")
+        source = make_skill(tmp_path / "src", "incoming", body="# incoming\n")
+        before_target = (previous / "SKILL.md").read_bytes()
+        with patch("agent_backbone.skills._remove", side_effect=OSError("backup cleanup failed")):
+            installed = add_skill(store, source, name="keep", replace=True)
+        backup = store / ".replaced-keep"
+        assert installed.valid and installed.path == previous
+        assert (previous / "SKILL.md").read_text().endswith("# incoming\n")
+        assert (backup / "SKILL.md").read_bytes() == before_target
+        assert not source.exists() and not list(store.glob(".incoming-*"))
+        assert str(previous) in caplog.text and str(backup) in caplog.text
+        assert "backup cleanup failed" in caplog.text
 
     @pytest.mark.parametrize("failure", ["copy", "source_cleanup"])
     def test_cross_device_failure_retains_complete_source_and_old_store(self, tmp_path, failure):

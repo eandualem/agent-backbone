@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import os
 import re
+import signal
 from pathlib import Path
 
 _GITHUB_REMOTE_RE = re.compile(
@@ -29,19 +30,21 @@ async def run_git(repo_dir: Path | str, *args: str, timeout: float = 30.0) -> tu
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
     except OSError as exc:
         return 1, "", str(exc)
     try:
         async with asyncio.timeout(timeout):
             out, err = await proc.communicate()
-    except TimeoutError:
-        return 1, "", f"git {' '.join(args)} timed out"
-    finally:
-        if proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            await proc.communicate()
+    except BaseException as exc:
+        # Hooks and SSH children can keep pipes open after Git itself exits.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        await proc.communicate()
+        if isinstance(exc, TimeoutError):
+            return 1, "", f"git {' '.join(args)} timed out"
+        raise
     return proc.returncode or 0, out.decode().strip(), err.decode().strip()
 
 

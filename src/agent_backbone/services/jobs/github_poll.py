@@ -134,7 +134,11 @@ class GitHubPoller:
         config = self._config
         if self._backfill_pending is None:
             self._backfill_pending = set(config.agents.repos)
-        self._backfill_pending.intersection_update(config.agents.repos)
+        configured = {repo.casefold() for repo in config.agents.repos}
+        # Keep the startup spelling and replay cursor across case-only edits.
+        self._backfill_pending = {
+            repo for repo in self._backfill_pending if repo.casefold() in configured
+        }
         summary, incomplete = await self._run_repos(config, sorted(self._backfill_pending))
         self._backfill_pending = incomplete
         if incomplete:

@@ -517,7 +517,12 @@ _IDLE = {"ike": _snap(AgentState.IDLE)}
 
 class TestDeliverPendingIssues:
     @pytest.mark.parametrize("stage", ["lookup", "delivery"])
-    async def test_one_agent_failure_does_not_starve_the_next(self, config, db, stage):
+    @pytest.mark.parametrize(
+        "diagnostic_failure", [None, "pending_issues_failed", "pending_issues_recovered"]
+    )
+    async def test_one_agent_failure_does_not_starve_the_next(
+        self, config, db, stage, diagnostic_failure, caplog
+    ):
         fail = True
 
         async def queue(config, name, gh, *, db):
@@ -530,6 +535,13 @@ class TestDeliverPendingIssues:
                 raise RuntimeError("delivery unavailable")
             return DeliveryReport(DeliveryOutcome.DELIVERED)
 
+        record_diagnostic = db.diagnostics.record
+
+        async def record(**kwargs):
+            if kwargs["agent_name"] == "ike" and kwargs["code"] == diagnostic_failure:
+                raise RuntimeError("diagnostics unavailable")
+            return await record_diagnostic(**kwargs)
+
         gh = AsyncMock()
         gh.list_comments.return_value = []
         states = {name: _snap(AgentState.IDLE) for name in ("ike", "ada")}
@@ -537,17 +549,26 @@ class TestDeliverPendingIssues:
             patch(f"{_PEND}.list_open_queue_for_target", side_effect=queue),
             patch(f"{_PEND}.safe_deliver", side_effect=deliver),
         ):
-            assert await deliver_pending_issues(config, states, db, gh) == {
-                "ike": "failed",
-                "ada": "delivered_#7",
-            }
-            fail = False
-            assert (await deliver_pending_issues(config, states, db, gh))["ike"] == "delivered_#7"
+            with patch.object(db.diagnostics, "record", side_effect=record):
+                assert await deliver_pending_issues(config, states, db, gh) == {
+                    "ike": "failed",
+                    "ada": "delivered_#7",
+                }
+                fail = False
+                assert await deliver_pending_issues(config, states, db, gh) == {
+                    "ike": "delivered_#7",
+                    "ada": "delivered_#7",
+                }
+            if diagnostic_failure == "pending_issues_recovered":
+                # A failed diagnostic write is retried on the next observed success.
+                await deliver_pending_issues(config, states, db, gh)
         rows = await db.diagnostics.query(agent_name="ike")
-        assert {row["code"] for row in rows} == {
-            "pending_issues_failed",
-            "pending_issues_recovered",
-        }
+        expected = {"pending_issues_failed", "pending_issues_recovered"}
+        if diagnostic_failure == "pending_issues_failed":
+            expected.remove("pending_issues_failed")
+        assert {row["code"] for row in rows} == expected
+        if diagnostic_failure:
+            assert "Failed to record pending issue diagnostic for ike" in caplog.text
 
     async def test_delivers_first_pending_to_idle_agent(self, config, db):
         gh = AsyncMock()

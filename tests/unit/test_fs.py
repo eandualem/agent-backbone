@@ -31,3 +31,16 @@ def test_existing_mode_is_kept(tmp_path):
     atomic_write_text(target, '{"a": 1}')
     assert target.read_text() == '{"a": 1}'
     assert _mode(target) == 0o644
+
+
+def test_text_is_utf8_even_with_an_ascii_locale_default(tmp_path, monkeypatch):
+    fdopen = os.fdopen
+
+    def ascii_default(fd, *args, **kwargs):
+        kwargs.setdefault("encoding", "ascii")
+        return fdopen(fd, *args, **kwargs)
+
+    monkeypatch.setattr(os, "fdopen", ascii_default)
+    target = tmp_path / "SKILL.md"
+    atomic_write_text(target, "café")
+    assert target.read_bytes() == b"caf\xc3\xa9"

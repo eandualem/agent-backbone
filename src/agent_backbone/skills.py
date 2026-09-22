@@ -29,6 +29,7 @@ Standard library only: this module is a leaf like ``templates``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -38,6 +39,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
+
+log = logging.getLogger(__name__)
 
 TAGS_KEY = "backbone-tags"
 """The ``metadata`` key carrying a skill's tags (space-separated)."""
@@ -321,34 +324,55 @@ def add_skill(
         raise ValueError(f"previous replacement data remains at {displaced}; recover it first")
     staging = Path(tempfile.mkdtemp(prefix=f".incoming-{target_name}-", dir=store))
     staged = staging / target_name
+    incoming = staged
     try:
         # Cross-device move can fail after copying, while removing the source.
         # Keep that complete copy in staging and the existing store entry intact.
         shutil.move(str(source), str(staged))
         if target.exists() or target.is_symlink():
             target.rename(displaced)
-        published = False
         try:
             staged.rename(target)
-            published = True
+            incoming = target
             atomic_write_text(target / "SKILL.md", edited)
-        except OSError:
-            if published:
-                target.rename(staged)
-            if displaced.exists() or displaced.is_symlink():
-                displaced.rename(target)
-            shutil.move(str(staged), str(source))
+        except BaseException as exc:
+            try:
+                if incoming == target:
+                    target.rename(staged)
+                    incoming = staged
+                if displaced.exists() or displaced.is_symlink():
+                    displaced.rename(target)
+                shutil.move(str(staged), str(source))
+                incoming = source
+            except BaseException as rollback_error:
+                exc.add_note(f"Skill rollback failed: {rollback_error}")
             raise
-    except OSError as exc:
-        if staged.exists():
-            raise OSError(f"{exc}; incoming skill data retained at {staged}") from exc
+    except BaseException as exc:
+        recovery = [
+            str(path)
+            for path in (incoming, displaced)
+            if path != source and (path.exists() or path.is_symlink())
+        ]
+        if recovery:
+            detail = f"skill recovery data retained at {', '.join(recovery)}"
+            if isinstance(exc, Exception):
+                raise OSError(f"{exc}; {detail}") from exc
+            exc.add_note(detail)
         raise
     finally:
         # Remove only an empty staging parent, never a recovery copy.
         with suppress(OSError):
             staging.rmdir()
     if displaced.exists() or displaced.is_symlink():
-        _remove(displaced)
+        try:
+            _remove(displaced)
+        except OSError as exc:
+            log.warning(
+                "Installed skill %s; could not finish removing previous entry at %s: %s",
+                target,
+                displaced,
+                exc,
+            )
     return skill
 
 

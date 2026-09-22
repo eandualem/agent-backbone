@@ -331,11 +331,12 @@ class TestAuthorization:
 @pytest.mark.parametrize(
     ("stage", "error", "cleanup_error"),
     [
-        ("polling", TimeoutError, False),
-        ("polling", asyncio.CancelledError, False),
-        ("sync", asyncio.CancelledError, False),
-        ("polling", TimeoutError, True),
-        ("sync", asyncio.CancelledError, True),
+        ("polling", TimeoutError, None),
+        ("polling", asyncio.CancelledError, None),
+        ("sync", asyncio.CancelledError, None),
+        ("polling", TimeoutError, RuntimeError),
+        ("sync", asyncio.CancelledError, RuntimeError),
+        ("polling", TimeoutError, asyncio.CancelledError),
     ],
 )
 async def test_failed_start_closes_partial_application(config, stage, error, cleanup_error, caplog):
@@ -344,9 +345,8 @@ async def test_failed_start_closes_partial_application(config, stage, error, cle
     app = MagicMock(
         initialize=AsyncMock(), start=AsyncMock(), stop=AsyncMock(), shutdown=AsyncMock()
     )
-    app.bot.shutdown = AsyncMock(
-        side_effect=RuntimeError("cleanup failed") if cleanup_error else None
-    )
+    app.stop.side_effect = cleanup_error("cleanup failed") if cleanup_error else None
+    app.bot.shutdown = AsyncMock()
     app.running = True
     app.updater.running = stage == "sync"
     app.updater.stop = AsyncMock()
@@ -363,6 +363,43 @@ async def test_failed_start_closes_partial_application(config, stage, error, cle
     assert app.updater.stop.await_count == (stage == "sync")
     if cleanup_error:
         assert "Telegram startup cleanup failed" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("phase", "error"),
+    [
+        ("updater", RuntimeError),
+        ("application", asyncio.CancelledError),
+        ("shutdown", RuntimeError),
+    ],
+)
+async def test_stop_attempts_remaining_cleanup_then_raises_first_failure(config, phase, error):
+    bot = _bot(config)
+    failure = error("first cleanup failed")
+    calls = []
+
+    async def cleanup(name):
+        calls.append(name)
+        if name == phase:
+            raise failure
+        if name == "bot":
+            raise RuntimeError("later cleanup failed")
+
+    app = MagicMock(running=True)
+    app.updater.running = True
+    app.updater.stop = lambda: cleanup("updater")
+    app.stop = lambda: cleanup("application")
+    app.shutdown = lambda: cleanup("shutdown")
+    app.bot.shutdown = lambda: cleanup("bot")
+    bot._app = app
+    bot._running = True
+    with pytest.raises(error) as raised:
+        await bot.stop()
+    assert raised.value is failure
+    assert calls == ["updater", "application", "shutdown", "bot"]
+    assert not bot.running and bot._app is None
+    await bot.stop()
+    assert len(calls) == 4
 
 
 @pytest.mark.parametrize("error", [NetworkError, asyncio.CancelledError])

@@ -135,19 +135,22 @@ async def deliver_pending_issues(
             result[name] = "deferred"
             log.debug("Deferred delivery to %s (state=%s)", name, snapshot.state.value)
             continue
+        error_type = None
         try:
             result[name] = await deliver_one(name)
         except Exception as exc:
             result[name] = "failed"
             log.exception("Pending issue delivery failed for %s (other agents continue)", name)
+            error_type = type(exc).__name__
+        try:
             await observe_job(
                 db,
                 source=SOURCE,
                 stage="pending_issues",
                 agent_name=name,
-                error_type=type(exc).__name__,
+                error_type=error_type,
             )
-        else:
-            await observe_job(db, source=SOURCE, stage="pending_issues", agent_name=name)
+        except Exception:
+            log.exception("Failed to record pending issue diagnostic for %s", name)
 
     return result
