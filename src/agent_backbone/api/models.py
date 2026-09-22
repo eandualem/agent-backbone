@@ -62,6 +62,53 @@ class AgentStartResponse(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class AgentRestartRequest(BaseModel):
+    """Body for ``POST /api/agents/{name}/restart``: stop the session now and
+    start its replacement after a wait (``backbone agent restart``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    runtime: str | None = None
+    model: str | None = None
+    resume: bool = False
+    """Continue the saved conversation; only valid when the runtime is unchanged."""
+    start: bool = True
+    """False stops the session and starts nothing."""
+    delay_seconds: int | None = None
+    """Seconds between the stop and the start (default 60); excludes ``start_at``."""
+    start_at: str | None = None
+    """ISO 8601 start time (local time unless an offset is given)."""
+    message: str | None = None
+    """Continuation message delivered to the replacement once it is up."""
+    from_entity: str = ""
+
+
+class AgentTransitionView(BaseModel):
+    """One transition: what was asked, where it stands and how it ended."""
+
+    id: int
+    session: str
+    requested_by: str = ""
+    requested_at: str
+    runtime: str | None = None
+    model: str | None = None
+    resume: bool = False
+    start: bool = True
+    delay_seconds: int = 60
+    start_at: str | None = None
+    message: str | None = None
+    status: str
+    """``pending`` | ``completed`` | ``failed``."""
+    stopped_at: str | None = None
+    completed_at: str | None = None
+    result: dict = Field(default_factory=dict)
+    """The start's ``ready``/``evidence``, the message outcome, or the failure ``reason``."""
+
+    @classmethod
+    def from_row(cls, row: dict) -> AgentTransitionView:
+        return cls(session=row["agent_name"], **{k: v for k, v in row.items() if k != "agent_name"})
+
+
 class AgentUpdateRequest(BaseModel):
     """Fields that ``PATCH /api/agents/{name}`` may change."""
 
@@ -138,6 +185,8 @@ class AgentInspectResponse(BaseModel):
     """The runtime's own session id, when its hook reports one."""
     last_message: str | None = None
     """The agent's last reply (clipped), when its hook reports one."""
+    restart: AgentTransitionView | None = None
+    """The open transition (``backbone agent restart``), else the latest one."""
     detail: str | None = None
     """What the runtime said about a ``blocked`` state (when its limit resets)."""
     evidence: list[str] = Field(default_factory=list)

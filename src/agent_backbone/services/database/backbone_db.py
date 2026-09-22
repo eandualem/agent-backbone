@@ -23,6 +23,7 @@ from agent_backbone.services.database._reports_repo import ReportRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
 from agent_backbone.services.database._state_repo import StateRepo
 from agent_backbone.services.database._swarms_repo import SwarmRepo
+from agent_backbone.services.database._transitions_repo import TransitionRepo
 from agent_backbone.services.database._usage_repo import UsageRepo
 from agent_backbone.services.database.base import Base
 from agent_backbone.services.database.engine import build_engine, redact_url
@@ -226,6 +227,7 @@ class BackboneDB:
         self.agents = AgentRepo(engine)
         self.swarms = SwarmRepo(engine)
         self.states = StateRepo(engine)
+        self.transitions = TransitionRepo(engine)
         self.usage = UsageRepo(engine)
 
     @property

@@ -188,10 +188,14 @@ async def check_for_stalls(config: BackboneConfig, states: AgentStates) -> list[
 async def check_for_unexpected_offline(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB, gh: GitHubClient | None
 ) -> list[dict]:
-    """Known agents whose last recorded state was live but whose session is gone."""
+    """Known agents whose last recorded state was live but whose session is gone.
+
+    An agent with a pending transition (``backbone agent restart``) is absent
+    on purpose and is not reported."""
     offline: list[dict] = []
     try:
         known_states = await db.states.all()
+        planned = set(await db.transitions.open_agents())
     except Exception:
         log.exception("Failed to read agent states for offline check")
         return offline
@@ -201,6 +205,8 @@ async def check_for_unexpected_offline(
         if record.get("state", "unknown") == "unknown":
             continue
         if session_name in active_sessions or session_name not in config.agents:
+            continue
+        if session_name in planned:
             continue
         pending_count = 0
         try:

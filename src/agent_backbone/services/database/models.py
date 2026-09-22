@@ -263,6 +263,42 @@ class AgentStateORM(Base):
     plan_title: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class AgentTransitionORM(Base):
+    """An explicit, one-time stop/restart an agent asked for (``backbone agent
+    restart``). The backbone owns the transition, so a caller stopping its
+    own session cannot lose the pending start."""
+
+    __tablename__ = "agent_transitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_name: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    requested_at: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Requested runtime; None keeps the agent's recorded one."""
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Requested ``model[:effort]``; None keeps the recorded one."""
+    resume: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    start: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    """0 for stop-only: the session is stopped and nothing is started."""
+    delay_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("60"))
+    start_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When the replacement starts: the explicit time, else stop time plus delay."""
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Continuation message, delivered to the replacement once it is up."""
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    """``pending`` | ``completed`` | ``failed``."""
+    stopped_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    """JSON: ``ready`` and ``evidence`` of the start, or ``reason`` of a failure."""
+
+    __table_args__ = (
+        Index("idx_transitions_agent", "agent_name", "status"),
+        {"sqlite_autoincrement": True},
+    )
+
+
 class IssueDependencyORM(Base):
     """Parent/sub-issue dependency tracking (per repository)."""
 

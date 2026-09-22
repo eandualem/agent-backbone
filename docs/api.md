@@ -117,6 +117,55 @@ Same body; starts a known agent (`dir` in the body registers it first).
 
 Stops a registered agent. An unregistered tmux session returns 404.
 
+### `POST /api/agents/{name}/restart`
+
+Stops a registered agent's session and starts its replacement after a wait —
+the one restart the backbone performs, because it was asked. The backbone
+owns the transition: the request is validated and stored, the response is the
+pending transition, and the `agent-transitions` job stops the session on its
+next tick and starts the replacement when the wait is over, through the same
+launch as `start` (record update, brief, hooks, readiness wait). Nothing inside
+the session takes part after acceptance, so an agent can ask for its own
+session and lose nothing; a backbone restart in between changes nothing either.
+
+```json
+{"runtime": "claude", "model": "opus", "resume": false, "start": true,
+ "delay_seconds": 60, "start_at": null, "message": "Resume from HANDOFF.md",
+ "from_entity": "app"}
+```
+
+All fields are optional. `runtime` and `model` (with an optional `:effort`)
+are recorded on the agent as `start` would; omitted, the saved ones are used.
+`resume` continues the saved conversation and is valid only when the runtime
+is unchanged. `start: false` stops and starts nothing. The wait is between the
+stop and the start: `delay_seconds` (default 60) or `start_at` (ISO 8601; local
+time unless an offset is given), not both. `message` is delivered to the
+replacement once it is at its prompt, as `[via:backbone from:<from_entity>]`,
+and never expires while it waits.
+
+```json
+{"id": 7, "session": "app", "requested_by": "app", "requested_at": "…",
+ "runtime": "claude", "model": "opus", "resume": false, "start": true,
+ "delay_seconds": 60, "start_at": null, "message": "Resume from HANDOFF.md",
+ "status": "pending", "stopped_at": null, "completed_at": null, "result": {}}
+```
+
+`status` ends `completed` — `result` carries the launch's `ready` and
+`evidence`, the effective runtime and model and the message outcome
+(`delivered` or `queued`) — or `failed` with `result.reason`: the runtime
+could not launch, the session could not be stopped, the agent was forgotten,
+or a session was already running at start time (someone started it by hand
+during the wait; it is never claimed as this transition's work). Errors:
+`400` for a request that could not work (unknown or missing runtime, an effort
+the runtime lacks, a cross-CLI resume, delay and time both given, an
+unparsable time, the backbone's own session), `409` while the agent already
+has a pending transition, `404` for an unregistered agent.
+
+### `GET /api/agents/{name}/restarts?limit=5`
+
+The agent's recent transitions, newest first, in the shape above.
+`GET /api/agents/{name}/inspect` carries the open or latest one as `restart`.
+
 ### `POST /api/agents/{name}/approve`
 
 Body (optional): `{"from_entity": "orch"}`. Answers the permission prompt

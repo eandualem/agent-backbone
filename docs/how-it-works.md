@@ -98,6 +98,24 @@ Stopping (`agent stop`) is `tmux kill-session`. The backbone refuses to
 stop its own session. A session that dies on its own is **reported** (to
 the escalation target and Telegram, once) — never restarted.
 
+Restarting (`agent restart`, `POST /api/agents/{name}/restart`) is the one
+restart the backbone performs, because it was asked for. The request is
+validated (registered agent, installed runtime, model and effort, same-CLI
+resume) and stored as a `pending` transition; nothing is stopped inside the
+request. The `agent-transitions` job then stops the session on its next tick
+(5 s), records the stop, and — when the wait is over (default one minute after
+the stop, or the explicit delay or time) — starts the replacement through the
+same operation as `agent start`: the record update, the brief, the hooks and
+the readiness wait. A continuation message is handed to the replacement once
+it is at its prompt (queued if it is not; that queue row never expires). No
+process inside the session takes part after acceptance, so an agent can ask
+for its own session and lose nothing; the row is in the database, so a
+backbone restart in between changes nothing. The transition ends `completed`
+with the launch's readiness, or `failed` with the reason — including a
+session someone started by hand during the wait, which is never claimed as
+this transition's work. An agent with a pending transition is not reported
+as unexpectedly offline.
+
 When the backbone is down, the CLI does the same thing directly against the
 database and tmux, and says so.
 

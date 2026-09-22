@@ -389,6 +389,99 @@ class TestStopAgent:
         assert resp.status_code == 400
 
 
+class TestRestartAgent:
+    async def test_accepts_and_persists_without_stopping_anything(
+        self, api_client, auth_headers, api_app, tmux_svc, launch
+    ):
+        resp = await api_client.post(
+            "/api/agents/ike/restart",
+            json={
+                "runtime": "claude",
+                "model": "opus",
+                "message": "carry on",
+                "from_entity": "ike",
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["status"] == "pending" and data["session"] == "ike"
+        assert data["delay_seconds"] == 60 and data["start_at"] is None
+        assert data["model"] == "opus" and data["message"] == "carry on"
+        tmux_svc.stop_session.assert_not_awaited()
+        launch.start_session.assert_not_awaited()
+        assert (await api_app.state.db.transitions.open_for("ike"))["id"] == data["id"]
+
+    async def test_explicit_delay_and_start_time(self, api_client, auth_headers, launch):
+        resp = await api_client.post(
+            "/api/agents/ike/restart", json={"delay_seconds": 12000}, headers=auth_headers
+        )
+        assert resp.json()["delay_seconds"] == 12000
+        resp = await api_client.post(
+            "/api/agents/leo/restart",
+            json={"start_at": "2030-01-01T10:00:00+02:00"},
+            headers=auth_headers,
+        )
+        assert resp.json()["start_at"] == "2030-01-01T08:00:00.000000Z"
+        resp = await api_client.post(
+            "/api/agents/feynman/restart", json={"start_at": "soon"}, headers=auth_headers
+        )
+        assert resp.status_code == 400 and "ISO 8601" in resp.json()["detail"]
+
+    async def test_cross_cli_resume_is_400(self, api_client, auth_headers, launch):
+        resp = await api_client.post(
+            "/api/agents/ike/restart",
+            json={"runtime": "codex", "resume": True},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+        assert "same CLI" in resp.json()["detail"]
+
+    async def test_second_request_while_one_is_open_is_409(self, api_client, auth_headers, launch):
+        first = await api_client.post("/api/agents/ike/restart", headers=auth_headers)
+        resp = await api_client.post("/api/agents/ike/restart", headers=auth_headers)
+        assert resp.status_code == 409
+        assert f"#{first.json()['id']}" in resp.json()["detail"]
+
+    async def test_unregistered_and_backbone_sessions(self, api_client, auth_headers, api_app):
+        assert (
+            await api_client.post("/api/agents/stray/restart", headers=auth_headers)
+        ).status_code == 404
+        from dataclasses import replace
+
+        from agent_backbone.config import BackboneSection
+
+        api_app.state.config = replace(
+            api_app.state.config, backbone=BackboneSection(session_name="ike")
+        )
+        resp = await api_client.post("/api/agents/ike/restart", headers=auth_headers)
+        assert resp.status_code == 400
+
+    async def test_list_and_inspect_show_the_transition(
+        self, api_client, auth_headers, api_app, launch
+    ):
+        accepted = (
+            await api_client.post(
+                "/api/agents/ike/restart", json={"start": False}, headers=auth_headers
+            )
+        ).json()
+        await api_app.state.db.transitions.finish(accepted["id"], "completed", {"stopped": True})
+        listed = (await api_client.get("/api/agents/ike/restarts", headers=auth_headers)).json()
+        assert [t["id"] for t in listed] == [accepted["id"]]
+        assert listed[0]["status"] == "completed" and listed[0]["result"] == {"stopped": True}
+        from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+        with patch(f"{_ROUTE}.get_session_intelligence", new_callable=AsyncMock) as intel:
+            intel.return_value = SessionProfile("ike", SessionIntelligence.OFFLINE, runtime="")
+            inspected = (
+                await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
+            ).json()
+            assert inspected["restart"]["id"] == accepted["id"]
+            assert inspected["restart"]["status"] == "completed"
+            other = (await api_client.get("/api/agents/leo/inspect", headers=auth_headers)).json()
+        assert other["restart"] is None
+
+
 class TestSessions:
     async def test_list_sessions(self, api_client, auth_headers):
         resp = await api_client.get("/api/sessions", headers=auth_headers)

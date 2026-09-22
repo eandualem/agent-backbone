@@ -201,6 +201,7 @@ Background loops inside the backbone process:
 |---|---|---|
 | `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, read every agent's state once and mirror it to the database, stall and dead-session reports, plan-waiting alerts, queue drain, next pending issue to idle agents, Socket.IO snapshot |
 | `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
+| `agent-transitions` | 5 s | explicit one-time stop/restart requests (`agent restart`): stop the session, start the replacement when its wait is over, hand it the continuation message |
 | `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
 | `sources-poll` | `sources.poll_interval_seconds` (60 s) | only with a configured [source](sources.md): search each source for new items matching any subscription filter and deliver them |
 | `github-backfill` | starts at startup | webhook intake only: catch up on downtime; `delivery-retry` retries unfinished repositories until catch-up succeeds |
@@ -213,7 +214,9 @@ Background loops inside the backbone process:
   expected to do](github.md#what-an-agent-is-expected-to-do) is the whole
   protocol.
 - **Who may talk to whom.** Any agent can message any agent through the API.
-- **Whether to restart a dead agent.** It reports; it never restarts.
+- **Whether to restart a dead agent.** It reports; it never restarts on its
+  own. The one restart it performs is the explicit `agent restart` an agent
+  or a person asked for.
 
 Runtime registration is declared in `services/runtimes/catalog.json`: IDs,
 detection order and hook files feed configuration, the runtime registry and

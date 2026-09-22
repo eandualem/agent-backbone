@@ -218,6 +218,66 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--attach", action="store_true", help="attach after resuming")
     pr.add_argument("--no-wait", action="store_true")
     pr.set_defaults(resume=True, dir=None, runtime=None, model=None, watch=None, group=True)
+    prs = asub.add_parser(
+        "restart",
+        help="stop an agent (your own session included) and start its replacement after a wait",
+        description=(
+            "The backbone owns the transition: it accepts the request, stops the session on its "
+            "next tick and starts the replacement when the wait is over, so asking for your own "
+            "session is safe. Save your memory first. NAME defaults to $BACKBONE_AGENT."
+        ),
+    )
+    prs.add_argument("name", nargs="?", default=None, metavar="NAME")
+    prs.add_argument(
+        "--runtime", default=None, help=f"{' | '.join(RUNTIMES)} (default: the saved runtime)"
+    )
+    prs.add_argument(
+        "--model",
+        default=None,
+        help="model for the replacement, optionally `model:effort` (default: the saved model)",
+    )
+    next_conversation = prs.add_mutually_exclusive_group()
+    next_conversation.add_argument(
+        "--resume",
+        dest="resume",
+        action="store_true",
+        default=False,
+        help="continue the saved conversation (same CLI only)",
+    )
+    next_conversation.add_argument(
+        "--fresh",
+        dest="resume",
+        action="store_false",
+        default=False,
+        help="start a new conversation (the default)",
+    )
+    prs.add_argument(
+        "--in",
+        dest="delay",
+        default=None,
+        metavar="DURATION",
+        help="wait between the stop and the start: 90s, 20m, 3h20m (default: 1m)",
+    )
+    prs.add_argument(
+        "--at",
+        dest="start_at",
+        default=None,
+        metavar="TIME",
+        help="start at this time instead (ISO 8601; local time unless an offset is given)",
+    )
+    prs.add_argument(
+        "--message",
+        default=None,
+        help="continuation message handed to the replacement once it is at its prompt",
+    )
+    prs.add_argument("--stop-only", action="store_true", help="stop the session; start nothing")
+    prs.add_argument(
+        "--from",
+        dest="sender",
+        default=os.environ.get("BACKBONE_AGENT") or os.environ.get("USER", "cli"),
+        help="who is asking (default: $BACKBONE_AGENT or $USER)",
+    )
+    prs.add_argument("--json", action="store_true")
     pa = asub.add_parser("attach", help="open an agent session; detach with Ctrl-b d")
     pa.add_argument("name")
     pa.add_argument("--read-only", action="store_true", help="watch without sending input")

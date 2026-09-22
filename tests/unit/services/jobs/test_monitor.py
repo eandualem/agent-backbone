@@ -180,6 +180,21 @@ class TestOffline:
         assert "1 pending issue" in d.await_args.args[1]
         assert (await db.states.get("ike"))["state"] == "unknown"
 
+    async def test_a_planned_restart_is_not_an_unexpected_absence(self, config, db):
+        config = _always_on(replace(config, escalation=EscalationConfig(target="leo")), "ike")
+        await db.states.set("ike", "busy", current_issue=3)
+        await db.transitions.create(agent_name="ike", requested_by="ike")
+        gh = AsyncMock()
+        gh.list_issues = AsyncMock(return_value=[_issue(3)])
+        with (
+            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+        ):
+            assert await esc.check_for_unexpected_offline(config, {"leo"}, db, gh) == []
+            await esc.handle_offline(config, {"leo"}, db, gh)
+        d.assert_not_called()
+        tg.assert_not_called()
+
     async def test_an_ordinary_agent_going_offline_is_not_reported(self, config, db):
         """Agents are not expected to stay up; the state is cleared quietly."""
         config = replace(config, escalation=EscalationConfig(target="leo"))

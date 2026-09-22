@@ -832,3 +832,129 @@ class TestCheckpointInbox:
             assert _run(["inbox"]) == 1
             api.assert_not_called()
         assert "--agent" in capsys.readouterr().out
+
+
+class TestAgentRestart:
+    def test_parses_options_and_posts_the_transition(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        accepted = {
+            "id": 7,
+            "session": "orch",
+            "status": "pending",
+            "start": True,
+            "delay_seconds": 12000,
+            "start_at": None,
+            "runtime": "claude",
+            "model": "opus",
+            "resume": False,
+            "message": "carry on",
+        }
+        with (
+            patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=True),
+            patch(
+                "agent_backbone.cli._common.api",
+                new_callable=AsyncMock,
+                return_value=(200, accepted),
+            ) as api,
+        ):
+            assert (
+                _run(
+                    [
+                        "agent",
+                        "restart",
+                        "--runtime",
+                        "claude",
+                        "--model",
+                        "opus",
+                        "--in",
+                        "3h20m",
+                        "--message",
+                        "carry on",
+                    ]
+                )
+                == 0
+            )
+        assert api.await_args.args[1:] == ("POST", "/api/agents/orch/restart")
+        assert api.await_args.kwargs["json_body"] == {
+            "runtime": "claude",
+            "model": "opus",
+            "resume": False,
+            "start": True,
+            "start_at": None,
+            "message": "carry on",
+            "from_entity": "orch",
+            "delay_seconds": 12000,
+        }
+        out = capsys.readouterr().out
+        assert "restart #7 accepted" in out and "12000s after the stop" in out
+        assert "finish writing your memory" in out
+
+    def test_stop_only_and_explicit_time(self, monkeypatch):
+        with (
+            patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=True),
+            patch(
+                "agent_backbone.cli._common.api",
+                new_callable=AsyncMock,
+                return_value=(200, {"id": 1, "status": "pending", "start": False}),
+            ) as api,
+        ):
+            assert _run(["agent", "restart", "app", "--stop-only", "--from", "elias"]) == 0
+            body = api.await_args.kwargs["json_body"]
+            assert body["start"] is False and "delay_seconds" not in body
+            assert body["from_entity"] == "elias"
+            assert _run(["agent", "restart", "app", "--at", "2030-01-01T09:00"]) == 0
+            assert api.await_args.kwargs["json_body"]["start_at"] == "2030-01-01T09:00"
+
+    def test_errors_are_reported_without_a_traceback(self, monkeypatch, capsys):
+        monkeypatch.delenv("BACKBONE_AGENT", raising=False)
+        assert _run(["agent", "restart"]) == 1
+        assert "$BACKBONE_AGENT" in capsys.readouterr().out
+        assert _run(["agent", "restart", "app", "--in", "soon"]) == 1
+        assert "not a duration" in capsys.readouterr().out
+        with patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=False):
+            assert _run(["agent", "restart", "app"]) == 1
+        assert "no direct-tmux fallback" in capsys.readouterr().out
+        with (
+            patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=True),
+            patch(
+                "agent_backbone.cli._common.api",
+                new_callable=AsyncMock,
+                return_value=(409, {"detail": "'app' already has a pending restart (#3)"}),
+            ),
+        ):
+            assert _run(["agent", "restart", "app"]) == 1
+        assert "error 409: 'app' already has a pending restart (#3)" in capsys.readouterr().out
+
+    def test_duration_parsing(self):
+        from agent_backbone.cli.agents import parse_duration
+
+        assert parse_duration("90") == 90
+        assert parse_duration("90s") == 90
+        assert parse_duration("20m") == 1200
+        assert parse_duration("3h20m") == 12000
+        assert parse_duration("1d") == 86400
+        for bad in ("", "3h20", "h", "20m3h?", "1.5h"):
+            with pytest.raises(ValueError):
+                parse_duration(bad)
+
+    def test_inspect_line(self):
+        from agent_backbone.cli.agents import _transition_line
+
+        pending = {"id": 3, "status": "pending", "start": True, "resume": False, "start_at": None}
+        assert _transition_line(pending) == "#3 pending: fresh start, starts 60s after the stop"
+        done = {
+            "id": 4,
+            "status": "completed",
+            "start": True,
+            "resume": True,
+            "runtime": "codex",
+            "model": None,
+            "result": {"ready": "ready", "message": "delivered"},
+        }
+        assert _transition_line(done) == "#4 completed: resume (codex) — ready; message delivered"
+        timed = {**pending, "id": 6, "start_at": "2030-01-01T06:00:00.000000Z", "model": "opus"}
+        assert (
+            _transition_line(timed) == "#6 pending: fresh start (opus), starts at 2030-01-01T06:00Z"
+        )
+        failed = {"id": 5, "status": "failed", "start": False, "result": {"reason": "boom"}}
+        assert _transition_line(failed) == "#5 failed: stop — boom"

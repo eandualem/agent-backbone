@@ -23,7 +23,9 @@ playbook for each; read it before first use):
   `backbone agent approve <agent>` answers the prompt (audited). Never reach
   around it with raw `tmux send-keys`.
 - **Manage agents yourself**: `backbone agent start|stop <name>`,
-  `backbone agent watch OWNER/REPO` — no human needed.
+  `backbone agent watch OWNER/REPO` — no human needed. `backbone agent restart`
+  hands over to a fresh session (another CLI or model, now or later), your own
+  included; write your memory first (`backbone help agents`).
 - **Issues drive work**: unlabelled issues in your repository are yours;
   `for:<agent>` labels route work between agents; acknowledge with a comment
   starting `[from:{agent_name}]`.

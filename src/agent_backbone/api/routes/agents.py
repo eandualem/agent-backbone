@@ -20,10 +20,12 @@ from agent_backbone.api.models import (
     AgentApproveResponse,
     AgentDenyResponse,
     AgentInspectResponse,
+    AgentRestartRequest,
     AgentStartRequest,
     AgentStartResponse,
     AgentStateDetail,
     AgentStopResponse,
+    AgentTransitionView,
     AgentUpdateRequest,
     DeliveryRecord,
     ListEnvelope,
@@ -55,6 +57,12 @@ from agent_backbone.services.agents.operations import (
 )
 from agent_backbone.services.agents.operations import (
     forget_agent as forget_agent_op,
+)
+from agent_backbone.services.agents.transitions import (
+    TransitionPending,
+    TransitionRequest,
+    parse_start_at,
+    request_transition,
 )
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import get_session_intelligence
@@ -165,6 +173,7 @@ async def inspect_agent(
         recent = await db.deliveries.query(session_name=name, limit=10)
     except Exception:
         recent = []
+    transitions = await db.transitions.list_for(name, limit=1)
 
     return AgentInspectResponse(
         name=name,
@@ -192,6 +201,7 @@ async def inspect_agent(
         tmux=tmux_vars,
         pane_tail=pane_tail,
         recent_deliveries=[DeliveryRecord(**row) for row in recent],
+        restart=AgentTransitionView.from_row(transitions[0]) if transitions else None,
     )
 
 
@@ -290,6 +300,50 @@ async def stop_agent(
     if ok:
         await feed.refresh_and_emit()
     return AgentStopResponse(ok=ok, session=session)
+
+
+@router.post("/agents/{session}/restart", response_model=AgentTransitionView)
+async def restart_agent(
+    session: str,
+    body: AgentRestartRequest | None = None,
+    config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
+):
+    """Accept a one-time stop/restart. Validated and persisted here; the
+    ``agent-transitions`` job stops the session and starts the replacement,
+    so a caller asking for its own session cannot lose the start."""
+    spec = registered_agent_or_404(config, session)
+    body = body or AgentRestartRequest()
+    try:
+        req = TransitionRequest(
+            runtime=body.runtime,
+            model=body.model,
+            resume=body.resume,
+            start=body.start,
+            delay_seconds=body.delay_seconds,
+            start_at=parse_start_at(body.start_at) if body.start_at else None,
+            message=body.message or None,
+            requested_by=body.from_entity,
+        )
+        row = await request_transition(db, config, spec, req)
+    except TransitionPending as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return AgentTransitionView.from_row(row)
+
+
+@router.get("/agents/{session}/restarts", response_model=list[AgentTransitionView])
+async def list_restarts(
+    session: str,
+    limit: int = Query(5, ge=1, le=50),
+    config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
+):
+    """Recent transitions of a registered agent, newest first, with their results."""
+    registered_agent_or_404(config, session)
+    rows = await db.transitions.list_for(session, limit)
+    return [AgentTransitionView.from_row(row) for row in rows]
 
 
 _APPROVE_STATUS = {

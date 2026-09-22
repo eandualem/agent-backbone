@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 5fc8ff89340d
+Revision ID: 1ffd320db41c
 Revises:
-Create Date: 2026-09-17 19:12:43.746353
+Create Date: 2026-09-22 13:49:53.354601
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "5fc8ff89340d"
+revision: str = "1ffd320db41c"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -58,6 +58,29 @@ def upgrade() -> None:
         batch_op.create_index(
             "uq_subscriptions_query", ["agent_name", "source", "query"], unique=True
         )
+
+    op.create_table(
+        "agent_transitions",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("agent_name", sa.Text(), nullable=False),
+        sa.Column("requested_by", sa.Text(), server_default="", nullable=False),
+        sa.Column("requested_at", sa.Text(), nullable=False),
+        sa.Column("runtime", sa.Text(), nullable=True),
+        sa.Column("model", sa.Text(), nullable=True),
+        sa.Column("resume", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("start", sa.Integer(), server_default=sa.text("1"), nullable=False),
+        sa.Column("delay_seconds", sa.Integer(), server_default=sa.text("(60)"), nullable=False),
+        sa.Column("start_at", sa.Text(), nullable=True),
+        sa.Column("message", sa.Text(), nullable=True),
+        sa.Column("status", sa.Text(), server_default="pending", nullable=False),
+        sa.Column("stopped_at", sa.Text(), nullable=True),
+        sa.Column("completed_at", sa.Text(), nullable=True),
+        sa.Column("result", sa.Text(), server_default="{}", nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_agent_transitions")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("agent_transitions", schema=None) as batch_op:
+        batch_op.create_index("idx_transitions_agent", ["agent_name", "status"], unique=False)
 
     op.create_table(
         "agent_watches",
@@ -465,6 +488,10 @@ def downgrade() -> None:
 
     op.drop_table("agents")
     op.drop_table("agent_watches")
+    with op.batch_alter_table("agent_transitions", schema=None) as batch_op:
+        batch_op.drop_index("idx_transitions_agent")
+
+    op.drop_table("agent_transitions")
     with op.batch_alter_table("agent_subscriptions", schema=None) as batch_op:
         batch_op.drop_index("uq_subscriptions_query")
 
