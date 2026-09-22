@@ -129,8 +129,10 @@ knows where it came from:
 
 One attempt to hand a message to a session, recorded with its **kind**
 (`issue`, `comment`, `review`, `pull_request`, `direct_message`, `watch`,
-`escalation`, `plan_response`, `subscription`), repository, outcome and a preview — direct
-messages included. A `plan_response` (an answer typed into a plan prompt)
+`escalation`, `plan_response`, `subscription`, `steer`), repository, outcome and a preview — direct
+messages included. A `steer` (`backbone tell --steer`) is never queued or
+pasted: it is offered to a working agent's hook and its record moves from
+`offered` to `handed_off`, `not_taken` or `cancelled`. A `plan_response` (an answer typed into a plan prompt)
 is the one kind that is **never queued**: it goes in only while the agent
 is waiting for a plan decision, and is refused as `not_waiting` otherwise. What cannot be delivered now is **queued** in the database and
 delivered by the background jobs — a message that waited at least two
@@ -201,6 +203,7 @@ Background loops inside the backbone process:
 |---|---|---|
 | `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, read every agent's state once and mirror it to the database, stall and dead-session reports, plan-waiting alerts, queue drain, next pending issue to idle agents, Socket.IO snapshot |
 | `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
+| `steer-settle` | 15 s | record what became of each steer offer: `handed_off`, `not_taken` after 300 s, `cancelled` when the session was replaced |
 | `agent-transitions` | 5 s | explicit one-time stop/restart requests (`agent restart`): stop the session, start the replacement when its wait is over, hand it the continuation message |
 | `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
 | `sources-poll` | `sources.poll_interval_seconds` (60 s) | only with a configured [source](sources.md): search each source for new items matching any subscription filter and deliver them |

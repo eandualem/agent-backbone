@@ -237,3 +237,58 @@ class TestSendMessage:
             )
         assert resp.status_code == 200
         assert mock_deliver.call_args.kwargs["sender"] == "elias"
+
+
+class TestSteer:
+    async def test_offered(self, api_client, auth_headers):
+        from agent_backbone.services.routing import SteerReport
+
+        report = SteerReport("offered", "ike", None, 9, "op", "L1", ["offered to launch L1"])
+        with patch(
+            "agent_backbone.api.routes.messages.steer_agent",
+            new_callable=AsyncMock,
+            return_value=report,
+        ) as steer:
+            resp = await api_client.post(
+                "/api/steer",
+                json={"target_session": "ike", "from_entity": "leo", "message": "use the lock"},
+                headers=auth_headers,
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["ok"] is True and data["outcome"] == "offered" and data["delivery_id"] == 9
+        assert data["launch_id"] == "L1" and "not_taken after 300s" in data["detail"]
+        assert steer.await_args.args[:2] == ("ike", "use the lock")
+        assert steer.await_args.kwargs["sender"] == "leo"
+
+    async def test_refused_says_nothing_was_queued(self, api_client, auth_headers):
+        from agent_backbone.services.routing import SteerReport
+
+        report = SteerReport("refused", "ike", "not_working", evidence=["idle"])
+        with patch(
+            "agent_backbone.api.routes.messages.steer_agent",
+            new_callable=AsyncMock,
+            return_value=report,
+        ):
+            resp = await api_client.post(
+                "/api/steer",
+                json={"target_session": "ike", "from_entity": "leo", "message": "x"},
+                headers=auth_headers,
+            )
+        data = resp.json()
+        assert resp.status_code == 200 and data["ok"] is False
+        assert data["reason"] == "not_working" and "nothing was queued" in data["detail"]
+
+    async def test_unregistered_target_and_bad_sender(self, api_client, auth_headers):
+        resp = await api_client.post(
+            "/api/steer",
+            json={"target_session": "stray", "from_entity": "leo", "message": "x"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404
+        resp = await api_client.post(
+            "/api/steer",
+            json={"target_session": "ike", "from_entity": "[x]", "message": "x"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422

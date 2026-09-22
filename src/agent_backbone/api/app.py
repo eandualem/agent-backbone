@@ -45,7 +45,7 @@ def _register_jobs(app: FastAPI):
         run_transitions,
     )
     from agent_backbone.services.jobs.transitions import INTERVAL_SECONDS as _TRANSITION_TICK
-    from agent_backbone.services.routing import routing_in_flight
+    from agent_backbone.services.routing import routing_in_flight, settle_steers
     from agent_backbone.services.scheduler import PeriodicScheduler
 
     state = app.state
@@ -94,6 +94,12 @@ def _register_jobs(app: FastAPI):
 
     # Explicit one-time stop/restart requests (`backbone agent restart`).
     scheduler.add("agent-transitions", _TRANSITION_TICK, _transitions)
+
+    async def _steers():
+        return await settle_steers(state.config, state.db)
+
+    # What became of each steer offer (`backbone tell --steer`).
+    scheduler.add("steer-settle", 15, _steers)
     scheduler.add("prune", 6 * 3600, _prune)
     scheduler.add("report-audio", 30, state.integrations.flush_report_audio, run_immediately=True)
     # Integrations re-provision their per-agent surfaces (Telegram topics):

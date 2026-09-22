@@ -489,7 +489,7 @@ backbone from PyPI can read the reference without a checkout; a source
 checkout reads the same files from the repository. Also served at
 `GET /api/docs[/{page}]`.
 
-## `backbone tell AGENT MESSAGE… [--from NAME] [--priority]`
+## `backbone tell AGENT MESSAGE… [--from NAME] [--priority | --steer]`
 
 Delivers `[via:backbone from:NAME] MESSAGE` through the running backbone
 (`POST /api/messages`) and prints the outcome JSON. The sender defaults to
@@ -515,6 +515,21 @@ A queued or unsuccessful reply also prints its operation ID after the explanatio
 use `backbone diagnostics trace OPERATION_ID` to follow that message through
 retries, submission, expiry or retirement. A retirement does not mean the message
 was submitted.
+
+`--steer` is a different thing from `--priority`: guidance for the agent's
+**current task** — a clarification, a correction, context it lacks — not a new
+task and not queue-jumping. It goes through `POST /api/steer` as a transient
+offer to the agent's runtime hook, never as a queue row and never as a paste:
+Claude Code and Codex hand it to the model as context on the agent's next tool
+call, so it cannot overwrite a draft or answer a dialog. It is accepted only
+while the agent is `agent_working` on one of those runtimes in a session the
+backbone started; otherwise it is **refused with the reason** (`not_working`,
+`unsupported_runtime`, `offline`, `no_launch_id`) and nothing is queued — send
+an ordinary message instead. The guarantee is at-most-once handoff, not
+incorporation: the delivery record (`kind` `steer`, in `agent inspect`) moves
+from `offered` to `handed_off` when the hook took it, `not_taken` when the turn
+ended without another tool call within five minutes, or `cancelled` when the
+session was replaced first. Exit 0 when offered, 1 otherwise.
 
 ## `backbone reply TEXT… [--agent NAME]`
 

@@ -278,9 +278,13 @@ sequenceDiagram
   box, including an envelope still buffered in the prompt. If the runtime queued it for its next turn (Claude does), that
   counts as delivered.
 - **Busy is never bypassed.** `priority: true` (and issues labelled
-  `blocking`) only get through `human_typing` and `settling`. The one thing
-  that reaches a *working* agent is a high-priority [subscription](sources.md)
-  batch, and it does so as hook context, never as a paste.
+  `blocking`) only get through `human_typing` and `settling`. What reaches a
+  *working* agent is a high-priority [subscription](sources.md) batch or a
+  [steer](cli.md#backbone-tell-agent-message-from-name-priority--steer), and
+  both do so as hook context, never as a paste. A steer is written for the
+  live session only (`<state_dir>/context/<agent>/<launch_id>/`), is never
+  queued for a later prompt, and is recorded as `handed_off`, `not_taken`
+  (300 s without another tool call) or `cancelled` (the session was replaced).
 - **Comments**, including those on the current issue, wait while the agent is
   starting, busy, blocked, or waiting for a human. They are queued and delivered
   when the agent is ready; priority does not bypass these conditions.

@@ -13,9 +13,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from agent_backbone.api.deps import get_config, get_db, registered_agent_or_404
-from agent_backbone.api.models import MessageRequest, MessageResponse
+from agent_backbone.api.models import (
+    MessageRequest,
+    MessageResponse,
+    SteerRequest,
+    SteerResponse,
+)
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.routing import checkpoint_inbox, queue_detail, safe_deliver
+from agent_backbone.services.routing import (
+    STEER_TTL_SECONDS,
+    checkpoint_inbox,
+    queue_detail,
+    safe_deliver,
+    steer_agent,
+)
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +76,44 @@ async def send_message(
         operation_id=report.operation_id,
         delivery_id=report.delivery_id,
         queue_id=report.queue_id,
+    )
+
+
+@router.post("/steer", response_model=SteerResponse)
+async def steer(
+    body: SteerRequest,
+    config=Depends(get_config),
+    db=Depends(get_db),
+):
+    """Hand a working agent guidance for its current task through its
+    runtime's hook — a transient offer, never a queue row and never a paste.
+    Refused, with the reason, when the agent is not working, its runtime has
+    no hook context (Claude Code and Codex only) or the session was not
+    started by the backbone; nothing is queued on refusal."""
+    registered_agent_or_404(config, body.target_session)
+    report = await steer_agent(
+        body.target_session, body.message, config, db=db, sender=body.from_entity
+    )
+    if report.outcome == "offered":
+        detail = (
+            f"Offered to {report.session}'s current turn; its hook hands it over on the next "
+            f"tool call, or it is recorded as not_taken after {STEER_TTL_SECONDS}s "
+            f"(delivery {report.delivery_id})."
+        )
+    elif report.outcome == "refused":
+        detail = f"Not offered ({report.reason}); nothing was queued."
+    else:
+        detail = f"Not offered ({report.reason})."
+    return SteerResponse(
+        ok=report.outcome == "offered",
+        session=report.session,
+        outcome=report.outcome,
+        reason=report.reason,
+        delivery_id=report.delivery_id,
+        operation_id=report.operation_id,
+        launch_id=report.launch_id,
+        evidence=report.evidence,
+        detail=detail,
     )
 
 

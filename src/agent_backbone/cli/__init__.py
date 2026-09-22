@@ -485,6 +485,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="sender label for the provenance envelope (default: $BACKBONE_AGENT, then $USER)",
     )
     p.add_argument("--priority", action="store_true", help="deliver even while someone is typing")
+    p.add_argument(
+        "--steer",
+        action="store_true",
+        help="guidance for the agent's CURRENT task: offered through its hook while it works "
+        "(Claude Code, Codex), never queued or pasted; refused when it is not working",
+    )
     p.set_defaults(func=cmd_tell)
 
     p = sub.add_parser(

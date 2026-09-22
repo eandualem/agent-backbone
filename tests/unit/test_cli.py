@@ -1008,3 +1008,52 @@ class TestAgentOutput:
             assert _run(["agent", "output", "nobody", "--screen"]) == 1
             assert "unknown agent" in capsys.readouterr().out
             read.assert_not_awaited()
+
+
+class TestTellSteer:
+    def test_steer_posts_to_the_steer_endpoint(self, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        data = {
+            "ok": True,
+            "session": "app",
+            "outcome": "offered",
+            "delivery_id": 9,
+            "detail": "Offered to app's current turn.",
+        }
+        with (
+            patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=True),
+            patch(
+                "agent_backbone.cli._common.api", new_callable=AsyncMock, return_value=(200, data)
+            ) as api,
+        ):
+            assert _run(["tell", "app", "use", "the", "lock", "--steer"]) == 0
+        assert api.await_args.args[1:] == ("POST", "/api/steer")
+        assert api.await_args.kwargs["json_body"] == {
+            "target_session": "app",
+            "from_entity": "orch",
+            "message": "use the lock",
+        }
+        out = capsys.readouterr().out
+        assert "Offered to app's current turn." in out and "delivery 9" in out
+
+    def test_steer_refused_and_flag_conflict(self, monkeypatch, capsys):
+        with (
+            patch("agent_backbone.cli._common.api_up", new_callable=AsyncMock, return_value=True),
+            patch(
+                "agent_backbone.cli._common.api",
+                new_callable=AsyncMock,
+                return_value=(
+                    200,
+                    {
+                        "ok": False,
+                        "outcome": "refused",
+                        "reason": "not_working",
+                        "detail": "Not offered (not_working); nothing was queued.",
+                    },
+                ),
+            ),
+        ):
+            assert _run(["tell", "app", "x", "--steer"]) == 1
+        assert "nothing was queued" in capsys.readouterr().out
+        assert _run(["tell", "app", "x", "--steer", "--priority"]) == 1
+        assert "different things" in capsys.readouterr().out

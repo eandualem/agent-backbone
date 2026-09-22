@@ -462,6 +462,30 @@ class MessageRequest(BaseModel):
         return value
 
 
+class SteerRequest(BaseModel):
+    """Body for ``POST /api/steer``: guidance for the agent's current task."""
+
+    target_session: str
+    from_entity: str
+    message: str = Field(min_length=1, max_length=4000)
+
+    _sender = field_validator("from_entity")(MessageRequest._sender_must_fit_the_envelope.__func__)
+
+
+class SteerResponse(BaseModel):
+    ok: bool
+    """True only when the offer was placed (``outcome`` ``offered``)."""
+    session: str
+    outcome: str
+    """``offered`` | ``refused`` | ``failed``."""
+    reason: str | None = None
+    delivery_id: int | None = None
+    operation_id: str | None = None
+    launch_id: str | None = None
+    evidence: list[str] = Field(default_factory=list)
+    detail: str = ""
+
+
 class MessageResponse(BaseModel):
     operation_id: str | None = None
     delivery_id: int | None = None
