@@ -60,6 +60,7 @@ _EXPECTED_INDEXES = {
     "uq_swarms_active_issue",
     "uq_subscriptions_query",
     "idx_transitions_agent",
+    "uq_transitions_open",
     "uq_diagnostics_observation",
     "idx_diagnostics_last_seen",
     "idx_diagnostics_agent",

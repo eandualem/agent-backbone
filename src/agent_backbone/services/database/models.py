@@ -289,12 +289,24 @@ class AgentTransitionORM(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     """``pending`` | ``completed`` | ``failed``."""
     stopped_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    launch_operation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The startup operation identity, persisted before the replacement is
+    launched: after a backbone restart mid-launch, the startup diagnostics
+    under this id say whether the running session is this transition's."""
     completed_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     result: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
     """JSON: ``ready`` and ``evidence`` of the start, or ``reason`` of a failure."""
 
     __table_args__ = (
         Index("idx_transitions_agent", "agent_name", "status"),
+        # One open transition per agent, enforced where two requests race.
+        Index(
+            "uq_transitions_open",
+            "agent_name",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
         {"sqlite_autoincrement": True},
     )
 

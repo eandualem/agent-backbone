@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import now_iso
@@ -36,33 +37,37 @@ class TransitionRepo(Repo):
         delay_seconds: int = 60,
         start_at: str | None = None,
         message: str | None = None,
-    ) -> dict:
-        """Persist an accepted request as ``pending`` and return the row."""
-        async with self._tx() as conn:
-            result = await conn.execute(
-                text(
-                    """INSERT INTO agent_transitions
+    ) -> dict | None:
+        """Persist an accepted request as ``pending`` and return the row, or None
+        when the agent already has a pending one (``uq_transitions_open``)."""
+        try:
+            async with self._tx() as conn:
+                result = await conn.execute(
+                    text(
+                        """INSERT INTO agent_transitions
                        (agent_name, requested_by, requested_at, runtime, model, resume, start,
                         delay_seconds, start_at, message, status, result)
                        VALUES (:agent_name, :requested_by, :requested_at, :runtime, :model,
                                :resume, :start, :delay_seconds, :start_at, :message,
                                'pending', '{}')
                        RETURNING *"""
-                ),
-                {
-                    "agent_name": agent_name,
-                    "requested_by": requested_by,
-                    "requested_at": now_iso(),
-                    "runtime": runtime,
-                    "model": model,
-                    "resume": int(resume),
-                    "start": int(start),
-                    "delay_seconds": delay_seconds,
-                    "start_at": start_at,
-                    "message": message,
-                },
-            )
-            return _row(result.fetchone())
+                    ),
+                    {
+                        "agent_name": agent_name,
+                        "requested_by": requested_by,
+                        "requested_at": now_iso(),
+                        "runtime": runtime,
+                        "model": model,
+                        "resume": int(resume),
+                        "start": int(start),
+                        "delay_seconds": delay_seconds,
+                        "start_at": start_at,
+                        "message": message,
+                    },
+                )
+                return _row(result.fetchone())
+        except IntegrityError:
+            return None
 
     async def get(self, transition_id: int) -> dict | None:
         async with self._tx() as conn:
@@ -123,6 +128,17 @@ class TransitionRepo(Repo):
                        WHERE id = :id AND status = 'pending'"""
                 ),
                 {"id": transition_id, "now": now_iso(), "start_at": start_at},
+            )
+
+    async def mark_launching(self, transition_id: int, operation_id: str) -> None:
+        """Remember the startup operation about to run for this transition."""
+        async with self._tx() as conn:
+            await conn.execute(
+                text(
+                    """UPDATE agent_transitions SET launch_operation_id = :operation_id
+                       WHERE id = :id AND status = 'pending'"""
+                ),
+                {"id": transition_id, "operation_id": operation_id},
             )
 
     async def finish(self, transition_id: int, status: str, result: dict) -> None:

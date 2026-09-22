@@ -182,6 +182,68 @@ async def test_a_row_stopped_before_a_backbone_restart_is_started_by_the_new_pro
     start.assert_awaited_once()
 
 
+async def test_a_stop_only_row_stopped_before_a_backbone_restart_never_starts(
+    db, config, store, seams
+):
+    stop, start, _ = seams
+    row = await db.transitions.create(agent_name="ike", start=False)
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    assert await _run(config, store, db) == {"ike": "stopped"}
+    assert (await db.transitions.get(row["id"]))["status"] == "completed"
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+
+
+async def test_the_launch_identity_is_persisted_before_the_start(db, config, store, seams):
+    _, start, _ = seams
+    row = await db.transitions.create(agent_name="ike", delay_seconds=0)
+    await _run(config, store, db)
+    req = start.await_args.args[3]
+    assert (await db.transitions.get(row["id"]))["launch_operation_id"] == req.operation_id
+
+
+async def test_a_launch_interrupted_by_a_backbone_restart_is_recovered_from_diagnostics(
+    db, config, store, seams
+):
+    """The earlier process launched the replacement and died before closing the
+    row; the new process finds the session running and the launch recorded."""
+    _, start, deliver = seams
+    start.return_value = StartResult(ok=True, already_running=True)
+    row = await db.transitions.create(agent_name="ike", message="hi")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-9")
+    for code in ("requested", "ready"):
+        await db.diagnostics.record(
+            category="startup", operation_id="op-9", code=code, severity="info", agent_name="ike"
+        )
+    assert await _run(config, store, db) == {"ike": "started"}
+    assert start.await_args.args[3].operation_id == "op-9"
+    done = await db.transitions.get(row["id"])
+    assert done["status"] == "completed" and done["result"]["ready"] == "ready"
+    assert "earlier backbone process" in done["result"]["evidence"][0]
+    deliver.assert_awaited_once()
+
+
+async def test_a_running_session_without_a_recorded_launch_is_not_claimed(db, config, store, seams):
+    _, start, _ = seams
+    start.return_value = StartResult(ok=True, already_running=True)
+    row = await db.transitions.create(agent_name="ike")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-10")  # launch never got recorded
+    assert await _run(config, store, db) == {"ike": "failed"}
+    assert "already running" in (await db.transitions.get(row["id"]))["result"]["reason"]
+
+
+async def test_a_continuation_that_cannot_be_stored_fails_the_transition(db, config, store, seams):
+    _, _, deliver = seams
+    deliver.return_value = DeliveryReport(outcome=DeliveryOutcome.OFFLINE, queue="failed")
+    row = await db.transitions.create(agent_name="ike", delay_seconds=0, message="hi")
+    assert await _run(config, store, db) == {"ike": "failed"}
+    result = (await db.transitions.get(row["id"]))["result"]
+    assert "neither delivered nor stored" in result["reason"]
+    assert result["ready"] == "ready" and result["message_queue"] == "failed"
+
+
 async def test_a_queued_message_is_reported_as_queued(db, config, store, seams):
     _, _, deliver = seams
     deliver.return_value = DeliveryReport(outcome=DeliveryOutcome.SETTLING, queue="stored")

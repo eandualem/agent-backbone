@@ -13,6 +13,7 @@ substituted.
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -83,6 +84,10 @@ async def _advance(config: BackboneConfig, store: AgentStore, db: BackboneDB, ro
         if start_at > now_iso():
             return "stopped"
         return await _start(config, store, db, {**row, "start_at": start_at})
+    if not row["start"]:
+        # Stopped by a process that exited before closing the row.
+        await db.transitions.finish(row["id"], "completed", {"stopped": True})
+        return "stopped"
     if row["start_at"] > now_iso():
         return "waiting"
     return await _start(config, store, db, row)
@@ -90,7 +95,20 @@ async def _advance(config: BackboneConfig, store: AgentStore, db: BackboneDB, ro
 
 async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row: dict) -> str:
     name = row["agent_name"]
-    req = StartRequest(name=name, runtime=row["runtime"], model=row["model"], resume=row["resume"])
+    # The launch's operation identity is persisted first: if this process
+    # exits mid-launch, the next one can tell the replacement it started
+    # from a session someone started by hand (``_recovered_launch``).
+    resumed_launch = row["launch_operation_id"]
+    operation_id = resumed_launch or uuid.uuid4().hex
+    if resumed_launch is None:
+        await db.transitions.mark_launching(row["id"], operation_id)
+    req = StartRequest(
+        name=name,
+        runtime=row["runtime"],
+        model=row["model"],
+        resume=row["resume"],
+        operation_id=operation_id,
+    )
     try:
         spec = await resolve_agent(store, req)
         result = await start_resolved(store, config, spec, req, db=db)
@@ -105,10 +123,17 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         "evidence": list(result.evidence),
     }
     if result.already_running:
-        outcome["reason"] = "the session was already running at start time; not started here"
-        await db.transitions.finish(row["id"], "failed", outcome)
-        return "failed"
-    if not result.ok or result.ready == "exited":
+        recovered = await _recovered_launch(db, operation_id) if resumed_launch else None
+        if recovered is None:
+            outcome["reason"] = "the session was already running at start time; not started here"
+            await db.transitions.finish(row["id"], "failed", outcome)
+            return "failed"
+        outcome["ready"] = recovered
+        outcome["evidence"] = [
+            f"launch {operation_id} was started by an earlier backbone process; "
+            f"its recorded outcome is '{recovered}'"
+        ]
+    elif not result.ok or result.ready == "exited":
         outcome["reason"] = "the replacement did not start"
         await db.transitions.finish(row["id"], "failed", outcome)
         return "failed"
@@ -126,5 +151,26 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         outcome["message"] = report.outcome.value
         if report.queue is not None:
             outcome["message_queue"] = report.queue
+        if report.queue == "failed":
+            outcome["reason"] = (
+                "the replacement started but the continuation message was neither "
+                "delivered nor stored"
+            )
+            await db.transitions.finish(row["id"], "failed", outcome)
+            return "failed"
     await db.transitions.finish(row["id"], "completed", outcome)
     return "started"
+
+
+async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
+    """What the startup diagnostics say a launch this transition began ended as.
+
+    None when no launch under that identity was recorded (the session is
+    someone else's) or it is recorded as failed. ``not_observed`` when the
+    launch was requested but its readiness never recorded."""
+    records = await db.diagnostics.query(operation_id=operation_id, category="startup", limit=20)
+    if not records:
+        return None
+    codes = [record["code"] for record in records]  # newest first
+    outcome = next((code for code in codes if code != "requested"), "not_observed")
+    return None if outcome in {"failed", "exited", "already_running"} else outcome

@@ -11,6 +11,7 @@ import pytest
 from agent_backbone.config import BackboneSection
 from agent_backbone.services.agents.transitions import (
     DEFAULT_DELAY_SECONDS,
+    MAX_DELAY_SECONDS,
     TransitionPending,
     TransitionRequest,
     due_after,
@@ -74,8 +75,13 @@ class TestValidate:
                 spec,
                 TransitionRequest(delay_seconds=5, start_at="2030-01-01T00:00:00.000000Z"),
             )
-        with pytest.raises(ValueError, match="negative"):
+        with pytest.raises(ValueError, match="between 0 and"):
             validate_transition(config, spec, TransitionRequest(delay_seconds=-1))
+        with pytest.raises(ValueError, match="30 days"):
+            validate_transition(
+                config, spec, TransitionRequest(delay_seconds=MAX_DELAY_SECONDS + 1)
+            )
+        validate_transition(config, spec, TransitionRequest(delay_seconds=MAX_DELAY_SECONDS))
         with pytest.raises(ValueError, match="stop-only has no start"):
             validate_transition(config, spec, TransitionRequest(start=False, delay_seconds=5))
         validate_transition(config, spec, TransitionRequest(start=False))

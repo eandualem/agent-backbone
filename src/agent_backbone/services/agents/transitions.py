@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
 
 DEFAULT_DELAY_SECONDS = 60
+MAX_DELAY_SECONDS = 30 * 86400
+"""The longest supported wait between the stop and the start."""
 SOURCE = "agent-restart"
 """Delivery source of the continuation message; the queue never expires it."""
 
@@ -69,8 +71,8 @@ def validate_transition(config: BackboneConfig, spec: AgentSpec, req: Transition
         raise ValueError("refusing to restart the backbone's own session")
     if req.delay_seconds is not None and req.start_at is not None:
         raise ValueError("give a delay or a start time, not both")
-    if req.delay_seconds is not None and req.delay_seconds < 0:
-        raise ValueError("the delay cannot be negative")
+    if req.delay_seconds is not None and not 0 <= req.delay_seconds <= MAX_DELAY_SECONDS:
+        raise ValueError(f"the delay must be between 0 and {MAX_DELAY_SECONDS} seconds (30 days)")
     if req.start_at is not None:
         parse_iso(req.start_at)
     if not req.start:
@@ -105,10 +107,7 @@ async def request_transition(
 ) -> dict:
     """Validate and persist the request as ``pending``; the job executes it."""
     validate_transition(config, spec, req)
-    open_row = await db.transitions.open_for(spec.name)
-    if open_row is not None:
-        raise TransitionPending(open_row)
-    return await db.transitions.create(
+    row = await db.transitions.create(
         agent_name=spec.name,
         requested_by=req.requested_by,
         runtime=req.runtime,
@@ -121,6 +120,11 @@ async def request_transition(
         start_at=req.start_at,
         message=req.message,
     )
+    if row is None:
+        # The unique index refused a second pending row; name the open one.
+        open_row = await db.transitions.open_for(spec.name)
+        raise TransitionPending(open_row or {"agent_name": spec.name, "id": "?"})
+    return row
 
 
 def due_after(stopped: datetime, delay_seconds: int) -> str:

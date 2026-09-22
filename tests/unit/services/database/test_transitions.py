@@ -43,7 +43,8 @@ async def test_finish_does_not_reopen_or_overwrite_a_closed_row(db):
 
 async def test_list_for_is_newest_first_and_bounded(db):
     for _ in range(3):
-        await db.transitions.create(agent_name="ike")
+        row = await db.transitions.create(agent_name="ike")
+        await db.transitions.finish(row["id"], "completed", {})
     await db.transitions.create(agent_name="leo")
     rows = await db.transitions.list_for("ike", limit=2)
     assert [r["agent_name"] for r in rows] == ["ike", "ike"]
@@ -69,3 +70,18 @@ async def test_pending_rows_survive_a_process_restart(tmp_path):
             assert count.scalar_one() == 1
     finally:
         await second.stop()
+
+
+async def test_a_second_pending_row_is_refused_by_the_index(db):
+    first = await db.transitions.create(agent_name="ike")
+    assert await db.transitions.create(agent_name="ike") is None
+    assert await db.transitions.create(agent_name="leo") is not None
+    await db.transitions.finish(first["id"], "completed", {})
+    assert await db.transitions.create(agent_name="ike") is not None
+
+
+async def test_mark_launching_persists_the_operation_identity(db):
+    row = await db.transitions.create(agent_name="ike")
+    assert row["launch_operation_id"] is None
+    await db.transitions.mark_launching(row["id"], "op-1")
+    assert (await db.transitions.get(row["id"]))["launch_operation_id"] == "op-1"

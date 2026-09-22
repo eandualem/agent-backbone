@@ -138,10 +138,10 @@ All fields are optional. `runtime` and `model` (with an optional `:effort`)
 are recorded on the agent as `start` would; omitted, the saved ones are used.
 `resume` continues the saved conversation and is valid only when the runtime
 is unchanged. `start: false` stops and starts nothing. The wait is between the
-stop and the start: `delay_seconds` (default 60) or `start_at` (ISO 8601; local
-time unless an offset is given), not both. `message` is delivered to the
-replacement once it is at its prompt, as `[via:backbone from:<from_entity>]`,
-and never expires while it waits.
+stop and the start: `delay_seconds` (default 60, at most 30 days) or `start_at`
+(ISO 8601; local time unless an offset is given), not both. `message` is
+delivered to the replacement once it is at its prompt, as
+`[via:backbone from:<from_entity>]`, and never expires while it waits.
 
 ```json
 {"id": 7, "session": "app", "requested_by": "app", "requested_at": "…",
@@ -151,11 +151,17 @@ and never expires while it waits.
 ```
 
 `status` ends `completed` — `result` carries the launch's `ready` and
-`evidence`, the effective runtime and model and the message outcome
-(`delivered` or `queued`) — or `failed` with `result.reason`: the runtime
-could not launch, the session could not be stopped, the agent was forgotten,
-or a session was already running at start time (someone started it by hand
-during the wait; it is never claimed as this transition's work). Errors:
+`evidence`, the effective runtime and model and, with a message, its
+delivery outcome as `result.message` (`delivered`, or the [delivery
+condition](concepts.md#delivery-condition) that queued it, such as `settling`)
+with `result.message_queue` (`stored` or `already_queued`) when it waits in
+the queue — or `failed` with `result.reason`: the runtime could not launch,
+the session could not be stopped, the agent was forgotten, the continuation
+message could be neither delivered nor stored, or a session was already
+running at start time (someone started it by hand during the wait; it is
+never claimed as this transition's work). A backbone restart in the middle
+of the launch is recovered from the startup diagnostics: a replacement this
+transition launched completes with the readiness recorded there. Errors:
 `400` for a request that could not work (unknown or missing runtime, an effort
 the runtime lacks, a cross-CLI resume, delay and time both given, an
 unparsable time, the backbone's own session), `409` while the agent already

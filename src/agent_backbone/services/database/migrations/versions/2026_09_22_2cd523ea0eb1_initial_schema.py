@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 1ffd320db41c
+Revision ID: 2cd523ea0eb1
 Revises:
-Create Date: 2026-09-22 13:49:53.354601
+Create Date: 2026-09-22 14:21:41.304939
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "1ffd320db41c"
+revision: str = "2cd523ea0eb1"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -74,6 +74,7 @@ def upgrade() -> None:
         sa.Column("message", sa.Text(), nullable=True),
         sa.Column("status", sa.Text(), server_default="pending", nullable=False),
         sa.Column("stopped_at", sa.Text(), nullable=True),
+        sa.Column("launch_operation_id", sa.Text(), nullable=True),
         sa.Column("completed_at", sa.Text(), nullable=True),
         sa.Column("result", sa.Text(), server_default="{}", nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_agent_transitions")),
@@ -81,6 +82,13 @@ def upgrade() -> None:
     )
     with op.batch_alter_table("agent_transitions", schema=None) as batch_op:
         batch_op.create_index("idx_transitions_agent", ["agent_name", "status"], unique=False)
+        batch_op.create_index(
+            "uq_transitions_open",
+            ["agent_name"],
+            unique=True,
+            postgresql_where=sa.text("status = 'pending'"),
+            sqlite_where=sa.text("status = 'pending'"),
+        )
 
     op.create_table(
         "agent_watches",
@@ -489,6 +497,11 @@ def downgrade() -> None:
     op.drop_table("agents")
     op.drop_table("agent_watches")
     with op.batch_alter_table("agent_transitions", schema=None) as batch_op:
+        batch_op.drop_index(
+            "uq_transitions_open",
+            postgresql_where=sa.text("status = 'pending'"),
+            sqlite_where=sa.text("status = 'pending'"),
+        )
         batch_op.drop_index("idx_transitions_agent")
 
     op.drop_table("agent_transitions")
