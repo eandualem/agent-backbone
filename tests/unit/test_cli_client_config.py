@@ -212,3 +212,29 @@ def test_a_pool_timeout_says_nothing_was_sent():
     from agent_backbone.cli._common import _failure
 
     assert "nothing was sent" in _failure(httpx.PoolTimeout("pool"), "u", 10)
+
+
+def test_a_denial_inside_an_exception_group_is_found():
+    """localhost with IPv4 and IPv6 addresses fails as an ExceptionGroup."""
+    group = ExceptionGroup(
+        "multiple connection attempts failed",
+        [
+            PermissionError(1, "Operation not permitted"),
+            PermissionError(1, "Operation not permitted"),
+        ],
+    )
+    from agent_backbone.cli._common import _failure
+
+    assert "sandbox or permission boundary" in _failure(_connect_error_from(group), "u", 10)
+
+
+def _connect_error_from(cause: BaseException):
+    import httpx
+
+    try:
+        try:
+            raise OSError("All connection attempts failed") from cause
+        except OSError as wrapper:
+            raise httpx.ConnectError(str(wrapper)) from wrapper
+    except httpx.ConnectError as exc:
+        return exc

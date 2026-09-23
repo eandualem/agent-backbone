@@ -196,7 +196,7 @@ def status_view(data: dict, *, width: int, plain: bool = False, watch: bool = Fa
         ordered = sorted(members, key=lambda a: (_state(a)[0], clean(a["name"]).casefold()))
         for index, agent in enumerate(ordered):
             _, label, style = _state(agent)
-            if agent.get("state_source") == "stale":
+            if agent.get("state_source") == "stale" and agent.get("online"):
                 label += "?"
             cells = [
                 Text(clean(agent["name"]), "bold" if agent.get("online") else "dim"),
@@ -242,7 +242,7 @@ def status_view(data: dict, *, width: int, plain: bool = False, watch: bool = Fa
                 information.append("Purpose: " + clean(agent["description"]))
             if agent.get("tags"):
                 information.append("Tags: " + clean(", ".join(agent["tags"])))
-        if agent.get("state_source") == "stale":
+        if agent.get("state_source") == "stale" and agent.get("online"):
             information.append("Unconfirmed: stale hook state; the terminal was inconclusive")
         if reason := agent.get("reason"):
             information.append("Reason: " + clean(reason))

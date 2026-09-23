@@ -131,7 +131,7 @@ async def get_session_intelligence(
                     SessionIntelligence.SETTLING,
                     f"idle for {elapsed:.1f}s < grace {config.timing.grace_period_seconds}s",
                 )
-        elif state_snap.source == "push":
+        elif state_snap.source in ("push", "stale"):
             # The hook wrote a wall-clock transition time: grace counts from
             # when the agent became idle, not from this read. A terminal
             # reading is stamped at read time, so it carries no grace —
