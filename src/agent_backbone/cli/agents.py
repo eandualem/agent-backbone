@@ -352,7 +352,13 @@ async def _agent_start(args: argparse.Namespace) -> int:
         directory = os.getcwd()
     elif directory is None and name is not None and not getattr(args, "group", False):
         # A bare unknown name registers the current directory under that name.
+        from agent_backbone.services.agents.operations import case_twin
+
         config = await _common.read_config()
+        if twin := case_twin(config.agents.names, name):
+            print(f"'{name}' differs only in case from the registered agent '{twin}'")
+            print(f"  start it: backbone agent start {twin}")
+            return 1
         if config.agents.get(name) is None:
             directory = os.getcwd()
             print(f"'{name}' is new — registering it for {directory}")
