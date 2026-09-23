@@ -15,6 +15,7 @@ from agent_backbone.services.agents import launch
 from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.launch import StartResult
+from agent_backbone.services.agents.store import refuse_case_twin
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.terminal import session_exists
 
@@ -94,6 +95,7 @@ async def _record_start_failure(
 
 
 async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
+    refuse_case_twin(store.agents, req.name)
     if req.directory:
         return await store.register_directory(
             req.directory,

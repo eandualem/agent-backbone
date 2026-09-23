@@ -124,7 +124,7 @@ class TestRuntimePaste:
             ) as submit,
             patch(
                 "agent_backbone.services.runtimes.base.capture_pane",
-                AsyncMock(side_effect=[envelope, "❯" if consumed else envelope]),
+                AsyncMock(side_effect=[envelope] * 5 + ["❯" if consumed else envelope] * 6),
             ),
             patch("agent_backbone.services.runtimes.base.asyncio.sleep", AsyncMock()),
         ):

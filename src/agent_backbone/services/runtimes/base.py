@@ -264,7 +264,10 @@ class Runtime:
     Codex, milliseconds for Gemini CLI)."""
 
     # --- paste behaviour ---------------------------------------------------
-    submission_checks: int = 2
+    # Observations after the one Enter, 0.1 s apart. Claude Code 2.1.280 was
+    # measured taking about 0.5 s to clear a submitted prompt; two checks
+    # reported submitted prompts as unconfirmed.
+    submission_checks: int = 10
     paste_settle_seconds: float = 0.2
 
     def __repr__(self) -> str:

@@ -71,6 +71,24 @@ def _flag(name: str, value: object) -> bool:
     raise ValueError(f"{name} must be true or false, got {value!r}")
 
 
+def case_twin(names, name: str | None) -> str | None:
+    """A registered name that differs from ``name`` only in letter case."""
+    if not name:
+        return None
+    return next((n for n in names if n != name and n.casefold() == name.casefold()), None)
+
+
+def refuse_case_twin(agents, name: str | None) -> None:
+    """A new name beside a registered one of different case ("alfred" beside
+    "Alfred") would be a second agent that messages to the first never reach.
+    An exact registered name is not new and passes."""
+    if name and agents.get(name) is None and (twin := case_twin(agents.names, name)):
+        raise ValueError(
+            f"'{name}' differs only in case from the registered agent '{twin}'; "
+            f"start '{twin}', or choose a distinct name"
+        )
+
+
 class AgentStore:
     """Known agents + settings snapshot, with change notification."""
 
@@ -200,6 +218,7 @@ class AgentStore:
                     current = await self.discover(directory, **options)
                     if current.name != spec.name:
                         continue
+                    refuse_case_twin(self._agents, current.name)
                     return await self.register(current.with_watches(*watches))
 
     @serialized_mutation
