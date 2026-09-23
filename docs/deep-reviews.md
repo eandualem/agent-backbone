@@ -1,21 +1,34 @@
 # Deep reviews without stopping your agent
 
-A repository agent can run the installed Codex CLI as a separate process while
-its own conversation continues. No Backbone swarm or managed agent session is
-needed. Use a deep review before a release or a broad architectural change;
-use a focused review for a small change and a swarm for independent implementation
-work. The review produces findings for an agent to verify, not automatic fixes.
+A repository agent can run the installed Codex CLI, or Claude Code, as a
+separate process while its own conversation continues. No Backbone swarm or managed agent session is
+needed. The review produces findings for an agent to verify, not automatic fixes.
 
-## Codex: explicit Ultra effort
+The reviewer is a different model family in a different CLI from the one that
+wrote the change: Claude-led work is reviewed by Codex with `gpt-6-astra`, and
+Codex-led work by Claude Code with `claude-fable-5-1`. Name the model exactly;
+if it is unavailable, report that rather than substituting another.
 
-Check `codex --version` and `codex exec review --help`. A complete review was verified with CLI
-0.153.4, with `gpt-6-astra` supporting `ultra`. Ultra is a reasoning setting for
+Two scopes use the same commands at different depths:
+
+| Scope | Head | Base | Codex effort | Claude level |
+|---|---|---|---|---|
+| Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | `high` | `high` |
+| Release, develop into main | `develop` | `main` | `ultra` | `max` |
+
+For a Codex-led repository, the release's "Ultra" review is therefore
+`claude-fable-5-1` at `/code-review max`.
+
+## Codex reviewer
+
+Check `codex --version` and `codex exec review --help`. Complete reviews were verified
+with `gpt-6-astra` at `ultra` (CLI 0.153.4) and at `high` (CLI 0.155.1). An unknown
+model fails: exit 1, a `turn.failed` event and no report. Ultra is a reasoning setting for
 Codex's review command, not a separate `codex ultrareview` subcommand. Set both
 model and effort explicitly rather than inheriting the implementing agent's defaults.
 
 Fetch the intended repository refs, resolve the head and base to commit IDs, and
-use a clean, detached checkout of the head. For develop into main, the reviewed
-head is develop and the comparison base is main. This is a merge-base diff;
+use a clean, detached checkout of the head. This is a merge-base diff;
 record the merge-base too. Never switch an agent's active checkout underneath it.
 
 For example, run these Bash/Zsh commands from your repository. They select
@@ -24,19 +37,23 @@ for every attempt; never overwrite an earlier review's evidence.
 
 ```bash
 git fetch origin
-review_head=$(git rev-parse --verify 'origin/develop^{commit}')
-review_base=$(git rev-parse --verify 'origin/main^{commit}')
+# Feature branch before its PR: the branch you committed on, against develop.
+review_head=$(git rev-parse --verify 'HEAD^{commit}')
+review_base=$(git rev-parse --verify 'origin/develop^{commit}')
+review_effort=high
+# Release review instead: head origin/develop, base origin/main, review_effort=ultra.
 review_run="$PWD/.backbone/reviews/$(date -u +%Y%m%dT%H%M%SZ)-$$"
 mkdir -p "$review_run"
 git worktree add --detach "$review_run/repo" "$review_head"
 printf '%s\n' "head=$review_head" "base=$review_base" \
   "merge_base=$(git merge-base "$review_base" "$review_head")" \
-  "model=gpt-6-astra" "effort=ultra" > "$review_run/scope.txt"
+  "model=gpt-6-astra" "effort=$review_effort" > "$review_run/scope.txt"
 codex --version >> "$review_run/scope.txt"
 ```
 
 The essential invocation, from that clean checkout, is below. Replace
-`BASE_COMMIT` with the saved base SHA and the output paths with your run directory.
+`BASE_COMMIT` with the saved base SHA, `EFFORT` with `high` or `ultra` from the
+table, and the output paths with your run directory.
 Ask your agent to execute it in the background; you do not need to open or stop
 an interactive Codex session.
 
@@ -46,7 +63,7 @@ env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
   codex exec --sandbox read-only --ignore-user-config --ephemeral \
   --disable hooks --disable shell_snapshot \
   -c approval_policy=never \
-  -c model_reasoning_effort=ultra \
+  -c model_reasoning_effort=EFFORT \
   review --base BASE_COMMIT --model gpt-6-astra \
   --json --output-last-message /ABSOLUTE/RUN/DIR/report.md \
   > /ABSOLUTE/RUN/DIR/events.jsonl 2> /ABSOLUTE/RUN/DIR/stderr.log
@@ -63,6 +80,9 @@ For a job that must outlive that facility, use a detached supervisor with closed
 stdin that records the process exit code and timestamps. Save the command, CLI
 version, model, effort, head, base and merge-base alongside the report. Keep these
 artifacts under the repository's ignored `.backbone/reviews/` directory, not `docs/`.
+CLI 0.155.1 reports every token count as 0 in `exec review`'s `turn.completed`
+event; record tokens as unavailable, not zero. Remove the detached checkout afterwards with `git worktree remove "$review_run/repo"`;
+the saved evidence stays in the run directory.
 
 If the launching agent reports `failed to initialize in-process app-server client:
 Operation not permitted`, Codex may be blocked by the outer agent sandbox before
@@ -94,7 +114,8 @@ triaged findings and the authorized scope:
 
 - **Many valid findings, or any high-severity findings:** assume the pass may have
   saturated and left other problems unreported. After the fixes have landed in
-  `develop` through ordinary reviewed PRs, run another Ultra pass from the updated
+  `develop` through ordinary reviewed PRs, run another release-depth pass with the
+  same reviewer (Codex `ultra` or Claude `max`) from the updated
   head to the intended base. Pin the new head, base and merge-base and use a new
   run directory. Apply the same decision rule to that round's findings.
 - **Few findings, all minor:** fix them on a branch, PR to `develop`, complete
@@ -136,13 +157,84 @@ A review does not itself authorize a release. When release work is in scope,
 follow the repository's [promotion process](../CONTRIBUTING.md#releasing-maintainers)
 and verify the resulting PR state before reporting completion.
 
-## Claude Code
+## Claude Code: a local reviewer
 
-`claude ultrareview BASE_BRANCH --no-post` is a separate, cloud-hosted review
-capability. `--json` returns findings, and `--timeout MINUTES` bounds how long the
-command waits. It is not ordinary Claude `--effort max`. Check local help and account
-availability first. Backbone does not silently replace the requested Codex review
-with this service.
+A Codex-led repository gets its independent review from Claude Code, run the
+same way: a separate headless process in a clean detached checkout, while the
+calling agent keeps working. Prepare the run directory, checkout and `scope.txt`
+exactly as above; record `model=claude-fable-5-1` and the level, and save
+`claude --version` in place of Codex's. Measured with Claude Code 2.1.280.
+
+```bash
+cd /ABSOLUTE/RUN/DIR/repo
+env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
+  -u BACKBONE_DATA_DIR -u BACKBONE_API_KEY -u BACKBONE_LAUNCH_ID \
+  claude -p "/code-review LEVEL BASE_COMMIT" --model claude-fable-5-1 \
+  --permission-mode plan --no-session-persistence \
+  --settings '{"disableAllHooks":true}' --output-format json \
+  < /dev/null > /ABSOLUTE/RUN/DIR/report.json 2> /ABSOLUTE/RUN/DIR/stderr.log
+```
+
+`/code-review LEVEL BASE_COMMIT` is Claude Code's built-in review; `LEVEL` is
+`high` or `max` from the table. With a commit as its target it reviews the diff
+from that commit to the checkout's `HEAD`.
+`--permission-mode plan` keeps the reviewer read-only. `disableAllHooks` skips
+every hook in user and project settings, including ones Backbone did not install.
+`--no-session-persistence` leaves no resumable conversation. Do not use `--bare`
+for isolation: it refuses OAuth and keychain logins, so a subscription login cannot
+authenticate.
+
+**Exit status 0 does not prove a review ran.** With an unknown model Claude Code
+exits 0 with `"is_error": false`, an explanation in `result` and an empty
+`modelUsage`. Count the review as done only when `modelUsage` names the requested
+model and `result` holds the findings: a JSON array of `file`,
+`line`, `summary` and `failure_scenario`, followed by a short summary.
+
+```bash
+jq -e '(.is_error | not) and (.modelUsage | has("claude-fable-5-1"))' \
+  /ABSOLUTE/RUN/DIR/report.json
+```
+
+Save `claude --version`, the model from `modelUsage`, the level, `total_cost_usd`
+and `usage` with the report; they are the round's model, cost and token evidence.
+
+From inside a Codex task the reviewer needs network access to Anthropic's API.
+As with the Codex reviewer, ask for this one process to run outside the outer
+sandbox and keep plan mode and disabled hooks. This path has not been measured
+from inside a Codex sandbox.
+
+`claude ultrareview BASE_BRANCH --no-post` is a different thing: a cloud-hosted
+multi-agent review, billed and dependent on the account. `--json` returns
+findings and `--timeout MINUTES` bounds the wait. Check local help and account
+availability before relying on it. Backbone never silently substitutes it for a
+requested local review.
+
+## Review depth, time and cost
+
+A feature review at `high` is cheap enough to run before every implementation
+PR. On a one-file diff with two seeded bugs, Claude `claude-fable-5-1` at `high`
+took 99 s and $0.56 and found both. The same diff at `max` (measured with Opus)
+took 850 s and $6.08. Keep `max` and Codex `ultra` for the release review, where
+[another round](#decide-whether-to-run-another-ultra-round) is decided from the
+findings.
+
+## Before and after the pull request
+
+For a feature branch, finish the review before opening the PR. Triage every
+finding against the reviewed head as described above, fix the valid ones on the
+branch and run the repository's checks again. A meaningful change made after the
+review (new behaviour, not a typo) gets another `high` review of the new head. Then
+open the PR against `develop` and link the saved report.
+
+After the PR opens, required checks and branch protection still gate the merge.
+Whether CodeRabbit is also required (public repositories) or not (private ones)
+is set by the shared `independent-review` policy (`backbone templates show
+independent-review`). When it is required, confirm that a review ran on the latest commit:
+the check reads "Review completed", not "Review rate limited" or "Review skipped".
+If none started, comment `@coderabbitai review` on the PR. When it is rate limited,
+send that comment only after the "available in N minutes" time it gives. A GitHub
+Actions payment does not enable CodeRabbit; its private-repository reviews are a
+separate subscription.
 
 The full tracked review-job API, cancellation and automatic completion notices
 are follow-up work in [issue #171](https://github.com/eandualem/agent-backbone/issues/171); this guide describes the native CLI workflow.
