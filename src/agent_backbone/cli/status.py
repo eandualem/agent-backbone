@@ -303,7 +303,8 @@ async def snapshot(args: argparse.Namespace) -> dict:
         # "offline" agents would report the caller's sandbox as an outage.
         if denied := await access_error():
             raise ValueError(
-                f"agent states unknown from this process: {_common.unreachable()}; tmux: {denied}"
+                "agent states unknown from this process: "
+                f"{_common.unreachable('/api/agents')}; tmux: {denied}"
             )
         async with _common.Direct(config) as direct:
             agents = [

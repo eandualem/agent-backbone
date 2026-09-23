@@ -174,13 +174,14 @@ class ClaudeCode(Runtime):
     # "✳ Harmonizing… (2m 42s · ↓ 10.1k tokens)" above the prompt while a turn
     # runs (live capture, 2.1.280, which no longer shows "esc to interrupt");
     # the glyph cycles. A finished turn reads "✻ Baked for 4m 11s", no "…(".
-    _SPINNER_RE = re.compile(r"^[·✢✳✶✻✽*]\s+\S[^\n]*…\s*\(\d")
+    # It starts at column 0; the same text quoted in a reply is indented.
+    _SPINNER_RE = re.compile(r"^[·✢✳✶✻✽*] +\S[^\n]*…\s*\(\d")
 
     def detect_busy(self, pane_content: str) -> bool:
         if super().detect_busy(pane_content):
             return True
         tail = sanitize_pane_content(pane_content).strip().splitlines()[-25:]
-        return any(self._SPINNER_RE.match(line.strip()) for line in tail)
+        return any(self._SPINNER_RE.match(line) for line in tail)
 
     def detect_dialog_chrome(self, pane_content: str) -> bool:
         return self._unnumbered_dialog(pane_content) or super().detect_dialog_chrome(pane_content)

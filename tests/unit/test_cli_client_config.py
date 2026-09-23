@@ -204,3 +204,11 @@ def test_a_read_timeout_says_the_outcome_is_unknown():
 
     reason = _failure(httpx.ReadTimeout("timed out"), "u", 30)
     assert "outcome is unknown" in reason
+
+
+def test_a_pool_timeout_says_nothing_was_sent():
+    import httpx
+
+    from agent_backbone.cli._common import _failure
+
+    assert "nothing was sent" in _failure(httpx.PoolTimeout("pool"), "u", 10)

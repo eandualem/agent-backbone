@@ -152,14 +152,14 @@ async def list_sessions(*, strict: bool = False) -> list[str]:
 
 
 async def access_error() -> str | None:
-    """tmux's refusal when a server exists but this process may not use its socket.
+    """Why tmux cannot answer this process, when the sessions may still be running.
 
     A sandboxed caller gets "error connecting to …/default (Operation not
-    permitted)": the sessions may all be running, so this is not "no sessions".
+    permitted)"; a hung server times out. Neither means "no sessions".
     """
     rc, _, stderr = await _run_tmux("list-sessions", "-F", "#{session_name}")
     text = stderr.decode(errors="replace").strip()
-    if rc != 0 and ("not permitted" in text or "permission denied" in text.lower()):
+    if rc == -1 or (rc != 0 and ("not permitted" in text or "permission denied" in text.lower())):
         return text
     return None
 

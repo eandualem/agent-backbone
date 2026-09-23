@@ -54,7 +54,7 @@ async def api(
             )
     except httpx.HTTPError as exc:
         global _last_failure
-        _last_failure = _failure(exc, api_url(config, path), timeout)
+        _last_failure = _failures[path] = _failure(exc, api_url(config, path), timeout)
         return None
     try:
         data = resp.json()
@@ -64,6 +64,7 @@ async def api(
 
 
 _last_failure = "no request was made"
+_failures: dict[str, str] = {}
 
 
 def _failure(exc: Exception, url: str, timeout: float) -> str:
@@ -84,19 +85,27 @@ def _failure(exc: Exception, url: str, timeout: float) -> str:
         )
     if any(isinstance(c, ConnectionRefusedError) for c in chain):
         return f"nothing is listening at {url}; is `backbone up` running?"
-    if isinstance(exc, httpx.ConnectTimeout):
-        return f"{url} did not accept a connection within {timeout:g}s"
-    if isinstance(exc, httpx.TimeoutException):
+    if isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout):
+        return f"{url} did not accept a connection within {timeout:g}s; nothing was sent"
+    if isinstance(exc, httpx.ReadTimeout):
         return (
             f"{url} accepted the request but did not answer within {timeout:g}s; "
             "its outcome is unknown, so check before repeating it"
         )
+    if isinstance(exc, httpx.TimeoutException | httpx.ReadError | httpx.RemoteProtocolError):
+        return (
+            f"{url}: the request may have been sent, but no answer arrived "
+            f"({type(exc).__name__}); its outcome is unknown, so check before repeating it"
+        )
     return f"{url}: {type(exc).__name__}: {exc}"
 
 
-def unreachable() -> str:
-    """The message for a call that got no response, with the reason it failed."""
-    return f"backbone API unreachable: {_last_failure}"
+def unreachable(path: str | None = None) -> str:
+    """The message for a call that got no response, with the reason it failed.
+
+    Concurrent callers name their ``path``: the last failure may be another request's.
+    """
+    return f"backbone API unreachable: {_failures.get(path or '', _last_failure)}"
 
 
 async def api_up(config: BackboneConfig) -> bool:

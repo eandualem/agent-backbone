@@ -46,8 +46,12 @@ async def _swarm(args: argparse.Namespace) -> int:
 
     if sub == "list":
         result = await _common.api(boot, "GET", "/api/swarms")
-        if result is None or result[0] != 200:
+        if result is None:
             print(_common.unreachable())
+            return 1
+        if result[0] != 200:
+            detail = result[1].get("detail") if isinstance(result[1], dict) else result[1]
+            print(f"error {result[0]}: {detail}")
             return 1
         swarms = result[1].get("items", []) if isinstance(result[1], dict) else []
         if not isinstance(swarms, list) or any(not isinstance(s, dict) for s in swarms):

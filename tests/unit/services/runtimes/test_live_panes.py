@@ -461,3 +461,9 @@ class TestClaudeSpinner:
     def test_finished_turn_summary_is_idle(self):
         assert not RUNTIMES["claude"].detect_busy(CLAUDE_TURN_DONE)
         assert infer_state_from_pane(CLAUDE_TURN_DONE, "claude").state == AgentState.IDLE
+
+    def test_a_spinner_quoted_in_a_reply_is_not_busy(self):
+        quoted = CLAUDE_TURN_DONE.replace(
+            "⏺ Bash(make check)\n", "⏺ The pane read:\n  ✳ Harmonizing… (2m 42s · ↓ 10.1k tokens)\n"
+        )
+        assert not RUNTIMES["claude"].detect_busy(quoted)

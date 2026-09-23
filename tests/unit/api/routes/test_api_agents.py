@@ -130,6 +130,15 @@ class TestListAgents:
         resp = await api_client.get("/api/agents", headers=auth_headers)
         assert "tw-1" not in {a["name"] for a in resp.json()["items"]}
 
+    async def test_keeps_a_session_whose_group_has_no_live_session(
+        self, api_client, auth_headers, tmux_svc
+    ):
+        tmux_svc.list_sessions_rich.return_value.append(
+            {"name": "scratch", "windows": 1, "created": 1, "attached": False, "group": "work"}
+        )
+        resp = await api_client.get("/api/agents", headers=auth_headers)
+        assert "scratch" in {a["name"] for a in resp.json()["items"]}
+
     async def test_requires_auth(self, api_client):
         assert (await api_client.get("/api/agents")).status_code == 401
 

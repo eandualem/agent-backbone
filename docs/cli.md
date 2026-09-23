@@ -521,9 +521,10 @@ The reply prints one sentence saying what happened: delivered; stored
 (`"queue": "already_queued"` — nothing was added); or not stored
 (`"queue": "failed"` — send again later). Exit code 0 if delivered, 2 if
 the message is in the queue, 1 if it is not (API error or storage
-failure). With no answer from the API the message was not accepted, except
-after a timeout once the request was sent: the error then says the outcome is
-unknown, so check `agent inspect` before sending it again. Multi-line messages are pasted with bracketed paste and arrive
+failure). With no answer from the API the error says whether the request
+was sent. If it was not, the message was not accepted; if it was (a read
+timeout or a dropped answer), the outcome is unknown, so check `agent
+inspect` before sending it again. Multi-line messages are pasted with bracketed paste and arrive
 intact as a single message.
 
 The JSON includes `operation_id`, `delivery_id` and `queue_id` when available.
