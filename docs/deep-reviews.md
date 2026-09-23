@@ -18,8 +18,9 @@ Two scopes use the same commands at different depths:
 
 ## Codex reviewer
 
-Check `codex --version` and `codex exec review --help`. A complete review was verified with CLI
-0.153.4, with `gpt-6-astra` supporting `high` and `ultra`. Ultra is a reasoning setting for
+Check `codex --version` and `codex exec review --help`. Complete reviews were verified
+with `gpt-6-astra` at `ultra` (CLI 0.153.4) and at `high` (CLI 0.155.1). An unknown
+model fails: exit 1, a `turn.failed` event and no report. Ultra is a reasoning setting for
 Codex's review command, not a separate `codex ultrareview` subcommand. Set both
 model and effort explicitly rather than inheriting the implementing agent's defaults.
 
@@ -75,7 +76,8 @@ For a job that must outlive that facility, use a detached supervisor with closed
 stdin that records the process exit code and timestamps. Save the command, CLI
 version, model, effort, head, base and merge-base alongside the report. Keep these
 artifacts under the repository's ignored `.backbone/reviews/` directory, not `docs/`.
-Remove the detached checkout afterwards with `git worktree remove "$review_run/repo"`;
+CLI 0.155.1 reports every token count as 0 in `exec review`'s `turn.completed`
+event; record tokens as unavailable, not zero. Remove the detached checkout afterwards with `git worktree remove "$review_run/repo"`;
 the saved evidence stays in the run directory.
 
 If the launching agent reports `failed to initialize in-process app-server client:
