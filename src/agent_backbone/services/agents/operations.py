@@ -15,6 +15,7 @@ from agent_backbone.services.agents import launch
 from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.launch import StartResult
+from agent_backbone.services.agents.store import refuse_case_twin
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.terminal import session_exists
 
@@ -93,23 +94,8 @@ async def _record_start_failure(
     )
 
 
-def case_twin(names, name: str | None) -> str | None:
-    """A registered name that differs from ``name`` only in letter case."""
-    if not name:
-        return None
-    return next((n for n in names if n != name and n.casefold() == name.casefold()), None)
-
-
 async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
-    # "alfred" beside a registered "Alfred" would be a second agent that
-    # messages to "Alfred" never reach.
-    if store.agents.get(req.name or "") is None and (
-        twin := case_twin(store.agents.names, req.name)
-    ):
-        raise ValueError(
-            f"'{req.name}' differs only in case from the registered agent '{twin}'; "
-            f"start '{twin}', or choose a distinct name"
-        )
+    refuse_case_twin(store.agents, req.name)
     if req.directory:
         return await store.register_directory(
             req.directory,

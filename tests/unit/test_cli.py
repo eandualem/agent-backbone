@@ -299,9 +299,38 @@ class TestAgentCommands:
             )
             assert _run(["agent", "start", "alfred", "--dir", str(other), "--no-wait"]) == 1
             assert "differs only in case" in capsys.readouterr().out
+            # Discovery from a directory named "alfred" derives the same twin.
+            twin_dir = tmp_path / "other-parent" / "alfred"  # macOS paths ignore case
+            twin_dir.mkdir(parents=True)
+            assert _run(["agent", "start", "--dir", str(twin_dir), "--no-wait"]) == 1
+            assert "differs only in case" in capsys.readouterr().out
         start.assert_not_called()
         assert _run(["agent", "list", "--json"]) == 0
         assert [a["name"] for a in json.loads(capsys.readouterr().out)["items"]] == ["Alfred"]
+
+    def test_existing_case_twins_still_start_by_exact_name(self, tmp_path, capsys):
+        """Registries from before the check may hold "Alfred" and "alfred"."""
+        from agent_backbone.cli import _common
+        from agent_backbone.config import AgentSpec
+
+        assert _run(["init"]) == 0
+
+        async def seed():
+            async with _common.Direct(await _common.read_client_config()) as direct:
+                for parent, name in (("one", "Alfred"), ("two", "alfred")):
+                    (tmp_path / parent / name).mkdir(parents=True)
+                    await direct.store.register(
+                        AgentSpec(name=name, dir=str(tmp_path / parent / name))
+                    )
+
+        import asyncio
+
+        asyncio.run(seed())
+        start = AsyncMock(return_value=StartResult(ok=True))
+        with patch("agent_backbone.services.agents.launch.start_agent", start):
+            assert _run(["agent", "start", "Alfred", "--no-wait"]) == 0
+            assert _run(["agent", "start", "alfred", "--no-wait"]) == 0
+        assert [call.args[0].name for call in start.await_args_list] == ["Alfred", "alfred"]
 
     def test_moved_directory_follows_and_same_name_gets_suffix(self, tmp_path, capsys):
         assert _run(["init"]) == 0

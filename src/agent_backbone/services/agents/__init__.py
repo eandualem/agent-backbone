@@ -35,7 +35,7 @@ from agent_backbone.services.agents.launch import (
 )
 from agent_backbone.services.agents.models import AgentState, StateSnapshot, prompt_id
 from agent_backbone.services.agents.skills_preview import skills_preview
-from agent_backbone.services.agents.store import AgentStore
+from agent_backbone.services.agents.store import AgentStore, case_twin
 
 __all__ = [
     "AgentConfigView",
@@ -49,6 +49,7 @@ __all__ = [
     "bind_task",
     "build_enriched_agent",
     "build_session_snapshot",
+    "case_twin",
     "clear_starting_marker",
     "collect_usage",
     "deny_agent",
