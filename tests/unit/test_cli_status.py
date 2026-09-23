@@ -232,3 +232,11 @@ def test_a_stale_hook_reading_is_marked_unconfirmed():
     output = render_status(data, width=120)
     assert "idle?" in output
     assert "Unconfirmed: stale hook state" in output
+
+
+def test_an_offline_agent_with_a_stale_hook_is_not_marked_unconfirmed():
+    data = example()
+    data["agents"][0].update(state="offline", online=False, state_source="stale")
+    output = render_status(data, width=120)
+    assert "offline?" not in output
+    assert "Unconfirmed" not in output

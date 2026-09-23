@@ -73,10 +73,16 @@ def _failure(exc: Exception, url: str, timeout: float) -> str:
 
     # The socket's own error sits under wrappers ("All connection attempts failed").
     chain: list[BaseException] = []
-    cause: BaseException | None = exc
-    while cause is not None and cause not in chain:
+    pending: list[BaseException] = [exc]
+    while pending:
+        cause = pending.pop()
+        if cause in chain:
+            continue
         chain.append(cause)
-        cause = cause.__cause__ or cause.__context__
+        # Several addresses (IPv4/IPv6 localhost) fail as an ExceptionGroup.
+        pending.extend(getattr(cause, "exceptions", ()))
+        if nxt := cause.__cause__ or cause.__context__:
+            pending.append(nxt)
     if denied := next((c for c in chain if isinstance(c, PermissionError)), None):
         return (
             f"this process may not connect to {url} ({denied.strerror}); a sandbox or "

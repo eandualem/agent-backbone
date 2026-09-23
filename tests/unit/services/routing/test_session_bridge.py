@@ -331,6 +331,16 @@ class TestGetSessionIntelligence:
             profile = await get_session_intelligence("ike", config)
         assert profile.intelligence == SessionIntelligence.SETTLING
 
+    async def test_stale_hook_idle_still_starts_grace(self, config):
+        # A stale reading repeats the hook's wall-clock transition time too.
+        from agent_backbone.services.agents import StateSnapshot as Snap
+
+        config = replace(config, timing=TimingConfig(grace_period_seconds=60))
+        snap = Snap(state=AgentState.IDLE, source="stale", timestamp=time.time() - 1)
+        with _online(snap=snap):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == SessionIntelligence.SETTLING
+
     async def test_hook_idle_beyond_grace_is_ready(self, config):
         from agent_backbone.services.agents import StateSnapshot as Snap
 
