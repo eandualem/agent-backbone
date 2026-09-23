@@ -136,8 +136,12 @@ class TestListAgents:
         tmux_svc.list_sessions_rich.return_value.append(
             {"name": "scratch", "windows": 1, "created": 1, "attached": False, "group": "work"}
         )
+        tmux_svc.list_sessions_rich.return_value.append(
+            {"name": "tw-2", "windows": 1, "created": 2, "attached": True, "group": "work"}
+        )
         resp = await api_client.get("/api/agents", headers=auth_headers)
-        assert "scratch" in {a["name"] for a in resp.json()["items"]}
+        names = {a["name"] for a in resp.json()["items"]}
+        assert "scratch" in names and "tw-2" not in names
 
     async def test_requires_auth(self, api_client):
         assert (await api_client.get("/api/agents")).status_code == 401
