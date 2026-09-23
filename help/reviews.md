@@ -7,10 +7,14 @@ need to use the same runtime as the reviewer. No managed agent or swarm is creat
 1. Commit the intended changes, fetch refs, and pin the head, base and merge-base.
 2. Review the head in a separate clean checkout. For develop into main, head is
    develop and base is main. Preserve the implementing agent's active checkout.
-3. Run Codex's `exec review --base BASE_COMMIT` with explicit `gpt-6-astra` and
-   `model_reasoning_effort=ultra`, the read-only sandbox, hooks disabled and a
-   fresh environment without the caller's Backbone identity. Use `--json` and
-   `--output-last-message` to save execution evidence and a readable final report.
+3. Run Codex's `exec review --base BASE_COMMIT` with explicit `gpt-6-astra`, the
+   read-only sandbox, hooks disabled and a fresh environment without the caller's
+   Backbone identity. Use `--json` and `--output-last-message` to save execution
+   evidence and a readable final report. For a Claude reviewer, run
+   `claude -p "/code-review LEVEL BASE_COMMIT" --model opus` in plan mode with all
+   hooks disabled and JSON output; its exit status 0 alone is not success, so check
+   `modelUsage` as the guide shows. Depth: `high` for an ordinary PR; Codex `ultra`
+   or Claude `max` for release and broad reviews.
 4. Start the process in the background, retain its handle, and continue working.
    Capture exit status; a timeout, failed launch or missing report is not a clean
    review. Keep artifacts in ignored `.backbone/reviews/`, outside `docs/`.

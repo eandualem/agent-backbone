@@ -1,7 +1,7 @@
 # Deep reviews without stopping your agent
 
-A repository agent can run the installed Codex CLI as a separate process while
-its own conversation continues. No Backbone swarm or managed agent session is
+A repository agent can run the installed Codex CLI, or Claude Code, as a
+separate process while its own conversation continues. No Backbone swarm or managed agent session is
 needed. Use a deep review before a release or a broad architectural change;
 use a focused review for a small change and a swarm for independent implementation
 work. The review produces findings for an agent to verify, not automatic fixes.
@@ -136,13 +136,66 @@ A review does not itself authorize a release. When release work is in scope,
 follow the repository's [promotion process](../CONTRIBUTING.md#releasing-maintainers)
 and verify the resulting PR state before reporting completion.
 
-## Claude Code
+## Claude Code: a local reviewer
 
-`claude ultrareview BASE_BRANCH --no-post` is a separate, cloud-hosted review
-capability. `--json` returns findings, and `--timeout MINUTES` bounds how long the
-command waits. It is not ordinary Claude `--effort max`. Check local help and account
-availability first. Backbone does not silently replace the requested Codex review
-with this service.
+A Codex-led repository gets its independent review from Claude Code, run the
+same way: a separate headless process in a clean detached checkout, while the
+calling agent keeps working. Prepare the run directory, checkout and `scope.txt`
+exactly as above; record `model=opus` and the review level in place of the
+Codex model and effort. Measured with Claude Code 2.1.280, where the `opus`
+alias answered as `claude-opus-5-5`.
+
+```bash
+cd /ABSOLUTE/RUN/DIR/repo
+env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
+  -u BACKBONE_DATA_DIR -u BACKBONE_API_KEY -u BACKBONE_LAUNCH_ID \
+  claude -p "/code-review high BASE_COMMIT" --model opus \
+  --permission-mode plan --no-session-persistence \
+  --settings '{"disableAllHooks":true}' --output-format json \
+  < /dev/null > /ABSOLUTE/RUN/DIR/report.json 2> /ABSOLUTE/RUN/DIR/stderr.log
+```
+
+`/code-review LEVEL BASE_COMMIT` is Claude Code's built-in review. With a commit
+as its target it reviews the diff from that commit to the checkout's `HEAD`.
+`--permission-mode plan` keeps the reviewer read-only. `disableAllHooks` skips
+every hook in user and project settings, including ones Backbone did not install.
+`--no-session-persistence` leaves no resumable conversation. Do not use `--bare`
+for isolation: it refuses OAuth and keychain logins, so a subscription login cannot
+authenticate.
+
+**Exit status 0 does not prove a review ran.** With an unknown model Claude Code
+exits 0 with `"is_error": false`, an explanation in `result` and an empty
+`modelUsage`. Count the review as done only when `modelUsage` names a model of
+the requested family and `result` holds the findings: a JSON array of `file`,
+`line`, `summary` and `failure_scenario`, followed by a short summary.
+
+```bash
+jq -e '(.is_error | not) and (.modelUsage | keys | any(startswith("claude-opus")))' \
+  /ABSOLUTE/RUN/DIR/report.json
+```
+
+Save `claude --version`, the model from `modelUsage`, the level, `total_cost_usd`
+and `usage` with the report; they are the round's model, cost and token evidence.
+
+From inside a Codex task the reviewer needs network access to Anthropic's API.
+As with the Codex reviewer, ask for this one process to run outside the outer
+sandbox and keep plan mode and disabled hooks. This path has not been measured
+from inside a Codex sandbox.
+
+`claude ultrareview BASE_BRANCH --no-post` is a different thing: a cloud-hosted
+multi-agent review, billed and dependent on the account. `--json` returns
+findings and `--timeout MINUTES` bounds the wait. Check local help and account
+availability before relying on it. Backbone never silently substitutes it for a
+requested local review.
+
+## Review depth
+
+Use `high` for an ordinary implementation PR: `model_reasoning_effort=high` for
+Codex, `/code-review high` for Claude. Keep the deepest setting for release and
+broad architectural reviews: `ultra` for Codex, `/code-review max` for Claude.
+On a one-file diff with two seeded bugs, Claude's `high` took 27 s and $0.11,
+`max` took 850 s and $6.08, and both found the bugs. Expect `max` to cost far
+more on a real release diff.
 
 The full tracked review-job API, cancellation and automatic completion notices
 are follow-up work in [issue #171](https://github.com/eandualem/agent-backbone/issues/171); this guide describes the native CLI workflow.
