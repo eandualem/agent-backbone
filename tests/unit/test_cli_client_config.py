@@ -113,10 +113,27 @@ async def test_offline_status_uses_registered_agents_and_settings(tmp_path, monk
 
     with (
         patch("agent_backbone.cli._common.api", AsyncMock(return_value=None)),
+        patch("agent_backbone.services.terminal.access_error", AsyncMock(return_value=None)),
         patch("agent_backbone.services.agents.build_session_snapshot", side_effect=build),
     ):
         result = await snapshot(build_parser().parse_args(["status"]))
     assert result["api_online"] is False
+
+
+async def test_status_without_api_or_tmux_access_is_unknown_not_offline(tmp_path, monkeypatch):
+    """A sandboxed caller must not see every live agent reported as offline."""
+    from agent_backbone.cli import build_parser
+    from agent_backbone.cli.status import snapshot
+
+    monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'backbone.db'}")
+    denied = "error connecting to /private/tmp/tmux-501/default (Operation not permitted)"
+    with (
+        patch("agent_backbone.cli._common.api", AsyncMock(return_value=None)),
+        patch("agent_backbone.services.terminal.access_error", AsyncMock(return_value=denied)),
+        pytest.raises(ValueError, match="agent states unknown from this process.*not permitted"),
+    ):
+        await snapshot(build_parser().parse_args(["status"]))
 
 
 async def test_offline_stop_protects_configured_backbone_session(tmp_path, monkeypatch, capsys):
@@ -150,3 +167,40 @@ def test_unreadable_roster_reports_error_without_repair(tmp_path, monkeypatch, c
         assert cmd_agent(build_parser().parse_args(["agent", "list"])) == 1
     assert "Could not read existing configuration" in capsys.readouterr().out
     assert database.read_bytes() == before
+
+
+def _connect_error(cause: OSError):
+    """As the async client raises it: the socket error under a generic OSError."""
+    import httpx
+
+    try:
+        try:
+            raise OSError("All connection attempts failed") from cause
+        except OSError as wrapper:
+            raise httpx.ConnectError(str(wrapper)) from wrapper
+    except httpx.ConnectError as exc:
+        return exc
+
+
+def test_unreachable_names_a_sandbox_denial_not_an_outage():
+    from agent_backbone.cli._common import _failure
+
+    reason = _failure(_connect_error(PermissionError(1, "Operation not permitted")), "u", 10)
+    assert "sandbox or permission boundary" in reason
+    assert "backbone up" not in reason
+
+
+def test_unreachable_suggests_starting_only_when_refused():
+    from agent_backbone.cli._common import _failure
+
+    reason = _failure(_connect_error(ConnectionRefusedError(61, "Connection refused")), "u", 10)
+    assert "is `backbone up` running?" in reason
+
+
+def test_a_read_timeout_says_the_outcome_is_unknown():
+    import httpx
+
+    from agent_backbone.cli._common import _failure
+
+    reason = _failure(httpx.ReadTimeout("timed out"), "u", 30)
+    assert "outcome is unknown" in reason

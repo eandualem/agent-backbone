@@ -30,7 +30,7 @@ async def _swarm(args: argparse.Namespace) -> int:
         }
         result = await _common.api(boot, "POST", "/api/swarms", json_body=body, timeout=300.0)
         if result is None:
-            print("backbone API unreachable; `backbone up` must be running to create a swarm")
+            print(_common.unreachable())
             return 1
         status, data = result
         if status != 200:
@@ -47,7 +47,7 @@ async def _swarm(args: argparse.Namespace) -> int:
     if sub == "list":
         result = await _common.api(boot, "GET", "/api/swarms")
         if result is None or result[0] != 200:
-            print("backbone API unreachable")
+            print(_common.unreachable())
             return 1
         swarms = result[1].get("items", []) if isinstance(result[1], dict) else []
         if not isinstance(swarms, list) or any(not isinstance(s, dict) for s in swarms):
@@ -92,7 +92,7 @@ async def _swarm(args: argparse.Namespace) -> int:
     if sub == "disband":
         result = await _common.api(boot, "DELETE", f"/api/swarms/{args.name}", timeout=60.0)
         if result is None:
-            print("backbone API unreachable")
+            print(_common.unreachable())
             return 1
         status, data = result
         if status != 200:

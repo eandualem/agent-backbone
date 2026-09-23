@@ -144,7 +144,7 @@ async def _agent_output(args: argparse.Namespace) -> int:
                 query += f"&{key}={value}"
         result = await _common.api(boot, "GET", f"/api/sessions/{name}/output?{query}")
         if result is None:
-            print("backbone API unreachable")
+            print(_common.unreachable())
             return 1
         status, data = result
         if status != 200:
@@ -241,14 +241,14 @@ async def _agent_restart(args: argparse.Namespace) -> int:
             return 1
     boot = await _common.read_client_config()
     if not await _common.api_up(boot):
-        print("backbone API unreachable; is `backbone up` running?")
+        print(_common.unreachable())
         print("(a restart is owned by the running backbone; there is no direct-tmux fallback)")
         return 1
     result = await _common.api(
         boot, "POST", f"/api/agents/{name}/restart", json_body=body, timeout=30.0
     )
     if result is None:
-        print("backbone API unreachable; is `backbone up` running?")
+        print(_common.unreachable())
         return 1
     status, data = result
     if status != 200:
@@ -369,7 +369,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
     if await _common.api_up(boot):
         result = await _common.api(boot, "POST", "/api/agents/start", json_body=body, timeout=120.0)
         if result is None:
-            print("backbone API unreachable")
+            print(_common.unreachable())
             return 1
         status, data = result
         if status != 200:
@@ -536,7 +536,7 @@ async def _agent(args: argparse.Namespace) -> int:
 
     if sub in ("approve", "deny"):
         if not api_up:
-            print("backbone API unreachable; is `backbone up` running?")
+            print(_common.unreachable())
             return 1
         result = await _common.api(
             boot,
@@ -546,7 +546,7 @@ async def _agent(args: argparse.Namespace) -> int:
             timeout=30.0,
         )
         if result is None:
-            print("backbone API unreachable; is `backbone up` running?")
+            print(_common.unreachable())
             return 1
         status, data = result
         detail = data.get("detail") if isinstance(data, dict) else None
@@ -580,8 +580,12 @@ async def _agent(args: argparse.Namespace) -> int:
             return 1
         # Offline inspection: state file + tmux only.
         from agent_backbone.services.agents import agent_state, subscription_views
-        from agent_backbone.services.terminal import session_exists
+        from agent_backbone.services.terminal import access_error, session_exists
 
+        if denied := await access_error():
+            print(f"{args.name}: state unknown from this process: {_common.unreachable()}")
+            print(f"tmux: {denied}")
+            return 1
         config = await _common.read_config()
         online = await session_exists(args.name)
         snapshot = await agent_state(config, args.name)
@@ -819,7 +823,7 @@ async def _tell(args: argparse.Namespace) -> int:
     }
     result = await _common.api(boot, "POST", "/api/messages", json_body=payload, timeout=30.0)
     if result is None:
-        print("backbone API unreachable; is `backbone up` running?")
+        print(_common.unreachable())
         return 1
     status, data = result
     if status != 200:
@@ -845,7 +849,7 @@ async def _steer(boot, agent: str, text: str, sender: str) -> int:
     payload = {"target_session": agent, "from_entity": sender, "message": text}
     result = await _common.api(boot, "POST", "/api/steer", json_body=payload, timeout=30.0)
     if result is None:
-        print("backbone API unreachable; is `backbone up` running?")
+        print(_common.unreachable())
         return 1
     status, data = result
     if status != 200 or not isinstance(data, dict):
@@ -875,7 +879,7 @@ async def _reply(args: argparse.Namespace) -> int:
         boot, "POST", "/api/integrations/reply", json_body=payload, timeout=30.0
     )
     if result is None:
-        print("backbone API unreachable; is `backbone up` running?")
+        print(_common.unreachable())
         return 1
     status, data = result
     if status != 200:
@@ -946,7 +950,7 @@ async def _inbox(args: argparse.Namespace) -> int:
         },
     )
     if result is None:
-        print("backbone API unreachable; is `backbone up` running?")
+        print(_common.unreachable())
         return 1
     status, data = result
     print(json.dumps(data))

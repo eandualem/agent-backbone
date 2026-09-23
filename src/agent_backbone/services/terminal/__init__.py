@@ -17,6 +17,7 @@ from agent_backbone.services.terminal._core import (
 from agent_backbone.services.terminal._pty import PtyManager, PtySession
 from agent_backbone.services.terminal._sessions import (
     SESSION_FORMAT_STR,
+    access_error,
     graceful_close,
     list_sessions,
     list_sessions_rich,
@@ -30,6 +31,7 @@ __all__ = [
     "SESSION_FORMAT_STR",
     "PtyManager",
     "PtySession",
+    "access_error",
     "active_pane_size",
     "attach_session",
     "capture_pane",

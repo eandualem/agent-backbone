@@ -48,7 +48,7 @@ def prompt_id(snapshot: StateSnapshot) -> str:
     monitor tick would look like a new prompt and re-alert. Answering is
     still gated on the dialog being on screen either way.
     """
-    if snapshot.source == "push":
+    if snapshot.source in ("push", "stale"):
         return f"{snapshot.timestamp:.3f}"
     return f"pane:{snapshot.prompt_ref or snapshot.reason or 'waiting'}"
 

@@ -121,6 +121,15 @@ class TestListAgents:
         assert scratch["configured"] is False
         assert scratch["online"] is True
 
+    async def test_excludes_a_viewer_grouped_with_an_agent(
+        self, api_client, auth_headers, tmux_svc
+    ):
+        tmux_svc.list_sessions_rich.return_value.append(
+            {"name": "tw-1", "windows": 1, "created": 1, "attached": True, "group": "ike"}
+        )
+        resp = await api_client.get("/api/agents", headers=auth_headers)
+        assert "tw-1" not in {a["name"] for a in resp.json()["items"]}
+
     async def test_requires_auth(self, api_client):
         assert (await api_client.get("/api/agents")).status_code == 401
 
