@@ -16,6 +16,9 @@ Two scopes use the same commands at different depths:
 | Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | `high` | `high` |
 | Release, develop into main | `develop` | `main` | `ultra` | `max` |
 
+For a Codex-led repository, the release's "Ultra" review is therefore
+`claude-fable-5-1` at `/code-review max`.
+
 ## Codex reviewer
 
 Check `codex --version` and `codex exec review --help`. Complete reviews were verified
@@ -37,13 +40,14 @@ git fetch origin
 # Feature branch before its PR: the branch you committed on, against develop.
 review_head=$(git rev-parse --verify 'HEAD^{commit}')
 review_base=$(git rev-parse --verify 'origin/develop^{commit}')
-# Release review instead: head origin/develop, base origin/main.
+review_effort=high
+# Release review instead: head origin/develop, base origin/main, review_effort=ultra.
 review_run="$PWD/.backbone/reviews/$(date -u +%Y%m%dT%H%M%SZ)-$$"
 mkdir -p "$review_run"
 git worktree add --detach "$review_run/repo" "$review_head"
 printf '%s\n' "head=$review_head" "base=$review_base" \
   "merge_base=$(git merge-base "$review_base" "$review_head")" \
-  "model=gpt-6-astra" "effort=high" > "$review_run/scope.txt"
+  "model=gpt-6-astra" "effort=$review_effort" > "$review_run/scope.txt"
 codex --version >> "$review_run/scope.txt"
 ```
 
@@ -110,7 +114,8 @@ triaged findings and the authorized scope:
 
 - **Many valid findings, or any high-severity findings:** assume the pass may have
   saturated and left other problems unreported. After the fixes have landed in
-  `develop` through ordinary reviewed PRs, run another Ultra pass from the updated
+  `develop` through ordinary reviewed PRs, run another release-depth pass with the
+  same reviewer (Codex `ultra` or Claude `max`) from the updated
   head to the intended base. Pin the new head, base and merge-base and use a new
   run directory. Apply the same decision rule to that round's findings.
 - **Few findings, all minor:** fix them on a branch, PR to `develop`, complete
@@ -221,8 +226,10 @@ branch and run the repository's checks again. A meaningful change made after the
 review (new behaviour, not a typo) gets another `high` review of the new head. Then
 open the PR against `develop` and link the saved report.
 
-After the PR opens, required checks still gate the merge. Where the repository's
-policy also asks for CodeRabbit, confirm that a review ran on the latest commit:
+After the PR opens, required checks and branch protection still gate the merge.
+Whether CodeRabbit is also required (public repositories) or not (private ones)
+is set by the shared `independent-review` policy (`backbone templates show
+independent-review`). When it is required, confirm that a review ran on the latest commit:
 the check reads "Review completed", not "Review rate limited" or "Review skipped".
 If none started, comment `@coderabbitai review` on the PR. When it is rate limited,
 send that comment only after the "available in N minutes" time it gives. A GitHub

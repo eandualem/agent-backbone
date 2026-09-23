@@ -27,7 +27,8 @@ need to use the same runtime as the reviewer. No managed agent or swarm is creat
    when clear. Create issues for findings only when authorized.
 6. Decide from the triaged findings whether another Ultra round is warranted.
    Many valid findings, or any high-severity ones, suggest the pass saturated and
-   more may remain: run another head → base Ultra review after fixes land. Few,
+   more may remain: run another head → base review after fixes land, with the
+   same reviewer at release depth (Codex `ultra`, Claude `max`). Few,
    minor findings mean fix them through the ordinary PR/review/check/merge path
    and **do not run another Ultra pass**. Zero valid findings also ends the rounds.
    Apply this judgment after every round; use neither a fixed pass count nor an
