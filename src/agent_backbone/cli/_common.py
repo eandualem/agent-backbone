@@ -52,13 +52,60 @@ async def api(
             resp = await client.request(
                 method, api_url(config, path), headers=headers(config), json=json_body
             )
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        global _last_failure
+        _last_failure = _failures[path] = _failure(exc, api_url(config, path), timeout)
         return None
     try:
         data = resp.json()
     except ValueError:
         data = {"detail": resp.text}
     return resp.status_code, data
+
+
+_last_failure = "no request was made"
+_failures: dict[str, str] = {}
+
+
+def _failure(exc: Exception, url: str, timeout: float) -> str:
+    """Why a request got no response, in terms the caller can act on."""
+    import httpx
+
+    # The socket's own error sits under wrappers ("All connection attempts failed").
+    chain: list[BaseException] = []
+    cause: BaseException | None = exc
+    while cause is not None and cause not in chain:
+        chain.append(cause)
+        cause = cause.__cause__ or cause.__context__
+    if denied := next((c for c in chain if isinstance(c, PermissionError)), None):
+        return (
+            f"this process may not connect to {url} ({denied.strerror}); a sandbox or "
+            "permission boundary is blocking it, and the service may still be running. "
+            "Run the command where local network and the tmux socket are allowed"
+        )
+    if any(isinstance(c, ConnectionRefusedError) for c in chain):
+        return f"nothing is listening at {url}; is `backbone up` running?"
+    if isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout):
+        return f"{url} did not accept a connection within {timeout:g}s; nothing was sent"
+    if isinstance(exc, httpx.ReadTimeout):
+        return (
+            f"{url} accepted the request but did not answer within {timeout:g}s; "
+            "its outcome is unknown, so check before repeating it"
+        )
+    if isinstance(exc, httpx.TimeoutException | httpx.ReadError | httpx.RemoteProtocolError):
+        return (
+            f"{url}: the request may have been sent, but no answer arrived "
+            f"({type(exc).__name__}); its outcome is unknown, so check before repeating it"
+        )
+    return f"{url}: {type(exc).__name__}: {exc}"
+
+
+def unreachable(path: str | None = None) -> str:
+    """The message for a call that got no response, with the reason it failed.
+
+    Concurrent callers name their ``path``: the last failure may be another request's.
+    """
+    return f"backbone API unreachable: {_failures.get(path or '', _last_failure)}"
 
 
 async def api_up(config: BackboneConfig) -> bool:

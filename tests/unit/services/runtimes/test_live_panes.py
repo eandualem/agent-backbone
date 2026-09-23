@@ -7,6 +7,7 @@ the fixture from a fresh capture, not from memory.
 
 import pytest
 
+from agent_backbone.services.agents import AgentState, infer_state_from_pane
 from agent_backbone.services.runtimes import RUNTIMES, detect_runtime
 
 
@@ -430,3 +431,39 @@ class TestDeepCodeLive:
         assert runtime.detect_busy(DEEPCODE_FAILED) is False
         assert runtime.detect_idle(DEEPCODE_FAILED) is True
         assert runtime.prompt_has_pending_input(DEEPCODE_FAILED) is False
+
+
+# Claude Code 2.1.280 while a turn runs: a spinner line, no "esc to interrupt",
+# and the input prompt stays visible below it (live capture, trimmed).
+CLAUDE_WORKING = (
+    "⏺ Bash(make check)\n"
+    "  ⎿  Running…\n"
+    "\n"
+    "✳ Harmonizing… (2m 42s · ↓ 10.1k tokens)\n"
+    "  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work\n"
+    "\n"
+    "─────────────────────────────────────────\n"
+    "❯ \n"
+    "─────────────────────────────────────────\n"
+    "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n"
+)
+
+CLAUDE_TURN_DONE = CLAUDE_WORKING.replace(
+    "✳ Harmonizing… (2m 42s · ↓ 10.1k tokens)", "✻ Baked for 4m 11s · done 8:45 AM"
+)
+
+
+class TestClaudeSpinner:
+    def test_spinner_above_a_visible_prompt_is_busy(self):
+        assert RUNTIMES["claude"].detect_busy(CLAUDE_WORKING)
+        assert infer_state_from_pane(CLAUDE_WORKING, "claude").state == AgentState.BUSY
+
+    def test_finished_turn_summary_is_idle(self):
+        assert not RUNTIMES["claude"].detect_busy(CLAUDE_TURN_DONE)
+        assert infer_state_from_pane(CLAUDE_TURN_DONE, "claude").state == AgentState.IDLE
+
+    def test_a_spinner_quoted_in_a_reply_is_not_busy(self):
+        quoted = CLAUDE_TURN_DONE.replace(
+            "⏺ Bash(make check)\n", "⏺ The pane read:\n  ✳ Harmonizing… (2m 42s · ↓ 10.1k tokens)\n"
+        )
+        assert not RUNTIMES["claude"].detect_busy(quoted)

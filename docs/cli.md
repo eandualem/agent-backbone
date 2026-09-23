@@ -264,7 +264,21 @@ and plan titles appear in aligned details below the tables. Component failures
 are shown above the roster. State comes from
 the same hook/terminal inference as `agent inspect`; an API authentication error
 is an error, not an offline result. With the service down, local tmux and saved
-state remain available.
+state remain available. A state followed by `?` (`idle?`, `busy?`) repeats a
+hook state older than `timing.stale_threshold_seconds` because the terminal was
+inconclusive (`state_source` `stale` in `--json`); treat it as unconfirmed.
+Other tmux sessions grouped with an agent's session (a terminal viewer's
+`new-session -t NAME`) show that agent's windows and are not listed.
+
+When a command gets no answer from the API it says why: nothing is listening
+(start it with `backbone up`), the connection or answer timed out, or **this
+process may not connect** (`Operation not permitted`). The last case is a
+sandbox or permission boundary around the caller, such as a Codex task
+without network access: the service may be running and its agents working.
+If the tmux socket is refused too, `status` and `agent inspect` report the
+agent states as unknown from that process instead of listing everyone as
+offline. Run the command where local network and the tmux socket are
+allowed (for Codex, a command approved to run outside its sandbox).
 
 ```bash
 backbone status --running           # only live sessions
@@ -507,7 +521,10 @@ The reply prints one sentence saying what happened: delivered; stored
 (`"queue": "already_queued"` — nothing was added); or not stored
 (`"queue": "failed"` — send again later). Exit code 0 if delivered, 2 if
 the message is in the queue, 1 if it is not (API error or storage
-failure). Multi-line messages are pasted with bracketed paste and arrive
+failure). With no answer from the API the error says whether the request
+was sent. If it was not, the message was not accepted; if it was (a read
+timeout or a dropped answer), the outcome is unknown, so check `agent
+inspect` before sending it again. Multi-line messages are pasted with bracketed paste and arrive
 intact as a single message.
 
 The JSON includes `operation_id`, `delivery_id` and `queue_id` when available.

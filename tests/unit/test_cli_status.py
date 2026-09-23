@@ -224,3 +224,11 @@ def test_tags_observed_model_and_directory_show_in_the_roster():
     from agent_backbone.cli.status import _work
 
     assert _work({"dir": "C:\\work\\web"}, compact=True) == "web"
+
+
+def test_a_stale_hook_reading_is_marked_unconfirmed():
+    data = example()
+    data["agents"][0].update(state="idle", state_source="stale")
+    output = render_status(data, width=120)
+    assert "idle?" in output
+    assert "Unconfirmed: stale hook state" in output

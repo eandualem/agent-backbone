@@ -332,6 +332,7 @@ async def _get_agent_state(
             ]
             return replace(
                 push,
+                source="stale",
                 diagnostics=pull.diagnostics,
                 diagnostics_observed=pull.diagnostics_observed,
             )
@@ -341,7 +342,7 @@ async def _get_agent_state(
         push.evidence = [
             f"no terminal output; using stale hook state '{push.state.value}' ({push_age:.0f}s)"
         ]
-        return _with_diagnostics(push, pane_content, runtime_hint)
+        return _with_diagnostics(replace(push, source="stale"), pane_content, runtime_hint)
 
     return _with_diagnostics(
         StateSnapshot(

@@ -189,7 +189,19 @@ def listable_sessions(config: BackboneConfig, active_sessions: set[str]) -> list
 async def build_session_snapshot(config: BackboneConfig) -> list[EnrichedAgent]:
     """The full enriched snapshot of every listable session, uncached."""
     rich_sessions = await list_sessions_rich()
-    tmux_lookup = {session["name"]: session for session in rich_sessions}
+    # Sessions in one tmux group (``new-session -t leo``, as terminal viewers
+    # create) share their windows: one agent, not several. Keep the configured
+    # members, otherwise the session named after the group, otherwise the oldest.
+    groups: dict[str, list[dict]] = {}
+    for session in rich_sessions:
+        groups.setdefault(session.get("group") or session["name"], []).append(session)
+    tmux_lookup: dict[str, dict] = {}
+    for group, members in groups.items():
+        kept = [m for m in members if m["name"] in config.agents] or [
+            next((m for m in members if m["name"] == group), None)
+            or min(members, key=lambda m: m.get("created", 0))
+        ]
+        tmux_lookup.update((m["name"], m) for m in kept)
     active_sessions = set(tmux_lookup.keys())
     coros = [
         build_enriched_agent(session, config, active_sessions, tmux_lookup.get(session))

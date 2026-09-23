@@ -131,7 +131,7 @@ flowchart TD
     D -->|permission prompt| WFH[waiting_for_human permission]
     D -->|empty prompt| IDLE[idle]
     D -->|inconclusive| E{stale hook state usable?}
-    E -->|idle / busy / plan with file| F[stale hook state]
+    E -->|idle / busy / plan with file| F[stale hook state, source stale]
     E -->|no| UNK[unknown]
 ```
 

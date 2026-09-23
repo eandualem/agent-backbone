@@ -196,6 +196,8 @@ def status_view(data: dict, *, width: int, plain: bool = False, watch: bool = Fa
         ordered = sorted(members, key=lambda a: (_state(a)[0], clean(a["name"]).casefold()))
         for index, agent in enumerate(ordered):
             _, label, style = _state(agent)
+            if agent.get("state_source") == "stale":
+                label += "?"
             cells = [
                 Text(clean(agent["name"]), "bold" if agent.get("online") else "dim"),
                 Text(label, style),
@@ -240,6 +242,8 @@ def status_view(data: dict, *, width: int, plain: bool = False, watch: bool = Fa
                 information.append("Purpose: " + clean(agent["description"]))
             if agent.get("tags"):
                 information.append("Tags: " + clean(", ".join(agent["tags"])))
+        if agent.get("state_source") == "stale":
+            information.append("Unconfirmed: stale hook state; the terminal was inconclusive")
         if reason := agent.get("reason"):
             information.append("Reason: " + clean(reason))
         for key, label in (
@@ -293,7 +297,15 @@ async def snapshot(args: argparse.Namespace) -> dict:
         swarms = swarm_body["items"]
     else:
         from agent_backbone.services.agents import build_session_snapshot
+        from agent_backbone.services.terminal import access_error
 
+        # Without the API or tmux nothing here can be observed; a table of
+        # "offline" agents would report the caller's sandbox as an outage.
+        if denied := await access_error():
+            raise ValueError(
+                "agent states unknown from this process: "
+                f"{_common.unreachable('/api/agents')}; tmux: {denied}"
+            )
         async with _common.Direct(config) as direct:
             agents = [
                 a.model_dump(mode="json") for a in await build_session_snapshot(direct.config)

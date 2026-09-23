@@ -254,11 +254,28 @@ class TestAgentCommands:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
+            patch(
+                "agent_backbone.services.terminal.access_error",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
         ):
             assert _run(["agent", "inspect", "ike"]) == 0
 
         assert state.await_args.args[1] == "ike"
         assert "configured runtime" in capsys.readouterr().out
+
+    def test_direct_inspect_without_tmux_access_is_unknown_not_offline(self, capsys):
+        denied = "error connecting to /private/tmp/tmux-501/default (Operation not permitted)"
+        with patch(
+            "agent_backbone.services.terminal.access_error",
+            new_callable=AsyncMock,
+            return_value=denied,
+        ):
+            assert _run(["agent", "inspect", "ike"]) == 1
+        out = capsys.readouterr().out
+        assert "ike: state unknown from this process" in out
+        assert "offline" not in out
 
     def test_moved_directory_follows_and_same_name_gets_suffix(self, tmp_path, capsys):
         assert _run(["init"]) == 0
@@ -367,6 +384,11 @@ class TestAgentCommands:
                 "agent_backbone.services.terminal.session_exists",
                 new_callable=AsyncMock,
                 return_value=False,
+            ),
+            patch(
+                "agent_backbone.services.terminal.access_error",
+                new_callable=AsyncMock,
+                return_value=None,
             ),
         ):
             assert _run(["agent", "inspect", "desk", "--json"]) == 0

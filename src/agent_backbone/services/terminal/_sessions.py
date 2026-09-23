@@ -151,6 +151,19 @@ async def list_sessions(*, strict: bool = False) -> list[str]:
     return [s.strip() for s in stdout.decode().splitlines() if s.strip()]
 
 
+async def access_error() -> str | None:
+    """Why tmux cannot answer this process, when the sessions may still be running.
+
+    A sandboxed caller gets "error connecting to …/default (Operation not
+    permitted)"; a hung server times out. Neither means "no sessions".
+    """
+    rc, _, stderr = await _run_tmux("list-sessions", "-F", "#{session_name}")
+    text = stderr.decode(errors="replace").strip()
+    if rc == -1 or (rc != 0 and ("not permitted" in text or "permission denied" in text.lower())):
+        return text
+    return None
+
+
 async def query_format_vars(
     session_name: str, format_str: str = SESSION_FORMAT_STR
 ) -> dict[str, str]:
@@ -169,10 +182,10 @@ async def query_format_vars(
 
 
 async def list_sessions_rich() -> list[dict]:
-    """Sessions with metadata: name, windows, created, attached, activity."""
+    """Sessions with metadata: name, windows, created, attached, activity, group."""
     fmt = (
         "#{session_name}\t#{session_windows}\t#{session_created}"
-        "\t#{session_attached}\t#{session_activity}"
+        "\t#{session_attached}\t#{session_activity}\t#{session_group}"
     )
     rc, stdout, _ = await _run_tmux("list-sessions", "-F", fmt, capture_stdout=True)
     if rc != 0:
@@ -189,6 +202,7 @@ async def list_sessions_rich() -> list[dict]:
                 "created": int(parts[2]) if parts[2].isdigit() else 0,
                 "attached": parts[3] == "1",
                 "activity": int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0,
+                "group": parts[5] if len(parts) > 5 else "",
             }
         )
     return results

@@ -214,8 +214,9 @@ Everything the backbone knows about one agent, with the evidence:
 ### `GET /api/agents/{name}/state`
 
 The reconciled state snapshot with `source` (`push` = the state file, written
-by a hook or by `POST /api/agents/{name}/state`; `pull` = terminal) and
-`evidence`.
+by a hook or by `POST /api/agents/{name}/state`; `pull` = terminal; `stale` =
+a state file older than `timing.stale_threshold_seconds`, repeated because the
+terminal was inconclusive) and `evidence`.
 
 ### `POST /api/agents/{name}/state`
 

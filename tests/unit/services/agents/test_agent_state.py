@@ -380,7 +380,7 @@ class TestGetAgentState:
         with patch(f"{_INF}.capture_pane", mock_capture):
             result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
         assert result.state == AgentState.IDLE
-        assert result.source == "push"
+        assert result.source == "stale"
         mock_capture.assert_awaited_once()
 
     async def test_stale_busy_verified_via_tmux(self, tmp_path):
@@ -444,7 +444,7 @@ class TestGetAgentState:
             result = await get_agent_state(tmp_path, "feynman", stale_threshold=300)
         assert result.state == AgentState.WAITING_FOR_HUMAN
         assert result.reason == "plan"
-        assert result.source == "push"
+        assert result.source == "stale"
 
     async def test_stale_permission_waiting_does_not_resurrect(self, tmp_path):
         """Permission prompts are transient and must never be revived from stale push data."""
