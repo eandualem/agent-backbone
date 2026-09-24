@@ -942,6 +942,30 @@ def cmd_hooks(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_chrome(args: argparse.Namespace) -> int:
+    """The optional extension that names agents' Claude-in-Chrome tab groups."""
+    from agent_backbone.hooks.install import (
+        install_chrome_tab_names,
+        uninstall_chrome_tab_names,
+    )
+
+    config = bootstrap_config()
+    if args.chrome_command == "uninstall":
+        removed = uninstall_chrome_tab_names(config.data_dir)
+        for path in removed:
+            print(f"removed {path}")
+        print("Remove the extension too: chrome://extensions → Agent Backbone tab group names")
+        return 0
+    extension, manifest = install_chrome_tab_names(config.data_dir, config.state_dir)
+    print(f"native host registered: {manifest}")
+    print("Load the extension once in Chrome:")
+    print("  1. open chrome://extensions and turn on Developer mode")
+    print(f"  2. Load unpacked → {extension}")
+    print("Groups Claude-in-Chrome opens for an agent are then named after it,")
+    print("unless a person already renamed them. Undo: backbone chrome uninstall")
+    return 0
+
+
 async def _inbox(args: argparse.Namespace) -> int:
     if not args.agent:
         print("Use --agent NAME or run inside an agent session ($BACKBONE_AGENT)")

@@ -131,3 +131,64 @@ def default_python() -> str:
     """Interpreter for the hook command: the current one if it is a plain path."""
     exe = Path(sys.executable)
     return str(exe) if exe.is_file() else "python3"
+
+
+CHROME_HOST = "com.agent_backbone.tab_names"
+CHROME_EXTENSION_ID = "apmflpbnkiglbnppfajmimbjebjigagh"
+"""Fixed by the public ``key`` in ``chrome_tab_names/manifest.json``: native
+messaging admits only the extension IDs its manifest lists."""
+
+
+def chrome_host_manifest() -> Path:
+    """Where Google Chrome looks up a user's native messaging hosts."""
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+    else:
+        base = Path.home() / ".config" / "google-chrome"
+    return base / "NativeMessagingHosts" / f"{CHROME_HOST}.json"
+
+
+def install_chrome_tab_names(
+    data_dir: Path, state_dir: Path, python: str | None = None
+) -> tuple[Path, Path]:
+    """Copy the tab-names extension and its native host into
+    ``<data_dir>/chrome-tab-names/`` and register the host with Chrome.
+    Returns (extension folder to load unpacked, host manifest)."""
+    target = data_dir / "chrome-tab-names"
+    shutil.copytree(hook_source("chrome_tab_names"), target / "extension", dirs_exist_ok=True)
+    host = target / "host.py"
+    shutil.copy2(hook_source("chrome_tab_names_host.py"), host)
+    wrapper = target / "host"
+    command = shlex.join([python or default_python(), str(host), "--state-dir", str(state_dir)])
+    atomic_write_text(wrapper, f'#!/bin/sh\nexec {command} "$@"\n')
+    wrapper.chmod(0o755)
+    manifest = chrome_host_manifest()
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(
+        manifest,
+        json.dumps(
+            {
+                "name": CHROME_HOST,
+                "description": "Agent Backbone tab group names",
+                "path": str(wrapper),
+                "type": "stdio",
+                "allowed_origins": [f"chrome-extension://{CHROME_EXTENSION_ID}/"],
+            },
+            indent=2,
+        ),
+    )
+    return target / "extension", manifest
+
+
+def uninstall_chrome_tab_names(data_dir: Path) -> list[Path]:
+    """Remove the host registration and the copied files; returns what was removed."""
+    removed = []
+    manifest = chrome_host_manifest()
+    if manifest.exists():
+        manifest.unlink()
+        removed.append(manifest)
+    target = data_dir / "chrome-tab-names"
+    if target.exists():
+        shutil.rmtree(target)
+        removed.append(target)
+    return removed

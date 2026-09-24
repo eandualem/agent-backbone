@@ -778,6 +778,7 @@ def run_hook(
     *,
     context_events: frozenset[str] = frozenset(),
     turn_end_events: frozenset[str] = frozenset(),
+    observe: Callable[[dict, Path, str], None] | None = None,
 ) -> int:
     """Read the CLI's JSON payload from stdin, derive the state, write it.
 
@@ -785,6 +786,8 @@ def run_hook(
     may add context to the model) the hook also hands over whatever the
     backbone offered under ``<state_dir>/context/<agent>/`` — see ``CONTEXT_DIR``.
     On an event in ``turn_end_events`` it retires this session's open steers.
+    ``observe(payload, state_dir, agent)`` records anything else the runtime's
+    payload tells (Claude's Chrome tab group); its failure changes nothing else.
 
     Usage (as configured by the installer):
         <script> --state-dir /path/to/state [--agent NAME]
@@ -828,6 +831,9 @@ def run_hook(
                 print(hook_context_output(event, texts))
         if event in turn_end_events:
             retire_steers(state_dir, agent)
+        if observe is not None:
+            with suppress(Exception):
+                observe(payload, state_dir, agent)
     except Exception:  # a hook must never make the CLI fail
         # An unexpected payload shape or an unwritable state dir: the
         # backbone falls back to the terminal; the agent is not disturbed.

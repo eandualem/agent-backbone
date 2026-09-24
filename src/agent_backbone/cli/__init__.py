@@ -33,7 +33,14 @@ import os
 import sys
 
 from agent_backbone import __version__
-from agent_backbone.cli.agents import cmd_agent, cmd_hooks, cmd_inbox, cmd_reply, cmd_tell
+from agent_backbone.cli.agents import (
+    cmd_agent,
+    cmd_chrome,
+    cmd_hooks,
+    cmd_inbox,
+    cmd_reply,
+    cmd_tell,
+)
 from agent_backbone.cli.completion import cmd_completion, complete
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
 from agent_backbone.cli.instructions import add_instruction_commands
@@ -404,6 +411,14 @@ def build_parser() -> argparse.ArgumentParser:
             "default: the user's global settings",
         )
     p.set_defaults(func=cmd_hooks)
+
+    p = sub.add_parser(
+        "chrome", help="name agents' Claude-in-Chrome tab groups after the agent (optional)"
+    )
+    csub = p.add_subparsers(dest="chrome_command", required=True)
+    csub.add_parser("install", help="register the native host and copy the extension")
+    csub.add_parser("uninstall", help="remove the native host and the copied extension")
+    p.set_defaults(func=cmd_chrome)
 
     p = sub.add_parser("swarm", help="run a coordinator+members swarm on an issue")
     ssub = p.add_subparsers(dest="swarm_command", required=True)

@@ -12,8 +12,11 @@ Standard library only — it must run under any ``python3``.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
+from pathlib import Path
 
 try:
     from agent_backbone.hooks import backbone_state as bb
@@ -100,13 +103,52 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
     return None, None
 
 
+CHROME_GROUPS_DIR = "chrome-groups"
+"""``<state_dir>/chrome-groups/<agent>.json``: the Chrome tab group this agent's
+Claude-in-Chrome session uses, read by the optional tab-names extension."""
+_CHROME_TOOL = "mcp__claude-in-chrome__"
+# The tool result carries JSON inside text blocks, so the quotes may be escaped.
+_TAB_GROUP = re.compile(r'tabGroupId\\*"\s*:\s*(\d+)')
+_TAB = re.compile(r'tabId\\*"\s*:\s*(\d+)')
+
+
+def record_chrome_group(payload: dict, state_dir: Path, agent: str) -> None:
+    """Remember the tab group and tabs a Claude-in-Chrome result names.
+
+    Each session's group is titled "Claude"; this record is what lets the
+    optional extension name it after the agent. One file per agent: hooks
+    of different agents never write the same file."""
+    if payload.get("hook_event_name") != "PostToolUse":
+        return
+    if not str(payload.get("tool_name", "")).startswith(_CHROME_TOOL):
+        return
+    text = json.dumps(payload.get("tool_response"))
+    group = _TAB_GROUP.search(text)
+    if group is None:
+        return
+    record = {
+        "group": int(group.group(1)),
+        "tabs": sorted({int(tab) for tab in _TAB.findall(text)}),
+        "ts": bb.time.time(),
+    }
+    target = state_dir / CHROME_GROUPS_DIR / f"{agent}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(record))
+    os.replace(tmp, target)
+
+
 CONTEXT_EVENTS = frozenset({"PostToolUse"})
 """Events whose JSON output adds context to the model (``hookSpecificOutput.additionalContext``)."""
 
 
 def main(argv: list[str] | None = None) -> int:
     return bb.run_hook(
-        derive, argv, context_events=CONTEXT_EVENTS, turn_end_events=frozenset({"Stop"})
+        derive,
+        argv,
+        context_events=CONTEXT_EVENTS,
+        turn_end_events=frozenset({"Stop"}),
+        observe=record_chrome_group,
     )
 
 
