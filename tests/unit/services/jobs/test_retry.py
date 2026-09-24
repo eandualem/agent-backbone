@@ -283,12 +283,21 @@ class TestDeliveryRetryQueueDrain:
             db,
             config,
             [
-                {"session_name": "ike", "sender": "leo",
-                 "message": "[via:backbone from:leo] please review"},
-                {"session_name": "ike", "source": "github",
-                 "message": "[via:github pr:36] New pull request"},
-                {"session_name": "ike", "sender": "codex-user-assistant",
-                 "message": "[via:backbone from:codex-user-assistant] brief"},
+                {
+                    "session_name": "ike",
+                    "sender": "leo",
+                    "message": "[via:backbone from:leo] please review",
+                },
+                {
+                    "session_name": "ike",
+                    "source": "github",
+                    "message": "[via:github pr:36] New pull request",
+                },
+                {
+                    "session_name": "ike",
+                    "sender": "codex-user-assistant",
+                    "message": "[via:backbone from:codex-user-assistant] brief",
+                },
             ],
         )
         queued = {
@@ -311,7 +320,9 @@ class TestDeliveryRetryQueueDrain:
             session_name="ike", message="old", delivery_kind="direct_message", sender="leo"
         )
         async with db.engine.begin() as conn:
-            await conn.execute(text("UPDATE message_queue SET enqueued_at = '2020-01-01T00:00:00Z'"))
+            await conn.execute(
+                text("UPDATE message_queue SET enqueued_at = '2020-01-01T00:00:00Z'")
+            )
 
         def broken(rows):
             raise RuntimeError("notice failed")
@@ -342,8 +353,9 @@ class TestDeliveryRetryQueueDrain:
 
     async def test_a_sender_notice_names_where_the_rest_went(self, db, config):
         await self._expire(
-            db, config, [{"session_name": f"a{n % 2}", "sender": "leo", "message": "m"}
-                         for n in range(12)]
+            db,
+            config,
+            [{"session_name": f"a{n % 2}", "sender": "leo", "message": "m"} for n in range(12)],
         )
         [notice] = await db.queue.dequeue("leo")
         assert notice["message"].startswith("[via:backbone] 12 message(s) you sent expired")
@@ -352,8 +364,10 @@ class TestDeliveryRetryQueueDrain:
         )
 
     async def test_a_sender_name_with_delimiters_keeps_the_count(self, db, config):
-        rows = [{"session_name": "ike", "sender": "Elias, desktop: ×", "message": f"m{n}"}
-                for n in range(11)]
+        rows = [
+            {"session_name": "ike", "sender": "Elias, desktop: ×", "message": f"m{n}"}
+            for n in range(11)
+        ]
         await self._expire(db, config, rows)
         await self._expire(db, config, rows[:1])
         [notice] = await db.queue.dequeue("ike")
