@@ -24,7 +24,8 @@ REFUSAL = {
 def _fresh(monkeypatch):
     monkeypatch.setattr(escalation, "_denial_log_offset", None)
     monkeypatch.setattr(escalation, "_denial_log_inode", None)
-    monkeypatch.setattr(escalation, "_denial_watermark", 0.0)
+    monkeypatch.setattr(escalation, "_denial_watch_started", 0.0)
+    monkeypatch.setattr(escalation, "_denials_read", RecentKeys(3600))
     monkeypatch.setattr(escalation, "_denial_notified", RecentKeys(1800))
     monkeypatch.setattr(escalation, "_denials_unsent", [])
 
@@ -106,3 +107,14 @@ async def test_refusals_survive_the_log_rotation(config):
     _append(config, {**REFUSAL, "summary": "gh api"}, {"action": "comment", "session": "ike"})
     notify = await _check(config)
     assert [c.args[1].split("\n")[1] for c in notify.await_args_list] == ["Action: gh api"]
+
+
+async def test_a_refusal_appended_out_of_timestamp_order_is_not_lost(config):
+    import time
+
+    await _check(config)
+    now = time.time()
+    _append(config, {**REFUSAL, "ts": now + 5, "tool_use_id": "later"})
+    assert (await _check(config)).await_count == 1
+    _append(config, {**REFUSAL, "ts": now + 1, "tool_use_id": "earlier", "summary": "gh api"})
+    assert (await _check(config)).await_count == 1  # an earlier stamp, appended later

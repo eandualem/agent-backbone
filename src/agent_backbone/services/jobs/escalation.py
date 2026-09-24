@@ -135,10 +135,10 @@ _denial_log_offset: int | None = None
 """How far into the action log refusals have been read; None until the first check."""
 _denial_log_inode: int | None = None
 """The log file read; the prune job's atomic rotation replaces it with a new one."""
-_denial_watermark = 0.0
-"""Newest refusal read. The first check sets it to now, so a restart never
-replays old refusals; after the prune job rotates the log it is how the
-records not yet read are found again."""
+_denial_watch_started = 0.0
+"""When the watch began: refusals stamped earlier are never replayed."""
+_denials_read = RecentKeys(24 * 3600)
+"""Identities of refusals already read, so re-reading a rotated log adds nothing twice."""
 _denials_unsent: list[dict] = []
 """Refusals whose notice no integration accepted; tried again next tick."""
 _UNSENT_LIMIT = 50
@@ -163,10 +163,10 @@ def denial_text(name: str, record: dict) -> str:
 
 def _new_denials(config: BackboneConfig) -> list[dict]:
     """Refusal records appended to the action log since the last check."""
-    global _denial_log_offset, _denial_log_inode, _denial_watermark
+    global _denial_log_offset, _denial_log_inode, _denial_watch_started
     path = config.action_log_path
     if _denial_log_offset is None:
-        _denial_watermark = time.time()  # nothing from before the watch is replayed
+        _denial_watch_started = time.time()  # nothing from before the watch is replayed
     try:
         status = path.stat()
     except OSError:
@@ -177,7 +177,7 @@ def _new_denials(config: BackboneConfig) -> list[dict]:
         _denial_log_offset, _denial_log_inode = size, status.st_ino
         return []
     if status.st_ino != _denial_log_inode or size < _denial_log_offset:
-        # Rotated (a new file) or truncated: re-read, keeping only what is newer.
+        # Rotated (a new file) or truncated: re-read; identities skip what was read.
         _denial_log_offset, _denial_log_inode = 0, status.st_ino
     with path.open("rb") as log_file:
         log_file.seek(_denial_log_offset)
@@ -196,10 +196,12 @@ def _new_denials(config: BackboneConfig) -> list[dict]:
             stamp = float(record.get("ts") or 0)
         except (TypeError, ValueError):
             continue
-        if stamp > _denial_watermark:
-            records.append(record)
-    if records:
-        _denial_watermark = max(float(r["ts"]) for r in records)
+        # Byte order, not timestamps, decides what is new: concurrent hooks may
+        # append out of timestamp order.
+        identity = (record.get("session"), record.get("tool_use_id") or stamp)
+        if stamp < _denial_watch_started or _denials_read.check_and_mark(identity):
+            continue
+        records.append(record)
     return records
 
 

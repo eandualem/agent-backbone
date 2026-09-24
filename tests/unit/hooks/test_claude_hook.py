@@ -432,6 +432,10 @@ def test_the_claude_runtime_listens_for_refusals():
         ('gh issue edit 40 --body "a && b"', "gh issue edit"),
         ("./secret-deploy.sh --x", "a local command"),
         ('FOO=1 git commit -m "private; text"', "git commit"),
+        ("gh api confidential", "gh api"),
+        ("gh issue edit 40", "gh issue edit"),
+        ("claude confidential prompt", "claude"),
+        ("git secretbranch", "git"),
     ],
 )
 def test_a_refusal_summary_keeps_program_names_only(command, summary):

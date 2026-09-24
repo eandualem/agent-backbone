@@ -154,21 +154,101 @@ _KNOWN_PROGRAMS = frozenset(
     }
 )
 """Programs named in a refusal notice; any other program is "a local command"."""
-_SUBCOMMAND_DEPTH = {
-    "gh": 2,
-    "git": 1,
-    "backbone": 2,
-    "docker": 1,
-    "kubectl": 1,
-    "npm": 1,
-    "pnpm": 1,
-    "yarn": 1,
-    "uv": 1,
-    "brew": 1,
-    "claude": 1,
-    "codex": 1,
+_GH_GROUPS = frozenset(
+    {"issue", "pr", "repo", "release", "run", "workflow", "label", "gist", "api", "auth", "search"}
+)
+_GH_VERBS = frozenset(
+    {
+        "create",
+        "edit",
+        "close",
+        "reopen",
+        "comment",
+        "merge",
+        "view",
+        "list",
+        "delete",
+        "ready",
+        "review",
+        "checkout",
+        "diff",
+        "status",
+        "clone",
+        "fork",
+        "sync",
+        "rename",
+        "archive",
+        "download",
+        "upload",
+        "cancel",
+        "rerun",
+        "watch",
+        "lock",
+        "unlock",
+        "transfer",
+        "pin",
+    }
+)
+_SUBCOMMANDS = {
+    "git": frozenset(
+        {
+            "add",
+            "am",
+            "branch",
+            "checkout",
+            "cherry-pick",
+            "clean",
+            "clone",
+            "commit",
+            "diff",
+            "fetch",
+            "init",
+            "log",
+            "merge",
+            "mv",
+            "pull",
+            "push",
+            "rebase",
+            "remote",
+            "reset",
+            "restore",
+            "revert",
+            "rm",
+            "show",
+            "stash",
+            "status",
+            "switch",
+            "tag",
+            "worktree",
+        }
+    ),
+    "backbone": frozenset(
+        {
+            "agent",
+            "tell",
+            "inbox",
+            "report",
+            "reply",
+            "status",
+            "swarm",
+            "skills",
+            "chrome",
+            "hooks",
+            "config",
+            "up",
+            "down",
+            "service",
+            "diagnostics",
+            "usage",
+            "upgrade",
+        }
+    ),
+    "docker": frozenset({"build", "run", "exec", "push", "pull", "rm", "stop", "start", "compose"}),
+    "npm": frozenset({"install", "ci", "run", "test", "publish", "uninstall", "update"}),
+    "uv": frozenset({"run", "sync", "add", "remove", "pip", "tool", "build", "publish"}),
+    "brew": frozenset({"install", "uninstall", "upgrade", "update"}),
 }
-"""How many plain subcommand words each program's summary keeps (``gh issue edit``)."""
+"""Subcommands a summary may name; any other word may be user content and stops it."""
 _SEPARATORS = frozenset({"&&", "||", ";", "|", "&", ";;"})
 
 
@@ -197,13 +277,13 @@ def _command_summary(command: str) -> str:
         program = os.path.basename(words[0])
         if program not in _KNOWN_PROGRAMS:
             summary = "a local command"
+        elif program == "gh" and len(words) > 1 and words[1] in _GH_GROUPS:
+            verb = words[2] if len(words) > 2 and words[1] != "api" else ""
+            summary = " ".join(["gh", words[1], *([verb] if verb in _GH_VERBS else [])])
+        elif len(words) > 1 and words[1] in _SUBCOMMANDS.get(program, ()):
+            summary = f"{program} {words[1]}"
         else:
-            kept = [program]
-            for word in words[1 : 1 + _SUBCOMMAND_DEPTH.get(program, 0)]:
-                if not _WORD.fullmatch(word):
-                    break
-                kept.append(word)
-            summary = " ".join(kept)
+            summary = program
         if summary not in parts:
             parts.append(summary)
     return "; ".join(parts[:3]) or "a shell command"
