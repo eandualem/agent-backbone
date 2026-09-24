@@ -36,7 +36,10 @@ Read `backbone docs security` for the trust model.
 - Ordinary queued messages expire after `timing.queue_expiry_minutes` (default
   30). Messages to or from a member of an active swarm are retained until
   delivery or the swarm ends. Inbox messages and uncertain submissions remain
-  held until acknowledged. Use issues for the durable task/decision record.
+  held until acknowledged, and messages queued behind an uncertain submission
+  wait with it, then get a full expiry window once it is acknowledged. When messages expire, you get a `[via:backbone]` notice listing
+  those sent to you, and those you sent: ask or send again if one still
+  matters. Use issues for the durable task/decision record.
 - Multi-line messages arrive intact as a single message.
 
 ## Steering a working peer — guidance for its current task

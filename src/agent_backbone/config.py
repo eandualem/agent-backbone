@@ -195,7 +195,8 @@ SETTINGS_HELP: dict[str, str] = {
     "timing.stale_threshold_seconds": "Hook state older than this is verified against the terminal",
     "timing.grace_period_seconds": "Settle time after a hook reports idle before delivering",
     "timing.queue_expiry_minutes": (
-        "Queued messages expire after this age, except active swarm coordination and inbox holds"
+        "Queued messages expire after this age, except active swarm coordination, inbox holds"
+        " and queues held by an unconfirmed delivery; recipients and senders are notified"
     ),
     "timing.stall_threshold_seconds": "Busy on one issue longer than this is a stall",
     "timing.escalation_dedup_seconds": "Do not repeat the same escalation within this window",

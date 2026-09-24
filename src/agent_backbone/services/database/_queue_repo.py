@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
@@ -21,6 +22,11 @@ _INSERT_COLUMNS = """(operation_id, session_name, message, repo, issue_number, t
                VALUES (:operation_id, :session_name, :message, :repo, :issue_number, :target_entity,
                        :delivery_kind, :source, :enqueued_at, :initial_status,
                        :sender, :dedup_key, :priority)"""
+
+Revise = Callable[[str | None], str]
+"""Builds a notice's text from its current text (None when there is none yet)."""
+Notices = Callable[[list[dict]], list[tuple[str, str, str, Revise]]]
+"""Maps expired rows to ``(session, source, target_entity, revise)`` notices."""
 
 SUBSCRIPTION_BATCH_LIMIT = 25
 """Lines one subscription batch lists; further lines open the next batch."""
@@ -175,6 +181,54 @@ class QueueRepo(Repo):
                 # this statement's snapshot. Recheck insertion instead of
                 # inventing a receipt for a row that is no longer waiting.
             raise RuntimeError("Queue changed repeatedly during enqueue; retry the message")
+
+    async def _revise_in(
+        self, conn, session_name: str, source: str, target_entity: str, revise: Revise
+    ) -> None:
+        """Rewrite the session's waiting direct message from ``source`` for
+        ``target_entity`` as ``revise(its text)``, or insert ``revise(None)``:
+        one notice per party that grows, not a stream. A notice already out for
+        delivery is left alone and a new one opens behind it, with its own
+        identity so identical text cannot fold into the one being delivered."""
+        lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
+        found = await conn.execute(
+            text(
+                "SELECT id, message FROM message_queue WHERE session_name = :session "
+                "AND source = :source AND target_entity = :target "
+                "AND status = 'pending' ORDER BY id DESC LIMIT 1" + lock
+            ),
+            {"session": session_name, "source": source, "target": target_entity},
+        )
+        row = found.mappings().first()
+        if row is not None:
+            updated = await conn.execute(
+                text(
+                    "UPDATE message_queue SET message = :message "
+                    "WHERE id = :id AND status = 'pending' AND message = :previous"
+                ),
+                {"id": row["id"], "message": revise(row["message"]), "previous": row["message"]},
+            )
+            if updated.rowcount:
+                return
+        message = revise(None)
+        await conn.execute(
+            text(f"INSERT INTO message_queue {_INSERT_COLUMNS}"),
+            {
+                "operation_id": uuid.uuid4().hex,
+                "session_name": session_name,
+                "message": message,
+                "repo": "",
+                "issue_number": None,
+                "target_entity": target_entity,
+                "delivery_kind": "direct_message",
+                "source": source,
+                "enqueued_at": now_iso(),
+                "initial_status": "pending",
+                "sender": "",
+                "dedup_key": dedup_key_for(message, "", uuid.uuid4().hex),
+                "priority": 0,
+            },
+        )
 
     async def enqueue_subscription(
         self,
@@ -372,7 +426,11 @@ class QueueRepo(Repo):
         )
 
     async def expire_pending(
-        self, max_age_minutes: int = 30, *, protected_sessions: tuple[str, ...] = ()
+        self,
+        max_age_minutes: int = 30,
+        *,
+        protected_sessions: tuple[str, ...] = (),
+        notices: Notices | None = None,
     ) -> list[dict]:
         """Expire pending messages older than the cutoff and, in the same
         transaction, leave a delivery row with outcome ``expired`` for each,
@@ -383,6 +441,15 @@ class QueueRepo(Repo):
         Subscription batches never expire: they are facts, not conversation.
         Nor does a restart's continuation message (source ``agent-restart``):
         it belongs to the transition and waits for its replacement session.
+        Nor does an expiry notice (source ``queue-expiry``): it reports a loss.
+        Nor does anything queued for a session with an ``uncertain`` row: that
+        row holds the whole queue until it is acknowledged, so the wait
+        measures the hold, not whether the message is still wanted. After the
+        hold is acknowledged the queue gets a full window from that moment.
+
+        ``notices`` turns the expired rows into notices written in the same
+        transaction: an expiry is never committed without them, and a failure
+        rolls both back for the next sweep.
         """
         async with self._tx() as conn:
             now = now_iso()
@@ -391,7 +458,12 @@ class QueueRepo(Repo):
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE status = 'pending' AND enqueued_at < :cutoff
                          AND delivery_kind != 'subscription'
-                         AND source != 'agent-restart'
+                         AND source NOT IN ('agent-restart', 'queue-expiry')
+                         AND session_name NOT IN (
+                             SELECT session_name FROM message_queue WHERE status = 'uncertain')
+                         AND session_name NOT IN (
+                             SELECT session_name FROM deliveries
+                             WHERE source = 'uncertain-acknowledged' AND created_at >= :cutoff)
                          AND session_name NOT IN :protected
                          AND COALESCE(sender, '') NOT IN :protected
                        RETURNING *"""
@@ -428,6 +500,9 @@ class QueueRepo(Repo):
                     },
                 )
                 row["delivery_id"] = delivery.scalar_one()
+            if notices is not None and rows:
+                for session, source, target, revise in notices(rows):
+                    await self._revise_in(conn, session, source, target, revise)
         for row in rows:
             await self._record_lifecycle(row, "queue_expired", delivery_id=row["delivery_id"])
         return rows
@@ -522,12 +597,15 @@ class QueueRepo(Repo):
         async with self._tx() as conn:
             records = await conn.execute(
                 text(
-                    "SELECT id,operation_id FROM message_queue WHERE session_name=:session AND "
-                    + identity
-                    + " AND status IN ('checkpoint','uncertain','delivered')"
+                    "SELECT id,operation_id,status FROM message_queue WHERE session_name=:session "
+                    "AND " + identity + " AND status IN ('checkpoint','uncertain','delivered')"
                 ),
                 params,
             )
+            records = records.all()
+            # A released uncertain row is recorded as such: the queue it held
+            # gets a fresh expiry window from now (``expire_pending``).
+            was_uncertain = {r[0] for r in records if r[2] == "uncertain"}
             if {f"{r[0]}:{r[1]}" for r in records} != set(tokens):
                 raise ValueError("Receipts must match this agent's inbox; read inbox first")
             result = await conn.execute(
@@ -546,7 +624,7 @@ class QueueRepo(Repo):
                     text(
                         "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"
                         "session_name,outcome,source,preview,created_at) VALUES "
-                        "(:op,:kind,:repo,:issue,:session,:session,'delivered','agent-checkpoint',:preview,:now)"
+                        "(:op,:kind,:repo,:issue,:session,:session,'delivered',:source,:preview,:now)"
                     ),
                     {
                         "session": session_name,
@@ -556,6 +634,9 @@ class QueueRepo(Repo):
                         "repo": row["repo"],
                         "issue": row["issue_number"],
                         "preview": row["message"][:120],
+                        "source": "uncertain-acknowledged"
+                        if row["id"] in was_uncertain
+                        else "agent-checkpoint",
                     },
                 )
         return sorted(set(tokens))
