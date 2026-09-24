@@ -25,7 +25,7 @@ def _fresh(monkeypatch):
     monkeypatch.setattr(escalation, "_denial_log_offset", None)
     monkeypatch.setattr(escalation, "_denial_log_inode", None)
     monkeypatch.setattr(escalation, "_denial_watch_started", 0.0)
-    monkeypatch.setattr(escalation, "_denials_read", RecentKeys(3600))
+    monkeypatch.setattr(escalation, "_denials_read", {})
     monkeypatch.setattr(escalation, "_denial_notified", RecentKeys(1800))
     monkeypatch.setattr(escalation, "_denials_unsent", [])
 
@@ -118,3 +118,15 @@ async def test_a_refusal_appended_out_of_timestamp_order_is_not_lost(config):
     assert (await _check(config)).await_count == 1
     _append(config, {**REFUSAL, "ts": now + 1, "tool_use_id": "earlier", "summary": "gh api"})
     assert (await _check(config)).await_count == 1  # an earlier stamp, appended later
+
+
+async def test_a_rotation_long_after_the_notice_does_not_resend_it(config, monkeypatch):
+    from agent_backbone.services.agents import rotate_action_log
+
+    await _check(config)
+    _append(config, {**REFUSAL, "tool_use_id": "t1"})
+    assert (await _check(config)).await_count == 1
+    monkeypatch.setattr(escalation, "_denial_notified", RecentKeys(1800))  # dedup window over
+    _append(config, *({"action": "comment", "session": "ike"} for _ in range(3)))
+    rotate_action_log(config.action_log_path, keep_lines=3)  # the refusal survives it
+    assert not (await _check(config)).await_count

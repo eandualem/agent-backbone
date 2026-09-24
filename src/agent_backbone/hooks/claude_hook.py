@@ -249,13 +249,15 @@ _SUBCOMMANDS = {
     "brew": frozenset({"install", "uninstall", "upgrade", "update"}),
 }
 """Subcommands a summary may name; any other word may be user content and stops it."""
-_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", ";;"})
+_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", ";;", "\n"})
 
 
 def _command_summary(command: str) -> str:
     """``cd; gh issue edit`` for ``cd x && gh issue edit 40 --body-file …``:
     known programs and their subcommands only, never arguments or file names."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    # An unquoted newline separates commands too; a quoted one stays inside its word.
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
+    lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     try:
         tokens = list(lexer)
@@ -263,7 +265,7 @@ def _command_summary(command: str) -> str:
         tokens = command.split()
     segments, current = [], []
     for token in tokens:
-        if token in _SEPARATORS:
+        if token in _SEPARATORS or not token.strip():
             segments.append(current)
             current = []
         else:

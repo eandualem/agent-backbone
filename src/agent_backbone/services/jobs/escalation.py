@@ -137,8 +137,11 @@ _denial_log_inode: int | None = None
 """The log file read; the prune job's atomic rotation replaces it with a new one."""
 _denial_watch_started = 0.0
 """When the watch began: refusals stamped earlier are never replayed."""
-_denials_read = RecentKeys(24 * 3600)
-"""Identities of refusals already read, so re-reading a rotated log adds nothing twice."""
+_denials_read: dict[tuple, None] = {}
+"""Identities of refusals already read, oldest first, so re-reading a rotated log adds
+nothing twice. Kept by count, not age: the log keeps its newest lines however old."""
+_DENIALS_READ_LIMIT = 5000
+"""More identities than the rotated log (2,000 lines) can hold."""
 _denials_unsent: list[dict] = []
 """Refusals whose notice no integration accepted; tried again next tick."""
 _UNSENT_LIMIT = 50
@@ -199,8 +202,11 @@ def _new_denials(config: BackboneConfig) -> list[dict]:
         # Byte order, not timestamps, decides what is new: concurrent hooks may
         # append out of timestamp order.
         identity = (record.get("session"), record.get("tool_use_id") or stamp)
-        if stamp < _denial_watch_started or _denials_read.check_and_mark(identity):
+        if stamp < _denial_watch_started or identity in _denials_read:
             continue
+        _denials_read[identity] = None
+        if len(_denials_read) > _DENIALS_READ_LIMIT:
+            del _denials_read[next(iter(_denials_read))]
         records.append(record)
     return records
 
