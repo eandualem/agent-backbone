@@ -130,10 +130,18 @@ async def check_permission_waiting(config: BackboneConfig, states: AgentStates) 
 
 
 _denial_notified = RecentKeys(1800)
-"""(agent, kind, category, summary) refusals the humans were told about."""
+"""(agent, category, summary) refusals the humans were told about."""
 _denial_log_offset: int | None = None
-"""How far into the action log refusals have been read; None until the first
-check, which starts at the end so a restart never replays old refusals."""
+"""How far into the action log refusals have been read; None until the first check."""
+_denial_log_inode: int | None = None
+"""The log file read; the prune job's atomic rotation replaces it with a new one."""
+_denial_watermark = 0.0
+"""Newest refusal read. The first check sets it to now, so a restart never
+replays old refusals; after the prune job rotates the log it is how the
+records not yet read are found again."""
+_denials_unsent: list[dict] = []
+"""Refusals whose notice no integration accepted; tried again next tick."""
+_UNSENT_LIMIT = 50
 
 
 def denial_text(name: str, record: dict) -> str:
@@ -155,17 +163,22 @@ def denial_text(name: str, record: dict) -> str:
 
 def _new_denials(config: BackboneConfig) -> list[dict]:
     """Refusal records appended to the action log since the last check."""
-    global _denial_log_offset
+    global _denial_log_offset, _denial_log_inode, _denial_watermark
     path = config.action_log_path
+    if _denial_log_offset is None:
+        _denial_watermark = time.time()  # nothing from before the watch is replayed
     try:
-        size = path.stat().st_size
+        status = path.stat()
     except OSError:
-        if _denial_log_offset is None:
-            _denial_log_offset = 0  # no log yet: nothing to replay, watch from its start
+        _denial_log_offset, _denial_log_inode = 0, None
         return []
-    if _denial_log_offset is None or size < _denial_log_offset:
-        _denial_log_offset = size  # first check, or the log was replaced
+    size = status.st_size
+    if _denial_log_offset is None:
+        _denial_log_offset, _denial_log_inode = size, status.st_ino
         return []
+    if status.st_ino != _denial_log_inode or size < _denial_log_offset:
+        # Rotated (a new file) or truncated: re-read, keeping only what is newer.
+        _denial_log_offset, _denial_log_inode = 0, status.st_ino
     with path.open("rb") as log_file:
         log_file.seek(_denial_log_offset)
         chunk = log_file.read(size - _denial_log_offset)
@@ -177,8 +190,16 @@ def _new_denials(config: BackboneConfig) -> list[dict]:
             record = json.loads(line)
         except ValueError:
             continue
-        if isinstance(record, dict) and record.get("action") == "permission_denied":
+        if not isinstance(record, dict) or record.get("action") != "permission_denied":
+            continue
+        try:
+            stamp = float(record.get("ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        if stamp > _denial_watermark:
             records.append(record)
+    if records:
+        _denial_watermark = max(float(r["ts"]) for r in records)
     return records
 
 
@@ -188,9 +209,12 @@ async def check_permission_denials(config: BackboneConfig) -> None:
 
     One notice per agent and refused action within the dedup window, in the
     agent's own Telegram topic, without buttons: there is nothing to approve
-    remotely, and an old refusal is never replayed or retried.
+    remotely. A notice no integration accepted is tried again next tick; a
+    refusal from before the watch is never replayed, and no action is retried.
     """
-    for record in _new_denials(config):
+    pending = [*_denials_unsent, *_new_denials(config)]
+    _denials_unsent.clear()
+    for record in pending:
         name = str(record.get("session") or "")
         if name not in config.agents:
             continue
@@ -200,6 +224,8 @@ async def check_permission_denials(config: BackboneConfig) -> None:
         if await notify_humans(config, denial_text(name, record), agent=name):
             _denial_notified.mark(key)
             log.warning("Sent permission-denied notification for %s", name)
+        elif len(_denials_unsent) < _UNSENT_LIMIT:
+            _denials_unsent.append(record)  # the notice is retried, never the action
 
 
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:

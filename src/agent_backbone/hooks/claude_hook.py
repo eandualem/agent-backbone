@@ -112,25 +112,100 @@ _CATEGORY = re.compile(r"\[([^\]\n]{1,80})\]")
 _WORD = re.compile(r"[a-z][a-z0-9_-]{0,30}")
 
 
+_KNOWN_PROGRAMS = frozenset(
+    {
+        "backbone",
+        "brew",
+        "cat",
+        "cd",
+        "chmod",
+        "claude",
+        "codex",
+        "cp",
+        "curl",
+        "docker",
+        "find",
+        "gh",
+        "git",
+        "grep",
+        "kill",
+        "kubectl",
+        "ls",
+        "mkdir",
+        "mv",
+        "node",
+        "npm",
+        "npx",
+        "open",
+        "osascript",
+        "pip",
+        "pnpm",
+        "python",
+        "python3",
+        "rm",
+        "rsync",
+        "scp",
+        "sed",
+        "ssh",
+        "tar",
+        "uv",
+        "wget",
+        "yarn",
+    }
+)
+"""Programs named in a refusal notice; any other program is "a local command"."""
+_SUBCOMMAND_DEPTH = {
+    "gh": 2,
+    "git": 1,
+    "backbone": 2,
+    "docker": 1,
+    "kubectl": 1,
+    "npm": 1,
+    "pnpm": 1,
+    "yarn": 1,
+    "uv": 1,
+    "brew": 1,
+    "claude": 1,
+    "codex": 1,
+}
+"""How many plain subcommand words each program's summary keeps (``gh issue edit``)."""
+_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", ";;"})
+
+
 def _command_summary(command: str) -> str:
-    """``gh issue edit`` for ``cd x && gh issue edit 40 --body-file …``: each
-    segment's program and plain subcommands, never arguments, flags or paths."""
+    """``cd; gh issue edit`` for ``cd x && gh issue edit 40 --body-file …``:
+    known programs and their subcommands only, never arguments or file names."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        tokens = command.split()
+    segments, current = [], []
+    for token in tokens:
+        if token in _SEPARATORS:
+            segments.append(current)
+            current = []
+        else:
+            current.append(token)
+    segments.append(current)
     parts = []
-    for segment in re.split(r"&&|\|\||;|\|", command):
-        try:
-            words = shlex.split(segment)
-        except ValueError:
-            words = segment.split()
+    for words in segments:
         words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
         if not words:
             continue
-        summary = [os.path.basename(words[0])]
-        for word in words[1:3]:
-            if not _WORD.fullmatch(word):
-                break
-            summary.append(word)
-        if _WORD.fullmatch(summary[0]) and " ".join(summary) not in parts:
-            parts.append(" ".join(summary))
+        program = os.path.basename(words[0])
+        if program not in _KNOWN_PROGRAMS:
+            summary = "a local command"
+        else:
+            kept = [program]
+            for word in words[1 : 1 + _SUBCOMMAND_DEPTH.get(program, 0)]:
+                if not _WORD.fullmatch(word):
+                    break
+                kept.append(word)
+            summary = " ".join(kept)
+        if summary not in parts:
+            parts.append(summary)
     return "; ".join(parts[:3]) or "a shell command"
 
 
@@ -143,6 +218,8 @@ def _action_summary(tool: str, tool_input) -> str:
     if not match:
         return tool
     server, name = match.groups()
+    if server != "claude-in-chrome":
+        return f"{server}: {name}"  # another tool's fields may be user content
     steps = []
     for action in tool_input.get("actions") or [tool_input]:
         if not isinstance(action, dict):

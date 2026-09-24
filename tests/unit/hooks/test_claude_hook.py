@@ -422,3 +422,27 @@ def test_the_claude_runtime_listens_for_refusals():
     from agent_backbone.services.runtimes import RUNTIMES
 
     assert ("PermissionDenied", "") in RUNTIMES["claude"].hook_events
+
+
+@pytest.mark.parametrize(
+    ("command", "summary"),
+    [
+        ("rm confidential-backup", "rm"),
+        ("cd private-project && git push", "cd; git push"),
+        ('gh issue edit 40 --body "a && b"', "gh issue edit"),
+        ("./secret-deploy.sh --x", "a local command"),
+        ('FOO=1 git commit -m "private; text"', "git commit"),
+    ],
+)
+def test_a_refusal_summary_keeps_program_names_only(command, summary):
+    record = hook.denial_record(
+        {"tool_name": "Bash", "tool_input": {"command": command}, "reason": ""}, 1.0
+    )
+    assert record["summary"] == summary
+
+
+def test_other_mcp_tools_show_only_server_and_tool():
+    record = hook.denial_record(
+        {"tool_name": "mcp__github__create_repository", "tool_input": {"name": "secret"}}, 1.0
+    )
+    assert record["summary"] == "github: create_repository"
