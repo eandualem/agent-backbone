@@ -290,3 +290,9 @@ def api_key():
 @pytest.fixture
 def auth_headers(api_key):
     return {"Authorization": f"Bearer {api_key}"}
+
+
+@pytest.fixture(autouse=True)
+def _no_prompt_hook_wait(monkeypatch):
+    """An unconfirmed paste waits for the runtime's prompt hook; tests have none."""
+    monkeypatch.setattr("agent_backbone.services.routing._delivery.PROMPT_HOOK_WAIT_SECONDS", 0.0)

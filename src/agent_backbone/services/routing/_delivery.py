@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
@@ -32,7 +33,7 @@ from agent_backbone.models import (
     SUCCESS_OUTCOMES,
     DeliveryOutcome,
 )
-from agent_backbone.services.agents import note_submission
+from agent_backbone.services.agents import note_submission, read_state_file
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.runtimes import SubmissionUnconfirmed, get_runtime, send_message
@@ -526,10 +527,13 @@ async def safe_deliver(
 
     async def submit() -> bool:
         nonlocal uncertain
+        pasted_at = time.time()
         note_submission(config.state_dir, session_name)
         try:
             return await send_message(session_name, message, runtime_hint=profile.runtime)
         except SubmissionUnconfirmed as exc:
+            if await prompt_hook_after(config.state_dir, session_name, pasted_at):
+                return True
             uncertain = True
             await record_exception("submission_unconfirmed", "submission", exc)
             return False
@@ -633,6 +637,32 @@ async def safe_deliver(
             report.queue_id,
         )
     return report
+
+
+PROMPT_HOOK_WAIT_SECONDS = 3.0
+"""How long a submission the screen could not confirm waits for the runtime's hook."""
+
+
+async def prompt_hook_after(state_dir, session_name: str, since: float) -> bool:
+    """Whether the runtime's own hook reported a prompt submitted after ``since``.
+
+    The screen check reads the prompt box, whose redraw timing varies; a
+    ``UserPromptSubmit`` hook record is the runtime saying it took the prompt
+    (live: Feynman, 2026-09-24 19:05:34.938Z, reported unconfirmed at 19:05:36).
+    """
+    deadline = time.monotonic() + PROMPT_HOOK_WAIT_SECONDS
+    while True:
+        snapshot = await asyncio.to_thread(read_state_file, state_dir, session_name)
+        if (
+            snapshot is not None
+            and snapshot.source == "push"
+            and snapshot.event == "UserPromptSubmit"
+            and snapshot.timestamp >= since
+        ):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.25)
 
 
 @_serialized

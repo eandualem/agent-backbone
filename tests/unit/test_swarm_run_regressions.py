@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.hooks.backbone_state import issue_from_text
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import (
     AgentState,
     StateSnapshot,
@@ -50,6 +51,58 @@ async def test_uncertain_submission_is_held_and_never_retried(db, config):
     assert held[0]["status"] == "uncertain"
     await db.queue.acknowledge_checkpoint("ike", [f"{first.queue_id}:{first.operation_id}"])
     assert await db.queue.checkpoint("ike") == []
+
+
+async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, config):
+    """The screen check can miss a redraw; the runtime's UserPromptSubmit hook is its receipt."""
+    import json
+    import time
+
+    def submitted(*_args, **_kwargs):
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        (config.state_dir / "ike.json").write_text(
+            json.dumps({"state": "busy", "event": "UserPromptSubmit", "ts": time.time()})
+        )
+        raise SubmissionUnconfirmed("prompt box still showed text")
+
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.send_message",
+            AsyncMock(side_effect=submitted),
+        ),
+    ):
+        report = await safe_deliver(
+            "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
+        )
+    assert report.outcome == DeliveryOutcome.DELIVERED and not report.unconfirmed
+    assert await db.queue.checkpoint("ike") == []  # nothing held
+
+
+async def test_an_older_prompt_hook_is_not_a_receipt(db, config):
+    import json
+
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    (config.state_dir / "ike.json").write_text(
+        json.dumps({"state": "busy", "event": "UserPromptSubmit", "ts": 1.0})
+    )
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.send_message",
+            AsyncMock(side_effect=SubmissionUnconfirmed("no receipt")),
+        ),
+    ):
+        report = await safe_deliver(
+            "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
+        )
+    assert report.unconfirmed
 
 
 async def test_checkpoint_survives_read_response_loss_and_retains_sender(db):
