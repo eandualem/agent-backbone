@@ -471,9 +471,15 @@ def _model_from_transcript(path: Path) -> str | None:
     return None
 
 
-PROMPT_HEAD_CHARS = 400
-"""How much of the last prompt a record keeps: enough to find a pasted message's
-opening after the runtime's own wrapper (Claude's ``<pasted_content …>``)."""
+_PASTE_WRAPPER = re.compile(r"</?pasted_content\b[^>]*>")
+
+
+def prompt_digest(text: str) -> str:
+    """A prompt's identity: without the runtime's paste wrapper (Claude's
+    ``<pasted_content id=…>``), whitespace collapsed. Delivery compares it with
+    the digest of the message it pasted: equal means that very message."""
+    normalized = " ".join(_PASTE_WRAPPER.sub(" ", text).split())
+    return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 def record_factory(payload: dict, current: dict | None, event: str) -> Callable[..., dict]:
@@ -481,8 +487,8 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
     ``repo`` and ``started_at`` stable across events and stamps the runtime's
     session id, the observed model and the event that produced the record.
     ``prompted_at`` is when the runtime last took a prompt (``UserPromptSubmit``)
-    and ``prompt_head`` how that prompt began (whitespace collapsed, clipped),
-    both kept through the turn's later records: delivery's receipt for a paste."""
+    and ``prompt_digest`` which prompt it was, both kept through the turn's
+    later records: delivery's receipt for a paste."""
     now = time.time()
     current = current or {}
     session_id = payload.get("session_id") or current.get("session_id")
@@ -510,14 +516,13 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
         if current.get("last_message") is not None:
             record["last_message"] = current["last_message"]
         if event == "UserPromptSubmit":
-            prompted_at = now
-            prompt_head = " ".join(str(payload.get("prompt") or "").split())[:PROMPT_HEAD_CHARS]
+            prompted_at, digest = now, prompt_digest(str(payload.get("prompt") or ""))
         else:
-            prompted_at, prompt_head = current.get("prompted_at"), current.get("prompt_head")
+            prompted_at, digest = current.get("prompted_at"), current.get("prompt_digest")
         if prompted_at is not None:
             record["prompted_at"] = prompted_at
-        if prompt_head:
-            record["prompt_head"] = prompt_head
+        if digest:
+            record["prompt_digest"] = digest
         record.update(extra)
         return record
 

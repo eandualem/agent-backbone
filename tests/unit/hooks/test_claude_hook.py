@@ -365,10 +365,12 @@ class TestObservedModel:
 
 def test_a_prompt_time_survives_the_turns_later_records():
     """Delivery's receipt for a paste: set by the prompt, kept through Stop."""
-    prompted, _ = hook.derive(_payload("UserPromptSubmit", prompt="  go\n now "), {})
-    assert prompted["prompted_at"] == prompted["ts"] and prompted["prompt_head"] == "go now"
+    wrapped = '\n<pasted_content id="8687">\ngo\n now\n</pasted_content id="8687">\n'
+    prompted, _ = hook.derive(_payload("UserPromptSubmit", prompt=wrapped), {})
+    assert prompted["prompted_at"] == prompted["ts"]
+    assert prompted["prompt_digest"] == hook.bb.prompt_digest("go now")  # wrapper ignored
     stopped, _ = hook.derive(_payload("Stop"), prompted)
     assert stopped["prompted_at"] == prompted["prompted_at"]
-    assert stopped["prompt_head"] == "go now"
+    assert stopped["prompt_digest"] == prompted["prompt_digest"]
     started, _ = hook.derive(_payload("SessionStart"), {})
     assert "prompted_at" not in started

@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import text
 
 from agent_backbone.config import AgentsConfig, AgentSpec
-from agent_backbone.hooks.backbone_state import issue_from_text
+from agent_backbone.hooks.backbone_state import issue_from_text, prompt_digest
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import (
     AgentState,
@@ -70,7 +70,9 @@ async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, con
                     "ts": time.time(),
                     "prompted_at": time.time(),
                     # as Claude's hook receives a paste (live capture, 2.1.281)
-                    "prompt_head": '<pasted_content id="8687"> correction </pasted_content>',
+                    "prompt_digest": prompt_digest(
+                        '\n\n<pasted_content id="8687">\ncorrection\n</pasted_content id="8687">\n'
+                    ),
                 }
             )
         )
@@ -101,16 +103,19 @@ async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, con
             "event": "UserPromptSubmit",
             "ts": 1.0,
             "prompted_at": 1.0,
-            "prompt_head": "correction",
+            "prompt_digest": prompt_digest("correction"),
         },
-        # someone else's prompt submitted meanwhile
-        {
-            "state": "busy",
-            "event": "UserPromptSubmit",
-            "ts": 4102444800.0,
-            "prompted_at": 4102444800.0,
-            "prompt_head": "fix the login page",
-        },
+        # someone else's prompt, one sharing the opening, or this one with more typed in
+        *(
+            {
+                "state": "busy",
+                "event": "UserPromptSubmit",
+                "ts": 4102444800.0,
+                "prompted_at": 4102444800.0,
+                "prompt_digest": prompt_digest(other),
+            }
+            for other in ("fix the login page", "correction and more", '<pasted_content id="1">')
+        ),
         # a turn that was already running goes on after the paste: no new prompt
         {"state": "idle", "event": "Stop", "ts": 4102444800.0, "prompted_at": 1.0},
         {"state": "idle", "event": "Notification", "ts": 4102444800.0},
