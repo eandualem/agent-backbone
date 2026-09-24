@@ -532,7 +532,7 @@ async def safe_deliver(
         try:
             return await send_message(session_name, message, runtime_hint=profile.runtime)
         except SubmissionUnconfirmed as exc:
-            if await prompt_hook_after(config.state_dir, session_name, pasted_at):
+            if await prompt_hook_after(config.state_dir, session_name, pasted_at, message):
                 return True
             uncertain = True
             await record_exception("submission_unconfirmed", "submission", exc)
@@ -640,18 +640,23 @@ async def safe_deliver(
 
 
 PROMPT_HOOK_WAIT_SECONDS = 3.0
+PROMPT_MATCH_CHARS = 80
+"""The opening of a pasted message its prompt record must contain."""
 """How long a submission the screen could not confirm waits for the runtime's hook."""
 
 
-async def prompt_hook_after(state_dir, session_name: str, since: float) -> bool:
-    """Whether the runtime's hook reports taking a prompt at or after ``since``.
+async def prompt_hook_after(state_dir, session_name: str, since: float, message: str) -> bool:
+    """Whether the runtime's hook reports taking this ``message`` at or after ``since``.
 
     The screen check reads the prompt box, whose redraw timing varies; the
     hook's ``prompted_at`` is the runtime saying it took a prompt (live:
     Feynman, 2026-09-24, prompt taken at 19:05:34.938Z, reported unconfirmed
     at 19:05:36). It survives the turn's later records, so a quick ``Stop``
     does not erase it, and a turn that was already running cannot supply it.
+    The prompt must also begin with this message (after the runtime's own
+    wrapper): a different prompt someone submitted meanwhile is no receipt.
     """
+    opening = " ".join(message.split())[:PROMPT_MATCH_CHARS]
     deadline = time.monotonic() + PROMPT_HOOK_WAIT_SECONDS
     while True:
         snapshot = await asyncio.to_thread(read_state_file, state_dir, session_name)
@@ -660,6 +665,7 @@ async def prompt_hook_after(state_dir, session_name: str, since: float) -> bool:
             and snapshot.source == "push"
             and snapshot.prompted_at is not None
             and snapshot.prompted_at >= since
+            and opening in (snapshot.prompt_head or "")
         ):
             return True
         if time.monotonic() >= deadline:

@@ -471,12 +471,18 @@ def _model_from_transcript(path: Path) -> str | None:
     return None
 
 
+PROMPT_HEAD_CHARS = 400
+"""How much of the last prompt a record keeps: enough to find a pasted message's
+opening after the runtime's own wrapper (Claude's ``<pasted_content …>``)."""
+
+
 def record_factory(payload: dict, current: dict | None, event: str) -> Callable[..., dict]:
     """A ``state(new_state, reason=None, **extra)`` builder that keeps ``issue``,
     ``repo`` and ``started_at`` stable across events and stamps the runtime's
     session id, the observed model and the event that produced the record.
-    ``prompted_at`` is when the runtime last took a prompt (``UserPromptSubmit``),
-    kept through the turn's later records: delivery's receipt for a paste."""
+    ``prompted_at`` is when the runtime last took a prompt (``UserPromptSubmit``)
+    and ``prompt_head`` how that prompt began (whitespace collapsed, clipped),
+    both kept through the turn's later records: delivery's receipt for a paste."""
     now = time.time()
     current = current or {}
     session_id = payload.get("session_id") or current.get("session_id")
@@ -503,9 +509,15 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
             record["model"] = model
         if current.get("last_message") is not None:
             record["last_message"] = current["last_message"]
-        prompted_at = now if event == "UserPromptSubmit" else current.get("prompted_at")
+        if event == "UserPromptSubmit":
+            prompted_at = now
+            prompt_head = " ".join(str(payload.get("prompt") or "").split())[:PROMPT_HEAD_CHARS]
+        else:
+            prompted_at, prompt_head = current.get("prompted_at"), current.get("prompt_head")
         if prompted_at is not None:
             record["prompted_at"] = prompted_at
+        if prompt_head:
+            record["prompt_head"] = prompt_head
         record.update(extra)
         return record
 

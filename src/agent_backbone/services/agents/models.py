@@ -75,6 +75,8 @@ class StateSnapshot:
     started_at: float | None = None
     prompted_at: float | None = None
     """When the runtime last took a prompt, as its hook reported it."""
+    prompt_head: str | None = None
+    """How that prompt began, whitespace collapsed."""
     plan_file: str | None = None
     plan_title: str | None = None
     session_id: str | None = None

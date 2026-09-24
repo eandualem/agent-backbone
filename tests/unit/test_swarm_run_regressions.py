@@ -64,7 +64,14 @@ async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, con
         config.state_dir.mkdir(parents=True, exist_ok=True)
         (config.state_dir / "ike.json").write_text(
             json.dumps(
-                {"state": "busy", "event": event, "ts": time.time(), "prompted_at": time.time()}
+                {
+                    "state": "busy",
+                    "event": event,
+                    "ts": time.time(),
+                    "prompted_at": time.time(),
+                    # as Claude's hook receives a paste (live capture, 2.1.281)
+                    "prompt_head": '<pasted_content id="8687"> correction </pasted_content>',
+                }
             )
         )
         raise SubmissionUnconfirmed("prompt box still showed text")
@@ -89,7 +96,21 @@ async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, con
 @pytest.mark.parametrize(
     "record",
     [
-        {"state": "busy", "event": "UserPromptSubmit", "ts": 1.0, "prompted_at": 1.0},
+        {
+            "state": "busy",
+            "event": "UserPromptSubmit",
+            "ts": 1.0,
+            "prompted_at": 1.0,
+            "prompt_head": "correction",
+        },
+        # someone else's prompt submitted meanwhile
+        {
+            "state": "busy",
+            "event": "UserPromptSubmit",
+            "ts": 4102444800.0,
+            "prompted_at": 4102444800.0,
+            "prompt_head": "fix the login page",
+        },
         # a turn that was already running goes on after the paste: no new prompt
         {"state": "idle", "event": "Stop", "ts": 4102444800.0, "prompted_at": 1.0},
         {"state": "idle", "event": "Notification", "ts": 4102444800.0},

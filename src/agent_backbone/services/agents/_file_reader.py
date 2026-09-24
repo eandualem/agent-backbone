@@ -119,6 +119,7 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         last_message=data.get("last_message") or None,
         event=data.get("event") or None,
         prompted_at=_finite(data.get("prompted_at")),
+        prompt_head=data["prompt_head"] if isinstance(data.get("prompt_head"), str) else None,
         detail=data.get("detail") or None,
         evidence=[
             f"hook state file {state_file.name}: {state.value}"
