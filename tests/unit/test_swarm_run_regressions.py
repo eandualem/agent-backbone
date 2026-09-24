@@ -53,7 +53,8 @@ async def test_uncertain_submission_is_held_and_never_retried(db, config):
     assert await db.queue.checkpoint("ike") == []
 
 
-async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, config):
+@pytest.mark.parametrize("event", ["UserPromptSubmit", "PreToolUse", "Stop"])
+async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, config, event):
     """The screen check can miss a redraw; the runtime's UserPromptSubmit hook is its receipt."""
     import json
     import time
@@ -61,8 +62,8 @@ async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, con
     def submitted(*_args, **_kwargs):
         config.state_dir.mkdir(parents=True, exist_ok=True)
         (config.state_dir / "ike.json").write_text(
-            json.dumps({"state": "busy", "event": "UserPromptSubmit", "ts": time.time()})
-        )
+            json.dumps({"state": "busy", "event": event, "ts": time.time()})
+        )  # a quick turn's Stop, or Codex's PreToolUse, may already replace the prompt record
         raise SubmissionUnconfirmed("prompt box still showed text")
 
     with (
@@ -82,13 +83,18 @@ async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, con
     assert await db.queue.checkpoint("ike") == []  # nothing held
 
 
-async def test_an_older_prompt_hook_is_not_a_receipt(db, config):
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"state": "busy", "event": "UserPromptSubmit", "ts": 1.0},  # before the paste
+        {"state": "idle", "event": "Notification", "ts": 4102444800.0},  # idle agents emit it
+    ],
+)
+async def test_what_is_not_a_receipt(db, config, record):
     import json
 
     config.state_dir.mkdir(parents=True, exist_ok=True)
-    (config.state_dir / "ike.json").write_text(
-        json.dumps({"state": "busy", "event": "UserPromptSubmit", "ts": 1.0})
-    )
+    (config.state_dir / "ike.json").write_text(json.dumps(record))
     with (
         patch(
             "agent_backbone.services.routing._delivery.get_session_intelligence",
