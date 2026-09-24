@@ -35,12 +35,12 @@ def groups(state_dir: Path, now: float | None = None) -> list[dict]:
     for path in sorted((state_dir / "chrome-groups").glob("*.json")):
         try:
             record = json.loads(path.read_text())
-            group, tabs, seen = int(record["group"]), record["tabs"], float(record["ts"])
+            group, seen = int(record["group"]), float(record["ts"])
+            tab_ids = [int(tab) for tab in record["tabs"]]
         except (OSError, ValueError, KeyError, TypeError):
+            continue  # one unreadable record must not cost the others their names
+        if now - seen > MAX_AGE_SECONDS:
             continue
-        if now - seen > MAX_AGE_SECONDS or not isinstance(tabs, list):
-            continue
-        tab_ids = [int(tab) for tab in tabs]
         found.append({"group": group, "tabs": tab_ids, "title": title_for(path.stem)})
     return found
 

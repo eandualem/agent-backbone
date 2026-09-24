@@ -98,6 +98,7 @@ class TestNativeHost:
         self._record(tmp_path, "ada", 8, [3])
         self._record(tmp_path, "old-desk", 9, [4], age=host.MAX_AGE_SECONDS + 1)
         (tmp_path / "chrome-groups" / "broken.json").write_text("{")
+        self._record(tmp_path, "bad-tabs", 10, ["not a tab id"])
         assert host.groups(tmp_path) == [
             {"group": 8, "tabs": [3], "title": "Ada"},
             {"group": 7, "tabs": [1, 2], "title": "Contract Desk"},

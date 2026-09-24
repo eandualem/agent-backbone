@@ -607,7 +607,8 @@ backbone chrome uninstall    # removes both; also remove the extension in Chrome
 
 The extension needs `tabGroups`, `tabs`, `nativeMessaging` and `alarms`; it
 never reads pages. A group is renamed within about 30 seconds of the agent's
-first Chrome action. Only Claude Code agents are covered (Codex drives Chrome
+first `tabs_context_mcp` result for it; a group a `navigate` call opened
+first is named at the agent's next `tabs_context_mcp`. Only Claude Code agents are covered (Codex drives Chrome
 through its own extension), and only Google Chrome's default user directory.
 
 ## `backbone templates`
