@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -71,26 +71,44 @@ def _expired_line(row: dict, *, to_recipient: bool) -> str:
     return f"- {who}, queued {queued}Z: {preview}"
 
 
-_COUNT = re.compile(r"^\[via:backbone\] (\d+) message")
+_MORE = re.compile(r"^- … and \d+ more, (?:from|to) (.+?): ")
+
+
+def _origin(row: dict, *, to_recipient: bool) -> str:
+    if to_recipient:
+        return str(row.get("sender") or row.get("source") or "unknown")
+    return str(row.get("session_name") or "unknown")
 
 
 def _merged_notice(
     previous: str | None, rows: list[dict], *, to_recipient: bool, agent: str, minutes: int
 ) -> str:
-    """The notice with these rows added to what it already listed: a count,
-    the first lines, and a pointer to diagnostics for the rest."""
-    old_lines = [
-        line
-        for line in (previous or "").split("\n")[1:]
-        if line.startswith("- ") and not line.startswith("- … and ")
-    ]
-    match = _COUNT.match(previous or "")
-    total = (int(match.group(1)) if match else 0) + len(rows)
-    lines = (old_lines + [_expired_line(r, to_recipient=to_recipient) for r in rows])[
-        :_EXPIRY_LINES
-    ]
-    if total > len(lines):
-        lines.append(f"- … and {total - len(lines)} more: backbone diagnostics --agent {agent}")
+    """The notice with these rows added to what it already listed: up to ten
+    lines, then the rest counted by where they came from or went."""
+    earlier = (previous or "").split("\n")[1:]
+    detail = [line for line in earlier if line.startswith("- ") and not _MORE.match(line)]
+    omitted: Counter[str] = Counter()
+    for line in earlier:
+        if match := _MORE.match(line):
+            for part in match.group(1).split(", "):
+                name, _, count = part.rpartition(" ×")
+                omitted[name] += int(count) if count.isdigit() else 1
+    for row in rows:
+        if len(detail) < _EXPIRY_LINES:
+            detail.append(_expired_line(row, to_recipient=to_recipient))
+        else:
+            omitted[_origin(row, to_recipient=to_recipient)] += 1
+    total = len(detail) + sum(omitted.values())
+    lines = list(detail)
+    if omitted:
+        parties = ", ".join(f"{name} ×{count}" for name, count in omitted.most_common())
+        where = (
+            f"backbone diagnostics --agent {agent} lists them (repository and issue, not text)"
+            if to_recipient
+            else "you have their text if one still matters"
+        )
+        direction = "from" if to_recipient else "to"
+        lines.append(f"- … and {sum(omitted.values())} more, {direction} {parties}: {where}")
     heading = (
         f"{total} message(s) to you expired after {minutes} min in the queue "
         "without being delivered. Ask the sender if one still matters:"

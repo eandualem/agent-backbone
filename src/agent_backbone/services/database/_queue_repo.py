@@ -188,26 +188,37 @@ class QueueRepo(Repo):
         """Rewrite the session's waiting direct message from ``source`` for
         ``target_entity`` as ``revise(its text)``, or queue ``revise(None)``:
         one notice per party that grows, not a stream. A notice already
-        leased for delivery is left alone and a new one opens behind it."""
-        async with self._tx() as conn:
-            lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
-            params = {"session": session_name, "source": source, "target": target_entity}
-            found = await conn.execute(
-                text(
-                    "SELECT id, message FROM message_queue WHERE session_name = :session "
-                    "AND source = :source AND target_entity = :target AND status = 'pending' "
-                    "ORDER BY id DESC LIMIT 1" + lock
-                ),
-                params,
-            )
-            row = found.mappings().first()
-            if row is not None:
+        leased for delivery is left alone and a new one opens behind it.
+
+        The rewrite applies only if the text is still the one read (SQLite
+        takes no row lock), so a concurrent revision is re-read, never lost.
+        A new notice gets its own identity: identical text must not fold
+        into one that is already out for delivery."""
+        params = {"session": session_name, "source": source, "target": target_entity}
+        for _attempt in range(_MAX_ENQUEUE_ATTEMPTS):
+            async with self._tx() as conn:
+                lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
+                found = await conn.execute(
+                    text(
+                        "SELECT id, message FROM message_queue WHERE session_name = :session "
+                        "AND source = :source AND target_entity = :target "
+                        "AND status = 'pending' ORDER BY id DESC LIMIT 1" + lock
+                    ),
+                    params,
+                )
+                row = found.mappings().first()
+                if row is None:
+                    break
                 updated = await conn.execute(
                     text(
                         "UPDATE message_queue SET message = :message "
-                        "WHERE id = :id AND status = 'pending'"
+                        "WHERE id = :id AND status = 'pending' AND message = :previous"
                     ),
-                    {"id": row["id"], "message": revise(row["message"])},
+                    {
+                        "id": row["id"],
+                        "message": revise(row["message"]),
+                        "previous": row["message"],
+                    },
                 )
                 if updated.rowcount:
                     return
@@ -217,6 +228,7 @@ class QueueRepo(Repo):
             target_entity=target_entity,
             delivery_kind="direct_message",
             source=source,
+            source_key=uuid.uuid4().hex,
         )
 
     async def enqueue_subscription(

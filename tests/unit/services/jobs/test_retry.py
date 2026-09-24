@@ -296,7 +296,10 @@ class TestDeliveryRetryQueueDrain:
         await _report_expired(config, db, rows)
         [notice] = await db.queue.dequeue("ike")
         assert notice["message"].count("\n- from github") == 10
-        assert notice["message"].endswith("- … and 3 more: backbone diagnostics --agent ike")
+        assert notice["message"].endswith(
+            "- … and 3 more, from github ×3: backbone diagnostics --agent ike lists them "
+            "(repository and issue, not text)"
+        )
 
     async def test_later_expiries_grow_the_waiting_notice(self, db, config):
         from agent_backbone.services.jobs.retry import _report_expired
@@ -309,11 +312,46 @@ class TestDeliveryRetryQueueDrain:
         [notice] = await db.queue.dequeue("ike")  # one notice, not one per sweep
         assert notice["message"].startswith("[via:backbone] 13 message(s) to you expired")
         assert notice["message"].count("\n- from github") == 10
-        assert notice["message"].endswith("- … and 3 more: backbone diagnostics --agent ike")
+        assert "- … and 3 more, from github ×3: " in notice["message"]
         # Once it is out for delivery it is not rewritten: the next opens behind it.
         await _report_expired(config, db, [gh(14)])
         [later] = await db.queue.dequeue("ike")
         assert later["message"].startswith("[via:backbone] 1 message(s) to you expired")
+
+    async def test_concurrent_reports_both_reach_the_notice(self, db, config):
+        import asyncio
+
+        from agent_backbone.services.jobs.retry import _report_expired
+
+        def row(n):
+            return {"session_name": "ike", "sender": "leo", "message": f"m{n}"}
+
+        await asyncio.gather(
+            *(_report_expired(config, db, [row(n)]) for n in range(6))
+        )  # the monitor and the retry job both drain the queue
+        notices = await db.queue.dequeue("ike", limit=10)
+        assert sum(int(n["message"].split()[1]) for n in notices) == 6
+
+    async def test_an_identical_notice_is_not_folded_into_one_out_for_delivery(self, db, config):
+        from agent_backbone.services.jobs.retry import _report_expired
+
+        same = {"session_name": "ike", "sender": "", "source": "github", "message": "x"}
+        await _report_expired(config, db, [same])
+        [first] = await db.queue.dequeue("ike")  # leased: out for delivery
+        await _report_expired(config, db, [same])
+        [second] = await db.queue.dequeue("ike")
+        assert second["id"] != first["id"] and second["message"] == first["message"]
+
+    async def test_a_sender_notice_names_where_the_rest_went(self, db, config):
+        from agent_backbone.services.jobs.retry import _report_expired
+
+        rows = [{"session_name": f"a{n % 2}", "sender": "leo", "message": "m"} for n in range(12)]
+        await _report_expired(config, db, rows)
+        [notice] = await db.queue.dequeue("leo")
+        assert notice["message"].startswith("[via:backbone] 12 message(s) you sent expired")
+        assert notice["message"].endswith(
+            "- … and 2 more, to a0 ×1, a1 ×1: you have their text if one still matters"
+        )
 
     async def test_the_drain_counts_expiries(self, db, config):
         db.queue.expire_pending = AsyncMock(return_value=[{"id": 7, "session_name": "ike"}])
