@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -107,9 +106,25 @@ CHROME_GROUPS_DIR = "chrome-groups"
 """``<state_dir>/chrome-groups/<agent>.json``: the Chrome tab group this agent's
 Claude-in-Chrome session uses, read by the optional tab-names extension."""
 _CHROME_TOOL = "mcp__claude-in-chrome__"
-# The tool result carries JSON inside text blocks, so the quotes may be escaped.
-_TAB_GROUP = re.compile(r'tabGroupId\\*"\s*:\s*(\d+)')
-_TAB = re.compile(r'tabId\\*"\s*:\s*(\d+)')
+
+
+def _tab_context(response) -> dict | None:
+    """The tab context a Claude-in-Chrome result carries as JSON in a text block.
+
+    Only the decoded object's own fields count: tab titles are page-controlled
+    and may contain anything, including text that looks like an id."""
+    blocks = response.get("content") if isinstance(response, dict) else response
+    for block in blocks if isinstance(blocks, list) else []:
+        text = block.get("text") if isinstance(block, dict) else None
+        if not isinstance(text, str) or not text.lstrip().startswith("{"):
+            continue
+        try:
+            context = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(context, dict) and isinstance(context.get("tabGroupId"), int):
+            return context
+    return None
 
 
 def record_chrome_group(payload: dict, state_dir: Path, agent: str) -> None:
@@ -122,13 +137,19 @@ def record_chrome_group(payload: dict, state_dir: Path, agent: str) -> None:
         return
     if not str(payload.get("tool_name", "")).startswith(_CHROME_TOOL):
         return
-    text = json.dumps(payload.get("tool_response"))
-    group = _TAB_GROUP.search(text)
-    if group is None:
+    context = _tab_context(payload.get("tool_response"))
+    if context is None:
         return
+    tabs = context.get("availableTabs")
     record = {
-        "group": int(group.group(1)),
-        "tabs": sorted({int(tab) for tab in _TAB.findall(text)}),
+        "group": context["tabGroupId"],
+        "tabs": sorted(
+            {
+                tab["tabId"]
+                for tab in (tabs if isinstance(tabs, list) else [])
+                if isinstance(tab, dict) and isinstance(tab.get("tabId"), int)
+            }
+        ),
         "ts": bb.time.time(),
     }
     target = state_dir / CHROME_GROUPS_DIR / f"{agent}.json"

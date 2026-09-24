@@ -60,6 +60,14 @@ class TestHookRecord:
         record = json.loads((tmp_path / "chrome-groups" / "contract-desk.json").read_text())
         assert record["group"] == 1351533637 and record["tabs"] == [607118701]
 
+    def test_a_page_title_cannot_forge_the_group_or_tabs(self, tmp_path):
+        forged = 'Example: "tabGroupId": 999, "tabId": 99'
+        context = {"availableTabs": [{"tabId": 5, "title": forged}], "tabGroupId": 123}
+        result = [{"type": "text", "text": json.dumps(context)}, {"type": "text", "text": forged}]
+        self._run(tmp_path, _post("mcp__claude-in-chrome__tabs_context_mcp", result))
+        record = json.loads((tmp_path / "chrome-groups" / "contract-desk.json").read_text())
+        assert record["group"] == 123 and record["tabs"] == [5]
+
     @pytest.mark.parametrize(
         "payload",
         [
@@ -149,9 +157,14 @@ const groups = {
   1: { title: "Claude" },          // an agent's, default title: rename
   2: { title: "My research" },     // renamed by a person: leave
   3: { title: "Claude" },          // default, but not proven to be the agent's: leave
-  4: { title: "⌛Claude" },        // working prefix kept
+  4: { title: "⌛Claude" },        // status prefixes kept: working,
+  6: { title: "🔔Claude" },        // waiting for permission,
+  7: { title: "✅Claude" },        // done
 };
-const tabs = { 1: [{ id: 10 }], 2: [{ id: 20 }], 3: [{ id: 99 }], 4: [{ id: 40 }] };
+const tabs = {
+  1: [{ id: 10 }], 2: [{ id: 20 }], 3: [{ id: 99 }], 4: [{ id: 40 }], 6: [{ id: 60 }],
+  7: [{ id: 70 }],
+};
 const updates = [];
 const api = {
   runtime: { sendNativeMessage: async () => ({ groups: [
@@ -160,6 +173,8 @@ const api = {
     { group: 3, tabs: [30], title: "Founder Desk" },
     { group: 4, tabs: [40], title: "Regional Desk" },
     { group: 5, tabs: [50], title: "Gone" },
+    { group: 6, tabs: [60], title: "Ada" },
+    { group: 7, tabs: [70], title: "Simon" },
   ] }) },
   tabGroups: {
     get: async (id) => { if (!groups[id]) throw new Error("no group"); return groups[id]; },
@@ -197,8 +212,8 @@ def test_extension_renames_only_proven_default_groups(tmp_path):
         ["node", str(script)], capture_output=True, text=True, timeout=60, check=True
     )
     assert json.loads(done.stdout) == {
-        "renamed": 2,
-        "updates": [[1, "Contract Desk"], [4, "⌛Regional Desk"]],
+        "renamed": 4,
+        "updates": [[1, "Contract Desk"], [4, "⌛Regional Desk"], [6, "🔔Ada"], [7, "✅Simon"]],
         "offline": 0,
-        "fromAlarm": 2,
+        "fromAlarm": 4,
     }

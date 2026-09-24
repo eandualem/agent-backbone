@@ -6,7 +6,9 @@
 // touched. Nothing here reads or changes the Claude extension itself.
 
 const HOST = "com.agent_backbone.tab_names";
-const DEFAULT_TITLE = /^(⌛\s*)?Claude$/;
+// Claude's default title, with the status prefix its extension adds while the
+// session works (⌛), waits for permission (🔔) or is done (✅).
+const DEFAULT_TITLE = /^(⌛|🔔|✅)?Claude$/;
 
 export async function nameGroups(api = chrome) {
   let reply;
