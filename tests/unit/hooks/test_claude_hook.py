@@ -361,3 +361,64 @@ class TestObservedModel:
         assert record["model"] == "gpt-6-astra"
         record, _ = hook.derive(_payload("Stop", transcript_path=str(tmp_path / "nope")), None)
         assert "model" not in record
+
+
+class TestPermissionDenied:
+    """A refusal without a dialog is recorded for the humans; nothing else changes."""
+
+    def _run(self, tmp_path, payload: dict) -> int:
+        with patch.object(hook.sys, "stdin", io.StringIO(json.dumps(payload))):
+            return hook.main(["--state-dir", str(tmp_path), "--agent", "grace"])
+
+    def test_a_classifier_refusal_is_logged_without_its_arguments(self, tmp_path):
+        payload = _payload(
+            "PermissionDenied",
+            tool_name="Bash",
+            tool_input={"command": "cd ~/ws/x && gh issue edit 40 --body-file /tmp/private.md"},
+            tool_use_id="toolu_1",
+            reason="Permission for this action was denied by the Claude Code auto mode "
+            "classifier. Reason: [External System Writes]. If you have other tasks…",
+        )
+        assert self._run(tmp_path, payload) == 0
+        [line] = (tmp_path / "actions.jsonl").read_text().splitlines()
+        record = json.loads(line)
+        assert record["action"] == "permission_denied" and record["session"] == "grace"
+        assert record["kind"] == "classifier" and record["category"] == "External System Writes"
+        assert record["summary"] == "cd; gh issue edit"
+        assert "private" not in line and "40" not in line
+        assert not (tmp_path / "grace.json").exists()  # the agent's state is untouched
+
+    def test_a_browser_refusal_names_actions_not_page_content(self, tmp_path):
+        payload = _payload(
+            "PermissionDenied",
+            tool_name="mcp__claude-in-chrome__browser_batch",
+            tool_input={
+                "actions": [
+                    {"name": "computer", "input": {"action": "left_click", "ref": "ref_9"}},
+                    {"name": "find", "input": {"query": "private search text"}},
+                ]
+            },
+            reason="denied by the auto mode classifier. Reason: [External System Writes].",
+        )
+        self._run(tmp_path, payload)
+        record = json.loads((tmp_path / "actions.jsonl").read_text())
+        assert record["summary"] == "claude-in-chrome: browser_batch (computer:left_click, find)"
+        assert "private" not in json.dumps(record)
+
+
+@pytest.mark.parametrize(
+    ("reason", "category"),
+    [
+        ("External System Writes", "External System Writes"),  # the hook's short reason
+        ("x " * 60 + "posting the private body of issue 40", ""),  # prose is never copied
+    ],
+)
+def test_only_a_short_category_is_kept_from_the_reason(reason, category):
+    record = hook.denial_record({"tool_name": "Bash", "reason": reason}, 1.0)
+    assert record["category"] == category and record["kind"] == "classifier"
+
+
+def test_the_claude_runtime_listens_for_refusals():
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    assert ("PermissionDenied", "") in RUNTIMES["claude"].hook_events

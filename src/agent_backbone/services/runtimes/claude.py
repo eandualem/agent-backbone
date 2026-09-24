@@ -95,6 +95,9 @@ class ClaudeCode(Runtime):
         ("Notification", None),
         ("PreToolUse", "ExitPlanMode|AskUserQuestion|Bash|mcp__.*__add_issue_comment"),
         ("PostToolUse", ""),
+        # A refusal that shows no dialog (auto mode's classifier): the backbone
+        # tells the humans, since nothing else would.
+        ("PermissionDenied", ""),
     )
     hook_timeout = 10  # seconds
     hook_context = True  # PostToolUse additionalContext

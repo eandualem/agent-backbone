@@ -18,6 +18,7 @@ from agent_backbone.services.github import QueueSnapshot
 from agent_backbone.services.jobs.diagnostics import observe_job, observe_runtime
 from agent_backbone.services.jobs.escalation import (
     check_blocked,
+    check_permission_denials,
     check_permission_waiting,
     check_plan_waiting,
     handle_offline,
@@ -179,6 +180,19 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="blocked_notification")
+
+        try:
+            await check_permission_denials(config)
+        except Exception as exc:
+            log.exception("Permission-denied notification failed (non-fatal)")
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="denial_notification",
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="denial_notification")
 
         try:
             await check_permission_waiting(config, states)

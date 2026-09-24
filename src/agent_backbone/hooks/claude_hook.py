@@ -13,6 +13,8 @@ Standard library only — it must run under any ``python3``.
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import sys
 
 try:
@@ -97,7 +99,79 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
         if response.get("success") is False:
             return None, []
         return None, bb.action_records(payload, now, phase="succeeded")
+    if event == "PermissionDenied":
+        # Auto mode's classifier refused a call, with no dialog (a permission
+        # rule's refusal does not fire this event: measured, 2.1.282). The
+        # agent keeps working, so no state changes; the backbone tells the
+        # humans from this record, and never asks for a retry.
+        return None, denial_record(payload, now)
     return None, None
+
+
+_CATEGORY = re.compile(r"\[([^\]\n]{1,80})\]")
+_WORD = re.compile(r"[a-z][a-z0-9_-]{0,30}")
+
+
+def _command_summary(command: str) -> str:
+    """``gh issue edit`` for ``cd x && gh issue edit 40 --body-file …``: each
+    segment's program and plain subcommands, never arguments, flags or paths."""
+    parts = []
+    for segment in re.split(r"&&|\|\||;|\|", command):
+        try:
+            words = shlex.split(segment)
+        except ValueError:
+            words = segment.split()
+        words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+        if not words:
+            continue
+        summary = [os.path.basename(words[0])]
+        for word in words[1:3]:
+            if not _WORD.fullmatch(word):
+                break
+            summary.append(word)
+        if _WORD.fullmatch(summary[0]) and " ".join(summary) not in parts:
+            parts.append(" ".join(summary))
+    return "; ".join(parts[:3]) or "a shell command"
+
+
+def _action_summary(tool: str, tool_input) -> str:
+    """What was refused, safely: names of programs and actions, not their input."""
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    if tool == "Bash":
+        return _command_summary(str(tool_input.get("command") or ""))
+    match = re.fullmatch(r"mcp__(.+?)__(.+)", tool)
+    if not match:
+        return tool
+    server, name = match.groups()
+    steps = []
+    for action in tool_input.get("actions") or [tool_input]:
+        if not isinstance(action, dict):
+            continue
+        step = str(action.get("name") or name)
+        inner = action.get("input") if isinstance(action.get("input"), dict) else action
+        if _WORD.fullmatch(str(inner.get("action") or "")):
+            step += f":{inner['action']}"
+        if _WORD.fullmatch(step.replace(":", "_")) and step not in steps:
+            steps.append(step)
+    return f"{server}: {name}" + (f" ({', '.join(steps[:4])})" if steps and steps != [name] else "")
+
+
+def denial_record(payload: dict, now: float) -> dict:
+    """The action-log record of one refused tool call (``action: permission_denied``)."""
+    reason = " ".join(str(payload.get("reason") or "").split())
+    bracketed = _CATEGORY.search(reason)
+    # The classifier's category ("External System Writes"), never its prose,
+    # which may describe the action's content.
+    category = bracketed.group(1).strip() if bracketed else reason if len(reason) <= 60 else ""
+    return {
+        "ts": now,
+        "action": "permission_denied",
+        "kind": "classifier",
+        "category": category,
+        "tool": str(payload.get("tool_name") or ""),
+        "summary": _action_summary(str(payload.get("tool_name") or ""), payload.get("tool_input")),
+        "tool_use_id": str(payload.get("tool_use_id") or ""),
+    }
 
 
 CONTEXT_EVENTS = frozenset({"PostToolUse"})
