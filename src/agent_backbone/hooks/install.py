@@ -153,7 +153,9 @@ def install_chrome_tab_names(
 ) -> tuple[Path, Path]:
     """Copy the tab-names extension and its native host into
     ``<data_dir>/chrome-tab-names/`` and register the host with Chrome.
-    Returns (extension folder to load unpacked, host manifest)."""
+    Returns (extension folder to load unpacked, host manifest). Chrome needs
+    an absolute host path, and runs the host from its own working directory."""
+    data_dir, state_dir = data_dir.expanduser().resolve(), state_dir.expanduser().resolve()
     target = data_dir / "chrome-tab-names"
     shutil.copytree(hook_source("chrome_tab_names"), target / "extension", dirs_exist_ok=True)
     host = target / "host.py"

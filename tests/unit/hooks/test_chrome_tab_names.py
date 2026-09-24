@@ -135,9 +135,16 @@ class TestInstaller:
         }
         assert not manifest.exists()
 
+    def test_relative_directories_register_absolute_paths(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+        monkeypatch.chdir(tmp_path)
+        _extension, manifest = install_chrome_tab_names(Path("data"), Path("state"))
+        wrapper = Path(json.loads(manifest.read_text())["path"])
+        assert wrapper.is_absolute()
+        assert str((tmp_path / "state").resolve()) in wrapper.read_text()
+
 
 NODE_TEST = r"""
-import { nameGroups } from "BACKGROUND";
 const groups = {
   1: { title: "Claude" },          // an agent's, default title: rename
   2: { title: "My research" },     // renamed by a person: leave
@@ -160,10 +167,24 @@ const api = {
   },
   tabs: { query: async ({ groupId }) => tabs[groupId] ?? [] },
 };
-const renamed = await nameGroups(api);
+const listeners = {};
+const on = (name) => ({ addListener: (fn) => { listeners[name] = fn; } });
+globalThis.chrome = {
+  ...api,
+  tabGroups: { ...api.tabGroups, onCreated: on("created"), onUpdated: on("groupUpdated") },
+  tabs: { ...api.tabs, onUpdated: on("tabUpdated") },
+  alarms: { create: () => {}, onAlarm: on("alarm") },
+  runtime: { ...api.runtime, onStartup: on("startup"), onInstalled: on("installed") },
+};
+const { nameGroups: named } = await import("BACKGROUND?listeners");
+listeners.alarm({ name: "name-groups", scheduledTime: 0 });  // Chrome passes an Alarm
+await new Promise((resolve) => setTimeout(resolve, 50));
+const fromAlarm = updates.length;
+updates.length = 0;
+const renamed = await named(api);
 const noHost = async () => { throw new Error("no host"); };
-const offline = await nameGroups({ runtime: { sendNativeMessage: noHost } });
-console.log(JSON.stringify({ renamed, updates, offline }));
+const offline = await named({ runtime: { sendNativeMessage: noHost } });
+console.log(JSON.stringify({ renamed, updates, offline, fromAlarm }));
 """
 
 
@@ -179,4 +200,5 @@ def test_extension_renames_only_proven_default_groups(tmp_path):
         "renamed": 2,
         "updates": [[1, "Contract Desk"], [4, "⌛Regional Desk"]],
         "offline": 0,
+        "fromAlarm": 2,
     }

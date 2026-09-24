@@ -39,16 +39,22 @@ function soon() {
   clearTimeout(pending);
   pending = setTimeout(() => {
     nameGroups();
-    setTimeout(nameGroups, 5000);
+    setTimeout(() => nameGroups(), 5000);
   }, 1000);
 }
+
+// Chrome passes each listener its own argument (an Alarm, install details):
+// never let it stand in for the API.
+const sync = () => {
+  nameGroups();
+};
 
 if (globalThis.chrome?.tabGroups) {
   chrome.tabGroups.onCreated.addListener(soon);
   chrome.tabGroups.onUpdated.addListener(soon);
   chrome.tabs.onUpdated.addListener(soon);
   chrome.alarms.create("name-groups", { periodInMinutes: 0.5 });
-  chrome.alarms.onAlarm.addListener(nameGroups);
-  chrome.runtime.onStartup.addListener(nameGroups);
-  chrome.runtime.onInstalled.addListener(nameGroups);
+  chrome.alarms.onAlarm.addListener(sync);
+  chrome.runtime.onStartup.addListener(sync);
+  chrome.runtime.onInstalled.addListener(sync);
 }
