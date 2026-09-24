@@ -474,7 +474,9 @@ def _model_from_transcript(path: Path) -> str | None:
 def record_factory(payload: dict, current: dict | None, event: str) -> Callable[..., dict]:
     """A ``state(new_state, reason=None, **extra)`` builder that keeps ``issue``,
     ``repo`` and ``started_at`` stable across events and stamps the runtime's
-    session id, the observed model and the event that produced the record."""
+    session id, the observed model and the event that produced the record.
+    ``prompted_at`` is when the runtime last took a prompt (``UserPromptSubmit``),
+    kept through the turn's later records: delivery's receipt for a paste."""
     now = time.time()
     current = current or {}
     session_id = payload.get("session_id") or current.get("session_id")
@@ -501,6 +503,9 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
             record["model"] = model
         if current.get("last_message") is not None:
             record["last_message"] = current["last_message"]
+        prompted_at = now if event == "UserPromptSubmit" else current.get("prompted_at")
+        if prompted_at is not None:
+            record["prompted_at"] = prompted_at
         record.update(extra)
         return record
 

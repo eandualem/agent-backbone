@@ -641,22 +641,16 @@ async def safe_deliver(
 
 PROMPT_HOOK_WAIT_SECONDS = 3.0
 """How long a submission the screen could not confirm waits for the runtime's hook."""
-TURN_EVENTS = frozenset(
-    {"UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop"}
-)
-"""Hook events only a running turn writes. Delivery pastes only into a ready agent,
-so one of these after the paste means the prompt was taken, even when a later
-event of the same turn (a quick Stop, Codex's PreToolUse) replaced the
-UserPromptSubmit record. Notification and SessionStart are not turn events: an
-idle agent emits them without any prompt."""
 
 
 async def prompt_hook_after(state_dir, session_name: str, since: float) -> bool:
-    """Whether the runtime's own hooks show a turn that began after ``since``.
+    """Whether the runtime's hook reports taking a prompt at or after ``since``.
 
     The screen check reads the prompt box, whose redraw timing varies; the
-    runtime's hook is the runtime saying it took the prompt (live: Feynman,
-    2026-09-24, prompt taken at 19:05:34.938Z, reported unconfirmed at 19:05:36).
+    hook's ``prompted_at`` is the runtime saying it took a prompt (live:
+    Feynman, 2026-09-24, prompt taken at 19:05:34.938Z, reported unconfirmed
+    at 19:05:36). It survives the turn's later records, so a quick ``Stop``
+    does not erase it, and a turn that was already running cannot supply it.
     """
     deadline = time.monotonic() + PROMPT_HOOK_WAIT_SECONDS
     while True:
@@ -664,8 +658,8 @@ async def prompt_hook_after(state_dir, session_name: str, since: float) -> bool:
         if (
             snapshot is not None
             and snapshot.source == "push"
-            and snapshot.event in TURN_EVENTS
-            and snapshot.timestamp >= since
+            and snapshot.prompted_at is not None
+            and snapshot.prompted_at >= since
         ):
             return True
         if time.monotonic() >= deadline:
