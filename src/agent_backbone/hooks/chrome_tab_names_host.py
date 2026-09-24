@@ -3,8 +3,9 @@
 
 Chrome starts it for each request, sends one length-prefixed JSON message on
 stdin and reads one reply from stdout. The reply lists the tab group each
-Backbone agent's Claude-in-Chrome session uses, as the Claude hook recorded
-it in ``<state_dir>/chrome-groups/<agent>.json``, with the title to give it.
+Backbone agent's Claude-in-Chrome sessions used, as the Claude hook recorded
+them in ``<state_dir>/chrome-groups/<agent>.<group>.json``, with the title to
+give each.
 It reads nothing else and needs no credentials.
 
 Standard library only: Chrome runs it outside any virtual environment.
@@ -36,12 +37,15 @@ def groups(state_dir: Path, now: float | None = None) -> list[dict]:
         try:
             record = json.loads(path.read_text())
             group, seen = int(record["group"]), float(record["ts"])
+            if not isinstance(record["tabs"], list):
+                raise TypeError("tabs must be a list")  # "5" would read as tab 5
             tab_ids = [int(tab) for tab in record["tabs"]]
+            agent = str(record["agent"])
         except (OSError, ValueError, KeyError, TypeError):
             continue  # one unreadable record must not cost the others their names
         if now - seen > MAX_AGE_SECONDS:
             continue
-        found.append({"group": group, "tabs": tab_ids, "title": title_for(path.stem)})
+        found.append({"group": group, "tabs": tab_ids, "title": title_for(agent)})
     return found
 
 

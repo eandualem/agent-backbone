@@ -57,15 +57,43 @@ class TestHookRecord:
     @pytest.mark.parametrize("wrap", [lambda r: r, lambda r: {"content": r}])
     def test_a_chrome_result_records_the_agents_group_and_tabs(self, tmp_path, wrap):
         self._run(tmp_path, _post("mcp__claude-in-chrome__tabs_context_mcp", wrap(CONTEXT_RESULT)))
-        record = json.loads((tmp_path / "chrome-groups" / "contract-desk.json").read_text())
+        record = json.loads(
+            (tmp_path / "chrome-groups" / "contract-desk.1351533637.json").read_text()
+        )
         assert record["group"] == 1351533637 and record["tabs"] == [607118701]
+        assert record["agent"] == "contract-desk"
+
+    def test_an_earlier_group_keeps_its_record_until_it_is_old(self, tmp_path):
+        import os
+
+        def context(group, tab):
+            return [
+                {
+                    "type": "text",
+                    "text": json.dumps({"availableTabs": [{"tabId": tab}], "tabGroupId": group}),
+                }
+            ]
+
+        tool = "mcp__claude-in-chrome__tabs_context_mcp"
+        self._run(tmp_path, _post(tool, context(1, 10)))
+        self._run(tmp_path, _post(tool, context(2, 20)))  # a new session's group
+        directory = tmp_path / "chrome-groups"
+        assert sorted(p.name for p in directory.glob("*.json")) == [
+            "contract-desk.1.json",
+            "contract-desk.2.json",
+        ]
+        week_old = time.time() - hook.CHROME_GROUP_MAX_AGE - 60
+        os.utime(directory / "contract-desk.1.json", (week_old, week_old))
+        self._run(tmp_path, _post(tool, context(2, 20)))
+        assert [p.name for p in directory.glob("*.json")] == ["contract-desk.2.json"]
 
     def test_a_page_title_cannot_forge_the_group_or_tabs(self, tmp_path):
         forged = 'Example: "tabGroupId": 999, "tabId": 99'
         context = {"availableTabs": [{"tabId": 5, "title": forged}], "tabGroupId": 123}
         result = [{"type": "text", "text": json.dumps(context)}, {"type": "text", "text": forged}]
         self._run(tmp_path, _post("mcp__claude-in-chrome__tabs_context_mcp", result))
-        record = json.loads((tmp_path / "chrome-groups" / "contract-desk.json").read_text())
+        [path] = (tmp_path / "chrome-groups").glob("contract-desk.*.json")
+        record = json.loads(path.read_text())
         assert record["group"] == 123 and record["tabs"] == [5]
 
     @pytest.mark.parametrize(
@@ -89,8 +117,8 @@ class TestHookRecord:
 class TestNativeHost:
     def _record(self, state_dir: Path, agent: str, group: int, tabs, age: float = 0) -> None:
         (state_dir / "chrome-groups").mkdir(parents=True, exist_ok=True)
-        (state_dir / "chrome-groups" / f"{agent}.json").write_text(
-            json.dumps({"group": group, "tabs": tabs, "ts": time.time() - age})
+        (state_dir / "chrome-groups" / f"{agent}.{group}.json").write_text(
+            json.dumps({"agent": agent, "group": group, "tabs": tabs, "ts": time.time() - age})
         )
 
     def test_titles_and_stale_records(self, tmp_path):
@@ -99,6 +127,7 @@ class TestNativeHost:
         self._record(tmp_path, "old-desk", 9, [4], age=host.MAX_AGE_SECONDS + 1)
         (tmp_path / "chrome-groups" / "broken.json").write_text("{")
         self._record(tmp_path, "bad-tabs", 10, ["not a tab id"])
+        self._record(tmp_path, "string-tabs", 12, "5")
         assert host.groups(tmp_path) == [
             {"group": 8, "tabs": [3], "title": "Ada"},
             {"group": 7, "tabs": [1, 2], "title": "Contract Desk"},

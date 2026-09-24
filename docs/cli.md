@@ -590,7 +590,7 @@ group an agent's session opened is renamed after the agent (`contract-desk`
 1. The Claude Code hook reads each `tabs_context_mcp` result (the Claude
    extension's own account of the session's tab group; page output from other
    tools is never trusted) and records the group and its tabs in
-   `<state_dir>/chrome-groups/<agent>.json`. The agent does nothing
+   `<state_dir>/chrome-groups/<agent>.<group>.json`. The agent does nothing
    different.
 2. A small extension, loaded once, asks a native messaging host for those
    records (no network, no API key) and renames a group only while it still
