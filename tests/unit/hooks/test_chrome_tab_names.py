@@ -72,6 +72,8 @@ class TestHookRecord:
         "payload",
         [
             _post("Bash", CONTEXT_RESULT),  # not a Chrome tool
+            # a page script's output can look exactly like a tab context
+            _post("mcp__claude-in-chrome__javascript_tool", CONTEXT_RESULT),
             _post("mcp__claude-in-chrome__navigate", [{"type": "text", "text": "ok"}]),
             {
                 **_post("mcp__claude-in-chrome__tabs_context_mcp", CONTEXT_RESULT),

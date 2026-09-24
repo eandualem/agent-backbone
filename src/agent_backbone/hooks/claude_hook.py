@@ -105,7 +105,9 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
 CHROME_GROUPS_DIR = "chrome-groups"
 """``<state_dir>/chrome-groups/<agent>.json``: the Chrome tab group this agent's
 Claude-in-Chrome session uses, read by the optional tab-names extension."""
-_CHROME_TOOL = "mcp__claude-in-chrome__"
+_CHROME_CONTEXT_TOOL = "mcp__claude-in-chrome__tabs_context_mcp"
+"""The one tool whose result is the extension's own account of the session's
+group; other tools (javascript_tool) can return page-controlled JSON."""
 
 
 def _tab_context(response) -> dict | None:
@@ -135,7 +137,7 @@ def record_chrome_group(payload: dict, state_dir: Path, agent: str) -> None:
     of different agents never write the same file."""
     if payload.get("hook_event_name") != "PostToolUse":
         return
-    if not str(payload.get("tool_name", "")).startswith(_CHROME_TOOL):
+    if payload.get("tool_name") != _CHROME_CONTEXT_TOOL:
         return
     context = _tab_context(payload.get("tool_response"))
     if context is None:
