@@ -8,6 +8,7 @@ import uuid
 from collections import Counter, defaultdict
 from collections.abc import Collection
 from datetime import UTC, datetime
+from functools import partial
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import (
@@ -75,9 +76,10 @@ _MORE = re.compile(r"^- … and \d+ more, (?:from|to) (.+?): ")
 
 
 def _origin(row: dict, *, to_recipient: bool) -> str:
-    if to_recipient:
-        return str(row.get("sender") or row.get("source") or "unknown")
-    return str(row.get("session_name") or "unknown")
+    """Who a summarised row came from or went to, without the characters the
+    summary uses as delimiters (a sender name is free text)."""
+    name = row.get("sender") or row.get("source") if to_recipient else row.get("session_name")
+    return re.sub(r"[,:×\s]+", " ", str(name or "")).strip() or "unknown"
 
 
 def _merged_notice(
@@ -119,11 +121,11 @@ def _merged_notice(
     return "\n".join([f"[via:backbone] {heading}", *lines])
 
 
-async def _report_expired(config: BackboneConfig, db: BackboneDB, expired: list[dict]) -> None:
-    """Tell the parties an expiry dropped messages between: each registered
-    recipient and each registered sender has one waiting notice that grows
-    until delivered. A sender without an inbox (GitHub, an external caller)
-    keeps the diagnostics row."""
+def expiry_notices(config: BackboneConfig, expired: list[dict]) -> list[tuple]:
+    """The notices an expiry owes: one per registered recipient and one per
+    registered sender, each merged into that party's waiting notice. A
+    sender without an inbox (GitHub, an external caller) keeps the
+    diagnostics row."""
     minutes = config.timing.queue_expiry_minutes
     parties: dict[tuple[str, bool], list[dict]] = defaultdict(list)
     for row in expired:
@@ -132,27 +134,17 @@ async def _report_expired(config: BackboneConfig, db: BackboneDB, expired: list[
             parties[(recipient, True)].append(row)
         if sender in config.agents and sender != recipient:
             parties[(sender, False)].append(row)
-    for (name, to_recipient), rows in parties.items():
-        try:
-            await db.queue.revise_pending(
-                session_name=name,
-                source=EXPIRY_SOURCE,
-                target_entity="expired-to-you" if to_recipient else "expired-from-you",
-                revise=lambda previous, rows=rows, to_recipient=to_recipient, name=name: (
-                    _merged_notice(
-                        previous, rows, to_recipient=to_recipient, agent=name, minutes=minutes
-                    )
-                ),
-            )
-        except Exception as exc:
-            log.exception("Could not queue an expiry notice for %s (non-fatal)", name)
-            await observe_job(
-                db,
-                source=SOURCE,
-                stage="expiry_notice",
-                agent_name=name,
-                error_type=type(exc).__name__,
-            )
+    return [
+        (
+            name,
+            EXPIRY_SOURCE,
+            "expired-to-you" if to_recipient else "expired-from-you",
+            partial(
+                _merged_notice, rows=rows, to_recipient=to_recipient, agent=name, minutes=minutes
+            ),
+        )
+        for (name, to_recipient), rows in parties.items()
+    ]
 
 
 async def drain_message_queue(
@@ -181,6 +173,7 @@ async def drain_message_queue(
         expired = await db.queue.expire_pending(
             max_age_minutes=config.timing.queue_expiry_minutes,
             protected_sessions=protected,
+            notices=partial(expiry_notices, config),
         )
         if expired:
             log.info(
@@ -189,7 +182,6 @@ async def drain_message_queue(
                 config.timing.queue_expiry_minutes,
             )
             summary["queue_expired"] = len(expired)  # each left a delivery row (same transaction)
-            await _report_expired(config, db, expired)
     except Exception as exc:
         log.exception("Failed to expire stale messages (non-fatal)")
         await observe_job(db, source=SOURCE, stage="queue_expiry", error_type=type(exc).__name__)

@@ -23,6 +23,11 @@ _INSERT_COLUMNS = """(operation_id, session_name, message, repo, issue_number, t
                        :delivery_kind, :source, :enqueued_at, :initial_status,
                        :sender, :dedup_key, :priority)"""
 
+Revise = Callable[[str | None], str]
+"""Builds a notice's text from its current text (None when there is none yet)."""
+Notices = Callable[[list[dict]], list[tuple[str, str, str, Revise]]]
+"""Maps expired rows to ``(session, source, target_entity, revise)`` notices."""
+
 SUBSCRIPTION_BATCH_LIMIT = 25
 """Lines one subscription batch lists; further lines open the next batch."""
 
@@ -177,58 +182,52 @@ class QueueRepo(Repo):
                 # inventing a receipt for a row that is no longer waiting.
             raise RuntimeError("Queue changed repeatedly during enqueue; retry the message")
 
-    async def revise_pending(
-        self,
-        *,
-        session_name: str,
-        source: str,
-        target_entity: str,
-        revise: Callable[[str | None], str],
+    async def _revise_in(
+        self, conn, session_name: str, source: str, target_entity: str, revise: Revise
     ) -> None:
         """Rewrite the session's waiting direct message from ``source`` for
-        ``target_entity`` as ``revise(its text)``, or queue ``revise(None)``:
-        one notice per party that grows, not a stream. A notice already
-        leased for delivery is left alone and a new one opens behind it.
-
-        The rewrite applies only if the text is still the one read (SQLite
-        takes no row lock), so a concurrent revision is re-read, never lost.
-        A new notice gets its own identity: identical text must not fold
-        into one that is already out for delivery."""
-        params = {"session": session_name, "source": source, "target": target_entity}
-        for _attempt in range(_MAX_ENQUEUE_ATTEMPTS):
-            async with self._tx() as conn:
-                lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
-                found = await conn.execute(
-                    text(
-                        "SELECT id, message FROM message_queue WHERE session_name = :session "
-                        "AND source = :source AND target_entity = :target "
-                        "AND status = 'pending' ORDER BY id DESC LIMIT 1" + lock
-                    ),
-                    params,
-                )
-                row = found.mappings().first()
-                if row is None:
-                    break
-                updated = await conn.execute(
-                    text(
-                        "UPDATE message_queue SET message = :message "
-                        "WHERE id = :id AND status = 'pending' AND message = :previous"
-                    ),
-                    {
-                        "id": row["id"],
-                        "message": revise(row["message"]),
-                        "previous": row["message"],
-                    },
-                )
-                if updated.rowcount:
-                    return
-        await self.enqueue(
-            session_name=session_name,
-            message=revise(None),
-            target_entity=target_entity,
-            delivery_kind="direct_message",
-            source=source,
-            source_key=uuid.uuid4().hex,
+        ``target_entity`` as ``revise(its text)``, or insert ``revise(None)``:
+        one notice per party that grows, not a stream. A notice already out for
+        delivery is left alone and a new one opens behind it, with its own
+        identity so identical text cannot fold into the one being delivered."""
+        lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
+        found = await conn.execute(
+            text(
+                "SELECT id, message FROM message_queue WHERE session_name = :session "
+                "AND source = :source AND target_entity = :target "
+                "AND status = 'pending' ORDER BY id DESC LIMIT 1" + lock
+            ),
+            {"session": session_name, "source": source, "target": target_entity},
+        )
+        row = found.mappings().first()
+        if row is not None:
+            updated = await conn.execute(
+                text(
+                    "UPDATE message_queue SET message = :message "
+                    "WHERE id = :id AND status = 'pending' AND message = :previous"
+                ),
+                {"id": row["id"], "message": revise(row["message"]), "previous": row["message"]},
+            )
+            if updated.rowcount:
+                return
+        message = revise(None)
+        await conn.execute(
+            text(f"INSERT INTO message_queue {_INSERT_COLUMNS}"),
+            {
+                "operation_id": uuid.uuid4().hex,
+                "session_name": session_name,
+                "message": message,
+                "repo": "",
+                "issue_number": None,
+                "target_entity": target_entity,
+                "delivery_kind": "direct_message",
+                "source": source,
+                "enqueued_at": now_iso(),
+                "initial_status": "pending",
+                "sender": "",
+                "dedup_key": dedup_key_for(message, "", uuid.uuid4().hex),
+                "priority": 0,
+            },
         )
 
     async def enqueue_subscription(
@@ -427,7 +426,11 @@ class QueueRepo(Repo):
         )
 
     async def expire_pending(
-        self, max_age_minutes: int = 30, *, protected_sessions: tuple[str, ...] = ()
+        self,
+        max_age_minutes: int = 30,
+        *,
+        protected_sessions: tuple[str, ...] = (),
+        notices: Notices | None = None,
     ) -> list[dict]:
         """Expire pending messages older than the cutoff and, in the same
         transaction, leave a delivery row with outcome ``expired`` for each,
@@ -442,6 +445,10 @@ class QueueRepo(Repo):
         Nor does anything queued for a session with an ``uncertain`` row: that
         row holds the whole queue until it is acknowledged, so the wait
         measures the hold, not whether the message is still wanted.
+
+        ``notices`` turns the expired rows into notices written in the same
+        transaction: an expiry is never committed without them, and a failure
+        rolls both back for the next sweep.
         """
         async with self._tx() as conn:
             now = now_iso()
@@ -489,6 +496,9 @@ class QueueRepo(Repo):
                     },
                 )
                 row["delivery_id"] = delivery.scalar_one()
+            if notices is not None and rows:
+                for session, source, target, revise in notices(rows):
+                    await self._revise_in(conn, session, source, target, revise)
         for row in rows:
             await self._record_lifecycle(row, "queue_expired", delivery_id=row["delivery_id"])
         return rows
