@@ -143,7 +143,8 @@ does not read as current; queued messages expire after
 and `subscription` batches (facts, not conversation: they grow while the agent
 is busy and are retired only when delivered). Nothing expires for an agent whose
 queue is held by an unconfirmed (`uncertain`) delivery: that wait measures the
-hold, not whether the message is still wanted.
+hold, not whether the message is still wanted. Once the hold is acknowledged,
+the waiting messages get a full expiry window from that moment.
 An expired message leaves a
 delivery with outcome `expired` (kind, source and preview kept), so
 `agent inspect` shows what never arrived, and the recipient and each registered

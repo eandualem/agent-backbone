@@ -444,7 +444,8 @@ class QueueRepo(Repo):
         Nor does an expiry notice (source ``queue-expiry``): it reports a loss.
         Nor does anything queued for a session with an ``uncertain`` row: that
         row holds the whole queue until it is acknowledged, so the wait
-        measures the hold, not whether the message is still wanted.
+        measures the hold, not whether the message is still wanted. After the
+        hold is acknowledged the queue gets a full window from that moment.
 
         ``notices`` turns the expired rows into notices written in the same
         transaction: an expiry is never committed without them, and a failure
@@ -460,6 +461,9 @@ class QueueRepo(Repo):
                          AND source NOT IN ('agent-restart', 'queue-expiry')
                          AND session_name NOT IN (
                              SELECT session_name FROM message_queue WHERE status = 'uncertain')
+                         AND session_name NOT IN (
+                             SELECT session_name FROM deliveries
+                             WHERE source = 'uncertain-acknowledged' AND created_at >= :cutoff)
                          AND session_name NOT IN :protected
                          AND COALESCE(sender, '') NOT IN :protected
                        RETURNING *"""
@@ -593,12 +597,15 @@ class QueueRepo(Repo):
         async with self._tx() as conn:
             records = await conn.execute(
                 text(
-                    "SELECT id,operation_id FROM message_queue WHERE session_name=:session AND "
-                    + identity
-                    + " AND status IN ('checkpoint','uncertain','delivered')"
+                    "SELECT id,operation_id,status FROM message_queue WHERE session_name=:session "
+                    "AND " + identity + " AND status IN ('checkpoint','uncertain','delivered')"
                 ),
                 params,
             )
+            records = records.all()
+            # A released uncertain row is recorded as such: the queue it held
+            # gets a fresh expiry window from now (``expire_pending``).
+            was_uncertain = {r[0] for r in records if r[2] == "uncertain"}
             if {f"{r[0]}:{r[1]}" for r in records} != set(tokens):
                 raise ValueError("Receipts must match this agent's inbox; read inbox first")
             result = await conn.execute(
@@ -617,7 +624,7 @@ class QueueRepo(Repo):
                     text(
                         "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"
                         "session_name,outcome,source,preview,created_at) VALUES "
-                        "(:op,:kind,:repo,:issue,:session,:session,'delivered','agent-checkpoint',:preview,:now)"
+                        "(:op,:kind,:repo,:issue,:session,:session,'delivered',:source,:preview,:now)"
                     ),
                     {
                         "session": session_name,
@@ -627,6 +634,9 @@ class QueueRepo(Repo):
                         "repo": row["repo"],
                         "issue": row["issue_number"],
                         "preview": row["message"][:120],
+                        "source": "uncertain-acknowledged"
+                        if row["id"] in was_uncertain
+                        else "agent-checkpoint",
                     },
                 )
         return sorted(set(tokens))

@@ -97,3 +97,25 @@ async def test_an_expiry_notice_never_expires(db):
     await _age_all(db)
     assert await db.queue.expire_pending(max_age_minutes=30) == []
     assert (await queue_row(db, notice.id))["status"] == "pending"
+
+
+async def test_a_released_hold_gives_the_waiting_queue_a_full_window(db):
+    hold = await db.queue.enqueue(
+        session_name="app",
+        message="pasted, not confirmed",
+        delivery_kind="direct_message",
+        uncertain=True,
+    )
+    held = await db.queue.enqueue(
+        session_name="app", message="[via:backbone from:leo] next", delivery_kind="direct_message"
+    )
+    await _age_all(db)  # the hold lasted longer than the expiry
+    token = f"{hold.id}:{hold.operation_id}"
+    assert await db.queue.acknowledge_checkpoint("app", [token]) == [token]
+    assert await db.queue.expire_pending(max_age_minutes=30) == []
+    assert (await queue_row(db, held.id))["status"] == "pending"
+    released = await db.deliveries.query(session_name="app")
+    assert [d["source"] for d in released] == ["uncertain-acknowledged"]
+    async with db.engine.begin() as conn:  # the fresh window has passed
+        await conn.execute(text("UPDATE deliveries SET created_at='2020-01-01T00:00:00.000000Z'"))
+    assert [row["id"] for row in await db.queue.expire_pending(max_age_minutes=30)] == [held.id]
