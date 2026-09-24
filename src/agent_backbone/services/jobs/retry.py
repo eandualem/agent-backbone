@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
+from collections import defaultdict
 from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -39,6 +41,9 @@ log = logging.getLogger(__name__)
 _BUSY_OUTCOMES = BLOCKED_OUTCOMES - {DeliveryOutcome.OFFLINE}
 _QUEUE_DONE = frozenset({DeliveryOutcome.DELIVERED, DeliveryOutcome.ALREADY_DELIVERED})
 SOURCE = "delivery-retry"
+EXPIRY_SOURCE = "queue-expiry"
+"""Notices about expired messages; they never expire themselves (``expire_pending``)."""
+_EXPIRY_LINES = 10
 _draining: set[str] = set()
 """Sessions currently draining; removed on completion or cancellation."""
 
@@ -53,6 +58,83 @@ def _waited_seconds(record: dict) -> float:
     if enqueued.tzinfo is None:
         enqueued = enqueued.replace(tzinfo=UTC)
     return max(0.0, (datetime.now(UTC) - enqueued).total_seconds())
+
+
+def _expired_line(row: dict, *, to_recipient: bool) -> str:
+    who = (
+        f"from {row.get('sender') or row.get('source') or 'unknown'}"
+        if to_recipient
+        else f"to {row.get('session_name')}"
+    )
+    queued = str(row.get("enqueued_at") or "")[11:16]
+    preview = " ".join(str(row.get("message") or "").split())[:100]
+    return f"- {who}, queued {queued}Z: {preview}"
+
+
+_COUNT = re.compile(r"^\[via:backbone\] (\d+) message")
+
+
+def _merged_notice(
+    previous: str | None, rows: list[dict], *, to_recipient: bool, agent: str, minutes: int
+) -> str:
+    """The notice with these rows added to what it already listed: a count,
+    the first lines, and a pointer to diagnostics for the rest."""
+    old_lines = [
+        line
+        for line in (previous or "").split("\n")[1:]
+        if line.startswith("- ") and not line.startswith("- … and ")
+    ]
+    match = _COUNT.match(previous or "")
+    total = (int(match.group(1)) if match else 0) + len(rows)
+    lines = (old_lines + [_expired_line(r, to_recipient=to_recipient) for r in rows])[
+        :_EXPIRY_LINES
+    ]
+    if total > len(lines):
+        lines.append(f"- … and {total - len(lines)} more: backbone diagnostics --agent {agent}")
+    heading = (
+        f"{total} message(s) to you expired after {minutes} min in the queue "
+        "without being delivered. Ask the sender if one still matters:"
+        if to_recipient
+        else f"{total} message(s) you sent expired after {minutes} min in the queue "
+        "without being delivered. Send again if one still matters:"
+    )
+    return "\n".join([f"[via:backbone] {heading}", *lines])
+
+
+async def _report_expired(config: BackboneConfig, db: BackboneDB, expired: list[dict]) -> None:
+    """Tell the parties an expiry dropped messages between: each registered
+    recipient and each registered sender has one waiting notice that grows
+    until delivered. A sender without an inbox (GitHub, an external caller)
+    keeps the diagnostics row."""
+    minutes = config.timing.queue_expiry_minutes
+    parties: dict[tuple[str, bool], list[dict]] = defaultdict(list)
+    for row in expired:
+        recipient, sender = row.get("session_name") or "", row.get("sender") or ""
+        if recipient in config.agents:
+            parties[(recipient, True)].append(row)
+        if sender in config.agents and sender != recipient:
+            parties[(sender, False)].append(row)
+    for (name, to_recipient), rows in parties.items():
+        try:
+            await db.queue.revise_pending(
+                session_name=name,
+                source=EXPIRY_SOURCE,
+                target_entity="expired-to-you" if to_recipient else "expired-from-you",
+                revise=lambda previous, rows=rows, to_recipient=to_recipient, name=name: (
+                    _merged_notice(
+                        previous, rows, to_recipient=to_recipient, agent=name, minutes=minutes
+                    )
+                ),
+            )
+        except Exception as exc:
+            log.exception("Could not queue an expiry notice for %s (non-fatal)", name)
+            await observe_job(
+                db,
+                source=SOURCE,
+                stage="expiry_notice",
+                agent_name=name,
+                error_type=type(exc).__name__,
+            )
 
 
 async def drain_message_queue(
@@ -89,6 +171,7 @@ async def drain_message_queue(
                 config.timing.queue_expiry_minutes,
             )
             summary["queue_expired"] = len(expired)  # each left a delivery row (same transaction)
+            await _report_expired(config, db, expired)
     except Exception as exc:
         log.exception("Failed to expire stale messages (non-fatal)")
         await observe_job(db, source=SOURCE, stage="queue_expiry", error_type=type(exc).__name__)

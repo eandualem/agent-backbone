@@ -141,10 +141,15 @@ its envelope, so a review or comment drained after a long busy stretch
 does not read as current; queued messages expire after
 `timing.queue_expiry_minutes` (30), except active swarm coordination, inbox holds
 and `subscription` batches (facts, not conversation: they grow while the agent
-is busy and are retired only when delivered).
+is busy and are retired only when delivered). Nothing expires for an agent whose
+queue is held by an unconfirmed (`uncertain`) delivery: that wait measures the
+hold, not whether the message is still wanted.
 An expired message leaves a
 delivery with outcome `expired` (kind, source and preview kept), so
-`agent inspect` shows what never arrived. The sender is told whether a row
+`agent inspect` shows what never arrived, and the recipient and each registered
+agent that sent one get a `[via:backbone]` notice listing them (source
+`queue-expiry`; notices never expire). A sender without a Backbone inbox, such as
+GitHub or an external caller, keeps only that record. The sender is told whether a row
 exists (`stored`), whether the same message from them was already
 waiting (`already_queued`), or whether storing it failed (`failed`) —
 "queued" is never claimed for a message that is not in the database.

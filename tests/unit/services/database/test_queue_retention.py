@@ -59,3 +59,41 @@ async def test_a_restart_continuation_never_expires(db):
     expired = await db.queue.expire_pending(max_age_minutes=30)
     assert [row["id"] for row in expired] == [chat.id]
     assert (await queue_row(db, note.id))["status"] == "pending"
+
+
+async def _age_all(db):
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE message_queue SET enqueued_at='2020-01-01T00:00:00.000000Z'")
+        )
+
+
+async def test_messages_held_behind_an_unconfirmed_delivery_do_not_expire(db):
+    await db.queue.enqueue(
+        session_name="app",
+        message="pasted, not confirmed",
+        delivery_kind="direct_message",
+        uncertain=True,
+    )
+    held = await db.queue.enqueue(
+        session_name="app", message="[via:backbone from:leo] next", delivery_kind="direct_message"
+    )
+    other = await db.queue.enqueue(
+        session_name="web", message="[via:backbone from:leo] hi", delivery_kind="direct_message"
+    )
+    await _age_all(db)
+    expired = await db.queue.expire_pending(max_age_minutes=30)
+    assert [row["id"] for row in expired] == [other.id]
+    assert (await queue_row(db, held.id))["status"] == "pending"
+
+
+async def test_an_expiry_notice_never_expires(db):
+    notice = await db.queue.enqueue(
+        session_name="app",
+        message="[via:backbone] 1 message expired",
+        delivery_kind="direct_message",
+        source="queue-expiry",
+    )
+    await _age_all(db)
+    assert await db.queue.expire_pending(max_age_minutes=30) == []
+    assert (await queue_row(db, notice.id))["status"] == "pending"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
@@ -175,6 +176,48 @@ class QueueRepo(Repo):
                 # this statement's snapshot. Recheck insertion instead of
                 # inventing a receipt for a row that is no longer waiting.
             raise RuntimeError("Queue changed repeatedly during enqueue; retry the message")
+
+    async def revise_pending(
+        self,
+        *,
+        session_name: str,
+        source: str,
+        target_entity: str,
+        revise: Callable[[str | None], str],
+    ) -> None:
+        """Rewrite the session's waiting direct message from ``source`` for
+        ``target_entity`` as ``revise(its text)``, or queue ``revise(None)``:
+        one notice per party that grows, not a stream. A notice already
+        leased for delivery is left alone and a new one opens behind it."""
+        async with self._tx() as conn:
+            lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
+            params = {"session": session_name, "source": source, "target": target_entity}
+            found = await conn.execute(
+                text(
+                    "SELECT id, message FROM message_queue WHERE session_name = :session "
+                    "AND source = :source AND target_entity = :target AND status = 'pending' "
+                    "ORDER BY id DESC LIMIT 1" + lock
+                ),
+                params,
+            )
+            row = found.mappings().first()
+            if row is not None:
+                updated = await conn.execute(
+                    text(
+                        "UPDATE message_queue SET message = :message "
+                        "WHERE id = :id AND status = 'pending'"
+                    ),
+                    {"id": row["id"], "message": revise(row["message"])},
+                )
+                if updated.rowcount:
+                    return
+        await self.enqueue(
+            session_name=session_name,
+            message=revise(None),
+            target_entity=target_entity,
+            delivery_kind="direct_message",
+            source=source,
+        )
 
     async def enqueue_subscription(
         self,
@@ -383,6 +426,10 @@ class QueueRepo(Repo):
         Subscription batches never expire: they are facts, not conversation.
         Nor does a restart's continuation message (source ``agent-restart``):
         it belongs to the transition and waits for its replacement session.
+        Nor does an expiry notice (source ``queue-expiry``): it reports a loss.
+        Nor does anything queued for a session with an ``uncertain`` row: that
+        row holds the whole queue until it is acknowledged, so the wait
+        measures the hold, not whether the message is still wanted.
         """
         async with self._tx() as conn:
             now = now_iso()
@@ -391,7 +438,9 @@ class QueueRepo(Repo):
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE status = 'pending' AND enqueued_at < :cutoff
                          AND delivery_kind != 'subscription'
-                         AND source != 'agent-restart'
+                         AND source NOT IN ('agent-restart', 'queue-expiry')
+                         AND session_name NOT IN (
+                             SELECT session_name FROM message_queue WHERE status = 'uncertain')
                          AND session_name NOT IN :protected
                          AND COALESCE(sender, '') NOT IN :protected
                        RETURNING *"""

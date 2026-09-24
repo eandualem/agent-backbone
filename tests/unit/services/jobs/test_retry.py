@@ -248,6 +248,73 @@ class TestDeliveryRetryQueueDrain:
         assert rows[0]["preview"].startswith("[via:backbone from:leo]")
         assert await db.queue.pending_count("ike") == 0
 
+    async def test_expiry_tells_the_recipient_and_a_registered_sender(self, db, config):
+        from agent_backbone.services.jobs.retry import _report_expired
+
+        rows = [
+            {
+                "session_name": "ike",
+                "sender": "leo",
+                "enqueued_at": "2026-09-23T13:24:15Z",
+                "message": "[via:backbone from:leo] please review",
+            },
+            {
+                "session_name": "ike",
+                "sender": "",
+                "source": "github",
+                "enqueued_at": "",
+                "message": "[via:github pr:36] New pull request",
+            },
+            {
+                "session_name": "ike",
+                "sender": "codex-user-assistant",
+                "enqueued_at": "",
+                "message": "[via:backbone from:codex-user-assistant] brief",
+            },
+        ]
+        await _report_expired(config, db, rows)
+        queued = {
+            row["session_name"]: row
+            for row in await db.queue.dequeue("ike", limit=5) + await db.queue.dequeue("leo")
+        }
+        assert set(queued) == {"ike", "leo"}  # no inbox for GitHub or an external caller
+        to_ike, to_leo = queued["ike"]["message"], queued["leo"]["message"]
+        assert to_ike.startswith("[via:backbone] 3 message(s) to you expired after 30 min")
+        assert "- from leo, queued 13:24Z: [via:backbone from:leo] please review" in to_ike
+        assert "- from github" in to_ike and "- from codex-user-assistant" in to_ike
+        assert to_leo.startswith("[via:backbone] 1 message(s) you sent expired")
+        assert "- to ike" in to_leo and "github" not in to_leo
+        assert {row["source"] for row in queued.values()} == {"queue-expiry"}
+
+    async def test_a_long_expiry_notice_points_to_diagnostics(self, db, config):
+        from agent_backbone.services.jobs.retry import _report_expired
+
+        rows = [
+            {"session_name": "ike", "sender": "", "source": "github", "message": f"notice {n}"}
+            for n in range(13)
+        ]
+        await _report_expired(config, db, rows)
+        [notice] = await db.queue.dequeue("ike")
+        assert notice["message"].count("\n- from github") == 10
+        assert notice["message"].endswith("- … and 3 more: backbone diagnostics --agent ike")
+
+    async def test_later_expiries_grow_the_waiting_notice(self, db, config):
+        from agent_backbone.services.jobs.retry import _report_expired
+
+        def gh(n):
+            return {"session_name": "ike", "sender": "", "source": "github", "message": f"n{n}"}
+
+        await _report_expired(config, db, [gh(1), gh(2)])
+        await _report_expired(config, db, [gh(n) for n in range(3, 14)])
+        [notice] = await db.queue.dequeue("ike")  # one notice, not one per sweep
+        assert notice["message"].startswith("[via:backbone] 13 message(s) to you expired")
+        assert notice["message"].count("\n- from github") == 10
+        assert notice["message"].endswith("- … and 3 more: backbone diagnostics --agent ike")
+        # Once it is out for delivery it is not rewritten: the next opens behind it.
+        await _report_expired(config, db, [gh(14)])
+        [later] = await db.queue.dequeue("ike")
+        assert later["message"].startswith("[via:backbone] 1 message(s) to you expired")
+
     async def test_the_drain_counts_expiries(self, db, config):
         db.queue.expire_pending = AsyncMock(return_value=[{"id": 7, "session_name": "ike"}])
         db.queue.expire_stale_leases = AsyncMock(return_value=0)

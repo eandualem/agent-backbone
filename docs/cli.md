@@ -515,7 +515,10 @@ interrupts a busy agent — that is an invariant, not a gap. A message that
 cannot be delivered now (`agent_working`, `offline`, …) is stored in the
 queue and the monitor delivers it when the agent is ready, oldest first;
 ordinary queued messages expire after `timing.queue_expiry_minutes` (default 30);
-active swarm coordination and inbox holds are retained.
+active swarm coordination and inbox holds are retained, and nothing behind an
+unconfirmed (`uncertain`) delivery expires while that hold stands. When messages
+expire, the recipient and each registered agent that sent one get a
+`[via:backbone]` notice listing them.
 The reply prints one sentence saying what happened: delivered; stored
 (`"queued": true`); the same message from you already waiting
 (`"queue": "already_queued"` — nothing was added); or not stored
