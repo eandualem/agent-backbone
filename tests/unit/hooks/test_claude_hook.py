@@ -437,6 +437,7 @@ def test_the_claude_runtime_listens_for_refusals():
         ("claude confidential prompt", "claude"),
         ("git secretbranch", "git"),
         ("cd /repo\ngh issue edit 40", "cd; gh issue edit"),
+        ("cd /repo &&\ngh issue edit 40", "cd; gh issue edit"),
         ("git commit -m 'line one\nline two'", "git commit"),
     ],
 )

@@ -265,7 +265,8 @@ def _command_summary(command: str) -> str:
         tokens = command.split()
     segments, current = [], []
     for token in tokens:
-        if token in _SEPARATORS or not token.strip():
+        # Adjacent operators and newlines come as one token ("&&\n", ";\n\n").
+        if token in _SEPARATORS or not token.strip() or set(token) <= set("();&|\n"):
             segments.append(current)
             current = []
         else:

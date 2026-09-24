@@ -27,7 +27,7 @@ def _fresh(monkeypatch):
     monkeypatch.setattr(escalation, "_denial_watch_started", 0.0)
     monkeypatch.setattr(escalation, "_denials_read", {})
     monkeypatch.setattr(escalation, "_denial_notified", RecentKeys(1800))
-    monkeypatch.setattr(escalation, "_denials_unsent", [])
+    monkeypatch.setattr(escalation, "_denials_unsent", {})
 
 
 def _append(config, *records, raw: str = ""):
@@ -130,3 +130,15 @@ async def test_a_rotation_long_after_the_notice_does_not_resend_it(config, monke
     _append(config, *({"action": "comment", "session": "ike"} for _ in range(3)))
     rotate_action_log(config.action_log_path, keep_lines=3)  # the refusal survives it
     assert not (await _check(config)).await_count
+
+
+async def test_repeats_during_an_outage_do_not_crowd_out_other_notices(config):
+    await _check(config)
+    _append(config, *({**REFUSAL} for _ in range(60)), {**REFUSAL, "summary": "gh api"})
+    await _check(config, accepted=False)
+    assert len(escalation._denials_unsent) == 2  # one pending notice per distinct action
+    notify = await _check(config)
+    assert sorted(c.args[1].split("\n")[1] for c in notify.await_args_list) == [
+        "Action: gh api",
+        "Action: gh issue edit",
+    ]

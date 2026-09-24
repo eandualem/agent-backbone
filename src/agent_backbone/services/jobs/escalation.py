@@ -142,8 +142,8 @@ _denials_read: dict[tuple, None] = {}
 nothing twice. Kept by count, not age: the log keeps its newest lines however old."""
 _DENIALS_READ_LIMIT = 5000
 """More identities than the rotated log (2,000 lines) can hold."""
-_denials_unsent: list[dict] = []
-"""Refusals whose notice no integration accepted; tried again next tick."""
+_denials_unsent: dict[tuple, dict] = {}
+"""Notices no integration accepted, by (agent, category, summary); tried again next tick."""
 _UNSENT_LIMIT = 50
 
 
@@ -220,7 +220,7 @@ async def check_permission_denials(config: BackboneConfig) -> None:
     remotely. A notice no integration accepted is tried again next tick; a
     refusal from before the watch is never replayed, and no action is retried.
     """
-    pending = [*_denials_unsent, *_new_denials(config)]
+    pending = [*_denials_unsent.values(), *_new_denials(config)]
     _denials_unsent.clear()
     for record in pending:
         name = str(record.get("session") or "")
@@ -232,8 +232,8 @@ async def check_permission_denials(config: BackboneConfig) -> None:
         if await notify_humans(config, denial_text(name, record), agent=name):
             _denial_notified.mark(key)
             log.warning("Sent permission-denied notification for %s", name)
-        elif len(_denials_unsent) < _UNSENT_LIMIT:
-            _denials_unsent.append(record)  # the notice is retried, never the action
+        elif key in _denials_unsent or len(_denials_unsent) < _UNSENT_LIMIT:
+            _denials_unsent[key] = record  # the notice is retried, never the action
 
 
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
