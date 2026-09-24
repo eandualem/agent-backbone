@@ -207,7 +207,9 @@ console.log(JSON.stringify({ renamed, updates, offline, fromAlarm }));
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_extension_renames_only_proven_default_groups(tmp_path):
-    background = hook_source("chrome_tab_names") / "background.js"
+    # An .mjs copy: Node before 22 does not detect ES module syntax in a .js file.
+    background = tmp_path / "background.mjs"
+    shutil.copy2(hook_source("chrome_tab_names") / "background.js", background)
     script = tmp_path / "check.mjs"
     script.write_text(NODE_TEST.replace("BACKGROUND", background.as_uri()))
     done = subprocess.run(
