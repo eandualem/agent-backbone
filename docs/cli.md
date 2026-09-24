@@ -153,8 +153,9 @@ removes one, `list` shows which known secrets are present (names only),
 ## `backbone doctor`
 
 Checks and prints ✓/✗ for: data dir and `.env`, database reachable, each
-known agent's directory and runtime binary, tmux on PATH, installed
-runtimes, API key, GitHub credentials and effective intake, Telegram
+known agent's directory and runtime binary, tmux on PATH, at least one agent
+CLI on PATH (with none, it fails and names the supported CLIs; `agent start`
+would fail next), API key, GitHub credentials and effective intake, Telegram
 allowlist, whether the API is up. Exit code 1 if anything failed.
 
 ## `backbone up [--detach] [--reload]` · `backbone down`
