@@ -584,8 +584,8 @@ running sessions afterwards.
 
 Optional. Claude-in-Chrome titles every agent's tab group "Claude", so
 agents sharing one Chrome are hard to tell apart. With this installed, a
-group an agent's session opened is renamed after the agent (`contract-desk`
-→ "Contract Desk"):
+group an agent's session opened is renamed after the agent (`docs-writer`
+→ "Docs Writer"):
 
 1. The Claude Code hook reads each `tabs_context_mcp` result (the Claude
    extension's own account of the session's tab group; page output from other

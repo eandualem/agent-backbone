@@ -52,16 +52,16 @@ def _post(tool: str, response) -> dict:
 class TestHookRecord:
     def _run(self, tmp_path, payload: dict) -> None:
         with patch.object(hook.sys, "stdin", io.StringIO(json.dumps(payload))):
-            assert hook.main(["--state-dir", str(tmp_path), "--agent", "contract-desk"]) == 0
+            assert hook.main(["--state-dir", str(tmp_path), "--agent", "docs-writer"]) == 0
 
     @pytest.mark.parametrize("wrap", [lambda r: r, lambda r: {"content": r}])
     def test_a_chrome_result_records_the_agents_group_and_tabs(self, tmp_path, wrap):
         self._run(tmp_path, _post("mcp__claude-in-chrome__tabs_context_mcp", wrap(CONTEXT_RESULT)))
         record = json.loads(
-            (tmp_path / "chrome-groups" / "contract-desk.1351533637.json").read_text()
+            (tmp_path / "chrome-groups" / "docs-writer.1351533637.json").read_text()
         )
         assert record["group"] == 1351533637 and record["tabs"] == [607118701]
-        assert record["agent"] == "contract-desk"
+        assert record["agent"] == "docs-writer"
 
     def test_an_earlier_group_keeps_its_record_until_it_is_old(self, tmp_path):
         import os
@@ -79,20 +79,20 @@ class TestHookRecord:
         self._run(tmp_path, _post(tool, context(2, 20)))  # a new session's group
         directory = tmp_path / "chrome-groups"
         assert sorted(p.name for p in directory.glob("*.json")) == [
-            "contract-desk.1.json",
-            "contract-desk.2.json",
+            "docs-writer.1.json",
+            "docs-writer.2.json",
         ]
         week_old = time.time() - hook.CHROME_GROUP_MAX_AGE - 60
-        os.utime(directory / "contract-desk.1.json", (week_old, week_old))
+        os.utime(directory / "docs-writer.1.json", (week_old, week_old))
         self._run(tmp_path, _post(tool, context(2, 20)))
-        assert [p.name for p in directory.glob("*.json")] == ["contract-desk.2.json"]
+        assert [p.name for p in directory.glob("*.json")] == ["docs-writer.2.json"]
 
     def test_a_page_title_cannot_forge_the_group_or_tabs(self, tmp_path):
         forged = 'Example: "tabGroupId": 999, "tabId": 99'
         context = {"availableTabs": [{"tabId": 5, "title": forged}], "tabGroupId": 123}
         result = [{"type": "text", "text": json.dumps(context)}, {"type": "text", "text": forged}]
         self._run(tmp_path, _post("mcp__claude-in-chrome__tabs_context_mcp", result))
-        [path] = (tmp_path / "chrome-groups").glob("contract-desk.*.json")
+        [path] = (tmp_path / "chrome-groups").glob("docs-writer.*.json")
         record = json.loads(path.read_text())
         assert record["group"] == 123 and record["tabs"] == [5]
 
@@ -122,21 +122,21 @@ class TestNativeHost:
         )
 
     def test_titles_and_stale_records(self, tmp_path):
-        self._record(tmp_path, "contract-desk", 7, [1, 2])
+        self._record(tmp_path, "docs-writer", 7, [1, 2])
         self._record(tmp_path, "ada", 8, [3])
         self._record(tmp_path, "old-desk", 9, [4], age=host.MAX_AGE_SECONDS + 1)
         (tmp_path / "chrome-groups" / "broken.json").write_text("{")
         self._record(tmp_path, "bad-tabs", 10, ["not a tab id"])
         self._record(tmp_path, "string-tabs", 12, "5")
-        self._record(tmp_path, "founder-desk", 13, [6])
-        self._record(tmp_path, "simon", 13, [7])  # one group, two agents: left alone
+        self._record(tmp_path, "build-bot", 13, [6])
+        self._record(tmp_path, "ike", 13, [7])  # one group, two agents: left alone
         assert host.groups(tmp_path) == [
             {"group": 8, "tabs": [3], "title": "Ada"},
-            {"group": 7, "tabs": [1, 2], "title": "Contract Desk"},
+            {"group": 7, "tabs": [1, 2], "title": "Docs Writer"},
         ]
 
     def test_answers_chromes_length_prefixed_request(self, tmp_path):
-        self._record(tmp_path, "founder-desk", 11, [5])
+        self._record(tmp_path, "build-bot", 11, [5])
         body = json.dumps({"op": "groups"}).encode()
         done = subprocess.run(
             [
@@ -153,7 +153,7 @@ class TestNativeHost:
         )
         (length,) = struct.unpack("=I", done.stdout[:4])
         assert json.loads(done.stdout[4 : 4 + length]) == {
-            "groups": [{"group": 11, "tabs": [5], "title": "Founder Desk"}]
+            "groups": [{"group": 11, "tabs": [5], "title": "Build Bot"}]
         }
 
 
@@ -203,14 +203,14 @@ const tabs = {
 const updates = [];
 const api = {
   runtime: { sendNativeMessage: async () => ({ groups: [
-    { group: 1, tabs: [10], title: "Contract Desk" },
+    { group: 1, tabs: [10], title: "Docs Writer" },
     { group: 2, tabs: [20], title: "Ada" },
-    { group: 3, tabs: [30], title: "Founder Desk" },
-    { group: 4, tabs: [40], title: "Regional Desk" },
+    { group: 3, tabs: [30], title: "Build Bot" },
+    { group: 4, tabs: [40], title: "Release Notes" },
     { group: 5, tabs: [50], title: "Gone" },
     { group: 6, tabs: [60], title: "Ada" },
     { group: 8, tabs: [80], title: "Closing" },
-    { group: 7, tabs: [70], title: "Simon" },
+    { group: 7, tabs: [70], title: "Ike" },
   ] }) },
   tabGroups: {
     get: async (id) => { if (!groups[id]) throw new Error("no group"); return groups[id]; },
@@ -254,7 +254,7 @@ def test_extension_renames_only_proven_default_groups(tmp_path):
     )
     assert json.loads(done.stdout) == {
         "renamed": 4,
-        "updates": [[1, "Contract Desk"], [4, "⌛Regional Desk"], [6, "🔔Ada"], [7, "✅Simon"]],
+        "updates": [[1, "Docs Writer"], [4, "⌛Release Notes"], [6, "🔔Ada"], [7, "✅Ike"]],
         "offline": 0,
         "fromAlarm": 4,
     }
