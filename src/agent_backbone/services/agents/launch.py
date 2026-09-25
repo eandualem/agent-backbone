@@ -17,6 +17,7 @@ from agent_backbone.config import session_secret_keys
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.git import git_write_paths
 from agent_backbone.hooks.backbone_state import clear_agent_context
+from agent_backbone.models import BRIEF_SOURCE
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
     read_state_file,
@@ -445,7 +446,7 @@ async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:
             session_name=name,
             message=f"[via:backbone] {text}",
             delivery_kind="direct_message",
-            source="agent-brief",
+            source=BRIEF_SOURCE,
         )
     except Exception:
         log.exception("Could not queue the brief for '%s' (non-fatal)", name)

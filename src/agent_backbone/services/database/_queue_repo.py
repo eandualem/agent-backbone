@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
 
-from agent_backbone.models import RETIREMENT_REASONS, SUBSCRIPTION_KIND
+from agent_backbone.models import BRIEF_SOURCE, RETIREMENT_REASONS, SUBSCRIPTION_KIND
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
@@ -330,8 +330,8 @@ class QueueRepo(Repo):
             return [row._mapping["session_name"] for row in result.fetchall()]
 
     async def dequeue(self, session_name: str, limit: int = 10) -> list[dict]:
-        """Atomically claim pending messages for a session: high-priority
-        subscription batches first, then oldest first."""
+        """Atomically claim pending messages for a session: its startup brief
+        first, then high-priority subscription batches, then oldest first."""
         async with self._tx() as conn:
             now = now_iso()
             lock = "FOR UPDATE SKIP LOCKED" if conn.dialect.name == "postgresql" else ""
@@ -339,16 +339,24 @@ class QueueRepo(Repo):
                      WHERE id IN (
                          SELECT id FROM message_queue
                          WHERE session_name=:session AND status='pending'
-                         ORDER BY priority DESC, enqueued_at ASC LIMIT :lim
+                         ORDER BY source = :brief DESC, priority DESC, enqueued_at ASC
+                         LIMIT :lim
                          {lock}
                      ) RETURNING *"""
             result = await conn.execute(
-                text(sql), {"session": session_name, "lim": limit, "now": now}
+                text(sql),
+                {"session": session_name, "lim": limit, "now": now, "brief": BRIEF_SOURCE},
             )
             rows = [dict(row._mapping) for row in result.fetchall()]
             for row in rows:
                 await self._ensure_operation_id(conn, row)
-            rows.sort(key=lambda row: (-(row.get("priority") or 0), row["enqueued_at"]))
+            rows.sort(
+                key=lambda row: (
+                    row.get("source") != BRIEF_SOURCE,
+                    -(row.get("priority") or 0),
+                    row["enqueued_at"],
+                )
+            )
             return rows
 
     async def release(self, message_id: int) -> None:
@@ -670,6 +678,22 @@ class QueueRepo(Repo):
             )
             row = result.mappings().first()
             return dict(row) if row else None
+
+    async def has_brief_ahead(self, session: str, queue_id: int | None = None) -> bool:
+        """Whether the session's startup brief, other than row ``queue_id``, is still to go."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT 1 FROM message_queue WHERE session_name=:session AND source=:brief "
+                    "AND status IN ('pending', 'in_progress') AND id != :id LIMIT 1"
+                ),
+                {
+                    "session": session,
+                    "brief": BRIEF_SOURCE,
+                    "id": -1 if queue_id is None else queue_id,
+                },
+            )
+            return result.first() is not None
 
     async def has_uncertain(self, session: str) -> bool:
         async with self._tx() as conn:

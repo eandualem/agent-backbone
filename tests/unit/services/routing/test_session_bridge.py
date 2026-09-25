@@ -407,6 +407,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _patch_list_sessions([]):
             result = (
                 await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
@@ -429,6 +430,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(), _patch_send_message(True):
             result = (
                 await safe_deliver(
@@ -471,6 +473,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(), _patch_capture_pane("› Review the fallback routing logic"):
             result = (
                 await safe_deliver(
@@ -504,6 +507,37 @@ class TestSafeDeliver:
             send.assert_awaited_once()
             assert await db.queue.pending_count("ike") == 0
 
+    @pytest.mark.parametrize("priority", [False, True])
+    async def test_a_fresh_sessions_brief_goes_before_earlier_and_later_messages(
+        self, config, db, priority
+    ):
+        from agent_backbone.models import BRIEF_SOURCE
+        from agent_backbone.services.jobs.retry import drain_message_queue
+
+        await db.queue.enqueue(
+            session_name="ike", message="queued while offline", delivery_kind="direct_message"
+        )
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the brief",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        with _online(), _patch_send_message(True) as send:
+            receipt = await safe_deliver(
+                "ike",
+                "sent after the start",
+                config,
+                db=db,
+                delivery_kind="direct_message",
+                sender="ada",
+                priority=priority,
+            )
+            assert receipt.outcome == "settling" and receipt.queued
+            send.assert_not_awaited()
+            await drain_message_queue(config, db, None, active_sessions={"ike"})
+        assert "the brief" in send.await_args_list[0].args[1]
+
     async def test_agent_working_blocks_even_priority(self, config):
         with _online(snap=_BUSY_SNAP):
             assert (
@@ -514,6 +548,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(snap=_BUSY_SNAP):
             result = (
                 await safe_deliver(
@@ -549,6 +584,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(), _patch_send_message(False):
             result = (
                 await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
@@ -560,6 +596,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(snap=_UNKNOWN_SNAP), _patch_send_message(True):
             result = (
                 await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
@@ -572,6 +609,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.deliveries.query.return_value = [
             {
                 "repo": "example/orchestration",
@@ -593,6 +631,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.deliveries.query.side_effect = [
             [],
             [
@@ -618,6 +657,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.deliveries.query.side_effect = [
             [],
             [
@@ -649,6 +689,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.deliveries.query.return_value = []
         order: list[str] = []
 
@@ -679,6 +720,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.deliveries.query.return_value = []
         mock_db.deliveries.claim.return_value = None
         with (
@@ -696,6 +738,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(), _patch_send_message(True):
             result = (
                 await safe_deliver(
@@ -768,6 +811,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with patch(
             f"{_DELIV}.get_session_intelligence",
             new_callable=AsyncMock,
@@ -794,6 +838,7 @@ class TestPlanResponseDelivery:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(snap=_PLAN_SNAP), _patch_send_message(True) as send:
             result = (
                 await safe_deliver(
@@ -814,6 +859,7 @@ class TestPlanResponseDelivery:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(snap=_PERMISSION_SNAP), _patch_send_message(True) as send:
             result = (
                 await safe_deliver("ike", "2", config, db=mock_db, delivery_kind="plan_response")
@@ -828,6 +874,7 @@ class TestPlanResponseDelivery:
             mock_db = AsyncMock()
             mock_db.queue.held_receipt.return_value = None
             mock_db.queue.has_uncertain.return_value = False
+            mock_db.queue.has_brief_ahead.return_value = False
             with _online(snap=snap), _patch_send_message(True) as send:
                 result = (
                     await safe_deliver(
@@ -842,6 +889,7 @@ class TestPlanResponseDelivery:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _patch_list_sessions([]):
             result = (
                 await safe_deliver("ike", "2", config, db=mock_db, delivery_kind="plan_response")
@@ -859,6 +907,7 @@ class TestDeliveryReport:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         row_id = 1 if status == "inserted" else None
         mock_db.queue.enqueue.return_value = EnqueueResult(status, row_id)
         return mock_db
@@ -885,6 +934,7 @@ class TestDeliveryReport:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.queue.enqueue.side_effect = RuntimeError("disk full")
         with _online(snap=_BUSY_SNAP):
             report = await safe_deliver(
