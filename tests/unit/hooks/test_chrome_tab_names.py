@@ -123,7 +123,7 @@ class TestNativeHost:
 
     def test_titles_and_stale_records(self, tmp_path):
         self._record(tmp_path, "docs-writer", 7, [1, 2])
-        self._record(tmp_path, "ada", 8, [3])
+        self._record(tmp_path, "alice", 8, [3])
         self._record(tmp_path, "old-desk", 9, [4], age=host.MAX_AGE_SECONDS + 1)
         (tmp_path / "chrome-groups" / "broken.json").write_text("{")
         self._record(tmp_path, "bad-tabs", 10, ["not a tab id"])
@@ -131,7 +131,7 @@ class TestNativeHost:
         self._record(tmp_path, "build-bot", 13, [6])
         self._record(tmp_path, "ike", 13, [7])  # one group, two agents: left alone
         assert host.groups(tmp_path) == [
-            {"group": 8, "tabs": [3], "title": "Ada"},
+            {"group": 8, "tabs": [3], "title": "Alice"},
             {"group": 7, "tabs": [1, 2], "title": "Docs Writer"},
         ]
 
@@ -204,11 +204,11 @@ const updates = [];
 const api = {
   runtime: { sendNativeMessage: async () => ({ groups: [
     { group: 1, tabs: [10], title: "Docs Writer" },
-    { group: 2, tabs: [20], title: "Ada" },
+    { group: 2, tabs: [20], title: "Alice" },
     { group: 3, tabs: [30], title: "Build Bot" },
     { group: 4, tabs: [40], title: "Release Notes" },
     { group: 5, tabs: [50], title: "Gone" },
-    { group: 6, tabs: [60], title: "Ada" },
+    { group: 6, tabs: [60], title: "Alice" },
     { group: 8, tabs: [80], title: "Closing" },
     { group: 7, tabs: [70], title: "Ike" },
   ] }) },
@@ -254,7 +254,7 @@ def test_extension_renames_only_proven_default_groups(tmp_path):
     )
     assert json.loads(done.stdout) == {
         "renamed": 4,
-        "updates": [[1, "Docs Writer"], [4, "⌛Release Notes"], [6, "🔔Ada"], [7, "✅Ike"]],
+        "updates": [[1, "Docs Writer"], [4, "⌛Release Notes"], [6, "🔔Alice"], [7, "✅Ike"]],
         "offline": 0,
         "fromAlarm": 4,
     }
