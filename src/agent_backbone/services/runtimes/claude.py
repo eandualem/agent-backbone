@@ -79,6 +79,16 @@ class ClaudeCode(Runtime):
     # A resumed session keeps its stored system prompt and declines a brief
     # sent as a user message (measured on 2.1.282): its hook hands it over.
     brief_refresh = "hook_context"
+    declared_capabilities = frozenset(
+        {
+            "trust",
+            "brief-after-compaction",
+            "project-instructions",
+            "browser-group-name",
+            "deep-review",
+            "message-authority",
+        }
+    )
     models = ("opus", "sonnet", "haiku")  # Claude Code's own aliases
     # `claude --effort <level>`; levels as Claude Code itself lists them when
     # it rejects an unknown one (live capture).

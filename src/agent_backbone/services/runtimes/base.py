@@ -186,6 +186,10 @@ class Runtime:
     started with): handed to its ``SessionStart`` hook as context, which a
     peer's message cannot imitate, or not at all (a gap: start the agent
     fresh to apply a changed brief). Never as a chat message (#294)."""
+    declared_capabilities: frozenset[str] = frozenset()
+    """Contract rows (``capabilities.py``) this CLI provides by itself, where
+    no other adapter attribute shows it (loading ``AGENTS.md``, declining a
+    forged brief): the registry test holds the contract to these."""
     models: tuple[str, ...] = ()
     """Model ids known to work with ``--model`` (aliases or ids seen live).
     Examples for `backbone runtimes`, not an exhaustive list — the CLI's own

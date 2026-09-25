@@ -113,6 +113,15 @@ class Codex(Runtime):
     # A resumed session gets its current brief from its SessionStart hook, a
     # channel a peer message cannot imitate (#294).
     brief_refresh = "hook_context"
+    declared_capabilities = frozenset(
+        {
+            "trust",
+            "brief-after-compaction",
+            "project-instructions",
+            "deep-review",
+            "message-authority",
+        }
+    )
     models = ("gpt-5.6-sol", "gpt-6-astra")  # as shown by codex's own status line (live capture)
     # Codex has no effort flag; the level is a config override. Levels as
     # gpt-6-astra reports them in codex 0.153 (`~/.codex/models_cache.json`).
