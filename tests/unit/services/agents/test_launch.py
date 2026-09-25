@@ -372,6 +372,14 @@ class TestStartAgentBrief:
             await start_agent(self._spec(tmp_path, "aider"), config, resume=True, db=db)
         db.queue.enqueue.assert_not_awaited()
 
+    async def test_the_session_carries_its_launchs_operation_id(self, tmp_path):
+        """How a recovered restart recognises the session it started."""
+        config = bootstrap_config(tmp_path / "data")
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            await start_agent(self._spec(tmp_path, "claude"), config, operation_id="op-1")
+        assert started.await_args.kwargs["environment"]["BACKBONE_OPERATION_ID"] == "op-1"
+
     async def test_unknown_runtime_is_refused(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False):

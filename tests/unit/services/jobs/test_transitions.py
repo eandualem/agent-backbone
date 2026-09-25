@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import text
 
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import AgentStore, StartResult
@@ -53,12 +51,8 @@ def seams():
             new_callable=AsyncMock,
             return_value=DeliveryReport(outcome=DeliveryOutcome.DELIVERED),
         ) as deliver,
-        # A running session created long ago: any recorded launch predates it.
-        patch(
-            f"{_JOB}.list_sessions_rich",
-            new_callable=AsyncMock,
-            return_value=[{"name": "ike", "created": 0}],
-        ),
+        # A running session carries no launch of ours unless a test says so.
+        patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value=None),
     ):
         yield stop, start, deliver
 
@@ -224,7 +218,8 @@ async def test_a_launch_interrupted_by_a_backbone_restart_is_recovered_from_diag
         await db.diagnostics.record(
             category="startup", operation_id="op-9", code=code, severity="info", agent_name="ike"
         )
-    assert await _run(config, store, db) == {"ike": "started"}
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value="op-9"):
+        assert await _run(config, store, db) == {"ike": "started"}
     assert start.await_args.args[3].operation_id == "op-9"
     done = await db.transitions.get(row["id"])
     assert done["status"] == "completed" and done["result"]["ready"] == "ready"
@@ -256,7 +251,8 @@ async def test_the_retrys_own_already_running_record_does_not_hide_the_launch(
     await db.diagnostics.record(
         category="startup", operation_id="op-11", code="ready", severity="info", agent_name="ike"
     )
-    assert await _run(config, store, db) == {"ike": "started"}
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value="op-11"):
+        assert await _run(config, store, db) == {"ike": "started"}
 
 
 async def test_an_interrupted_retry_does_not_hide_the_launch_from_the_next(
@@ -273,7 +269,8 @@ async def test_an_interrupted_retry_does_not_hide_the_launch_from_the_next(
         await db.diagnostics.record(
             category="startup", operation_id="op-12", code=code, severity="info", agent_name="ike"
         )
-    assert await _run(config, store, db) == {"ike": "started"}
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value="op-12"):
+        assert await _run(config, store, db) == {"ike": "started"}
 
 
 async def test_a_later_successful_launch_counts_over_an_earlier_failure(db, config, store, seams):
@@ -288,7 +285,8 @@ async def test_a_later_successful_launch_counts_over_an_earlier_failure(db, conf
         await db.diagnostics.record(
             category="startup", operation_id="op-13", code=code, severity="info", agent_name="ike"
         )
-    assert await _run(config, store, db) == {"ike": "started"}
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value="op-13"):
+        assert await _run(config, store, db) == {"ike": "started"}
 
 
 async def test_a_launch_that_only_found_a_running_session_is_not_claimed(db, config, store, seams):
@@ -304,9 +302,11 @@ async def test_a_launch_that_only_found_a_running_session_is_not_claimed(db, con
     assert await _run(config, store, db) == {"ike": "failed"}
 
 
-async def test_a_session_started_after_the_recorded_launch_is_not_claimed(db, config, store, seams):
-    """The launched session exited and someone started another under the same
-    name: the recorded outcome belongs to a session that is gone."""
+async def test_a_session_someone_else_started_under_the_name_is_not_claimed(
+    db, config, store, seams
+):
+    """The launched session exited and another was started under the same
+    name: it carries another launch's operation id, so the continuation waits."""
     _, start, deliver = seams
     start.return_value = StartResult(ok=True, already_running=True)
     row = await db.transitions.create(agent_name="ike", message="hi")
@@ -316,33 +316,26 @@ async def test_a_session_started_after_the_recorded_launch_is_not_claimed(db, co
         await db.diagnostics.record(
             category="startup", operation_id="op-15", code=code, severity="info", agent_name="ike"
         )
-    later = [{"name": "ike", "created": int(time.time()) + 3600}]
-    with patch(f"{_JOB}.list_sessions_rich", new_callable=AsyncMock, return_value=later):
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value="op-other"):
         assert await _run(config, store, db) == {"ike": "failed"}
     deliver.assert_not_awaited()
 
 
-async def test_a_repeated_outcome_is_compared_at_its_latest_sighting(db, config, store, seams):
-    """Retries that launched again under the same operation merge into one
-    record: the session running now belongs to its latest sighting."""
+async def test_a_replacement_from_an_interrupted_retry_is_claimed_by_its_operation(
+    db, config, store, seams
+):
+    """A retry launched another replacement under the same operation and was
+    interrupted before recording its readiness: the session carries the id."""
     _, start, _ = seams
     start.return_value = StartResult(ok=True, already_running=True)
     row = await db.transitions.create(agent_name="ike")
     await db.transitions.mark_stopped(row["id"], start_at=PAST)
     await db.transitions.mark_launching(row["id"], "op-16")
-    for code in ("requested", "ready"):
+    for code in ("requested", "ready", "requested"):
         await db.diagnostics.record(
             category="startup", operation_id="op-16", code=code, severity="info", agent_name="ike"
         )
-    async with db.engine.begin() as conn:
-        await conn.execute(
-            text(
-                "UPDATE diagnostics SET first_seen_at = '2000-01-01T00:00:00+00:00' "
-                "WHERE operation_id = 'op-16'"
-            )
-        )
-    now = [{"name": "ike", "created": int(time.time()) - 1}]
-    with patch(f"{_JOB}.list_sessions_rich", new_callable=AsyncMock, return_value=now):
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value="op-16"):
         assert await _run(config, store, db) == {"ike": "started"}
 
 
@@ -358,16 +351,9 @@ async def test_the_latest_observed_outcome_counts_whatever_its_row_order(db, con
         await db.diagnostics.record(
             category="startup", operation_id="op-17", code=code, severity="info", agent_name="ike"
         )
-    async with db.engine.begin() as conn:
-        await conn.execute(
-            text(
-                "UPDATE diagnostics SET last_seen_at = '2000-01-01T00:00:00+00:00' "
-                "WHERE operation_id = 'op-17' AND code = 'timeout'"
-            )
-        )
-    now = [{"name": "ike", "created": int(time.time()) - 1}]
-    with patch(f"{_JOB}.list_sessions_rich", new_callable=AsyncMock, return_value=now):
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value="op-17"):
         assert await _run(config, store, db) == {"ike": "started"}
+    assert (await db.transitions.get(row["id"]))["result"]["ready"] == "ready"
 
 
 async def test_a_running_session_without_a_recorded_launch_is_not_claimed(db, config, store, seams):

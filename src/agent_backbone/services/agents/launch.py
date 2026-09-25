@@ -52,23 +52,39 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+OPERATION_ENV_KEY = "BACKBONE_OPERATION_ID"
+"""The launch's operation id, in the session's environment (``launch_environment``)."""
+
+
 def launch_environment(
     name: str,
     runtime: str,
     state_dir: Path | str | None = None,
     extra: dict[str, str] | None = None,
+    *,
+    operation_id: str | None = None,
 ) -> dict[str, str]:
     """Environment exported into an agent session so shipped hooks can find the backbone.
 
     This is the whole contract: the runtime, the agent's name, the state
-    directory, and whatever the agent itself is configured with. The
-    backbone's secrets are not part of it and are stripped from the session
-    (see ``session_secret_keys`` and ``start_session``'s ``scrub``).
+    directory, the launch's operation (``BACKBONE_OPERATION_ID``, how a
+    recovered restart recognises the session it started), and whatever the
+    agent itself is configured with. The backbone's secrets are not part of
+    it and are stripped from the session (see ``session_secret_keys`` and
+    ``start_session``'s ``scrub``).
     """
     env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name, "BACKBONE_LAUNCH_ID": uuid4().hex}
+    if operation_id:
+        env[OPERATION_ENV_KEY] = operation_id
     if state_dir:
         env[STATE_DIR_ENV_KEY] = str(state_dir)
-    reserved = {RUNTIME_ENV_KEY, AGENT_ENV_KEY, STATE_DIR_ENV_KEY, "BACKBONE_LAUNCH_ID"}
+    reserved = {
+        RUNTIME_ENV_KEY,
+        AGENT_ENV_KEY,
+        STATE_DIR_ENV_KEY,
+        "BACKBONE_LAUNCH_ID",
+        OPERATION_ENV_KEY,
+    }
     for key, value in (extra or {}).items():
         if key in reserved:
             log.warning("Ignoring reserved variable %s in agent env for '%s'", key, name)
@@ -187,6 +203,7 @@ async def start_agent(
             db=db,
             wait=wait,
             details=details,
+            operation_id=operation_id,
             observe=observe,
         )
     except Exception as exc:
@@ -225,6 +242,7 @@ async def _start_agent(
     wait: bool,
     details: dict,
     observe: Callable[[str], Awaitable[None]],
+    operation_id: str | None = None,
 ) -> StartResult:
     """Start an agent in its tmux session.
 
@@ -350,6 +368,7 @@ async def _start_agent(
             **extra_env,
             **rt.hook_launch_env(config.data_dir, config.state_dir, env=extra_env),
         },
+        operation_id=operation_id,
     )
     # `starting` lives in its own marker file, written before the launch: a
     # hook write newer than the marker outranks it, ``wait_until_ready``

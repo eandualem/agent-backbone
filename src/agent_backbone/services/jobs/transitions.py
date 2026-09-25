@@ -24,7 +24,7 @@ from agent_backbone.services.agents.transitions import SOURCE, due_after
 from agent_backbone.services.database import now_iso
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import safe_deliver
-from agent_backbone.services.terminal import list_sessions_rich
+from agent_backbone.services.terminal import query_environment_var
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -126,14 +126,14 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         "evidence": list(result.evidence),
     }
     if result.already_running:
-        if recovered is None or not await _session_existed_by(name, recovered[1]):
+        if recovered is None or not await _session_is_launch(name, operation_id):
             outcome["reason"] = "the session was already running at start time; not started here"
             await db.transitions.finish(row["id"], "failed", outcome)
             return "failed"
-        outcome["ready"] = recovered[0]
+        outcome["ready"] = recovered
         outcome["evidence"] = [
             f"launch {operation_id} was started by an earlier backbone process; "
-            f"its recorded outcome is '{recovered[0]}'"
+            f"its recorded outcome is '{recovered}'"
         ]
     elif not result.ok or result.ready == "exited":
         outcome["reason"] = "the replacement did not start"
@@ -164,44 +164,30 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
     return "started"
 
 
-async def _recovered_launch(db: BackboneDB, operation_id: str) -> tuple[str, str | None] | None:
-    """What the startup diagnostics say a launch this transition began ended
-    as, and when that was recorded.
+async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
+    """What the startup diagnostics say a launch this transition began ended as.
 
     None when no launch under that identity was recorded (the session is
-    someone else's) or it is recorded as failed. ``("not_observed", None)``
-    when the launch was requested but its readiness never recorded."""
+    someone else's) or it is recorded as failed. ``not_observed`` when the
+    launch was requested but its readiness never recorded."""
     records = await db.diagnostics.query(operation_id=operation_id, category="startup", limit=20)
     if not records:
         return None
-    # Newest first. A retry that found the session running records
-    # "already_running" under the same operation: that is not a launch
-    # outcome, so the newest real one counts. With nothing but
-    # "already_running", the session was running before this launch.
+    # A retry that found the session running records "already_running" under
+    # the same operation: that is not a launch outcome. With nothing else,
+    # the session was running before this launch.
     codes = [record["code"] for record in records]
     outcomes = [r for r in records if r["code"] not in {"requested", "already_running"}]
     if not outcomes:
-        return None if "already_running" in codes else ("not_observed", None)
+        return None if "already_running" in codes else "not_observed"
     # Repeated observations update their first row in place, so id order is
     # not observation order: the latest sighting decides.
-    newest = max(outcomes, key=lambda record: record["last_seen_at"])
-    return (
-        None if newest["code"] in {"failed", "exited"} else (newest["code"], newest["last_seen_at"])
-    )
+    newest = max(outcomes, key=lambda record: record["last_seen_at"])["code"]
+    return None if newest in {"failed", "exited"} else newest
 
 
-async def _session_existed_by(name: str, recorded_at: str | None) -> bool:
-    """Whether the running session already existed when the launch's outcome
-    was recorded: one created later was started by someone else under the
-    same name. Without a recorded outcome there is nothing to compare."""
-    if recorded_at is None:
-        return True
-    recorded = datetime.fromisoformat(recorded_at).timestamp()
-    for session in await list_sessions_rich():
-        if session["name"] == name:
-            return session["created"] <= recorded + _CLOCK_SLACK_SECONDS
-    return False
-
-
-_CLOCK_SLACK_SECONDS = 5
-"""tmux reports creation in whole seconds."""
+async def _session_is_launch(name: str, operation_id: str) -> bool:
+    """Whether the running session was started by this launch: every launch
+    exports its operation id into the session's environment. A session
+    someone started later under the same name carries another, or none."""
+    return await query_environment_var(name, launch.OPERATION_ENV_KEY) == operation_id
