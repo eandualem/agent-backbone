@@ -682,16 +682,18 @@ class QueueRepo(Repo):
     async def retire_pending_briefs(self, session: str) -> int:
         """Expire the startup briefs still waiting for ``session``.
 
-        Called before a launch: a brief queued for an earlier launch never
-        reached it, and a new session must not receive it (#290). A leased
-        row is mid-delivery and is left alone. Returns how many were retired.
+        Called before a launch, when no session of the agent exists: a brief
+        queued for an earlier launch never reached it, and a new session must
+        not receive it (#290). A leased row is retired too — the session it
+        was leased for is gone, and a recovered lease would otherwise deliver
+        it to the new one. Returns how many were retired.
         """
         async with self._tx() as conn:
             result = await conn.execute(
                 text(
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE session_name = :session AND source = :brief
-                         AND status = 'pending' RETURNING *"""
+                         AND status IN ('pending', 'in_progress') RETURNING *"""
                 ),
                 {"now": now_iso(), "session": session, "brief": BRIEF_SOURCE},
             )

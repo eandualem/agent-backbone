@@ -255,6 +255,15 @@ _POSITIVE_SETTINGS = frozenset(
 )
 
 
+def _is_absolute(path: str) -> bool:
+    """Whether ``path`` is absolute once ``~`` is expanded; an unknown home
+    (``~nobody/x``, a RuntimeError from ``expanduser``) is simply not."""
+    try:
+        return Path(path).expanduser().is_absolute()
+    except RuntimeError:
+        return False
+
+
 def validate_setting(key: str, value: Any) -> Any:
     """Check a key exists and coerce/validate the value against the default's type."""
     if key not in SETTINGS_DEFAULTS:
@@ -309,14 +318,14 @@ def validate_setting(key: str, value: Any) -> Any:
         if not isinstance(value, str) or (value and not value.strip()):
             raise ValueError(f"{key}: expected a directory path, or an empty string to disable")
         value = value.strip()
-        if value and not Path(value).expanduser().is_absolute():
+        if value and not _is_absolute(value):
             raise ValueError(f"{key}: expected an absolute path (CLI and service run elsewhere)")
         return value
     if key == "templates.dir":
         if not isinstance(value, str) or (value and not value.strip()):
             raise ValueError(f"{key}: expected a directory path, or an empty string for default")
         value = value.strip()
-        if value and not Path(value).expanduser().is_absolute():
+        if value and not _is_absolute(value):
             raise ValueError(f"{key}: expected an absolute path (CLI and service run elsewhere)")
         return value
     if key == "templates.maintainer":

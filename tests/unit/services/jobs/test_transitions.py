@@ -251,6 +251,23 @@ async def test_the_retrys_own_already_running_record_does_not_hide_the_launch(
     assert await _run(config, store, db) == {"ike": "started"}
 
 
+async def test_an_interrupted_retry_does_not_hide_the_launch_from_the_next(
+    db, config, store, seams
+):
+    """A first retry recorded "already_running" and died before closing the
+    row: the original launch's outcome is still the one that counts."""
+    _, start, _ = seams
+    start.return_value = StartResult(ok=True, already_running=True)
+    row = await db.transitions.create(agent_name="ike")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-12")
+    for code in ("requested", "ready", "already_running"):
+        await db.diagnostics.record(
+            category="startup", operation_id="op-12", code=code, severity="info", agent_name="ike"
+        )
+    assert await _run(config, store, db) == {"ike": "started"}
+
+
 async def test_a_running_session_without_a_recorded_launch_is_not_claimed(db, config, store, seams):
     _, start, _ = seams
     start.return_value = StartResult(ok=True, already_running=True)

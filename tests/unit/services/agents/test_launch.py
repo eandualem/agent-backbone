@@ -297,6 +297,32 @@ class TestStartAgentBrief:
             await start_agent(self._spec(tmp_path, "aider"), config, brief_file=role, db=db)
         assert db.queue.enqueue.await_args.kwargs["message"] == "[via:backbone] You are the scout."
 
+    async def test_a_launch_stops_when_earlier_briefs_cannot_be_retired(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.side_effect = RuntimeError("database is locked")
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            result = await start_agent(self._spec(tmp_path, "aider"), config, db=db)
+        assert result.ok is False
+        started.assert_not_awaited()
+        db.queue.enqueue.assert_not_awaited()
+
+    async def test_a_message_brief_is_queued_before_the_session_exists(self, tmp_path):
+        """Nothing sent once the session is ready can overtake it."""
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 0
+
+        async def session_starts(*_args, **_kwargs):
+            db.queue.enqueue.assert_awaited_once()
+            return True
+
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            started.side_effect = session_starts
+            assert (await start_agent(self._spec(tmp_path, "aider"), config, db=db)).ok
+
     @pytest.mark.parametrize("runtime", ["claude", "aider", "shell"])
     async def test_a_launch_retires_briefs_queued_for_an_earlier_one(self, tmp_path, runtime):
         config = bootstrap_config(tmp_path / "data")

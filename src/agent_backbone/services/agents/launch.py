@@ -363,7 +363,15 @@ async def _start_agent(
     clear_agent_context(config.state_dir, spec.name)
     # Likewise a brief queued for an earlier launch that never received it:
     # this launch brings its own, and the old one must not reach it (#290).
-    await _retire_stale_briefs(db, spec.name)
+    if not await _retire_stale_briefs(db, spec.name):
+        details["reason"] = "brief_retirement_failed"
+        return StartResult(
+            ok=False, evidence=("could not retire an earlier launch's undelivered brief",)
+        )
+    # Queued before the session exists, so no message sent once it is ready
+    # can go ahead of it; a launch that fails leaves it for the next one to retire.
+    if rt.brief_mode == "message" and brief is not None and not resume:
+        await _queue_brief(db, spec.name, brief)
     write_starting_marker(config.state_dir, spec.name, launched_at)
     ok = await start_session(
         spec.name,
@@ -396,10 +404,6 @@ async def _start_agent(
             observe=observe,
         )
 
-    # No launch-time injection for this runtime: the brief is queued as the
-    # first message, delivered by the monitor once the agent is at its prompt.
-    if rt.brief_mode == "message" and brief is not None and not resume and ready != "exited":
-        await _queue_brief(db, spec.name, brief)
     return StartResult(ok=True, ready=ready, evidence=tuple(resume_evidence + evidence))
 
 
@@ -438,14 +442,17 @@ def _writable_dirs(agent_dir: Path, configured: tuple[str, ...]) -> tuple[str, .
     return tuple(dict.fromkeys((*configured, *git_write_paths(agent_dir))))
 
 
-async def _retire_stale_briefs(db: BackboneDB | None, name: str) -> None:
+async def _retire_stale_briefs(db: BackboneDB | None, name: str) -> bool:
+    """False when an earlier brief may still be waiting: the launch must not go on."""
     if db is None:
-        return
+        return True
     try:
         if retired := await db.queue.retire_pending_briefs(name):
             log.info("Retired %d undelivered brief(s) of an earlier launch of '%s'", retired, name)
     except Exception:
-        log.exception("Could not retire earlier briefs for '%s' (non-fatal)", name)
+        log.exception("Could not retire earlier briefs for '%s'", name)
+        return False
+    return True
 
 
 async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:

@@ -588,6 +588,21 @@ class TestSafeDeliver:
         assert "the current brief" in sent[0]
         assert not any("the brief of the earlier launch" in text for text in sent)
 
+    async def test_a_leased_brief_of_an_earlier_launch_is_retired_too(self, db):
+        """Its session is gone; a recovered lease must not deliver it to the next."""
+        from agent_backbone.models import BRIEF_SOURCE
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the brief of the earlier launch",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        assert len(await db.queue.dequeue("ike")) == 1  # leased by a worker that died
+        assert await db.queue.retire_pending_briefs("ike") == 1
+        await db.queue.expire_stale_leases(max_age_minutes=0)
+        assert await db.queue.dequeue("ike") == []
+
     async def test_agent_working_blocks_even_priority(self, config):
         with _online(snap=_BUSY_SNAP):
             assert (

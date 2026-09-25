@@ -138,6 +138,12 @@ class TestValidateSetting:
         with pytest.raises(ValueError, match="absolute"):
             validate_setting("skills.store", "skills")
 
+    @pytest.mark.parametrize("key", ["skills.store", "templates.dir"])
+    def test_a_path_under_an_unknown_home_is_rejected_not_raised(self, key):
+        # Path.expanduser raises RuntimeError for a user it cannot resolve.
+        with pytest.raises(ValueError, match="absolute"):
+            validate_setting(key, "~no-such-user-for-backbone-tests/dir")
+
     def test_coerces_types(self):
         assert validate_setting("backbone.port", "8123") == 8123
         assert validate_setting("security.allow_unauthenticated", "true") is True
