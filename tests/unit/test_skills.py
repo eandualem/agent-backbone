@@ -99,9 +99,9 @@ class TestSelect:
 
     def test_an_agent_tag_matches_a_mixed_case_agent_name(self, tmp_path):
         path = make_skill(tmp_path, "notes")
-        write_tags(path, ("agent:Feynman",))
-        assert parse_skill(path).tags == ("agent:feynman",)
-        assert [s.name for s in select_skills(read_store(tmp_path), (), "Feynman")] == ["notes"]
+        write_tags(path, ("agent:Builder",))
+        assert parse_skill(path).tags == ("agent:builder",)
+        assert [s.name for s in select_skills(read_store(tmp_path), (), "Builder")] == ["notes"]
 
     def test_invalid_skills_are_never_selected(self, tmp_path):
         path = make_skill(tmp_path, "broken", tags="all")
@@ -441,13 +441,13 @@ class TestMaterialize:
         make_skill(store, "a", tags="all")
         repo = _git_repo(tmp_path / "repo")
         manifests = tmp_path / "data" / "skills" / "materialized"
-        for agent in ("leo", "ike"):
+        for agent in ("app", "worker"):
             materialize(
                 store, repo, (".claude/skills",), read_store(store), manifests / f"{agent}.json"
             )
-        # leo moves to a runtime that reads another directory; ike still reads this one
+        # app moves to a runtime that reads another directory; worker still reads this one
         result = materialize(
-            store, repo, (".agents/skills",), read_store(store), manifests / "leo.json"
+            store, repo, (".agents/skills",), read_store(store), manifests / "app.json"
         )
         assert result.removed == [] and (repo / ".claude" / "skills" / "a").is_symlink()
 

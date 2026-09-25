@@ -148,7 +148,7 @@ def parse_tags(value: object) -> tuple[str, ...]:
 
 
 def validate_tags(tags: tuple[str, ...]) -> tuple[str, ...]:
-    """The tags, lowercased as ``parse_tags`` reads them (``agent:Feynman`` → ``agent:feynman``)."""
+    """The tags, lowercased as ``parse_tags`` reads them (``agent:Builder`` → ``agent:builder``)."""
     tags = tuple(dict.fromkeys(tag.lower() for tag in tags))
     for tag in tags:
         if not TAG_RE.match(tag):

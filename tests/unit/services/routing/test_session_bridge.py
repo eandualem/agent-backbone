@@ -530,7 +530,7 @@ class TestSafeDeliver:
                 config,
                 db=db,
                 delivery_kind="direct_message",
-                sender="ada",
+                sender="worker",
                 priority=priority,
             )
             assert receipt.outcome == "settling" and receipt.queued
