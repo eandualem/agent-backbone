@@ -227,17 +227,53 @@ async def test_a_failed_rename_moves_the_manifest_back(db, store):
     assert old.exists() and not manifest_path(store.config.data_dir, "desk").exists()
 
 
-async def test_a_rename_onto_an_existing_manifest_is_refused_and_both_survive(db, store):
+async def test_a_rename_onto_a_registered_agent_leaves_both_manifests(db, store, tmp_path):
+    from agent_backbone.config import AgentSpec
     from agent_backbone.skills import manifest_path
 
+    await store.register(AgentSpec(name="desk", dir=str(tmp_path), runtime="codex"))
     mine = manifest_path(store.config.data_dir, "api")
     theirs = manifest_path(store.config.data_dir, "desk")
     mine.parent.mkdir(parents=True)
     mine.write_text('{"repo": "/a", "links": []}')
     theirs.write_text('{"repo": "/d", "links": [".agents/skills/x"]}')
-    with pytest.raises(ValueError, match="skill manifest"):
+    with pytest.raises(ValueError, match="already an agent"):
         await store.rename("api", "desk")
     assert '"/a"' in mine.read_text() and '"/d"' in theirs.read_text()
+
+
+async def test_a_forgotten_agents_leftover_manifest_is_released_before_its_name_is_reused(
+    db, store, tmp_path
+):
+    """Its links could not be released at forget; a rename to its name retries."""
+    from agent_backbone.skills import manifest_path
+
+    skills = tmp_path / "skill-store"
+    (skills / "tidy").mkdir(parents=True)
+    await db.settings.set("skills.store", str(skills))
+    await store.refresh()
+    checkout = tmp_path / "old-checkout"
+    link = checkout / ".agents" / "skills" / "tidy"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(skills / "tidy")
+    leftover = manifest_path(store.config.data_dir, "desk")
+    leftover.parent.mkdir(parents=True)
+    leftover.write_text(f'{{"repo": "{checkout}", "links": [".agents/skills/tidy"]}}')
+    await store.rename("api", "desk")
+    assert not link.is_symlink()
+    assert "desk" in {row["name"] for row in await db.agents.list()}
+
+
+async def test_a_leftover_manifest_that_still_cannot_be_released_refuses_the_rename(db, store):
+    from agent_backbone.skills import manifest_path
+
+    leftover = manifest_path(store.config.data_dir, "desk")
+    leftover.parent.mkdir(parents=True)
+    leftover.write_text('{"repo": "/d", "links": [".agents/skills/x"]}')
+    with patch("agent_backbone.skills.materialize", side_effect=OSError("read-only")):
+        with pytest.raises(ValueError, match="could not be released"):
+            await store.rename("api", "desk")
+    assert leftover.exists()
 
 
 async def test_rename_keeps_a_pending_restart(db, store):

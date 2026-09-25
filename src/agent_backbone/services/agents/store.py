@@ -311,19 +311,20 @@ class AgentStore:
             # A pending hook-context offer must not reach the next agent of this name.
             shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
             if spec is not None:
-                self._release_skills(spec)
+                self._release_skills(spec.name)
         return removed
 
-    def _release_skills(self, spec: AgentSpec) -> None:
+    def _release_skills(self, name: str) -> bool:
         """Remove a forgotten agent's skill links that no other agent in its
-        checkout still records, and its manifest, so they keep nothing alive."""
+        checkout still records, and its manifest, so they keep nothing alive.
+        False when the links could not be released: the manifest is kept."""
         import json
 
         from agent_backbone.skills import manifest_path, materialize
 
-        manifest = manifest_path(self.config.data_dir, spec.name)
+        manifest = manifest_path(self.config.data_dir, name)
         if not manifest.exists():
-            return
+            return True
         store = self.config.skills.store_path
         try:
             # The links live in the checkout the manifest records, which may
@@ -333,9 +334,10 @@ class AgentStore:
                 materialize(store, Path(repo), (), [], manifest)
         except (OSError, ValueError, AttributeError) as exc:
             # Kept: it is what a later cleanup of those links goes by.
-            log.warning("Could not release the skill links of '%s': %s", spec.name, exc)
-            return
+            log.warning("Could not release the skill links of '%s': %s", name, exc)
+            return False
         manifest.unlink(missing_ok=True)
+        return True
 
     async def rename(self, name: str, new_name: str) -> AgentSpec:
         """Rename a stopped non-swarm agent and retain its runtime resume record."""
@@ -372,8 +374,15 @@ class AgentStore:
 
             old_manifest = manifest_path(self.config.data_dir, name)
             new_manifest = manifest_path(self.config.data_dir, new_name)
-            if new_manifest.exists():
-                raise ValueError(f"'{new_name}' already has a skill manifest; choose another name")
+            if new_name in self._agents:
+                raise ValueError(f"'{new_name}' is already an agent")
+            # A manifest under a name no agent holds is a forgotten agent's,
+            # kept because its links could not be released then: retry now.
+            if new_manifest.exists() and not self._release_skills(new_name):
+                raise ValueError(
+                    f"'{new_name}' still has a forgotten agent's skill links that could not be "
+                    "released; choose another name"
+                )
             copied = moved = False
             try:
                 if source.exists():
