@@ -42,6 +42,7 @@ claims support that the adapter's code lacks.
 | Shared skills linked | ✅ | ✅ | ✅ | ✅ | ❌ #282 | ❌ #282 | n/a |
 | Token usage recorded | ✅ | ✅ | ❌ #283 | ✅ | ❌ #283 | ❌ #283 | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ❌ #284 | ❌ #284 | ❌ #284 | ❌ #284 | n/a |
+| Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ --approve-for-me | ❌ #293 | ❌ #293 | ❌ #293 | ❌ #293 | n/a |
 | Deep review run from and for this runtime | ✅ | ✅ | ❌ #288 | ❌ #288 | ❌ #288 | ❌ #288 | n/a |
 <!-- capability-table:end -->
 
