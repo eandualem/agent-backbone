@@ -516,7 +516,7 @@ def _offer_refreshed_brief(config: BackboneConfig, name: str, launch_id: str, br
     False when it could not be offered: the session must not resume on its old brief."""
     text = read_brief(brief)
     if text is None:
-        return True
+        return False
     try:
         offer_steer(
             config.state_dir,

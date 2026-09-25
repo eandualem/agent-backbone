@@ -456,10 +456,10 @@ class Runtime:
         """The launch command, or None for a plain shell.
 
         ``brief_file`` is only handed over when ``brief_mode`` injects at
-        launch; on ``resume`` initial-prompt runtimes get none here (the
-        launch queues the current brief as a message instead — a resumed
-        session keeps its original brief, Claude Code's stored system prompt
-        included). ``unattended`` adds the runtime's own
+        launch; on ``resume`` initial-prompt runtimes get none here. A
+        resumed session keeps its original brief, Claude Code's stored
+        system prompt included; a runtime with ``brief_refresh`` is handed
+        the current one through its hook instead. ``unattended`` adds the runtime's own
         no-approval switch (``unattended_args``) and ``writable_dirs`` the
         directories a sandboxed runtime may write outside the agent's own,
         both on a fresh start and on ``resume`` alike. Raises RuntimeError

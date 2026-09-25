@@ -416,19 +416,20 @@ class TestStartAgentBrief:
         assert offered.startswith(f"{REFRESHED_BRIEF_HEADER}\n\n")
         assert take_context(config.state_dir, "ike", "another-session") == []
 
-    async def test_a_resume_stops_when_its_brief_cannot_be_handed_over(self, tmp_path):
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            patch(f"{_MOD}.offer_steer", side_effect=OSError("read-only state dir")),
+            patch(f"{_MOD}.read_brief", return_value=None),  # the current brief is unreadable
+        ],
+        ids=["offer", "brief"],
+    )
+    async def test_a_resume_stops_when_its_brief_cannot_be_handed_over(self, tmp_path, failure):
         config = bootstrap_config(tmp_path / "data")
         db = AsyncMock()
         db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
-        with (
-            exists,
-            start as started,
-            _cmd,
-            _trust,
-            _wait,
-            patch(f"{_MOD}.offer_steer", side_effect=OSError("read-only state dir")),
-        ):
+        with exists, start as started, _cmd, _trust, _wait, failure:
             result = await start_agent(self._spec(tmp_path, "claude"), config, resume=True, db=db)
         assert result.ok is False
         started.assert_not_awaited()
