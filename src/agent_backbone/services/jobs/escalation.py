@@ -222,13 +222,17 @@ async def check_permission_denials(config: BackboneConfig) -> None:
     """
     pending = [*_denials_unsent.values(), *_new_denials(config)]
     _denials_unsent.clear()
+    tried = set()  # one send per action and pass, even when it fails
     for record in pending:
         name = str(record.get("session") or "")
         if name not in config.agents:
             continue
         key = (name, record.get("category"), record.get("summary"))
-        if _denial_notified.seen(key, ttl_seconds=config.timing.escalation_dedup_seconds):
+        if key in tried or _denial_notified.seen(
+            key, ttl_seconds=config.timing.escalation_dedup_seconds
+        ):
             continue
+        tried.add(key)
         if await notify_humans(config, denial_text(name, record), agent=name):
             _denial_notified.mark(key)
             log.warning("Sent permission-denied notification for %s", name)

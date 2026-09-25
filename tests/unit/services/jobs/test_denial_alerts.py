@@ -135,7 +135,7 @@ async def test_a_rotation_long_after_the_notice_does_not_resend_it(config, monke
 async def test_repeats_during_an_outage_do_not_crowd_out_other_notices(config):
     await _check(config)
     _append(config, *({**REFUSAL} for _ in range(60)), {**REFUSAL, "summary": "gh api"})
-    await _check(config, accepted=False)
+    assert (await _check(config, accepted=False)).await_count == 2  # one try per action
     assert len(escalation._denials_unsent) == 2  # one pending notice per distinct action
     notify = await _check(config)
     assert sorted(c.args[1].split("\n")[1] for c in notify.await_args_list) == [
