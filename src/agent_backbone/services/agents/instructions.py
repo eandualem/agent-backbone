@@ -77,7 +77,12 @@ def instruction_preview(
             "Using legacy agent-brief.md; `backbone templates edit base` "
             "saves to templates/base.md."
         )
-    if runtime.brief_mode in ("initial_prompt", "message"):
+    if runtime.brief_refresh == "hook_context":
+        notices.append(
+            "Resuming keeps the existing conversation; "
+            "its session hook is handed the current brief."
+        )
+    elif runtime.brief_mode in ("initial_prompt", "message"):
         notices.append("Resuming keeps the existing conversation; the brief is not injected again.")
     notices.append(
         "Project and runtime-owned instructions may also load; they are not managed here."

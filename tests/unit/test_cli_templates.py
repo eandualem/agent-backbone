@@ -266,3 +266,16 @@ def test_relocated_dir_warns_about_files_left_at_the_default(tmp_path, capsys):
     assert "not read" in capsys.readouterr().out
     with pytest.raises(ValueError, match="absolute"):
         validate_setting("templates.dir", "fleet-config")
+
+
+@pytest.mark.parametrize(
+    ("runtime", "notice"),
+    [
+        ("codex", "its session hook is handed the current brief"),
+        ("claude", "its session hook is handed the current brief"),
+        ("aider", "the brief is not injected again"),
+    ],
+)
+def test_the_preview_says_what_a_resume_does_with_the_brief(tmp_path, runtime, notice):
+    spec = AgentSpec(name="api", dir=str(tmp_path), runtime=runtime)
+    assert any(notice in n for n in instruction_preview(spec, bootstrap_config())["notices"])
