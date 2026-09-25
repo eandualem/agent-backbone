@@ -182,7 +182,9 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> tuple[str, str
     outcomes = [r for r in records if r["code"] not in {"requested", "already_running"}]
     if not outcomes:
         return None if "already_running" in codes else ("not_observed", None)
-    newest = outcomes[0]
+    # Repeated observations update their first row in place, so id order is
+    # not observation order: the latest sighting decides.
+    newest = max(outcomes, key=lambda record: record["last_seen_at"])
     return (
         None if newest["code"] in {"failed", "exited"} else (newest["code"], newest["last_seen_at"])
     )

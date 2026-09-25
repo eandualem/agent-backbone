@@ -346,6 +346,30 @@ async def test_a_repeated_outcome_is_compared_at_its_latest_sighting(db, config,
         assert await _run(config, store, db) == {"ike": "started"}
 
 
+async def test_the_latest_observed_outcome_counts_whatever_its_row_order(db, config, store, seams):
+    """ready, timeout, ready: the repeat updates the first row, so id order
+    would pick the timeout."""
+    _, start, _ = seams
+    start.return_value = StartResult(ok=True, already_running=True)
+    row = await db.transitions.create(agent_name="ike")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-17")
+    for code in ("requested", "ready", "timeout", "ready"):
+        await db.diagnostics.record(
+            category="startup", operation_id="op-17", code=code, severity="info", agent_name="ike"
+        )
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE diagnostics SET last_seen_at = '2000-01-01T00:00:00+00:00' "
+                "WHERE operation_id = 'op-17' AND code = 'timeout'"
+            )
+        )
+    now = [{"name": "ike", "created": int(time.time()) - 1}]
+    with patch(f"{_JOB}.list_sessions_rich", new_callable=AsyncMock, return_value=now):
+        assert await _run(config, store, db) == {"ike": "started"}
+
+
 async def test_a_running_session_without_a_recorded_launch_is_not_claimed(db, config, store, seams):
     _, start, _ = seams
     start.return_value = StartResult(ok=True, already_running=True)
