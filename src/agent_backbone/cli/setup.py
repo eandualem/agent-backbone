@@ -238,6 +238,7 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     from agent_backbone.services.database.engine import redact_url
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
+    from agent_backbone.services.runtimes import agent_clis, install_hint
 
     ok = True
 
@@ -289,8 +290,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
         note("Tools")
         check("tmux on PATH", shutil.which("tmux") is not None, "install tmux")
-        found = [rt.id for rt in REGISTRY.values() if rt.binary and rt.available()]
-        note(f"  - runtimes installed: {', '.join(found) or 'none'}")
+        found = [rt.id for rt in REGISTRY.values() if rt.id in agent_clis() and rt.available()]
+        # Starting an agent needs one: without it the next step fails.
+        check("an agent CLI on PATH", bool(found), install_hint())
+        if found:
+            note(f"  - runtimes installed: {', '.join(found)}")
 
         note("Security")
         check(
