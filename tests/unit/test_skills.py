@@ -517,3 +517,20 @@ async def test_commit_store_initialises_history_on_first_use(tmp_path):
     assert calls[0] == ("init", "-q")
     assert calls[1] == ("add", "-A") and calls[3] == ("commit", "-q", "-m", "add x by leo")
     assert ("init", "-q") not in calls[4:]
+
+
+def test_a_sibling_manifest_without_a_links_list_is_ignored(tmp_path):
+    """A malformed manifest of another agent must not stop this agent's launch."""
+    from agent_backbone.skills import materialize
+
+    store = tmp_path / "store"
+    make_skill(store, "tidy")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "other.json").write_text(f'{{"repo": "{repo}", "links": null}}')
+    result = materialize(
+        store, repo, (".claude/skills",), read_store(store), manifests / "mine.json"
+    )
+    assert result.linked == [".claude/skills/tidy"]

@@ -644,6 +644,23 @@ class TestSafeDeliver:
         assert await db.queue.expire_pending(max_age_minutes=30) == []
         assert await db.queue.sessions_with_pending() == ["ike"]
 
+    async def test_an_inbox_read_hands_over_the_brief_before_anything_else(self, db):
+        """A fresh session that reads its inbox before the brief is pasted still
+        gets the brief first: it is the oldest row, queued before the session."""
+        from agent_backbone.models import BRIEF_SOURCE
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the current brief",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        await db.queue.enqueue(
+            session_name="ike", message="sent after the start", delivery_kind="direct_message"
+        )
+        read = await db.queue.checkpoint("ike")
+        assert [row["message"] for row in read] == ["the current brief", "sent after the start"]
+
     async def test_agent_working_blocks_even_priority(self, config):
         with _online(snap=_BUSY_SNAP):
             assert (

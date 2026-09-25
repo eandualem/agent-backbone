@@ -444,7 +444,9 @@ def _links_of_others(manifest: Path, repo_dir: Path) -> set[str]:
             and isinstance(data.get("repo"), str)
             and Path(data["repo"]).resolve() == repo_dir.resolve()
         ):
-            links.update(str(item) for item in data.get("links", []) if isinstance(item, str))
+            recorded = data.get("links")
+            if isinstance(recorded, list):
+                links.update(item for item in recorded if isinstance(item, str))
     return links
 
 
@@ -463,7 +465,9 @@ def _links_sharing_git_dir(manifest_dir: Path, git_dir: Path) -> set[str]:
             continue
         other = _common_git_dir(Path(data["repo"]))
         if other is not None and other == git_dir:
-            links.update(str(item) for item in data.get("links", []) if isinstance(item, str))
+            recorded = data.get("links")
+            if isinstance(recorded, list):
+                links.update(item for item in recorded if isinstance(item, str))
     return links
 
 

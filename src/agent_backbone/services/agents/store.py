@@ -304,12 +304,31 @@ class AgentStore:
 
     @serialized_mutation
     async def forget(self, name: str) -> bool:
+        spec = self._agents.get(name)
         removed = await self._db.agents.delete(name)
         await self.refresh()
         if removed:
             # A pending hook-context offer must not reach the next agent of this name.
             shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
+            if spec is not None:
+                self._release_skills(spec)
         return removed
+
+    def _release_skills(self, spec: AgentSpec) -> None:
+        """Remove a forgotten agent's skill links that no other agent in its
+        checkout still records, and its manifest, so they keep nothing alive."""
+        from agent_backbone.skills import manifest_path, materialize
+
+        manifest = manifest_path(self.config.data_dir, spec.name)
+        if not manifest.exists():
+            return
+        store = self.config.skills.store_path
+        try:
+            if store is not None:
+                materialize(store, spec.path, (), [], manifest)
+        except (OSError, ValueError) as exc:
+            log.warning("Could not release the skill links of '%s': %s", spec.name, exc)
+        manifest.unlink(missing_ok=True)
 
     async def rename(self, name: str, new_name: str) -> AgentSpec:
         """Rename a stopped non-swarm agent and retain its runtime resume record."""
@@ -352,6 +371,15 @@ class AgentStore:
                 raise
             source.unlink(missing_ok=True)
             (self.config.state_dir / f"{name}.starting").unlink(missing_ok=True)
+            # Its skill manifest follows too, or the old name would keep its links alive.
+            from agent_backbone.skills import manifest_path
+
+            manifest = manifest_path(self.config.data_dir, name)
+            if manifest.exists():
+                try:
+                    manifest.rename(manifest_path(self.config.data_dir, new_name))
+                except OSError as exc:
+                    log.warning("Could not move the skill manifest of '%s': %s", name, exc)
             # Pending hook-context offers follow the queue rows just rekeyed.
             offers = self.config.state_dir / CONTEXT_DIR / name
             if offers.exists():

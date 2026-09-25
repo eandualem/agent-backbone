@@ -134,6 +134,38 @@ async def test_forget_clears_pending_hook_context_offers(db, store):
     assert claim_context(store.config.state_dir, "api", "7") == "missing"
 
 
+async def test_rename_moves_the_skill_manifest(db, store):
+    """Left under the old name, it would keep links alive for an agent that is gone."""
+    from agent_backbone.skills import manifest_path
+
+    old = manifest_path(store.config.data_dir, "api")
+    old.parent.mkdir(parents=True)
+    old.write_text('{"repo": "/r", "links": []}')
+    await store.rename("api", "desk")
+    assert not old.exists()
+    assert manifest_path(store.config.data_dir, "desk").exists()
+
+
+async def test_forget_releases_the_agents_own_skill_links(db, store, tmp_path):
+    from agent_backbone.skills import manifest_path
+
+    skills = tmp_path / "skill-store"
+    (skills / "tidy").mkdir(parents=True)
+    await db.settings.set("skills.store", str(skills))
+    await store.refresh()
+    link = tmp_path / ".agents" / "skills" / "tidy"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(skills / "tidy")
+    manifest = manifest_path(store.config.data_dir, "api")
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f'{{"repo": "{tmp_path}", "links": [".agents/skills/tidy"]}}', encoding="utf-8"
+    )
+    assert await store.forget("api")
+    assert not link.is_symlink()
+    assert not manifest.exists()
+
+
 async def test_rename_keeps_a_pending_restart(db, store):
     row = await db.transitions.create(agent_name="api", delay_seconds=3600, message="go on")
     await store.rename("api", "backend")
