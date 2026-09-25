@@ -43,6 +43,9 @@ def _unit_path() -> Path:
 
 
 def _plist(binary: str, data_dir: Path, log: Path) -> str:
+    # ProcessType Interactive: the tmux server and every agent the service
+    # starts inherit its scheduling, and launchd's default for a LaunchAgent
+    # throttles them below ordinary apps (priority 20 instead of 31, measured).
     path_var = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     binary, data_dir, log, path_var = (escape(str(v)) for v in (binary, data_dir, log, path_var))
     return f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -58,6 +61,7 @@ def _plist(binary: str, data_dir: Path, log: Path) -> str:
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
   <key>StandardOutPath</key><string>{log}</string>
   <key>StandardErrorPath</key><string>{log}</string>
 </dict></plist>

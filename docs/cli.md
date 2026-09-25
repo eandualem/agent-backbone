@@ -186,6 +186,14 @@ you installed it from; its log is `<data_dir>/backbone.log` on macOS and
 `journalctl --user -u agent-backbone` on Linux. Agents are still tmux
 sessions and still need `backbone agent start` after a reboot.
 
+On macOS the LaunchAgent is an interactive job (`ProcessType`). The tmux
+server and every agent the service starts inherit its scheduling, and
+launchd's default for a LaunchAgent would throttle them below ordinary
+apps, so their screens fall behind when the machine is busy. An older
+install lacks the key: run `backbone service install` again to rewrite it,
+which restarts the service. A tmux server that is already running keeps its
+old priority until it restarts, and all its sessions with it.
+
 ## `backbone upgrade [--check] [--no-restart]`
 
 New code in, one restart, agents untouched. Upgrades the package through
