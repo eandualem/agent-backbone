@@ -141,7 +141,7 @@ async def _skills(args: argparse.Namespace) -> int:
                 for spec in config.agents
                 if entry.valid
                 and set(entry.tags)
-                & ({t.lower() for t in spec.tags} | {ALL_TAG, f"agent:{spec.name}"})
+                & ({t.lower() for t in spec.tags} | {ALL_TAG, f"agent:{spec.name.lower()}"})
             ]
             rows.append(
                 {

@@ -97,6 +97,12 @@ class TestSelect:
         assert [s.name for s in chosen] == ["coders", "everyone", "mine", "python-only"]
         assert [s.name for s in select_skills(read_store(tmp_path), (), "ike")] == ["everyone"]
 
+    def test_an_agent_tag_matches_a_mixed_case_agent_name(self, tmp_path):
+        path = make_skill(tmp_path, "notes")
+        write_tags(path, ("agent:Feynman",))
+        assert parse_skill(path).tags == ("agent:feynman",)
+        assert [s.name for s in select_skills(read_store(tmp_path), (), "Feynman")] == ["notes"]
+
     def test_invalid_skills_are_never_selected(self, tmp_path):
         path = make_skill(tmp_path, "broken", tags="all")
         (path / "SKILL.md").write_text("no frontmatter")

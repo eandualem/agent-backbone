@@ -148,6 +148,8 @@ def parse_tags(value: object) -> tuple[str, ...]:
 
 
 def validate_tags(tags: tuple[str, ...]) -> tuple[str, ...]:
+    """The tags, lowercased as ``parse_tags`` reads them (``agent:Feynman`` → ``agent:feynman``)."""
+    tags = tuple(dict.fromkeys(tag.lower() for tag in tags))
     for tag in tags:
         if not TAG_RE.match(tag):
             raise ValueError(f"invalid tag {tag!r}: lowercase letters, digits, and : . _ -")
@@ -207,7 +209,7 @@ def read_store(store: Path) -> list[Skill]:
 
 def select_skills(skills: list[Skill], tags: tuple[str, ...], agent_name: str) -> list[Skill]:
     """The valid skills an agent with ``tags`` receives, in store order."""
-    mine = {tag.lower() for tag in tags} | {ALL_TAG, f"{AGENT_TAG_PREFIX}{agent_name}"}
+    mine = {tag.lower() for tag in tags} | {ALL_TAG, f"{AGENT_TAG_PREFIX}{agent_name.lower()}"}
     return [skill for skill in skills if skill.valid and set(skill.tags) & mine]
 
 
@@ -220,7 +222,7 @@ def write_tags(skill_dir: Path, tags: tuple[str, ...]) -> None:
 
 def _edit_frontmatter(text: str, tags: tuple[str, ...], *, name: str | None = None) -> str:
     """Prepare a complete edit before a skill is moved or its file is replaced."""
-    validate_tags(tags)
+    tags = validate_tags(tags)
     parts = _split_frontmatter(text)
     if parts is None:
         raise ValueError("SKILL.md has no frontmatter")
@@ -293,7 +295,7 @@ def add_skill(
     target_name = name or source.name
     if not NAME_RE.match(target_name):
         raise ValueError(f"invalid skill name {target_name!r}")
-    validate_tags(tags)
+    tags = validate_tags(tags)
     target = store / target_name
     if (target.exists() or target.is_symlink()) and not replace:
         raise ValueError(f"skill {target_name!r} already exists in the store (use --replace)")
