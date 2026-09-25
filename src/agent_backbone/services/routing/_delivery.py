@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
@@ -25,14 +26,19 @@ from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 from weakref import WeakValueDictionary
 
-from agent_backbone.hooks.backbone_state import claim_context, clear_context, offer_context
+from agent_backbone.hooks.backbone_state import (
+    claim_context,
+    clear_context,
+    offer_context,
+    prompt_digest,
+)
 from agent_backbone.models import (
     BLOCKED_OUTCOMES,
     SUBSCRIPTION_KIND,
     SUCCESS_OUTCOMES,
     DeliveryOutcome,
 )
-from agent_backbone.services.agents import note_submission
+from agent_backbone.services.agents import note_submission, read_state_file
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.runtimes import SubmissionUnconfirmed, get_runtime, send_message
@@ -526,10 +532,13 @@ async def safe_deliver(
 
     async def submit() -> bool:
         nonlocal uncertain
+        pasted_at = time.time()
         note_submission(config.state_dir, session_name)
         try:
             return await send_message(session_name, message, runtime_hint=profile.runtime)
         except SubmissionUnconfirmed as exc:
+            if await prompt_hook_after(config.state_dir, session_name, pasted_at, message):
+                return True
             uncertain = True
             await record_exception("submission_unconfirmed", "submission", exc)
             return False
@@ -638,6 +647,39 @@ async def safe_deliver(
             report.queue_id,
         )
     return report
+
+
+PROMPT_HOOK_WAIT_SECONDS = 3.0
+"""How long a submission the screen could not confirm waits for the runtime's hook."""
+
+
+async def prompt_hook_after(state_dir, session_name: str, since: float, message: str) -> bool:
+    """Whether the runtime's hook reports taking this ``message`` at or after ``since``.
+
+    The screen check reads the prompt box, whose redraw timing varies; the
+    hook's ``prompted_at`` is the runtime saying it took a prompt (live,
+    2026-09-24: prompt taken at 19:05:34.938Z, reported unconfirmed at
+    19:05:36). It survives the turn's later records, so a quick ``Stop``
+    does not erase it, and a turn that was already running cannot supply it.
+    The prompt must also be exactly this message (``prompt_digest``): a
+    different prompt someone submitted meanwhile, or this one with more text
+    typed into it, is no receipt, and the message stays held.
+    """
+    digest = prompt_digest(message)
+    deadline = time.monotonic() + PROMPT_HOOK_WAIT_SECONDS
+    while True:
+        snapshot = await asyncio.to_thread(read_state_file, state_dir, session_name)
+        if (
+            snapshot is not None
+            and snapshot.source == "push"
+            and snapshot.prompted_at is not None
+            and snapshot.prompted_at >= since
+            and snapshot.prompt_digest == digest
+        ):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.25)
 
 
 @_serialized

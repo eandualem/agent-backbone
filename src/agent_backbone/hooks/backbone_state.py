@@ -471,10 +471,21 @@ def _model_from_transcript(path: Path) -> str | None:
     return None
 
 
+def prompt_digest(text: str) -> str:
+    """A prompt's identity, whitespace collapsed. Delivery compares it with the
+    digest of the message it pasted: equal means that very message. A runtime
+    that wraps a paste removes its wrapper in its own hook script first."""
+    normalized = " ".join(text.split())
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
 def record_factory(payload: dict, current: dict | None, event: str) -> Callable[..., dict]:
     """A ``state(new_state, reason=None, **extra)`` builder that keeps ``issue``,
     ``repo`` and ``started_at`` stable across events and stamps the runtime's
-    session id, the observed model and the event that produced the record."""
+    session id, the observed model and the event that produced the record.
+    ``prompted_at`` is when the runtime last took a prompt (``UserPromptSubmit``)
+    and ``prompt_digest`` which prompt it was, both kept through the turn's
+    later records: delivery's receipt for a paste."""
     now = time.time()
     current = current or {}
     session_id = payload.get("session_id") or current.get("session_id")
@@ -509,6 +520,14 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
             record["model"] = model
         if current.get("last_message") is not None:
             record["last_message"] = current["last_message"]
+        if event == "UserPromptSubmit":
+            prompted_at, digest = now, prompt_digest(str(payload.get("prompt") or ""))
+        else:
+            prompted_at, digest = current.get("prompted_at"), current.get("prompt_digest")
+        if prompted_at is not None:
+            record["prompted_at"] = prompted_at
+        if digest:
+            record["prompt_digest"] = digest
         record.update(extra)
         return record
 

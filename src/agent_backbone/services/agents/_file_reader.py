@@ -62,6 +62,14 @@ def _starting_snapshot(state_dir: Path, session: str, newer_than: float) -> Stat
     )
 
 
+def _finite(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
     """Read hook-written state from ``<state_dir>/<session>.json``.
 
@@ -110,6 +118,8 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         model=data["model"] if isinstance(data.get("model"), str) and data["model"] else None,
         last_message=data.get("last_message") or None,
         event=data.get("event") or None,
+        prompted_at=_finite(data.get("prompted_at")),
+        prompt_digest=data["prompt_digest"] if isinstance(data.get("prompt_digest"), str) else None,
         detail=data.get("detail") or None,
         evidence=[
             f"hook state file {state_file.name}: {state.value}"

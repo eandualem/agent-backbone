@@ -36,12 +36,24 @@ REASON_QUESTION = bb.REASON_QUESTION
 resolve_agent = bb.resolve_agent
 subprocess = bb.subprocess  # tests patch the tmux lookup through this name
 
+# Claude Code hands a pasted prompt to the hook inside ``<pasted_content id=…>`` tags.
+_PASTE_WRAPPER = re.compile(r"\s*<pasted_content\b([^>]*)>(.*)</pasted_content\1>\s*", re.DOTALL)
+
+
+def _unwrapped(payload: dict) -> dict:
+    """The payload with the paste wrapper around its whole prompt removed, so
+    the prompt's digest is that of the text delivery pasted. Tags inside the
+    pasted text are part of it and stay."""
+    prompt = payload.get("prompt")
+    wrapped = _PASTE_WRAPPER.fullmatch(prompt) if isinstance(prompt, str) else None
+    return {**payload, "prompt": wrapped.group(2)} if wrapped else payload
+
 
 def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | None]:
     """Map a Claude Code hook payload to (new_state_record, action_record)."""
     event = payload.get("hook_event_name", "")
     current = current or {}
-    state = bb.record_factory(payload, current, event)
+    state = bb.record_factory(_unwrapped(payload), current, event)
     now = bb.time.time()
 
     if event == "SessionStart":
