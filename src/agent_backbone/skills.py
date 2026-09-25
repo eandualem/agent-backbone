@@ -429,11 +429,20 @@ def _write_manifest(path: Path, repo_dir: Path, links: list[str]) -> None:
     os.replace(tmp, path)
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    if a == b:
+        return True
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
+
+
 def _links_of_others(manifest: Path, repo_dir: Path) -> set[str]:
     """The links other agents' manifests record in this same checkout."""
     links: set[str] = set()
     for path in manifest.parent.glob("*.json") if manifest.parent.is_dir() else ():
-        if path == manifest:
+        if _same_file(path, manifest):  # its own, however the filesystem spells it
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))

@@ -534,3 +534,22 @@ def test_a_sibling_manifest_without_a_links_list_is_ignored(tmp_path):
         store, repo, (".claude/skills",), read_store(store), manifests / "mine.json"
     )
     assert result.linked == [".claude/skills/tidy"]
+
+
+def test_an_agents_own_manifest_is_not_counted_as_anothers_under_another_spelling(tmp_path):
+    """A case-insensitive filesystem (here: a link) names one file two ways."""
+    from agent_backbone.skills import materialize
+
+    store = tmp_path / "store"
+    make_skill(store, "tidy")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    own = manifests / "desk.json"
+    materialize(store, repo, (".claude/skills",), read_store(store), own)
+    alias = manifests / "desk-alias.json"
+    alias.symlink_to(own)
+    result = materialize(store, repo, (), [], alias)
+    assert result.removed == [".claude/skills/tidy"]
+    assert not (repo / ".claude/skills/tidy").is_symlink()
