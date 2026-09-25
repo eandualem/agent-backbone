@@ -538,6 +538,21 @@ class TestSafeDeliver:
             await drain_message_queue(config, db, None, active_sessions={"ike"})
         assert "the brief" in send.await_args_list[0].args[1]
 
+    async def test_a_second_queued_brief_does_not_hold_the_first(self, config, db):
+        from agent_backbone.models import BRIEF_SOURCE
+        from agent_backbone.services.jobs.retry import drain_message_queue
+
+        for text in ("the old brief", "the new brief"):
+            await db.queue.enqueue(
+                session_name="ike",
+                message=text,
+                delivery_kind="direct_message",
+                source=BRIEF_SOURCE,
+            )
+        with _online(), _patch_send_message(True) as send:
+            await drain_message_queue(config, db, None, active_sessions={"ike"})
+        assert "the old brief" in send.await_args_list[0].args[1]
+
     async def test_agent_working_blocks_even_priority(self, config):
         with _online(snap=_BUSY_SNAP):
             assert (
