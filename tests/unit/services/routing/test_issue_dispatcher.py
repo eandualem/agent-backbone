@@ -172,6 +172,28 @@ def _review_event(
     return IssueEvent(event_type=EventType.REVIEW_SUBMITTED, issue=issue, review=review)
 
 
+class TestCapitalisedAgentNames:
+    """``[from:X]`` tags are read lowercased; the agent keeps its registered spelling."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        specs = {name: AgentSpec(name=name, dir="/x") for name in ("Builder", "ops")}
+        return make_config(tmp_path, agents=AgentsConfig(specs=specs))
+
+    async def test_its_own_comment_is_not_echoed_and_acknowledges(self, config, mock_db):
+        event = _comment_event(5, "ops", ["Builder"], "[from:Builder] Done.")
+        with _patch_safe_deliver() as deliver:
+            result = await issue_dispatcher(event, config, mock_db)
+        assert result.delivered == ["ops"] and deliver.await_count == 1
+        mock_db.acks.record.assert_called_once_with(5, "Builder", repo=OTHER_REPO)
+
+    async def test_its_own_review_is_not_echoed(self, config, mock_db):
+        event = _review_event(6, "ops", ["Builder"], "[from:Builder] LGTM", state="approved")
+        with _patch_safe_deliver():
+            result = await issue_dispatcher(event, config, mock_db)
+        assert result.delivered == ["ops"]
+
+
 class TestReviewDispatch:
     async def test_review_reaches_the_pull_requests_parties(self, config, mock_db):
         event = _review_event(41, "ike", ["feynman"], "Two findings.", state="changes_requested")
