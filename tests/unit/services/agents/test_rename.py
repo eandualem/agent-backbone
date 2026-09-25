@@ -191,6 +191,42 @@ async def test_forget_releases_links_in_the_checkout_the_manifest_records(db, st
     assert same_name.is_symlink()
 
 
+async def test_forget_keeps_the_manifest_when_its_links_cannot_be_released(db, store, tmp_path):
+    from agent_backbone.skills import manifest_path
+
+    await db.settings.set("skills.store", str(tmp_path / "skill-store"))
+    await store.refresh()
+    manifest = manifest_path(store.config.data_dir, "api")
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(f'{{"repo": "{tmp_path}", "links": [".agents/skills/tidy"]}}')
+    with patch("agent_backbone.skills.materialize", side_effect=OSError("read-only checkout")):
+        assert await store.forget("api")
+    assert manifest.exists()  # a later cleanup still knows those links
+
+
+async def test_a_manifest_that_cannot_move_aborts_the_rename(db, store):
+    from agent_backbone.skills import manifest_path
+
+    old = manifest_path(store.config.data_dir, "api")
+    old.parent.mkdir(parents=True)
+    old.write_text('{"repo": "/r", "links": []}')
+    with patch("pathlib.Path.rename", side_effect=OSError("busy")), pytest.raises(OSError):
+        await store.rename("api", "desk")
+    assert "api" in {row["name"] for row in await db.agents.list()} and old.exists()
+
+
+async def test_a_failed_rename_moves_the_manifest_back(db, store):
+    from agent_backbone.skills import manifest_path
+
+    old = manifest_path(store.config.data_dir, "api")
+    old.parent.mkdir(parents=True)
+    old.write_text('{"repo": "/r", "links": []}')
+    with patch.object(db.agents, "rename", AsyncMock(side_effect=RuntimeError("db down"))):
+        with pytest.raises(RuntimeError):
+            await store.rename("api", "desk")
+    assert old.exists() and not manifest_path(store.config.data_dir, "desk").exists()
+
+
 async def test_rename_keeps_a_pending_restart(db, store):
     row = await db.transitions.create(agent_name="api", delay_seconds=3600, message="go on")
     await store.rename("api", "backend")

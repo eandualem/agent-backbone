@@ -332,7 +332,9 @@ class AgentStore:
             if store is not None and isinstance(repo, str):
                 materialize(store, Path(repo), (), [], manifest)
         except (OSError, ValueError, AttributeError) as exc:
+            # Kept: it is what a later cleanup of those links goes by.
             log.warning("Could not release the skill links of '%s': %s", spec.name, exc)
+            return
         manifest.unlink(missing_ok=True)
 
     async def rename(self, name: str, new_name: str) -> AgentSpec:
@@ -364,27 +366,29 @@ class AgentStore:
             target = self.config.state_dir / f"{new_name}.json"
             if target.exists():
                 raise ValueError(f"'{new_name}' already has saved state; choose another name")
-            copied = False
+            # Its skill manifest follows too, or the old name would keep its links
+            # alive; it moves with the rename or not at all.
+            from agent_backbone.skills import manifest_path
+
+            old_manifest = manifest_path(self.config.data_dir, name)
+            new_manifest = manifest_path(self.config.data_dir, new_name)
+            copied = moved = False
             try:
                 if source.exists():
                     atomic_write_text(target, source.read_text())
                     copied = True
+                if old_manifest.exists():
+                    old_manifest.rename(new_manifest)
+                    moved = True
                 await self._db.agents.rename(name, new_name)
             except BaseException:
                 if copied:
                     target.unlink(missing_ok=True)
+                if moved:
+                    new_manifest.rename(old_manifest)
                 raise
             source.unlink(missing_ok=True)
             (self.config.state_dir / f"{name}.starting").unlink(missing_ok=True)
-            # Its skill manifest follows too, or the old name would keep its links alive.
-            from agent_backbone.skills import manifest_path
-
-            manifest = manifest_path(self.config.data_dir, name)
-            if manifest.exists():
-                try:
-                    manifest.rename(manifest_path(self.config.data_dir, new_name))
-                except OSError as exc:
-                    log.warning("Could not move the skill manifest of '%s': %s", name, exc)
             # Pending hook-context offers follow the queue rows just rekeyed.
             offers = self.config.state_dir / CONTEXT_DIR / name
             if offers.exists():
