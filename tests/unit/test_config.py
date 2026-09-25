@@ -138,6 +138,17 @@ class TestValidateSetting:
         with pytest.raises(ValueError, match="absolute"):
             validate_setting("skills.store", "skills")
 
+    def test_a_stored_value_the_rules_now_reject_is_reported_not_silent(self, caplog):
+        from agent_backbone.config import SETTINGS_DEFAULTS, effective_settings, invalid_settings
+
+        stored = {"skills.store": "skills", "backbone.port": 8123}
+        assert list(invalid_settings(stored)) == ["skills.store"]
+        with caplog.at_level("WARNING"):
+            merged = effective_settings(stored)
+        assert merged["skills.store"] == SETTINGS_DEFAULTS["skills.store"]
+        assert merged["backbone.port"] == 8123
+        assert "skills.store is ignored" in caplog.text
+
     @pytest.mark.parametrize("key", ["skills.store", "templates.dir"])
     def test_a_path_under_an_unknown_home_is_rejected_not_raised(self, key):
         # Path.expanduser raises RuntimeError for a user it cannot resolve.

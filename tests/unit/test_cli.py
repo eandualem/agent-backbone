@@ -136,6 +136,19 @@ class TestDoctor:
         flat = " ".join(out.split())  # the hint wraps at the terminal width
         assert "claude, codex" in flat and "backbone docs getting-started" in flat
 
+    def test_reports_a_stored_setting_that_is_now_ignored(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        ignored = {"skills.store": "skills.store: expected an absolute path"}
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch("agent_backbone.config.invalid_settings", return_value=ignored),
+        ):
+            code = _run(["doctor"])
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "FAIL setting skills.store" in out and "backbone config set skills.store" in out
+
 
 class TestAgentCommands:
     @pytest.fixture(autouse=True)
