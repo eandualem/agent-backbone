@@ -184,9 +184,7 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> tuple[str, str
         return None if "already_running" in codes else ("not_observed", None)
     newest = outcomes[0]
     return (
-        None
-        if newest["code"] in {"failed", "exited"}
-        else (newest["code"], newest["first_seen_at"])
+        None if newest["code"] in {"failed", "exited"} else (newest["code"], newest["last_seen_at"])
     )
 
 

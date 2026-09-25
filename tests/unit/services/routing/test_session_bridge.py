@@ -617,6 +617,33 @@ class TestSafeDeliver:
         assert await db.queue.retire_pending_briefs("ike") == 1
         assert await db.queue.sessions_with_pending() == []
 
+    async def test_retiring_an_uncertain_brief_gives_the_held_queue_a_fresh_window(self, db):
+        """Like acknowledging it: messages that waited behind the hold do not expire at once."""
+        from sqlalchemy import text
+
+        from agent_backbone.models import BRIEF_SOURCE
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the brief of the earlier launch",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+            uncertain=True,
+        )
+        await db.queue.enqueue(
+            session_name="ike", message="waited behind the hold", delivery_kind="direct_message"
+        )
+        async with db.engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00+00:00' "
+                    "WHERE status = 'pending'"
+                )
+            )
+        assert await db.queue.retire_pending_briefs("ike") == 1
+        assert await db.queue.expire_pending(max_age_minutes=30) == []
+        assert await db.queue.sessions_with_pending() == ["ike"]
+
     async def test_agent_working_blocks_even_priority(self, config):
         with _online(snap=_BUSY_SNAP):
             assert (

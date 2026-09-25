@@ -6,6 +6,7 @@ import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy import text
 
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import AgentStore, StartResult
@@ -319,6 +320,30 @@ async def test_a_session_started_after_the_recorded_launch_is_not_claimed(db, co
     with patch(f"{_JOB}.list_sessions_rich", new_callable=AsyncMock, return_value=later):
         assert await _run(config, store, db) == {"ike": "failed"}
     deliver.assert_not_awaited()
+
+
+async def test_a_repeated_outcome_is_compared_at_its_latest_sighting(db, config, store, seams):
+    """Retries that launched again under the same operation merge into one
+    record: the session running now belongs to its latest sighting."""
+    _, start, _ = seams
+    start.return_value = StartResult(ok=True, already_running=True)
+    row = await db.transitions.create(agent_name="ike")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-16")
+    for code in ("requested", "ready"):
+        await db.diagnostics.record(
+            category="startup", operation_id="op-16", code=code, severity="info", agent_name="ike"
+        )
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE diagnostics SET first_seen_at = '2000-01-01T00:00:00+00:00' "
+                "WHERE operation_id = 'op-16'"
+            )
+        )
+    now = [{"name": "ike", "created": int(time.time()) - 1}]
+    with patch(f"{_JOB}.list_sessions_rich", new_callable=AsyncMock, return_value=now):
+        assert await _run(config, store, db) == {"ike": "started"}
 
 
 async def test_a_running_session_without_a_recorded_launch_is_not_claimed(db, config, store, seams):

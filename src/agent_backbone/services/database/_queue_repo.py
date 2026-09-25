@@ -471,7 +471,8 @@ class QueueRepo(Repo):
                              SELECT session_name FROM message_queue WHERE status = 'uncertain')
                          AND session_name NOT IN (
                              SELECT session_name FROM deliveries
-                             WHERE source = 'uncertain-acknowledged' AND created_at >= :cutoff)
+                             WHERE source IN ('uncertain-acknowledged', 'uncertain-retired')
+                               AND created_at >= :cutoff)
                          AND session_name NOT IN :protected
                          AND COALESCE(sender, '') NOT IN :protected
                        RETURNING *"""
@@ -690,6 +691,16 @@ class QueueRepo(Repo):
         one. Returns how many were retired.
         """
         async with self._tx() as conn:
+            now = now_iso()
+            params = {"now": now, "session": session, "brief": BRIEF_SOURCE}
+            held = await conn.execute(
+                text(
+                    "SELECT id FROM message_queue WHERE session_name = :session "
+                    "AND source = :brief AND status = 'uncertain'"
+                ),
+                params,
+            )
+            was_uncertain = {row[0] for row in held}
             result = await conn.execute(
                 text(
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
@@ -697,11 +708,31 @@ class QueueRepo(Repo):
                          AND status IN ('pending', 'in_progress', 'checkpoint', 'uncertain')
                        RETURNING *"""
                 ),
-                {"now": now_iso(), "session": session, "brief": BRIEF_SOURCE},
+                params,
             )
             rows = [dict(row) for row in result.mappings()]
             for row in rows:
                 await self._ensure_operation_id(conn, row)
+                if row["id"] in was_uncertain:
+                    # Like an acknowledged one, a released uncertain hold gives the
+                    # queue it held a fresh expiry window from now (``expire_pending``).
+                    await conn.execute(
+                        text(
+                            "INSERT INTO deliveries (operation_id,kind,repo,issue_number,"
+                            "target_entity,session_name,outcome,source,preview,created_at) "
+                            "VALUES (:op,:kind,:repo,:issue,:session,:session,'expired',"
+                            "'uncertain-retired',:preview,:now)"
+                        ),
+                        {
+                            "op": row["operation_id"],
+                            "kind": row["delivery_kind"],
+                            "repo": row["repo"],
+                            "issue": row["issue_number"],
+                            "session": session,
+                            "preview": row["message"][:120],
+                            "now": now,
+                        },
+                    )
         for row in rows:
             await self._record_lifecycle(row, "retired_superseded_brief")
         return len(rows)
