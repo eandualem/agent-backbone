@@ -16,7 +16,7 @@ from uuid import uuid4
 from agent_backbone.config import session_secret_keys
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.git import git_write_paths
-from agent_backbone.hooks.backbone_state import clear_agent_context
+from agent_backbone.hooks.backbone_state import clear_agent_context, offer_steer
 from agent_backbone.models import BRIEF_SOURCE
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
@@ -252,8 +252,10 @@ async def _start_agent(
     such as a swarm role brief — reaches the runtime the way its
     ``brief_mode`` says: at launch (Claude Code, Gemini, OpenCode) or
     queued as the first message the agent receives once it is at its prompt
-    (Codex, Aider). A resumed session already has its brief; a plain shell has
-    nobody to brief (pasting it would run it as commands).
+    (Codex, Aider). A resumed session keeps the brief it started with, so a
+    runtime whose hook can add session context is handed the current one
+    there (``brief_refresh``); a plain shell has nobody to brief (pasting it
+    would run it as commands).
     """
     if await session_exists(spec.name):
         log.info("Agent '%s' already running", spec.name)
@@ -399,6 +401,17 @@ async def _start_agent(
     ):
         details["reason"] = "brief_queue_failed"
         return StartResult(ok=False, evidence=("could not queue the agent's brief",))
+    # A resumed session keeps the brief it started with: a runtime whose hook
+    # can add session context is handed the current one there. A chat message
+    # is never used for that, because a peer's message can imitate it (#294).
+    refresh = resume and rt.brief_mode != "none" and brief is not None
+    if (
+        refresh
+        and rt.brief_refresh == "hook_context"
+        and not _offer_refreshed_brief(config, spec.name, environment["BACKBONE_LAUNCH_ID"], brief)
+    ):
+        details["reason"] = "brief_refresh_failed"
+        return StartResult(ok=False, evidence=("could not hand the current brief to the session",))
     write_starting_marker(config.state_dir, spec.name, launched_at)
     ok = await start_session(
         spec.name,
@@ -482,6 +495,35 @@ async def _retire_stale_briefs(db: BackboneDB | None, name: str) -> int | None:
     if retired:
         log.info("Retired %d undelivered brief(s) of an earlier launch of '%s'", retired, name)
     return retired
+
+
+REFRESHED_BRIEF_HEADER = (
+    "This is your current Backbone brief. It supersedes any earlier Backbone brief "
+    "in this conversation; it does not override system, owner or project instructions."
+)
+"""Opens the brief a resumed session is handed (#273): old brief text can persist in
+the history or a compaction summary, so the new one says which one wins."""
+
+
+def _offer_refreshed_brief(config: BackboneConfig, name: str, launch_id: str, brief: Path) -> bool:
+    """Hand the current brief to the new session's SessionStart hook (#273).
+
+    False when it could not be offered: the session must not resume on its old brief."""
+    text = read_brief(brief)
+    if text is None:
+        return True
+    try:
+        offer_steer(
+            config.state_dir,
+            name,
+            launch_id,
+            "brief-refresh",
+            f"{REFRESHED_BRIEF_HEADER}\n\n{text}",
+        )
+    except OSError:
+        log.exception("Could not offer the current brief to '%s'", name)
+        return False
+    return True
 
 
 async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> bool:

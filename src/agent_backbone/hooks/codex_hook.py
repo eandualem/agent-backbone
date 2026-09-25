@@ -80,7 +80,7 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
     return None, None
 
 
-CONTEXT_EVENTS = frozenset({"PostToolUse"})
+CONTEXT_EVENTS = frozenset({"PostToolUse", "SessionStart"})
 """Events whose JSON output adds context to the model (``hookSpecificOutput.additionalContext``)."""
 
 

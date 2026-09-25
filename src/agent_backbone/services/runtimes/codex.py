@@ -110,6 +110,9 @@ class Codex(Runtime):
     # launch command at 16 KB — a brief with a few policies plus the sandbox
     # and hook flags crosses it. So the brief is queued as the first message.
     brief_mode = "message"
+    # A resumed session gets its current brief from its SessionStart hook, a
+    # channel a peer message cannot imitate (#294).
+    brief_refresh = "hook_context"
     models = ("gpt-5.6-sol", "gpt-6-astra")  # as shown by codex's own status line (live capture)
     # Codex has no effort flag; the level is a config override. Levels as
     # gpt-6-astra reports them in codex 0.153 (`~/.codex/models_cache.json`).
