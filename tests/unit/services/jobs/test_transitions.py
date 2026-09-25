@@ -224,6 +224,33 @@ async def test_a_launch_interrupted_by_a_backbone_restart_is_recovered_from_diag
     deliver.assert_awaited_once()
 
 
+async def test_the_retrys_own_already_running_record_does_not_hide_the_launch(
+    db, config, store, seams
+):
+    """The retry records "already_running" under the same operation: the
+    earlier launch's outcome is read before it."""
+    _, start, _ = seams
+
+    async def retry(store, config, spec, req, db):
+        await db.diagnostics.record(
+            category="startup",
+            operation_id=req.operation_id,
+            code="already_running",
+            severity="info",
+            agent_name="ike",
+        )
+        return StartResult(ok=True, already_running=True)
+
+    start.side_effect = retry
+    row = await db.transitions.create(agent_name="ike")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-11")
+    await db.diagnostics.record(
+        category="startup", operation_id="op-11", code="ready", severity="info", agent_name="ike"
+    )
+    assert await _run(config, store, db) == {"ike": "started"}
+
+
 async def test_a_running_session_without_a_recorded_launch_is_not_claimed(db, config, store, seams):
     _, start, _ = seams
     start.return_value = StartResult(ok=True, already_running=True)

@@ -109,6 +109,8 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         resume=row["resume"],
         operation_id=operation_id,
     )
+    # Read before the retry: its own "already_running" record would be the newest.
+    recovered = await _recovered_launch(db, operation_id) if resumed_launch else None
     try:
         spec = await resolve_agent(store, req)
         result = await start_resolved(store, config, spec, req, db=db)
@@ -123,7 +125,6 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         "evidence": list(result.evidence),
     }
     if result.already_running:
-        recovered = await _recovered_launch(db, operation_id) if resumed_launch else None
         if recovered is None:
             outcome["reason"] = "the session was already running at start time; not started here"
             await db.transitions.finish(row["id"], "failed", outcome)
