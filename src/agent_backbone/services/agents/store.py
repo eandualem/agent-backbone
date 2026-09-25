@@ -317,6 +317,8 @@ class AgentStore:
     def _release_skills(self, spec: AgentSpec) -> None:
         """Remove a forgotten agent's skill links that no other agent in its
         checkout still records, and its manifest, so they keep nothing alive."""
+        import json
+
         from agent_backbone.skills import manifest_path, materialize
 
         manifest = manifest_path(self.config.data_dir, spec.name)
@@ -324,9 +326,12 @@ class AgentStore:
             return
         store = self.config.skills.store_path
         try:
-            if store is not None:
-                materialize(store, spec.path, (), [], manifest)
-        except (OSError, ValueError) as exc:
+            # The links live in the checkout the manifest records, which may
+            # not be the agent's directory any more (``agent set dir=``).
+            repo = json.loads(manifest.read_text(encoding="utf-8")).get("repo")
+            if store is not None and isinstance(repo, str):
+                materialize(store, Path(repo), (), [], manifest)
+        except (OSError, ValueError, AttributeError) as exc:
             log.warning("Could not release the skill links of '%s': %s", spec.name, exc)
         manifest.unlink(missing_ok=True)
 

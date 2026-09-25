@@ -166,6 +166,31 @@ async def test_forget_releases_the_agents_own_skill_links(db, store, tmp_path):
     assert not manifest.exists()
 
 
+async def test_forget_releases_links_in_the_checkout_the_manifest_records(db, store, tmp_path):
+    """The agent's directory changed after its last launch: its links are in the old one."""
+    from agent_backbone.skills import manifest_path
+
+    skills = tmp_path / "skill-store"
+    (skills / "tidy").mkdir(parents=True)
+    await db.settings.set("skills.store", str(skills))
+    old_checkout = tmp_path / "old-checkout"
+    old_link = old_checkout / ".agents" / "skills" / "tidy"
+    old_link.parent.mkdir(parents=True)
+    old_link.symlink_to(skills / "tidy")
+    same_name = tmp_path / ".agents" / "skills" / "tidy"  # in the agent's current directory
+    same_name.parent.mkdir(parents=True)
+    same_name.symlink_to(skills / "tidy")
+    await store.refresh()
+    manifest = manifest_path(store.config.data_dir, "api")
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f'{{"repo": "{old_checkout}", "links": [".agents/skills/tidy"]}}', encoding="utf-8"
+    )
+    assert await store.forget("api")
+    assert not old_link.is_symlink()
+    assert same_name.is_symlink()
+
+
 async def test_rename_keeps_a_pending_restart(db, store):
     row = await db.transitions.create(agent_name="api", delay_seconds=3600, message="go on")
     await store.rename("api", "backend")
