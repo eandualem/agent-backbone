@@ -408,7 +408,11 @@ async def _start_agent(
     if (
         refresh
         and rt.brief_refresh == "hook_context"
-        and not _offer_refreshed_brief(config, spec.name, environment["BACKBONE_LAUNCH_ID"], brief)
+        # The hook that takes the offer must be wired into this launch too.
+        and not (
+            rt.hook_launch_args(config.data_dir, config.state_dir)
+            and _offer_refreshed_brief(config, spec.name, environment["BACKBONE_LAUNCH_ID"], brief)
+        )
     ):
         details["reason"] = "brief_refresh_failed"
         return StartResult(ok=False, evidence=("could not hand the current brief to the session",))

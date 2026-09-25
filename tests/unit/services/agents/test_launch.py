@@ -432,6 +432,26 @@ class TestStartAgentBrief:
         assert result.ok is False
         started.assert_not_awaited()
 
+    @pytest.mark.parametrize(
+        "runtime", [rt for rt in RUNTIMES if RUNTIMES[rt].brief_refresh == "hook_context"]
+    )
+    async def test_a_resume_stops_when_the_refresh_hook_cannot_be_wired(self, tmp_path, runtime):
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 0
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with (
+            exists,
+            start as started,
+            _cmd,
+            _trust,
+            _wait,
+            patch.object(RUNTIMES[runtime], "hook_launch_args", return_value=[]),
+        ):
+            result = await start_agent(self._spec(tmp_path, runtime), config, resume=True, db=db)
+        assert result.ok is False
+        started.assert_not_awaited()
+
     async def test_unknown_runtime_is_refused(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False):
