@@ -101,7 +101,7 @@ Derived from the state plus the terminal, right before anything is pasted:
 | `agent_working` | starting, busy, or blocked on a usage limit or provider failure | no — queued (never bypassed) |
 | `human_reading` | someone is selecting text or reading tmux scrollback | no — queued, even with `priority` |
 | `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
-| `settling` | hook reported idle less than `timing.grace_period_seconds` ago | not yet, unless `priority` |
+| `settling` | hook reported idle less than `timing.grace_period_seconds` ago, or a fresh session's brief (Codex, aider) is not delivered yet | not yet, unless `priority`; the brief goes first even then |
 | `ready` | idle, empty prompt | **yes** |
 | `unknown` | no signal either way | yes, best effort |
 

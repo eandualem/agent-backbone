@@ -23,6 +23,21 @@ def _no_backbone_env(monkeypatch):
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
 
 
+def test_a_new_codex_session_does_not_inherit_the_previous_claude_model(monkeypatch):
+    monkeypatch.setenv("BACKBONE_RUNTIME", "codex")
+    claude = {
+        "state": "idle",
+        "session_id": "c1-claude",
+        "runtime": "claude",
+        "model": "claude-opus-5",
+    }
+    record, _ = hook.derive(_payload("SessionStart"), claude)
+    assert "model" not in record and record["runtime"] == "codex"
+    record["model"] = "gpt-6-astra"  # observed in this session: carried within it
+    later, _ = hook.derive(_payload("PreToolUse"), record)
+    assert later["model"] == "gpt-6-astra"
+
+
 class TestDerive:
     @pytest.mark.parametrize(
         ("event", "expected"),

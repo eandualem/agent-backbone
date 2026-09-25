@@ -24,6 +24,7 @@ from agent_backbone.services.agents.transitions import SOURCE, due_after
 from agent_backbone.services.database import now_iso
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.terminal import query_environment_var
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -109,6 +110,8 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         resume=row["resume"],
         operation_id=operation_id,
     )
+    # Read before the retry: its own "already_running" record would be the newest.
+    recovered = await _recovered_launch(db, operation_id) if resumed_launch else None
     try:
         spec = await resolve_agent(store, req)
         result = await start_resolved(store, config, spec, req, db=db)
@@ -123,8 +126,7 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         "evidence": list(result.evidence),
     }
     if result.already_running:
-        recovered = await _recovered_launch(db, operation_id) if resumed_launch else None
-        if recovered is None:
+        if recovered is None or not await _session_is_launch(name, operation_id):
             outcome["reason"] = "the session was already running at start time; not started here"
             await db.transitions.finish(row["id"], "failed", outcome)
             return "failed"
@@ -171,6 +173,21 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
     records = await db.diagnostics.query(operation_id=operation_id, category="startup", limit=20)
     if not records:
         return None
-    codes = [record["code"] for record in records]  # newest first
-    outcome = next((code for code in codes if code != "requested"), "not_observed")
-    return None if outcome in {"failed", "exited", "already_running"} else outcome
+    # A retry that found the session running records "already_running" under
+    # the same operation: that is not a launch outcome. With nothing else,
+    # the session was running before this launch.
+    codes = [record["code"] for record in records]
+    outcomes = [r for r in records if r["code"] not in {"requested", "already_running"}]
+    if not outcomes:
+        return None if "already_running" in codes else "not_observed"
+    # Repeated observations update their first row in place, so id order is
+    # not observation order: the latest sighting decides.
+    newest = max(outcomes, key=lambda record: record["last_seen_at"])["code"]
+    return None if newest in {"failed", "exited"} else newest
+
+
+async def _session_is_launch(name: str, operation_id: str) -> bool:
+    """Whether the running session was started by this launch: every launch
+    exports its operation id into the session's environment. A session
+    someone started later under the same name carries another, or none."""
+    return await query_environment_var(name, launch.OPERATION_ENV_KEY) == operation_id

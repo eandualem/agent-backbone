@@ -17,6 +17,7 @@ from agent_backbone.config import session_secret_keys
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.git import git_write_paths
 from agent_backbone.hooks.backbone_state import clear_agent_context
+from agent_backbone.models import BRIEF_SOURCE
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
     read_state_file,
@@ -51,23 +52,39 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+OPERATION_ENV_KEY = "BACKBONE_OPERATION_ID"
+"""The launch's operation id, in the session's environment (``launch_environment``)."""
+
+
 def launch_environment(
     name: str,
     runtime: str,
     state_dir: Path | str | None = None,
     extra: dict[str, str] | None = None,
+    *,
+    operation_id: str | None = None,
 ) -> dict[str, str]:
     """Environment exported into an agent session so shipped hooks can find the backbone.
 
     This is the whole contract: the runtime, the agent's name, the state
-    directory, and whatever the agent itself is configured with. The
-    backbone's secrets are not part of it and are stripped from the session
-    (see ``session_secret_keys`` and ``start_session``'s ``scrub``).
+    directory, the launch's operation (``BACKBONE_OPERATION_ID``, how a
+    recovered restart recognises the session it started), and whatever the
+    agent itself is configured with. The backbone's secrets are not part of
+    it and are stripped from the session (see ``session_secret_keys`` and
+    ``start_session``'s ``scrub``).
     """
     env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name, "BACKBONE_LAUNCH_ID": uuid4().hex}
+    if operation_id:
+        env[OPERATION_ENV_KEY] = operation_id
     if state_dir:
         env[STATE_DIR_ENV_KEY] = str(state_dir)
-    reserved = {RUNTIME_ENV_KEY, AGENT_ENV_KEY, STATE_DIR_ENV_KEY, "BACKBONE_LAUNCH_ID"}
+    reserved = {
+        RUNTIME_ENV_KEY,
+        AGENT_ENV_KEY,
+        STATE_DIR_ENV_KEY,
+        "BACKBONE_LAUNCH_ID",
+        OPERATION_ENV_KEY,
+    }
     for key, value in (extra or {}).items():
         if key in reserved:
             log.warning("Ignoring reserved variable %s in agent env for '%s'", key, name)
@@ -186,6 +203,7 @@ async def start_agent(
             db=db,
             wait=wait,
             details=details,
+            operation_id=operation_id,
             observe=observe,
         )
     except Exception as exc:
@@ -224,6 +242,7 @@ async def _start_agent(
     wait: bool,
     details: dict,
     observe: Callable[[str], Awaitable[None]],
+    operation_id: str | None = None,
 ) -> StartResult:
     """Start an agent in its tmux session.
 
@@ -349,6 +368,7 @@ async def _start_agent(
             **extra_env,
             **rt.hook_launch_env(config.data_dir, config.state_dir, env=extra_env),
         },
+        operation_id=operation_id,
     )
     # `starting` lives in its own marker file, written before the launch: a
     # hook write newer than the marker outranks it, ``wait_until_ready``
@@ -360,6 +380,25 @@ async def _start_agent(
     # new session must not have the old one's guidance injected on its
     # first tool call. Queue rows behind a batch survive and are pasted.
     clear_agent_context(config.state_dir, spec.name)
+    # Likewise a brief queued for an earlier launch that never received it:
+    # this launch brings its own, and the old one must not reach it (#290).
+    retired = await _retire_stale_briefs(db, spec.name)
+    if retired is None:
+        details["reason"] = "brief_retirement_failed"
+        return StartResult(
+            ok=False, evidence=("could not retire an earlier launch's undelivered brief",)
+        )
+    # Queued before the session exists, so no message sent once it is ready
+    # can go ahead of it; a launch that fails leaves it for the next one to retire.
+    # A resumed conversation whose brief never reached it gets the current one.
+    if (
+        rt.brief_mode == "message"
+        and brief is not None
+        and (not resume or retired > 0)
+        and not await _queue_brief(db, spec.name, brief)
+    ):
+        details["reason"] = "brief_queue_failed"
+        return StartResult(ok=False, evidence=("could not queue the agent's brief",))
     write_starting_marker(config.state_dir, spec.name, launched_at)
     ok = await start_session(
         spec.name,
@@ -392,10 +431,6 @@ async def _start_agent(
             observe=observe,
         )
 
-    # No launch-time injection for this runtime: the brief is queued as the
-    # first message, delivered by the monitor once the agent is at its prompt.
-    if rt.brief_mode == "message" and brief is not None and not resume and ready != "exited":
-        await _queue_brief(db, spec.name, brief)
     return StartResult(ok=True, ready=ready, evidence=tuple(resume_evidence + evidence))
 
 
@@ -434,21 +469,39 @@ def _writable_dirs(agent_dir: Path, configured: tuple[str, ...]) -> tuple[str, .
     return tuple(dict.fromkeys((*configured, *git_write_paths(agent_dir))))
 
 
-async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:
+async def _retire_stale_briefs(db: BackboneDB | None, name: str) -> int | None:
+    """How many undelivered earlier briefs were retired; None when an earlier
+    brief may still be waiting, and the launch must not go on."""
+    if db is None:
+        return 0
+    try:
+        retired = await db.queue.retire_pending_briefs(name)
+    except Exception:
+        log.exception("Could not retire earlier briefs for '%s'", name)
+        return None
+    if retired:
+        log.info("Retired %d undelivered brief(s) of an earlier launch of '%s'", retired, name)
+    return retired
+
+
+async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> bool:
+    """False when the brief could not be queued: the session must not start without it."""
     text = read_brief(brief)
     if db is None or text is None:
         if text is not None:
             log.info("No database handle: agent '%s' starts without its brief", name)
-        return
+        return True
     try:
         await db.queue.enqueue(
             session_name=name,
             message=f"[via:backbone] {text}",
             delivery_kind="direct_message",
-            source="agent-brief",
+            source=BRIEF_SOURCE,
         )
     except Exception:
-        log.exception("Could not queue the brief for '%s' (non-fatal)", name)
+        log.exception("Could not queue the brief for '%s'", name)
+        return False
+    return True
 
 
 async def wait_until_ready(

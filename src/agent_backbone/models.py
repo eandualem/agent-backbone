@@ -261,6 +261,10 @@ class DeliveryOutcome(StrEnum):
     """A queued message dropped after ``timing.queue_expiry_minutes`` — terminal, never retried."""
 
 
+BRIEF_SOURCE = "agent-brief"
+"""The queue source of a runtime's startup brief (``brief_mode = "message"``):
+delivered before anything else the session is sent."""
+
 SUBSCRIPTION_KIND = "subscription"
 """The delivery kind of a batch of subscribed source events (``docs/sources.md``):
 one message per agent and priority, grown while the agent is not ready."""

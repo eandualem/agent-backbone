@@ -103,6 +103,17 @@ def test_add_goes_through_the_api_when_the_backbone_runs(config, capsys, tmp_pat
     assert source.exists()  # the backbone moves it, not this process
 
 
+def test_add_local_moves_it_here_even_when_the_backbone_runs(config, capsys, tmp_path):
+    source = _skill(tmp_path / "Downloads", "draft")
+    with (
+        patch.object(_common, "api_up", AsyncMock(return_value=True)),
+        patch.object(_common, "api", AsyncMock()) as api,
+    ):
+        assert run(["skills", "add", str(source), "--tag", "all", "--local"]) == 0
+    api.assert_not_awaited()
+    assert not source.exists() and (config.skills.store_path / "draft" / "SKILL.md").is_file()
+
+
 def test_preview_and_validate(config, capsys):
     assert run(["skills", "preview", "leo"]) == 0
     out = capsys.readouterr().out

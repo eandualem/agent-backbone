@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
 
-from agent_backbone.models import RETIREMENT_REASONS, SUBSCRIPTION_KIND
+from agent_backbone.models import BRIEF_SOURCE, RETIREMENT_REASONS, SUBSCRIPTION_KIND
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
@@ -330,8 +330,8 @@ class QueueRepo(Repo):
             return [row._mapping["session_name"] for row in result.fetchall()]
 
     async def dequeue(self, session_name: str, limit: int = 10) -> list[dict]:
-        """Atomically claim pending messages for a session: high-priority
-        subscription batches first, then oldest first."""
+        """Atomically claim pending messages for a session: its startup brief
+        first, then high-priority subscription batches, then oldest first."""
         async with self._tx() as conn:
             now = now_iso()
             lock = "FOR UPDATE SKIP LOCKED" if conn.dialect.name == "postgresql" else ""
@@ -339,16 +339,24 @@ class QueueRepo(Repo):
                      WHERE id IN (
                          SELECT id FROM message_queue
                          WHERE session_name=:session AND status='pending'
-                         ORDER BY priority DESC, enqueued_at ASC LIMIT :lim
+                         ORDER BY source = :brief DESC, priority DESC, enqueued_at ASC
+                         LIMIT :lim
                          {lock}
                      ) RETURNING *"""
             result = await conn.execute(
-                text(sql), {"session": session_name, "lim": limit, "now": now}
+                text(sql),
+                {"session": session_name, "lim": limit, "now": now, "brief": BRIEF_SOURCE},
             )
             rows = [dict(row._mapping) for row in result.fetchall()]
             for row in rows:
                 await self._ensure_operation_id(conn, row)
-            rows.sort(key=lambda row: (-(row.get("priority") or 0), row["enqueued_at"]))
+            rows.sort(
+                key=lambda row: (
+                    row.get("source") != BRIEF_SOURCE,
+                    -(row.get("priority") or 0),
+                    row["enqueued_at"],
+                )
+            )
             return rows
 
     async def release(self, message_id: int) -> None:
@@ -463,7 +471,8 @@ class QueueRepo(Repo):
                              SELECT session_name FROM message_queue WHERE status = 'uncertain')
                          AND session_name NOT IN (
                              SELECT session_name FROM deliveries
-                             WHERE source = 'uncertain-acknowledged' AND created_at >= :cutoff)
+                             WHERE source IN ('uncertain-acknowledged', 'uncertain-retired')
+                               AND created_at >= :cutoff)
                          AND session_name NOT IN :protected
                          AND COALESCE(sender, '') NOT IN :protected
                        RETURNING *"""
@@ -670,6 +679,82 @@ class QueueRepo(Repo):
             )
             row = result.mappings().first()
             return dict(row) if row else None
+
+    async def retire_pending_briefs(self, session: str) -> int:
+        """Expire the startup briefs still waiting for ``session``.
+
+        Called before a launch, when no session of the agent exists: a brief
+        queued for an earlier launch never reached it, and a new session must
+        not receive it (#290). A leased, checkpointed or uncertain row is
+        retired too: the session it was meant for is gone, and lease recovery,
+        an inbox read or an uncertain hold would otherwise hand it to the new
+        one. Returns how many were retired.
+        """
+        async with self._tx() as conn:
+            now = now_iso()
+            params = {"now": now, "session": session, "brief": BRIEF_SOURCE}
+            held = await conn.execute(
+                text(
+                    "SELECT id FROM message_queue WHERE session_name = :session "
+                    "AND source = :brief AND status = 'uncertain'"
+                ),
+                params,
+            )
+            was_uncertain = {row[0] for row in held}
+            result = await conn.execute(
+                text(
+                    """UPDATE message_queue SET status = 'expired', delivered_at = :now
+                       WHERE session_name = :session AND source = :brief
+                         AND status IN ('pending', 'in_progress', 'checkpoint', 'uncertain')
+                       RETURNING *"""
+                ),
+                params,
+            )
+            rows = [dict(row) for row in result.mappings()]
+            for row in rows:
+                await self._ensure_operation_id(conn, row)
+                if row["id"] in was_uncertain:
+                    # Like an acknowledged one, a released uncertain hold gives the
+                    # queue it held a fresh expiry window from now (``expire_pending``).
+                    await conn.execute(
+                        text(
+                            "INSERT INTO deliveries (operation_id,kind,repo,issue_number,"
+                            "target_entity,session_name,outcome,source,preview,created_at) "
+                            "VALUES (:op,:kind,:repo,:issue,:session,:session,'expired',"
+                            "'uncertain-retired',:preview,:now)"
+                        ),
+                        {
+                            "op": row["operation_id"],
+                            "kind": row["delivery_kind"],
+                            "repo": row["repo"],
+                            "issue": row["issue_number"],
+                            "session": session,
+                            "preview": row["message"][:120],
+                            "now": now,
+                        },
+                    )
+        for row in rows:
+            await self._record_lifecycle(row, "retired_superseded_brief")
+        return len(rows)
+
+    async def has_brief_ahead(self, session: str, queue_id: int | None = None) -> bool:
+        """Whether the session's startup brief, other than row ``queue_id``, is still to go."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT 1 FROM message_queue WHERE session_name=:session AND source=:brief "
+                    "AND status IN ('pending', 'in_progress') AND id != :id "
+                    # A brief is never held behind another (a restart may queue a second).
+                    "AND NOT EXISTS "
+                    "(SELECT 1 FROM message_queue WHERE id = :id AND source = :brief) LIMIT 1"
+                ),
+                {
+                    "session": session,
+                    "brief": BRIEF_SOURCE,
+                    "id": -1 if queue_id is None else queue_id,
+                },
+            )
+            return result.first() is not None
 
     async def has_uncertain(self, session: str) -> bool:
         async with self._tx() as conn:
