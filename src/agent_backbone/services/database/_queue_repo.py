@@ -684,16 +684,18 @@ class QueueRepo(Repo):
 
         Called before a launch, when no session of the agent exists: a brief
         queued for an earlier launch never reached it, and a new session must
-        not receive it (#290). A leased row is retired too — the session it
-        was leased for is gone, and a recovered lease would otherwise deliver
-        it to the new one. Returns how many were retired.
+        not receive it (#290). A leased, checkpointed or uncertain row is
+        retired too: the session it was meant for is gone, and lease recovery,
+        an inbox read or an uncertain hold would otherwise hand it to the new
+        one. Returns how many were retired.
         """
         async with self._tx() as conn:
             result = await conn.execute(
                 text(
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE session_name = :session AND source = :brief
-                         AND status IN ('pending', 'in_progress') RETURNING *"""
+                         AND status IN ('pending', 'in_progress', 'checkpoint', 'uncertain')
+                       RETURNING *"""
                 ),
                 {"now": now_iso(), "session": session, "brief": BRIEF_SOURCE},
             )

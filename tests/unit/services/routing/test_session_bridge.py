@@ -603,6 +603,20 @@ class TestSafeDeliver:
         await db.queue.expire_stale_leases(max_age_minutes=0)
         assert await db.queue.dequeue("ike") == []
 
+    async def test_a_checkpointed_brief_of_an_earlier_launch_is_retired_too(self, db):
+        """Read from the inbox by a session that ended before acknowledging it."""
+        from agent_backbone.models import BRIEF_SOURCE
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the brief of the earlier launch",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        assert len(await db.queue.checkpoint("ike")) == 1  # read at an inbox checkpoint
+        assert await db.queue.retire_pending_briefs("ike") == 1
+        assert await db.queue.sessions_with_pending() == []
+
     async def test_agent_working_blocks_even_priority(self, config):
         with _online(snap=_BUSY_SNAP):
             assert (

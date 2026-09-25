@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -51,6 +52,12 @@ def seams():
             new_callable=AsyncMock,
             return_value=DeliveryReport(outcome=DeliveryOutcome.DELIVERED),
         ) as deliver,
+        # A running session created long ago: any recorded launch predates it.
+        patch(
+            f"{_JOB}.list_sessions_rich",
+            new_callable=AsyncMock,
+            return_value=[{"name": "ike", "created": 0}],
+        ),
     ):
         yield stop, start, deliver
 
@@ -294,6 +301,24 @@ async def test_a_launch_that_only_found_a_running_session_is_not_claimed(db, con
             category="startup", operation_id="op-14", code=code, severity="info", agent_name="ike"
         )
     assert await _run(config, store, db) == {"ike": "failed"}
+
+
+async def test_a_session_started_after_the_recorded_launch_is_not_claimed(db, config, store, seams):
+    """The launched session exited and someone started another under the same
+    name: the recorded outcome belongs to a session that is gone."""
+    _, start, deliver = seams
+    start.return_value = StartResult(ok=True, already_running=True)
+    row = await db.transitions.create(agent_name="ike", message="hi")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-15")
+    for code in ("requested", "ready"):
+        await db.diagnostics.record(
+            category="startup", operation_id="op-15", code=code, severity="info", agent_name="ike"
+        )
+    later = [{"name": "ike", "created": int(time.time()) + 3600}]
+    with patch(f"{_JOB}.list_sessions_rich", new_callable=AsyncMock, return_value=later):
+        assert await _run(config, store, db) == {"ike": "failed"}
+    deliver.assert_not_awaited()
 
 
 async def test_a_running_session_without_a_recorded_launch_is_not_claimed(db, config, store, seams):

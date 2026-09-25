@@ -319,6 +319,17 @@ class TestStartAgentBrief:
         assert result.ok is False
         started.assert_not_awaited()
 
+    async def test_a_resumed_conversation_that_never_got_its_brief_is_sent_the_current_one(
+        self, tmp_path
+    ):
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 1  # the earlier session ended first
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start, _cmd, _trust, _wait:
+            await start_agent(self._spec(tmp_path, "aider"), config, resume=True, db=db)
+        db.queue.enqueue.assert_awaited_once()
+
     async def test_a_message_brief_is_queued_before_the_session_exists(self, tmp_path):
         """Nothing sent once the session is ready can overtake it."""
         config = bootstrap_config(tmp_path / "data")
@@ -354,6 +365,7 @@ class TestStartAgentBrief:
     async def test_shell_and_resume_get_no_brief(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start, _cmd, _trust, _wait:
             await start_agent(self._spec(tmp_path, "shell"), config, db=db)
