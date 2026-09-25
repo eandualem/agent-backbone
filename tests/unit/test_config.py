@@ -133,6 +133,11 @@ class TestValidateSetting:
         with pytest.raises(KeyError):
             validate_setting("nope.key", 1)
 
+    def test_the_skill_store_must_be_absolute(self):
+        assert validate_setting("skills.store", " ~/skills ") == "~/skills"
+        with pytest.raises(ValueError, match="absolute"):
+            validate_setting("skills.store", "skills")
+
     def test_coerces_types(self):
         assert validate_setting("backbone.port", "8123") == 8123
         assert validate_setting("security.allow_unauthenticated", "true") is True

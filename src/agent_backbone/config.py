@@ -308,7 +308,10 @@ def validate_setting(key: str, value: Any) -> Any:
     if key == "skills.store":
         if not isinstance(value, str) or (value and not value.strip()):
             raise ValueError(f"{key}: expected a directory path, or an empty string to disable")
-        return value.strip()
+        value = value.strip()
+        if value and not Path(value).expanduser().is_absolute():
+            raise ValueError(f"{key}: expected an absolute path (CLI and service run elsewhere)")
+        return value
     if key == "templates.dir":
         if not isinstance(value, str) or (value and not value.strip()):
             raise ValueError(f"{key}: expected a directory path, or an empty string for default")

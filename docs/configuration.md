@@ -86,7 +86,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `skills.store` | `~/skills` | Directory holding the one copy of every shared skill. At launch each agent gets the skills tagged for it as symlinks in the directory its CLI reads; `backbone skills` manages the store. Empty disables materialisation. See [Skills](skills.md) |
+| `skills.store` | `~/skills` | Directory holding the one copy of every shared skill (an absolute path; `~` is expanded). At launch each agent gets the skills tagged for it as symlinks in the directory its CLI reads; `backbone skills` manages the store. Empty disables materialisation. See [Skills](skills.md) |
 
 ### `templates.*`
 
