@@ -374,11 +374,16 @@ class AgentStore:
 
             old_manifest = manifest_path(self.config.data_dir, name)
             new_manifest = manifest_path(self.config.data_dir, new_name)
-            if new_name in self._agents:
+            others = [n for n in self._agents.names if n != name]
+            if new_name in others or case_twin(others, new_name):
                 raise ValueError(f"'{new_name}' is already an agent")
             # A manifest under a name no agent holds is a forgotten agent's,
-            # kept because its links could not be released then: retry now.
-            if new_manifest.exists() and not self._release_skills(new_name):
+            # kept because its links could not be released then: retry now. On a
+            # case-insensitive filesystem a case-only rename names the agent's own.
+            leftover = new_manifest.exists() and not (
+                old_manifest.exists() and old_manifest.samefile(new_manifest)
+            )
+            if leftover and not self._release_skills(new_name):
                 raise ValueError(
                     f"'{new_name}' still has a forgotten agent's skill links that could not be "
                     "released; choose another name"

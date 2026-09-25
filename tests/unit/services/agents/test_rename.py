@@ -276,6 +276,22 @@ async def test_a_leftover_manifest_that_still_cannot_be_released_refuses_the_ren
     assert leftover.exists()
 
 
+async def test_a_case_only_rename_keeps_the_agents_own_manifest(db, store):
+    """On a case-insensitive filesystem the new name's manifest is the agent's own."""
+    from agent_backbone.skills import manifest_path
+
+    mine = manifest_path(store.config.data_dir, "api")
+    mine.parent.mkdir(parents=True)
+    mine.write_text('{"repo": "/a", "links": [".agents/skills/x"]}')
+    with (
+        patch("pathlib.Path.samefile", return_value=True),
+        patch.object(
+            store, "_release_skills", side_effect=AssertionError("released its own manifest")
+        ),
+    ):
+        await store.rename("api", "API")
+
+
 async def test_rename_keeps_a_pending_restart(db, store):
     row = await db.transitions.create(agent_name="api", delay_seconds=3600, message="go on")
     await store.rename("api", "backend")
