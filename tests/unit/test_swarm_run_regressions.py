@@ -55,8 +55,9 @@ async def test_uncertain_submission_is_held_and_never_retried(db, config):
 
 @pytest.mark.parametrize("event", ["UserPromptSubmit", "PreToolUse", "Stop"])
 async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, config, event):
-    """The prompt's time survives the turn's later records (a quick Stop, Codex's PreToolUse)."""
-    """The screen check can miss a redraw; the runtime's UserPromptSubmit hook is its receipt."""
+    """The screen check can miss a redraw; the runtime's UserPromptSubmit hook is its
+    receipt, and the prompt's time survives the turn's later records (a quick Stop,
+    Codex's PreToolUse)."""
     import json
     import time
 
@@ -69,10 +70,7 @@ async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, con
                     "event": event,
                     "ts": time.time(),
                     "prompted_at": time.time(),
-                    # as Claude's hook receives a paste (live capture, 2.1.281)
-                    "prompt_digest": prompt_digest(
-                        '\n\n<pasted_content id="8687">\ncorrection\n</pasted_content id="8687">\n'
-                    ),
+                    "prompt_digest": prompt_digest("correction"),
                 }
             )
         )
@@ -93,6 +91,54 @@ async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, con
         )
     assert report.outcome == DeliveryOutcome.DELIVERED and not report.unconfirmed
     assert await db.queue.checkpoint("ike") == []  # nothing held
+
+
+async def test_a_prompt_hook_receipt_after_the_first_poll_is_delivered(db, config, monkeypatch):
+    """The hook can report a moment after the screen check gives up: delivery keeps polling."""
+    import json
+
+    from agent_backbone.services.agents import read_state_file
+
+    monkeypatch.setattr("agent_backbone.services.routing._delivery.PROMPT_HOOK_WAIT_SECONDS", 2.0)
+    polls = []
+
+    def read_then_hook_reports(state_dir, session):
+        snapshot = read_state_file(state_dir, session)
+        if not polls:
+            config.state_dir.mkdir(parents=True, exist_ok=True)
+            (config.state_dir / "ike.json").write_text(
+                json.dumps(
+                    {
+                        "state": "busy",
+                        "event": "UserPromptSubmit",
+                        "ts": time.time(),
+                        "prompted_at": time.time(),
+                        "prompt_digest": prompt_digest("correction"),
+                    }
+                )
+            )
+        polls.append(snapshot)
+        return snapshot
+
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.send_message",
+            AsyncMock(side_effect=SubmissionUnconfirmed("prompt box still showed text")),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.read_state_file",
+            side_effect=read_then_hook_reports,
+        ),
+    ):
+        report = await safe_deliver(
+            "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
+        )
+    assert len(polls) >= 2  # the receipt was not there at the first poll
+    assert report.outcome == DeliveryOutcome.DELIVERED and not report.unconfirmed
 
 
 @pytest.mark.parametrize(

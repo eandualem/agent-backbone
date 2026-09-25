@@ -277,7 +277,10 @@ sequenceDiagram
 - **Paste, don't type.** Text goes in through tmux's paste buffer as one
   chunk, then Enter; the pane is re-read to confirm the text left the input
   box, including an envelope still buffered in the prompt. If the runtime queued it for its next turn (Claude does), that
-  counts as delivered.
+  counts as delivered. When the pane can't confirm it, delivery waits up to
+  3 s for the runtime's prompt hook (Claude Code and Codex): a
+  `UserPromptSubmit` for exactly this message, taken after the paste, confirms
+  it. Otherwise the delivery stays uncertain (`submission_unconfirmed`).
 - **Busy is never bypassed.** `priority: true` (and issues labelled
   `blocking`) only get through `human_typing` and `settling`. What reaches a
   *working* agent is a high-priority [subscription](sources.md) batch or a

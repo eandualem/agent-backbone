@@ -471,14 +471,11 @@ def _model_from_transcript(path: Path) -> str | None:
     return None
 
 
-_PASTE_WRAPPER = re.compile(r"</?pasted_content\b[^>]*>")
-
-
 def prompt_digest(text: str) -> str:
-    """A prompt's identity: without the runtime's paste wrapper (Claude's
-    ``<pasted_content id=…>``), whitespace collapsed. Delivery compares it with
-    the digest of the message it pasted: equal means that very message."""
-    normalized = " ".join(_PASTE_WRAPPER.sub(" ", text).split())
+    """A prompt's identity, whitespace collapsed. Delivery compares it with the
+    digest of the message it pasted: equal means that very message. A runtime
+    that wraps a paste removes its wrapper in its own hook script first."""
+    normalized = " ".join(text.split())
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
