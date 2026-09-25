@@ -279,3 +279,11 @@ def test_relocated_dir_warns_about_files_left_at_the_default(tmp_path, capsys):
 def test_the_preview_says_what_a_resume_does_with_the_brief(tmp_path, runtime, notice):
     spec = AgentSpec(name="api", dir=str(tmp_path), runtime=runtime)
     assert any(notice in n for n in instruction_preview(spec, bootstrap_config())["notices"])
+
+
+def test_the_preview_promises_no_refreshed_brief_when_injection_is_off(tmp_path):
+    spec = AgentSpec(name="api", dir=str(tmp_path), runtime="codex")
+    config = bootstrap_config()
+    config = replace(config, launch=replace(config.launch, inject_brief=False))
+    notices = instruction_preview(spec, config)["notices"]
+    assert not any("handed the current brief" in n for n in notices)

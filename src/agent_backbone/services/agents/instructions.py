@@ -77,7 +77,7 @@ def instruction_preview(
             "Using legacy agent-brief.md; `backbone templates edit base` "
             "saves to templates/base.md."
         )
-    if runtime.brief_refresh == "hook_context":
+    if enabled and runtime.brief_refresh == "hook_context":
         notices.append(
             "Resuming keeps the existing conversation; "
             "its session hook is handed the current brief."
