@@ -652,9 +652,9 @@ async def prompt_hook_after(state_dir, session_name: str, since: float, message:
     """Whether the runtime's hook reports taking this ``message`` at or after ``since``.
 
     The screen check reads the prompt box, whose redraw timing varies; the
-    hook's ``prompted_at`` is the runtime saying it took a prompt (live:
-    Feynman, 2026-09-24, prompt taken at 19:05:34.938Z, reported unconfirmed
-    at 19:05:36). It survives the turn's later records, so a quick ``Stop``
+    hook's ``prompted_at`` is the runtime saying it took a prompt (live,
+    2026-09-24: prompt taken at 19:05:34.938Z, reported unconfirmed at
+    19:05:36). It survives the turn's later records, so a quick ``Stop``
     does not erase it, and a turn that was already running cannot supply it.
     The prompt must also be exactly this message (``prompt_digest``): a
     different prompt someone submitted meanwhile, or this one with more text
