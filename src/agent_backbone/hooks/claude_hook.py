@@ -12,10 +12,12 @@ Standard library only — it must run under any ``python3``.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
 import sys
+from pathlib import Path
 
 try:
     from agent_backbone.hooks import backbone_state as bb
@@ -106,6 +108,73 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
         # humans from this record, and never asks for a retry.
         return None, denial_record(payload, now)
     return None, None
+
+
+CHROME_GROUPS_DIR = "chrome-groups"
+"""``<state_dir>/chrome-groups/<agent>.<group>.json``: a Chrome tab group this
+agent's Claude-in-Chrome sessions used, read by the optional tab-names extension."""
+CHROME_GROUP_MAX_AGE = 7 * 24 * 3600
+"""A record this old is from a long-closed group; the agent's hook removes it."""
+_CHROME_CONTEXT_TOOL = "mcp__claude-in-chrome__tabs_context_mcp"
+"""The one tool whose result is the extension's own account of the session's
+group; other tools (javascript_tool) can return page-controlled JSON."""
+
+
+def _tab_context(response) -> dict | None:
+    """The tab context a Claude-in-Chrome result carries as JSON in a text block.
+
+    Only the decoded object's own fields count: tab titles are page-controlled
+    and may contain anything, including text that looks like an id."""
+    blocks = response.get("content") if isinstance(response, dict) else response
+    for block in blocks if isinstance(blocks, list) else []:
+        text = block.get("text") if isinstance(block, dict) else None
+        if not isinstance(text, str) or not text.lstrip().startswith("{"):
+            continue
+        try:
+            context = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(context, dict) and isinstance(context.get("tabGroupId"), int):
+            return context
+    return None
+
+
+def record_chrome_group(payload: dict, state_dir: Path, agent: str) -> None:
+    """Remember the tab group and tabs a Claude-in-Chrome result names.
+
+    Each session's group is titled "Claude"; this record is what lets the
+    optional extension name it after the agent. One file per agent and
+    group: an earlier group still open keeps its record, and hooks of
+    different agents never write the same file."""
+    if payload.get("hook_event_name") != "PostToolUse":
+        return
+    if payload.get("tool_name") != _CHROME_CONTEXT_TOOL:
+        return
+    context = _tab_context(payload.get("tool_response"))
+    if context is None:
+        return
+    tabs = context.get("availableTabs")
+    record = {
+        "agent": agent,
+        "group": context["tabGroupId"],
+        "tabs": sorted(
+            {
+                tab["tabId"]
+                for tab in (tabs if isinstance(tabs, list) else [])
+                if isinstance(tab, dict) and isinstance(tab.get("tabId"), int)
+            }
+        ),
+        "ts": bb.time.time(),
+    }
+    directory = state_dir / CHROME_GROUPS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{agent}.{record['group']}.json"
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(record))
+    os.replace(tmp, target)
+    for old in directory.glob(f"{agent}.*.json"):
+        if record["ts"] - old.stat().st_mtime > CHROME_GROUP_MAX_AGE:
+            old.unlink(missing_ok=True)
 
 
 _CATEGORY = re.compile(r"\[([^\]\n]{1,80})\]")
@@ -340,7 +409,11 @@ CONTEXT_EVENTS = frozenset({"PostToolUse"})
 
 def main(argv: list[str] | None = None) -> int:
     return bb.run_hook(
-        derive, argv, context_events=CONTEXT_EVENTS, turn_end_events=frozenset({"Stop"})
+        derive,
+        argv,
+        context_events=CONTEXT_EVENTS,
+        turn_end_events=frozenset({"Stop"}),
+        observe=record_chrome_group,
     )
 
 
