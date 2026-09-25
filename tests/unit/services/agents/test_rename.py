@@ -132,3 +132,10 @@ async def test_forget_clears_pending_hook_context_offers(db, store):
     assert offer_context(store.config.state_dir, "api", "7", "[via:gmail] mail")
     assert await store.forget("api")
     assert claim_context(store.config.state_dir, "api", "7") == "missing"
+
+
+async def test_rename_keeps_a_pending_restart(db, store):
+    row = await db.transitions.create(agent_name="api", delay_seconds=3600, message="go on")
+    await store.rename("api", "backend")
+    moved = await db.transitions.get(row["id"])
+    assert moved["agent_name"] == "backend" and moved["status"] == "pending"

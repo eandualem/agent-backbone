@@ -179,6 +179,7 @@ class AgentRepo(Repo):
             ("message_queue", "session_name"),
             ("message_queue", "target_entity"),
             ("event_outbox", "recipient"),
+            ("agent_transitions", "agent_name"),
         )
         values = {"old": name, "new": new_name}
         async with self._tx() as conn:

@@ -357,7 +357,7 @@ backbone config set escalation.target orch
 | `agent subscribe [NAME] SOURCE FILTER [--priority normal\|high]` / `agent unsubscribe [NAME] ID` | Subscribe to inbound events from a [source](sources.md) (`gmail`) matching a filter in the source's own query language (`"from:upwork.com subject:job"`); `high` reaches a working Claude Code or Codex agent on its next tool call through hook context (other runtimes: first when ready), `normal` waits for its prompt, batched. `agent inspect` lists subscriptions with their ids. `NAME` defaults to `$BACKBONE_AGENT` inside a session |
 | `agent forget NAME` | Remove a stopped agent from the backbone (refuses while its session is still running) |
 | `agent tag NAME TAG…` / `agent untag NAME TAG…` | Add/remove tags, retaining other tags. `swarm:`, `role:` and `task:` tags are managed by the swarm lifecycle |
-| `agent rename NAME NEW_NAME` | Rename a stopped non-swarm agent, preserving its directory, settings, watches, resume ID, queue and routing receipts. Refuses occupied names or names with existing history, active deliveries and agents participating in an active swarm |
+| `agent rename NAME NEW_NAME` | Rename a stopped non-swarm agent, preserving its directory, settings, watches, resume ID, queue, pending restart and routing receipts. Refuses occupied names or names with existing history, active deliveries and agents participating in an active swarm |
 
 `agent set` rejects unknown field names both online and in direct mode. A typo in
 a mixed update rejects the entire request; no valid fields are partially applied.
