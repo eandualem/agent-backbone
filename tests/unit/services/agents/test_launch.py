@@ -308,6 +308,17 @@ class TestStartAgentBrief:
         started.assert_not_awaited()
         db.queue.enqueue.assert_not_awaited()
 
+    async def test_a_launch_stops_when_its_brief_cannot_be_queued(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 0
+        db.queue.enqueue.side_effect = RuntimeError("database is locked")
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            result = await start_agent(self._spec(tmp_path, "aider"), config, db=db)
+        assert result.ok is False
+        started.assert_not_awaited()
+
     async def test_a_message_brief_is_queued_before_the_session_exists(self, tmp_path):
         """Nothing sent once the session is ready can overtake it."""
         config = bootstrap_config(tmp_path / "data")

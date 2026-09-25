@@ -370,8 +370,14 @@ async def _start_agent(
         )
     # Queued before the session exists, so no message sent once it is ready
     # can go ahead of it; a launch that fails leaves it for the next one to retire.
-    if rt.brief_mode == "message" and brief is not None and not resume:
-        await _queue_brief(db, spec.name, brief)
+    if (
+        rt.brief_mode == "message"
+        and brief is not None
+        and not resume
+        and not await _queue_brief(db, spec.name, brief)
+    ):
+        details["reason"] = "brief_queue_failed"
+        return StartResult(ok=False, evidence=("could not queue the agent's brief",))
     write_starting_marker(config.state_dir, spec.name, launched_at)
     ok = await start_session(
         spec.name,
@@ -455,12 +461,13 @@ async def _retire_stale_briefs(db: BackboneDB | None, name: str) -> bool:
     return True
 
 
-async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:
+async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> bool:
+    """False when the brief could not be queued: the session must not start without it."""
     text = read_brief(brief)
     if db is None or text is None:
         if text is not None:
             log.info("No database handle: agent '%s' starts without its brief", name)
-        return
+        return True
     try:
         await db.queue.enqueue(
             session_name=name,
@@ -469,7 +476,9 @@ async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:
             source=BRIEF_SOURCE,
         )
     except Exception:
-        log.exception("Could not queue the brief for '%s' (non-fatal)", name)
+        log.exception("Could not queue the brief for '%s'", name)
+        return False
+    return True
 
 
 async def wait_until_ready(
