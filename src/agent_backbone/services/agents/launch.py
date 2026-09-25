@@ -392,11 +392,12 @@ async def _start_agent(
         )
     # Queued before the session exists, so no message sent once it is ready
     # can go ahead of it; a launch that fails leaves it for the next one to retire.
-    # A resumed conversation whose brief never reached it gets the current one.
+    # A resumed conversation whose brief never reached it gets the current one,
+    # unless its hook hands it over below (once is enough).
     if (
         rt.brief_mode == "message"
         and brief is not None
-        and (not resume or retired > 0)
+        and (not resume or (retired > 0 and rt.brief_refresh != "hook_context"))
         and not await _queue_brief(db, spec.name, brief)
     ):
         details["reason"] = "brief_queue_failed"

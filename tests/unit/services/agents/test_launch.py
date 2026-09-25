@@ -396,8 +396,9 @@ class TestStartAgentBrief:
     @pytest.mark.parametrize(
         "runtime", [rt for rt in RUNTIMES if RUNTIMES[rt].brief_refresh == "hook_context"]
     )
+    @pytest.mark.parametrize("retired", [0, 1])  # 1: an earlier brief never arrived; still once
     async def test_a_hook_refreshed_runtime_gets_its_brief_as_session_context(
-        self, tmp_path, runtime
+        self, tmp_path, runtime, retired
     ):
         """#273: Claude Code declines a brief sent as a user message after resume."""
         from agent_backbone.hooks.backbone_state import take_context
@@ -405,7 +406,7 @@ class TestStartAgentBrief:
 
         config = bootstrap_config(tmp_path / "data")
         db = AsyncMock()
-        db.queue.retire_pending_briefs.return_value = 0
+        db.queue.retire_pending_briefs.return_value = retired
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
             await start_agent(self._spec(tmp_path, runtime), config, resume=True, db=db)
