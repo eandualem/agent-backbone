@@ -429,6 +429,25 @@ def _write_manifest(path: Path, repo_dir: Path, links: list[str]) -> None:
     os.replace(tmp, path)
 
 
+def _links_of_others(manifest: Path, repo_dir: Path) -> set[str]:
+    """The links other agents' manifests record in this same checkout."""
+    links: set[str] = set()
+    for path in manifest.parent.glob("*.json") if manifest.parent.is_dir() else ():
+        if path == manifest:
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (
+            isinstance(data, dict)
+            and isinstance(data.get("repo"), str)
+            and Path(data["repo"]).resolve() == repo_dir.resolve()
+        ):
+            links.update(str(item) for item in data.get("links", []) if isinstance(item, str))
+    return links
+
+
 def _links_sharing_git_dir(manifest_dir: Path, git_dir: Path) -> set[str]:
     """Every manifest's links whose repository uses ``git_dir`` — several
     agents can share one checkout, and worktrees share one ``info/exclude``."""
@@ -484,7 +503,9 @@ def materialize(
     result = Materialization()
     previous = set(_read_manifest(manifest))
     wanted = {f"{directory}/{skill.name}": skill for directory in dirs for skill in selected}
-    for rel in sorted(previous - set(wanted)):
+    # Another agent in this checkout may still be given the same link.
+    shared = _links_of_others(manifest, repo_dir)
+    for rel in sorted(previous - set(wanted) - shared):
         link = repo_dir / rel
         if _points_into(link, store):
             link.unlink()

@@ -436,6 +436,21 @@ class TestMaterialize:
         exclude = (repo / ".git" / "info" / "exclude").read_text()
         assert "/.claude/skills/a" not in exclude and "/.agents/skills/b" in exclude
 
+    def test_a_link_another_agent_in_the_checkout_still_gets_is_kept(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        manifests = tmp_path / "data" / "skills" / "materialized"
+        for agent in ("leo", "ike"):
+            materialize(
+                store, repo, (".claude/skills",), read_store(store), manifests / f"{agent}.json"
+            )
+        # leo moves to a runtime that reads another directory; ike still reads this one
+        result = materialize(
+            store, repo, (".agents/skills",), read_store(store), manifests / "leo.json"
+        )
+        assert result.removed == [] and (repo / ".claude" / "skills" / "a").is_symlink()
+
     def test_repository_owned_name_wins_as_a_conflict(self, tmp_path):
         store = tmp_path / "store"
         make_skill(store, "a", tags="all")
