@@ -403,7 +403,7 @@ def denial_record(payload: dict, now: float) -> dict:
     }
 
 
-CONTEXT_EVENTS = frozenset({"PostToolUse"})
+CONTEXT_EVENTS = frozenset({"PostToolUse", "SessionStart"})
 """Events whose JSON output adds context to the model (``hookSpecificOutput.additionalContext``)."""
 
 
