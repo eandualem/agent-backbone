@@ -67,6 +67,12 @@ def add_skill_commands(sub) -> None:
         help=f"agents with this tag receive it (repeatable; `{ALL_TAG}` = everyone)",
     )
     p.add_argument("--replace", action="store_true", help="overwrite a store skill of that name")
+    p.add_argument(
+        "--local",
+        action="store_true",
+        help="move it from this terminal instead of the running backbone "
+        "(a path outside every agent's directory)",
+    )
     p = commands.add_parser("tag", help="replace a store skill's tags; none clears them")
     p.add_argument("name")
     p.add_argument("tags", nargs="*", metavar="TAG")
@@ -184,7 +190,7 @@ async def _skills(args: argparse.Namespace) -> int:
             "replace": args.replace,
             "actor": _actor(),
         }
-        if await _common.api_up(config):
+        if not args.local and await _common.api_up(config):
             response = await _common.api(config, "POST", "/api/skills", json_body=body)
             if not response or response[0] != 200:
                 detail = response[1] if response else "API unreachable"

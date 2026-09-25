@@ -87,7 +87,7 @@ async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
         raise HTTPException(
             status_code=422,
             detail="the skill must live inside a registered agent's directory; "
-            "run `backbone skills add` from the terminal for other paths",
+            "run `backbone skills add --local` from the terminal for other paths",
         )
     try:
         skill = add_skill(
