@@ -385,7 +385,8 @@ class TestPermissionDenied:
         assert record["action"] == "permission_denied" and record["session"] == "grace"
         assert record["kind"] == "classifier" and record["category"] == "External System Writes"
         assert record["summary"] == "cd; gh issue edit"
-        assert "private" not in line and "40" not in line
+        logged = json.dumps({key: value for key, value in record.items() if key != "ts"})
+        assert "private" not in logged and "40" not in logged  # the timestamp may hold "40"
         assert not (tmp_path / "grace.json").exists()  # the agent's state is untouched
 
     def test_a_browser_refusal_names_actions_not_page_content(self, tmp_path):
