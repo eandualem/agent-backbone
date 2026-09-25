@@ -192,7 +192,11 @@ launchd's default for a LaunchAgent would throttle them below ordinary
 apps, so their screens fall behind when the machine is busy. An older
 install lacks the key: run `backbone service install` again to rewrite it,
 which restarts the service. A tmux server that is already running keeps its
-old priority until it restarts, and all its sessions with it.
+old priority until it restarts, and all its sessions with it. To apply it
+now: let your agents save their work, stop them (`backbone agent stop
+NAME…`), end the old server with `tmux kill-server` (this closes every
+session still on it), then start the agents again with `backbone agent
+start`; the service starts a new tmux server with the new scheduling.
 
 ## `backbone upgrade [--check] [--no-restart]`
 
