@@ -361,6 +361,9 @@ async def _start_agent(
     # new session must not have the old one's guidance injected on its
     # first tool call. Queue rows behind a batch survive and are pasted.
     clear_agent_context(config.state_dir, spec.name)
+    # Likewise a brief queued for an earlier launch that never received it:
+    # this launch brings its own, and the old one must not reach it (#290).
+    await _retire_stale_briefs(db, spec.name)
     write_starting_marker(config.state_dir, spec.name, launched_at)
     ok = await start_session(
         spec.name,
@@ -433,6 +436,16 @@ def _materialize_skills(
 def _writable_dirs(agent_dir: Path, configured: tuple[str, ...]) -> tuple[str, ...]:
     """Explicit tooling roots and validated Git commit paths, without hooks/config."""
     return tuple(dict.fromkeys((*configured, *git_write_paths(agent_dir))))
+
+
+async def _retire_stale_briefs(db: BackboneDB | None, name: str) -> None:
+    if db is None:
+        return
+    try:
+        if retired := await db.queue.retire_pending_briefs(name):
+            log.info("Retired %d undelivered brief(s) of an earlier launch of '%s'", retired, name)
+    except Exception:
+        log.exception("Could not retire earlier briefs for '%s' (non-fatal)", name)
 
 
 async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:

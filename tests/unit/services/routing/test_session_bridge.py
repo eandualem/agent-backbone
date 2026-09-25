@@ -553,6 +553,41 @@ class TestSafeDeliver:
             await drain_message_queue(config, db, None, active_sessions={"ike"})
         assert "the old brief" in send.await_args_list[0].args[1]
 
+    async def test_a_relaunch_drops_the_earlier_brief_and_sends_its_own_first(self, config, db):
+        """#290 and the brief-first order together: an undelivered brief from an
+        earlier launch never reaches the new session, and the current one goes
+        before a message sent after the start."""
+        from agent_backbone.models import BRIEF_SOURCE
+        from agent_backbone.services.jobs.retry import drain_message_queue
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the brief of the earlier launch",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        assert await db.queue.retire_pending_briefs("ike") == 1  # what a launch does first
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the current brief",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        with _online(), _patch_send_message(True) as send:
+            receipt = await safe_deliver(
+                "ike",
+                "sent after the start",
+                config,
+                db=db,
+                delivery_kind="direct_message",
+                sender="worker",
+            )
+            assert receipt.queued
+            await drain_message_queue(config, db, None, active_sessions={"ike"})
+        sent = [call.args[1] for call in send.await_args_list]
+        assert "the current brief" in sent[0]
+        assert not any("the brief of the earlier launch" in text for text in sent)
+
     async def test_agent_working_blocks_even_priority(self, config):
         with _online(snap=_BUSY_SNAP):
             assert (

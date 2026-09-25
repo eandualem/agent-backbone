@@ -297,6 +297,23 @@ class TestStartAgentBrief:
             await start_agent(self._spec(tmp_path, "aider"), config, brief_file=role, db=db)
         assert db.queue.enqueue.await_args.kwargs["message"] == "[via:backbone] You are the scout."
 
+    @pytest.mark.parametrize("runtime", ["claude", "aider", "shell"])
+    async def test_a_launch_retires_briefs_queued_for_an_earlier_one(self, tmp_path, runtime):
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 1
+        exists, start, _cmd, _trust, _wait = self._launch()
+
+        async def session_starts(*_args, **_kwargs):
+            # The earlier briefs are gone before the new session exists.
+            db.queue.retire_pending_briefs.assert_awaited_once_with("ike")
+            return True
+
+        with exists, start as started, _cmd, _trust, _wait:
+            started.side_effect = session_starts
+            assert (await start_agent(self._spec(tmp_path, runtime), config, db=db)).ok
+        started.assert_awaited_once()
+
     async def test_shell_and_resume_get_no_brief(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         db = AsyncMock()

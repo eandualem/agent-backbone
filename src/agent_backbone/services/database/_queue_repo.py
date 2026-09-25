@@ -679,6 +679,29 @@ class QueueRepo(Repo):
             row = result.mappings().first()
             return dict(row) if row else None
 
+    async def retire_pending_briefs(self, session: str) -> int:
+        """Expire the startup briefs still waiting for ``session``.
+
+        Called before a launch: a brief queued for an earlier launch never
+        reached it, and a new session must not receive it (#290). A leased
+        row is mid-delivery and is left alone. Returns how many were retired.
+        """
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    """UPDATE message_queue SET status = 'expired', delivered_at = :now
+                       WHERE session_name = :session AND source = :brief
+                         AND status = 'pending' RETURNING *"""
+                ),
+                {"now": now_iso(), "session": session, "brief": BRIEF_SOURCE},
+            )
+            rows = [dict(row) for row in result.mappings()]
+            for row in rows:
+                await self._ensure_operation_id(conn, row)
+        for row in rows:
+            await self._record_lifecycle(row, "retired_superseded_brief")
+        return len(rows)
+
     async def has_brief_ahead(self, session: str, queue_id: int | None = None) -> bool:
         """Whether the session's startup brief, other than row ``queue_id``, is still to go."""
         async with self._tx() as conn:
