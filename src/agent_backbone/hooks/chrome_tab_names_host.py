@@ -32,7 +32,7 @@ def title_for(agent: str) -> str:
 
 def groups(state_dir: Path, now: float | None = None) -> list[dict]:
     now = time.time() if now is None else now
-    found = []
+    found: dict[int, dict | None] = {}
     for path in sorted((state_dir / "chrome-groups").glob("*.json")):
         try:
             record = json.loads(path.read_text())
@@ -45,8 +45,10 @@ def groups(state_dir: Path, now: float | None = None) -> list[dict]:
             continue  # one unreadable record must not cost the others their names
         if now - seen > MAX_AGE_SECONDS:
             continue
-        found.append({"group": group, "tabs": tab_ids, "title": title_for(agent)})
-    return found
+        # Two agents naming one group: neither name is proven, so it keeps its title.
+        entry = {"group": group, "tabs": tab_ids, "title": title_for(agent)}
+        found[group] = None if group in found else entry
+    return [entry for entry in found.values() if entry is not None]
 
 
 def read_message(stream) -> dict | None:

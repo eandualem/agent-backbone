@@ -128,6 +128,8 @@ class TestNativeHost:
         (tmp_path / "chrome-groups" / "broken.json").write_text("{")
         self._record(tmp_path, "bad-tabs", 10, ["not a tab id"])
         self._record(tmp_path, "string-tabs", 12, "5")
+        self._record(tmp_path, "founder-desk", 13, [6])
+        self._record(tmp_path, "simon", 13, [7])  # one group, two agents: left alone
         assert host.groups(tmp_path) == [
             {"group": 8, "tabs": [3], "title": "Ada"},
             {"group": 7, "tabs": [1, 2], "title": "Contract Desk"},
