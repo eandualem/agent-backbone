@@ -372,6 +372,8 @@ class AgentStore:
 
             old_manifest = manifest_path(self.config.data_dir, name)
             new_manifest = manifest_path(self.config.data_dir, new_name)
+            if new_manifest.exists():
+                raise ValueError(f"'{new_name}' already has a skill manifest; choose another name")
             copied = moved = False
             try:
                 if source.exists():

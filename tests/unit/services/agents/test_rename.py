@@ -227,6 +227,19 @@ async def test_a_failed_rename_moves_the_manifest_back(db, store):
     assert old.exists() and not manifest_path(store.config.data_dir, "desk").exists()
 
 
+async def test_a_rename_onto_an_existing_manifest_is_refused_and_both_survive(db, store):
+    from agent_backbone.skills import manifest_path
+
+    mine = manifest_path(store.config.data_dir, "api")
+    theirs = manifest_path(store.config.data_dir, "desk")
+    mine.parent.mkdir(parents=True)
+    mine.write_text('{"repo": "/a", "links": []}')
+    theirs.write_text('{"repo": "/d", "links": [".agents/skills/x"]}')
+    with pytest.raises(ValueError, match="skill manifest"):
+        await store.rename("api", "desk")
+    assert '"/a"' in mine.read_text() and '"/d"' in theirs.read_text()
+
+
 async def test_rename_keeps_a_pending_restart(db, store):
     row = await db.transitions.create(agent_name="api", delay_seconds=3600, message="go on")
     await store.rename("api", "backend")
