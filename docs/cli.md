@@ -156,7 +156,10 @@ Checks and prints ✓/✗ for: data dir and `.env`, database reachable, each
 known agent's directory and runtime binary, tmux on PATH, at least one agent
 CLI on PATH (with none, it fails and names the supported CLIs; `agent start`
 would fail next), API key, GitHub credentials and effective intake, Telegram
-allowlist, whether the API is up, and any stored setting the current rules reject (an older release may have accepted it; it is ignored in favour of the default until fixed). Exit code 1 if anything failed.
+allowlist, whether the API is up, and any stored setting the current rules reject (an older release may have accepted it; it is ignored in favour of the default until fixed). Exit code 1 if anything failed. For each
+installed agent CLI it also lists the capabilities that runtime lacks, with the
+issue tracking each ([runtime capabilities](runtime-capabilities.md)); these are
+reported, not failed.
 
 ## `backbone up [--detach] [--reload]` · `backbone down`
 

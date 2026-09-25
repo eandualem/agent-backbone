@@ -24,6 +24,7 @@ from agent_backbone.services.runtimes.base import (
     resolve_command,
     split_model_effort,
 )
+from agent_backbone.services.runtimes.capabilities import CAPABILITIES, unavailable
 from agent_backbone.services.terminal import capture_pane, query_environment_var
 
 RUNTIME_ENV_KEY = "BACKBONE_RUNTIME"
@@ -114,6 +115,7 @@ async def send_message(session_name: str, message: str, *, runtime_hint: str | N
 
 __all__ = [
     "AGENT_ENV_KEY",
+    "CAPABILITIES",
     "GENERIC_BUSY_FRAGMENTS",
     "RUNTIMES",
     "RUNTIME_ENV_KEY",
@@ -134,4 +136,5 @@ __all__ = [
     "sanitize_pane_content",
     "send_message",
     "split_model_effort",
+    "unavailable",
 ]

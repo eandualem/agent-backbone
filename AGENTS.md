@@ -135,6 +135,19 @@ Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way
   (`codex sandbox … --log-denials`, never under `/tmp`, which it treats as
   writable) and open exactly that.
 
+## Runtime parity
+
+A Backbone capability is never designed, merged or released for only one CLI.
+
+- **The contract declares support.** The capability contract (`services/runtimes/capabilities.py`, rendered in `docs/runtime-capabilities.md`) lists every user-reachable capability, including behaviour in hooks, launchers and helpers outside `services/runtimes`. Each row names the implementation path and the behaviour test for each runtime. A flag that defaults to off does not declare support. The CLI, `doctor` and the docs read their coverage from the contract. There is no separately maintained table that can drift from it.
+- **Every shipped adapter is in the contract** with its current support commitment, taken from the docs and the code. A gap stays open until it is fixed. Reducing a commitment, dropping an adapter or disabling a shipped capability is a separate explicit owner decision, never a way to close a gap.
+- **Equivalent behaviour is the gate.** A new or changed capability merges, counts as done and ships only when it gives the same user-visible outcome on every shipped adapter, verified by the same behaviour test run against each. The mechanism may differ per runtime. An open issue or a documented limitation authorises none of these steps. Not applicable only where the capability cannot exist on that adapter, for a reason recorded in the contract (for example, a plain shell runs no model). A missing integration or an upstream limit is a gap, never not applicable.
+- **Safety gates stay.** Parity answers or reports each runtime's own dialogs, refusals and sandbox. It never bypasses or weakens them.
+- **Upstream limits are escalated, not exempted.** When a runtime cannot provide the behaviour, record the evidence and pursue an equivalent mechanism or an upstream fix. Do not merge. Only the owner's explicit decision on a named capability makes an exception, and the contract records it with its issue, and the CLI and `doctor` report the capability as unavailable on that runtime.
+- **Shipped gaps are open defects.** Until fixed, the CLI and `doctor` report the capability as unavailable on the affected runtime. Documenting a gap does not close its issue.
+- **Every PR carries evidence.** It lists each shipped adapter with its test, plus a live check where the behaviour depends on the CLI itself (hooks, dialogs, browser tools, resume, instruction loading). Each receipt states whether the live check made a model call; paid inference needs the owner's approval. A registry test fails when a shipped adapter lacks the implementation for any contract row.
+- **Review checks** the contract row, the evidence for each runtime, and that no unapproved exception exists.
+
 ## Schema changes
 
 Edit `services/database/models.py`, then regenerate the **single** initial

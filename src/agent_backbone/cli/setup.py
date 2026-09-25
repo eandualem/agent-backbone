@@ -239,7 +239,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     from agent_backbone.config import invalid_settings
     from agent_backbone.services.database.engine import redact_url
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
-    from agent_backbone.services.runtimes import agent_clis, install_hint
+    from agent_backbone.services.runtimes import agent_clis, install_hint, unavailable
 
     ok = True
 
@@ -304,6 +304,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         check("an agent CLI on PATH", bool(found), install_hint())
         if found:
             note(f"  - runtimes installed: {', '.join(found)}")
+            # The capability contract: what each installed runtime lacks, and its issue.
+            for runtime_id in found:
+                if missing := unavailable(runtime_id):
+                    named = ", ".join(
+                        cap.id
+                        + (f" (#{cell.issue})" if (cell := cap.cells[runtime_id]).issue else "")
+                        for cap in missing
+                    )
+                    note(f"  ! {runtime_id} lacks: {named}")
+            note("    details: `backbone docs runtime-capabilities`")
 
         note("Security")
         check(

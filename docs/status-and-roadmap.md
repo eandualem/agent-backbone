@@ -58,20 +58,11 @@ every later CLI version or account.
 
 ## Runtimes
 
-These adapters are shipped. “Verified” records live checks performed during
-development; use `backbone runtimes` to see which binaries are installed locally.
-
-| Runtime | Unattended start | Brief at launch | State detection | Delivery | Approve |
-|---|---|---|---|---|---|
-| `claude` (Claude Code) | ✅ | ✅ system prompt | ✅ hooks + terminal | ✅ verified | ✅ |
-| `codex` | ✅ | ✅ first message | ✅ hooks + terminal | ✅ verified | ✅ |
-| `opencode` | ✅ (no trust dialog) | ✅ first prompt | ✅ hooks + terminal | ✅ verified | ✅ |
-| `deepcode` (Deep Code, DeepSeek) | ✅ (no trust dialog) | ✅ `-p` | ✅ terminal | ✅ verified | pending |
-| `gemini` | ✅ `--skip-trust` | ✅ first prompt | ✅ hooks + terminal | unverified¹ | — |
-| `aider` | — | first message | terminal, best effort | untested | — |
-| `shell` | — | none | terminal, best effort | — | — |
-
-¹ In a test with Gemini CLI 0.46, Google OAuth completed but the tested personal account was refused ("no longer supported for Gemini Code Assist for individuals"); the backbone reports such a session as `waiting_for_human`. Delivery to a signed-in Gemini session (e.g. `GEMINI_API_KEY`) has not been tested yet. Deep Code is `@vegamo/deepcode-cli`, the community CLI DeepSeek's docs point to; its permission dialog has not been captured yet, so `agent approve` refuses it until then.
+Seven adapters are shipped: `claude`, `codex`, `gemini`, `opencode`,
+`deepcode`, `aider` and `shell`. Which capabilities work on each, and the issue
+tracking each gap, is in [runtime capabilities](runtime-capabilities.md),
+generated from the capability contract; `backbone doctor` reports from the
+same source. Use `backbone runtimes` to see which CLIs are installed locally.
 
 ## Current limits
 

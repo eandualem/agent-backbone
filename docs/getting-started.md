@@ -14,7 +14,7 @@ steps 1–6 and says where it needs you.
 - [uv](https://docs.astral.sh/uv/) (or `pipx`)
 - At least one agent CLI on your `PATH`: `claude`, `codex`, `gemini`,
   `opencode`, `deepcode`, `aider`. Sign in through that CLI before starting it
-  here. See [runtime support](status-and-roadmap.md#runtimes) for limits.
+  here. See [runtime capabilities](runtime-capabilities.md) for what works on each.
 
 ## 1. Install the CLI
 
