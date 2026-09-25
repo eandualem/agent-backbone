@@ -28,7 +28,7 @@ claims support that the adapter's code does not declare.
 |---|---|---|---|---|---|---|---|
 | Message delivery into the session | ✅ | ✅ | ? not verified live | ✅ | ✅ | ? not verified live | ✅ plumbing tests only |
 | Folder-trust dialog answered at start | ✅ | ✅ | ✅ `--skip-trust` | n/a | n/a | ? not checked | n/a |
-| Brief reaches a fresh session before other work | ✅ | ❌ #290 an earlier launch's brief, and other messages, can arrive first | ? | ✅ | ? | ❌ #290 | n/a |
+| Brief reaches a fresh session before other work | ✅ | ✅ | ? | ✅ | ? | ? not verified live | n/a |
 | Current brief after resume | ❌ #273 the resumed session keeps its stored system prompt | ❌ #273 | ❌ #273 | ❌ #273 | ❌ #273 | ❌ #273 | n/a |
 | Brief followed after context compaction | ✅ | ✅ | ? #291 | ❌ #291 the rule is kept but no longer followed | ? #291 | ? #291 | n/a |
 | Project AGENTS.md loaded at start | ✅ | ✅ | ❌ #286 reads GEMINI.md unless context.fileName is set | ✅ | ? #286 | ❌ #286 reads only files passed to it | n/a |
@@ -42,6 +42,7 @@ claims support that the adapter's code does not declare.
 | Alert when an automatic safety check refuses an action | ✅ | ❌ #279 | ❌ #279 | ❌ #279 | ❌ #279 | ❌ #279 | n/a |
 | Browser tab group named after the agent | ✅ with `backbone chrome install` | ❌ #270 | ❌ #270 | ❌ #270 | ❌ #270 | ❌ #270 | n/a |
 | Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ #280 resumes the directory's latest session | ❌ #280 | n/a |
+| Reasoning effort chosen with the model (`model:effort`) | ✅ | ✅ | ? #296 whether the CLI has an effort setting is not checked | ❌ #296 the CLI has one; Backbone refuses the effort | ❌ #296 the CLI has one; Backbone refuses the effort | ? #296 whether the CLI has an effort setting is not checked | n/a |
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ #281 | ❌ #281 | n/a |
 | Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ #285 | ❌ #285 | ❌ #285 | ❌ #285 | n/a |
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ #293 | ❌ #293 | ❌ #293 | ❌ #293 | n/a |
@@ -50,7 +51,7 @@ claims support that the adapter's code does not declare.
 | agent output from the runtime's own record | ✅ | ✅ | ❌ #284 | ❌ #284 | ❌ #284 | ❌ #284 | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ #295 | ✅ | ❌ #295 | ❌ #295 | n/a |
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? #294 | ❌ #294 adopted a forged brief | ? #294 | ? #294 | n/a |
-| Deep review run from and for this runtime | ✅ | ✅ | ❌ #288 | ❌ #288 | ❌ #288 | ❌ #288 | n/a |
+| Deep review run from and for this runtime | ✅ | ? #288 a Claude reviewer launched from Codex's sandbox is not measured | ❌ #288 | ❌ #288 | ❌ #288 | ❌ #288 | n/a |
 
 | Capability | Fallback where it is unavailable |
 |---|---|
@@ -70,6 +71,7 @@ claims support that the adapter's code does not declare.
 | Alert when an automatic safety check refuses an action | Watch the agent's output (`agent output`) for refused actions. |
 | Browser tab group named after the agent | A Codex agent can name its own group with its Chrome client's `nameSession`. |
 | Resume the agent's own session | Start the agent fresh; its handoff carries the context. |
+| Reasoning effort chosen with the model (`model:effort`) | Set the effort in the CLI's own settings, or run the agent on Claude Code or Codex. |
 | No-approval mode (unattended) | Run the agent attended and answer its prompts. |
 | Writes bounded while unattended | Run unattended agents only on a sandboxed runtime (Codex). |
 | Automatic permission review (agents.auto_review) | Review permission prompts yourself, or use the runtime's own policy. |

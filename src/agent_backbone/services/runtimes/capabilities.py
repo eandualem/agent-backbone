@@ -114,6 +114,7 @@ _B2 = "live: #271 batch 2 (session record)"
 _B3 = "live: #271 batch 3 (scratch probe)"
 _B4 = "live: #271 batch 4 (scratch probe)"
 _PROVENANCE = "live: #273 post-fix round 3 (forged briefs declined)"
+_FRESH = "live: #290 post-fix probe (stale brief retired, current brief first)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
 _NO_MODEL = "a plain shell runs no model"
 
@@ -155,11 +156,11 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Check that the agent's first reply follows its brief; start it fresh if not.",
         implemented=lambda rt: rt.brief_mode != "none",
         claude=_ok(_B3),
-        codex=_gap(290, "an earlier launch's brief, and other messages, can arrive first"),
+        codex=_ok(_FRESH),
         gemini=_unverified(),
         opencode=_ok(_B3),
         deepcode=_unverified(),
-        aider=_gap(290),
+        aider=_unverified(note="not verified live"),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -345,6 +346,22 @@ CAPABILITIES: tuple[Capability, ...] = (
         shell=_na("a plain shell has no conversation to resume"),
     ),
     _row(
+        "reasoning-effort",
+        "Reasoning effort chosen with the model (`model:effort`)",
+        "src/agent_backbone/services/runtimes/base.py",
+        fallback=(
+            "Set the effort in the CLI's own settings, or run the agent on Claude Code or Codex."
+        ),
+        implemented=lambda rt: bool(rt.efforts),
+        claude=_ok(_LAUNCH),
+        codex=_ok(_LAUNCH),
+        gemini=_unverified(296, "whether the CLI has an effort setting is not checked"),
+        opencode=_gap(296, "the CLI has one; Backbone refuses the effort"),
+        deepcode=_gap(296, "the CLI has one; Backbone refuses the effort"),
+        aider=_unverified(296, "whether the CLI has an effort setting is not checked"),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
         "unattended",
         "No-approval mode (unattended)",
         "src/agent_backbone/services/runtimes/base.py",
@@ -463,7 +480,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Run the review with Claude Code or Codex as the reviewer.",
         implemented=_declared("deep-review"),
         claude=_ok("docs/deep-reviews.md"),
-        codex=_ok("docs/deep-reviews.md"),
+        codex=_unverified(288, "a Claude reviewer launched from Codex's sandbox is not measured"),
         gemini=_gap(288),
         opencode=_gap(288),
         deepcode=_gap(288),
