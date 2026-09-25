@@ -6,6 +6,7 @@ escalation-target agent) decide.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -126,6 +127,117 @@ async def check_permission_waiting(config: BackboneConfig, states: AgentStates) 
         if await notify_humans(config, text, agent=name, actions=actions):
             _permission_notified.mark(key)
             log.info("Sent permission-waiting notification for %s", name)
+
+
+_denial_notified = RecentKeys(1800)
+"""(agent, category, summary) refusals the humans were told about."""
+_denial_log_offset: int | None = None
+"""How far into the action log refusals have been read; None until the first check."""
+_denial_log_inode: int | None = None
+"""The log file read; the prune job's atomic rotation replaces it with a new one."""
+_denial_watch_started = 0.0
+"""When the watch began: refusals stamped earlier are never replayed."""
+_denials_read: dict[tuple, None] = {}
+"""Identities of refusals already read, oldest first, so re-reading a rotated log adds
+nothing twice. Kept by count, not age: the log keeps its newest lines however old."""
+_DENIALS_READ_LIMIT = 5000
+"""More identities than the rotated log (2,000 lines) can hold."""
+_denials_unsent: dict[tuple, dict] = {}
+"""Notices no integration accepted, by (agent, category, summary); tried again next tick."""
+_UNSENT_LIMIT = 50
+
+
+def denial_text(name: str, record: dict) -> str:
+    """One refusal, for a person: what, why, and what they can actually do."""
+    summary = str(record.get("summary") or record.get("tool") or "a tool call")[:120]
+    category = str(record.get("category") or "")[:80]
+    why = "Claude's auto-mode safety check refused it" + (f" ({category})" if category else "")
+    route = (
+        "No approval prompt was shown, and it cannot be approved from here. "
+        f"If you want it done, allow it in the terminal (tmux attach -t {name}, then "
+        f"/permissions) or do it yourself, and tell {name} to continue."
+    )
+    return (
+        f"\U0001f6ab Refused — {name}\n"
+        f"Action: {summary}\n{why}.\n{route}\n"
+        "The backbone does not retry refused actions."
+    )
+
+
+def _new_denials(config: BackboneConfig) -> list[dict]:
+    """Refusal records appended to the action log since the last check."""
+    global _denial_log_offset, _denial_log_inode, _denial_watch_started
+    path = config.action_log_path
+    if _denial_log_offset is None:
+        _denial_watch_started = time.time()  # nothing from before the watch is replayed
+    try:
+        status = path.stat()
+    except OSError:
+        _denial_log_offset, _denial_log_inode = 0, None
+        return []
+    size = status.st_size
+    if _denial_log_offset is None:
+        _denial_log_offset, _denial_log_inode = size, status.st_ino
+        return []
+    if status.st_ino != _denial_log_inode or size < _denial_log_offset:
+        # Rotated (a new file) or truncated: re-read; identities skip what was read.
+        _denial_log_offset, _denial_log_inode = 0, status.st_ino
+    with path.open("rb") as log_file:
+        log_file.seek(_denial_log_offset)
+        chunk = log_file.read(size - _denial_log_offset)
+    end = chunk.rfind(b"\n") + 1  # a line still being written waits for the next check
+    _denial_log_offset += end
+    records = []
+    for line in chunk[:end].splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or record.get("action") != "permission_denied":
+            continue
+        try:
+            stamp = float(record.get("ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        # Byte order, not timestamps, decides what is new: concurrent hooks may
+        # append out of timestamp order.
+        identity = (record.get("session"), record.get("tool_use_id") or stamp)
+        if stamp < _denial_watch_started or identity in _denials_read:
+            continue
+        _denials_read[identity] = None
+        if len(_denials_read) > _DENIALS_READ_LIMIT:
+            del _denials_read[next(iter(_denials_read))]
+        records.append(record)
+    return records
+
+
+async def check_permission_denials(config: BackboneConfig) -> None:
+    """Tell the humans about a refusal no dialog showed (a Claude auto-mode
+    classifier denial): the agent looks busy, and nobody would know.
+
+    One notice per agent and refused action within the dedup window, in the
+    agent's own Telegram topic, without buttons: there is nothing to approve
+    remotely. A notice no integration accepted is tried again next tick; a
+    refusal from before the watch is never replayed, and no action is retried.
+    """
+    pending = [*_denials_unsent.values(), *_new_denials(config)]
+    _denials_unsent.clear()
+    tried = set()  # one send per action and pass, even when it fails
+    for record in pending:
+        name = str(record.get("session") or "")
+        if name not in config.agents:
+            continue
+        key = (name, record.get("category"), record.get("summary"))
+        if key in tried or _denial_notified.seen(
+            key, ttl_seconds=config.timing.escalation_dedup_seconds
+        ):
+            continue
+        tried.add(key)
+        if await notify_humans(config, denial_text(name, record), agent=name):
+            _denial_notified.mark(key)
+            log.warning("Sent permission-denied notification for %s", name)
+        elif key in _denials_unsent or len(_denials_unsent) < _UNSENT_LIMIT:
+            _denials_unsent[key] = record  # the notice is retried, never the action
 
 
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:

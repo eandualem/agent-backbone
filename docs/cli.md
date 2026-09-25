@@ -580,6 +580,37 @@ The hooks prefer `$BACKBONE_STATE_DIR` (exported into every session the
 backbone starts), so one global install serves any data directory. Restart
 running sessions afterwards.
 
+## `backbone chrome install|uninstall`
+
+Optional. Claude-in-Chrome titles every agent's tab group "Claude", so
+agents sharing one Chrome are hard to tell apart. With this installed, a
+group an agent's session opened is renamed after the agent (`contract-desk`
+→ "Contract Desk"):
+
+1. The Claude Code hook reads each `tabs_context_mcp` result (the Claude
+   extension's own account of the session's tab group; page output from other
+   tools is never trusted) and records the group and its tabs in
+   `<state_dir>/chrome-groups/<agent>.<group>.json`. The agent does nothing
+   different.
+2. A small extension, loaded once, asks a native messaging host for those
+   records (no network, no API key) and renames a group only while it still
+   has Claude's default title and still holds one of the recorded tabs. A
+   group a person renamed, and every other group, is left alone. Claude's
+   own extension tracks its groups by id, so it keeps working, and it does
+   not overwrite a title that is no longer its default.
+
+```bash
+backbone chrome install      # registers the host, copies the extension
+# then in Chrome: chrome://extensions → Developer mode → Load unpacked → the printed folder
+backbone chrome uninstall    # removes both; also remove the extension in Chrome
+```
+
+The extension needs `tabGroups`, `tabs`, `nativeMessaging` and `alarms`; it
+never reads pages. A group is renamed within about 30 seconds of the agent's
+first `tabs_context_mcp` result for it; a group a `navigate` call opened
+first is named at the agent's next `tabs_context_mcp`. Only Claude Code agents are covered (Codex drives Chrome
+through its own extension), and only Google Chrome's default user directory.
+
 ## `backbone templates`
 
 Find, edit and preview injected instructions. `list [--json]` shows sources and
