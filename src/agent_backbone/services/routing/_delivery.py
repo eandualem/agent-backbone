@@ -583,6 +583,11 @@ async def safe_deliver(
         # too; the cooperative inbox is the safe way to resolve that ambiguity.
         return await finish(DeliveryOutcome.AWAITING_ACK, queue=True)
 
+    if db is not None and await db.queue.has_brief_ahead(session_name, queue_id):
+        # A fresh session's instructions come before its work (a runtime that
+        # takes its brief as a message): it is still being set up.
+        return await finish(DeliveryOutcome.SETTLING, queue=kind != "issue")
+
     if kind == SUBSCRIPTION_KIND and queue_id is not None and db is not None:
         # A drained high batch may already have reached the working agent as
         # hook context. Settle that right before pasting, under the session

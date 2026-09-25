@@ -132,3 +132,168 @@ async def test_forget_clears_pending_hook_context_offers(db, store):
     assert offer_context(store.config.state_dir, "api", "7", "[via:gmail] mail")
     assert await store.forget("api")
     assert claim_context(store.config.state_dir, "api", "7") == "missing"
+
+
+async def test_rename_moves_the_skill_manifest(db, store):
+    """Left under the old name, it would keep links alive for an agent that is gone."""
+    from agent_backbone.skills import manifest_path
+
+    old = manifest_path(store.config.data_dir, "api")
+    old.parent.mkdir(parents=True)
+    old.write_text('{"repo": "/r", "links": []}')
+    await store.rename("api", "desk")
+    assert not old.exists()
+    assert manifest_path(store.config.data_dir, "desk").exists()
+
+
+async def test_forget_releases_the_agents_own_skill_links(db, store, tmp_path):
+    from agent_backbone.skills import manifest_path
+
+    skills = tmp_path / "skill-store"
+    (skills / "tidy").mkdir(parents=True)
+    await db.settings.set("skills.store", str(skills))
+    await store.refresh()
+    link = tmp_path / ".agents" / "skills" / "tidy"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(skills / "tidy")
+    manifest = manifest_path(store.config.data_dir, "api")
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f'{{"repo": "{tmp_path}", "links": [".agents/skills/tidy"]}}', encoding="utf-8"
+    )
+    assert await store.forget("api")
+    assert not link.is_symlink()
+    assert not manifest.exists()
+
+
+async def test_forget_releases_links_in_the_checkout_the_manifest_records(db, store, tmp_path):
+    """The agent's directory changed after its last launch: its links are in the old one."""
+    from agent_backbone.skills import manifest_path
+
+    skills = tmp_path / "skill-store"
+    (skills / "tidy").mkdir(parents=True)
+    await db.settings.set("skills.store", str(skills))
+    old_checkout = tmp_path / "old-checkout"
+    old_link = old_checkout / ".agents" / "skills" / "tidy"
+    old_link.parent.mkdir(parents=True)
+    old_link.symlink_to(skills / "tidy")
+    same_name = tmp_path / ".agents" / "skills" / "tidy"  # in the agent's current directory
+    same_name.parent.mkdir(parents=True)
+    same_name.symlink_to(skills / "tidy")
+    await store.refresh()
+    manifest = manifest_path(store.config.data_dir, "api")
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f'{{"repo": "{old_checkout}", "links": [".agents/skills/tidy"]}}', encoding="utf-8"
+    )
+    assert await store.forget("api")
+    assert not old_link.is_symlink()
+    assert same_name.is_symlink()
+
+
+async def test_forget_keeps_the_manifest_when_its_links_cannot_be_released(db, store, tmp_path):
+    from agent_backbone.skills import manifest_path
+
+    await db.settings.set("skills.store", str(tmp_path / "skill-store"))
+    await store.refresh()
+    manifest = manifest_path(store.config.data_dir, "api")
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(f'{{"repo": "{tmp_path}", "links": [".agents/skills/tidy"]}}')
+    with patch("agent_backbone.skills.materialize", side_effect=OSError("read-only checkout")):
+        assert await store.forget("api")
+    assert manifest.exists()  # a later cleanup still knows those links
+
+
+async def test_a_manifest_that_cannot_move_aborts_the_rename(db, store):
+    from agent_backbone.skills import manifest_path
+
+    old = manifest_path(store.config.data_dir, "api")
+    old.parent.mkdir(parents=True)
+    old.write_text('{"repo": "/r", "links": []}')
+    with patch("pathlib.Path.rename", side_effect=OSError("busy")), pytest.raises(OSError):
+        await store.rename("api", "desk")
+    assert "api" in {row["name"] for row in await db.agents.list()} and old.exists()
+
+
+async def test_a_failed_rename_moves_the_manifest_back(db, store):
+    from agent_backbone.skills import manifest_path
+
+    old = manifest_path(store.config.data_dir, "api")
+    old.parent.mkdir(parents=True)
+    old.write_text('{"repo": "/r", "links": []}')
+    with patch.object(db.agents, "rename", AsyncMock(side_effect=RuntimeError("db down"))):
+        with pytest.raises(RuntimeError):
+            await store.rename("api", "desk")
+    assert old.exists() and not manifest_path(store.config.data_dir, "desk").exists()
+
+
+async def test_a_rename_onto_a_registered_agent_leaves_both_manifests(db, store, tmp_path):
+    from agent_backbone.config import AgentSpec
+    from agent_backbone.skills import manifest_path
+
+    await store.register(AgentSpec(name="desk", dir=str(tmp_path), runtime="codex"))
+    mine = manifest_path(store.config.data_dir, "api")
+    theirs = manifest_path(store.config.data_dir, "desk")
+    mine.parent.mkdir(parents=True)
+    mine.write_text('{"repo": "/a", "links": []}')
+    theirs.write_text('{"repo": "/d", "links": [".agents/skills/x"]}')
+    with pytest.raises(ValueError, match="already an agent"):
+        await store.rename("api", "desk")
+    assert '"/a"' in mine.read_text() and '"/d"' in theirs.read_text()
+
+
+async def test_a_forgotten_agents_leftover_manifest_is_released_before_its_name_is_reused(
+    db, store, tmp_path
+):
+    """Its links could not be released at forget; a rename to its name retries."""
+    from agent_backbone.skills import manifest_path
+
+    skills = tmp_path / "skill-store"
+    (skills / "tidy").mkdir(parents=True)
+    await db.settings.set("skills.store", str(skills))
+    await store.refresh()
+    checkout = tmp_path / "old-checkout"
+    link = checkout / ".agents" / "skills" / "tidy"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(skills / "tidy")
+    leftover = manifest_path(store.config.data_dir, "desk")
+    leftover.parent.mkdir(parents=True)
+    leftover.write_text(f'{{"repo": "{checkout}", "links": [".agents/skills/tidy"]}}')
+    await store.rename("api", "desk")
+    assert not link.is_symlink()
+    assert "desk" in {row["name"] for row in await db.agents.list()}
+
+
+async def test_a_leftover_manifest_that_still_cannot_be_released_refuses_the_rename(db, store):
+    from agent_backbone.skills import manifest_path
+
+    leftover = manifest_path(store.config.data_dir, "desk")
+    leftover.parent.mkdir(parents=True)
+    leftover.write_text('{"repo": "/d", "links": [".agents/skills/x"]}')
+    with patch("agent_backbone.skills.materialize", side_effect=OSError("read-only")):
+        with pytest.raises(ValueError, match="could not be released"):
+            await store.rename("api", "desk")
+    assert leftover.exists()
+
+
+async def test_a_case_only_rename_keeps_the_agents_own_manifest(db, store):
+    """On a case-insensitive filesystem the new name's manifest is the agent's own."""
+    from agent_backbone.skills import manifest_path
+
+    mine = manifest_path(store.config.data_dir, "api")
+    mine.parent.mkdir(parents=True)
+    mine.write_text('{"repo": "/a", "links": [".agents/skills/x"]}')
+    with (
+        patch("pathlib.Path.samefile", return_value=True),
+        patch.object(
+            store, "_release_skills", side_effect=AssertionError("released its own manifest")
+        ),
+    ):
+        await store.rename("api", "API")
+
+
+async def test_rename_keeps_a_pending_restart(db, store):
+    row = await db.transitions.create(agent_name="api", delay_seconds=3600, message="go on")
+    await store.rename("api", "backend")
+    moved = await db.transitions.get(row["id"])
+    assert moved["agent_name"] == "backend" and moved["status"] == "pending"

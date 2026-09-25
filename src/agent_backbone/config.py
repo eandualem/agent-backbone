@@ -22,6 +22,7 @@ backbone picks it up on its next refresh.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections.abc import Mapping
@@ -255,6 +256,15 @@ _POSITIVE_SETTINGS = frozenset(
 )
 
 
+def _is_absolute(path: str) -> bool:
+    """Whether ``path`` is absolute once ``~`` is expanded; an unknown home
+    (``~nobody/x``, a RuntimeError from ``expanduser``) is simply not."""
+    try:
+        return Path(path).expanduser().is_absolute()
+    except RuntimeError:
+        return False
+
+
 def validate_setting(key: str, value: Any) -> Any:
     """Check a key exists and coerce/validate the value against the default's type."""
     if key not in SETTINGS_DEFAULTS:
@@ -308,12 +318,15 @@ def validate_setting(key: str, value: Any) -> Any:
     if key == "skills.store":
         if not isinstance(value, str) or (value and not value.strip()):
             raise ValueError(f"{key}: expected a directory path, or an empty string to disable")
-        return value.strip()
+        value = value.strip()
+        if value and not _is_absolute(value):
+            raise ValueError(f"{key}: expected an absolute path (CLI and service run elsewhere)")
+        return value
     if key == "templates.dir":
         if not isinstance(value, str) or (value and not value.strip()):
             raise ValueError(f"{key}: expected a directory path, or an empty string for default")
         value = value.strip()
-        if value and not Path(value).expanduser().is_absolute():
+        if value and not _is_absolute(value):
             raise ValueError(f"{key}: expected an absolute path (CLI and service run elsewhere)")
         return value
     if key == "templates.maintainer":
@@ -873,15 +886,32 @@ def bootstrap_config(data_dir: str | Path | None = None) -> BackboneConfig:
     return build_config(resolve_data_dir(data_dir), settings={}, agents=AgentsConfig())
 
 
-def effective_settings(stored: dict[str, Any]) -> dict[str, Any]:
-    """Defaults overlaid with stored values (unknown keys are ignored)."""
-    merged = dict(SETTINGS_DEFAULTS)
+def invalid_settings(stored: dict[str, Any]) -> dict[str, str]:
+    """Stored values the current rules reject, with the reason: an older
+    release may have accepted them (``skills.store`` once allowed a relative
+    path). ``effective_settings`` falls back to the default for each."""
+    problems: dict[str, str] = {}
     for key, value in stored.items():
         if key in SETTINGS_DEFAULTS:
             try:
-                merged[key] = validate_setting(key, value)
-            except (ValueError, TypeError):
-                continue
+                validate_setting(key, value)
+            except (ValueError, TypeError) as exc:
+                problems[key] = str(exc)
+    return problems
+
+
+def effective_settings(stored: dict[str, Any]) -> dict[str, Any]:
+    """Defaults overlaid with stored values (unknown keys are ignored).
+
+    A stored value that is no longer valid falls back to the default, with
+    a warning; ``doctor`` reports it too, so it never goes quietly."""
+    merged = dict(SETTINGS_DEFAULTS)
+    problems = invalid_settings(stored)
+    for key, value in stored.items():
+        if key in SETTINGS_DEFAULTS and key not in problems:
+            merged[key] = validate_setting(key, value)
+    for key, reason in problems.items():
+        logging.getLogger(__name__).warning("Setting %s is ignored (default used): %s", key, reason)
     return merged
 
 

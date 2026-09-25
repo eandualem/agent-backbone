@@ -407,6 +407,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _patch_list_sessions([]):
             result = (
                 await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
@@ -429,6 +430,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(), _patch_send_message(True):
             result = (
                 await safe_deliver(
@@ -471,6 +473,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(), _patch_capture_pane("› Review the fallback routing logic"):
             result = (
                 await safe_deliver(
@@ -504,6 +507,160 @@ class TestSafeDeliver:
             send.assert_awaited_once()
             assert await db.queue.pending_count("ike") == 0
 
+    @pytest.mark.parametrize("priority", [False, True])
+    async def test_a_fresh_sessions_brief_goes_before_earlier_and_later_messages(
+        self, config, db, priority
+    ):
+        from agent_backbone.models import BRIEF_SOURCE
+        from agent_backbone.services.jobs.retry import drain_message_queue
+
+        await db.queue.enqueue(
+            session_name="ike", message="queued while offline", delivery_kind="direct_message"
+        )
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the brief",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        with _online(), _patch_send_message(True) as send:
+            receipt = await safe_deliver(
+                "ike",
+                "sent after the start",
+                config,
+                db=db,
+                delivery_kind="direct_message",
+                sender="worker",
+                priority=priority,
+            )
+            assert receipt.outcome == "settling" and receipt.queued
+            send.assert_not_awaited()
+            await drain_message_queue(config, db, None, active_sessions={"ike"})
+        assert "the brief" in send.await_args_list[0].args[1]
+
+    async def test_a_second_queued_brief_does_not_hold_the_first(self, config, db):
+        from agent_backbone.models import BRIEF_SOURCE
+        from agent_backbone.services.jobs.retry import drain_message_queue
+
+        for text in ("the old brief", "the new brief"):
+            await db.queue.enqueue(
+                session_name="ike",
+                message=text,
+                delivery_kind="direct_message",
+                source=BRIEF_SOURCE,
+            )
+        with _online(), _patch_send_message(True) as send:
+            await drain_message_queue(config, db, None, active_sessions={"ike"})
+        assert "the old brief" in send.await_args_list[0].args[1]
+
+    async def test_a_relaunch_drops_the_earlier_brief_and_sends_its_own_first(self, config, db):
+        """#290 and the brief-first order together: an undelivered brief from an
+        earlier launch never reaches the new session, and the current one goes
+        before a message sent after the start."""
+        from agent_backbone.models import BRIEF_SOURCE
+        from agent_backbone.services.jobs.retry import drain_message_queue
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the brief of the earlier launch",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        assert await db.queue.retire_pending_briefs("ike") == 1  # what a launch does first
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the current brief",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        with _online(), _patch_send_message(True) as send:
+            receipt = await safe_deliver(
+                "ike",
+                "sent after the start",
+                config,
+                db=db,
+                delivery_kind="direct_message",
+                sender="worker",
+            )
+            assert receipt.queued
+            await drain_message_queue(config, db, None, active_sessions={"ike"})
+        sent = [call.args[1] for call in send.await_args_list]
+        assert "the current brief" in sent[0]
+        assert not any("the brief of the earlier launch" in text for text in sent)
+
+    async def test_a_leased_brief_of_an_earlier_launch_is_retired_too(self, db):
+        """Its session is gone; a recovered lease must not deliver it to the next."""
+        from agent_backbone.models import BRIEF_SOURCE
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the brief of the earlier launch",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        assert len(await db.queue.dequeue("ike")) == 1  # leased by a worker that died
+        assert await db.queue.retire_pending_briefs("ike") == 1
+        await db.queue.expire_stale_leases(max_age_minutes=0)
+        assert await db.queue.dequeue("ike") == []
+
+    async def test_a_checkpointed_brief_of_an_earlier_launch_is_retired_too(self, db):
+        """Read from the inbox by a session that ended before acknowledging it."""
+        from agent_backbone.models import BRIEF_SOURCE
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the brief of the earlier launch",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        assert len(await db.queue.checkpoint("ike")) == 1  # read at an inbox checkpoint
+        assert await db.queue.retire_pending_briefs("ike") == 1
+        assert await db.queue.sessions_with_pending() == []
+
+    async def test_retiring_an_uncertain_brief_gives_the_held_queue_a_fresh_window(self, db):
+        """Like acknowledging it: messages that waited behind the hold do not expire at once."""
+        from sqlalchemy import text
+
+        from agent_backbone.models import BRIEF_SOURCE
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the brief of the earlier launch",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+            uncertain=True,
+        )
+        await db.queue.enqueue(
+            session_name="ike", message="waited behind the hold", delivery_kind="direct_message"
+        )
+        async with db.engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00+00:00' "
+                    "WHERE status = 'pending'"
+                )
+            )
+        assert await db.queue.retire_pending_briefs("ike") == 1
+        assert await db.queue.expire_pending(max_age_minutes=30) == []
+        assert await db.queue.sessions_with_pending() == ["ike"]
+
+    async def test_an_inbox_read_hands_over_the_brief_before_anything_else(self, db):
+        """A fresh session that reads its inbox before the brief is pasted still
+        gets the brief first: it is the oldest row, queued before the session."""
+        from agent_backbone.models import BRIEF_SOURCE
+
+        await db.queue.enqueue(
+            session_name="ike",
+            message="the current brief",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        await db.queue.enqueue(
+            session_name="ike", message="sent after the start", delivery_kind="direct_message"
+        )
+        read = await db.queue.checkpoint("ike")
+        assert [row["message"] for row in read] == ["the current brief", "sent after the start"]
+
     async def test_agent_working_blocks_even_priority(self, config):
         with _online(snap=_BUSY_SNAP):
             assert (
@@ -514,6 +671,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(snap=_BUSY_SNAP):
             result = (
                 await safe_deliver(
@@ -549,6 +707,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(), _patch_send_message(False):
             result = (
                 await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
@@ -560,6 +719,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(snap=_UNKNOWN_SNAP), _patch_send_message(True):
             result = (
                 await safe_deliver("ike", "Hello", config, db=mock_db, **_issue_kwargs())
@@ -572,6 +732,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.deliveries.query.return_value = [
             {
                 "repo": "example/orchestration",
@@ -593,6 +754,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.deliveries.query.side_effect = [
             [],
             [
@@ -618,6 +780,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.deliveries.query.side_effect = [
             [],
             [
@@ -649,6 +812,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.deliveries.query.return_value = []
         order: list[str] = []
 
@@ -679,6 +843,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.deliveries.query.return_value = []
         mock_db.deliveries.claim.return_value = None
         with (
@@ -696,6 +861,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(), _patch_send_message(True):
             result = (
                 await safe_deliver(
@@ -768,6 +934,7 @@ class TestSafeDeliver:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with patch(
             f"{_DELIV}.get_session_intelligence",
             new_callable=AsyncMock,
@@ -794,6 +961,7 @@ class TestPlanResponseDelivery:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(snap=_PLAN_SNAP), _patch_send_message(True) as send:
             result = (
                 await safe_deliver(
@@ -814,6 +982,7 @@ class TestPlanResponseDelivery:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _online(snap=_PERMISSION_SNAP), _patch_send_message(True) as send:
             result = (
                 await safe_deliver("ike", "2", config, db=mock_db, delivery_kind="plan_response")
@@ -828,6 +997,7 @@ class TestPlanResponseDelivery:
             mock_db = AsyncMock()
             mock_db.queue.held_receipt.return_value = None
             mock_db.queue.has_uncertain.return_value = False
+            mock_db.queue.has_brief_ahead.return_value = False
             with _online(snap=snap), _patch_send_message(True) as send:
                 result = (
                     await safe_deliver(
@@ -842,6 +1012,7 @@ class TestPlanResponseDelivery:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         with _patch_list_sessions([]):
             result = (
                 await safe_deliver("ike", "2", config, db=mock_db, delivery_kind="plan_response")
@@ -859,6 +1030,7 @@ class TestDeliveryReport:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         row_id = 1 if status == "inserted" else None
         mock_db.queue.enqueue.return_value = EnqueueResult(status, row_id)
         return mock_db
@@ -885,6 +1057,7 @@ class TestDeliveryReport:
         mock_db = AsyncMock()
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
         mock_db.queue.enqueue.side_effect = RuntimeError("disk full")
         with _online(snap=_BUSY_SNAP):
             report = await safe_deliver(

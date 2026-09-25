@@ -45,7 +45,8 @@ async def list_skills(config=Depends(get_config)):
             spec.name
             for spec in config.agents
             if entry.valid
-            and set(entry.tags) & ({t.lower() for t in spec.tags} | {"all", f"agent:{spec.name}"})
+            and set(entry.tags)
+            & ({t.lower() for t in spec.tags} | {"all", f"agent:{spec.name.lower()}"})
         ]
         items.append({**SkillView.from_skill(entry).model_dump(), "reaches": reaches})
     return {
@@ -86,7 +87,7 @@ async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
         raise HTTPException(
             status_code=422,
             detail="the skill must live inside a registered agent's directory; "
-            "run `backbone skills add` from the terminal for other paths",
+            "run `backbone skills add --local` from the terminal for other paths",
         )
     try:
         skill = add_skill(

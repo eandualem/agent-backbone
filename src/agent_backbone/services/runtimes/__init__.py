@@ -92,6 +92,19 @@ async def resolve_runtime(
     return detect_runtime(pane_content)
 
 
+def agent_clis() -> list[str]:
+    """The agent CLIs the backbone can start (the ``shell`` runtime is not one)."""
+    return [rt.id for rt in RUNTIMES.values() if rt.binary and rt.id != "shell"]
+
+
+def install_hint() -> str:
+    """What to do when no agent CLI (or not the chosen one) is on PATH."""
+    return (
+        f"install one of these agent CLIs and sign in to it: {', '.join(agent_clis())} "
+        "(Requirements in `backbone docs getting-started`); `backbone runtimes` then lists it"
+    )
+
+
 async def send_message(session_name: str, message: str, *, runtime_hint: str | None = None) -> bool:
     """Paste ``message`` into a session and submit it the way its runtime expects."""
     pane_content = await capture_pane(session_name, lines=80)
@@ -110,8 +123,10 @@ __all__ = [
     "RuntimeDiagnostic",
     "SubmissionUnconfirmed",
     "TranscriptEntry",
+    "agent_clis",
     "detect_runtime",
     "get_runtime",
+    "install_hint",
     "read_brief",
     "read_usage_jsonl",
     "resolve_command",

@@ -113,10 +113,41 @@ class TestDoctor:
     def test_passes_with_valid_setup(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
         assert _run(["init"]) == 0
-        with patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"):
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+        ):
             code = _run(["doctor"])
         assert code == 0
         assert "All good" in capsys.readouterr().out
+
+    def test_no_agent_cli_is_a_problem_that_names_them(self, tmp_path, monkeypatch, capsys):
+        """A newcomer must not read "All good." and then fail at `agent start` (#260)."""
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=False),
+        ):
+            code = _run(["doctor"])
+        out = capsys.readouterr().out
+        assert code == 1 and "All good" not in out
+        assert "FAIL an agent CLI on PATH" in out
+        flat = " ".join(out.split())  # the hint wraps at the terminal width
+        assert "claude, codex" in flat and "backbone docs getting-started" in flat
+
+    def test_reports_a_stored_setting_that_is_now_ignored(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        ignored = {"skills.store": "skills.store: expected an absolute path"}
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch("agent_backbone.config.invalid_settings", return_value=ignored),
+        ):
+            code = _run(["doctor"])
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "FAIL setting skills.store" in out and "backbone config set skills.store" in out
 
 
 class TestAgentCommands:

@@ -148,6 +148,8 @@ def parse_tags(value: object) -> tuple[str, ...]:
 
 
 def validate_tags(tags: tuple[str, ...]) -> tuple[str, ...]:
+    """The tags, lowercased as ``parse_tags`` reads them (``agent:Builder`` → ``agent:builder``)."""
+    tags = tuple(dict.fromkeys(tag.lower() for tag in tags))
     for tag in tags:
         if not TAG_RE.match(tag):
             raise ValueError(f"invalid tag {tag!r}: lowercase letters, digits, and : . _ -")
@@ -207,7 +209,7 @@ def read_store(store: Path) -> list[Skill]:
 
 def select_skills(skills: list[Skill], tags: tuple[str, ...], agent_name: str) -> list[Skill]:
     """The valid skills an agent with ``tags`` receives, in store order."""
-    mine = {tag.lower() for tag in tags} | {ALL_TAG, f"{AGENT_TAG_PREFIX}{agent_name}"}
+    mine = {tag.lower() for tag in tags} | {ALL_TAG, f"{AGENT_TAG_PREFIX}{agent_name.lower()}"}
     return [skill for skill in skills if skill.valid and set(skill.tags) & mine]
 
 
@@ -220,7 +222,7 @@ def write_tags(skill_dir: Path, tags: tuple[str, ...]) -> None:
 
 def _edit_frontmatter(text: str, tags: tuple[str, ...], *, name: str | None = None) -> str:
     """Prepare a complete edit before a skill is moved or its file is replaced."""
-    validate_tags(tags)
+    tags = validate_tags(tags)
     parts = _split_frontmatter(text)
     if parts is None:
         raise ValueError("SKILL.md has no frontmatter")
@@ -293,7 +295,7 @@ def add_skill(
     target_name = name or source.name
     if not NAME_RE.match(target_name):
         raise ValueError(f"invalid skill name {target_name!r}")
-    validate_tags(tags)
+    tags = validate_tags(tags)
     target = store / target_name
     if (target.exists() or target.is_symlink()) and not replace:
         raise ValueError(f"skill {target_name!r} already exists in the store (use --replace)")
@@ -427,6 +429,36 @@ def _write_manifest(path: Path, repo_dir: Path, links: list[str]) -> None:
     os.replace(tmp, path)
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    if a == b:
+        return True
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
+
+
+def _links_of_others(manifest: Path, repo_dir: Path) -> set[str]:
+    """The links other agents' manifests record in this same checkout."""
+    links: set[str] = set()
+    for path in manifest.parent.glob("*.json") if manifest.parent.is_dir() else ():
+        if _same_file(path, manifest):  # its own, however the filesystem spells it
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (
+            isinstance(data, dict)
+            and isinstance(data.get("repo"), str)
+            and Path(data["repo"]).resolve() == repo_dir.resolve()
+        ):
+            recorded = data.get("links")
+            if isinstance(recorded, list):
+                links.update(item for item in recorded if isinstance(item, str))
+    return links
+
+
 def _links_sharing_git_dir(manifest_dir: Path, git_dir: Path) -> set[str]:
     """Every manifest's links whose repository uses ``git_dir`` — several
     agents can share one checkout, and worktrees share one ``info/exclude``."""
@@ -442,7 +474,9 @@ def _links_sharing_git_dir(manifest_dir: Path, git_dir: Path) -> set[str]:
             continue
         other = _common_git_dir(Path(data["repo"]))
         if other is not None and other == git_dir:
-            links.update(str(item) for item in data.get("links", []) if isinstance(item, str))
+            recorded = data.get("links")
+            if isinstance(recorded, list):
+                links.update(item for item in recorded if isinstance(item, str))
     return links
 
 
@@ -482,7 +516,9 @@ def materialize(
     result = Materialization()
     previous = set(_read_manifest(manifest))
     wanted = {f"{directory}/{skill.name}": skill for directory in dirs for skill in selected}
-    for rel in sorted(previous - set(wanted)):
+    # Another agent in this checkout may still be given the same link.
+    shared = _links_of_others(manifest, repo_dir)
+    for rel in sorted(previous - set(wanted) - shared):
         link = repo_dir / rel
         if _points_into(link, store):
             link.unlink()

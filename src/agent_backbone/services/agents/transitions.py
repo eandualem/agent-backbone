@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.database import format_iso, parse_iso
-from agent_backbone.services.runtimes import RUNTIMES
+from agent_backbone.services.runtimes import RUNTIMES, install_hint
 
 if TYPE_CHECKING:
     from agent_backbone.config import AgentSpec, BackboneConfig
@@ -84,7 +84,7 @@ def validate_transition(config: BackboneConfig, spec: AgentSpec, req: Transition
         raise ValueError(f"Unknown runtime: {runtime}")
     rt = RUNTIMES[runtime]
     if not rt.available():
-        raise ValueError(f"Runtime '{runtime}' binary not found")
+        raise ValueError(f"Runtime '{runtime}' binary not found: {install_hint()}")
     if req.resume and runtime != spec.runtime:
         raise ValueError(
             f"resume continues a conversation in the same CLI: the agent runs {spec.runtime}, "

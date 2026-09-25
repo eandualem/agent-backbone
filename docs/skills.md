@@ -45,7 +45,7 @@ Codex, Gemini and OpenCode (`.agents/skills`) — the start path:
 2. creates `<repo>/<dir>/<name>` → `<store>/<name>` symlinks for them, records
    each in `<data_dir>/skills/materialized/<agent>.json`, and removes links from
    that manifest that are no longer selected (only while they still point into
-   the store);
+   the store, and never one another agent in the same checkout still records);
 3. keeps the link names out of `git status` through a backbone-owned block in
    `.git/info/exclude` — git's per-clone ignore list, never a tracked file — so
    the repository's own skills stay tracked and only the links are hidden;
@@ -67,7 +67,7 @@ Plain shells, `aider` and `deepcode` receive nothing.
 backbone skills list [--tag TAG] [--json]   # store skills, tags, and the agents each reaches
 backbone skills show NAME                   # print a store skill
 backbone skills path [NAME]                 # the store, or one skill's directory
-backbone skills add PATH [--name N] [--tag T]… [--replace]
+backbone skills add PATH [--name N] [--tag T]… [--replace] [--local]
 backbone skills tag NAME [TAG…]             # replace tags; none = reaches nobody
 backbone skills preview AGENT [--json]      # next launch: skills, directories, link state
 backbone skills AGENT                       # the same, for short
@@ -79,7 +79,9 @@ so no second copy survives — rewrites its top-level frontmatter `name` if `--n
 renames it, writes the tags, and commits. Nested metadata and description text are
 preserved. The command goes through the API when the backbone is running, so an
 agent inside a sandbox that cannot write to `~/skills` still has a sanctioned
-path; the backbone does the move. The API is
+path; the backbone does the move. The API accepts only a path inside a registered
+agent's directory; for any other path (a download, say), run `--local` from your
+terminal, which moves it with your own permissions. The API is
 `GET /api/skills`, `POST /api/skills`, `PUT /api/skills/{name}/tags` and
 `GET /api/skills/preview/{agent}`.
 

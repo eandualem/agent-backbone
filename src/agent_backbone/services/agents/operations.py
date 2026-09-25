@@ -16,7 +16,7 @@ from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.launch import StartResult
 from agent_backbone.services.agents.store import refuse_case_twin
-from agent_backbone.services.runtimes import RUNTIMES
+from agent_backbone.services.runtimes import RUNTIMES, install_hint
 from agent_backbone.services.terminal import session_exists
 
 if TYPE_CHECKING:
@@ -159,7 +159,7 @@ async def start_resolved(
         if runtime not in RUNTIMES:
             raise ValueError(f"Unknown runtime: {runtime}")
         if not RUNTIMES[runtime].available():
-            raise ValueError(f"Runtime '{runtime}' binary not found")
+            raise ValueError(f"Runtime '{runtime}' binary not found: {install_hint()}")
         if not spec.path.is_dir():
             raise ValueError(f"Directory does not exist: {spec.path}")
     except ValueError as exc:

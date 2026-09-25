@@ -236,8 +236,10 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    from agent_backbone.config import invalid_settings
     from agent_backbone.services.database.engine import redact_url
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
+    from agent_backbone.services.runtimes import agent_clis, install_hint
 
     ok = True
 
@@ -257,6 +259,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             async with _common.Direct(boot) as direct:
                 config = direct.config
                 check(f"database reachable: {redact_url(config.database_url)}", True)
+                stored = await direct.db.settings.all()
         except Exception as exc:
             check(
                 f"database reachable: {redact_url(boot.database_url)}",
@@ -264,6 +267,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 f"{exc}; run `backbone init`",
             )
             return 1
+        # A value an older release accepted may now be ignored for its default.
+        for key, reason in invalid_settings(stored).items():
+            check(
+                f"setting {key}",
+                False,
+                f"ignored: {reason}; fix with `backbone config set {key} …`",
+            )
         templates = config.template_dirs.editable
         origin = "templates.dir" if config.templates.dir else "default"
         check(
@@ -289,8 +299,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
         note("Tools")
         check("tmux on PATH", shutil.which("tmux") is not None, "install tmux")
-        found = [rt.id for rt in REGISTRY.values() if rt.binary and rt.available()]
-        note(f"  - runtimes installed: {', '.join(found) or 'none'}")
+        found = [rt.id for rt in REGISTRY.values() if rt.id in agent_clis() and rt.available()]
+        # Starting an agent needs one: without it the next step fails.
+        check("an agent CLI on PATH", bool(found), install_hint())
+        if found:
+            note(f"  - runtimes installed: {', '.join(found)}")
 
         note("Security")
         check(

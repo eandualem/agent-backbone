@@ -106,7 +106,7 @@ async def test_preflight_failure_is_recorded_without_attempting_launch(db, tmp_p
     with (
         patch.object(RUNTIMES["codex"], "available", return_value=False),
         patch(f"{_LAUNCH}.start_session", AsyncMock()) as start,
-        pytest.raises(ValueError, match="binary not found"),
+        pytest.raises(ValueError, match="binary not found: install one of these agent CLIs"),
     ):
         await start_resolved(store, store.config, spec, req, db=db)
     start.assert_not_awaited()

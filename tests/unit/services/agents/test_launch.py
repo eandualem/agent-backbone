@@ -297,14 +297,88 @@ class TestStartAgentBrief:
             await start_agent(self._spec(tmp_path, "aider"), config, brief_file=role, db=db)
         assert db.queue.enqueue.await_args.kwargs["message"] == "[via:backbone] You are the scout."
 
+    async def test_a_launch_stops_when_earlier_briefs_cannot_be_retired(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.side_effect = RuntimeError("database is locked")
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            result = await start_agent(self._spec(tmp_path, "aider"), config, db=db)
+        assert result.ok is False
+        started.assert_not_awaited()
+        db.queue.enqueue.assert_not_awaited()
+
+    async def test_a_launch_stops_when_its_brief_cannot_be_queued(self, tmp_path):
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 0
+        db.queue.enqueue.side_effect = RuntimeError("database is locked")
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            result = await start_agent(self._spec(tmp_path, "aider"), config, db=db)
+        assert result.ok is False
+        started.assert_not_awaited()
+
+    async def test_a_resumed_conversation_that_never_got_its_brief_is_sent_the_current_one(
+        self, tmp_path
+    ):
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 1  # the earlier session ended first
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start, _cmd, _trust, _wait:
+            await start_agent(self._spec(tmp_path, "aider"), config, resume=True, db=db)
+        db.queue.enqueue.assert_awaited_once()
+
+    async def test_a_message_brief_is_queued_before_the_session_exists(self, tmp_path):
+        """Nothing sent once the session is ready can overtake it."""
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 0
+
+        async def session_starts(*_args, **_kwargs):
+            db.queue.enqueue.assert_awaited_once()
+            return True
+
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            started.side_effect = session_starts
+            assert (await start_agent(self._spec(tmp_path, "aider"), config, db=db)).ok
+
+    @pytest.mark.parametrize("runtime", ["claude", "aider", "shell"])
+    async def test_a_launch_retires_briefs_queued_for_an_earlier_one(self, tmp_path, runtime):
+        config = bootstrap_config(tmp_path / "data")
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 1
+        exists, start, _cmd, _trust, _wait = self._launch()
+
+        async def session_starts(*_args, **_kwargs):
+            # The earlier briefs are gone before the new session exists.
+            db.queue.retire_pending_briefs.assert_awaited_once_with("ike")
+            return True
+
+        with exists, start as started, _cmd, _trust, _wait:
+            started.side_effect = session_starts
+            assert (await start_agent(self._spec(tmp_path, runtime), config, db=db)).ok
+        started.assert_awaited_once()
+
     async def test_shell_and_resume_get_no_brief(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start, _cmd, _trust, _wait:
             await start_agent(self._spec(tmp_path, "shell"), config, db=db)
             await start_agent(self._spec(tmp_path, "aider"), config, resume=True, db=db)
         db.queue.enqueue.assert_not_awaited()
+
+    async def test_the_session_carries_its_launchs_operation_id(self, tmp_path):
+        """How a recovered restart recognises the session it started."""
+        config = bootstrap_config(tmp_path / "data")
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            await start_agent(self._spec(tmp_path, "claude"), config, operation_id="op-1")
+        assert started.await_args.kwargs["environment"]["BACKBONE_OPERATION_ID"] == "op-1"
 
     async def test_unknown_runtime_is_refused(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")

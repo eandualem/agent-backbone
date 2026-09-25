@@ -304,12 +304,40 @@ class AgentStore:
 
     @serialized_mutation
     async def forget(self, name: str) -> bool:
+        spec = self._agents.get(name)
         removed = await self._db.agents.delete(name)
         await self.refresh()
         if removed:
             # A pending hook-context offer must not reach the next agent of this name.
             shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
+            if spec is not None:
+                self._release_skills(spec.name)
         return removed
+
+    def _release_skills(self, name: str) -> bool:
+        """Remove a forgotten agent's skill links that no other agent in its
+        checkout still records, and its manifest, so they keep nothing alive.
+        False when the links could not be released: the manifest is kept."""
+        import json
+
+        from agent_backbone.skills import manifest_path, materialize
+
+        manifest = manifest_path(self.config.data_dir, name)
+        if not manifest.exists():
+            return True
+        store = self.config.skills.store_path
+        try:
+            # The links live in the checkout the manifest records, which may
+            # not be the agent's directory any more (``agent set dir=``).
+            repo = json.loads(manifest.read_text(encoding="utf-8")).get("repo")
+            if store is not None and isinstance(repo, str):
+                materialize(store, Path(repo), (), [], manifest)
+        except (OSError, ValueError, AttributeError) as exc:
+            # Kept: it is what a later cleanup of those links goes by.
+            log.warning("Could not release the skill links of '%s': %s", name, exc)
+            return False
+        manifest.unlink(missing_ok=True)
+        return True
 
     async def rename(self, name: str, new_name: str) -> AgentSpec:
         """Rename a stopped non-swarm agent and retain its runtime resume record."""
@@ -340,15 +368,40 @@ class AgentStore:
             target = self.config.state_dir / f"{new_name}.json"
             if target.exists():
                 raise ValueError(f"'{new_name}' already has saved state; choose another name")
-            copied = False
+            # Its skill manifest follows too, or the old name would keep its links
+            # alive; it moves with the rename or not at all.
+            from agent_backbone.skills import manifest_path
+
+            old_manifest = manifest_path(self.config.data_dir, name)
+            new_manifest = manifest_path(self.config.data_dir, new_name)
+            others = [n for n in self._agents.names if n != name]
+            if new_name in others or case_twin(others, new_name):
+                raise ValueError(f"'{new_name}' is already an agent")
+            # A manifest under a name no agent holds is a forgotten agent's,
+            # kept because its links could not be released then: retry now. On a
+            # case-insensitive filesystem a case-only rename names the agent's own.
+            leftover = new_manifest.exists() and not (
+                old_manifest.exists() and old_manifest.samefile(new_manifest)
+            )
+            if leftover and not self._release_skills(new_name):
+                raise ValueError(
+                    f"'{new_name}' still has a forgotten agent's skill links that could not be "
+                    "released; choose another name"
+                )
+            copied = moved = False
             try:
                 if source.exists():
                     atomic_write_text(target, source.read_text())
                     copied = True
+                if old_manifest.exists():
+                    old_manifest.rename(new_manifest)
+                    moved = True
                 await self._db.agents.rename(name, new_name)
             except BaseException:
                 if copied:
                     target.unlink(missing_ok=True)
+                if moved:
+                    new_manifest.rename(old_manifest)
                 raise
             source.unlink(missing_ok=True)
             (self.config.state_dir / f"{name}.starting").unlink(missing_ok=True)

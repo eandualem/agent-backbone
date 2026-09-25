@@ -97,6 +97,12 @@ class TestSelect:
         assert [s.name for s in chosen] == ["coders", "everyone", "mine", "python-only"]
         assert [s.name for s in select_skills(read_store(tmp_path), (), "ike")] == ["everyone"]
 
+    def test_an_agent_tag_matches_a_mixed_case_agent_name(self, tmp_path):
+        path = make_skill(tmp_path, "notes")
+        write_tags(path, ("agent:Builder",))
+        assert parse_skill(path).tags == ("agent:builder",)
+        assert [s.name for s in select_skills(read_store(tmp_path), (), "Builder")] == ["notes"]
+
     def test_invalid_skills_are_never_selected(self, tmp_path):
         path = make_skill(tmp_path, "broken", tags="all")
         (path / "SKILL.md").write_text("no frontmatter")
@@ -430,6 +436,21 @@ class TestMaterialize:
         exclude = (repo / ".git" / "info" / "exclude").read_text()
         assert "/.claude/skills/a" not in exclude and "/.agents/skills/b" in exclude
 
+    def test_a_link_another_agent_in_the_checkout_still_gets_is_kept(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        manifests = tmp_path / "data" / "skills" / "materialized"
+        for agent in ("app", "worker"):
+            materialize(
+                store, repo, (".claude/skills",), read_store(store), manifests / f"{agent}.json"
+            )
+        # app moves to a runtime that reads another directory; worker still reads this one
+        result = materialize(
+            store, repo, (".agents/skills",), read_store(store), manifests / "app.json"
+        )
+        assert result.removed == [] and (repo / ".claude" / "skills" / "a").is_symlink()
+
     def test_repository_owned_name_wins_as_a_conflict(self, tmp_path):
         store = tmp_path / "store"
         make_skill(store, "a", tags="all")
@@ -496,3 +517,39 @@ async def test_commit_store_initialises_history_on_first_use(tmp_path):
     assert calls[0] == ("init", "-q")
     assert calls[1] == ("add", "-A") and calls[3] == ("commit", "-q", "-m", "add x by leo")
     assert ("init", "-q") not in calls[4:]
+
+
+def test_a_sibling_manifest_without_a_links_list_is_ignored(tmp_path):
+    """A malformed manifest of another agent must not stop this agent's launch."""
+    from agent_backbone.skills import materialize
+
+    store = tmp_path / "store"
+    make_skill(store, "tidy")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "other.json").write_text(f'{{"repo": "{repo}", "links": null}}')
+    result = materialize(
+        store, repo, (".claude/skills",), read_store(store), manifests / "mine.json"
+    )
+    assert result.linked == [".claude/skills/tidy"]
+
+
+def test_an_agents_own_manifest_is_not_counted_as_anothers_under_another_spelling(tmp_path):
+    """A case-insensitive filesystem (here: a link) names one file two ways."""
+    from agent_backbone.skills import materialize
+
+    store = tmp_path / "store"
+    make_skill(store, "tidy")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    own = manifests / "desk.json"
+    materialize(store, repo, (".claude/skills",), read_store(store), own)
+    alias = manifests / "desk-alias.json"
+    alias.symlink_to(own)
+    result = materialize(store, repo, (), [], alias)
+    assert result.removed == [".claude/skills/tidy"]
+    assert not (repo / ".claude/skills/tidy").is_symlink()

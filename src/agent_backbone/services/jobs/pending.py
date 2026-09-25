@@ -61,7 +61,7 @@ async def deliver_pending_issues(
                     if entity
                 }
                 comment_ack_cache[key] = acknowledged
-            if name in acknowledged:
+            if name.lower() in acknowledged:  # tags are read lowercased
                 await db.acks.record(issue_number, name, repo=repo)
                 return True
         except Exception:

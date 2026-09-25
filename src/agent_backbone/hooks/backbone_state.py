@@ -493,7 +493,15 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
     current = current or {}
     session_id = payload.get("session_id") or current.get("session_id")
     runtime = os.environ.get("BACKBONE_RUNTIME", "").strip() or current.get("runtime")
-    model = observed_model(payload, current, event)
+    # An observed model belongs to one session of one runtime: a new one starts without it.
+    moved = any(
+        mine and theirs and mine != theirs
+        for mine, theirs in (
+            (session_id, current.get("session_id")),
+            (runtime, current.get("runtime")),
+        )
+    )
+    model = observed_model(payload, {} if moved else current, event)
 
     def state(new_state: str, reason: str | None = None, **extra) -> dict:
         record = {

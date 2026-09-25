@@ -46,6 +46,12 @@ log = logging.getLogger(__name__)
 SOURCE = "issue-dispatcher"
 
 
+def _registered(entity: str, config: BackboneConfig) -> str:
+    """A ``[from:X]`` tag's agent under its registered spelling: tags are read
+    lowercased, and case-only twins cannot be registered."""
+    return next((spec.name for spec in config.agents if spec.name.lower() == entity), entity)
+
+
 def _resolve_commenter_entity(
     event: IssueEvent, config: BackboneConfig, *, include_intent: bool = True
 ) -> str | None:
@@ -53,7 +59,7 @@ def _resolve_commenter_entity(
     if event.comment and event.comment.body:
         entity = parse_from_tag(event.comment.body)
         if entity:
-            return entity
+            return _registered(entity, config)
     return find_outgoing_comment(
         event.issue.number,
         action_log=config.action_log_path,
@@ -227,6 +233,7 @@ async def _dispatch_review(
     if review is None:
         return
     reviewer = parse_from_tag(review.body)
+    reviewer = _registered(reviewer, config) if reviewer else None
     audience = comment_audience(event.issue, reviewer, config)
     message = format_review_notification(event.issue, review)
     reviewer_session = resolve_entity_session(reviewer, config) if reviewer else None
