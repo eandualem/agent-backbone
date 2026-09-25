@@ -29,7 +29,11 @@ export async function nameGroups(api = chrome) {
     if (!match) continue;
     const tabs = await api.tabs.query({ groupId: entry.group });
     if (!tabs.some((tab) => entry.tabs.includes(tab.id))) continue;
-    await api.tabGroups.update(entry.group, { title: (match[1] ?? "") + entry.title });
+    try {
+      await api.tabGroups.update(entry.group, { title: (match[1] ?? "") + entry.title });
+    } catch {
+      continue; // closed since it was read: the other groups still get their names
+    }
     renamed += 1;
   }
   return renamed;

@@ -192,10 +192,11 @@ const groups = {
   4: { title: "⌛Claude" },        // status prefixes kept: working,
   6: { title: "🔔Claude" },        // waiting for permission,
   7: { title: "✅Claude" },        // done
+  8: { title: "Claude" },          // closes before its rename: skipped, the rest go on
 };
 const tabs = {
   1: [{ id: 10 }], 2: [{ id: 20 }], 3: [{ id: 99 }], 4: [{ id: 40 }], 6: [{ id: 60 }],
-  7: [{ id: 70 }],
+  7: [{ id: 70 }], 8: [{ id: 80 }],
 };
 const updates = [];
 const api = {
@@ -206,11 +207,15 @@ const api = {
     { group: 4, tabs: [40], title: "Regional Desk" },
     { group: 5, tabs: [50], title: "Gone" },
     { group: 6, tabs: [60], title: "Ada" },
+    { group: 8, tabs: [80], title: "Closing" },
     { group: 7, tabs: [70], title: "Simon" },
   ] }) },
   tabGroups: {
     get: async (id) => { if (!groups[id]) throw new Error("no group"); return groups[id]; },
-    update: async (id, change) => { updates.push([id, change.title]); },
+    update: async (id, change) => {
+      if (id === 8) throw new Error("no group");
+      updates.push([id, change.title]);
+    },
   },
   tabs: { query: async ({ groupId }) => tabs[groupId] ?? [] },
 };
