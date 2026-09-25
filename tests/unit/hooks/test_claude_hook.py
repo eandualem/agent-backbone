@@ -369,6 +369,10 @@ def test_a_prompt_time_survives_the_turns_later_records():
     prompted, _ = hook.derive(_payload("UserPromptSubmit", prompt=wrapped), {})
     assert prompted["prompted_at"] == prompted["ts"]
     assert prompted["prompt_digest"] == hook.bb.prompt_digest("go now")  # wrapper ignored
+    quoting = 'see <pasted_content id="1">x</pasted_content id="1">'
+    for prompt in (quoting, f'\n<pasted_content id="9">\n{quoting}\n</pasted_content id="9">\n'):
+        record, _ = hook.derive(_payload("UserPromptSubmit", prompt=prompt), {})
+        assert record["prompt_digest"] == hook.bb.prompt_digest(quoting)  # quoted tags kept
     stopped, _ = hook.derive(_payload("Stop"), prompted)
     assert stopped["prompted_at"] == prompted["prompted_at"]
     assert stopped["prompt_digest"] == prompted["prompt_digest"]
