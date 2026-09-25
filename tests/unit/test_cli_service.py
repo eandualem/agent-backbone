@@ -43,6 +43,7 @@ class TestMacOS:
         assert "<string>/opt/bin/backbone</string><string>up</string>" in text
         assert f"<string>{tmp_path / 'data'}</string>" in text
         assert "<key>KeepAlive</key><true/>" in text
+        assert "<key>ProcessType</key><string>Interactive</string>" in text
         assert run.call_args.args[0][:2] == ("launchctl", "bootstrap")
         assert "starts at login" in capsys.readouterr().out
 
