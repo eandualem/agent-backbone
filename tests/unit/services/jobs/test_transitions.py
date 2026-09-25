@@ -268,6 +268,34 @@ async def test_an_interrupted_retry_does_not_hide_the_launch_from_the_next(
     assert await _run(config, store, db) == {"ike": "started"}
 
 
+async def test_a_later_successful_launch_counts_over_an_earlier_failure(db, config, store, seams):
+    """A failed launch, then a retry that launched the replacement and died
+    before closing the row: the running replacement is this transition's."""
+    _, start, _ = seams
+    start.return_value = StartResult(ok=True, already_running=True)
+    row = await db.transitions.create(agent_name="ike")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-13")
+    for code in ("requested", "failed", "requested", "ready"):
+        await db.diagnostics.record(
+            category="startup", operation_id="op-13", code=code, severity="info", agent_name="ike"
+        )
+    assert await _run(config, store, db) == {"ike": "started"}
+
+
+async def test_a_launch_that_only_found_a_running_session_is_not_claimed(db, config, store, seams):
+    _, start, _ = seams
+    start.return_value = StartResult(ok=True, already_running=True)
+    row = await db.transitions.create(agent_name="ike")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-14")
+    for code in ("requested", "already_running"):
+        await db.diagnostics.record(
+            category="startup", operation_id="op-14", code=code, severity="info", agent_name="ike"
+        )
+    assert await _run(config, store, db) == {"ike": "failed"}
+
+
 async def test_a_running_session_without_a_recorded_launch_is_not_claimed(db, config, store, seams):
     _, start, _ = seams
     start.return_value = StartResult(ok=True, already_running=True)

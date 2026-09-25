@@ -172,8 +172,12 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
     records = await db.diagnostics.query(operation_id=operation_id, category="startup", limit=20)
     if not records:
         return None
-    # Newest first. The original launch's outcome is the oldest one: every
-    # retry, interrupted ones included, only adds its own later record.
+    # Newest first. A retry that found the session running records
+    # "already_running" under the same operation: that is not a launch
+    # outcome, so the newest real one counts. With nothing but
+    # "already_running", the session was running before this launch.
     codes = [record["code"] for record in records]
-    outcome = next((code for code in reversed(codes) if code != "requested"), "not_observed")
-    return None if outcome in {"failed", "exited", "already_running"} else outcome
+    outcomes = [code for code in codes if code not in {"requested", "already_running"}]
+    if not outcomes:
+        return None if "already_running" in codes else "not_observed"
+    return None if outcomes[0] in {"failed", "exited"} else outcomes[0]
