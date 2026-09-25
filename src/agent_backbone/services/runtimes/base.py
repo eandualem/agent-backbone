@@ -181,6 +181,11 @@ class Runtime:
     """How the agent brief reaches the runtime at launch: appended to the
     system prompt, passed as the first (initial) prompt, delivered as the
     first message once the agent is at its prompt, or not at all."""
+    brief_refresh: Literal["hook_context", "none"] = "none"
+    """How a resumed session gets its current brief (it keeps the one it
+    started with): handed to its ``SessionStart`` hook as context, which a
+    peer's message cannot imitate, or not at all (a gap: start the agent
+    fresh to apply a changed brief). Never as a chat message (#294)."""
     models: tuple[str, ...] = ()
     """Model ids known to work with ``--model`` (aliases or ids seen live).
     Examples for `backbone runtimes`, not an exhaustive list — the CLI's own
@@ -451,9 +456,10 @@ class Runtime:
         """The launch command, or None for a plain shell.
 
         ``brief_file`` is only handed over when ``brief_mode`` injects at
-        launch; a resumed session already has its brief, so initial-prompt
-        runtimes are not re-briefed on ``resume`` (a system prompt is
-        re-applied every launch). ``unattended`` adds the runtime's own
+        launch; on ``resume`` initial-prompt runtimes get none here. A
+        resumed session keeps its original brief, Claude Code's stored
+        system prompt included; a runtime with ``brief_refresh`` is handed
+        the current one through its hook instead. ``unattended`` adds the runtime's own
         no-approval switch (``unattended_args``) and ``writable_dirs`` the
         directories a sandboxed runtime may write outside the agent's own,
         both on a fresh start and on ``resume`` alike. Raises RuntimeError

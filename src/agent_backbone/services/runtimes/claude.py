@@ -76,6 +76,9 @@ class ClaudeCode(Runtime):
     aliases = ("claude-code", "claude code")
     binary = "claude"
     brief_mode = "system_prompt"
+    # A resumed session keeps its stored system prompt and declines a brief
+    # sent as a user message (measured on 2.1.282): its hook hands it over.
+    brief_refresh = "hook_context"
     models = ("opus", "sonnet", "haiku")  # Claude Code's own aliases
     # `claude --effort <level>`; levels as Claude Code itself lists them when
     # it rejects an unknown one (live capture).

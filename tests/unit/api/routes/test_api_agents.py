@@ -219,13 +219,18 @@ class TestStartAgent:
         assert queued[0]["delivery_kind"] == "direct_message"
         assert queued[0]["source"] == "agent-brief"
 
-    async def test_launch_injected_and_resumed_runtimes_are_not_rebriefed(
+    async def test_launch_injected_runtimes_and_shells_get_no_queued_brief(
         self, api_client, auth_headers, launch, api_app
     ):
         await api_client.post("/api/agents/ike/start", headers=auth_headers)  # claude
         await api_client.post(
             "/api/agents/ike/start", json={"runtime": "shell"}, headers=auth_headers
         )
+        assert await api_app.state.db.queue.sessions_with_pending() == []
+
+    async def test_a_resumed_session_is_never_queued_a_brief(
+        self, api_client, auth_headers, launch, api_app
+    ):
         await api_client.post(
             "/api/agents/ike/start",
             json={"runtime": "aider", "resume": True},

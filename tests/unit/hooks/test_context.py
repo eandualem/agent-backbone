@@ -6,6 +6,8 @@ import io
 import json
 from unittest.mock import patch
 
+import pytest
+
 from agent_backbone.hooks import backbone_state as bb
 from agent_backbone.hooks import claude_hook, codex_hook
 
@@ -118,3 +120,20 @@ def test_a_steer_left_when_the_turn_ends_never_reaches_the_next_task(tmp_path, m
         assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(5, "missed")]
         bb.clear_steer(tmp_path, "desk", "launch-x", 5)
         assert bb.steer_offers(tmp_path) == []
+
+
+@pytest.mark.parametrize("hook", [claude_hook, codex_hook])
+def test_a_session_takes_its_offers_at_session_start(tmp_path, monkeypatch, hook):
+    """#273: a resumed session takes its refreshed brief as it starts."""
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    bb.offer_steer(tmp_path, "desk", "launch-x", "brief-refresh", "the current brief")
+    out = _run(
+        hook,
+        tmp_path,
+        {"hook_event_name": "SessionStart", "session_id": "s", "source": "resume"},
+    )
+    data = json.loads(out)
+    assert data["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    assert data["hookSpecificOutput"]["additionalContext"] == "the current brief"
+    assert _run(hook, tmp_path, {"hook_event_name": "SessionStart", "session_id": "s"}) == ""
