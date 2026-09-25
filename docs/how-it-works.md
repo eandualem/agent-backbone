@@ -155,6 +155,7 @@ SessionEnd record expires; stale permission requests are not revived:
 | `PreToolUse ExitPlanMode` | `waiting_for_human` / `plan`, plan text saved to `<data_dir>/state/plans/<agent>.md` |
 | `PreToolUse AskUserQuestion` | `waiting_for_human` / `question` |
 | `PostToolUse` of either | `busy` |
+| `PermissionDenied` | no state change; a `permission_denied` record in the action log (see the refusal alert in [Telegram](telegram.md)) |
 | `SessionEnd` | `unknown` |
 
 | Codex event | State written |
