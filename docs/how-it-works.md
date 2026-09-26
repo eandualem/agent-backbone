@@ -186,10 +186,12 @@ SessionEnd record expires; stale permission requests are not revived:
 | `permission.asked` / `permission.replied` | `waiting_for_human` / `permission`, then `busy` |
 | `session.error` | `idle` |
 
-After each tool call of the root session the plugin also hands over what the
-backbone offered the working agent (a steer, a high-priority batch) as a user
-message in the running turn, with the turn's agent and model; when the turn
-ends (`idle`) it marks a steer still offered as missed.
+After each tool call of the root session during its turn, the plugin also
+hands over what the backbone offered the working agent (a steer, a
+high-priority batch) as a user message in the running turn, with the turn's
+agent and model; when the turn ends (`idle`) it marks a steer still offered as
+missed. A turn's first `busy` stamps `prompted_at`, as `UserPromptSubmit` does
+for Claude Code and Codex.
 
 The hooks parse actual `gh issue comment`, `gh pr comment` and `gh pr create`
 commands into `<data_dir>/state/actions.jsonl`, with repository and branch
@@ -414,8 +416,9 @@ what matched, stores each message in `events` (dedup) and delivers one
 `subscription` batch per agent and priority through `safe_deliver`: a
 reference per message — id, sender, subject, time, link — never the body.
 Normal batches grow in the queue while the agent is busy and never expire;
-a high batch for a working Claude Code or Codex agent is offered through the
-runtime's PostToolUse hook and arrives on the agent's next tool call.
+a high batch for a working Claude Code, Codex or OpenCode agent is offered
+through the runtime's hook (PostToolUse; OpenCode's plugin) and arrives on the
+agent's next tool call.
 
 ## 5. Background monitoring
 

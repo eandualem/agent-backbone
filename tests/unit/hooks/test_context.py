@@ -61,44 +61,70 @@ def _run(hook, tmp_path, payload: dict) -> str:
 
 
 _OPENCODE_DRIVER = """
+import fs from "node:fs";
 const [plugin, steps, reply] = process.argv.slice(1);
 const { AgentBackbone } = await import(plugin);
 const prompts = [];
-const client = { session: { prompt: async (request) => {
-  prompts.push(request);
-  return reply === "error" ? { error: { name: "BadRequest" } } : { data: {} };
-} } };
+const client = { session: {
+  prompt: async (request) => {
+    prompts.push(request);
+    return reply === "error" ? { error: { name: "BadRequest" } } : { data: {} };
+  },
+  // "child" is a subagent resumed from an earlier run: no session.created for it.
+  get: async ({ path }) => ({
+    data: { id: path.id, parentID: path.id === "child" ? "s" : undefined },
+  }),
+} };
 const hook = await AgentBackbone({ client, directory: process.cwd() });
-const outputs = [];
+const status = (sessionID, type) => hook.event({ event: { type: "session.status",
+  properties: { sessionID, status: { type } } } });
+const state = `${process.env.BACKBONE_STATE_DIR}/desk.json`;
+const outputs = [], marks = [];
 for (const step of JSON.parse(steps)) {
-  if (step === "request") {
-    await hook["chat.params"]({ sessionID: "s", agent: "plan", message: {
-      agent: "plan", model: { providerID: "zen", modelID: "free", variant: "high" } } }, {});
-  } else if (step === "tool") {
+  if (step === "busy" || step === "request") {
+    await status("s", "busy");
+    if (step === "request") await hook["chat.params"]({ sessionID: "s", agent: "plan", message: {
+      agent: "plan", system: "house style",
+      model: { providerID: "zen", modelID: "free", variant: "high" } } }, {});
+  } else if (step === "tool" || step === "child-tool") {
+    const sessionID = step === "tool" ? "s" : "child";
+    if (sessionID === "child") await status("child", "busy");
     const output = { title: "read", output: "file text", metadata: {} };
-    await hook["tool.execute.after"]({ tool: "read", sessionID: "s", callID: "c" }, output);
+    await hook["tool.execute.after"]({ tool: "read", sessionID, callID: "c" }, output);
     outputs.push(output.output);
+  } else if (step === "mcp-tool") {
+    const output = { content: [{ type: "text", text: "mcp text" }] };
+    await hook["tool.execute.after"]({ tool: "srv_q", sessionID: "s", callID: "c" }, output);
+    outputs.push(output.content.map((block) => block.text).join("\\n\\n"));
+  } else if (step === "pause") {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  } else if (step === "failed-subtask") {
+    await hook["tool.execute.after"]({ tool: "task", sessionID: "s", callID: "c" }, undefined);
   } else {
-    await hook.event({ event: { type: "session.status",
-      properties: { sessionID: "s", status: { type: "idle" } } } });
-    await hook.event({ event: { type: "session.idle", properties: { sessionID: "s" } } });
+    const sessionID = step === "idle" ? "s" : "child";
+    await status(sessionID, "idle");
+    await hook.event({ event: { type: "session.idle", properties: { sessionID } } });
   }
+  try { marks.push(JSON.parse(fs.readFileSync(state, "utf8")).prompted_at ?? null); }
+  catch { marks.push(null); }
 }
-console.log(JSON.stringify({ prompts, outputs }));
+console.log(JSON.stringify({ prompts, outputs, marks }));
 """
 
 
 def _opencode(tmp_path, steps: list[str], *, reply: str = "ok") -> dict:
     """Drive the shipped OpenCode plugin with Node and a stand-in OpenCode client:
-    ``request`` (a model request of the turn), ``tool`` (a tool call ends) or
-    ``idle`` (the turn ends)."""
+    ``busy`` (the agent's session works), ``request`` (and a model request of
+    its turn), ``tool`` / ``mcp-tool`` (a tool call ends), ``failed-subtask`` (a
+    call ends without a result), ``idle`` (the turn ends), or ``child-tool`` /
+    ``child-idle`` for a resumed subagent. ``marks`` is the state record's
+    ``prompted_at`` after each step."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is needed to exercise the JavaScript plugin")
     hooks = tmp_path / "hooks"
     hooks.mkdir(exist_ok=True)
     (hooks / "opencode_hook.mjs").write_text(hook_source("opencode_hook.js").read_text())
-    shutil.copyfile(hook_source("backbone_state.py"), hooks / "backbone_state.py")
     done = subprocess.run(
         [node, "--input-type=module", "-e", _OPENCODE_DRIVER]
         + [(hooks / "opencode_hook.mjs").as_uri(), json.dumps(steps), reply],
@@ -229,8 +255,9 @@ def test_a_steer_left_when_the_turn_ends_never_reaches_the_next_task(
 
 
 def test_opencode_hands_offers_over_as_a_message_in_the_running_turn(tmp_path, monkeypatch):
-    """#276: OpenCode's own path for input typed while it works, keeping the
-    turn's agent and model; the tool's output is left as it was."""
+    """#276: OpenCode's own path for input typed while it works, keeping what
+    drives the turn (agent, model, a request's own system prompt); the tool's
+    output is left as it was."""
     monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
     bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:peer] go")
     result = _opencode(tmp_path, ["request", "tool"])
@@ -242,6 +269,7 @@ def test_opencode_hands_offers_over_as_a_message_in_the_running_turn(tmp_path, m
                 "agent": "plan",
                 "model": {"providerID": "zen", "modelID": "free"},
                 "variant": "high",
+                "system": "house style",
                 "parts": [{"type": "text", "text": "[via:backbone from:peer] go"}],
             },
         }
@@ -249,15 +277,56 @@ def test_opencode_hands_offers_over_as_a_message_in_the_running_turn(tmp_path, m
     assert result["outputs"] == ["file text"]
 
 
-@pytest.mark.parametrize(("steps", "reply"), [(["request", "tool"], "error"), (["tool"], "ok")])
-def test_opencode_never_drops_a_taken_offer(tmp_path, monkeypatch, steps, reply):
+@pytest.mark.parametrize(
+    ("steps", "reply", "outputs"),
+    [
+        (["request", "tool"], "error", ["file text\n\n[via:backbone from:peer] go"]),
+        (["busy", "tool"], "ok", ["file text\n\n[via:backbone from:peer] go"]),
+        (["request", "mcp-tool"], "error", ["mcp text\n\n[via:backbone from:peer] go"]),
+    ],
+)
+def test_opencode_never_drops_a_taken_offer(tmp_path, monkeypatch, steps, reply, outputs):
     """Refused by OpenCode, or no request seen yet to say which agent and model
-    run the turn: the taken text rides on the tool's output instead."""
+    run the turn: the taken text rides on the tool's result instead."""
     monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
     bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:peer] go")
-    result = _opencode(tmp_path, steps, reply=reply)
-    assert result["outputs"] == ["file text\n\n[via:backbone from:peer] go"]
+    assert _opencode(tmp_path, steps, reply=reply)["outputs"] == outputs
     assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(3, "taken")]
+
+
+def test_opencode_offers_wait_for_the_agents_own_session(tmp_path, monkeypatch):
+    """A resumed subagent's calls and turn end, or a call without a result,
+    neither take nor retire the offers: the root session's next call takes them."""
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:peer] go")
+    steps = ["request", "child-tool", "child-idle", "failed-subtask"]
+    result = _opencode(tmp_path, steps)
+    assert (result["prompts"], result["outputs"]) == ([], ["file text"])
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(3, "offered")]
+    assert _tool_call("opencode", tmp_path) == "[via:backbone from:peer] go"
+
+
+def test_opencode_takes_nothing_once_the_turn_has_ended(tmp_path, monkeypatch):
+    """A tool call that ends after its turn did (an interrupt) takes nothing:
+    the turn's end retired the steer, and the batch waits for the prompt."""
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    bb.offer_context(tmp_path, "desk", "7", "[via:gmail] mail")
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:peer] go")
+    result = _opencode(tmp_path, ["request", "idle", "tool"])
+    assert (result["prompts"], result["outputs"]) == ([], ["file text"])
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(3, "missed")]
+    assert bb.claim_context(tmp_path, "desk", "7") == "claimed"
+
+
+def test_opencode_marks_when_each_turn_starts(tmp_path):
+    """The steer check's receipt that another turn began (``prompted_at``, as
+    Claude Code and Codex record at ``UserPromptSubmit``): stamped when the
+    agent's session starts working, kept through the turn and a subagent's work."""
+    steps = ["request", "tool", "request", "child-tool", "child-idle", "idle", "pause", "busy"]
+    marks = _opencode(tmp_path, steps)["marks"]
+    assert marks[0] is not None
+    assert marks[:6] == [marks[0]] * 6
+    assert marks[7] > marks[0]
 
 
 @pytest.mark.parametrize("hook", [claude_hook, codex_hook])

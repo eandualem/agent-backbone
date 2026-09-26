@@ -915,14 +915,3 @@ if __name__ == "__main__" and sys.argv[1:] == ["--shell-actions"]:
             ]
         )
     )
-
-if __name__ == "__main__" and sys.argv[1:] in (["--take-context"], ["--retire-steers"]):
-    # The OpenCode plugin hands offers over, and retires steers when a turn
-    # ends, through the same file protocol as the Python hooks.
-    request = json.load(sys.stdin)
-    state_dir, agent = Path(request["state_dir"]), request["agent"]
-    launch_id = request.get("launch_id") or None
-    if sys.argv[1] == "--take-context":
-        print(json.dumps(take_context(state_dir, agent, launch_id)))
-    else:
-        retire_steers(state_dir, agent, launch_id)
