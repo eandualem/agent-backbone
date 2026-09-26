@@ -26,7 +26,8 @@ from agent_backbone.hooks.backbone_state import (
     steer_key,
     steer_offers,
 )
-from agent_backbone.services.agents import AgentState, agent_state, read_state_file
+from agent_backbone.services.agents import agent_state, read_state_file
+from agent_backbone.services.agents.models import WORKING_STATES
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence
 from agent_backbone.services.runtimes import get_runtime
@@ -193,14 +194,15 @@ async def _turn_ended(config: BackboneConfig, session_name: str, turn: _HookReco
 
     Only a new record counts: an old one left from an earlier session says
     nothing about the turn the terminal showed working. A new prompt ends
-    the turn; otherwise the agent's state decides."""
+    the turn; otherwise the agent's state decides, as it did for accepting it."""
     record = await asyncio.to_thread(_hook_record, config, session_name)
     if record is None or (turn is not None and record[0] == turn[0]):
         return False  # no new hook record: the hook's own retirement and the TTL apply
     if record[1] != (turn[1] if turn is not None else None):
         return True
+    # The same test the steer passed: working, not waiting on a dialog.
     snapshot = await agent_state(config, session_name)
-    return snapshot.state in (AgentState.IDLE, AgentState.UNKNOWN)
+    return snapshot.state not in WORKING_STATES
 
 
 async def settle_steers(config: BackboneConfig, db: BackboneDB) -> dict[str, int]:

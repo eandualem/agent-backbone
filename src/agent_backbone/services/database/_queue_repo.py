@@ -32,9 +32,9 @@ SUBSCRIPTION_BATCH_LIMIT = 25
 """Lines one subscription batch lists; further lines open the next batch."""
 
 SUBSCRIPTION_REPLAY_HOURS = 24
-"""How far back a replayed event is looked for among delivered batches. A poll
-replays only what it fetched since its last saved cursor (two minutes of
-overlap, a poll a minute); batches still waiting are always looked at."""
+"""How long a delivered batch is still looked at for a replayed event, from
+its delivery. A poll replays only what it fetched since its last saved cursor
+(two minutes of overlap, a poll a minute); waiting batches are always looked at."""
 
 
 @dataclass(frozen=True)
@@ -267,7 +267,7 @@ class QueueRepo(Repo):
                 text(
                     "SELECT id, operation_id, message, priority, status FROM message_queue "
                     "WHERE session_name = :session AND delivery_kind = :kind "
-                    "AND (status != 'delivered' OR enqueued_at >= :recent) ORDER BY id DESC"
+                    "AND (status != 'delivered' OR delivered_at >= :recent) ORDER BY id DESC"
                 ),
                 {
                     "session": session_name,
