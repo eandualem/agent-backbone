@@ -98,6 +98,8 @@ async def _record_start_failure(
 
 async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     refuse_case_twin(store.agents, req.name)
+    if req.inbox_only and req.watch:
+        raise ValueError("an inbox-only agent takes no part in GitHub routing: drop the watches")
     if req.directory:
         return await store.register_directory(
             req.directory,

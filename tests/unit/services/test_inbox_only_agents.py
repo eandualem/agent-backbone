@@ -135,6 +135,11 @@ async def test_it_takes_no_part_in_github_routing(db, tmp_path):
     assert spec.repo == ""
     with pytest.raises(ValueError, match="GitHub routing"):
         await store.watch("client", "example/shared")
+    await store.register(AgentSpec(name="app", dir=str(tmp_path), runtime="shell"))
+    req = StartRequest(name="app", inbox_only=True, watch=("example/shared",))
+    with pytest.raises(ValueError, match="GitHub routing"):
+        await resolve_agent(store, req)
+    assert store.agents.get("app").watches == ()
 
 
 async def test_a_pending_restart_fails_instead_of_stopping(config, db):

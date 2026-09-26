@@ -472,6 +472,8 @@ async def watch_repo(name: str, body: WatchRequest, store: AgentStore = Depends(
         spec = await store.watch(name, body.repo)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return AgentConfigView.from_spec(spec)
 
 

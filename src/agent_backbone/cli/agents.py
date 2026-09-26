@@ -339,8 +339,12 @@ async def _agent_start(args: argparse.Namespace) -> int:
         or args.resume
         or args.runtime
         or args.model
+        or args.watch
     ):
-        print("--inbox-only registers one agent without launching it: drop the launch options")
+        print(
+            "--inbox-only registers one agent without launching it: "
+            "drop the launch and watch options"
+        )
         return 1
     boot = await _common.read_client_config()
     if getattr(args, "always_on", False):
@@ -769,6 +773,9 @@ async def _agent(args: argparse.Namespace) -> int:
                             await direct.store.unwatch(name, repo)
                     except KeyError:
                         print(f"unknown agent '{name}'")
+                        return 1
+                    except ValueError as exc:
+                        print(f"error: {exc}")
                         return 1
             print(f"{name}: {'now watching' if sub == 'watch' else 'stopped watching'} {repo}")
         return 0
