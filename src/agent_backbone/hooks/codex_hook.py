@@ -223,7 +223,8 @@ def _watch_file(target: Path):
             "seen": saved.get("seen") if isinstance(saved.get("seen"), list) else None,
             "watching": saved.get("watching") is True,
             "requested": saved.get("requested") if isinstance(saved.get("requested"), dict) else {},
-            "turn": saved.get("turn") if isinstance(saved.get("turn"), int) else 0,
+            "turn": str(saved.get("turn") or ""),
+            "session": saved.get("session") if isinstance(saved.get("session"), int) else 0,
         }
         yield watch
         tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
@@ -235,14 +236,14 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
     """Log the reviewer's refusals that appear once a turn requested an approval.
 
     The session's start records the refusals already on screen. A
-    ``PermissionRequest`` starts a watch; every later hook of the turn reads
+    ``PermissionRequest`` starts a watch for its turn; every later hook reads
     the screen again and logs what appeared since the last reading, and a
-    read at the turn's end ends the watch, unless a newer request started it
-    again meanwhile. Each hook records its event at once, then reads the
-    screen when no other hook is reading it: hooks of parallel calls never
-    lose an event behind a slow read, and readings apply in the order taken.
-    A screen that cannot be read leaves everything for the next read. A
-    refusal is only read, never answered."""
+    read at that turn's end (or the next prompt's) ends the watch. Each hook
+    records its event at once, then reads the screen when no other hook is
+    reading it: hooks of parallel calls never lose an event behind a slow
+    read, and readings apply in the order taken, except one begun before a
+    new session started. A screen that cannot be read leaves everything for
+    the next read. A refusal is only read, never answered."""
     event = payload.get("hook_event_name", "")
     if event not in _LOOK_EVENTS or not os.environ.get("TMUX_PANE", "").strip():
         return
@@ -250,14 +251,16 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
     target = directory / f"{agent}.json"
     if event not in ("SessionStart", "PermissionRequest") and not target.exists():
         return
+    turn = str(payload.get("turn_id") or "")  # Codex names the turn of every turn event
     directory.mkdir(parents=True, exist_ok=True)
     with _watch_file(target) as watch:
         if watch is None:
             return
         if event == "SessionStart":  # a new session: what was seen before means nothing
-            watch.update(seen=None, watching=False, requested={}, turn=watch["turn"] + 1)
+            watch.update(seen=None, watching=False, requested={}, turn="")
+            watch["session"] += 1
         elif event == "PermissionRequest":
-            watch.update(watching=True, turn=watch["turn"] + 1)
+            watch.update(watching=True, turn=turn)
             tool_input = payload.get("tool_input")
             command = tool_input.get("command") if isinstance(tool_input, dict) else None
             if isinstance(command, str):
@@ -268,7 +271,7 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
                 watch["requested"][key] = summary  # every request of the turn, until it ends
         elif not watch["watching"]:
             return
-        turn = watch["turn"]
+        session = watch["session"]
     with _locked(directory / f"{agent}.look", LOOK_WAIT_SECONDS) as reading:
         screen = own_screen() if reading else None
         if screen is None:
@@ -276,8 +279,8 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
         found = screen_refusals(screen)  # every one tmux still holds
         now_seen = [_identity(entry) for entry, _ in found]
         with _watch_file(target) as watch:
-            if watch is None:
-                return
+            if watch is None or watch["session"] != session:
+                return  # begun before a new session started: its baseline is not this
             if watch["seen"] is not None:  # never guess what an unknown earlier screen held
                 now = bb.time.time()
                 fresh = found[len(found) - _new_count(watch["seen"], now_seen) :]
@@ -286,8 +289,20 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
                     record = refusal_record(entry, risk, now, ref, watch["requested"])
                     bb.append_action(state_dir, agent, record)
             watch["seen"] = now_seen
-            if event not in _WATCH_EVENTS and watch["turn"] == turn:
-                watch.update(watching=False, requested={})  # the turn's end ends its watch
+            if _ends_the_watch(event, turn, watch["turn"]):
+                watch.update(watching=False, requested={})
+
+
+def _ends_the_watch(event: str, turn: str, watched: str) -> bool:
+    """Whether a read at this event ends the watch of the turn ``watched``.
+
+    Its own turn's end does, and a new prompt does; an event of another turn
+    (delayed, or a subagent's) does not. Without turn ids, any end does."""
+    if event in ("Stop", "Interrupt"):
+        return not turn or not watched or turn == watched
+    if event == "UserPromptSubmit":
+        return not turn or turn != watched
+    return event == "SessionEnd"
 
 
 def tool_succeeded(payload: dict) -> bool:

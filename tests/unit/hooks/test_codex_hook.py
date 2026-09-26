@@ -173,11 +173,13 @@ class TestAutomaticReviewerRefusals:
     def _in_a_pane(self, monkeypatch):
         monkeypatch.setenv("TMUX_PANE", "%1")  # every screen read below is mocked
 
-    def _turn(self, tmp_path, *screens, events=("PermissionRequest", "PreToolUse"), command=""):
+    def _turn(
+        self, tmp_path, *screens, events=("PermissionRequest", "PreToolUse"), command="", turn="t1"
+    ):
         with patch.object(hook, "own_screen", side_effect=list(screens)) as look:
             for event in events:
                 request = {"tool_input": {"command": command}} if command else {}
-                payload = _payload(event, tool_name="Bash", **request)
+                payload = _payload(event, tool_name="Bash", turn_id=turn, **request)
                 hook.watch_refusals(payload, tmp_path, "cx")
         log = tmp_path / "actions.jsonl"
         logged = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -381,13 +383,37 @@ class TestAutomaticReviewerRefusals:
         monkeypatch.setattr(hook, "LOOK_WAIT_SECONDS", 0.1)  # the new request's read waits
 
         def read_across_a_new_request():  # the turn ended; the next turn requested again
-            self._turn(tmp_path, None, events=("PermissionRequest",))  # its read failed
+            self._turn(tmp_path, None, events=("PermissionRequest",), turn="t2")
             return REVIEWING
 
         with patch.object(hook, "own_screen", side_effect=read_across_a_new_request):
-            hook.watch_refusals(_payload("Interrupt"), tmp_path, "cx")
+            hook.watch_refusals(_payload("Interrupt", turn_id="t1"), tmp_path, "cx")
         assert self._watch(tmp_path)["watching"]
-        assert len(self._turn(tmp_path, DENIED, events=("Stop",))[0]) == 1
+        assert len(self._turn(tmp_path, DENIED, events=("Stop",), turn="t2")[0]) == 1
+
+    @pytest.mark.parametrize("late", ["t1", "sub-1"])  # a delayed end, a subagent's end
+    def test_the_end_of_another_turn_does_not_end_the_watch(self, tmp_path, late):
+        self._turn(tmp_path, REVIEWING, events=("PermissionRequest",), turn="t2")
+        self._turn(tmp_path, REVIEWING, events=("Stop",), turn=late)
+        assert self._watch(tmp_path)["watching"]
+
+    def test_a_new_prompt_ends_an_earlier_turns_watch(self, tmp_path):
+        self._turn(tmp_path, REVIEWING, events=("PermissionRequest",), turn="t1")
+        self._turn(tmp_path, REVIEWING, events=("UserPromptSubmit",), turn="t2")
+        assert not self._watch(tmp_path)["watching"]
+
+    def test_a_read_begun_before_a_new_session_is_not_its_baseline(self, tmp_path, monkeypatch):
+        self._turn(tmp_path, REVIEWING, events=("PermissionRequest",))
+        monkeypatch.setattr(hook, "LOOK_WAIT_SECONDS", 0.1)  # the new session's read waits
+
+        def read_across_a_new_session():  # the session restarts while this hook reads
+            self._turn(tmp_path, None, events=("SessionStart",))  # its own read failed
+            return DENIED  # the old session's screen
+
+        with patch.object(hook, "own_screen", side_effect=read_across_a_new_session):
+            hook.watch_refusals(_payload("PreToolUse", turn_id="t1"), tmp_path, "cx")
+        assert self._watch(tmp_path)["seen"] is None
+        assert self._turn(tmp_path, DENIED, DENIED, events=("SessionStart", "Stop"))[0] == []
 
     def test_outside_tmux_nothing_is_watched(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TMUX_PANE")
