@@ -61,9 +61,13 @@ def _register_jobs(app: FastAPI):
     async def _broadcast():
         # Reconcile out-of-band session churn to live Socket.IO subscribers.
         await state.feed.emit(only_if_changed=True)
-        # Inbox rows written outside a tell (expiry notices) reach their hint here.
+        # Inbox rows written outside a tell (expiry notices, escalations to an
+        # inbox-only agent) reach their hint here.
         try:
-            await state.feed.hint_inbox(state.db.queue.inbox_rows, complete=True)
+            inbox = tuple(spec.name for spec in state.config.agents if spec.inbox_only)
+            await state.feed.hint_inbox(
+                lambda: state.db.queue.inbox_rows(inbox_sessions=inbox), complete=True
+            )
         except Exception:
             log.exception("Inbox hint failed (non-fatal)")
 

@@ -339,3 +339,9 @@ async def test_its_inbox_read_returns_escalations(api_app, api_client, auth_head
         "/api/messages/inbox", headers=auth_headers, json={"session": "ike"}
     )
     assert [m["message"] for m in response.json()["messages"]] == ["[via:backbone] alert"]
+
+
+async def test_its_escalations_count_towards_its_inbox_hint(db):
+    await db.queue.enqueue(session_name="ike", message="alert", delivery_kind="escalation")
+    await db.queue.enqueue(session_name="bell", message="alert", delivery_kind="escalation")
+    assert set(await db.queue.inbox_rows(inbox_sessions=("ike",))) == {"ike"}

@@ -69,7 +69,8 @@ async def send_message(
     )
     if report.queue == "stored":
         try:
-            await feed.hint_inbox(lambda: db.queue.inbox_rows(target))
+            inbox = (target,) if spec.inbox_only else ()
+            await feed.hint_inbox(lambda: db.queue.inbox_rows(target, inbox_sessions=inbox))
         except Exception:
             log.exception("Inbox hint for %s failed (non-fatal)", target)
     return MessageResponse(

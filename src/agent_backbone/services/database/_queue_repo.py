@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
@@ -363,10 +363,11 @@ class QueueRepo(Repo):
             return int(result.scalar_one())
 
     async def inbox_rows(
-        self, session_name: str | None = None
+        self, session_name: str | None = None, *, inbox_sessions: Collection[str] = ()
     ) -> dict[str, frozenset[tuple[int, str | None]]]:
         """Per session with any, the rows waiting for its inbox (held
-        ``checkpoint``/``uncertain`` rows and pending direct messages;
+        ``checkpoint``/``uncertain`` rows and pending direct messages, plus
+        escalation notices for ``inbox_sessions``, the inbox-only agents;
         ``checkpoint`` hands them out ten at a time), each as
         ``(id, operation_id)``: an identity a reused id cannot repeat."""
         only = "AND session_name = :session " if session_name is not None else ""
@@ -375,9 +376,11 @@ class QueueRepo(Repo):
                 text(
                     "SELECT session_name, id, operation_id FROM message_queue "
                     "WHERE (status IN ('checkpoint', 'uncertain') "
-                    "OR (status = 'pending' AND delivery_kind = 'direct_message')) " + only
-                ),
-                {"session": session_name},
+                    "OR (status = 'pending' AND delivery_kind = 'direct_message') "
+                    "OR (status = 'pending' AND delivery_kind = 'escalation' "
+                    "AND session_name IN :inbox)) " + only
+                ).bindparams(bindparam("inbox", expanding=True)),
+                {"session": session_name, "inbox": list(inbox_sessions)},
             )
             rows: dict[str, set[tuple[int, str | None]]] = {}
             for row in result.mappings():

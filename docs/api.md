@@ -576,7 +576,8 @@ emits nothing (the monitor job re-checks once a minute).
 It also emits `inbox:pending` `{"session": "app", "pending": 2}` when an
 agent's [inbox](#cooperative-inbox) has more to read: at once when a message
 to it is queued through `POST /api/messages`, and within a minute for rows
-written otherwise (such as an expiry notice). `pending` is how many rows are
+written otherwise (such as an expiry notice, or an escalation notice to an
+inbox-only agent). `pending` is how many rows are
 waiting to be read; the event carries no message text. It is a hint, not a
 delivery: read with `POST /api/messages/inbox`. One read returns at most
 ten, unacknowledged messages first, so acknowledge each message once it is
