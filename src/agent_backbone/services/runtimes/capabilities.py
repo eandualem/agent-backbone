@@ -52,6 +52,7 @@ REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
         ("bounded-unattended", "claude", 285),
         ("auto-review", "claude", 293),
         ("deep-review", "codex", 288),
+        ("request-diagnostics", "claude", 304),
     }
 )
 """``(row, runtime, issue)``: required-pair cells that shipped before the
@@ -492,6 +493,34 @@ CAPABILITIES: tuple[Capability, ...] = (
         deepcode=_gap(295),
         aider=_gap(295),
         shell=_na("a plain shell has no model provider"),
+    ),
+    _row(
+        "observed-model",
+        "Running model observed (status)",
+        "src/agent_backbone/hooks/backbone_state.py",
+        fallback="`status` shows the configured model; check the session for the running one.",
+        implemented=_declared("observed-model"),
+        claude=_ok("tests/unit/hooks/test_claude_hook.py"),
+        codex=_ok("tests/unit/hooks/test_codex_hook.py"),
+        gemini=_unverified(302),
+        opencode=_gap(303),
+        deepcode=_gap(275, "no hook state"),
+        aider=_gap(275, "no hook state"),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "request-diagnostics",
+        "Request errors and model changes recorded (diagnostics)",
+        "src/agent_backbone/services/runtimes/codex.py",
+        fallback="Check the session for errors and model changes (`agent output`).",
+        implemented=lambda rt: type(rt).diagnostics is not Runtime.diagnostics,
+        claude=_gap(304),
+        codex=_ok("tests/unit/services/runtimes/test_diagnostics.py"),
+        gemini=_gap(304),
+        opencode=_gap(304),
+        deepcode=_gap(304),
+        aider=_gap(304),
+        shell=_na(_NO_MODEL),
     ),
     _row(
         "message-authority",

@@ -51,6 +51,7 @@ INITIAL_BASELINE = {
     ("bounded-unattended", "claude", 285),
     ("auto-review", "claude", 293),
     ("deep-review", "codex", 288),
+    ("request-diagnostics", "claude", 304),
 }
 
 

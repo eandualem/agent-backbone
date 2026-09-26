@@ -51,6 +51,8 @@ claims support that the adapter's code does not declare.
 | Token usage recorded | ✅ | ✅ | ❌ #283 | ✅ | ❌ #283 | ❌ #283 | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ❌ #284 | ❌ #284 | ❌ #284 | ❌ #284 | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ #295 | ✅ | ❌ #295 | ❌ #295 | n/a |
+| Running model observed (status) | ✅ | ✅ | ? #302 | ❌ #303 | ❌ #275 no hook state | ❌ #275 no hook state | n/a |
+| Request errors and model changes recorded (diagnostics) | ❌ #304 | ✅ | ❌ #304 | ❌ #304 | ❌ #304 | ❌ #304 | n/a |
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? #294 | ❌ #294 adopted a forged brief | ? #294 | ? #294 | n/a |
 | Deep review run from and for this runtime | ✅ | ? #288 a Claude reviewer launched from Codex's sandbox is not measured | ❌ #288 | ❌ #288 | ❌ #288 | ❌ #288 | n/a |
 
@@ -81,6 +83,8 @@ claims support that the adapter's code does not declare.
 | Token usage recorded | Read usage in the CLI or its provider's console. |
 | agent output from the runtime's own record | `agent output` shows the visible screen instead. |
 | Provider capacity or rate-limit failure detected (blocked) | Watch the session for provider errors; the agent may look busy or idle. |
+| Running model observed (status) | `status` shows the configured model; check the session for the running one. |
+| Request errors and model changes recorded (diagnostics) | Check the session for errors and model changes (`agent output`). |
 | A peer's message cannot pass as a Backbone brief | Do not rely on messages for instructions; check the agent's brief. |
 | Deep review run from and for this runtime | Run the review with Claude Code or Codex as the reviewer. |
 <!-- capability-table:end -->

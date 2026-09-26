@@ -120,6 +120,7 @@ class Codex(Runtime):
             "project-instructions",
             "deep-review",
             "message-authority",
+            "observed-model",
         }
     )
     models = ("gpt-5.6-sol", "gpt-6-astra")  # as shown by codex's own status line (live capture)

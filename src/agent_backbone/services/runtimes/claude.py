@@ -87,6 +87,7 @@ class ClaudeCode(Runtime):
             "browser-group-name",
             "deep-review",
             "message-authority",
+            "observed-model",
         }
     )
     models = ("opus", "sonnet", "haiku")  # Claude Code's own aliases
