@@ -135,10 +135,14 @@ async def steer_agent(
         )
     # The hook writes the turn's end before it retires offers, so a turn that
     # ended before the offer existed shows here; its retirement missed the
-    # offer, and the next task must not take it. The hook may have taken it
+    # offer, and the next task must not take it. If the retirement came after
+    # the write, the offer is already missed. The hook may have taken it
     # within the turn already, which is a handoff.
-    if await _turn_ended(config, session_name, turn) and await asyncio.to_thread(
-        expire_steer, config.state_dir, session_name, launch_id, delivery_id
+    if await _turn_ended(config, session_name, turn) and (
+        await asyncio.to_thread(
+            expire_steer, config.state_dir, session_name, launch_id, delivery_id
+        )
+        or await asyncio.to_thread(_missed, config, session_name, launch_id, delivery_id)
     ):
         await asyncio.to_thread(clear_steer, config.state_dir, session_name, launch_id, delivery_id)
         await db.deliveries.settle(delivery_id, "not_taken", expected="offered")
@@ -162,6 +166,14 @@ async def steer_agent(
         operation_id,
         launch_id,
         [*evidence, f"offered to launch {launch_id}; the hook hands it over on the next tool call"],
+    )
+
+
+def _missed(config: BackboneConfig, session_name: str, launch_id: str, delivery_id: int) -> bool:
+    """Whether the turn's end already marked this offer missed."""
+    return any(
+        (launch, key, state) == (launch_id, delivery_id, "missed")
+        for _, launch, key, state, _ in steer_offers(config.state_dir, session_name)
     )
 
 

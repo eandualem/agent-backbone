@@ -92,20 +92,22 @@ def _hook(hook, config, payload: dict) -> None:
     [(claude_hook, "Stop"), (codex_hook, "Stop"), (codex_hook, "Interrupt")],
 )
 @pytest.mark.parametrize("next_task", [False, True])
+@pytest.mark.parametrize("ends", ["before the offer is written", "just after"])
 async def test_a_turn_that_ends_while_the_offer_is_written_never_reaches_the_next_task(
-    config, db, working, monkeypatch, hook, event, next_task
+    config, db, working, monkeypatch, hook, event, next_task, ends
 ):
-    """The turn's end retires offers before this one exists; the next task must not take it."""
+    """The next task must not take an offer whose turn ended around its writing."""
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
     monkeypatch.setenv("BACKBONE_LAUNCH_ID", "L1")
     prompt = {"hook_event_name": "UserPromptSubmit", "session_id": "s"}
     _hook(hook, config, {**prompt, "prompt": "task one"})
 
     def offer_as_the_turn_ends(*args):
+        placed = offer_steer(*args) if ends == "just after" else None
         _hook(hook, config, {"hook_event_name": event, "session_id": "s"})
         if next_task:
             _hook(hook, config, {**prompt, "prompt": "task two"})
-        return offer_steer(*args)
+        return placed if placed is not None else offer_steer(*args)
 
     with (
         patch(f"{_STEER}.offer_steer", side_effect=offer_as_the_turn_ends),
