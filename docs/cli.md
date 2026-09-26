@@ -659,7 +659,7 @@ be changed with these commands. Changes take effect at the next fresh launch.
 
 ## Cooperative message checkpoints
 
-`backbone inbox [--agent NAME]` reads up to ten direct messages at a worker's own
+`backbone inbox [--agent NAME]` reads up to ten direct messages (for an inbox-only agent, escalation notices too) at a worker's own
 checkpoint without terminal injection; `backbone inbox --ack TOKEN ...` confirms
 application or deliberate supersession. Unacknowledged receipts are replayed on later
 reads, including after a lost response/restart. Do not repeat work for an

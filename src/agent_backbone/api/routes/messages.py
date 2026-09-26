@@ -70,7 +70,8 @@ async def send_message(
     )
     if report.queue == "stored":
         # After the response: the hint never delays the sender.
-        background.add_task(_hint_inbox, feed, db, target)
+        inbox = (target,) if spec.inbox_only else ()
+        background.add_task(_hint_inbox, feed, db, target, inbox)
     return MessageResponse(
         ok=report.outcome == DeliveryOutcome.DELIVERED,
         session=target,
@@ -86,9 +87,9 @@ async def send_message(
     )
 
 
-async def _hint_inbox(feed, db, target: str) -> None:
+async def _hint_inbox(feed, db, target: str, inbox: tuple[str, ...]) -> None:
     try:
-        await feed.hint_inbox(lambda: db.queue.inbox_rows(target))
+        await feed.hint_inbox(lambda: db.queue.inbox_rows(target, inbox_sessions=inbox))
     except Exception:
         log.exception("Inbox hint for %s failed (non-fatal)", target)
 
@@ -149,9 +150,11 @@ async def read_checkpoint_inbox(
     Holding a message prevents automatic redelivery; acknowledge after applying
     or explicitly superseding it, and inspect uncertain sends before repeating work.
     """
-    registered_agent_or_404(config, body.session)
+    spec = registered_agent_or_404(config, body.session)
     try:
-        result = await checkpoint_inbox(body.session, db=db, acknowledge=body.acknowledge)
+        result = await checkpoint_inbox(
+            body.session, db=db, acknowledge=body.acknowledge, escalations=spec.inbox_only
+        )
         if body.acknowledge:
             return result
         rows = result["messages"]
