@@ -979,6 +979,7 @@ async def _inbox(args: argparse.Namespace) -> int:
             "session": args.agent,
             "acknowledge": args.ack,
         },
+        timeout=30.0,  # waits behind a delivery to the same session (up to ~12 s)
     )
     if result is None:
         print(_common.unreachable())
