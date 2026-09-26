@@ -143,6 +143,32 @@ class TestRetryDeliveryAckCheck:
         assert await retry_delivery(config, delivery, db, mock_gh) == "still_offline"
 
 
+class TestDrainAgent:
+    @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
+    async def test_an_offline_drain_delivers_only_the_brief(self, mock_deliver, db, config):
+        """Older messages wait for the service's drain, which expires them first."""
+        from agent_backbone.models import BRIEF_SOURCE
+        from agent_backbone.services.jobs import drain_agent
+
+        chat = await db.queue.enqueue(
+            session_name="app", message="old", delivery_kind="direct_message"
+        )
+        brief = await db.queue.enqueue(
+            session_name="app",
+            message="[via:backbone] brief",
+            delivery_kind="direct_message",
+            source=BRIEF_SOURCE,
+        )
+        mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
+        await drain_agent(config, db, "app")
+        assert mock_deliver.await_count == 1
+        assert mock_deliver.await_args.args[1].startswith("[via:backbone] brief")
+        assert (await queue_row(db, brief.id))["status"] == "delivered"
+        assert (await queue_row(db, chat.id))["status"] == "pending"
+        await drain_agent(config, db, "app")  # no brief left: nothing else goes
+        assert mock_deliver.await_count == 1
+
+
 class TestDeliveryRetryQueueDrain:
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_drain_includes_queued_sessions(self, mock_deliver, db, config):
