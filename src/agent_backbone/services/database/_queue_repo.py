@@ -450,6 +450,8 @@ class QueueRepo(Repo):
         Nor does a restart's continuation message (source ``agent-restart``):
         it belongs to the transition and waits for its replacement session.
         Nor does an expiry notice (source ``queue-expiry``): it reports a loss.
+        Nor does a startup brief: it waits for its session, and the next launch
+        retires it (``retire_pending_briefs``).
         Nor does anything queued for a session with an ``uncertain`` row: that
         row holds the whole queue until it is acknowledged, so the wait
         measures the hold, not whether the message is still wanted. After the
@@ -466,7 +468,7 @@ class QueueRepo(Repo):
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE status = 'pending' AND enqueued_at < :cutoff
                          AND delivery_kind != 'subscription'
-                         AND source NOT IN ('agent-restart', 'queue-expiry')
+                         AND source NOT IN ('agent-restart', 'queue-expiry', :brief)
                          AND session_name NOT IN (
                              SELECT session_name FROM message_queue WHERE status = 'uncertain')
                          AND session_name NOT IN (
@@ -480,6 +482,7 @@ class QueueRepo(Repo):
                 {
                     "now": now,
                     "cutoff": cutoff_iso(minutes=max_age_minutes),
+                    "brief": BRIEF_SOURCE,
                     "protected": list(protected_sessions),
                 },
             )

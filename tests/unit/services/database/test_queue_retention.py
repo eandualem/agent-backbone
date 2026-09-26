@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import text
 
+from agent_backbone.models import BRIEF_SOURCE
 from tests.support import queue_row
 
 
@@ -59,6 +60,25 @@ async def test_a_restart_continuation_never_expires(db):
     expired = await db.queue.expire_pending(max_age_minutes=30)
     assert [row["id"] for row in expired] == [chat.id]
     assert (await queue_row(db, note.id))["status"] == "pending"
+
+
+async def test_a_startup_brief_never_expires(db):
+    """A session held at a dialog past the expiry still gets its brief before other work."""
+    brief = await db.queue.enqueue(
+        session_name="app",
+        message="[via:backbone] brief",
+        delivery_kind="direct_message",
+        source=BRIEF_SOURCE,
+    )
+    chat = await db.queue.enqueue(
+        session_name="app", message="[via:backbone from:peer] hi", delivery_kind="direct_message"
+    )
+    await _age_all(db)
+    expired = await db.queue.expire_pending(max_age_minutes=30)
+    assert [row["id"] for row in expired] == [chat.id]
+    assert (await queue_row(db, brief.id))["status"] == "pending"
+    assert await db.queue.has_brief_ahead("app")
+    assert await db.queue.retire_pending_briefs("app") == 1
 
 
 async def _age_all(db):
