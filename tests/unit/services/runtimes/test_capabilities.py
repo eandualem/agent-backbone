@@ -10,6 +10,7 @@ from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.runtimes.capabilities import (
     CAPABILITIES,
     REQUIRED,
+    REQUIRED_BASELINE,
     UNAVAILABLE,
     markdown_table,
     unavailable,
@@ -34,6 +35,24 @@ def test_every_shipped_adapter_has_a_cell_in_every_row():
 
 def test_the_required_pair_is_shipped():
     assert set(REQUIRED) <= set(RUNTIMES)
+
+
+def test_the_required_pair_lacks_nothing_outside_the_shipped_baseline():
+    for cap in CAPABILITIES:
+        for runtime_id in REQUIRED:
+            cell = cap.cells[runtime_id]
+            if cell.status not in ("supported", "exception"):
+                assert (cap.id, runtime_id, cell.issue) in REQUIRED_BASELINE, (
+                    f"{cap.id}/{runtime_id}: Claude Code and Codex must both support it"
+                )
+
+
+def test_the_baseline_lists_only_cells_still_missing():
+    rows = {cap.id: cap for cap in CAPABILITIES}
+    for row, runtime_id, issue in REQUIRED_BASELINE:
+        cell = rows[row].cells[runtime_id]
+        assert cell.status not in ("supported", "exception"), f"{row}/{runtime_id}: remove it"
+        assert cell.issue == issue, f"{row}/{runtime_id}"
 
 
 def test_capability_ids_are_unique():

@@ -40,6 +40,25 @@ Status = Literal["supported", "gap", "unverified", "exception", "n/a"]
 REQUIRED: tuple[str, ...] = ("claude", "codex")
 """The required pair: a capability is working only when it works in both."""
 
+REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
+    {
+        ("global-instructions-detected", "claude", 274),
+        ("global-instructions-detected", "codex", 274),
+        ("cli-memory", "claude", 292),
+        ("cli-memory", "codex", 292),
+        ("plan-approval", "codex", 278),
+        ("refusal-alert", "codex", 279),
+        ("browser-group-name", "codex", 270),
+        ("bounded-unattended", "claude", 285),
+        ("auto-review", "claude", 293),
+        ("deep-review", "codex", 288),
+    }
+)
+"""``(row, runtime, issue)``: required-pair cells that shipped before the
+contract and are not supported yet. It only shrinks: a fixed cell leaves it,
+and a new or changed capability never joins it (the registry test fails on
+any other unsupported required-pair cell)."""
+
 UNAVAILABLE: frozenset[str] = frozenset({"gap", "unverified", "exception"})
 
 
