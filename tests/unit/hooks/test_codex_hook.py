@@ -402,6 +402,14 @@ class TestAutomaticReviewerRefusals:
         self._turn(tmp_path, REVIEWING, events=("UserPromptSubmit",), turn="t2")
         assert not self._watch(tmp_path)["watching"]
 
+    def test_a_subagents_prompt_does_not_end_the_watch(self, tmp_path):
+        self._turn(tmp_path, REVIEWING, events=("PermissionRequest",), turn="t1")
+        prompt = _payload("UserPromptSubmit", turn_id="sub-1", agent_id="child", agent_type="x")
+        with patch.object(hook, "own_screen", return_value=REVIEWING):
+            hook.watch_refusals(prompt, tmp_path, "cx")
+        assert self._watch(tmp_path)["watching"]
+        assert len(self._turn(tmp_path, DENIED, events=("Stop",), turn="t1")[0]) == 1
+
     def test_a_read_begun_before_a_new_session_is_not_its_baseline(self, tmp_path, monkeypatch):
         self._turn(tmp_path, REVIEWING, events=("PermissionRequest",))
         monkeypatch.setattr(hook, "LOOK_WAIT_SECONDS", 0.1)  # the new session's read waits

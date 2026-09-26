@@ -289,19 +289,20 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
                     record = refusal_record(entry, risk, now, ref, watch["requested"])
                     bb.append_action(state_dir, agent, record)
             watch["seen"] = now_seen
-            if _ends_the_watch(event, turn, watch["turn"]):
+            if _ends_the_watch(event, turn, watch["turn"], subagent=bool(payload.get("agent_id"))):
                 watch.update(watching=False, requested={})
 
 
-def _ends_the_watch(event: str, turn: str, watched: str) -> bool:
+def _ends_the_watch(event: str, turn: str, watched: str, *, subagent: bool) -> bool:
     """Whether a read at this event ends the watch of the turn ``watched``.
 
-    Its own turn's end does, and a new prompt does; an event of another turn
-    (delayed, or a subagent's) does not. Without turn ids, any end does."""
+    Its own turn's end does, and a new prompt in the session does; an event of
+    another turn (delayed, or a subagent's: Codex sends a subagent's input as a
+    prompt with its ``agent_id``) does not. Without turn ids, any end does."""
     if event in ("Stop", "Interrupt"):
         return not turn or not watched or turn == watched
     if event == "UserPromptSubmit":
-        return not turn or turn != watched
+        return not subagent and (not turn or turn != watched)
     return event == "SessionEnd"
 
 
