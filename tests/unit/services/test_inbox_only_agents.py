@@ -18,8 +18,10 @@ from agent_backbone.services.agents.operations import (
     start_resolved,
     stop_agent_session,
 )
+from agent_backbone.services.agents.queries import build_enriched_agent
 from agent_backbone.services.agents.transitions import TransitionRequest, validate_transition
 from agent_backbone.services.jobs import escalation as esc
+from agent_backbone.services.jobs.monitor import read_states
 from agent_backbone.services.jobs.retry import drain_message_queue
 from agent_backbone.services.jobs.transitions import run_transitions
 from agent_backbone.services.routing import safe_deliver
@@ -135,6 +137,17 @@ async def test_a_pending_restart_fails_instead_of_stopping(config, db):
         assert await run_transitions(lambda: config, AsyncMock(), db) == {"ike": "failed"}
     stop.assert_not_awaited()
     assert (await db.transitions.get(row["id"]))["status"] == "failed"
+
+
+async def test_a_session_with_its_name_is_not_read_as_its_state(config):
+    config = _inbox_only(config)
+    with (
+        patch("agent_backbone.services.jobs.monitor.capture_pane", AsyncMock()) as capture,
+        patch("agent_backbone.services.jobs.monitor.agent_state", AsyncMock()),
+    ):
+        assert "ike" not in await read_states(config, {"ike", "bell"})
+    assert capture.await_count == 1
+    assert not (await build_enriched_agent("ike", config, {"ike"}, {"attached": True})).online
 
 
 def test_a_restart_is_refused(config):
