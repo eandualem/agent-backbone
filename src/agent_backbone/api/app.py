@@ -63,7 +63,7 @@ def _register_jobs(app: FastAPI):
         await state.feed.emit(only_if_changed=True)
         # Inbox rows written outside a tell (expiry notices) reach their hint here.
         try:
-            await state.feed.hint_inbox(await state.db.queue.inbox_counts(), complete=True)
+            await state.feed.hint_inbox(await state.db.queue.inbox_summary())
         except Exception:
             log.exception("Inbox hint failed (non-fatal)")
 

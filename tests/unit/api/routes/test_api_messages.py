@@ -310,4 +310,5 @@ async def test_a_queued_message_hints_the_recipients_inbox(api_client, auth_head
             json={"target_session": "ike", "from_entity": "bell", "message": "hello"},
         )
     assert response.json()["queue"] == "stored"
-    hint.assert_awaited_once_with({"ike": 1})
+    ((summary,), _) = hint.await_args
+    assert summary["ike"] == (1, response.json()["queue_id"])

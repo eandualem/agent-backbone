@@ -46,7 +46,8 @@ class SessionFeed:
         self._lock = asyncio.Lock()
         self._emit_lock = asyncio.Lock()
         self._last_signature: str | None = None
-        self._inbox: dict[str, int] = {}
+        self._hinted: dict[str, int] = {}
+        """The newest inbox row each session was hinted about."""
 
     @property
     def sio(self) -> socketio.AsyncServer | None:
@@ -97,20 +98,22 @@ class SessionFeed:
             self._last_signature = signature
             return True
 
-    async def hint_inbox(self, counts: Mapping[str, int], *, complete: bool = False) -> None:
-        """Tell ``/sessions`` subscribers whose inbox grew: ``inbox:pending
-        {session, pending}``, with no message text, once per rise in the
-        count. ``complete`` says ``counts`` covers every session (absent means
-        none). A hint can be missed (a disconnect, a restart): readers also
-        read their inbox on connect and on a slow poll."""
-        rising = {name: n for name, n in counts.items() if n > self._inbox.get(name, 0)}
-        if complete:
-            self._inbox = dict(counts)
-        else:
-            self._inbox.update(counts)
+    async def hint_inbox(self, summary: Mapping[str, tuple[int, int]]) -> None:
+        """Tell ``/sessions`` subscribers whose inbox has something new:
+        ``inbox:pending {session, pending}``, with no message text, once per
+        new row (``summary`` is ``QueueRepo.inbox_summary``: the count and
+        the newest row id). A hint can be missed (a disconnect, a restart):
+        readers also read their inbox on connect and on a slow poll."""
+        fresh = {
+            name: pending
+            for name, (pending, newest) in summary.items()
+            if newest > self._hinted.get(name, 0)
+        }
+        for name, (_, newest) in summary.items():
+            self._hinted[name] = max(newest, self._hinted.get(name, 0))
         if self._sio is None:
             return
-        for name, pending in rising.items():
+        for name, pending in fresh.items():
             await self._sio.emit(
                 INBOX_PENDING_EVENT,
                 {"session": name, "pending": pending},

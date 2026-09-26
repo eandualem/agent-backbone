@@ -163,26 +163,29 @@ class TestEmit:
 
 
 class TestInboxHint:
-    async def test_hints_once_per_rise_without_message_text(self, db):
+    async def test_hints_once_per_new_row_without_message_text(self, db):
         sio = MagicMock()
         sio.emit = AsyncMock()
         feed = _feed(sio)
         await db.queue.enqueue(session_name="app", message="secret", delivery_kind="direct_message")
         await db.queue.enqueue(session_name="app", message="issue", issue_number=7)
-        await feed.hint_inbox(await db.queue.inbox_counts("app"))
-        await feed.hint_inbox(await db.queue.inbox_counts(), complete=True)  # a tick, no rise
+        await feed.hint_inbox(await db.queue.inbox_summary("app"))
+        await feed.hint_inbox(await db.queue.inbox_summary())  # a tick: nothing new
+        await db.queue.checkpoint("app")  # read, not acknowledged: nothing new
+        await feed.hint_inbox(await db.queue.inbox_summary())
         sio.emit.assert_awaited_once_with(
             INBOX_PENDING_EVENT, {"session": "app", "pending": 1}, namespace=SESSIONS_NAMESPACE
         )
-        await db.queue.checkpoint("app")  # read: still one to acknowledge, no new hint
-        await feed.hint_inbox(await db.queue.inbox_counts(), complete=True)
-        assert sio.emit.await_count == 1
 
-    async def test_a_count_that_fell_to_zero_hints_again_on_the_next_message(self):
+    async def test_a_message_after_an_acknowledged_one_is_hinted(self, db):
         sio = MagicMock()
         sio.emit = AsyncMock()
         feed = _feed(sio)
-        await feed.hint_inbox({"app": 1})
-        await feed.hint_inbox({}, complete=True)  # acknowledged
-        await feed.hint_inbox({"app": 1})
+        await db.queue.enqueue(session_name="app", message="one", delivery_kind="direct_message")
+        await feed.hint_inbox(await db.queue.inbox_summary("app"))
+        (row,) = await db.queue.checkpoint("app")
+        await db.queue.acknowledge_checkpoint("app", [row["ack_token"]])
+        await db.queue.enqueue(session_name="app", message="two", delivery_kind="direct_message")
+        await feed.hint_inbox(await db.queue.inbox_summary("app"))
         assert sio.emit.await_count == 2
+        assert sio.emit.await_args.args[1] == {"session": "app", "pending": 1}

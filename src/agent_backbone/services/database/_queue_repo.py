@@ -362,14 +362,15 @@ class QueueRepo(Repo):
             )
             return int(result.scalar_one())
 
-    async def inbox_counts(self, session_name: str | None = None) -> dict[str, int]:
-        """How many rows ``checkpoint`` would return, per session with any:
-        held (``checkpoint``/``uncertain``) rows and pending direct messages."""
+    async def inbox_summary(self, session_name: str | None = None) -> dict[str, tuple[int, int]]:
+        """Per session with any: how many rows ``checkpoint`` would return
+        (held ``checkpoint``/``uncertain`` rows and pending direct messages)
+        and the newest of their ids."""
         only = "AND session_name = :session " if session_name is not None else ""
         async with self._tx() as conn:
             result = await conn.execute(
                 text(
-                    "SELECT session_name, COUNT(*) AS n FROM message_queue "
+                    "SELECT session_name, COUNT(*) AS n, MAX(id) AS newest FROM message_queue "
                     "WHERE (status IN ('checkpoint', 'uncertain') "
                     "OR (status = 'pending' AND delivery_kind = 'direct_message')) "
                     + only
@@ -377,7 +378,10 @@ class QueueRepo(Repo):
                 ),
                 {"session": session_name},
             )
-            return {row["session_name"]: int(row["n"]) for row in result.mappings()}
+            return {
+                row["session_name"]: (int(row["n"]), int(row["newest"]))
+                for row in result.mappings()
+            }
 
     async def sessions_with_pending(self) -> list[str]:
         async with self._tx() as conn:
