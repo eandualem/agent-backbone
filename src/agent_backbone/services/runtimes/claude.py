@@ -15,6 +15,7 @@ from agent_backbone.services.runtimes._usage import count
 from agent_backbone.services.runtimes.base import (
     Runtime,
     TranscriptEntry,
+    agent_home,
     has_text,
     transcript_clock,
 )
@@ -270,7 +271,7 @@ class ClaudeCode(Runtime):
         home = Path(
             env.get("CLAUDE_CONFIG_DIR")
             or os.environ.get("CLAUDE_CONFIG_DIR")
-            or Path.home() / ".claude"
+            or agent_home(env) / ".claude"
         ).expanduser()
         # User memory and user-level rules (2.1.283); a rule with `paths` loads
         # once the session reads a matching file, so it may reach it too.

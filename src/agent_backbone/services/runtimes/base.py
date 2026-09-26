@@ -11,6 +11,7 @@ module in this package that subclasses ``Runtime`` and registers itself in
 from __future__ import annotations
 
 import asyncio
+import codecs
 import hashlib
 import json
 import logging
@@ -123,18 +124,25 @@ def read_brief(brief_file: Path | str) -> str | None:
 
 
 def has_text(path: Path) -> bool:
-    """Whether ``path`` is a file with more than whitespace in it, read in chunks
-    up to the first that has some."""
+    """Whether ``path`` is a file with more than whitespace (Unicode, and a byte
+    order mark, as the CLIs trim it) in it, read in chunks up to the first that
+    has some."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     try:
         if not path.is_file():
             return False
         with path.open("rb") as handle:
             while chunk := handle.read(64 * 1024):
-                if chunk.strip():
+                if decoder.decode(chunk).strip().strip("\ufeff"):
                     return True
     except OSError:
-        pass
-    return False
+        return False
+    return bool(decoder.decode(b"", final=True).strip())
+
+
+def agent_home(env: dict[str, str]) -> Path:
+    """The home directory the agent's CLI sees: its own ``HOME``, else ours."""
+    return Path(env["HOME"]).expanduser() if env.get("HOME") else Path.home()
 
 
 def split_model_effort(spec: str | None) -> tuple[str | None, str | None]:

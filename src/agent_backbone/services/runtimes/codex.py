@@ -18,6 +18,7 @@ from agent_backbone.services.runtimes.base import (
     Runtime,
     RuntimeDiagnostic,
     TranscriptEntry,
+    agent_home,
     has_text,
     transcript_clock,
 )
@@ -352,7 +353,7 @@ class Codex(Runtime):
 
     def user_instructions(self, env, project=None):
         home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
         ).expanduser()
         # The override wins over AGENTS.md; only the first file with content is read.
         for path in (home / "AGENTS.override.md", home / "AGENTS.md"):

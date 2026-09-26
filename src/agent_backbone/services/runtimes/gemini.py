@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 from agent_backbone.hooks.install import save_settings
-from agent_backbone.services.runtimes.base import Runtime, has_text, read_brief
+from agent_backbone.services.runtimes.base import Runtime, agent_home, has_text, read_brief
 
 log = logging.getLogger(__name__)
 
@@ -114,15 +114,19 @@ class Gemini(Runtime):
 
     def user_instructions(self, env, project=None):
         home = Path(
-            env.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_CLI_HOME") or Path.home()
+            env.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_CLI_HOME") or agent_home(env)
         ).expanduser()
         gemini = home / ".gemini"
         # Every context file name is read from ~/.gemini: the configured
         # `context.fileName` (the project's settings over the user's), then
         # GEMINI.md, which a configured name adds to rather than replaces (0.46).
         configured = (
-            project is not None and _context_file_names(Path(project) / ".gemini/settings.json")
-        ) or _context_file_names(gemini / "settings.json")
+            None
+            if project is None
+            else _context_file_names(Path(project) / ".gemini/settings.json")
+        )
+        if configured is None:  # an empty list in the project still overrides
+            configured = _context_file_names(gemini / "settings.json")
         names = dict.fromkeys([*(name.strip() for name in configured or ()), "GEMINI.md"])
         return [gemini / name for name in names if name and has_text(gemini / name)]
 

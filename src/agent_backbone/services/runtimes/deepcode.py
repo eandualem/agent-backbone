@@ -20,7 +20,7 @@ from agent_backbone.services.runtimes._pane import (
     prompt_tail_line_pairs,
     sanitize_pane_content,
 )
-from agent_backbone.services.runtimes.base import Runtime, has_text, read_brief
+from agent_backbone.services.runtimes.base import Runtime, agent_home, has_text, read_brief
 
 
 class DeepCode(Runtime):
@@ -73,7 +73,7 @@ class DeepCode(Runtime):
         own = (".deepcode/AGENTS.md", "AGENTS.md")
         if project is not None and any(has_text(Path(project) / name) for name in own):
             return []
-        path = Path.home() / ".deepcode" / "AGENTS.md"
+        path = agent_home(env) / ".deepcode" / "AGENTS.md"
         return [path] if has_text(path) else []
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):

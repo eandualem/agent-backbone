@@ -47,6 +47,28 @@ def test_the_agents_own_environment_moves_the_codex_home(home):
     assert RUNTIMES["codex"].user_instructions({"CODEX_HOME": str(moved.parent)}) == [moved]
 
 
+@pytest.mark.parametrize(
+    ("runtime", "relative"),
+    [
+        ("claude", ".claude/CLAUDE.md"),
+        ("codex", ".codex/AGENTS.md"),
+        ("gemini", ".gemini/GEMINI.md"),
+        ("opencode", ".config/opencode/AGENTS.md"),
+        ("deepcode", ".deepcode/AGENTS.md"),
+    ],
+)
+def test_the_agents_own_home_is_the_one_searched(home, tmp_path, runtime, relative):
+    path = _write(tmp_path / "agent-home" / relative)
+    assert RUNTIMES[runtime].user_instructions({}) == []
+    assert RUNTIMES[runtime].user_instructions({"HOME": str(tmp_path / "agent-home")}) == [path]
+
+
+@pytest.mark.parametrize("blank", ["\u00a0\u3000\n", "\ufeff \n"])
+def test_unicode_whitespace_and_a_byte_order_mark_are_empty(home, blank):
+    _write(home / ".codex/AGENTS.md", blank)
+    assert RUNTIMES["codex"].user_instructions({}) == []
+
+
 def test_codex_reads_the_override_first_and_skips_an_empty_one(home):
     agents = _write(home / ".codex/AGENTS.md")
     override = _write(home / ".codex/AGENTS.override.md", "")
@@ -69,6 +91,9 @@ def test_gemini_takes_the_projects_context_file_names_over_the_users(home, tmp_p
     _write(tmp_path / ".gemini/settings.json", '{"context": {"fileName": "AGENTS.md"}}')
     assert RUNTIMES["gemini"].user_instructions({}) == [default]
     assert RUNTIMES["gemini"].user_instructions({}, tmp_path) == [agents, default]
+    _write(tmp_path / ".gemini/settings.json", '{"context": {"fileName": []}}')
+    _write(home / ".gemini/settings.json", '{"context": {"fileName": "AGENTS.md"}}')
+    assert RUNTIMES["gemini"].user_instructions({}, tmp_path) == [default]
 
 
 def test_opencode_reads_the_first_file_that_exists_even_when_empty(home, monkeypatch):
