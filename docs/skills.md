@@ -44,7 +44,8 @@ Codex, Gemini and OpenCode (`.agents/skills`) — the start path:
 1. reads the store and selects the skills tagged for the agent;
 2. creates `<repo>/<dir>/<name>` → `<store>/<name>` symlinks for them, records
    each in `<data_dir>/skills/materialized/<agent>.json`, and removes links from
-   that manifest that are no longer selected (only while they still point into
+   that manifest that are no longer selected, or all of them from the checkout
+   the agent left when its directory changed (only while they still point into
    the store, and never one another agent in the same checkout still records);
 3. keeps the link names out of `git status` through a backbone-owned block in
    `.git/info/exclude` — git's per-clone ignore list, never a tracked file — so

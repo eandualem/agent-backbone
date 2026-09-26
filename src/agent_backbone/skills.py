@@ -418,6 +418,16 @@ def _read_manifest(path: Path) -> list[str]:
     return [str(item) for item in links] if isinstance(links, list) else []
 
 
+def _manifest_repo(path: Path) -> Path | None:
+    """The checkout a manifest records its links in, or None."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    repo = data.get("repo") if isinstance(data, dict) else None
+    return Path(repo) if isinstance(repo, str) else None
+
+
 def _write_manifest(path: Path, repo_dir: Path, links: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not links:
@@ -509,12 +519,23 @@ def materialize(
 
     Links are created for selected skills, links recorded in the manifest
     but no longer selected are removed (only while they still point into
-    the store), and nothing else in those directories is touched.
+    the store), and nothing else in those directories is touched. When the
+    manifest records another checkout (the agent's directory changed), its
+    links there are released first, except those another agent there has.
     """
     store = Path(store).expanduser()
     repo_dir = Path(repo_dir)
     result = Materialization()
     previous = set(_read_manifest(manifest))
+    old_repo = _manifest_repo(manifest)
+    old_git: Path | None = None
+    if previous and old_repo is not None and not _same_file(old_repo, repo_dir):
+        for rel in sorted(previous - _links_of_others(manifest, old_repo)):
+            link = old_repo / rel
+            if _points_into(link, store):
+                link.unlink()
+        old_git = _common_git_dir(old_repo)
+        previous = set()
     wanted = {f"{directory}/{skill.name}": skill for directory in dirs for skill in selected}
     # Another agent in this checkout may still be given the same link.
     shared = _links_of_others(manifest, repo_dir)
@@ -551,6 +572,8 @@ def materialize(
     git_dir = _common_git_dir(repo_dir)
     if git_dir is not None:
         _update_exclude(git_dir, _links_sharing_git_dir(manifest.parent, git_dir))
+    if old_git is not None and old_git != git_dir:
+        _update_exclude(old_git, _links_sharing_git_dir(manifest.parent, old_git))
     return result
 
 

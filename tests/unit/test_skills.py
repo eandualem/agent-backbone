@@ -374,6 +374,27 @@ class TestMaterialize:
         ]
         assert manifest.is_file()
 
+    def test_a_changed_directory_releases_links_in_the_recorded_checkout(self, tmp_path):
+        """`agent set NAME dir=…`: the checkout the agent left keeps only others' links."""
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        make_skill(store, "b", tags="all")
+        old = _git_repo(tmp_path / "old")
+        new = _git_repo(tmp_path / "new")
+        manifests = tmp_path / "data" / "skills" / "materialized"
+        skills_dir = (".claude/skills",)
+        both = read_store(store)
+        only_b = [skill for skill in both if skill.name == "b"]
+        materialize(store, old, skills_dir, both, manifests / "app.json")
+        materialize(store, old, skills_dir, only_b, manifests / "ike.json")
+        materialize(store, new, skills_dir, both, manifests / "app.json")
+        assert not (old / ".claude" / "skills" / "a").is_symlink()
+        assert (old / ".claude" / "skills" / "b").is_symlink()  # ike's
+        exclude = (old / ".git" / "info" / "exclude").read_text().splitlines()
+        assert "/.claude/skills/a" not in exclude and "/.claude/skills/b" in exclude
+        assert (new / ".claude" / "skills" / "a").is_symlink()
+        assert (new / ".claude" / "skills" / "b").is_symlink()
+
     def test_removes_only_its_own_stale_links_and_keeps_repo_skills(self, tmp_path):
         store = tmp_path / "store"
         make_skill(store, "a", tags="all")
