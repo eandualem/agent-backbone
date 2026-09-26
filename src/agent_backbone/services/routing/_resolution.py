@@ -36,9 +36,11 @@ def validate_issue_targets(targets: list[str], config: BackboneConfig) -> None:
 
 
 def resolve_entity_session(target: str, config: BackboneConfig) -> str | None:
-    """Resolve a target name to a tmux session name (or None if not routable)."""
+    """Resolve a target name to a tmux session name (or None if not routable).
+    An inbox-only agent has no session and takes no part in GitHub routing."""
     if target in config.routing.ignore_targets:
         return None
-    if target in config.agents:
+    spec = config.agents.get(target)
+    if spec is not None and not spec.inbox_only:
         return target
     return None

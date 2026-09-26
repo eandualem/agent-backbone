@@ -12,6 +12,7 @@ from sqlalchemy import text
 from agent_backbone.config import AgentsConfig, AgentSpec, agents_from_rows
 from agent_backbone.models import DeliveryOutcome, EventType, IssueData, ParsedLabels
 from agent_backbone.services.agents import AgentState, AgentStore, agent_state
+from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.operations import (
     StartRequest,
     forget_agent,
@@ -26,7 +27,10 @@ from agent_backbone.services.jobs.monitor import read_states
 from agent_backbone.services.jobs.retry import drain_message_queue
 from agent_backbone.services.jobs.transitions import run_transitions
 from agent_backbone.services.routing import route_issue, safe_deliver
-from agent_backbone.services.routing._resolution import is_valid_issue_target
+from agent_backbone.services.routing._resolution import (
+    is_valid_issue_target,
+    resolve_entity_session,
+)
 from agent_backbone.services.routing._targets import issue_parties
 
 _OPS = "agent_backbone.services.agents.operations"
@@ -176,6 +180,13 @@ def test_github_labels_do_not_route_to_it(config):
     assert route_issue(issue, EventType.ISSUE_OPENED, config).queue == []
     assert issue_parties(issue, config) == []
     assert not is_valid_issue_target("ike", config)
+    assert resolve_entity_session("ike", config) is None
+
+
+def test_a_swarm_member_cannot_be_inbox_only(tmp_path):
+    member = AgentSpec(name="m", dir=str(tmp_path), tags=("swarm:s",), inbox_only=True)
+    with pytest.raises(ValueError, match="swarm member"):
+        validate_agent_spec(member)
 
 
 async def test_it_is_forgotten_despite_a_session_with_its_name(db, tmp_path):
