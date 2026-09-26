@@ -29,6 +29,9 @@ class DeepCode(Runtime):
     aliases = ("deep-code", "deep code", "deepseek")
     binary = "deepcode"
     brief_mode = "initial_prompt"
+    # Project-level interoperable skills; a symlinked skill directory is
+    # listed by /skills and in the model's skill catalog (0.3.1).
+    skill_dirs = (".agents/skills",)
     models = ("deepseek-v4-flash", "deepseek-v4-pro")
 
     prompt_prefixes = (">",)
