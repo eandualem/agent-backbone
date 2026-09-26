@@ -638,8 +638,33 @@ def clear_context(state_dir: Path, agent: str, key: str) -> None:
 def clear_agent_context(state_dir: Path, agent: str) -> None:
     """Backbone side, before a new session: drop every offer left for the
     previous one. An offer is meant for the session it was written for; the
-    queue row behind a batch survives and is pasted at the new prompt."""
-    shutil.rmtree(_context_dir(state_dir, agent), ignore_errors=True)
+    queue row behind a batch survives and is pasted at the new prompt.
+
+    What the previous session already took stays for the backbone to
+    settle: a batch's ``<key>.taken`` (the drain records it delivered rather
+    than pasting it again) and a steer's ``.taken`` or ``.missed``
+    (``settle_steers``)."""
+    directory = _context_dir(state_dir, agent)
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return
+    for path in entries:
+        if not path.is_dir():
+            if path.suffix != ".taken":
+                path.unlink(missing_ok=True)
+            continue
+        try:
+            files = list(path.iterdir())
+        except OSError:
+            continue
+        for item in files:
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            elif not (item.name.startswith(STEER_PREFIX) and item.suffix in (".taken", ".missed")):
+                item.unlink(missing_ok=True)
+        with suppress(OSError):
+            path.rmdir()  # only once nothing is left to settle
 
 
 def take_context(state_dir: Path, agent: str, launch_id: str | None = None) -> list[str]:
