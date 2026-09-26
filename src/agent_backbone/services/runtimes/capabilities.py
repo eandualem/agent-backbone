@@ -453,7 +453,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok("tests/unit/api/routes/test_api_skills.py"),
         gemini=_unverified(302, note="linked by the shared code; not tested for this runtime"),
         opencode=_unverified(302, note="linked by the shared code; not tested for this runtime"),
-        deepcode=_gap(282),
+        deepcode=_ok("tests/unit/api/routes/test_api_skills.py"),
         aider=_gap(282),
         shell=_na(_NO_MODEL),
     ),

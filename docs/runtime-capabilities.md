@@ -47,7 +47,7 @@ claims support that the adapter's code does not declare.
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ #281 | ❌ #281 | n/a |
 | Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ #285 | ❌ #285 | ❌ #285 | ❌ #285 | n/a |
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ #293 | ❌ #293 | ❌ #293 | ❌ #293 | n/a |
-| Shared skills linked | ✅ | ✅ | ? #302 linked by the shared code; not tested for this runtime | ? #302 linked by the shared code; not tested for this runtime | ❌ #282 | ❌ #282 | n/a |
+| Shared skills linked | ✅ | ✅ | ? #302 linked by the shared code; not tested for this runtime | ? #302 linked by the shared code; not tested for this runtime | ✅ | ❌ #282 | n/a |
 | Token usage recorded | ✅ | ✅ | ❌ #283 | ✅ | ❌ #283 | ❌ #283 | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ❌ #284 | ❌ #284 | ❌ #284 | ❌ #284 | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ #295 | ✅ | ❌ #295 | ❌ #295 | n/a |
