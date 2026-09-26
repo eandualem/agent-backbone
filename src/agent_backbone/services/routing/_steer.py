@@ -26,7 +26,7 @@ from agent_backbone.hooks.backbone_state import (
     steer_key,
     steer_offers,
 )
-from agent_backbone.services.agents import AgentState, read_state_file
+from agent_backbone.services.agents import AgentState, agent_state, read_state_file
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence
 from agent_backbone.services.runtimes import get_runtime
@@ -137,7 +137,7 @@ async def steer_agent(
     # ended before the offer existed shows here; its retirement missed the
     # offer, and the next task must not take it. The hook may have taken it
     # within the turn already, which is a handoff.
-    if await asyncio.to_thread(_turn_ended, config, session_name, turn) and await asyncio.to_thread(
+    if await _turn_ended(config, session_name, turn) and await asyncio.to_thread(
         expire_steer, config.state_dir, session_name, launch_id, delivery_id
     ):
         await asyncio.to_thread(clear_steer, config.state_dir, session_name, launch_id, delivery_id)
@@ -176,21 +176,19 @@ def _hook_record(config: BackboneConfig, session_name: str) -> _HookRecord | Non
     return snapshot.timestamp, snapshot.prompted_at
 
 
-def _turn_ended(config: BackboneConfig, session_name: str, turn: _HookRecord | None) -> bool:
-    """Whether a hook record written since ``turn`` says that turn is over.
+async def _turn_ended(config: BackboneConfig, session_name: str, turn: _HookRecord | None) -> bool:
+    """Whether the turn marked ``turn`` is over, once the hook has written since.
 
     Only a new record counts: an old one left from an earlier session says
-    nothing about the turn the terminal showed working."""
-    snapshot = read_state_file(config.state_dir, session_name)
-    if snapshot is None or snapshot.source != "push":
-        return False  # no hook evidence: the hook's own retirement and the TTL apply
-    if turn is not None and snapshot.timestamp == turn[0]:
-        return False
-    prompted_at = turn[1] if turn is not None else None
-    return (
-        snapshot.state in (AgentState.IDLE, AgentState.UNKNOWN)
-        or snapshot.prompted_at != prompted_at
-    )
+    nothing about the turn the terminal showed working. A new prompt ends
+    the turn; otherwise the agent's state decides."""
+    record = await asyncio.to_thread(_hook_record, config, session_name)
+    if record is None or (turn is not None and record[0] == turn[0]):
+        return False  # no new hook record: the hook's own retirement and the TTL apply
+    if record[1] != (turn[1] if turn is not None else None):
+        return True
+    snapshot = await agent_state(config, session_name)
+    return snapshot.state in (AgentState.IDLE, AgentState.UNKNOWN)
 
 
 async def settle_steers(config: BackboneConfig, db: BackboneDB) -> dict[str, int]:

@@ -31,6 +31,11 @@ Notices = Callable[[list[dict]], list[tuple[str, str, str, Revise]]]
 SUBSCRIPTION_BATCH_LIMIT = 25
 """Lines one subscription batch lists; further lines open the next batch."""
 
+SUBSCRIPTION_REPLAY_HOURS = 24
+"""How far back a replayed event is looked for among delivered batches. A poll
+replays only what it fetched since its last saved cursor (two minutes of
+overlap, a poll a minute); batches still waiting are always looked at."""
+
 
 @dataclass(frozen=True)
 class EnqueueResult:
@@ -257,13 +262,18 @@ class QueueRepo(Repo):
             lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
             # A poll replayed before its events were marked processed must not
             # list an event twice: drop lines a batch of this session already
-            # holds, delivered ones included.
+            # holds, recently delivered ones included.
             held = await conn.execute(
                 text(
                     "SELECT id, operation_id, message, priority, status FROM message_queue "
-                    "WHERE session_name = :session AND delivery_kind = :kind ORDER BY id DESC"
+                    "WHERE session_name = :session AND delivery_kind = :kind "
+                    "AND (status != 'delivered' OR enqueued_at >= :recent) ORDER BY id DESC"
                 ),
-                {"session": session_name, "kind": SUBSCRIPTION_KIND},
+                {
+                    "session": session_name,
+                    "kind": SUBSCRIPTION_KIND,
+                    "recent": cutoff_iso(hours=SUBSCRIPTION_REPLAY_HOURS),
+                },
             )
             known: dict[str, dict] = {}  # line -> the newest batch holding it
             for held_row in held.mappings():

@@ -113,6 +113,23 @@ class TestSubscriptionBatches:
         assert (await queue_row(db, high.id))["message"] == "h\n- c"
         assert (await queue_row(db, first.id))["message"] == "h\n- a\n- b"
 
+    async def test_only_recently_delivered_batches_are_searched_for_a_replay(self, db):
+        old = await db.queue.enqueue_subscription(
+            session_name="desk", header="h", lines=["- a"], priority=0
+        )
+        async with db.engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET status = 'delivered', "
+                    "enqueued_at = '2020-01-01T00:00:00.000000Z' WHERE id = :id"
+                ),
+                {"id": old.id},
+            )
+        again = await db.queue.enqueue_subscription(
+            session_name="desk", header="h", lines=["- a"], priority=0
+        )
+        assert again.status == "inserted" and again.id != old.id
+
     async def test_a_replay_names_its_own_batch_and_offers_a_waiting_high_one_again(self, db):
         """The process may stop before a high batch is offered; the replay offers it, once."""
         high = await db.queue.enqueue_subscription(

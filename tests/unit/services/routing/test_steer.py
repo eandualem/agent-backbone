@@ -24,6 +24,7 @@ from agent_backbone.services.routing import settle_steers, steer_agent
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 
 _STEER = "agent_backbone.services.routing._steer"
+_INFERENCE = "agent_backbone.services.agents._inference"
 
 
 def _profile(intel, runtime="claude"):
@@ -106,7 +107,10 @@ async def test_a_turn_that_ends_while_the_offer_is_written_never_reaches_the_nex
             _hook(hook, config, {**prompt, "prompt": "task two"})
         return offer_steer(*args)
 
-    with patch(f"{_STEER}.offer_steer", side_effect=offer_as_the_turn_ends):
+    with (
+        patch(f"{_STEER}.offer_steer", side_effect=offer_as_the_turn_ends),
+        patch(f"{_INFERENCE}.capture_pane", new_callable=AsyncMock, return_value=""),
+    ):
         report = await steer_agent("ike", "x", config, db=db, sender="peer")
     assert report.outcome == "refused" and report.reason == "not_working"
     assert take_context(config.state_dir, "ike", launch_id="L1") == []
