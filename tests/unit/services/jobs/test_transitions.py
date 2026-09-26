@@ -254,7 +254,7 @@ async def test_a_continuation_delivered_before_a_backbone_restart_is_not_sent_ag
     done = await db.transitions.get(row["id"])
     assert done["status"] == "completed"
     assert done["result"]["message"] == "already_delivered"
-    assert "handed over by an earlier backbone process" in done["result"]["evidence"][-1]
+    assert "delivered by an earlier backbone process" in done["result"]["evidence"][-1]
 
 
 async def test_a_fresh_replacement_gets_the_continuation_an_earlier_session_had(
@@ -274,7 +274,39 @@ async def test_a_fresh_replacement_gets_the_continuation_an_earlier_session_had(
     )
     assert await _run(config, store, db) == {"ike": "started"}
     deliver.assert_awaited_once()
-    assert (await db.transitions.get(row["id"]))["result"]["message"] == "delivered"
+    done = await db.transitions.get(row["id"])
+    assert done["result"]["message"] == "delivered"
+    # A new launch, with an identity (and a continuation) of its own.
+    assert done["launch_operation_id"] not in (None, "op-9")
+    assert deliver.await_args.kwargs["operation_id"] == f"{done['launch_operation_id']}:message"
+
+
+async def test_a_continuation_queued_before_a_backbone_restart_is_reported_queued(
+    db, config, store, seams
+):
+    """Queued, not delivered: the queue row delivers it, and the result says it waits."""
+    _, start, deliver = seams
+    start.return_value = StartResult(ok=True, already_running=True)
+    row = await db.transitions.create(agent_name="ike", message="hi")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-9")
+    for code in ("requested", "ready"):
+        await db.diagnostics.record(
+            category="startup", operation_id="op-9", code=code, severity="info", agent_name="ike"
+        )
+    await db.diagnostics.record(
+        category="queue",
+        operation_id="op-9:message",
+        code="queue_stored",
+        severity="info",
+        agent_name="ike",
+        details={"condition": "agent_working"},
+    )
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value="op-9"):
+        assert await _run(config, store, db) == {"ike": "started"}
+    deliver.assert_not_awaited()
+    result = (await db.transitions.get(row["id"]))["result"]
+    assert (result["message"], result["message_queue"]) == ("agent_working", "stored")
 
 
 async def test_the_retrys_own_already_running_record_does_not_hide_the_launch(

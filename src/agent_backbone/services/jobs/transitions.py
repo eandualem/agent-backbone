@@ -101,6 +101,10 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
     # exits mid-launch, the next one can tell the replacement it started
     # from a session someone started by hand (``_recovered_launch``).
     resumed_launch = row["launch_operation_id"]
+    if resumed_launch and not await _session_is_launch(name, resumed_launch):
+        # That launch's session is gone (or never came up): this start is a
+        # new launch, and its continuation is a new one too.
+        resumed_launch = None
     operation_id = resumed_launch or uuid.uuid4().hex
     if resumed_launch is None:
         await db.transitions.mark_launching(row["id"], operation_id)
@@ -145,15 +149,24 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
     # again to the same session from the next one (a paste cut off midway can
     # still repeat). A session started fresh here never had it.
     message_operation = f"{operation_id}:message"
-    if (
-        row["message"]
-        and result.already_running
-        and await _continuation_sent(db, message_operation)
-    ):
-        outcome["message"] = DeliveryOutcome.ALREADY_DELIVERED.value
-        outcome["evidence"].append(
-            "the continuation message was handed over by an earlier backbone process"
-        )
+    earlier = (
+        await _continuation_receipt(db, message_operation)
+        if row["message"] and result.already_running
+        else None
+    )
+    if earlier is not None:
+        kind, condition = earlier
+        if kind == "submitted":
+            outcome["message"] = DeliveryOutcome.ALREADY_DELIVERED.value
+            outcome["evidence"].append(
+                "the continuation message was delivered by an earlier backbone process"
+            )
+        else:
+            outcome["message"] = condition or "queued"
+            outcome["message_queue"] = "stored"
+            outcome["evidence"].append(
+                "the continuation message was queued by an earlier backbone process"
+            )
     elif row["message"]:
         sender = row["requested_by"] or "backbone"
         report = await safe_deliver(
@@ -202,14 +215,19 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
     return None if newest in {"failed", "exited"} else newest
 
 
-async def _continuation_sent(db: BackboneDB, operation_id: str) -> bool:
-    """Whether the continuation under ``operation_id`` was pasted or stored in the queue."""
+async def _continuation_receipt(db: BackboneDB, operation_id: str) -> tuple[str, str] | None:
+    """How the continuation under ``operation_id`` was handed over, if it was:
+    ``("submitted", "")`` when pasted, ``("stored", <condition>)`` when queued
+    (the queue row delivers it; ``condition`` is why it waited)."""
     records = await db.diagnostics.query(operation_id=operation_id, limit=20)
-    return any(
-        (record["category"], record["code"])
-        in {("delivery", "submitted"), ("queue", "queue_stored")}
-        for record in records
-    )
+    codes = {(record["category"], record["code"]): record for record in records}
+    if ("delivery", "submitted") in codes:
+        return "submitted", ""
+    stored = codes.get(("queue", "queue_stored"))
+    if stored is None:
+        return None
+    details = stored.get("details")
+    return "stored", str(details.get("condition") or "") if isinstance(details, dict) else ""
 
 
 async def _session_is_launch(name: str, operation_id: str) -> bool:
