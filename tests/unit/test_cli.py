@@ -188,6 +188,55 @@ class TestAgentCommands:
         listing = json.loads(capsys.readouterr().out)
         assert listing["items"][0]["dir"] == str(project)
 
+    @pytest.mark.parametrize("runtime", ["claude", "codex"])
+    def test_an_offline_start_briefs_the_agent(self, tmp_path, capsys, runtime):
+        """Claude Code takes its brief at launch; Codex's first message is sent here too."""
+        from agent_backbone.models import DeliveryOutcome
+        from agent_backbone.services.routing import DeliveryReport
+
+        assert _run(["init"]) == 0
+        project = tmp_path / "app"
+        project.mkdir()
+        launch = "agent_backbone.services.agents.launch"
+        with (
+            patch(f"{launch}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{launch}.start_session", new_callable=AsyncMock, return_value=True),
+            patch(f"{launch}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", [])),
+            patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/bin/x"),
+            patch("agent_backbone.services.runtimes.base.Runtime.pre_trust"),
+            patch(_DETECT_REPO, new_callable=AsyncMock, return_value=""),
+            patch(
+                "agent_backbone.services.jobs.retry.safe_deliver",
+                new_callable=AsyncMock,
+                return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+            ) as deliver,
+        ):
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", runtime]
+            assert _run(argv) == 0
+        out = capsys.readouterr().out
+        assert "brief is not delivered yet" not in out
+        if runtime == "codex":
+            assert deliver.await_count == 1
+            assert deliver.await_args.args[1].startswith("[via:backbone]")
+        else:
+            deliver.assert_not_awaited()
+
+    def test_an_offline_start_that_does_not_wait_says_the_brief_waits(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        project = tmp_path / "app"
+        project.mkdir()
+        launch = "agent_backbone.services.agents.launch"
+        with (
+            patch(f"{launch}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{launch}.start_session", new_callable=AsyncMock, return_value=True),
+            patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/bin/x"),
+            patch("agent_backbone.services.runtimes.base.Runtime.pre_trust"),
+            patch(_DETECT_REPO, new_callable=AsyncMock, return_value=""),
+        ):
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            assert _run([*argv, "--no-wait"]) == 0
+        assert "brief is not delivered yet" in capsys.readouterr().out
+
     def test_start_unknown_name_registers_cwd(self, tmp_path, monkeypatch, capsys):
         assert _run(["init"]) == 0
         project = tmp_path / "some-project"

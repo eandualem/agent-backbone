@@ -430,11 +430,32 @@ async def _agent_start(args: argparse.Namespace) -> int:
                 "evidence": list(result.evidence),
             }
         )
+        # A runtime briefed by its first message gets it now, as the service
+        # would; a dialog, a timeout or --no-wait leaves it for the service.
+        if result.ready == "ready" and not result.already_running:
+            await _brief_offline(direct, spec.name)
+        if await direct.db.queue.has_brief_ahead(spec.name):
+            print("  - the brief is not delivered yet: it goes first once the backbone runs")
         args.attach_name = spec.name
         print(
             "note: the backbone is not running — start it with `backbone up --detach` for routing"
         )
         return 0 if result.ready != "exited" else 1
+
+
+async def _brief_offline(direct: _common.Direct, name: str) -> None:
+    """Deliver a queued brief through the service's own drain, within the start timeout."""
+    from agent_backbone.services.jobs import drain_agent
+
+    timing = direct.config.timing
+    deadline = asyncio.get_running_loop().time() + timing.start_timeout_seconds
+    while await direct.db.queue.has_brief_ahead(name):
+        await drain_agent(direct.config, direct.db, name)
+        if not await direct.db.queue.has_brief_ahead(name):
+            return
+        if asyncio.get_running_loop().time() >= deadline:
+            return
+        await asyncio.sleep(timing.grace_period_seconds)
 
 
 async def _agent(args: argparse.Namespace) -> int:

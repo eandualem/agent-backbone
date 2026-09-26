@@ -218,6 +218,13 @@ async def drain_message_queue(
     return summary
 
 
+async def drain_agent(config, db, session_name: str) -> None:
+    """One drain of one agent's queue from outside the running service (an
+    ``agent start`` while it is down), through the same delivery. Without a
+    GitHub client, issue notifications wait for the service's own drain."""
+    await _drain_session(config, db, None, session_name, {})
+
+
 async def _drain_session(config, db, gh, session_name, summary) -> bool:
     queued = await db.queue.dequeue(session_name, limit=5)
     completed = True
