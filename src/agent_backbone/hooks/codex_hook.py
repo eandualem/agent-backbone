@@ -136,14 +136,17 @@ REQUESTS_REMEMBERED = 20
 """Approval requests of the turn whose commands a refusal on screen may be matched to."""
 
 
-def _command_key(command: str) -> str:
-    """The start of a command as both its request and the refusal's screen show it.
+def _shown(command: str) -> str:
+    """A command as the refusal on screen shows it: the first line, cut after
+    77 characters with "..." (codex-rs/tui/src/history_cell/approvals.rs)."""
+    first, more, _ = command.partition("\n")
+    shown = f"{first} ..." if more else first
+    return shown if len(shown) <= 80 else shown[:77] + "..."
 
-    The screen shows the first line only, cut after 77 characters with "..."
-    (codex-rs/tui/src/history_cell/approvals.rs); the key is its first 30
-    characters that are not whitespace, hashed."""
-    first = "".join(command.split("\n", 1)[0].split()).rstrip(".")
-    return hashlib.sha256(first[:30].encode()).hexdigest()[:12]
+
+def _command_key(shown: str) -> str:
+    """That text however it was wrapped (whitespace and the trailing dots dropped), hashed."""
+    return hashlib.sha256("".join(shown.split()).rstrip(".").encode()).hexdigest()[:12]
 
 
 def refusal_record(
@@ -157,6 +160,7 @@ def refusal_record(
     match = _REFUSAL.match(entry)
     timed_out = bool(match and match.group(1))
     what = match.group(2).strip() if match else ""
+    # An empty summary marks requests the screen cannot tell apart: the screen names it.
     summary = (requested or {}).get(_command_key(what[4:])) if what.startswith("run ") else None
     return {
         "ts": now,
@@ -214,9 +218,12 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
             tool_input = payload.get("tool_input")
             command = tool_input.get("command") if isinstance(tool_input, dict) else None
             if isinstance(command, str):
-                key = _command_key(command)
-                requested.pop(key, None)  # the latest request with this start names it
-                requested[key] = bb.action_summary(str(payload.get("tool_name") or ""), tool_input)
+                key = _command_key(_shown(command))
+                summary = bb.action_summary(str(payload.get("tool_name") or ""), tool_input)
+                if requested.get(key, summary) != summary:
+                    summary = ""  # two requests the screen shows alike: neither names it
+                requested.pop(key, None)
+                requested[key] = summary
                 requested = dict(list(requested.items())[-REQUESTS_REMEMBERED:])
         elif not watching:
             return

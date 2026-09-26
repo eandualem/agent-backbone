@@ -214,6 +214,32 @@ class TestAutomaticReviewerRefusals:
         assert refusal["summary"] == "cd; git push"
         assert "someone" not in (tmp_path / hook.WATCH_DIR / "cx.json").read_text()
 
+    def test_requests_that_start_alike_keep_their_own_names(self, tmp_path):
+        shared = "cd /home/someone/projects/checkout && "
+        with patch.object(hook, "own_screen", side_effect=[REVIEWING, REVIEWING, None]):
+            for command in (shared + "git push origin main", shared + "rm -rf build"):
+                request = _payload("PermissionRequest", tool_name="Bash")
+                request["tool_input"] = {"command": command}
+                hook.watch_refusals(request, tmp_path, "cx")
+            hook.watch_refusals(_payload("PostToolUse"), tmp_path, "cx")  # tmux did not answer
+        screen = REVIEWING + f"✗ Request denied for codex to run {shared}git push origin main\n"
+        [refusal], _ = self._turn(tmp_path, screen, events=("Stop",))
+        assert refusal["summary"] == "cd; git push"
+
+    def test_requests_the_screen_shows_alike_are_named_by_the_screen(self, tmp_path):
+        shared = (
+            "cd /home/someone/projects/a-long-directory/checkout/app/with/more/levels/deeper && "
+        )
+        with patch.object(hook, "own_screen", side_effect=[REVIEWING, REVIEWING]):
+            for command in (shared + "git push", shared + "rm -rf build"):
+                request = _payload("PermissionRequest", tool_name="Bash")
+                request["tool_input"] = {"command": command}
+                hook.watch_refusals(request, tmp_path, "cx")
+        assert len(shared) > 80  # both are cut inside the shared start
+        screen = REVIEWING + f"✗ Request denied for codex to run {hook._shown(shared)}\n"
+        [refusal], _ = self._turn(tmp_path, screen, events=("Stop",))
+        assert refusal["summary"] == "cd"  # the screen's own reading; neither request guessed
+
     def test_many_identical_refusals_are_all_counted(self, tmp_path):
         line = "✗ Request denied for codex to run git push\n"
         logged, _ = self._turn(tmp_path, line * 60, line * 61)
