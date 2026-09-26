@@ -195,12 +195,13 @@ def _run_hook(module, state_dir, agent, payload):
     ],
 )
 async def test_a_refusal_without_a_dialog_reaches_the_humans_in_both_runtimes(
-    config, runtime, refuse, why, allow
+    config, monkeypatch, runtime, refuse, why, allow
 ):
     from dataclasses import replace
 
     from agent_backbone.services.runtimes import RUNTIMES
 
+    monkeypatch.setenv("TMUX_PANE", "%1")  # inside a pane; every screen read is mocked
     config.agents.specs["ike"] = replace(config.agents.get("ike"), runtime=runtime)
     await _check(config)  # the watch starts
     refuse(config.state_dir, "ike")

@@ -27,14 +27,12 @@ except ImportError:  # copied next to backbone_state.py, outside the package
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import backbone_state as bb  # type: ignore[no-redef]
 
-REFUSAL_SCREEN_LINES = 2000
-"""How far back the session's screen is read for the automatic reviewer's refusals."""
 REFUSALS_COMPARED = 50
 """Refusals remembered between two looks at the screen."""
 WATCH_DIR = "refusal-watch"
 """``<state_dir>/refusal-watch/<agent>.json``: the refusals on screen at the last look,
-while a turn that requested an approval goes on; its own file, updated under a lock,
-since Codex runs the hooks of parallel tool calls at once."""
+and whether a turn that requested an approval is going on. Its own file, updated
+under a lock, since Codex runs the hooks of parallel tool calls at once."""
 
 # Codex's automatic reviewer (``--approve-for-me``) refuses an action without a
 # dialog. Codex (0.157) has no hook event for it and leaves it out of the
@@ -51,6 +49,7 @@ _RISK = re.compile(r"⚠ Automatic approval review denied \(risk: ([a-z]{1,12})\
 _NAME = re.compile(r"[A-Za-z0-9_-]{1,60}")
 _LOOK_EVENTS = frozenset(
     {
+        "SessionStart",
         "PermissionRequest",
         "PreToolUse",
         "PostToolUse",
@@ -60,19 +59,20 @@ _LOOK_EVENTS = frozenset(
         "SessionEnd",
     }
 )
-"""Events at which a watching hook reads its screen again."""
+"""Events at which the hook may read its screen: at the session's start, and while watching."""
 _WATCH_EVENTS = frozenset({"PermissionRequest", "PreToolUse", "PostToolUse"})
-"""Events within the turn: the watch goes on. After any other look, it ends."""
+"""Events within the turn: the watch goes on. After a look at any other event, it ends."""
 
 
 def own_screen() -> str | None:
-    """The recent text of this session's pane, or None outside tmux."""
+    """All that tmux still holds of this session's pane, wrapped lines joined;
+    None when it cannot be read."""
     pane = os.environ.get("TMUX_PANE", "").strip()
     if not pane or not os.environ.get("TMUX"):
         return None
     try:
         out = bb.subprocess.run(
-            ["tmux", "capture-pane", "-p", "-t", pane, "-S", f"-{REFUSAL_SCREEN_LINES}"],
+            ["tmux", "capture-pane", "-p", "-J", "-t", pane, "-S", "-"],
             capture_output=True,
             timeout=2,
             check=False,
@@ -82,27 +82,37 @@ def own_screen() -> str | None:
     return out.stdout.decode("utf-8", "replace") if out.returncode == 0 else None
 
 
-def screen_refusals(screen: str) -> list[tuple[str, str]]:
-    """``(entry, risk)`` for each of the reviewer's refusals on screen, oldest first.
-
-    An entry is the refusal's whole text with its wrapping undone, so a
-    re-wrapped screen shows the same entries."""
-    found: list[tuple[str, str]] = []
-    risk, entry = "", None
+def _entries(screen: str):
+    """Each entry at the left margin with its indented continuation, wrapping undone."""
+    entry: list[str] | None = None
     for line in [*screen.splitlines(), ""]:
+        if entry is not None and line.startswith("  ") and line.strip():
+            entry.append(line)
+            continue
         if entry is not None:
-            if line.startswith("  ") and line.strip():
-                entry.append(line)
-                continue
-            found.append((" ".join(" ".join(entry).split()), risk))
-            risk, entry = "", None
-        if warned := _RISK.match(line):
-            risk = warned.group(1)
-        elif _REFUSAL.match(line):
+            yield " ".join(" ".join(entry).split())
+            entry = None
+        if line[:1].strip():
             entry = [line]
-        elif line[:1].strip():
-            risk = ""  # another entry at the margin: the warning was not this refusal's
+
+
+def screen_refusals(screen: str) -> list[tuple[str, str]]:
+    """``(entry, risk)`` for each of the reviewer's refusals on screen, oldest first."""
+    found: list[tuple[str, str]] = []
+    risk = ""
+    for entry in _entries(screen):
+        if warned := _RISK.match(entry):
+            risk = warned.group(1)
+            continue
+        if _REFUSAL.match(entry):
+            found.append((entry, risk))
+        risk = ""  # a warning belongs to the refusal right after it
     return found
+
+
+def _identity(entry: str) -> str:
+    """The same refusal however it was wrapped: its text without any whitespace."""
+    return hashlib.sha256("".join(entry.split()).encode()).hexdigest()[:12]
 
 
 def refusal_summary(what: str) -> str:
@@ -150,19 +160,20 @@ def _new_count(seen: list[str], now: list[str]) -> int:
 
 
 def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
-    """Log the reviewer's refusals that appear once the turn requested an approval.
+    """Log the reviewer's refusals that appear once a turn requested an approval.
 
-    ``PermissionRequest`` starts a watch: the refusals already on screen. Each
-    later hook of the turn reads the screen again and logs what appeared
-    since; the turn's end ends the watch. A screen that cannot be read leaves
-    the watch for the next look. A refusal is only read, never answered."""
+    The session's start records the refusals already on screen. A
+    ``PermissionRequest`` starts a watch; every later hook of the turn reads
+    the screen again and logs what appeared since the last reading, and a
+    look at the turn's end ends the watch. A screen that cannot be read
+    leaves everything for the next look. A refusal is only read, never
+    answered."""
     event = payload.get("hook_event_name", "")
+    if event not in _LOOK_EVENTS or not os.environ.get("TMUX_PANE", "").strip():
+        return
     directory = state_dir / WATCH_DIR
     target = directory / f"{agent}.json"
-    if event == "SessionStart":
-        target.unlink(missing_ok=True)  # a new session: nothing to compare with
-        return
-    if event not in _LOOK_EVENTS or (event != "PermissionRequest" and not target.exists()):
+    if event not in ("SessionStart", "PermissionRequest") and not target.exists():
         return
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / f"{agent}.lock").open("a") as lock:
@@ -170,27 +181,31 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
         try:
             watch = json.loads(target.read_text())
         except (OSError, ValueError):
-            watch = None
-        watch = watch if isinstance(watch, list) else None
-        if watch is None and event != "PermissionRequest":
+            watch = {}
+        watch = watch if isinstance(watch, dict) else {}
+        seen = watch.get("seen") if isinstance(watch.get("seen"), list) else None
+        watching = watch.get("watching") is True
+        if event == "SessionStart":
+            seen, watching = None, False  # a new session: what was seen before means nothing
+        elif event == "PermissionRequest":
+            watching = True
+        elif not watching:
             return
         screen = own_screen()
-        if screen is None:
-            return
-        found = screen_refusals(screen)[-REFUSALS_COMPARED:]
-        seen = [hashlib.sha256(entry.encode()).hexdigest()[:12] for entry, _ in found]
-        if watch is not None:
-            now = bb.time.time()
-            fresh = found[len(found) - _new_count(watch, seen) :]
-            for index, (entry, risk) in enumerate(fresh):
-                record = refusal_record(entry, risk, now, f"auto-review:{now:.6f}:{index}")
-                bb.append_action(state_dir, agent, record)
-        if event in _WATCH_EVENTS:
-            tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-            tmp.write_text(json.dumps(seen))
-            os.replace(tmp, target)
-        else:
-            target.unlink(missing_ok=True)
+        if screen is not None:
+            found = screen_refusals(screen)[-REFUSALS_COMPARED:]
+            now_seen = [_identity(entry) for entry, _ in found]
+            if seen is not None:  # never guess what an unknown earlier screen held
+                now = bb.time.time()
+                fresh = found[len(found) - _new_count(seen, now_seen) :]
+                for index, (entry, risk) in enumerate(fresh):
+                    record = refusal_record(entry, risk, now, f"auto-review:{now:.6f}:{index}")
+                    bb.append_action(state_dir, agent, record)
+            seen = now_seen
+            watching = watching and event in _WATCH_EVENTS
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"seen": seen, "watching": watching}))
+        os.replace(tmp, target)
 
 
 def tool_succeeded(payload: dict) -> bool:
