@@ -132,10 +132,6 @@ def refusal_summary(what: str) -> str:
     return "an action"
 
 
-REQUESTS_REMEMBERED = 20
-"""Approval requests of the turn whose commands a refusal on screen may be matched to."""
-
-
 def _shown(command: str) -> str:
     """A command as the refusal on screen shows it: the first line, cut after
     77 characters with "..." (codex-rs/tui/src/history_cell/approvals.rs)."""
@@ -222,9 +218,7 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
                 summary = bb.action_summary(str(payload.get("tool_name") or ""), tool_input)
                 if requested.get(key, summary) != summary:
                     summary = ""  # two requests the screen shows alike: neither names it
-                requested.pop(key, None)
-                requested[key] = summary
-                requested = dict(list(requested.items())[-REQUESTS_REMEMBERED:])
+                requested[key] = summary  # every request of the turn; cleared when it ends
         elif not watching:
             return
         screen = own_screen()

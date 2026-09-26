@@ -240,6 +240,20 @@ class TestAutomaticReviewerRefusals:
         [refusal], _ = self._turn(tmp_path, screen, events=("Stop",))
         assert refusal["summary"] == "cd"  # the screen's own reading; neither request guessed
 
+    def test_requests_shown_alike_stay_unnamed_however_many_follow(self, tmp_path):
+        shared = (
+            "cd /home/someone/projects/a-long-directory/checkout/app/with/more/levels/deeper && "
+        )
+        commands = [shared + "git push", *(f"git tag v{n}" for n in range(25)), shared + "rm -rf b"]
+        with patch.object(hook, "own_screen", side_effect=[REVIEWING] * len(commands)):
+            for command in commands:
+                request = _payload("PermissionRequest", tool_name="Bash")
+                request["tool_input"] = {"command": command}
+                hook.watch_refusals(request, tmp_path, "cx")
+        screen = REVIEWING + f"✗ Request denied for codex to run {hook._shown(shared)}\n"
+        [refusal], _ = self._turn(tmp_path, screen, events=("Stop",))
+        assert refusal["summary"] == "cd"
+
     def test_many_identical_refusals_are_all_counted(self, tmp_path):
         line = "✗ Request denied for codex to run git push\n"
         logged, _ = self._turn(tmp_path, line * 60, line * 61)
