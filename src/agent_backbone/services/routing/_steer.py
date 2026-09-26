@@ -26,6 +26,7 @@ from agent_backbone.hooks.backbone_state import (
     steer_key,
     steer_offers,
 )
+from agent_backbone.services.agents import AgentState, read_state_file
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence
 from agent_backbone.services.runtimes import get_runtime
@@ -63,6 +64,9 @@ async def steer_agent(
     session_name: str, text: str, config: BackboneConfig, *, db: BackboneDB, sender: str
 ) -> SteerReport:
     """Offer ``text`` to the agent's current turn, or refuse with the reason."""
+    # The turn this steer is for, read before the checks: a turn that ends
+    # (or ends and another starts) while the offer is written is caught below.
+    turn = await asyncio.to_thread(_prompted_at, config, session_name)
     profile = await get_session_intelligence(session_name, config)
     evidence = list(profile.evidence)
     if profile.intelligence == SessionIntelligence.OFFLINE:
@@ -129,6 +133,27 @@ async def steer_agent(
             launch_id,
             evidence,
         )
+    # The hook writes the turn's end before it retires offers, so a turn that
+    # ended before the offer existed shows here; its retirement missed the
+    # offer, and the next task must not take it. The hook may have taken it
+    # within the turn already, which is a handoff.
+    if await asyncio.to_thread(_turn_ended, config, session_name, turn) and await asyncio.to_thread(
+        expire_steer, config.state_dir, session_name, launch_id, delivery_id
+    ):
+        await asyncio.to_thread(clear_steer, config.state_dir, session_name, launch_id, delivery_id)
+        await db.deliveries.settle(delivery_id, "not_taken", expected="offered")
+        return SteerReport(
+            "refused",
+            session_name,
+            "not_working",
+            delivery_id,
+            operation_id,
+            launch_id,
+            [
+                *evidence,
+                "the task ended while the offer was written; send an ordinary message instead",
+            ],
+        )
     return SteerReport(
         "offered",
         session_name,
@@ -138,6 +163,19 @@ async def steer_agent(
         launch_id,
         [*evidence, f"offered to launch {launch_id}; the hook hands it over on the next tool call"],
     )
+
+
+def _prompted_at(config: BackboneConfig, session_name: str) -> float | None:
+    snapshot = read_state_file(config.state_dir, session_name)
+    return snapshot.prompted_at if snapshot is not None and snapshot.source == "push" else None
+
+
+def _turn_ended(config: BackboneConfig, session_name: str, turn: float | None) -> bool:
+    """Whether the hook reports that the turn marked ``turn`` is over."""
+    snapshot = read_state_file(config.state_dir, session_name)
+    if snapshot is None or snapshot.source != "push":
+        return False  # no hook evidence: the hook's own retirement and the TTL apply
+    return snapshot.state in (AgentState.IDLE, AgentState.UNKNOWN) or snapshot.prompted_at != turn
 
 
 async def settle_steers(config: BackboneConfig, db: BackboneDB) -> dict[str, int]:
