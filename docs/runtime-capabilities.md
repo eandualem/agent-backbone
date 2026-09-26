@@ -35,7 +35,7 @@ claims support that the adapter's code does not declare.
 | Non-empty user-level instruction file detected | ✅ | ✅ | ✅ | ✅ files listed under `instructions` in its config not checked | ✅ | ? #302 no default user-level file per its docs; not yet verified | n/a |
 | CLI-native memory disabled or detected | ❌ #292 auto-memory is on | ? #292 | ? #292 | ? #292 | ? #292 | ? #292 | n/a |
 | State reported by the runtime (hooks) | ✅ | ✅ from its first prompt (the brief): Codex runs no hook before its first turn | ✅ | ✅ | ❌ #275 read from the terminal only | ❌ #275 read from the terminal only | n/a |
-| Steer and high-priority events into a working agent | ✅ | ✅ | ❌ #276 | ❌ #276 | ❌ #276 | ❌ #276 | n/a |
+| Steer and high-priority events into a working agent | ✅ | ✅ | ❌ #276 | ✅ as a user message in the running turn, after the next tool call | ❌ #276 | ❌ #276 | n/a |
 | Permission dialog detected and alerted | ✅ | ✅ | ? #302 markers not verified live | ✅ | ❌ #287 dialog not captured | ? #302 markers not verified live | n/a |
 | Permission dialog answered (agent approve) | ✅ | ✅ | ❌ #277 | ✅ | ❌ #277 | ❌ #277 | n/a |
 | Permission dialog refused (agent deny) | ✅ | ✅ | ❌ #299 | ❌ #299 | ❌ #299 | ❌ #299 | n/a |
@@ -47,7 +47,7 @@ claims support that the adapter's code does not declare.
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ #281 | ❌ #281 | n/a |
 | Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ #285 | ❌ #285 | ❌ #285 | ❌ #285 | n/a |
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ #293 | ❌ #293 | ❌ #293 | ❌ #293 | n/a |
-| Shared skills linked | ✅ | ✅ | ? #302 linked by the shared code; not tested for this runtime | ? #302 linked by the shared code; not tested for this runtime | ❌ #282 | ❌ #282 | n/a |
+| Shared skills linked | ✅ | ✅ | ? #302 linked by the shared code; not tested for this runtime | ? #302 linked by the shared code; not tested for this runtime | ✅ | ❌ #282 | n/a |
 | Token usage recorded | ✅ | ✅ | ❌ #283 | ✅ | ❌ #283 | ❌ #283 | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ❌ #284 | ❌ #284 | ❌ #284 | ❌ #284 | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ #295 | ✅ | ❌ #295 | ❌ #295 | n/a |

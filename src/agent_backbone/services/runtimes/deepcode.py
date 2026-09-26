@@ -31,6 +31,9 @@ class DeepCode(Runtime):
     brief_mode = "initial_prompt"
     # ./.deepcode/AGENTS.md, else ./AGENTS.md, as a system message (0.3.1).
     declared_capabilities = frozenset({"project-instructions"})
+    # Project-level interoperable skills; a symlinked skill directory is
+    # listed by /skills and in the model's skill catalog (0.3.1).
+    skill_dirs = (".agents/skills",)
     models = ("deepseek-v4-flash", "deepseek-v4-pro")
 
     prompt_prefixes = (">",)

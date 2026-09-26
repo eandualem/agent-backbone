@@ -51,8 +51,8 @@ backbone tell <agent> "the lock is held by the retry job; wait for it" --steer
 `--steer` is for a clarification, a correction or context the peer lacks
 **about the task it is doing now**. It is not a new task and not a way to
 jump the queue: it goes to the peer's runtime hook as a transient offer and
-arrives as context on its next tool call (Claude Code and Codex), never as a
-paste and never as a later prompt. While the peer is at its prompt, on
+arrives as context on its next tool call (Claude Code and Codex; on OpenCode
+as a message in its running turn), never as a paste and never as a later prompt. While the peer is at its prompt, on
 another runtime, or offline, it is refused with the reason and nothing is
 queued — send an ordinary message then. The result is at-most-once handoff:
 `backbone agent inspect <agent>` shows the `steer` record as `offered`,

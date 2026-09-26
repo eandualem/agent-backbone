@@ -27,8 +27,8 @@ every later CLI version or account.
   `backbone config`; secrets only in `.env`.
 - Event subscriptions ([sources](sources.md)): agents subscribe to Gmail
   with Gmail search filters and a priority; normal events batch in the queue
-  until the agent is ready, high events reach a working Claude Code or Codex
-  agent through its hook context. Unit-tested end to end with the IMAP
+  until the agent is ready, high events reach a working Claude Code, Codex or
+  OpenCode agent through its hook context. Unit-tested end to end with the IMAP
   client mocked; live mailbox validation is still pending.
 - GitHub per repository: owner / `for:` / `from:` / watch routing,
   one-issue-at-a-time with acknowledgement, close-then-next, sub-issue
