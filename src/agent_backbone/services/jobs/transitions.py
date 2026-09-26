@@ -142,9 +142,14 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         return "failed"
     # The continuation carries an identity of its own: a process that exits
     # after handing it over but before finishing the row must not send it
-    # again from the next one (a paste cut off midway can still repeat).
+    # again to the same session from the next one (a paste cut off midway can
+    # still repeat). A session started fresh here never had it.
     message_operation = f"{operation_id}:message"
-    if row["message"] and resumed_launch and await _continuation_sent(db, message_operation):
+    if (
+        row["message"]
+        and result.already_running
+        and await _continuation_sent(db, message_operation)
+    ):
         outcome["message"] = DeliveryOutcome.ALREADY_DELIVERED.value
         outcome["evidence"].append(
             "the continuation message was handed over by an earlier backbone process"

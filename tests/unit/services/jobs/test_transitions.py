@@ -257,6 +257,26 @@ async def test_a_continuation_delivered_before_a_backbone_restart_is_not_sent_ag
     assert "handed over by an earlier backbone process" in done["result"]["evidence"][-1]
 
 
+async def test_a_fresh_replacement_gets_the_continuation_an_earlier_session_had(
+    db, config, store, seams
+):
+    """The earlier replacement took the continuation and then ended; this one is new."""
+    _, _, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="hi")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-9")
+    await db.diagnostics.record(
+        category="delivery",
+        operation_id="op-9:message",
+        code="submitted",
+        severity="info",
+        agent_name="ike",
+    )
+    assert await _run(config, store, db) == {"ike": "started"}
+    deliver.assert_awaited_once()
+    assert (await db.transitions.get(row["id"]))["result"]["message"] == "delivered"
+
+
 async def test_the_retrys_own_already_running_record_does_not_hide_the_launch(
     db, config, store, seams
 ):
