@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import BackboneConfig
@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 SESSIONS_NAMESPACE = "/sessions"
 SESSIONS_UPDATE_EVENT = "sessions:update"
+INBOX_PENDING_EVENT = "inbox:pending"
 SNAPSHOT_TTL_SECONDS = 5.0
 
 
@@ -45,6 +46,7 @@ class SessionFeed:
         self._lock = asyncio.Lock()
         self._emit_lock = asyncio.Lock()
         self._last_signature: str | None = None
+        self._inbox: dict[str, int] = {}
 
     @property
     def sio(self) -> socketio.AsyncServer | None:
@@ -94,6 +96,26 @@ class SessionFeed:
             await self._sio.emit(SESSIONS_UPDATE_EVENT, payload, namespace=SESSIONS_NAMESPACE)
             self._last_signature = signature
             return True
+
+    async def hint_inbox(self, counts: Mapping[str, int], *, complete: bool = False) -> None:
+        """Tell ``/sessions`` subscribers whose inbox grew: ``inbox:pending
+        {session, pending}``, with no message text, once per rise in the
+        count. ``complete`` says ``counts`` covers every session (absent means
+        none). A hint can be missed (a disconnect, a restart): readers also
+        read their inbox on connect and on a slow poll."""
+        rising = {name: n for name, n in counts.items() if n > self._inbox.get(name, 0)}
+        if complete:
+            self._inbox = dict(counts)
+        else:
+            self._inbox.update(counts)
+        if self._sio is None:
+            return
+        for name, pending in rising.items():
+            await self._sio.emit(
+                INBOX_PENDING_EVENT,
+                {"session": name, "pending": pending},
+                namespace=SESSIONS_NAMESPACE,
+            )
 
     async def refresh_and_emit(self) -> None:
         """After a change made through the API: drop the cache and broadcast."""

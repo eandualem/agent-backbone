@@ -3,7 +3,8 @@
 Namespaces:
 
 * ``/sessions`` — receives ``sessions:update`` snapshots whenever agent state
-  changes (emitted by the API and the monitor job).
+  changes (emitted by the API and the monitor job), and ``inbox:pending``
+  hints when an agent's inbox has more to read.
 * ``/terminal`` — read-only stream of a registered agent's terminal. Each subscriber
   gets its own PTY running ``tmux attach-session`` so rendering is faithful,
   but input is never forwarded: the backbone streams terminals, it does not

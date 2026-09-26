@@ -7,6 +7,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agent_backbone.api.session_updates import (
+    INBOX_PENDING_EVENT,
     SESSIONS_NAMESPACE,
     SESSIONS_UPDATE_EVENT,
     SessionFeed,
@@ -159,3 +160,29 @@ class TestEmit:
             await feed.snapshot()
             await feed.refresh_and_emit()
         assert sio.emit.await_args.args[1] == [_agent("other").model_dump(mode="json")]
+
+
+class TestInboxHint:
+    async def test_hints_once_per_rise_without_message_text(self, db):
+        sio = MagicMock()
+        sio.emit = AsyncMock()
+        feed = _feed(sio)
+        await db.queue.enqueue(session_name="app", message="secret", delivery_kind="direct_message")
+        await db.queue.enqueue(session_name="app", message="issue", issue_number=7)
+        await feed.hint_inbox(await db.queue.inbox_counts("app"))
+        await feed.hint_inbox(await db.queue.inbox_counts(), complete=True)  # a tick, no rise
+        sio.emit.assert_awaited_once_with(
+            INBOX_PENDING_EVENT, {"session": "app", "pending": 1}, namespace=SESSIONS_NAMESPACE
+        )
+        await db.queue.checkpoint("app")  # read: still one to acknowledge, no new hint
+        await feed.hint_inbox(await db.queue.inbox_counts(), complete=True)
+        assert sio.emit.await_count == 1
+
+    async def test_a_count_that_fell_to_zero_hints_again_on_the_next_message(self):
+        sio = MagicMock()
+        sio.emit = AsyncMock()
+        feed = _feed(sio)
+        await feed.hint_inbox({"app": 1})
+        await feed.hint_inbox({}, complete=True)  # acknowledged
+        await feed.hint_inbox({"app": 1})
+        assert sio.emit.await_count == 2
