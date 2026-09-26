@@ -378,7 +378,7 @@ backbone config set escalation.target orch
 | `agent deny NAME [--from WHO]` | Refuse the prompt with the runtime's refusing key (Escape for Claude Code and Codex), under the same gate and audit as `approve`. The right answer to a *choice* dialog — Codex's rate-limit "switch to gpt-5.6-luna?" has Switch preselected, so `approve` refuses it (`not_permission`) and Escape keeps the model |
 | `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object), `always_on`, `unattended` and `inbox_only` (`true`/`false`; `unattended` launches the runtime with its own no-approval switch, `inbox_only` marks a client that is never launched — see [configuration](configuration.md#agents)) |
 | `agent watch [NAME] REPO…` / `agent unwatch [NAME] REPO…` | Add / remove watched repositories. Inside an agent session `NAME` defaults to the agent itself (`$BACKBONE_AGENT`), so an agent can subscribe on its own |
-| `agent subscribe [NAME] SOURCE FILTER [--priority normal\|high]` / `agent unsubscribe [NAME] ID` | Subscribe to inbound events from a [source](sources.md) (`gmail`) matching a filter in the source's own query language (`"from:upwork.com subject:job"`); `high` reaches a working Claude Code or Codex agent on its next tool call through hook context (other runtimes: first when ready), `normal` waits for its prompt, batched. `agent inspect` lists subscriptions with their ids. `NAME` defaults to `$BACKBONE_AGENT` inside a session |
+| `agent subscribe [NAME] SOURCE FILTER [--priority normal\|high]` / `agent unsubscribe [NAME] ID` | Subscribe to inbound events from a [source](sources.md) (`gmail`) matching a filter in the source's own query language (`"from:upwork.com subject:job"`); `high` reaches a working Claude Code, Codex or OpenCode agent on its next tool call through hook context (other runtimes: first when ready), `normal` waits for its prompt, batched. `agent inspect` lists subscriptions with their ids. `NAME` defaults to `$BACKBONE_AGENT` inside a session |
 | `agent forget NAME` | Remove a stopped agent from the backbone (refuses while its session is still running) |
 | `agent tag NAME TAG…` / `agent untag NAME TAG…` | Add/remove tags, retaining other tags. `swarm:`, `role:` and `task:` tags are managed by the swarm lifecycle |
 | `agent rename NAME NEW_NAME` | Rename a stopped non-swarm agent, preserving its directory, settings, watches, resume ID, queue, pending restart and routing receipts. Refuses occupied names or names with existing history, active deliveries and agents participating in an active swarm |
@@ -567,7 +567,8 @@ was submitted.
 task and not queue-jumping. It goes through `POST /api/steer` as a transient
 offer to the agent's runtime hook, never as a queue row and never as a paste:
 Claude Code and Codex hand it to the model as context on the agent's next tool
-call, so it cannot overwrite a draft or answer a dialog. It is accepted only
+call, and OpenCode's plugin adds it to the running turn as a user message after
+that call, so it cannot overwrite a draft or answer a dialog. It is accepted only
 while the agent is `agent_working` on one of those runtimes in a session the
 backbone started; otherwise it is **refused with the reason** (`not_working`,
 `unsupported_runtime`, `offline`, `no_launch_id`) and nothing is queued — send

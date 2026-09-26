@@ -186,6 +186,11 @@ SessionEnd record expires; stale permission requests are not revived:
 | `permission.asked` / `permission.replied` | `waiting_for_human` / `permission`, then `busy` |
 | `session.error` | `idle` |
 
+After each tool call of the root session the plugin also hands over what the
+backbone offered the working agent (a steer, a high-priority batch) as a user
+message in the running turn, with the turn's agent and model; when the turn
+ends (`idle`) it marks a steer still offered as missed.
+
 The hooks parse actual `gh issue comment`, `gh pr comment` and `gh pr create`
 commands into `<data_dir>/state/actions.jsonl`, with repository and branch
 metadata. Claude, Codex and OpenCode record **intent** before execution to suppress a fast

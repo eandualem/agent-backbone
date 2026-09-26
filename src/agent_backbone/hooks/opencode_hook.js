@@ -10,6 +10,12 @@
 //
 // Writes the same <state_dir>/<agent>.json the Python hooks write. Only the
 // root session counts: sessions with a parentID are OpenCode's own subagents.
+//
+// What the backbone offers a working agent (a steer, a high-priority batch;
+// <state_dir>/context/, see backbone_state.py) is taken after each tool call
+// and joins the running turn as a user message, OpenCode's own path for
+// input typed while it works: the turn's next step reads it (verified live
+// against OpenCode 1.18).
 
 import fs from "node:fs";
 import { createHash } from "node:crypto";
@@ -21,21 +27,54 @@ const STATE_IDLE = "idle";
 const STATE_BUSY = "busy";
 const STATE_WAITING = "waiting_for_human";
 const REASON_PERMISSION = "permission";
+
+function helper(mode, request) {
+  // The shipped stdlib module: one implementation of the parser and the offer protocol.
+  const script = fileURLToPath(new URL("backbone_state.py", import.meta.url));
+  return new Promise((resolve, reject) => {
+    const child = execFile("python3", [script, mode], {
+      encoding: "utf8", timeout: 15000,
+    }, (error, output) => error ? reject(error) : resolve(output));
+    child.stdin.on("error", reject);
+    child.stdin.end(JSON.stringify(request));
+  });
+}
+
 async function shellActions(command, cwd, phase) {
   // Reuse the shipped stdlib parser; never interpret quoted examples as commands.
   try {
-    const helper = fileURLToPath(new URL("backbone_state.py", import.meta.url));
-    const stdout = await new Promise((resolve, reject) => {
-      const child = execFile("python3", [helper, "--shell-actions"], {
-        encoding: "utf8", timeout: 15000,
-      }, (error, output) => error ? reject(error) : resolve(output));
-      child.stdin.on("error", reject);
-      child.stdin.end(JSON.stringify({ command, cwd, phase }));
-    });
-    return JSON.parse(stdout);
+    return JSON.parse(await helper("--shell-actions", { command, cwd, phase }));
   } catch {
     return []; // Hook failures must not stop the agent.
   }
+}
+
+function offered(dir, prefix = "") {
+  try {
+    return fs.readdirSync(dir).some((name) => name.startsWith(prefix) && name.endsWith(".md"));
+  } catch {
+    return false;
+  }
+}
+
+async function takeContext(t) {
+  const launch = (process.env.BACKBONE_LAUNCH_ID || "").trim();
+  const agentDir = path.join(t.dir, "context", t.agent);
+  if (!offered(agentDir) && !(launch && offered(path.join(agentDir, launch)))) return [];
+  try {
+    return JSON.parse(await helper("--take-context", { state_dir: t.dir, agent: t.agent, launch_id: launch }));
+  } catch {
+    return [];
+  }
+}
+
+async function retireSteers(t) {
+  // The turn ended: steers still offered were for it, never for the next task.
+  const launch = (process.env.BACKBONE_LAUNCH_ID || "").trim();
+  if (!launch || !offered(path.join(t.dir, "context", t.agent, launch), "steer-")) return;
+  try {
+    await helper("--retire-steers", { state_dir: t.dir, agent: t.agent, launch_id: launch });
+  } catch { /* Hook failures must not stop the agent. */ }
 }
 
 function target() {
@@ -105,17 +144,50 @@ function record(t, event, state, reason, extra = {}) {
   writeState(t, out);
 }
 
-export const AgentBackbone = async ({ directory } = {}) => {
+export const AgentBackbone = async ({ client, directory } = {}) => {
   const t = target();
   if (!t) return {};
   const children = new Set(); // subagent sessions, never the agent's own state
   const pending = new Set(); // permission requests waiting for an answer
+  const turns = new Map(); // sessionID -> the agent and model its turn runs with
   let root = null;
 
   const props = (event) => event.properties ?? event.data ?? {};
   const isChild = (sessionID) => sessionID && children.has(sessionID);
 
+  const handOver = async (sessionID, output) => {
+    const texts = await takeContext(t);
+    if (texts.length === 0) return;
+    const text = texts.join("\n\n");
+    // A message without the turn's agent and model would switch them.
+    const turn = turns.get(sessionID);
+    if (turn && client?.session?.prompt) {
+      try {
+        const result = await client.session.prompt({
+          path: { id: sessionID },
+          body: { noReply: true, ...turn, parts: [{ type: "text", text }] },
+        });
+        if (!result?.error) return;
+      } catch { /* the tool's output carries it instead */ }
+    }
+    // Already taken: never drop it. It rides on this tool's output.
+    if (output && typeof output === "object") {
+      output.output = output.output ? `${output.output}\n\n${text}` : text;
+    }
+  };
+
   return {
+    "chat.params": async (input) => {
+      // The user message this request answers: its agent and model run the turn.
+      const message = input?.message;
+      if (!input?.sessionID || !message?.agent || !message?.model?.modelID) return;
+      const { providerID, modelID, variant } = message.model;
+      turns.set(input.sessionID, {
+        agent: message.agent,
+        model: { providerID, modelID },
+        ...(variant ? { variant } : {}),
+      });
+    },
     event: async ({ event }) => {
       const p = props(event);
       switch (event.type) {
@@ -131,12 +203,16 @@ export const AgentBackbone = async ({ directory } = {}) => {
           if (type === "busy") record(t, event.type, STATE_BUSY, null, { session_id: p.sessionID });
           else if (type === "idle" && pending.size === 0) {
             record(t, event.type, STATE_IDLE, null, { session_id: p.sessionID });
+            await retireSteers(t);
           }
           return;
         }
         case "session.idle": {
           if (isChild(p.sessionID)) return;
-          if (pending.size === 0) record(t, event.type, STATE_IDLE, null, { session_id: p.sessionID });
+          if (pending.size === 0) {
+            record(t, event.type, STATE_IDLE, null, { session_id: p.sessionID });
+            await retireSteers(t);
+          }
           return;
         }
         case "session.error": {
@@ -167,7 +243,9 @@ export const AgentBackbone = async ({ directory } = {}) => {
       for (const action of await shellActions(command, directory ?? process.cwd(), "intent")) appendAction(t, action);
     },
     "tool.execute.after": async (input, output) => {
-      if (isChild(input?.sessionID) || input?.tool !== "bash") return;
+      if (isChild(input?.sessionID)) return;
+      await handOver(input?.sessionID, output);
+      if (input?.tool !== "bash") return;
       if (output?.metadata?.exit !== 0 || output?.metadata?.timeout) return;
       const command = input?.args?.command;
       if (typeof command !== "string") return;

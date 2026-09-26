@@ -2,7 +2,7 @@
 
 A steer is a transient hook-context offer — never a queue row and never a
 paste. It is accepted only for a session that is working right now on a
-runtime whose hook can add context (Claude Code, Codex), written under
+runtime whose hook can add context (Claude Code, Codex, OpenCode), written under
 ``<state_dir>/context/<agent>/<launch_id>/`` so only that session can take
 it, and settled by ``settle_steers``: ``handed_off`` once the hook took it,
 ``not_taken`` when the turn ended first (the hook marks it ``.missed``) or no

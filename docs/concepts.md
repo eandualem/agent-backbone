@@ -37,8 +37,8 @@ app: ready — claude repo acme/app
 - **Subscriptions** — inbound events from a [source](sources.md) the agent
   wants (`backbone agent subscribe desk gmail "from:upwork.com" --priority high`):
   a source, a filter in that source's own query language, and a priority
-  (`normal` waits for the prompt, batched; `high` reaches a working Claude Code
-  or Codex agent on its next tool call through hook context, other runtimes first when ready).
+  (`normal` waits for the prompt, batched; `high` reaches a working Claude Code,
+  Codex or OpenCode agent on its next tool call through hook context, other runtimes first when ready).
 
 There are no roles, groups or hierarchies. An orchestrator is an ordinary
 agent whose directory is its own repository and which watches the others.
