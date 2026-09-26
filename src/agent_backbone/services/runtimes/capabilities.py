@@ -322,7 +322,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok("docs/cli.md"),
         gemini=_gap(299),
         opencode=_gap(299),
-        deepcode=_gap(299),
+        deepcode=_ok("tests/unit/services/agents/test_launch.py"),
         aider=_gap(299),
         shell=_na("a plain shell shows no permission dialog"),
     ),

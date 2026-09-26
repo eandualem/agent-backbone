@@ -49,6 +49,9 @@ class DeepCode(Runtime):
     # "1" picks Yes wherever the cursor is (live, 0.3.1); Enter would pick the
     # highlighted option, which a person may have moved to No.
     approve_keys = ("1",)
+    # "Esc interrupt": the turn ends and the tool never runs, as Escape does in
+    # Claude Code and Codex; "No" would depend on where the cursor is.
+    deny_keys = ("Escape",)
 
     def _is_status_chrome_line(self, line: str) -> bool:
         # The footer wraps at narrow widths and leaves "exit" alone on a line.

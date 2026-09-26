@@ -155,6 +155,20 @@ class TestDenyAgent:
         assert outcome == "not_waiting"
         keys.assert_not_called()
 
+    async def test_deepcode_is_refused_with_escape(self):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(
+                f"{_MOD}.capture_pane",
+                side_effect=[TestApproveAgent.DEEPCODE_DIALOG, TestApproveAgent.DEEPCODE_IDLE],
+            ),
+            patch(f"{_BASE}.send_keys", new_callable=AsyncMock, return_value=True) as keys,
+        ):
+            outcome, evidence = await deny_agent("dc", runtime="deepcode", settle_seconds=0)
+        assert outcome == "denied"
+        keys.assert_awaited_once_with("dc", "Escape")
+        assert evidence[0].startswith("sent Escape to deepcode; dialog cleared")
+
     async def test_runtimes_without_a_verified_key_are_refused(self):
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
