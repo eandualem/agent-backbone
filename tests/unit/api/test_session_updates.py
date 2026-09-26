@@ -6,6 +6,8 @@ import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from agent_backbone.api.session_updates import (
     INBOX_PENDING_EVENT,
     SESSIONS_NAMESPACE,
@@ -198,3 +200,13 @@ class TestInboxHint:
         await feed.hint_inbox({"app": frozenset({(1, "a"), (2, "b")})})  # held as uncertain
         await feed.hint_inbox({"app": frozenset({(2, "c")})})  # id 2 pruned and reused
         assert sio.emit.await_count == 3
+
+    async def test_a_hint_that_failed_to_send_is_sent_again(self):
+        sio = MagicMock()
+        sio.emit = AsyncMock(side_effect=[RuntimeError("gone"), None])
+        feed = _feed(sio)
+        rows = {"app": frozenset({(1, "a")})}
+        with pytest.raises(RuntimeError):
+            await feed.hint_inbox(rows)
+        await feed.hint_inbox(rows, complete=True)
+        assert sio.emit.await_count == 2

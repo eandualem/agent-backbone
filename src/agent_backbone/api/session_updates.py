@@ -107,22 +107,25 @@ class SessionFeed:
         covers every session. A hint can be missed (a disconnect, a restart):
         readers also read their inbox on connect and on a slow poll."""
         fresh = {
-            name: len(rows)
+            name: rows
             for name, rows in readable.items()
             if rows - self._hinted.get(name, frozenset())
         }
+        known = {name: rows for name, rows in readable.items() if name not in fresh}
         if complete:
-            self._hinted = dict(readable)
+            self._hinted = known
         else:
-            self._hinted.update(readable)
+            self._hinted.update(known)
         if self._sio is None:
             return
-        for name, pending in fresh.items():
+        for name, rows in fresh.items():
             await self._sio.emit(
                 INBOX_PENDING_EVENT,
-                {"session": name, "pending": pending},
+                {"session": name, "pending": len(rows)},
                 namespace=SESSIONS_NAMESPACE,
             )
+            # Only a hint that went out is remembered: a failed one is retried.
+            self._hinted[name] = rows
 
     async def refresh_and_emit(self) -> None:
         """After a change made through the API: drop the cache and broadcast."""

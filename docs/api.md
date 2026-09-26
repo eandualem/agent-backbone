@@ -572,11 +572,12 @@ emits nothing (the monitor job re-checks once a minute).
 It also emits `inbox:pending` `{"session": "app", "pending": 2}` when an
 agent's [inbox](#cooperative-inbox) has more to read: at once when a message
 to it is queued through `POST /api/messages`, and within a minute for rows
-written otherwise (such as an expiry notice). `pending` is how many rows a
-read would return now; the event carries no message text. It is a hint, not
-a delivery: read with `POST /api/messages/inbox`, and also read once on
-connect and on a slow fallback poll, because a hint missed during a
-disconnect or restart is not sent again.
+written otherwise (such as an expiry notice). `pending` is how many rows are
+waiting to be read; the event carries no message text. It is a hint, not a
+delivery: read with `POST /api/messages/inbox` until a read returns no
+messages (one read returns at most ten), and also read once on connect and
+on a slow fallback poll, because a hint missed during a disconnect or
+restart is not sent again.
 
 ### Namespace `/terminal` (read-only)
 

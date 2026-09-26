@@ -365,9 +365,10 @@ class QueueRepo(Repo):
     async def inbox_rows(
         self, session_name: str | None = None
     ) -> dict[str, frozenset[tuple[int, str | None]]]:
-        """Per session with any, the rows ``checkpoint`` would return (held
-        ``checkpoint``/``uncertain`` rows and pending direct messages), each
-        as ``(id, operation_id)``: an identity a reused id cannot repeat."""
+        """Per session with any, the rows waiting for its inbox (held
+        ``checkpoint``/``uncertain`` rows and pending direct messages;
+        ``checkpoint`` hands them out ten at a time), each as
+        ``(id, operation_id)``: an identity a reused id cannot repeat."""
         only = "AND session_name = :session " if session_name is not None else ""
         async with self._tx() as conn:
             result = await conn.execute(
