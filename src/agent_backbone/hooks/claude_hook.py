@@ -201,6 +201,7 @@ def denial_record(payload: dict, now: float) -> dict:
     return {
         "ts": now,
         "action": "permission_denied",
+        "runtime": "claude",
         "kind": "classifier",
         "category": category,
         "tool": str(payload.get("tool_name") or ""),

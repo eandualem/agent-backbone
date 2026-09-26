@@ -236,8 +236,9 @@ async def check_permission_denials(config: BackboneConfig) -> None:
         ):
             continue
         tried.add(key)
+        # The runtime that refused it, even if the agent's runtime changed since.
         spec = config.agents.get(name)
-        runtime = get_runtime(spec.runtime if spec else None)
+        runtime = get_runtime(str(record.get("runtime") or "") or (spec.runtime if spec else None))
         if await notify_humans(config, denial_text(name, record, runtime), agent=name):
             _denial_notified.mark(key)
             log.warning("Sent permission-denied notification for %s", name)

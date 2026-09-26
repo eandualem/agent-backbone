@@ -27,8 +27,6 @@ except ImportError:  # copied next to backbone_state.py, outside the package
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import backbone_state as bb  # type: ignore[no-redef]
 
-REFUSALS_COMPARED = 50
-"""Refusals remembered between two looks at the screen."""
 WATCH_DIR = "refusal-watch"
 """``<state_dir>/refusal-watch/<agent>.json``: the refusals on screen at the last look,
 and whether a turn that requested an approval is going on. Its own file, updated
@@ -134,16 +132,39 @@ def refusal_summary(what: str) -> str:
     return "an action"
 
 
-def refusal_record(entry: str, risk: str, now: float, ref: str) -> dict:
-    """The action-log record of one refusal (``action: permission_denied``)."""
+REQUESTS_REMEMBERED = 20
+"""Approval requests of the turn whose commands a refusal on screen may be matched to."""
+
+
+def _command_key(command: str) -> str:
+    """The start of a command as both its request and the refusal's screen show it.
+
+    The screen shows the first line only, cut after 77 characters with "..."
+    (codex-rs/tui/src/history_cell/approvals.rs); the key is its first 30
+    characters that are not whitespace, hashed."""
+    first = "".join(command.split("\n", 1)[0].split()).rstrip(".")
+    return hashlib.sha256(first[:30].encode()).hexdigest()[:12]
+
+
+def refusal_record(
+    entry: str, risk: str, now: float, ref: str, requested: dict[str, str] | None = None
+) -> dict:
+    """The action-log record of one refusal (``action: permission_denied``).
+
+    A refused command is named from its approval request (``requested``: the
+    summaries of the turn's requests by ``_command_key``) when one matches,
+    since the screen shows only the command's start."""
     match = _REFUSAL.match(entry)
     timed_out = bool(match and match.group(1))
+    what = match.group(2).strip() if match else ""
+    summary = (requested or {}).get(_command_key(what[4:])) if what.startswith("run ") else None
     return {
         "ts": now,
         "action": "permission_denied",
+        "runtime": "codex",
         "kind": "auto_review",
         "category": "review timed out" if timed_out else f"risk: {risk}" if risk else "",
-        "summary": refusal_summary(match.group(2).strip() if match else ""),
+        "summary": summary or refusal_summary(what),
         "tool_use_id": ref,  # no call id reaches a hook; unique per refusal
     }
 
@@ -185,26 +206,38 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
         watch = watch if isinstance(watch, dict) else {}
         seen = watch.get("seen") if isinstance(watch.get("seen"), list) else None
         watching = watch.get("watching") is True
+        requested = watch.get("requested") if isinstance(watch.get("requested"), dict) else {}
         if event == "SessionStart":
             seen, watching = None, False  # a new session: what was seen before means nothing
         elif event == "PermissionRequest":
             watching = True
+            tool_input = payload.get("tool_input")
+            command = tool_input.get("command") if isinstance(tool_input, dict) else None
+            if isinstance(command, str):
+                key = _command_key(command)
+                requested.pop(key, None)  # the latest request with this start names it
+                requested[key] = bb.action_summary(str(payload.get("tool_name") or ""), tool_input)
+                requested = dict(list(requested.items())[-REQUESTS_REMEMBERED:])
         elif not watching:
             return
         screen = own_screen()
         if screen is not None:
-            found = screen_refusals(screen)[-REFUSALS_COMPARED:]
+            found = screen_refusals(screen)  # every one tmux still holds
             now_seen = [_identity(entry) for entry, _ in found]
             if seen is not None:  # never guess what an unknown earlier screen held
                 now = bb.time.time()
                 fresh = found[len(found) - _new_count(seen, now_seen) :]
                 for index, (entry, risk) in enumerate(fresh):
-                    record = refusal_record(entry, risk, now, f"auto-review:{now:.6f}:{index}")
-                    bb.append_action(state_dir, agent, record)
+                    ref = f"auto-review:{now:.6f}:{index}"
+                    bb.append_action(
+                        state_dir, agent, refusal_record(entry, risk, now, ref, requested)
+                    )
             seen = now_seen
             watching = watching and event in _WATCH_EVENTS
+            if not watching:
+                requested = {}  # the turn is over: its requests are answered
         tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"seen": seen, "watching": watching}))
+        tmp.write_text(json.dumps({"seen": seen, "watching": watching, "requested": requested}))
         os.replace(tmp, target)
 
 

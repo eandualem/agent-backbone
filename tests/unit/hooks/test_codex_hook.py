@@ -173,10 +173,12 @@ class TestAutomaticReviewerRefusals:
     def _in_a_pane(self, monkeypatch):
         monkeypatch.setenv("TMUX_PANE", "%1")  # every screen read below is mocked
 
-    def _turn(self, tmp_path, *screens, events=("PermissionRequest", "PreToolUse")):
+    def _turn(self, tmp_path, *screens, events=("PermissionRequest", "PreToolUse"), command=""):
         with patch.object(hook, "own_screen", side_effect=list(screens)) as look:
             for event in events:
-                hook.watch_refusals(_payload(event, tool_name="Bash"), tmp_path, "cx")
+                request = {"tool_input": {"command": command}} if command else {}
+                payload = _payload(event, tool_name="Bash", **request)
+                hook.watch_refusals(payload, tmp_path, "cx")
         log = tmp_path / "actions.jsonl"
         logged = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
         return logged, look
@@ -188,13 +190,34 @@ class TestAutomaticReviewerRefusals:
         [refusal], _ = self._turn(tmp_path, REVIEWING, REVIEWING + DENIED)
         assert refusal["action"] == "permission_denied" and refusal["kind"] == "auto_review"
         assert refusal["category"] == "risk: high" and refusal["summary"] == "curl"
-        assert refusal["session"] == "cx"
+        assert refusal["session"] == "cx" and refusal["runtime"] == "codex"
         logged = json.dumps(refusal)
         assert "example.com" not in logged and "codex.rs" not in logged
 
     def test_a_timed_out_review_is_a_refusal_too(self, tmp_path):
         [refusal], _ = self._turn(tmp_path, REVIEWING, TIMED_OUT)
         assert refusal["category"] == "review timed out" and refusal["summary"] == "curl"
+
+    @pytest.mark.parametrize(
+        ("command", "shown"),
+        [
+            (  # cut after 77 characters
+                "cd /home/someone/projects/a-long-directory/checkout/app && git push origin main",
+                "cd /home/someone/projects/a-long-directory/checkout/app && git push origin...",
+            ),
+            ("cd /repo\ngit push origin main", "cd /repo ..."),  # the first line only
+        ],
+    )
+    def test_a_refused_command_is_named_from_its_request(self, tmp_path, command, shown):
+        screen = f"✗ Request denied for codex to run {shown}\n"
+        [refusal], _ = self._turn(tmp_path, REVIEWING, screen, command=command)
+        assert refusal["summary"] == "cd; git push"
+        assert "someone" not in (tmp_path / hook.WATCH_DIR / "cx.json").read_text()
+
+    def test_many_identical_refusals_are_all_counted(self, tmp_path):
+        line = "✗ Request denied for codex to run git push\n"
+        logged, _ = self._turn(tmp_path, line * 60, line * 61)
+        assert len(logged) == 1
 
     def test_a_marker_wrapped_in_a_narrow_pane_is_still_read(self, tmp_path):
         narrow = "✗ Review timed out before\n  codex could run git push\n"

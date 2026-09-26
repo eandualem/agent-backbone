@@ -213,3 +213,11 @@ async def test_a_refusal_without_a_dialog_reaches_the_humans_in_both_runtimes(
     assert f"{RUNTIMES[runtime].refusal_check} refused it {why}" in text
     assert f"tmux attach -t ike, then {allow}" in text and "does not retry" in text
     assert "private" not in text and "40" not in text
+
+
+async def test_a_refusal_names_the_runtime_that_refused_it(config):
+    """An agent moved to another runtime since: the notice still fits the refusal."""
+    await _check(config)  # ike is a Claude Code agent here
+    _append(config, {**REFUSAL, "runtime": "codex", "kind": "auto_review", "category": ""})
+    text = (await _check(config)).await_args.args[1]
+    assert "Codex's automatic reviewer refused it." in text and "/approve" in text
