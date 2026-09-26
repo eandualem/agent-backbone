@@ -15,7 +15,7 @@ from pathlib import Path
 
 from agent_backbone.hooks import install as hooks
 from agent_backbone.services.runtimes._usage import UsageBatch, count
-from agent_backbone.services.runtimes.base import Runtime, read_brief
+from agent_backbone.services.runtimes.base import Runtime, has_text, read_brief
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
@@ -69,6 +69,20 @@ class OpenCode(Runtime):
             str(plugin),
             *command,
         ]
+
+    def user_instructions(self, env):
+        def value(key: str) -> str:
+            return env.get(key) or os.environ.get(key) or ""
+
+        config = Path(value("XDG_CONFIG_HOME") or Path.home() / ".config").expanduser()
+        candidates = [config / "opencode" / "AGENTS.md"]
+        # Claude Code's user memory stands in unless disabled (1.18: either flag).
+        flags = ("OPENCODE_DISABLE_CLAUDE_CODE", "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT")
+        if not any(value(f).strip().lower() in ("true", "yes", "on", "1", "y") for f in flags):
+            candidates.append(Path.home() / ".claude" / "CLAUDE.md")
+        # The first file that exists is the one read, even an empty one.
+        first = next((path for path in candidates if path.exists()), None)
+        return [first] if first is not None and has_text(first) else []
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args: list[str] = []

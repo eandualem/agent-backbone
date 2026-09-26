@@ -13,12 +13,14 @@ refuses this runtime until it has.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from agent_backbone.services.runtimes._pane import (
     is_box_line,
     prompt_tail_line_pairs,
     sanitize_pane_content,
 )
-from agent_backbone.services.runtimes.base import Runtime, read_brief
+from agent_backbone.services.runtimes.base import Runtime, has_text, read_brief
 
 
 class DeepCode(Runtime):
@@ -65,6 +67,11 @@ class DeepCode(Runtime):
 
     def launch_env(self, model: str | None) -> dict[str, str]:
         return {"MODEL": model} if model else {}
+
+    def user_instructions(self, env):
+        # Read when the project has neither ./.deepcode/AGENTS.md nor ./AGENTS.md (0.3.1).
+        path = Path.home() / ".deepcode" / "AGENTS.md"
+        return [path] if has_text(path) else []
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args: list[str] = []

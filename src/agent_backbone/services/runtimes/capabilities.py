@@ -42,8 +42,6 @@ REQUIRED: tuple[str, ...] = ("claude", "codex")
 
 REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
     {
-        ("global-instructions-detected", "claude", 274),
-        ("global-instructions-detected", "codex", 274),
         ("cli-memory", "claude", 292),
         ("cli-memory", "codex", 292),
         ("plan-approval", "codex", 278),
@@ -138,6 +136,7 @@ _FRESH = "live: #290 post-fix probe (stale brief retired, current brief first)"
 _RESUME = "live: #273 post-fix probe (resume and compaction)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
 _NO_MODEL = "a plain shell runs no model"
+_USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
@@ -231,13 +230,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Non-empty user-level instruction file detected",
         "src/agent_backbone/cli/setup.py",
         fallback="Check the CLI's user-level instruction file by hand.",
-        implemented=_declared("global-instructions-detected"),
-        claude=_gap(274),
-        codex=_gap(274),
-        gemini=_gap(274),
-        opencode=_gap(274),
-        deepcode=_gap(274),
-        aider=_gap(274),
+        implemented=lambda rt: type(rt).user_instructions is not Runtime.user_instructions,
+        claude=_ok(_USER_FILES),
+        codex=_ok(_USER_FILES),
+        gemini=_ok(_USER_FILES),
+        opencode=_ok(_USER_FILES),
+        deepcode=_ok(_USER_FILES),
+        aider=_unverified(302, "no default user-level file per its docs; not installed here"),
         shell=_na("a plain shell reads no instruction file"),
     ),
     _row(

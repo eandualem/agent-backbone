@@ -304,6 +304,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         check("an agent CLI on PATH", bool(found), install_hint())
         if found:
             note(f"  - runtimes installed: {', '.join(found)}")
+            # Reported, not failed: the file may be meant, but never unnoticed (#274).
+            for runtime_id in found:
+                runtime = REGISTRY[runtime_id]
+                for path in runtime.user_instructions({}):
+                    note(f"  ! {runtime.display_name} user-level instructions: {path}")
             # The capability contract: what each installed runtime lacks, and its issue.
             gaps = [
                 (

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from pathlib import Path
 
 from agent_backbone.hooks.install import save_settings
-from agent_backbone.services.runtimes.base import Runtime, read_brief
+from agent_backbone.services.runtimes.base import Runtime, has_text, read_brief
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +93,25 @@ class Gemini(Runtime):
             log.warning("Could not write the launch hook settings: %s", exc)
             return {}
         return {"GEMINI_CLI_SYSTEM_SETTINGS_PATH": str(path)}
+
+    def user_instructions(self, env):
+        home = Path(
+            env.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_CLI_HOME") or Path.home()
+        ).expanduser()
+        gemini = home / ".gemini"
+        # Every context file name (`context.fileName`, GEMINI.md by default) is
+        # read from ~/.gemini (0.46). A settings file with comments is not parsed
+        # here, and the default name is checked instead.
+        try:
+            configured = json.loads((gemini / "settings.json").read_text())["context"]["fileName"]
+        except (OSError, ValueError, KeyError, TypeError):
+            configured = None
+        names = ["GEMINI.md"]
+        if isinstance(configured, str):
+            names = [configured]
+        elif isinstance(configured, list):
+            names = [name for name in configured if isinstance(name, str)]
+        return [gemini / name for name in names if name and has_text(gemini / name)]
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args: list[str] = []
