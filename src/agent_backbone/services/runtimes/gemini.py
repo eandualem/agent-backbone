@@ -117,13 +117,13 @@ class Gemini(Runtime):
             env.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_CLI_HOME") or Path.home()
         ).expanduser()
         gemini = home / ".gemini"
-        # Every context file name (`context.fileName`, GEMINI.md by default) is
-        # read from ~/.gemini (0.46); the project's settings override the user's.
-        names = (
-            (project is not None and _context_file_names(Path(project) / ".gemini/settings.json"))
-            or _context_file_names(gemini / "settings.json")
-            or ["GEMINI.md"]
-        )
+        # Every context file name is read from ~/.gemini: the configured
+        # `context.fileName` (the project's settings over the user's), then
+        # GEMINI.md, which a configured name adds to rather than replaces (0.46).
+        configured = (
+            project is not None and _context_file_names(Path(project) / ".gemini/settings.json")
+        ) or _context_file_names(gemini / "settings.json")
+        names = dict.fromkeys([*(name.strip() for name in configured or ()), "GEMINI.md"])
         return [gemini / name for name in names if name and has_text(gemini / name)]
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):

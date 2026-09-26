@@ -55,12 +55,12 @@ def test_codex_reads_the_override_first_and_skips_an_empty_one(home):
     assert RUNTIMES["codex"].user_instructions({}) == [override]
 
 
-def test_gemini_reads_its_configured_context_file_names(home):
-    _write(home / ".gemini/GEMINI.md")
+def test_gemini_reads_its_configured_context_file_names_and_its_default(home):
+    default = _write(home / ".gemini/GEMINI.md")
     agents = _write(home / ".gemini/AGENTS.md")
     settings = '{\n  // AGENTS.md, as the project uses\n  "context": {"fileName": ["AGENTS.md"]}\n}'
     _write(home / ".gemini/settings.json", settings)
-    assert RUNTIMES["gemini"].user_instructions({}) == [agents]
+    assert RUNTIMES["gemini"].user_instructions({}) == [agents, default]
 
 
 def test_gemini_takes_the_projects_context_file_names_over_the_users(home, tmp_path):
@@ -68,7 +68,7 @@ def test_gemini_takes_the_projects_context_file_names_over_the_users(home, tmp_p
     agents = _write(home / ".gemini/AGENTS.md")
     _write(tmp_path / ".gemini/settings.json", '{"context": {"fileName": "AGENTS.md"}}')
     assert RUNTIMES["gemini"].user_instructions({}) == [default]
-    assert RUNTIMES["gemini"].user_instructions({}, tmp_path) == [agents]
+    assert RUNTIMES["gemini"].user_instructions({}, tmp_path) == [agents, default]
 
 
 def test_opencode_reads_the_first_file_that_exists_even_when_empty(home, monkeypatch):
