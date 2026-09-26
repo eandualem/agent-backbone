@@ -266,13 +266,14 @@ class ClaudeCode(Runtime):
         args.extend(self.hook_launch_args(data_dir, state_dir))
         return args
 
-    def user_instructions(self, env):
+    def user_instructions(self, env, project=None):
         home = Path(
             env.get("CLAUDE_CONFIG_DIR")
             or os.environ.get("CLAUDE_CONFIG_DIR")
             or Path.home() / ".claude"
         ).expanduser()
-        # User memory and user-level rules, both loaded into every session (2.1.283).
+        # User memory and user-level rules (2.1.283); a rule with `paths` loads
+        # once the session reads a matching file, so it may reach it too.
         candidates = [home / "CLAUDE.md", *sorted((home / "rules").rglob("*.md"))]
         return [path for path in candidates if has_text(path)]
 

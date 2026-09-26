@@ -68,8 +68,11 @@ class DeepCode(Runtime):
     def launch_env(self, model: str | None) -> dict[str, str]:
         return {"MODEL": model} if model else {}
 
-    def user_instructions(self, env):
+    def user_instructions(self, env, project=None):
         # Read when the project has neither ./.deepcode/AGENTS.md nor ./AGENTS.md (0.3.1).
+        own = (".deepcode/AGENTS.md", "AGENTS.md")
+        if project is not None and any(has_text(Path(project) / name) for name in own):
+            return []
         path = Path.home() / ".deepcode" / "AGENTS.md"
         return [path] if has_text(path) else []
 

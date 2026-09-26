@@ -1,25 +1,18 @@
 """User-level instruction files each CLI adds to every session (#274)."""
 
+from pathlib import Path
+
 import pytest
 
 from agent_backbone.services.runtimes import RUNTIMES
 
-_OVERRIDES = (
-    "CLAUDE_CONFIG_DIR",
-    "CODEX_HOME",
-    "GEMINI_CLI_HOME",
-    "XDG_CONFIG_HOME",
-    "OPENCODE_DISABLE_CLAUDE_CODE",
-    "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT",
-)
-
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    for key in _OVERRIDES:
+def home(monkeypatch):
+    """The empty home ``conftest`` gives every test."""
+    for key in ("OPENCODE_DISABLE_CLAUDE_CODE", "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT"):
         monkeypatch.delenv(key, raising=False)
-    return tmp_path
+    return Path.home()
 
 
 def _write(path, text="Always answer in French.\n"):
@@ -63,7 +56,8 @@ def test_codex_reads_the_override_first_and_skips_an_empty_one(home):
 def test_gemini_reads_its_configured_context_file_names(home):
     _write(home / ".gemini/GEMINI.md")
     agents = _write(home / ".gemini/AGENTS.md")
-    _write(home / ".gemini/settings.json", '{"context": {"fileName": ["AGENTS.md"]}}')
+    settings = '{\n  // AGENTS.md, as the project uses\n  "context": {"fileName": ["AGENTS.md"]}\n}'
+    _write(home / ".gemini/settings.json", settings)
     assert RUNTIMES["gemini"].user_instructions({}) == [agents]
 
 
@@ -75,6 +69,13 @@ def test_opencode_reads_the_first_file_that_exists_even_when_empty(home, monkeyp
     monkeypatch.delenv("OPENCODE_DISABLE_CLAUDE_CODE_PROMPT")
     _write(home / ".config/opencode/AGENTS.md", "")
     assert RUNTIMES["opencode"].user_instructions({}) == []
+
+
+def test_deep_code_reads_its_own_only_where_the_project_has_none(home, tmp_path):
+    own = _write(home / ".deepcode/AGENTS.md")
+    assert RUNTIMES["deepcode"].user_instructions({}, tmp_path) == [own]
+    _write(tmp_path / "AGENTS.md")
+    assert RUNTIMES["deepcode"].user_instructions({}, tmp_path) == []
 
 
 @pytest.mark.parametrize("runtime", ["aider", "shell"])

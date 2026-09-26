@@ -70,7 +70,7 @@ class OpenCode(Runtime):
             *command,
         ]
 
-    def user_instructions(self, env):
+    def user_instructions(self, env, project=None):
         def value(key: str) -> str:
             return env.get(key) or os.environ.get(key) or ""
 
@@ -78,7 +78,7 @@ class OpenCode(Runtime):
         candidates = [config / "opencode" / "AGENTS.md"]
         # Claude Code's user memory stands in unless disabled (1.18: either flag).
         flags = ("OPENCODE_DISABLE_CLAUDE_CODE", "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT")
-        if not any(value(f).strip().lower() in ("true", "yes", "on", "1", "y") for f in flags):
+        if not any(value(f).strip().lower() in ("true", "yes", "on", "1") for f in flags):
             candidates.append(Path.home() / ".claude" / "CLAUDE.md")
         # The first file that exists is the one read, even an empty one.
         first = next((path for path in candidates if path.exists()), None)

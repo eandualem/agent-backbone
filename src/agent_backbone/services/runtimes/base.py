@@ -123,9 +123,12 @@ def read_brief(brief_file: Path | str) -> str | None:
 
 
 def has_text(path: Path) -> bool:
-    """Whether ``path`` is a file with more than whitespace in it."""
+    """Whether ``path`` is a file with more than whitespace in its first 64 KiB."""
     try:
-        return path.is_file() and bool(path.read_text(errors="replace").strip())
+        if not path.is_file():
+            return False
+        with path.open("rb") as handle:
+            return bool(handle.read(64 * 1024).strip())
     except OSError:
         return False
 
@@ -296,10 +299,11 @@ class Runtime:
         """Whether the binary is installed (a shell always is)."""
         return self.binary is None or resolve_command(self.binary) is not None
 
-    def user_instructions(self, env: dict[str, str]) -> list[Path]:
-        """The user-level instruction files this CLI adds to every session, as
-        it would pick them now, with content only (#274). ``env`` holds the
-        agent's own overrides of the process environment."""
+    def user_instructions(self, env: dict[str, str], project: Path | None = None) -> list[Path]:
+        """The user-level instruction files this CLI adds to its sessions, as it
+        would pick them now, with content only (#274). ``env`` holds the agent's
+        own overrides of the process environment; ``project``, when given, is the
+        directory the session starts in."""
         return []
 
     def pre_trust(self, directory: Path | str) -> None:

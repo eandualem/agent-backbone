@@ -350,7 +350,7 @@ class Codex(Runtime):
             args.extend(["--model", model])
         return args
 
-    def user_instructions(self, env):
+    def user_instructions(self, env, project=None):
         home = Path(
             env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
         ).expanduser()

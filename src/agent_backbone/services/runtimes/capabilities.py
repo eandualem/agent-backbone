@@ -234,9 +234,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_USER_FILES),
         codex=_ok(_USER_FILES),
         gemini=_ok(_USER_FILES),
-        opencode=_ok(_USER_FILES),
+        opencode=_ok(_USER_FILES, "files listed under `instructions` in its config not checked"),
         deepcode=_ok(_USER_FILES),
-        aider=_unverified(302, "no default user-level file per its docs; not installed here"),
+        aider=_unverified(302, "no default user-level file per its docs; not yet verified"),
         shell=_na("a plain shell reads no instruction file"),
     ),
     _row(

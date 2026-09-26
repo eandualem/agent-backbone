@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes.base import Runtime, has_text, read_brief
 
 log = logging.getLogger(__name__)
+
+_JSON_COMMENT = re.compile(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', re.S)
+"""A JSON string (kept) or a comment (dropped), as Gemini CLI strips them."""
 
 
 class Gemini(Runtime):
@@ -94,16 +98,16 @@ class Gemini(Runtime):
             return {}
         return {"GEMINI_CLI_SYSTEM_SETTINGS_PATH": str(path)}
 
-    def user_instructions(self, env):
+    def user_instructions(self, env, project=None):
         home = Path(
             env.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_CLI_HOME") or Path.home()
         ).expanduser()
         gemini = home / ".gemini"
         # Every context file name (`context.fileName`, GEMINI.md by default) is
-        # read from ~/.gemini (0.46). A settings file with comments is not parsed
-        # here, and the default name is checked instead.
+        # read from ~/.gemini (0.46). Its settings file may carry comments.
         try:
-            configured = json.loads((gemini / "settings.json").read_text())["context"]["fileName"]
+            text = _JSON_COMMENT.sub(lambda m: m[1] or "", (gemini / "settings.json").read_text())
+            configured = json.loads(text)["context"]["fileName"]
         except (OSError, ValueError, KeyError, TypeError):
             configured = None
         names = ["GEMINI.md"]
