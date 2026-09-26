@@ -272,6 +272,35 @@ class TestAgentCommands:
         assert "app: ready" in out and "could not deliver the brief from here" in out
         assert "brief is not delivered yet" in out
 
+    def test_an_unreadable_queue_does_not_hide_the_started_agent(self, tmp_path, capsys):
+        """The database failing after the start leaves one line, not a failed command."""
+        assert _run(["init"]) == 0
+        project = tmp_path / "app"
+        project.mkdir()
+        launch = "agent_backbone.services.agents.launch"
+        with (
+            patch(f"{launch}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{launch}.start_session", new_callable=AsyncMock, return_value=True),
+            patch(f"{launch}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", [])),
+            patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/bin/x"),
+            patch("agent_backbone.services.runtimes.base.Runtime.pre_trust"),
+            patch(_DETECT_REPO, new_callable=AsyncMock, return_value=""),
+            patch(
+                "agent_backbone.cli.agents._brief_offline",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("database is locked"),
+            ),
+            patch(
+                "agent_backbone.cli.agents._report_offline_brief",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("database is locked"),
+            ),
+        ):
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            assert _run(argv) == 0
+        out = capsys.readouterr().out
+        assert "app: ready" in out and "could not read where the brief is" in out
+
     def test_an_offline_start_that_does_not_wait_says_the_brief_waits(self, tmp_path, capsys):
         assert _run(["init"]) == 0
         project = tmp_path / "app"
