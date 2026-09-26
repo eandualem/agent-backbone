@@ -38,6 +38,13 @@ def test_a_new_codex_session_does_not_inherit_the_previous_claude_model(monkeypa
     assert later["model"] == "gpt-6-astra"
 
 
+@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit", "Stop"])
+def test_the_running_model_comes_from_the_codex_payload(event):
+    """Codex's hook payload names the model (captured live, codex 0.156.1)."""
+    record, _ = hook.derive(_payload(event, model="gpt-6-sol"), None)
+    assert record["model"] == "gpt-6-sol"
+
+
 class TestDerive:
     @pytest.mark.parametrize(
         ("event", "expected"),
