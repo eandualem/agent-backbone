@@ -96,6 +96,23 @@ class TestSubscriptionBatches:
         assert second.id != first.id
         assert (await queue_row(db, first.id))["message"] == "h\n- a"
 
+    async def test_a_replayed_event_is_not_listed_twice(self, db):
+        """A poll run again before its events were marked processed adds nothing new."""
+        first = await db.queue.enqueue_subscription(
+            session_name="desk", header="h", lines=["- a", "- b"], priority=0
+        )
+        again = await db.queue.enqueue_subscription(
+            session_name="desk", header="h", lines=["- a", "- b"], priority=0
+        )
+        assert again.status == "already_queued" and again.id == first.id and again.stored
+        await db.queue.dequeue("desk")  # a leased batch still holds its lines
+        high = await db.queue.enqueue_subscription(
+            session_name="desk", header="h", lines=["- b", "- c"], priority=1
+        )
+        assert high.status == "inserted"
+        assert (await queue_row(db, high.id))["message"] == "h\n- c"
+        assert (await queue_row(db, first.id))["message"] == "h\n- a\n- b"
+
     async def test_a_full_batch_opens_the_next_one(self, db):
         lines = [f"- {n}" for n in range(SUBSCRIPTION_BATCH_LIMIT + 3)]
         result = await db.queue.enqueue_subscription(

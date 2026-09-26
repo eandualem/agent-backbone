@@ -250,11 +250,30 @@ class QueueRepo(Repo):
         row: its text may already be offered to a working agent as hook
         context, and an offer never changes under the hook's feet (the hook
         hands over every pending offer at once). Returns ``appended`` (only an
-        existing row grew) or ``inserted`` (the last row opened).
+        existing row grew), ``inserted`` (the last row opened) or
+        ``already_queued`` (every line is already in a batch).
         """
         async with self._tx() as conn:
             lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
-            rest = list(lines)
+            # A poll replayed before its events were marked processed must not
+            # list an event twice: drop lines a batch of this session already
+            # holds, delivered ones included.
+            held = await conn.execute(
+                text(
+                    "SELECT id, operation_id, message FROM message_queue "
+                    "WHERE session_name = :session AND delivery_kind = :kind ORDER BY id DESC"
+                ),
+                {"session": session_name, "kind": SUBSCRIPTION_KIND},
+            )
+            known: set[str] = set()
+            latest = None
+            for held_row in held.mappings():
+                latest = latest or held_row
+                known.update(held_row["message"].split("\n")[1:])
+            fresh = [line for line in lines if line not in known]
+            if lines and not fresh and latest is not None:
+                return EnqueueResult("already_queued", latest["id"], latest["operation_id"])
+            rest = list(fresh)
             offers: list[tuple[int, str]] = []
             grown: EnqueueResult | None = None
             if not priority:
@@ -280,7 +299,7 @@ class QueueRepo(Repo):
                         if result.rowcount:
                             grown = EnqueueResult("appended", row["id"], row["operation_id"])
                         else:
-                            rest = list(lines)  # leased meanwhile: open a new batch
+                            rest = list(fresh)  # leased meanwhile: open a new batch
             if grown is not None and not rest:
                 return grown
             while True:
