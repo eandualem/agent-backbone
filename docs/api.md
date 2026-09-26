@@ -574,9 +574,11 @@ agent's [inbox](#cooperative-inbox) has more to read: at once when a message
 to it is queued through `POST /api/messages`, and within a minute for rows
 written otherwise (such as an expiry notice). `pending` is how many rows are
 waiting to be read; the event carries no message text. It is a hint, not a
-delivery: read with `POST /api/messages/inbox` until a read returns no
-messages (one read returns at most ten), and also read once on connect and
-on a slow fallback poll, because a hint missed during a disconnect or
+delivery: read with `POST /api/messages/inbox`. One read returns at most
+ten, unacknowledged messages first, so acknowledge each message once it is
+handled and read again until a read returns none; a message you cannot
+acknowledge yet keeps coming back, so stop there. Also read once on connect
+and on a slow fallback poll, because a hint missed during a disconnect or
 restart is not sent again.
 
 ### Namespace `/terminal` (read-only)
