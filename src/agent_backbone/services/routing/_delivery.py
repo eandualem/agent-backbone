@@ -649,8 +649,10 @@ async def safe_deliver(
     return report
 
 
-PROMPT_HOOK_WAIT_SECONDS = 3.0
-"""How long a submission the screen could not confirm waits for the runtime's hook."""
+PROMPT_HOOK_WAIT_SECONDS = 10.0
+"""How long a submission the screen could not confirm waits for the runtime's hook.
+Codex took its prompt up to 6.5 s after a paste the screen had confirmed
+(live, 2026-09-26, 18 deliveries); Claude Code within 0.2 s."""
 
 
 async def prompt_hook_after(state_dir, session_name: str, since: float, message: str) -> bool:

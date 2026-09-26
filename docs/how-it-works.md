@@ -278,7 +278,7 @@ sequenceDiagram
   chunk, then Enter; the pane is re-read to confirm the text left the input
   box, including an envelope still buffered in the prompt. If the runtime queued it for its next turn (Claude does), that
   counts as delivered. When the pane can't confirm it, delivery waits up to
-  3 s for the runtime's prompt hook (Claude Code and Codex): a
+  10 s for the runtime's prompt hook (Claude Code and Codex): a
   `UserPromptSubmit` for exactly this message, taken after the paste, confirms
   it. Otherwise the delivery stays uncertain (`submission_unconfirmed`).
 - **Busy is never bypassed.** `priority: true` (and issues labelled
