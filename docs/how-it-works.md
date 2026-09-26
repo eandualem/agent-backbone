@@ -171,6 +171,16 @@ SessionEnd record expires; stale permission requests are not revived:
 | `Stop`, `Interrupt` | `idle`, with `last_assistant_message` |
 | `SessionEnd` | `unknown` |
 
+Codex's automatic reviewer (`agents.auto_review`) refuses an action without a
+dialog, and Codex sends no hook event for it. So the hook reads its own pane
+(all that tmux keeps of it): once at the session's start, then at each hook
+event of a turn that sent a `PermissionRequest`, including the turn's end. A
+new `✗ Request denied …` or `✗ Review timed out before …` entry from Codex
+becomes a `permission_denied` record in the action log, as a Claude Code
+`PermissionDenied` does (see the refusal alert in [Telegram](telegram.md)).
+A person's own "You did not approve" is not one. A refusal followed, before
+the next hook event, by more output than tmux's history holds is not seen.
+
 | Gemini CLI event | State written |
 |---|---|
 | `SessionStart` | `idle` |

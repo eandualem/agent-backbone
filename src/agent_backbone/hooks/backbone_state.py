@@ -411,6 +411,213 @@ def response_succeeded(response: object) -> bool:
     return response.get("success") is True or response.get("isError") is False
 
 
+_WORD = re.compile(r"[a-z][a-z0-9_-]{0,30}")
+
+
+_KNOWN_PROGRAMS = frozenset(
+    {
+        "backbone",
+        "brew",
+        "cat",
+        "cd",
+        "chmod",
+        "claude",
+        "codex",
+        "cp",
+        "curl",
+        "docker",
+        "find",
+        "gh",
+        "git",
+        "grep",
+        "kill",
+        "kubectl",
+        "ls",
+        "mkdir",
+        "mv",
+        "node",
+        "npm",
+        "npx",
+        "open",
+        "osascript",
+        "pip",
+        "pnpm",
+        "python",
+        "python3",
+        "rm",
+        "rsync",
+        "scp",
+        "sed",
+        "ssh",
+        "tar",
+        "uv",
+        "wget",
+        "yarn",
+    }
+)
+"""Programs named in a refusal notice; any other program is "a local command"."""
+_GH_GROUPS = frozenset(
+    {"issue", "pr", "repo", "release", "run", "workflow", "label", "gist", "api", "auth", "search"}
+)
+_GH_VERBS = frozenset(
+    {
+        "create",
+        "edit",
+        "close",
+        "reopen",
+        "comment",
+        "merge",
+        "view",
+        "list",
+        "delete",
+        "ready",
+        "review",
+        "checkout",
+        "diff",
+        "status",
+        "clone",
+        "fork",
+        "sync",
+        "rename",
+        "archive",
+        "download",
+        "upload",
+        "cancel",
+        "rerun",
+        "watch",
+        "lock",
+        "unlock",
+        "transfer",
+        "pin",
+    }
+)
+_SUBCOMMANDS = {
+    "git": frozenset(
+        {
+            "add",
+            "am",
+            "branch",
+            "checkout",
+            "cherry-pick",
+            "clean",
+            "clone",
+            "commit",
+            "diff",
+            "fetch",
+            "init",
+            "log",
+            "merge",
+            "mv",
+            "pull",
+            "push",
+            "rebase",
+            "remote",
+            "reset",
+            "restore",
+            "revert",
+            "rm",
+            "show",
+            "stash",
+            "status",
+            "switch",
+            "tag",
+            "worktree",
+        }
+    ),
+    "backbone": frozenset(
+        {
+            "agent",
+            "tell",
+            "inbox",
+            "report",
+            "reply",
+            "status",
+            "swarm",
+            "skills",
+            "chrome",
+            "hooks",
+            "config",
+            "up",
+            "down",
+            "service",
+            "diagnostics",
+            "usage",
+            "upgrade",
+        }
+    ),
+    "docker": frozenset({"build", "run", "exec", "push", "pull", "rm", "stop", "start", "compose"}),
+    "npm": frozenset({"install", "ci", "run", "test", "publish", "uninstall", "update"}),
+    "uv": frozenset({"run", "sync", "add", "remove", "pip", "tool", "build", "publish"}),
+    "brew": frozenset({"install", "uninstall", "upgrade", "update"}),
+}
+"""Subcommands a summary may name; any other word may be user content and stops it."""
+_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", ";;", "\n"})
+
+
+def command_summary(command: str) -> str:
+    """``cd; gh issue edit`` for ``cd x && gh issue edit 40 --body-file …``:
+    known programs and their subcommands only, never arguments or file names."""
+    # An unquoted newline separates commands too; a quoted one stays inside its word.
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        tokens = command.split()
+    segments, current = [], []
+    for token in tokens:
+        # Adjacent operators and newlines come as one token ("&&\n", ";\n\n").
+        if token in _SEPARATORS or not token.strip() or set(token) <= set("();&|\n"):
+            segments.append(current)
+            current = []
+        else:
+            current.append(token)
+    segments.append(current)
+    parts = []
+    for words in segments:
+        words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+        if not words:
+            continue
+        program = os.path.basename(words[0])
+        if program not in _KNOWN_PROGRAMS:
+            summary = "a local command"
+        elif program == "gh" and len(words) > 1 and words[1] in _GH_GROUPS:
+            verb = words[2] if len(words) > 2 and words[1] != "api" else ""
+            summary = " ".join(["gh", words[1], *([verb] if verb in _GH_VERBS else [])])
+        elif len(words) > 1 and words[1] in _SUBCOMMANDS.get(program, ()):
+            summary = f"{program} {words[1]}"
+        else:
+            summary = program
+        if summary not in parts:
+            parts.append(summary)
+    return "; ".join(parts[:3]) or "a shell command"
+
+
+def action_summary(tool: str, tool_input) -> str:
+    """What was refused, safely: names of programs and actions, not their input."""
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    if tool == "Bash":
+        return command_summary(str(tool_input.get("command") or ""))
+    match = re.fullmatch(r"mcp__(.+?)__(.+)", tool)
+    if not match:
+        return tool
+    server, name = match.groups()
+    if server != "claude-in-chrome":
+        return f"{server}: {name}"  # another tool's fields may be user content
+    steps = []
+    for action in tool_input.get("actions") or [tool_input]:
+        if not isinstance(action, dict):
+            continue
+        step = str(action.get("name") or name)
+        inner = action.get("input") if isinstance(action.get("input"), dict) else action
+        if _WORD.fullmatch(str(inner.get("action") or "")):
+            step += f":{inner['action']}"
+        if _WORD.fullmatch(step.replace(":", "_")) and step not in steps:
+            steps.append(step)
+    return f"{server}: {name}" + (f" ({', '.join(steps[:4])})" if steps and steps != [name] else "")
+
+
 def plan_title(plan: str) -> str:
     for line in plan.splitlines():
         stripped = line.strip().lstrip("#").strip()

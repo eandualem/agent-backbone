@@ -40,7 +40,7 @@ claims support that the adapter's code does not declare.
 | Permission dialog answered (agent approve) | ✅ | ✅ | ❌ #277 | ✅ | ❌ #277 | ❌ #277 | n/a |
 | Permission dialog refused (agent deny) | ✅ | ✅ | ❌ #299 | ❌ #299 | ❌ #299 | ❌ #299 | n/a |
 | Plan approval answered | ✅ | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | n/a |
-| Alert when an automatic safety check refuses an action | ✅ | ❌ #279 | ❌ #279 | ❌ #279 | ❌ #279 | ❌ #279 | n/a |
+| Alert when an automatic safety check refuses an action | ✅ | ✅ its automatic reviewer (`agents.auto_review`) | ❌ #279 | ❌ #279 | ❌ #279 | ❌ #279 | n/a |
 | Browser tab group named after the agent | ✅ with `backbone chrome install` | ❌ #270 | ❌ #270 | ❌ #270 | ❌ #270 | ❌ #270 | n/a |
 | Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ #280 resumes the directory's latest session | ❌ #280 | n/a |
 | Reasoning effort chosen with the model (`model:effort`) | ✅ | ✅ | ? #296 whether the CLI has an effort setting is not checked | ❌ #296 the CLI has one; Backbone refuses the effort | ❌ #296 the CLI has one; Backbone refuses the effort | ? #296 whether the CLI has an effort setting is not checked | n/a |
