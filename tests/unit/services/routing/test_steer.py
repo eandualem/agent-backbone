@@ -114,6 +114,19 @@ async def test_a_turn_that_ends_while_the_offer_is_written_never_reaches_the_nex
     assert [r["outcome"] for r in rows] == ["not_taken"]
 
 
+async def test_an_old_idle_record_does_not_withdraw_a_steer_the_terminal_shows_working(
+    config, db, working
+):
+    """A hook file left from earlier says nothing about the turn the terminal shows."""
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    (config.state_dir / "ike.json").write_text(
+        json.dumps({"state": "idle", "ts": time.time() - 3600}), encoding="utf-8"
+    )
+    report = await steer_agent("ike", "x", config, db=db, sender="peer")
+    assert report.outcome == "offered"
+    assert len(take_context(config.state_dir, "ike", launch_id="L1")) == 1
+
+
 async def test_a_session_without_a_launch_id_is_refused(config, db, working):
     working[1].return_value = None
     report = await steer_agent("ike", "x", config, db=db, sender="leo")

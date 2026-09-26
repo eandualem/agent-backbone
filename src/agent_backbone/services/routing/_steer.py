@@ -66,7 +66,7 @@ async def steer_agent(
     """Offer ``text`` to the agent's current turn, or refuse with the reason."""
     # The turn this steer is for, read before the checks: a turn that ends
     # (or ends and another starts) while the offer is written is caught below.
-    turn = await asyncio.to_thread(_prompted_at, config, session_name)
+    turn = await asyncio.to_thread(_hook_record, config, session_name)
     profile = await get_session_intelligence(session_name, config)
     evidence = list(profile.evidence)
     if profile.intelligence == SessionIntelligence.OFFLINE:
@@ -165,17 +165,32 @@ async def steer_agent(
     )
 
 
-def _prompted_at(config: BackboneConfig, session_name: str) -> float | None:
+_HookRecord = tuple[float, float | None]
+"""``(timestamp, prompted_at)`` of the hook's latest state record."""
+
+
+def _hook_record(config: BackboneConfig, session_name: str) -> _HookRecord | None:
     snapshot = read_state_file(config.state_dir, session_name)
-    return snapshot.prompted_at if snapshot is not None and snapshot.source == "push" else None
+    if snapshot is None or snapshot.source != "push":
+        return None
+    return snapshot.timestamp, snapshot.prompted_at
 
 
-def _turn_ended(config: BackboneConfig, session_name: str, turn: float | None) -> bool:
-    """Whether the hook reports that the turn marked ``turn`` is over."""
+def _turn_ended(config: BackboneConfig, session_name: str, turn: _HookRecord | None) -> bool:
+    """Whether a hook record written since ``turn`` says that turn is over.
+
+    Only a new record counts: an old one left from an earlier session says
+    nothing about the turn the terminal showed working."""
     snapshot = read_state_file(config.state_dir, session_name)
     if snapshot is None or snapshot.source != "push":
         return False  # no hook evidence: the hook's own retirement and the TTL apply
-    return snapshot.state in (AgentState.IDLE, AgentState.UNKNOWN) or snapshot.prompted_at != turn
+    if turn is not None and snapshot.timestamp == turn[0]:
+        return False
+    prompted_at = turn[1] if turn is not None else None
+    return (
+        snapshot.state in (AgentState.IDLE, AgentState.UNKNOWN)
+        or snapshot.prompted_at != prompted_at
+    )
 
 
 async def settle_steers(config: BackboneConfig, db: BackboneDB) -> dict[str, int]:
