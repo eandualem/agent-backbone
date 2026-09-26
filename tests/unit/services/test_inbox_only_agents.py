@@ -11,7 +11,7 @@ from sqlalchemy import text
 
 from agent_backbone.config import AgentsConfig, AgentSpec, agents_from_rows
 from agent_backbone.models import DeliveryOutcome, EventType, IssueData, ParsedLabels
-from agent_backbone.services.agents import AgentStore
+from agent_backbone.services.agents import AgentState, AgentStore, agent_state
 from agent_backbone.services.agents.operations import (
     StartRequest,
     forget_agent,
@@ -153,6 +153,18 @@ async def test_a_session_with_its_name_is_not_read_as_its_state(config):
     assert not (await build_enriched_agent("ike", config, {"ike"}, {"attached": True})).online
 
 
+async def test_its_state_is_never_read_from_a_session_with_its_name(
+    api_app, api_client, auth_headers
+):
+    config = api_app.state.config = _inbox_only(api_app.state.config)
+    with patch("agent_backbone.services.agents._inference.get_agent_state", AsyncMock()) as read:
+        assert (await agent_state(config, "ike")).state == AgentState.UNKNOWN
+    read.assert_not_awaited()
+    with patch("agent_backbone.api.routes.agents.session_exists", AsyncMock(return_value=True)):
+        response = await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
+    assert response.json()["online"] is False
+
+
 def test_github_labels_do_not_route_to_it(config):
     config = _inbox_only(config)
     issue = IssueData(
@@ -236,9 +248,14 @@ async def test_the_tell_reply_says_it_waits_in_the_inbox(api_app, api_client, au
     assert "Held for ike's inbox" in receipt["detail"]
 
 
-async def test_its_prompts_are_never_answered(api_app, api_client, auth_headers):
+async def test_its_prompts_are_never_answered_nor_a_terminal_read(
+    api_app, api_client, auth_headers
+):
     api_app.state.config = _inbox_only(api_app.state.config)
     with patch("agent_backbone.api.routes.agents.approve_agent", AsyncMock()) as approve:
         response = await api_client.post("/api/agents/ike/approve", headers=auth_headers)
     assert response.status_code == 409
     approve.assert_not_awaited()
+    for path in ("terminal", "output"):
+        response = await api_client.get(f"/api/sessions/ike/{path}", headers=auth_headers)
+        assert response.status_code == 409

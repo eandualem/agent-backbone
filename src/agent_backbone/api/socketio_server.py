@@ -180,9 +180,15 @@ class TerminalNamespace(_AuthenticatedNamespace):
         # Only registered agents are streamed — never an arbitrary tmux
         # session of the same user (same rule as GET /sessions/{name}/terminal).
         config = self._config()
-        if config is None or config.agents.get(session_name) is None:
+        spec = config.agents.get(session_name) if config is not None else None
+        if spec is None:
             await self.emit(
                 "error", {"message": f"'{session_name}' is not a registered agent"}, to=sid
+            )
+            return
+        if spec.inbox_only:
+            await self.emit(
+                "error", {"message": f"'{session_name}' is inbox-only: it has no terminal"}, to=sid
             )
             return
         if not await session_exists(session_name):

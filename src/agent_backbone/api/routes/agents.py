@@ -152,7 +152,8 @@ async def inspect_agent(
 ):
     """Everything the backbone knows about an agent, with the evidence behind it."""
     spec = config.agents.get(name)
-    online = await session_exists(name)
+    # An inbox-only agent has no session: one with its name is not its own.
+    online = not (spec is not None and spec.inbox_only) and await session_exists(name)
     profile = await get_session_intelligence(name, config)
 
     tmux_vars: dict = {}
@@ -350,8 +351,8 @@ async def list_restarts(
     return [AgentTransitionView.from_row(row) for row in rows]
 
 
-def _typed_into_or_409(config: BackboneConfig, name: str) -> AgentSpec:
-    """A registered agent that has a terminal to answer: never an inbox-only one."""
+def _terminal_agent_or_409(config: BackboneConfig, name: str) -> AgentSpec:
+    """A registered agent that has a terminal to read or answer: never an inbox-only one."""
     spec = registered_agent_or_404(config, name)
     if spec.inbox_only:
         raise HTTPException(status_code=409, detail=f"'{name}' is inbox-only: it has no terminal")
@@ -389,7 +390,7 @@ async def approve_agent_prompt(
                 "`backbone config set security.allow_remote_approval true` to enable."
             ),
         )
-    spec = _typed_into_or_409(config, name)
+    spec = _terminal_agent_or_409(config, name)
     approved_by = (body.from_entity if body else "") or "api"
     outcome, evidence = await approve_agent(name, runtime=spec.runtime)
     if outcome != "approved":
@@ -429,7 +430,7 @@ async def deny_agent_prompt(
                 "`backbone config set security.allow_remote_approval true` to enable."
             ),
         )
-    spec = _typed_into_or_409(config, name)
+    spec = _terminal_agent_or_409(config, name)
     denied_by = (body.from_entity if body else "") or "api"
     outcome, evidence = await deny_agent(name, runtime=spec.runtime)
     if outcome != "denied":
@@ -536,7 +537,7 @@ async def get_terminal_output(
     config: BackboneConfig = Depends(get_config),
 ):
     """Recent terminal output from a registered agent's session."""
-    registered_agent_or_404(config, name)
+    _terminal_agent_or_409(config, name)
     output = await capture_pane(name, lines=lines)
     if not output and not await session_exists(name):
         raise HTTPException(status_code=404, detail=f"Session '{name}' not found")
@@ -559,7 +560,7 @@ async def get_agent_output(
     reads the messages ending at or before that offset; ``since`` reads
     forward from an offset, optionally up to ``end``; ``screen`` forces a
     pane read. Every page says whether more lies before or after it."""
-    registered_agent_or_404(config, name)
+    _terminal_agent_or_409(config, name)
     if since is not None and before is not None:
         raise HTTPException(
             status_code=400, detail="give since (forward) or before (back), not both"
