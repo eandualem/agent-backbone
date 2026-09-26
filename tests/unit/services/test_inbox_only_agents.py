@@ -16,6 +16,7 @@ from agent_backbone.services.agents.operations import (
     StartRequest,
     resolve_agent,
     start_resolved,
+    stop_agent_session,
 )
 from agent_backbone.services.agents.transitions import TransitionRequest, validate_transition
 from agent_backbone.services.jobs import escalation as esc
@@ -92,6 +93,26 @@ async def test_launch_flags_do_not_apply(db, tmp_path):
     await _register_client(store, tmp_path)
     with pytest.raises(ValueError, match="always_on"):
         await store.update("client", always_on=True)
+
+
+async def test_it_takes_no_subscriptions(db, tmp_path):
+    store = await _store(db, tmp_path)
+    await _register_client(store, tmp_path)
+    with pytest.raises(ValueError, match="direct messages only"):
+        await store.subscribe("client", "gmail", "from:example.com", "normal")
+    await store.register(AgentSpec(name="app", dir=str(tmp_path), runtime="shell"))
+    await store.subscribe("app", "gmail", "from:example.com", "normal")
+    with patch(f"{_STORE}.session_exists", AsyncMock(return_value=False)):
+        with pytest.raises(ValueError, match="unsubscribe"):
+            await store.update("app", inbox_only=True)
+
+
+async def test_a_session_with_its_name_is_not_stopped(config):
+    config = _inbox_only(config)
+    with patch(f"{_OPS}.launch.stop_agent", AsyncMock()) as stop:
+        with pytest.raises(ValueError, match="no session to stop"):
+            await stop_agent_session(config, "ike")
+    stop.assert_not_awaited()
 
 
 def test_a_restart_is_refused(config):

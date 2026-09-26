@@ -62,3 +62,5 @@ def validate_agent_spec(spec: AgentSpec) -> None:
         raise ValueError(
             "an inbox-only agent is never launched: always_on and unattended do not apply"
         )
+    if spec.inbox_only and spec.subscriptions:
+        raise ValueError("an inbox-only agent reads only direct messages: unsubscribe it first")

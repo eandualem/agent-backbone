@@ -459,8 +459,11 @@ class AgentStore:
         if not filter_text or len(filter_text) > 500 or not filter_text.isprintable():
             raise ValueError("filter must be 1-500 printable characters")
         await self.refresh()
-        if name not in self._agents:
+        spec = self._agents.get(name)
+        if spec is None:
             raise KeyError(name)
+        if spec.inbox_only:
+            raise ValueError(f"'{name}' is inbox-only: its inbox takes direct messages only")
         await self._db.agents.add_subscription(name, source, filter_text, priority)
         await self.refresh()
         return self._agents.get(name)  # type: ignore[return-value]

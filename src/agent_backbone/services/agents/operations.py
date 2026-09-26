@@ -132,6 +132,10 @@ async def stop_agent_session(config: BackboneConfig, name: str) -> bool:
     (``ValueError``) on every surface — API, CLI, Telegram — from here."""
     if name == config.backbone.session_name:
         raise ValueError("refusing to stop the backbone's own session")
+    spec = config.agents.get(name)
+    if spec is not None and spec.inbox_only:
+        # A session with its name is not the agent's: never stop it on its behalf.
+        raise ValueError(f"'{name}' is inbox-only: it has no session to stop")
     async with lifecycle_lock(name):
         return await launch.stop_agent(name)
 
