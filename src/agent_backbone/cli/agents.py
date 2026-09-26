@@ -435,7 +435,10 @@ async def _agent_start(args: argparse.Namespace) -> int:
         # A runtime briefed by its first message gets it now, as the service
         # would; a dialog, a timeout or --no-wait leaves it for the service.
         if result.ready == "ready" and not result.already_running:
-            await _brief_offline(direct, spec.name, deadline)
+            try:
+                await _brief_offline(direct, spec.name, deadline)
+            except Exception as exc:  # the agent is up; the lines below say where the brief is
+                print(f"  - could not deliver the brief from here ({type(exc).__name__})")
         if await direct.db.queue.has_uncertain(spec.name):
             print(
                 "  - a delivery could not be confirmed, so messages to this agent are held "

@@ -248,6 +248,30 @@ class TestAgentCommands:
         out = capsys.readouterr().out
         assert "could not be confirmed" in out and "backbone inbox" in out
 
+    def test_a_failed_offline_brief_does_not_hide_the_started_agent(self, tmp_path, capsys):
+        assert _run(["init"]) == 0
+        project = tmp_path / "app"
+        project.mkdir()
+        launch = "agent_backbone.services.agents.launch"
+        with (
+            patch(f"{launch}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{launch}.start_session", new_callable=AsyncMock, return_value=True),
+            patch(f"{launch}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", [])),
+            patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/bin/x"),
+            patch("agent_backbone.services.runtimes.base.Runtime.pre_trust"),
+            patch(_DETECT_REPO, new_callable=AsyncMock, return_value=""),
+            patch(
+                "agent_backbone.services.jobs.retry.safe_deliver",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("database is locked"),
+            ),
+        ):
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            assert _run(argv) == 0
+        out = capsys.readouterr().out
+        assert "app: ready" in out and "could not deliver the brief from here" in out
+        assert "brief is not delivered yet" in out
+
     def test_an_offline_start_that_does_not_wait_says_the_brief_waits(self, tmp_path, capsys):
         assert _run(["init"]) == 0
         project = tmp_path / "app"
