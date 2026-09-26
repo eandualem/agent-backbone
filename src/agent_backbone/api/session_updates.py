@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import BackboneConfig
@@ -46,6 +46,7 @@ class SessionFeed:
         self._lock = asyncio.Lock()
         self._emit_lock = asyncio.Lock()
         self._last_signature: str | None = None
+        self._hint_lock = asyncio.Lock()
         self._hinted: dict[str, frozenset] = {}
         """The inbox rows each session was last hinted about."""
 
@@ -99,13 +100,18 @@ class SessionFeed:
             return True
 
     async def hint_inbox(
-        self, readable: Mapping[str, frozenset], *, complete: bool = False
+        self, read: Callable[[], Awaitable[Mapping[str, frozenset]]], *, complete: bool = False
     ) -> None:
         """Tell ``/sessions`` subscribers whose inbox holds a row they were not
         told about: ``inbox:pending {session, pending}``, with no message
-        text. ``readable`` is ``QueueRepo.inbox_rows``; ``complete`` says it
+        text. ``read`` returns ``QueueRepo.inbox_rows``, read under the lock
+        so an older read never replaces a newer one; ``complete`` says it
         covers every session. A hint can be missed (a disconnect, a restart):
         readers also read their inbox on connect and on a slow poll."""
+        async with self._hint_lock:
+            await self._hint(await read(), complete=complete)
+
+    async def _hint(self, readable: Mapping[str, frozenset], *, complete: bool) -> None:
         fresh = {
             name: rows
             for name, rows in readable.items()
