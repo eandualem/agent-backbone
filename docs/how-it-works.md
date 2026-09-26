@@ -110,8 +110,7 @@ the readiness wait. A continuation message is handed to the replacement once
 it is at its prompt (queued if it is not; that queue row never expires). No
 process inside the session takes part after acceptance, so an agent can ask
 for its own session and lose nothing; the row is in the database, so a
-backbone restart in between changes nothing, and a continuation an earlier
-process already handed over is not sent again. The transition ends `completed`
+backbone restart in between changes nothing. The transition ends `completed`
 with the launch's readiness, or `failed` with the reason — including a
 session someone started by hand during the wait, which is never claimed as
 this transition's work. An agent with a pending transition is not reported

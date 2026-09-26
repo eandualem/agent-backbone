@@ -18,7 +18,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import launch, lifecycle_lock
 from agent_backbone.services.agents.operations import StartRequest, resolve_agent, start_resolved
 from agent_backbone.services.agents.transitions import SOURCE, due_after
@@ -101,10 +100,6 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
     # exits mid-launch, the next one can tell the replacement it started
     # from a session someone started by hand (``_recovered_launch``).
     resumed_launch = row["launch_operation_id"]
-    if resumed_launch and not await _session_is_launch(name, resumed_launch):
-        # That launch's session is gone (or never came up): this start is a
-        # new launch, and its continuation is a new one too.
-        resumed_launch = None
     operation_id = resumed_launch or uuid.uuid4().hex
     if resumed_launch is None:
         await db.transitions.mark_launching(row["id"], operation_id)
@@ -144,30 +139,7 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         outcome["reason"] = "the replacement did not start"
         await db.transitions.finish(row["id"], "failed", outcome)
         return "failed"
-    # The continuation carries an identity of its own: a process that exits
-    # after handing it over but before finishing the row must not send it
-    # again to the same session from the next one (a paste cut off midway can
-    # still repeat). A session started fresh here never had it.
-    message_operation = f"{operation_id}:message"
-    earlier = (
-        await _continuation_receipt(db, message_operation)
-        if row["message"] and result.already_running
-        else None
-    )
-    if earlier is not None:
-        kind, condition = earlier
-        if kind == "submitted":
-            outcome["message"] = DeliveryOutcome.ALREADY_DELIVERED.value
-            outcome["evidence"].append(
-                "the continuation message was delivered by an earlier backbone process"
-            )
-        else:
-            outcome["message"] = condition or "queued"
-            outcome["message_queue"] = "stored"
-            outcome["evidence"].append(
-                "the continuation message was queued by an earlier backbone process"
-            )
-    elif row["message"]:
+    if row["message"]:
         sender = row["requested_by"] or "backbone"
         report = await safe_deliver(
             name,
@@ -177,7 +149,6 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
             delivery_kind="direct_message",
             source=SOURCE,
             sender=sender,
-            operation_id=message_operation,
         )
         outcome["message"] = report.outcome.value
         if report.queue is not None:
@@ -213,21 +184,6 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
     # not observation order: the latest sighting decides.
     newest = max(outcomes, key=lambda record: record["last_seen_at"])["code"]
     return None if newest in {"failed", "exited"} else newest
-
-
-async def _continuation_receipt(db: BackboneDB, operation_id: str) -> tuple[str, str] | None:
-    """How the continuation under ``operation_id`` was handed over, if it was:
-    ``("submitted", "")`` when pasted, ``("stored", <condition>)`` when queued
-    (the queue row delivers it; ``condition`` is why it waited)."""
-    records = await db.diagnostics.query(operation_id=operation_id, limit=20)
-    codes = {(record["category"], record["code"]): record for record in records}
-    if ("delivery", "submitted") in codes:
-        return "submitted", ""
-    stored = codes.get(("queue", "queue_stored"))
-    if stored is None:
-        return None
-    details = stored.get("details")
-    return "stored", str(details.get("condition") or "") if isinstance(details, dict) else ""
 
 
 async def _session_is_launch(name: str, operation_id: str) -> bool:
