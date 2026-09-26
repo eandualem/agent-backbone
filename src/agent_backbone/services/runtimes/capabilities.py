@@ -115,6 +115,7 @@ _B3 = "live: #271 batch 3 (scratch probe)"
 _B4 = "live: #271 batch 4 (scratch probe)"
 _PROVENANCE = "live: #273 post-fix round 3 (forged briefs declined)"
 _FRESH = "live: #290 post-fix probe (stale brief retired, current brief first)"
+_RESUME = "live: #273 post-fix probe (resume and compaction)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
 _NO_MODEL = "a plain shell runs no model"
 
@@ -168,9 +169,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Current brief after resume",
         "src/agent_backbone/services/agents/launch.py",
         fallback="Start the agent fresh (`agent start --fresh`) to apply a changed brief.",
-        implemented=_declared("brief-after-resume"),
-        claude=_gap(273, "the resumed session keeps its stored system prompt"),
-        codex=_gap(273),
+        implemented=lambda rt: rt.brief_refresh == "hook_context",
+        claude=_ok(_RESUME),
+        codex=_ok(_RESUME),
         gemini=_gap(273),
         opencode=_gap(273),
         deepcode=_gap(273),

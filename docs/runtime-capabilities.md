@@ -29,7 +29,7 @@ claims support that the adapter's code does not declare.
 | Message delivery into the session | ✅ | ✅ | ? not verified live | ✅ | ✅ | ? not verified live | ✅ plumbing tests only |
 | Folder-trust dialog answered at start | ✅ | ✅ | ✅ `--skip-trust` | n/a | n/a | ? not checked | n/a |
 | Brief reaches a fresh session before other work | ✅ | ✅ | ? | ✅ | ? | ? not verified live | n/a |
-| Current brief after resume | ❌ #273 the resumed session keeps its stored system prompt | ❌ #273 | ❌ #273 | ❌ #273 | ❌ #273 | ❌ #273 | n/a |
+| Current brief after resume | ✅ | ✅ | ❌ #273 | ❌ #273 | ❌ #273 | ❌ #273 | n/a |
 | Brief followed after context compaction | ✅ | ✅ | ? #291 | ❌ #291 the rule is kept but no longer followed | ? #291 | ? #291 | n/a |
 | Project AGENTS.md loaded at start | ✅ | ✅ | ❌ #286 reads GEMINI.md unless context.fileName is set | ✅ | ? #286 | ❌ #286 reads only files passed to it | n/a |
 | Non-empty user-level instruction file detected | ❌ #274 | ❌ #274 | ❌ #274 | ❌ #274 | ❌ #274 | ❌ #274 | n/a |
