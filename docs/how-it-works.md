@@ -121,7 +121,8 @@ When the backbone is down, the CLI does the same thing directly against the
 database and tmux, and says so. A brief sent as the first message (Codex,
 Aider) is delivered there too, through the same queue drain; if the agent
 is not ready for it in time, the CLI says the brief goes first once the
-backbone runs.
+backbone runs, and if its paste could not be confirmed, that the agent's
+messages are held until it is acknowledged.
 
 ## 2. State: how the backbone knows what an agent is doing
 

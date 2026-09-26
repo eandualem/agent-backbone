@@ -434,7 +434,14 @@ async def _agent_start(args: argparse.Namespace) -> int:
         # would; a dialog, a timeout or --no-wait leaves it for the service.
         if result.ready == "ready" and not result.already_running:
             await _brief_offline(direct, spec.name)
-        if await direct.db.queue.has_brief_ahead(spec.name):
+        if await direct.db.queue.has_uncertain(spec.name):
+            print(
+                "  - a delivery could not be confirmed, so messages to this agent are held "
+                "until it is acknowledged: check the session "
+                f"(`backbone agent attach {spec.name}`); the agent reads and acknowledges it "
+                "with `backbone inbox`"
+            )
+        elif await direct.db.queue.has_brief_ahead(spec.name):
             print("  - the brief is not delivered yet: it goes first once the backbone runs")
         args.attach_name = spec.name
         print(

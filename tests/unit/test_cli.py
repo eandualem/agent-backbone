@@ -221,6 +221,33 @@ class TestAgentCommands:
         else:
             deliver.assert_not_awaited()
 
+    def test_an_offline_start_reports_a_brief_it_could_not_confirm(self, tmp_path, capsys):
+        """An unconfirmed paste holds the queue: the start says so, and how to clear it."""
+        from agent_backbone.models import DeliveryOutcome
+        from agent_backbone.services.routing import DeliveryReport
+
+        async def unconfirmed(session, message, config, *, db, queue_id, **kwargs):
+            await db.queue.hold_uncertain(queue_id)
+            return DeliveryReport(DeliveryOutcome.AWAITING_ACK, unconfirmed=True)
+
+        assert _run(["init"]) == 0
+        project = tmp_path / "app"
+        project.mkdir()
+        launch = "agent_backbone.services.agents.launch"
+        with (
+            patch(f"{launch}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{launch}.start_session", new_callable=AsyncMock, return_value=True),
+            patch(f"{launch}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", [])),
+            patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/bin/x"),
+            patch("agent_backbone.services.runtimes.base.Runtime.pre_trust"),
+            patch(_DETECT_REPO, new_callable=AsyncMock, return_value=""),
+            patch("agent_backbone.services.jobs.retry.safe_deliver", side_effect=unconfirmed),
+        ):
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            assert _run(argv) == 0
+        out = capsys.readouterr().out
+        assert "could not be confirmed" in out and "backbone inbox" in out
+
     def test_an_offline_start_that_does_not_wait_says_the_brief_waits(self, tmp_path, capsys):
         assert _run(["init"]) == 0
         project = tmp_path / "app"
