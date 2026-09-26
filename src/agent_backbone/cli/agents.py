@@ -404,6 +404,8 @@ async def _agent_start(args: argparse.Namespace) -> int:
             watch=tuple(args.watch or ()),
             wait=not args.no_wait,
         )
+        # The brief below shares the start's timeout with the readiness wait.
+        deadline = asyncio.get_running_loop().time() + direct.config.timing.start_timeout_seconds
         try:
             spec = await resolve_agent(direct.store, req)
             result = await start_resolved(direct.store, direct.config, spec, req, db=direct.db)
@@ -433,7 +435,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
         # A runtime briefed by its first message gets it now, as the service
         # would; a dialog, a timeout or --no-wait leaves it for the service.
         if result.ready == "ready" and not result.already_running:
-            await _brief_offline(direct, spec.name)
+            await _brief_offline(direct, spec.name, deadline)
         if await direct.db.queue.has_uncertain(spec.name):
             print(
                 "  - a delivery could not be confirmed, so messages to this agent are held "
@@ -450,12 +452,12 @@ async def _agent_start(args: argparse.Namespace) -> int:
         return 0 if result.ready != "exited" else 1
 
 
-async def _brief_offline(direct: _common.Direct, name: str) -> None:
-    """Deliver a queued brief through the service's own drain, within the start timeout."""
+async def _brief_offline(direct: _common.Direct, name: str, deadline: float) -> None:
+    """Deliver a queued brief through the service's own drain: at least one
+    attempt, then more until ``deadline`` (the start's own timeout)."""
     from agent_backbone.services.jobs import drain_agent
 
     timing = direct.config.timing
-    deadline = asyncio.get_running_loop().time() + timing.start_timeout_seconds
     while await direct.db.queue.has_brief_ahead(name):
         await drain_agent(direct.config, direct.db, name)
         if not await direct.db.queue.has_brief_ahead(name):
