@@ -23,9 +23,8 @@ REFUSAL = {
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
     # In a backbone-started session BACKBONE_STATE_DIR points at the real state
-    # directory, and wins over the hooks' --state-dir; TMUX_PANE at a real pane.
+    # directory, and wins over the hooks' --state-dir.
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
-    monkeypatch.delenv("TMUX_PANE", raising=False)
     monkeypatch.setattr(escalation, "_denial_log_offset", None)
     monkeypatch.setattr(escalation, "_denial_log_inode", None)
     monkeypatch.setattr(escalation, "_denial_watch_started", 0.0)

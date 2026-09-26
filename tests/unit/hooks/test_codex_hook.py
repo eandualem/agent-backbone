@@ -21,7 +21,6 @@ def _payload(event: str, **extra) -> dict:
 @pytest.fixture(autouse=True)
 def _no_backbone_env(monkeypatch):
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
-    monkeypatch.delenv("TMUX_PANE", raising=False)  # the hook never reads a real pane here
 
 
 def test_a_new_codex_session_does_not_inherit_the_previous_claude_model(monkeypatch):
@@ -168,26 +167,26 @@ TIMED_OUT = """\
 
 
 class TestAutomaticReviewerRefusals:
-    """Codex's reviewer refuses without a dialog or hook event; its screen line is logged."""
+    """Codex's reviewer refuses without a dialog or hook event; its screen entry is logged."""
 
-    def _turn(self, *screens: str, events=("PermissionRequest", "PreToolUse")):
+    def _turn(self, tmp_path, *screens, events=("PermissionRequest", "PreToolUse")):
         with patch.object(hook, "own_screen", side_effect=list(screens)) as look:
-            record, logged = None, []
             for event in events:
-                new, actions = hook.derive(_payload(event, tool_name="Bash"), record)
-                record = new or record
-                logged += actions or []
-        return record, logged, look
+                hook.watch_refusals(_payload(event, tool_name="Bash"), tmp_path, "cx")
+        log = tmp_path / "actions.jsonl"
+        logged = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        return logged, look
 
-    def test_a_refusal_is_logged_with_program_names_only(self):
-        _, [refusal], _ = self._turn(REVIEWING, REVIEWING + DENIED)
+    def test_a_refusal_is_logged_with_program_names_only(self, tmp_path):
+        [refusal], _ = self._turn(tmp_path, REVIEWING, REVIEWING + DENIED)
         assert refusal["action"] == "permission_denied" and refusal["kind"] == "auto_review"
         assert refusal["category"] == "risk: high" and refusal["summary"] == "curl"
+        assert refusal["session"] == "cx"
         logged = json.dumps(refusal)
         assert "example.com" not in logged and "codex.rs" not in logged
 
-    def test_a_timed_out_review_is_a_refusal_too(self):
-        _, [refusal], _ = self._turn(REVIEWING, TIMED_OUT)
+    def test_a_timed_out_review_is_a_refusal_too(self, tmp_path):
+        [refusal], _ = self._turn(tmp_path, REVIEWING, TIMED_OUT)
         assert refusal["category"] == "review timed out" and refusal["summary"] == "curl"
 
     @pytest.mark.parametrize(
@@ -198,11 +197,12 @@ class TestAutomaticReviewerRefusals:
             "  ✗ Request denied for codex to run git push",  # quoted inside other output
         ],
     )
-    def test_other_lines_are_not_refusals(self, line):
-        assert self._turn(REVIEWING, REVIEWING + line + "\n")[1] == []
+    def test_other_lines_are_not_refusals(self, tmp_path, line):
+        assert self._turn(tmp_path, REVIEWING, REVIEWING + line + "\n")[0] == []
 
-    def test_a_refusal_already_on_screen_is_not_reported_again(self):
-        _, logged, _ = self._turn(
+    def test_a_refusal_already_on_screen_is_not_reported_again(self, tmp_path):
+        logged, _ = self._turn(
+            tmp_path,
             DENIED,
             DENIED + REVIEWING,
             DENIED + REVIEWING + DENIED,
@@ -210,30 +210,57 @@ class TestAutomaticReviewerRefusals:
         )
         assert len(logged) == 1  # the second one only
 
-    def test_a_refusal_that_scrolled_away_does_not_hide_a_new_one(self):
+    def test_a_rewrapped_screen_shows_the_same_refusal(self, tmp_path):
+        narrow = DENIED.replace("--data-binary\n  @core", "\n  --data-binary @core")
+        assert self._turn(tmp_path, DENIED, narrow)[0] == []
+
+    def test_a_refusal_that_scrolled_away_does_not_hide_a_new_one(self, tmp_path):
         first = "✗ Request denied for codex to run git push\n"
         second = "✗ Request denied for codex to run gh issue edit 4\n"
         third = "✗ Request denied for codex to run rm -rf build\n"
-        _, logged, _ = self._turn(first + second, second + third)
+        logged, _ = self._turn(tmp_path, first + second, second + third)
         assert [refusal["summary"] for refusal in logged] == ["rm"]
 
-    def test_the_watch_ends_with_the_turn(self):
-        record, _, look = self._turn(
-            REVIEWING, REVIEWING, events=("PermissionRequest", "Stop", "PreToolUse")
+    def test_the_watch_ends_with_the_turn(self, tmp_path):
+        _, look = self._turn(
+            tmp_path, REVIEWING, REVIEWING, events=("PermissionRequest", "Stop", "PreToolUse")
         )
-        assert look.call_count == 2 and "refusal_watch" not in record
+        assert look.call_count == 2 and not (tmp_path / hook.WATCH_DIR / "cx.json").exists()
 
-    def test_there_is_no_look_without_a_permission_request_or_after_a_tool_result(self):
-        _, logged, look = self._turn(
-            REVIEWING, events=("PreToolUse", "PermissionRequest", "PostToolUse")
+    def test_a_screen_that_cannot_be_read_waits_for_the_next_look(self, tmp_path):
+        logged, look = self._turn(
+            tmp_path,
+            REVIEWING,
+            None,  # the turn's end: tmux did not answer
+            DENIED,
+            events=("PermissionRequest", "Stop", "UserPromptSubmit"),
+        )
+        assert look.call_count == 3 and len(logged) == 1
+
+    def test_there_is_no_look_without_a_permission_request(self, tmp_path):
+        logged, look = self._turn(
+            tmp_path, REVIEWING, events=("PreToolUse", "Stop", "PermissionRequest")
         )
         assert look.call_count == 1 and logged == []
 
-    def test_outside_tmux_nothing_is_watched(self, monkeypatch):
+    def test_the_state_record_does_not_carry_the_watch(self, tmp_path):
+        """Hooks of parallel calls rewrite the state record; the watch is not in it."""
+        self._turn(tmp_path, REVIEWING, events=("PermissionRequest",))
+        record, _ = hook.derive(_payload("PreToolUse"), {"state": "busy"})
+        assert "refusal_watch" not in record
+        assert (tmp_path / hook.WATCH_DIR / "cx.json").exists()
+
+    def test_a_new_session_drops_the_watch(self, tmp_path):
+        _, look = self._turn(
+            tmp_path, REVIEWING, events=("PermissionRequest", "SessionStart", "PreToolUse")
+        )
+        assert look.call_count == 1
+
+    def test_outside_tmux_nothing_is_watched(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TMUX", "/tmp/tmux-1/default")
         assert hook.own_screen() is None  # no pane of its own
-        record, _ = hook.derive(_payload("PermissionRequest"), None)
-        assert "refusal_watch" not in record
+        hook.watch_refusals(_payload("PermissionRequest"), tmp_path, "cx")
+        assert not (tmp_path / hook.WATCH_DIR / "cx.json").exists()
 
     def test_the_hook_reads_only_its_own_pane(self, monkeypatch):
         monkeypatch.setenv("TMUX", "/tmp/tmux-1/default")
@@ -243,14 +270,14 @@ class TestAutomaticReviewerRefusals:
             assert hook.own_screen() == DENIED
         assert run.call_args.args[0][:5] == ["tmux", "capture-pane", "-p", "-t", "%7"]
 
-    def test_a_refusal_reaches_the_action_log(self, tmp_path):
+    def test_a_refusal_reaches_the_action_log_through_the_hook(self, tmp_path):
         for event, screen in (("PermissionRequest", REVIEWING), ("Stop", DENIED)):
             payload = io.StringIO(json.dumps(_payload(event, tool_name="Bash")))
             with patch.object(hook, "own_screen", return_value=screen):
                 with patch.object(bb.sys, "stdin", payload):
                     assert hook.main(["--state-dir", str(tmp_path), "--agent", "cx"]) == 0
         [line] = (tmp_path / "actions.jsonl").read_text().splitlines()
-        assert json.loads(line)["session"] == "cx"
+        assert json.loads(line)["summary"] == "curl"
 
 
 @pytest.mark.parametrize(

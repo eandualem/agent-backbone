@@ -13,11 +13,13 @@ Standard library only — it must run under any ``python3``.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
 import sys
+from pathlib import Path
 
 try:
     from agent_backbone.hooks import backbone_state as bb
@@ -25,10 +27,14 @@ except ImportError:  # copied next to backbone_state.py, outside the package
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import backbone_state as bb  # type: ignore[no-redef]
 
-REFUSAL_SCREEN_LINES = 200
+REFUSAL_SCREEN_LINES = 2000
 """How far back the session's screen is read for the automatic reviewer's refusals."""
 REFUSALS_COMPARED = 50
-"""Refusal lines remembered between two looks at the screen."""
+"""Refusals remembered between two looks at the screen."""
+WATCH_DIR = "refusal-watch"
+"""``<state_dir>/refusal-watch/<agent>.json``: the refusals on screen at the last look,
+while a turn that requested an approval goes on; its own file, updated under a lock,
+since Codex runs the hooks of parallel tool calls at once."""
 
 # Codex's automatic reviewer (``--approve-for-me``) refuses an action without a
 # dialog. Codex (0.157) has no hook event for it and leaves it out of the
@@ -36,6 +42,7 @@ REFUSALS_COMPARED = 50
 # with the risk level (codex-rs/tui/src/history_cell/approvals.rs):
 #   ⚠ Automatic approval review denied (risk: high): <the reviewer's rationale>
 #   ✗ Request denied for codex to run curl -sS -X POST …
+#     <the rest of the command, indented>
 # A person's own answer reads "✗ You did not approve …" and is not one.
 _REFUSAL = re.compile(
     r"✗ (?:Request denied(?: for codex to)?|(Review timed out) before codex could)(.*)"
@@ -43,12 +50,19 @@ _REFUSAL = re.compile(
 _RISK = re.compile(r"⚠ Automatic approval review denied \(risk: ([a-z]{1,12})\)")
 _NAME = re.compile(r"[A-Za-z0-9_-]{1,60}")
 _LOOK_EVENTS = frozenset(
-    {"PermissionRequest", "PreToolUse", "Stop", "Interrupt", "UserPromptSubmit", "SessionEnd"}
+    {
+        "PermissionRequest",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "Interrupt",
+        "UserPromptSubmit",
+        "SessionEnd",
+    }
 )
-"""Events after which a refusal is on screen: the model has moved on, or the turn ended.
-``PostToolUse`` is not one: a call running beside the reviewed one may finish first."""
-_WATCH_EVENTS = frozenset({"PermissionRequest", "PreToolUse"})
-"""Events within the turn: the watch goes on; any other event ends it."""
+"""Events at which a watching hook reads its screen again."""
+_WATCH_EVENTS = frozenset({"PermissionRequest", "PreToolUse", "PostToolUse"})
+"""Events within the turn: the watch goes on. After any other look, it ends."""
 
 
 def own_screen() -> str | None:
@@ -69,14 +83,23 @@ def own_screen() -> str | None:
 
 
 def screen_refusals(screen: str) -> list[tuple[str, str]]:
-    """``(line, risk)`` for each of the reviewer's refusals on screen, oldest first."""
-    found, risk = [], ""
-    for line in screen.splitlines():
+    """``(entry, risk)`` for each of the reviewer's refusals on screen, oldest first.
+
+    An entry is the refusal's whole text with its wrapping undone, so a
+    re-wrapped screen shows the same entries."""
+    found: list[tuple[str, str]] = []
+    risk, entry = "", None
+    for line in [*screen.splitlines(), ""]:
+        if entry is not None:
+            if line.startswith("  ") and line.strip():
+                entry.append(line)
+                continue
+            found.append((" ".join(" ".join(entry).split()), risk))
+            risk, entry = "", None
         if warned := _RISK.match(line):
             risk = warned.group(1)
         elif _REFUSAL.match(line):
-            found.append((line.rstrip(), risk))
-            risk = ""
+            entry = [line]
         elif line[:1].strip():
             risk = ""  # another entry at the margin: the warning was not this refusal's
     return found
@@ -101,9 +124,9 @@ def refusal_summary(what: str) -> str:
     return "an action"
 
 
-def refusal_record(line: str, risk: str, now: float, ref: str) -> dict:
+def refusal_record(entry: str, risk: str, now: float, ref: str) -> dict:
     """The action-log record of one refusal (``action: permission_denied``)."""
-    match = _REFUSAL.match(line)
+    match = _REFUSAL.match(entry)
     timed_out = bool(match and match.group(1))
     return {
         "ts": now,
@@ -116,7 +139,7 @@ def refusal_record(line: str, risk: str, now: float, ref: str) -> dict:
 
 
 def _new_count(seen: list[str], now: list[str]) -> int:
-    """How many lines at the end of ``now`` were not on screen at the last look.
+    """How many entries at the end of ``now`` were not on screen at the last look.
 
     The longest run at the end of ``seen`` that starts ``now`` is still on
     screen; what came before it scrolled away, and what follows it is new."""
@@ -126,26 +149,48 @@ def _new_count(seen: list[str], now: list[str]) -> int:
     return len(now)
 
 
-def watch_refusals(event: str, current: dict, now: float) -> tuple[list[str] | None, list[dict]]:
-    """``(watch, records)``: look for the reviewer's refusals once an approval was requested.
+def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
+    """Log the reviewer's refusals that appear once the turn requested an approval.
 
-    ``PermissionRequest`` starts a watch: the refusal lines already on screen.
-    Each later look within the turn records the lines that appeared since,
-    and the turn's end ends the watch. A refusal is only read, never answered."""
-    watch = current.get("refusal_watch")
-    watch = watch if isinstance(watch, list) else None
-    if event in _LOOK_EVENTS and (watch is not None or event == "PermissionRequest"):
+    ``PermissionRequest`` starts a watch: the refusals already on screen. Each
+    later hook of the turn reads the screen again and logs what appeared
+    since; the turn's end ends the watch. A screen that cannot be read leaves
+    the watch for the next look. A refusal is only read, never answered."""
+    event = payload.get("hook_event_name", "")
+    directory = state_dir / WATCH_DIR
+    target = directory / f"{agent}.json"
+    if event == "SessionStart":
+        target.unlink(missing_ok=True)  # a new session: nothing to compare with
+        return
+    if event not in _LOOK_EVENTS or (event != "PermissionRequest" and not target.exists()):
+        return
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / f"{agent}.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            watch = json.loads(target.read_text())
+        except (OSError, ValueError):
+            watch = None
+        watch = watch if isinstance(watch, list) else None
+        if watch is None and event != "PermissionRequest":
+            return
         screen = own_screen()
-        if screen is not None:
-            found = screen_refusals(screen)[-REFUSALS_COMPARED:]
-            seen = [hashlib.sha256(line.encode()).hexdigest()[:12] for line, _ in found]
-            fresh = found[len(found) - _new_count(watch, seen) :] if watch is not None else []
-            records = [
-                refusal_record(line, risk, now, f"auto-review:{now:.6f}:{index}")
-                for index, (line, risk) in enumerate(fresh)
-            ]
-            return (seen if event in _WATCH_EVENTS else None), records
-    return (watch if event in _WATCH_EVENTS else None), []
+        if screen is None:
+            return
+        found = screen_refusals(screen)[-REFUSALS_COMPARED:]
+        seen = [hashlib.sha256(entry.encode()).hexdigest()[:12] for entry, _ in found]
+        if watch is not None:
+            now = bb.time.time()
+            fresh = found[len(found) - _new_count(watch, seen) :]
+            for index, (entry, risk) in enumerate(fresh):
+                record = refusal_record(entry, risk, now, f"auto-review:{now:.6f}:{index}")
+                bb.append_action(state_dir, agent, record)
+        if event in _WATCH_EVENTS:
+            tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(seen))
+            os.replace(tmp, target)
+        else:
+            target.unlink(missing_ok=True)
 
 
 def tool_succeeded(payload: dict) -> bool:
@@ -177,22 +222,20 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
     current = current or {}
     state = bb.record_factory(payload, current, event)
     now = bb.time.time()
-    watch, refused = watch_refusals(event, current, now)
-    watching = {"refusal_watch": watch} if watch is not None else {}
 
     if event == "SessionStart":
         return state(bb.STATE_IDLE, started_at=now), None
     if event == "SessionEnd":
-        return state(bb.STATE_UNKNOWN), refused or None
+        return state(bb.STATE_UNKNOWN), None
     if event == "UserPromptSubmit":
         issue, repo = bb.issue_from_prompt(payload.get("prompt", "") or "", current)
-        return state(bb.STATE_BUSY, issue=issue, repo=repo), refused or None
+        return state(bb.STATE_BUSY, issue=issue, repo=repo), None
     if event == "PermissionRequest":
-        return state(bb.STATE_WAITING, bb.REASON_PERMISSION, **watching), refused or None
+        return state(bb.STATE_WAITING, bb.REASON_PERMISSION), None
     if event == "PreToolUse":
         # Intent suppresses a fast self-event, but does not acknowledge work.
         actions = bb.action_records(payload, now, phase="intent")
-        return state(bb.STATE_BUSY, **watching), [*refused, *actions] or None
+        return state(bb.STATE_BUSY), actions or None
     if event == "PostToolUse":
         actions = (
             bb.action_records(payload, now, phase="succeeded") if tool_succeeded(payload) else []
@@ -201,7 +244,7 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
     if event in ("Stop", "Interrupt"):
         return state(
             bb.STATE_IDLE, last_message=bb.clip_message(payload.get("last_assistant_message"))
-        ), refused or None
+        ), None
     return None, None
 
 
@@ -215,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
         argv,
         context_events=CONTEXT_EVENTS,
         turn_end_events=frozenset({"Stop", "Interrupt"}),
+        observe=watch_refusals,
     )
 
 

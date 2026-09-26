@@ -111,13 +111,15 @@ def isolated_skills_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_real_tmux():
+def no_real_tmux(monkeypatch):
     """The suite never touches the developer's tmux server.
 
     Every tmux call goes through one subprocess entry point; unless a test
     patches it (or a function above it) deliberately, reaching it is a bug
-    in the test's mocking, not something to run.
+    in the test's mocking, not something to run. A hook reads its own pane
+    from ``TMUX_PANE``: without one, it reads none.
     """
+    monkeypatch.delenv("TMUX_PANE", raising=False)
 
     async def _refuse(*args, **kwargs):
         raise RuntimeError(f"unpatched tmux call in a test: {' '.join(map(str, args))}")
