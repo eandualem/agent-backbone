@@ -3,6 +3,7 @@ direct messages held for ``backbone inbox``."""
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -11,7 +12,7 @@ from sqlalchemy import text
 
 from agent_backbone.config import AgentsConfig, AgentSpec, agents_from_rows
 from agent_backbone.models import DeliveryOutcome, EventType, IssueData, ParsedLabels
-from agent_backbone.services.agents import AgentState, AgentStore, agent_state
+from agent_backbone.services.agents import AgentState, AgentStore, agent_state, write_state_file
 from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.operations import (
     StartRequest,
@@ -153,7 +154,10 @@ async def test_a_session_with_its_name_is_not_read_as_its_state(config):
     ):
         assert "ike" not in await read_states(config, {"ike", "bell"})
     assert capture.await_count == 1
-    assert not (await build_enriched_agent("ike", config, {"ike"}, {"attached": True})).online
+    old_session = {"state": "busy", "issue": 42, "repo": "example/ike", "ts": time.time() - 60}
+    write_state_file(config.state_dir, "ike", old_session)
+    enriched = await build_enriched_agent("ike", config, {"ike"}, {"attached": True})
+    assert not enriched.online and enriched.current_issue is None
 
 
 async def test_its_state_is_never_read_from_a_session_with_its_name(

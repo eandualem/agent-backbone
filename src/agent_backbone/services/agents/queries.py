@@ -110,11 +110,13 @@ async def build_enriched_agent(
 ) -> EnrichedAgent:
     """Build an EnrichedAgent for a session (configured agent or ad-hoc session)."""
     spec = config.agents.get(session)
-    if spec is not None and spec.inbox_only:
-        # It has no session: a tmux session with its name is not its own.
+    inbox_only = spec is not None and spec.inbox_only
+    if inbox_only:
+        # It has no session: a tmux session with its name, or a hook file
+        # left by one it had before, is not its own (``agent_state``).
         active_sessions, tmux_info = set(), None
     online = session in active_sessions
-    if online:
+    if online or inbox_only:
         snapshot = await agent_state(config, session)
     else:
         # The shared tmux listing already proved the session absent. Reconcile
