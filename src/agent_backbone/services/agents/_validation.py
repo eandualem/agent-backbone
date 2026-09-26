@@ -64,3 +64,7 @@ def validate_agent_spec(spec: AgentSpec) -> None:
         )
     if spec.inbox_only and spec.subscriptions:
         raise ValueError("an inbox-only agent reads only direct messages: unsubscribe it first")
+    if spec.inbox_only and (spec.repo or spec.watches):
+        raise ValueError(
+            "an inbox-only agent takes no part in GitHub routing: clear its repo and watches first"
+        )

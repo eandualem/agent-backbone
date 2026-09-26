@@ -21,6 +21,7 @@ from agent_backbone.services.agents.operations import (
 from agent_backbone.services.agents.transitions import TransitionRequest, validate_transition
 from agent_backbone.services.jobs import escalation as esc
 from agent_backbone.services.jobs.retry import drain_message_queue
+from agent_backbone.services.jobs.transitions import run_transitions
 from agent_backbone.services.routing import safe_deliver
 
 _OPS = "agent_backbone.services.agents.operations"
@@ -30,7 +31,7 @@ _DELIVERY = "agent_backbone.services.routing._delivery"
 
 def _inbox_only(config, name: str = "ike"):
     agents = {spec.name: spec for spec in config.agents}
-    agents[name] = replace(agents[name], inbox_only=True)
+    agents[name] = replace(agents[name], inbox_only=True, repo="", watches=())
     return replace(config, agents=AgentsConfig(specs=agents))
 
 
@@ -57,7 +58,6 @@ async def test_start_inbox_only_registers_without_launching(db, tmp_path):
     store = await _store(db, tmp_path)
     req = StartRequest(name="client", directory=str(tmp_path), inbox_only=True)
     with (
-        patch(f"{_STORE}.detect_repo", AsyncMock(return_value="")),
         patch(f"{_STORE}.session_exists", AsyncMock(return_value=False)),
         patch(f"{_OPS}.launch.start_agent", AsyncMock()) as launch,
     ):
@@ -113,6 +113,28 @@ async def test_a_session_with_its_name_is_not_stopped(config):
         with pytest.raises(ValueError, match="no session to stop"):
             await stop_agent_session(config, "ike")
     stop.assert_not_awaited()
+
+
+async def test_it_takes_no_part_in_github_routing(db, tmp_path):
+    store = await _store(db, tmp_path)
+    req = StartRequest(name="client", directory=str(tmp_path), inbox_only=True)
+    with (
+        patch(f"{_STORE}.detect_repo", AsyncMock(return_value="example/client")),
+        patch(f"{_STORE}.session_exists", AsyncMock(return_value=False)),
+    ):
+        spec = await resolve_agent(store, req)
+    assert spec.repo == ""
+    with pytest.raises(ValueError, match="GitHub routing"):
+        await store.watch("client", "example/shared")
+
+
+async def test_a_pending_restart_fails_instead_of_stopping(config, db):
+    config = _inbox_only(config)
+    row = await db.transitions.create(agent_name="ike", delay_seconds=0)
+    with patch("agent_backbone.services.jobs.transitions.launch.stop_agent", AsyncMock()) as stop:
+        assert await run_transitions(lambda: config, AsyncMock(), db) == {"ike": "failed"}
+    stop.assert_not_awaited()
+    assert (await db.transitions.get(row["id"]))["status"] == "failed"
 
 
 def test_a_restart_is_refused(config):

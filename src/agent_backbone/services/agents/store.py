@@ -188,6 +188,7 @@ class AgentStore:
                 if existing is None or existing.path == path or not existing.path.is_dir():
                     break
                 counter += 1
+        inbox_only = inbox_only or bool(existing and existing.inbox_only)
         return AgentSpec(
             name=agent_name,
             dir=str(path),
@@ -199,7 +200,10 @@ class AgentStore:
             # Keep the recorded repo only for a record that lived elsewhere (a
             # moved project); rediscovering the same checkout trusts what the
             # checkout says now, so a removed origin clears ownership.
-            repo=await detect_repo(path)
+            # An inbox-only client takes no part in GitHub routing.
+            repo=""
+            if inbox_only
+            else await detect_repo(path)
             or (existing.repo if existing and existing.path != path else ""),
             watches=existing.watches if existing else (),
             subscriptions=existing.subscriptions if existing else (),
@@ -212,7 +216,7 @@ class AgentStore:
             unattended=bool(
                 existing and existing.unattended and runtime in (None, existing.runtime)
             ),
-            inbox_only=inbox_only or bool(existing and existing.inbox_only),
+            inbox_only=inbox_only,
         )
 
     async def register_directory(
@@ -435,8 +439,11 @@ class AgentStore:
     async def watch(self, name: str, repo: str) -> AgentSpec:
         validate_repo(repo)
         await self.refresh()
-        if name not in self._agents:
+        spec = self._agents.get(name)
+        if spec is None:
             raise KeyError(name)
+        if spec.inbox_only:
+            raise ValueError(f"'{name}' is inbox-only: it takes no part in GitHub routing")
         await self._db.agents.add_watch(name, repo)
         await self.refresh()
         return self._agents.get(name)  # type: ignore[return-value]
