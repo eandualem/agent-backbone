@@ -18,6 +18,8 @@ from agent_backbone.services.runtimes.base import (
     Runtime,
     RuntimeDiagnostic,
     TranscriptEntry,
+    agent_home,
+    has_text,
     transcript_clock,
 )
 from agent_backbone.usage import UsageEvent, timestamp
@@ -348,6 +350,16 @@ class Codex(Runtime):
         if model:
             args.extend(["--model", model])
         return args
+
+    def user_instructions(self, env, project=None):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        # The override wins over AGENTS.md; only the first file with content is read.
+        for path in (home / "AGENTS.override.md", home / "AGENTS.md"):
+            if has_text(path):
+                return [path]
+        return []
 
     usage_supported = True
     transcript_supported = True

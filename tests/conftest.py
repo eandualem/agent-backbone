@@ -111,6 +111,16 @@ def isolated_skills_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_user_instructions(tmp_path_factory, monkeypatch):
+    """The suite never reads the developer's own user-level instruction files
+    (``~/.claude/CLAUDE.md``, ``~/.codex/AGENTS.md`` …, #274): an empty home,
+    outside ``tmp_path`` so tests that inspect it see only their own files."""
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    for key in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "XDG_CONFIG_HOME"):
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def no_real_tmux():
     """The suite never touches the developer's tmux server.
 
