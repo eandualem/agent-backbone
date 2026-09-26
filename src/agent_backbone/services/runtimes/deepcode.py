@@ -46,6 +46,9 @@ class DeepCode(Runtime):
     )
     busy_markers = ("status: processing", "press esc to interrupt")
     prompt_markers = ("permission required", "do you want to proceed?")
+    # "1" picks Yes wherever the cursor is (live, 0.3.1); Enter would pick the
+    # highlighted option, which a person may have moved to No.
+    approve_keys = ("1",)
 
     def _is_status_chrome_line(self, line: str) -> bool:
         # The footer wraps at narrow widths and leaves "exit" alone on a line.
