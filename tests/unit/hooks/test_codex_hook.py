@@ -353,6 +353,18 @@ class TestAutomaticReviewerRefusals:
         record, _ = hook.derive(_payload("PreToolUse"), {"state": "busy"})
         assert "refusal_watch" not in record and self._watch(tmp_path)["watching"]
 
+    def test_a_hook_does_not_wait_long_for_anothers_look(self, tmp_path, monkeypatch):
+        import fcntl
+
+        self._turn(tmp_path, REVIEWING, events=("PermissionRequest",))
+        before = self._watch(tmp_path)
+        monkeypatch.setattr(hook, "LOCK_WAIT_SECONDS", 0.1)
+        with (tmp_path / hook.WATCH_DIR / "cx.lock").open("a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)  # another hook is looking
+            _, look = self._turn(tmp_path, DENIED, events=("PreToolUse",))
+        assert look.call_count == 0 and self._watch(tmp_path) == before
+        assert len(self._turn(tmp_path, DENIED, events=("Stop",))[0]) == 1  # the next look
+
     def test_outside_tmux_nothing_is_watched(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TMUX_PANE")
         monkeypatch.setenv("TMUX", "/tmp/tmux-1/default")

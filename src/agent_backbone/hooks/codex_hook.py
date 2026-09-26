@@ -31,6 +31,9 @@ WATCH_DIR = "refusal-watch"
 """``<state_dir>/refusal-watch/<agent>.json``: the refusals on screen at the last look,
 and whether a turn that requested an approval is going on. Its own file, updated
 under a lock, since Codex runs the hooks of parallel tool calls at once."""
+LOCK_WAIT_SECONDS = 3.0
+"""How long a hook waits for another's look (Codex gives a hook 10 s). One that
+waits longer skips its look: the next look compares with the same last reading."""
 
 # Codex's automatic reviewer (``--approve-for-me``) refuses an action without a
 # dialog. Codex (0.157) has no hook event for it and leaves it out of the
@@ -198,7 +201,15 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
         return
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / f"{agent}.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        deadline = bb.time.monotonic() + LOCK_WAIT_SECONDS
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if bb.time.monotonic() > deadline:
+                    return
+                bb.time.sleep(0.05)
         try:
             watch = json.loads(target.read_text())
         except (OSError, ValueError):
