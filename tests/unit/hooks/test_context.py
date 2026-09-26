@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +25,26 @@ def test_offer_take_claim_and_clear(tmp_path):
     assert list((tmp_path / "context" / "desk").iterdir()) == []
     assert bb.take_context(tmp_path, "desk") == []
     assert bb.take_context(tmp_path, "nobody") == []
+
+
+def test_a_repeated_offer_never_revives_one_the_hook_takes_meanwhile(tmp_path):
+    """A replay offers a waiting batch again while the hook may be taking it."""
+    assert bb.offer_context(tmp_path, "desk", "7", "batch")
+    original = Path.exists
+    hook = {"armed": True}
+
+    def hook_takes_after_the_first_check(path):
+        found = original(path)
+        if hook["armed"]:
+            hook["armed"] = False
+            hook["took"] = bb.take_context(tmp_path, "desk")
+        return found
+
+    with patch.object(Path, "exists", hook_takes_after_the_first_check):
+        bb.offer_context(tmp_path, "desk", "7", "batch")
+    assert hook["took"] == ["batch"]
+    assert bb.take_context(tmp_path, "desk") == []
+    assert bb.claim_context(tmp_path, "desk", "7") == "taken"
 
 
 def _run(hook, tmp_path, payload: dict) -> str:

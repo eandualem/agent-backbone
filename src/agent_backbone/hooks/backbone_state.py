@@ -605,12 +605,18 @@ def _context_dir(state_dir: Path, agent: str) -> Path:
 
 
 def offer_context(state_dir: Path, agent: str, key: str, text: str) -> bool:
-    """Backbone side: offer ``text`` under ``key``. False when the hook already took it."""
+    """Backbone side: offer ``text`` under ``key``. False when the hook already took it.
+
+    An offer already there is left as it is (a batch's text never changes).
+    Checked before the receipt, against the hook's rename of ``.md`` to
+    ``.taken``: an offer the hook takes meanwhile is never written again."""
     directory = _context_dir(state_dir, agent)
     directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{key}.md"
+    if target.exists():
+        return True
     if (directory / f"{key}.taken").exists():
         return False
-    target = directory / f"{key}.md"
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, target)
