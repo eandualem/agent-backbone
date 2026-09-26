@@ -221,7 +221,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(_B2),
         gemini=_gap(286, "reads GEMINI.md unless context.fileName is set"),
         opencode=_ok(_B2),
-        deepcode=_unverified(286),
+        deepcode=_ok("live: #286 local stub endpoint (./AGENTS.md sent as a system message)"),
         aider=_gap(286, "reads only files passed to it"),
         shell=_na("a plain shell loads no instructions"),
     ),

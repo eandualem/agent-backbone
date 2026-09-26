@@ -29,6 +29,8 @@ class DeepCode(Runtime):
     aliases = ("deep-code", "deep code", "deepseek")
     binary = "deepcode"
     brief_mode = "initial_prompt"
+    # ./.deepcode/AGENTS.md, else ./AGENTS.md, as a system message (0.3.1).
+    declared_capabilities = frozenset({"project-instructions"})
     models = ("deepseek-v4-flash", "deepseek-v4-pro")
 
     prompt_prefixes = (">",)
