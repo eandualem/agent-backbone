@@ -345,3 +345,35 @@ async def test_its_escalations_count_towards_its_inbox_hint(db):
     await db.queue.enqueue(session_name="ike", message="alert", delivery_kind="escalation")
     await db.queue.enqueue(session_name="bell", message="alert", delivery_kind="escalation")
     assert set(await db.queue.inbox_rows(inbox_sessions=("ike",))) == {"ike"}
+
+
+async def test_a_tick_that_escalates_to_it_hints_its_inbox(config, db):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from agent_backbone.api.app import hint_inboxes
+    from agent_backbone.api.session_updates import (
+        INBOX_PENDING_EVENT,
+        SESSIONS_NAMESPACE,
+        SessionFeed,
+    )
+    from agent_backbone.services.jobs.monitor import monitor_agents
+
+    config = replace(_inbox_only(config), escalation=EscalationConfig(target="ike"))
+    # curie: an agent no other test alerts on, so the escalation is not deduplicated
+    await db.queue.enqueue(session_name="curie", message="hi", delivery_kind="direct_message")
+    sio = MagicMock()
+    sio.emit = AsyncMock()
+    state = SimpleNamespace(config=config, db=db, feed=SessionFeed(lambda: config, sio))
+    mon = "agent_backbone.services.jobs.monitor"
+    with (
+        patch(f"{mon}.list_sessions", AsyncMock(return_value=[])),
+        patch(f"{mon}.collect_usage", AsyncMock(return_value={})),
+        patch(f"{mon}.check_permission_denials", AsyncMock()),
+        patch(f"{mon}.drain_message_queue", AsyncMock(return_value={})),
+        patch(f"{esc.__name__}.notify_humans", AsyncMock(return_value=True)),
+    ):
+        await monitor_agents(config, db, None, on_change=lambda: hint_inboxes(state))
+    sio.emit.assert_any_await(
+        INBOX_PENDING_EVENT, {"session": "ike", "pending": 1}, namespace=SESSIONS_NAMESPACE
+    )
