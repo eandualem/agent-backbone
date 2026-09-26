@@ -31,6 +31,11 @@ Notices = Callable[[list[dict]], list[tuple[str, str, str, Revise]]]
 SUBSCRIPTION_BATCH_LIMIT = 25
 """Lines one subscription batch lists; further lines open the next batch."""
 
+SUBSCRIPTION_REPLAY_HOURS = 24
+"""How long a delivered batch is still looked at for a replayed event, from
+its delivery. A poll replays only what it fetched since its last saved cursor
+(two minutes of overlap, a poll a minute); waiting batches are always looked at."""
+
 
 @dataclass(frozen=True)
 class EnqueueResult:
@@ -250,12 +255,45 @@ class QueueRepo(Repo):
         row: its text may already be offered to a working agent as hook
         context, and an offer never changes under the hook's feet (the hook
         hands over every pending offer at once). Returns ``appended`` (only an
-        existing row grew) or ``inserted`` (the last row opened).
+        existing row grew), ``inserted`` (the last row opened) or
+        ``already_queued`` (every line is already in a batch).
         """
         async with self._tx() as conn:
             lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
-            rest = list(lines)
-            offers: list[tuple[int, str]] = []
+            # A poll replayed before its events were marked processed must not
+            # list an event twice: drop lines a batch of this session already
+            # holds, recently delivered ones included.
+            held = await conn.execute(
+                text(
+                    "SELECT id, operation_id, message, priority, status FROM message_queue "
+                    "WHERE session_name = :session AND delivery_kind = :kind "
+                    "AND (status != 'delivered' OR delivered_at >= :recent) ORDER BY id DESC"
+                ),
+                {
+                    "session": session_name,
+                    "kind": SUBSCRIPTION_KIND,
+                    "recent": cutoff_iso(hours=SUBSCRIPTION_REPLAY_HOURS),
+                },
+            )
+            known: dict[str, dict] = {}  # line -> the newest batch holding it
+            for held_row in held.mappings():
+                for line in held_row["message"].split("\n")[1:]:
+                    known.setdefault(line, dict(held_row))
+            fresh = [line for line in lines if line not in known]
+            holders = {known[line]["id"]: known[line] for line in lines if line in known}
+            # The process may have stopped before a waiting high batch was
+            # offered: offer it again under its own id (a taken one never is).
+            offers: list[tuple[int, str]] = [
+                (row["id"], row["message"])
+                for row in holders.values()
+                if row["priority"] and row["status"] == "pending"
+            ]
+            if lines and not fresh:
+                holder = holders[max(holders)]
+                return EnqueueResult(
+                    "already_queued", holder["id"], holder["operation_id"], tuple(offers)
+                )
+            rest = list(fresh)
             grown: EnqueueResult | None = None
             if not priority:
                 existing = await conn.execute(
@@ -278,9 +316,11 @@ class QueueRepo(Repo):
                             {"id": row["id"], "message": message},
                         )
                         if result.rowcount:
-                            grown = EnqueueResult("appended", row["id"], row["operation_id"])
+                            grown = EnqueueResult(
+                                "appended", row["id"], row["operation_id"], tuple(offers)
+                            )
                         else:
-                            rest = list(lines)  # leased meanwhile: open a new batch
+                            rest = list(fresh)  # leased meanwhile: open a new batch
             if grown is not None and not rest:
                 return grown
             while True:
@@ -450,6 +490,8 @@ class QueueRepo(Repo):
         Nor does a restart's continuation message (source ``agent-restart``):
         it belongs to the transition and waits for its replacement session.
         Nor does an expiry notice (source ``queue-expiry``): it reports a loss.
+        Nor does a startup brief: it waits for its session, and the next launch
+        retires it (``retire_pending_briefs``).
         Nor does anything queued for a session with an ``uncertain`` row: that
         row holds the whole queue until it is acknowledged, so the wait
         measures the hold, not whether the message is still wanted. After the
@@ -466,7 +508,7 @@ class QueueRepo(Repo):
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE status = 'pending' AND enqueued_at < :cutoff
                          AND delivery_kind != 'subscription'
-                         AND source NOT IN ('agent-restart', 'queue-expiry')
+                         AND source NOT IN ('agent-restart', 'queue-expiry', :brief)
                          AND session_name NOT IN (
                              SELECT session_name FROM message_queue WHERE status = 'uncertain')
                          AND session_name NOT IN (
@@ -480,6 +522,7 @@ class QueueRepo(Repo):
                 {
                     "now": now,
                     "cutoff": cutoff_iso(minutes=max_age_minutes),
+                    "brief": BRIEF_SOURCE,
                     "protected": list(protected_sessions),
                 },
             )

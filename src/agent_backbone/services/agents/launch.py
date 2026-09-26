@@ -380,7 +380,8 @@ async def _start_agent(
     launched_at = time.time()
     # Hook-context offers belong to the session they were written for: the
     # new session must not have the old one's guidance injected on its
-    # first tool call. Queue rows behind a batch survive and are pasted.
+    # first tool call. Queue rows behind a batch survive and are pasted;
+    # what the old session already took stays to be settled, never re-pasted.
     clear_agent_context(config.state_dir, spec.name)
     # Likewise a brief queued for an earlier launch that never received it:
     # this launch brings its own, and the old one must not reach it (#290).

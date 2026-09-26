@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +25,26 @@ def test_offer_take_claim_and_clear(tmp_path):
     assert list((tmp_path / "context" / "desk").iterdir()) == []
     assert bb.take_context(tmp_path, "desk") == []
     assert bb.take_context(tmp_path, "nobody") == []
+
+
+def test_a_repeated_offer_never_revives_one_the_hook_takes_meanwhile(tmp_path):
+    """A replay offers a waiting batch again while the hook may be taking it."""
+    assert bb.offer_context(tmp_path, "desk", "7", "batch")
+    original = Path.exists
+    hook = {"armed": True}
+
+    def hook_takes_after_the_first_check(path):
+        found = original(path)
+        if hook["armed"]:
+            hook["armed"] = False
+            hook["took"] = bb.take_context(tmp_path, "desk")
+        return found
+
+    with patch.object(Path, "exists", hook_takes_after_the_first_check):
+        bb.offer_context(tmp_path, "desk", "7", "batch")
+    assert hook["took"] == ["batch"]
+    assert bb.take_context(tmp_path, "desk") == []
+    assert bb.claim_context(tmp_path, "desk", "7") == "taken"
 
 
 def _run(hook, tmp_path, payload: dict) -> str:
@@ -67,10 +88,26 @@ def test_clear_agent_context_drops_every_offer_left_for_a_previous_session(tmp_p
     bb.offer_context(tmp_path, "desk", "7", "batch")
     (tmp_path / "context" / "desk" / "launch-1").mkdir()
     (tmp_path / "context" / "desk" / "launch-1" / "steer-1.md").write_text("old guidance")
+    bb.offer_steer(tmp_path, "desk", "launch-1", "brief-refresh", "old brief")
     bb.clear_agent_context(tmp_path, "desk")
-    assert not (tmp_path / "context" / "desk").exists()
-    assert bb.take_context(tmp_path, "desk") == []
+    assert list((tmp_path / "context" / "desk").iterdir()) == []
+    assert bb.take_context(tmp_path, "desk", launch_id="launch-1") == []
+    assert bb.claim_context(tmp_path, "desk", "7") == "missing"
     bb.clear_agent_context(tmp_path, "nobody")  # nothing to clear is not an error
+
+
+def test_clear_agent_context_keeps_what_the_previous_session_took(tmp_path):
+    """A taken batch or steer is settled by the backbone, never offered or pasted again."""
+    bb.offer_context(tmp_path, "desk", "7", "batch")
+    bb.offer_steer(tmp_path, "desk", "launch-1", bb.steer_key(5), "guidance")
+    assert bb.take_context(tmp_path, "desk", launch_id="launch-1") == ["batch", "guidance"]
+    bb.offer_steer(tmp_path, "desk", "launch-1", bb.steer_key(6), "late guidance")
+    bb.retire_steers(tmp_path, "desk", launch_id="launch-1")  # the turn ended first
+    bb.clear_agent_context(tmp_path, "desk")
+    assert bb.claim_context(tmp_path, "desk", "7") == "taken"
+    settled = sorted((key, state) for _, _, key, state, _ in bb.steer_offers(tmp_path, "desk"))
+    assert settled == [(5, "taken"), (6, "missed")]
+    assert bb.take_context(tmp_path, "desk", launch_id="launch-2") == []
 
 
 def test_steer_offers_are_scoped_to_the_session_that_they_were_written_for(tmp_path, monkeypatch):

@@ -296,7 +296,7 @@ sequenceDiagram
   checks. Messages wait with `human_reading` until the human exits copy mode;
   priority does not bypass it.
 - **Queue hygiene.** Ordinary pending messages expire after `timing.queue_expiry_minutes`
-  (30). Active swarm coordination and inbox holds are retained, and a session
+  (30). Active swarm coordination, inbox holds and startup briefs are retained, and a session
   held by an unconfirmed (`uncertain`) delivery keeps its queue until the hold is
   acknowledged. Each expiry sweep sends one notice to every recipient and every
   registered sender it dropped messages between; the notices never expire. Leased by a crashed drain: released after 5 min. A blocked drain
