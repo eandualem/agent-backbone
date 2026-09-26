@@ -294,7 +294,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok("tests/unit/services/runtimes/test_live_panes.py"),
         gemini=_unverified(302, note="markers not verified live"),
         opencode=_ok("tests/unit/services/runtimes/test_live_panes.py"),
-        deepcode=_gap(287, "dialog not captured"),
+        deepcode=_ok("tests/unit/services/runtimes/test_live_panes.py"),
         aider=_unverified(302, note="markers not verified live"),
         shell=_na("a plain shell shows no permission dialog"),
     ),

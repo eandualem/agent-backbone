@@ -260,9 +260,50 @@ class TestPermissionDialogs:
         assert not adapter.detect_waiting_for_human(OPENCODE_IDLE_AFTER_RESPONSE)
         assert adapter.approve_keys == ("Enter",)
 
+    def test_deepcode_permission_dialog_is_waiting(self):
+        adapter = RUNTIMES["deepcode"]
+        assert adapter.detect_waiting_for_human(DEEPCODE_PERMISSION_DIALOG)
+        assert not adapter.detect_idle(DEEPCODE_PERMISSION_DIALOG)
+        assert not adapter.detect_busy(DEEPCODE_PERMISSION_DIALOG)
+        assert not adapter.detect_waiting_for_human(DEEPCODE_IDLE_AFTER_DIALOG)
+        assert adapter.detect_idle(DEEPCODE_IDLE_AFTER_DIALOG)
+
     def test_shell_has_no_answer(self):
         assert RUNTIMES["shell"].approve_keys == ()
 
+
+# deepcode 0.3.1 (permissions.defaultMode = "askAll"); the dialog replaces
+# the input box.
+DEEPCODE_PERMISSION_DIALOG = (
+    " > Run the probe.\n"
+    "status: ask_permission · 14/1M [░░░░░░░░░░] 0% · deepseek-v4-flash max\n"
+    "╭────────────────────────────────────────────────────────────╮\n"
+    "│ Permission required 1/1                                    │\n"
+    "│                                                            │\n"
+    "│ bash                                                       │\n"
+    "│ echo probe                                                 │\n"
+    "│ Print a probe line                                         │\n"
+    "│                                                            │\n"
+    "│ Do you want to proceed?                                    │\n"
+    "│                                                            │\n"
+    "│ > 1. Yes                                                   │\n"
+    "│   2. No                                                    │\n"
+    "│                                                            │\n"
+    "│ ↑/↓ move · Enter select · Esc interrupt                    │\n"
+    "╰────────────────────────────────────────────────────────────╯\n"
+)
+
+# The same session once the dialog was answered: back at its input.
+DEEPCODE_IDLE_AFTER_DIALOG = (
+    " > Run the probe.\n"
+    " ✧ Bash echo probe  # Print a probe line\n"
+    " ✦ done\n"
+    "status: completed · 14/1M [░░░░░░░░░░] 0% · deepseek-v4-flash max\n"
+    "────────────────────────────────────────────────────────────────────────────────\n"
+    ">   Type your message...\n"
+    "────────────────────────────────────────────────────────────────────────────────\n"
+    "enter send · shift+enter newline · @ files · ctrl+v image · / commands · ctrl+d exit\n"
+)
 
 # The same dialogs a moment after they were answered: the text is still in
 # the last 15 lines, but the runtime is back at its input. A state reading
@@ -291,6 +332,8 @@ class TestActiveDialogGate:
         assert RUNTIMES["claude"].detect_active_dialog(CLAUDE_PERMISSION_DIALOG)
         assert RUNTIMES["codex"].detect_active_dialog(CODEX_PERMISSION_DIALOG)
         assert RUNTIMES["opencode"].detect_active_dialog(OPENCODE_PERMISSION_DIALOG)
+        assert RUNTIMES["deepcode"].detect_active_dialog(DEEPCODE_PERMISSION_DIALOG)
+        assert not RUNTIMES["deepcode"].detect_active_dialog(DEEPCODE_IDLE_AFTER_DIALOG)
 
     def test_answered_dialogs_are_not_active(self):
         # Stale "Press enter to confirm" above an idle prompt: Enter here would
