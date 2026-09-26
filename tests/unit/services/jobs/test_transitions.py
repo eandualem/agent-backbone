@@ -225,6 +225,36 @@ async def test_a_launch_interrupted_by_a_backbone_restart_is_recovered_from_diag
     assert done["status"] == "completed" and done["result"]["ready"] == "ready"
     assert "earlier backbone process" in done["result"]["evidence"][0]
     deliver.assert_awaited_once()
+    assert deliver.await_args.kwargs["operation_id"] == "op-9:message"
+
+
+async def test_a_continuation_delivered_before_a_backbone_restart_is_not_sent_again(
+    db, config, store, seams
+):
+    """The earlier process pasted the continuation and died before closing the row."""
+    _, start, deliver = seams
+    start.return_value = StartResult(ok=True, already_running=True)
+    row = await db.transitions.create(agent_name="ike", message="hi")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "op-9")
+    for code in ("requested", "ready"):
+        await db.diagnostics.record(
+            category="startup", operation_id="op-9", code=code, severity="info", agent_name="ike"
+        )
+    await db.diagnostics.record(
+        category="delivery",
+        operation_id="op-9:message",
+        code="submitted",
+        severity="info",
+        agent_name="ike",
+    )
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value="op-9"):
+        assert await _run(config, store, db) == {"ike": "started"}
+    deliver.assert_not_awaited()
+    done = await db.transitions.get(row["id"])
+    assert done["status"] == "completed"
+    assert done["result"]["message"] == "already_delivered"
+    assert "handed over by an earlier backbone process" in done["result"]["evidence"][-1]
 
 
 async def test_the_retrys_own_already_running_record_does_not_hide_the_launch(

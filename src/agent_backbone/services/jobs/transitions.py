@@ -18,6 +18,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import launch, lifecycle_lock
 from agent_backbone.services.agents.operations import StartRequest, resolve_agent, start_resolved
 from agent_backbone.services.agents.transitions import SOURCE, due_after
@@ -139,7 +140,16 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         outcome["reason"] = "the replacement did not start"
         await db.transitions.finish(row["id"], "failed", outcome)
         return "failed"
-    if row["message"]:
+    # The continuation carries an identity of its own: a process that exits
+    # after handing it over but before finishing the row must not send it
+    # again from the next one (a paste cut off midway can still repeat).
+    message_operation = f"{operation_id}:message"
+    if row["message"] and resumed_launch and await _continuation_sent(db, message_operation):
+        outcome["message"] = DeliveryOutcome.ALREADY_DELIVERED.value
+        outcome["evidence"].append(
+            "the continuation message was handed over by an earlier backbone process"
+        )
+    elif row["message"]:
         sender = row["requested_by"] or "backbone"
         report = await safe_deliver(
             name,
@@ -149,6 +159,7 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
             delivery_kind="direct_message",
             source=SOURCE,
             sender=sender,
+            operation_id=message_operation,
         )
         outcome["message"] = report.outcome.value
         if report.queue is not None:
@@ -184,6 +195,16 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
     # not observation order: the latest sighting decides.
     newest = max(outcomes, key=lambda record: record["last_seen_at"])["code"]
     return None if newest in {"failed", "exited"} else newest
+
+
+async def _continuation_sent(db: BackboneDB, operation_id: str) -> bool:
+    """Whether the continuation under ``operation_id`` was pasted or stored in the queue."""
+    records = await db.diagnostics.query(operation_id=operation_id, limit=20)
+    return any(
+        (record["category"], record["code"])
+        in {("delivery", "submitted"), ("queue", "queue_stored")}
+        for record in records
+    )
 
 
 async def _session_is_launch(name: str, operation_id: str) -> bool:
