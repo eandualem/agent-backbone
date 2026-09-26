@@ -136,6 +136,24 @@ class TestDoctor:
         flat = " ".join(out.split())  # the hint wraps at the terminal width
         assert "claude, codex" in flat and "backbone docs getting-started" in flat
 
+    def test_names_a_user_level_instruction_file_without_failing(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """#274: such a file reaches every session of its CLI."""
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+        (tmp_path / "codex").mkdir()
+        (tmp_path / "codex" / "AGENTS.md").write_text("notes left by another session")
+        assert _run(["init"]) == 0
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+        ):
+            code = _run(["doctor"])
+        squeezed = "".join(capsys.readouterr().out.split())  # a long path wraps anywhere
+        assert code == 0
+        assert f"!Codexuser-levelinstructions:{tmp_path / 'codex' / 'AGENTS.md'}" in squeezed
+
     def test_reports_a_stored_setting_that_is_now_ignored(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
         assert _run(["init"]) == 0

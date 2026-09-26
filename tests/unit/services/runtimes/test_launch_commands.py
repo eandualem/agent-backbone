@@ -14,7 +14,6 @@ from agent_backbone.services.runtimes.claude import pre_trust_directory
 from agent_backbone.services.runtimes.codex import pre_trust_codex_directory
 
 _BASE = "agent_backbone.services.runtimes.base"
-_HOME = Path.home()
 # Every Codex launch opens the sandbox to the network so members reach the API.
 _NET = ["-c", "sandbox_workspace_write.network_access=true"]
 # Unattended Codex: never ask, and pin the sandbox the promise rests on.
@@ -434,7 +433,7 @@ class TestUnattended:
             command = RUNTIMES["codex"].build_command(
                 resume="sess-1", unattended=True, writable_dirs=("~/.cache/uv",)
             )
-        cache = str(_HOME / ".cache/uv")
+        cache = str(Path.home() / ".cache/uv")
         assert command[:8] == ["/bin/codex", *_NEVER_ASK, "--add-dir", cache, "resume"]
 
     def test_writable_dirs_open_only_a_sandbox(self):

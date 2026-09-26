@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import re
 from pathlib import Path
 
 from agent_backbone.hooks.install import save_settings
-from agent_backbone.services.runtimes.base import Runtime, read_brief
+from agent_backbone.services.runtimes.base import Runtime, agent_home, has_text, read_brief
 
 log = logging.getLogger(__name__)
+
+_JSON_COMMENT = re.compile(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', re.S)
+"""A JSON string (kept) or a comment (dropped), as Gemini CLI strips them."""
+
+
+def _context_file_names(settings: Path) -> list[str] | None:
+    """``context.fileName`` in one Gemini settings file, None where it sets none."""
+    try:
+        text = _JSON_COMMENT.sub(lambda m: m[1] or "", settings.read_text())
+        configured = json.loads(text)["context"]["fileName"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if isinstance(configured, str):
+        return [configured]
+    if isinstance(configured, list):
+        return [name for name in configured if isinstance(name, str)]
+    return None
 
 
 class Gemini(Runtime):
@@ -91,6 +111,24 @@ class Gemini(Runtime):
             log.warning("Could not write the launch hook settings: %s", exc)
             return {}
         return {"GEMINI_CLI_SYSTEM_SETTINGS_PATH": str(path)}
+
+    def user_instructions(self, env, project=None):
+        home = Path(
+            env.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_CLI_HOME") or agent_home(env)
+        ).expanduser()
+        gemini = home / ".gemini"
+        # Every context file name is read from ~/.gemini: the configured
+        # `context.fileName` (the project's settings over the user's), then
+        # GEMINI.md, which a configured name adds to rather than replaces (0.46).
+        configured = (
+            None
+            if project is None
+            else _context_file_names(Path(project) / ".gemini/settings.json")
+        )
+        if configured is None:  # an empty list in the project still overrides
+            configured = _context_file_names(gemini / "settings.json")
+        names = dict.fromkeys([*(name.strip() for name in configured or ()), "GEMINI.md"])
+        return [gemini / name for name in names if name and has_text(gemini / name)]
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args: list[str] = []

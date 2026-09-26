@@ -11,6 +11,7 @@ module in this package that subclasses ``Runtime`` and registers itself in
 from __future__ import annotations
 
 import asyncio
+import codecs
 import hashlib
 import json
 import logging
@@ -120,6 +121,28 @@ def read_brief(brief_file: Path | str) -> str | None:
         log.warning("Could not read the brief %s (starting without it)", brief_file)
         return None
     return text or None
+
+
+def has_text(path: Path) -> bool:
+    """Whether ``path`` is a file with more than whitespace (Unicode, and a byte
+    order mark, as the CLIs trim it) in it, read in chunks up to the first that
+    has some."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    try:
+        if not path.is_file():
+            return False
+        with path.open("rb") as handle:
+            while chunk := handle.read(64 * 1024):
+                if decoder.decode(chunk).strip().strip("\ufeff"):
+                    return True
+    except OSError:
+        return False
+    return bool(decoder.decode(b"", final=True).strip())
+
+
+def agent_home(env: dict[str, str]) -> Path:
+    """The home directory the agent's CLI sees: its own ``HOME``, else ours."""
+    return Path(env["HOME"]).expanduser() if env.get("HOME") else Path.home()
 
 
 def split_model_effort(spec: str | None) -> tuple[str | None, str | None]:
@@ -287,6 +310,13 @@ class Runtime:
     def available(self) -> bool:
         """Whether the binary is installed (a shell always is)."""
         return self.binary is None or resolve_command(self.binary) is not None
+
+    def user_instructions(self, env: dict[str, str], project: Path | None = None) -> list[Path]:
+        """The user-level instruction files this CLI adds to its sessions, as it
+        would pick them now, with content only (#274). ``env`` holds the agent's
+        own overrides of the process environment; ``project``, when given, is the
+        directory the session starts in."""
+        return []
 
     def pre_trust(self, directory: Path | str) -> None:
         """Answer the runtime's folder-trust dialog ahead of launch, if it has one."""

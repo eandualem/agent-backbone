@@ -473,6 +473,18 @@ class TestStartAgentBrief:
         assert result.ok is False
         started.assert_not_awaited()
 
+    async def test_a_user_level_instruction_file_is_named_at_start(self, tmp_path):
+        """#274, with the agent's own environment applied."""
+        config = bootstrap_config(tmp_path / "data")
+        agents = tmp_path / "codex-home" / "AGENTS.md"
+        agents.parent.mkdir()
+        agents.write_text("notes left by another session")
+        spec = replace(self._spec(tmp_path, "codex"), env={"CODEX_HOME": str(agents.parent)})
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start, _cmd, _trust, _wait:
+            result = await start_agent(spec, config, db=AsyncMock())
+        assert f"user-level instructions: {agents}" in result.evidence
+
     async def test_unknown_runtime_is_refused(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False):

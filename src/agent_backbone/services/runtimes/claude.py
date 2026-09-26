@@ -12,7 +12,13 @@ from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import count
-from agent_backbone.services.runtimes.base import Runtime, TranscriptEntry, transcript_clock
+from agent_backbone.services.runtimes.base import (
+    Runtime,
+    TranscriptEntry,
+    agent_home,
+    has_text,
+    transcript_clock,
+)
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
@@ -260,6 +266,17 @@ class ClaudeCode(Runtime):
             args.extend(["--append-system-prompt-file", str(brief_file)])
         args.extend(self.hook_launch_args(data_dir, state_dir))
         return args
+
+    def user_instructions(self, env, project=None):
+        home = Path(
+            env.get("CLAUDE_CONFIG_DIR")
+            or os.environ.get("CLAUDE_CONFIG_DIR")
+            or agent_home(env) / ".claude"
+        ).expanduser()
+        # User memory and user-level rules (2.1.283); a rule with `paths` loads
+        # once the session reads a matching file, so it may reach it too.
+        candidates = [home / "CLAUDE.md", *sorted((home / "rules").rglob("*.md"))]
+        return [path for path in candidates if has_text(path)]
 
     usage_supported = True
 
