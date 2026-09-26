@@ -365,6 +365,26 @@ class TestAutomaticReviewerRefusals:
         assert look.call_count == 0 and self._watch(tmp_path) == before
         assert len(self._turn(tmp_path, DENIED, events=("Stop",))[0]) == 1  # the next look
 
+    def test_a_hook_reading_the_screen_blocks_no_other_hook(self, tmp_path):
+        """A request arriving during another hook's screen read is recorded at once;
+        the older reading, applied after a newer one, adds nothing."""
+        self._turn(tmp_path, REVIEWING, events=("PermissionRequest",))
+        command = "cd /home/someone/projects/checkout && git push origin main"
+
+        def slow_read():  # while this hook reads, a parallel call's hooks run
+            request = _payload("PermissionRequest", tool_name="Bash")
+            request["tool_input"] = {"command": command}
+            refused = REVIEWING + f"✗ Request denied for codex to run {command}\n"
+            with patch.object(hook, "own_screen", return_value=refused):
+                hook.watch_refusals(request, tmp_path, "cx")
+            return REVIEWING  # read before the refusal was drawn
+
+        with patch.object(hook, "own_screen", side_effect=slow_read):
+            hook.watch_refusals(_payload("PreToolUse"), tmp_path, "cx")
+        logged = (tmp_path / "actions.jsonl").read_text().splitlines()
+        assert [json.loads(line)["summary"] for line in logged] == ["cd; git push"]
+        assert self._watch(tmp_path)["watching"]
+
     def test_outside_tmux_nothing_is_watched(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TMUX_PANE")
         monkeypatch.setenv("TMUX", "/tmp/tmux-1/default")

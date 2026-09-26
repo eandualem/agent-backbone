@@ -13,6 +13,7 @@ Standard library only — it must run under any ``python3``.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -31,9 +32,10 @@ WATCH_DIR = "refusal-watch"
 """``<state_dir>/refusal-watch/<agent>.json``: the refusals on screen at the last look,
 and whether a turn that requested an approval is going on. Its own file, updated
 under a lock, since Codex runs the hooks of parallel tool calls at once."""
-LOCK_WAIT_SECONDS = 3.0
-"""How long a hook waits for another's look (Codex gives a hook 10 s). One that
-waits longer skips its look: the next look compares with the same last reading."""
+LOCK_WAIT_SECONDS = 5.0
+"""How long a hook waits for the watch file (Codex gives a hook 10 s). The lock
+covers reading and writing that file only, never the pane read, so a wait this
+long means the machine has stalled; the hook then leaves the watch as it is."""
 
 # Codex's automatic reviewer (``--approve-for-me``) refuses an action without a
 # dialog. Codex (0.157) has no hook event for it and leaves it out of the
@@ -183,15 +185,49 @@ def _new_count(seen: list[str], now: list[str]) -> int:
     return len(now)
 
 
+@contextlib.contextmanager
+def _watch_file(target: Path):
+    """The watch, read and then written back under the agent's lock; None when
+    the lock is not had in time, and nothing is written then."""
+    with target.with_suffix(".lock").open("a") as lock:
+        deadline = bb.time.monotonic() + LOCK_WAIT_SECONDS
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if bb.time.monotonic() > deadline:
+                    yield None
+                    return
+                bb.time.sleep(0.02)
+        try:
+            saved = json.loads(target.read_text())
+        except (OSError, ValueError):
+            saved = {}
+        saved = saved if isinstance(saved, dict) else {}
+        watch = {
+            "seen": saved.get("seen") if isinstance(saved.get("seen"), list) else None,
+            "watching": saved.get("watching") is True,
+            "requested": saved.get("requested") if isinstance(saved.get("requested"), dict) else {},
+            "read_at": saved.get("read_at") if isinstance(saved.get("read_at"), float) else 0.0,
+        }
+        yield watch
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(watch))
+        os.replace(tmp, target)
+
+
 def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
     """Log the reviewer's refusals that appear once a turn requested an approval.
 
     The session's start records the refusals already on screen. A
     ``PermissionRequest`` starts a watch; every later hook of the turn reads
     the screen again and logs what appeared since the last reading, and a
-    look at the turn's end ends the watch. A screen that cannot be read
-    leaves everything for the next look. A refusal is only read, never
-    answered."""
+    look at the turn's end ends the watch. The event is recorded first, the
+    screen read without the lock, and the reading applied only when no later
+    one was: hooks of parallel calls never wait on another's screen read. A
+    screen that cannot be read leaves everything for the next look. A
+    refusal is only read, never answered."""
     event = payload.get("hook_event_name", "")
     if event not in _LOOK_EVENTS or not os.environ.get("TMUX_PANE", "").strip():
         return
@@ -200,57 +236,42 @@ def watch_refusals(payload: dict, state_dir: Path, agent: str) -> None:
     if event not in ("SessionStart", "PermissionRequest") and not target.exists():
         return
     directory.mkdir(parents=True, exist_ok=True)
-    with (directory / f"{agent}.lock").open("a") as lock:
-        deadline = bb.time.monotonic() + LOCK_WAIT_SECONDS
-        while True:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if bb.time.monotonic() > deadline:
-                    return
-                bb.time.sleep(0.05)
-        try:
-            watch = json.loads(target.read_text())
-        except (OSError, ValueError):
-            watch = {}
-        watch = watch if isinstance(watch, dict) else {}
-        seen = watch.get("seen") if isinstance(watch.get("seen"), list) else None
-        watching = watch.get("watching") is True
-        requested = watch.get("requested") if isinstance(watch.get("requested"), dict) else {}
-        if event == "SessionStart":
-            seen, watching = None, False  # a new session: what was seen before means nothing
+    with _watch_file(target) as watch:
+        if watch is None:
+            return
+        if event == "SessionStart":  # a new session: what was seen before means nothing
+            watch.update(seen=None, watching=False, requested={}, read_at=0.0)
         elif event == "PermissionRequest":
-            watching = True
+            watch["watching"] = True
             tool_input = payload.get("tool_input")
             command = tool_input.get("command") if isinstance(tool_input, dict) else None
             if isinstance(command, str):
                 key = _command_key(_shown(command))
                 summary = bb.action_summary(str(payload.get("tool_name") or ""), tool_input)
-                if requested.get(key, summary) != summary:
+                if watch["requested"].get(key, summary) != summary:
                     summary = ""  # two requests the screen shows alike: neither names it
-                requested[key] = summary  # every request of the turn; cleared when it ends
-        elif not watching:
+                watch["requested"][key] = summary  # every request of the turn, until it ends
+        elif not watch["watching"]:
             return
-        screen = own_screen()
-        if screen is not None:
-            found = screen_refusals(screen)  # every one tmux still holds
-            now_seen = [_identity(entry) for entry, _ in found]
-            if seen is not None:  # never guess what an unknown earlier screen held
-                now = bb.time.time()
-                fresh = found[len(found) - _new_count(seen, now_seen) :]
-                for index, (entry, risk) in enumerate(fresh):
-                    ref = f"auto-review:{now:.6f}:{index}"
-                    bb.append_action(
-                        state_dir, agent, refusal_record(entry, risk, now, ref, requested)
-                    )
-            seen = now_seen
-            watching = watching and event in _WATCH_EVENTS
-            if not watching:
-                requested = {}  # the turn is over: its requests are answered
-        tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"seen": seen, "watching": watching, "requested": requested}))
-        os.replace(tmp, target)
+    started = bb.time.time()
+    screen = own_screen()
+    if screen is None:
+        return
+    found = screen_refusals(screen)  # every one tmux still holds
+    now_seen = [_identity(entry) for entry, _ in found]
+    with _watch_file(target) as watch:
+        if watch is None or started <= watch["read_at"]:
+            return  # a later reading is already in: this one is older
+        if watch["seen"] is not None:  # never guess what an unknown earlier screen held
+            now = bb.time.time()
+            fresh = found[len(found) - _new_count(watch["seen"], now_seen) :]
+            for index, (entry, risk) in enumerate(fresh):
+                ref = f"auto-review:{now:.6f}:{index}"
+                record = refusal_record(entry, risk, now, ref, watch["requested"])
+                bb.append_action(state_dir, agent, record)
+        watch.update(seen=now_seen, read_at=started)
+        if event not in _WATCH_EVENTS:  # a look at the turn's end ends the watch
+            watch.update(watching=False, requested={})
 
 
 def tool_succeeded(payload: dict) -> bool:
