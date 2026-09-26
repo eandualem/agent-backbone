@@ -576,7 +576,8 @@ emits nothing (the monitor job re-checks once a minute).
 It also emits `inbox:pending` `{"session": "app", "pending": 2}` when an
 agent's [inbox](#cooperative-inbox) has more to read: at once when a message
 to it is queued through `POST /api/messages`, and within a minute for rows
-written otherwise (such as an expiry notice). `pending` is how many rows are
+written otherwise (such as an expiry notice, or an escalation notice to an
+inbox-only agent). `pending` is how many rows are
 waiting to be read; the event carries no message text. It is a hint, not a
 delivery: read with `POST /api/messages/inbox`. One read returns at most
 ten, unacknowledged messages first, so acknowledge each message once it is
@@ -639,6 +640,9 @@ coordination, acknowledgement and retention.
 `{"session":"worker","messages":[...]}` with `id`, `operation_id`, `message`,
 `ack_token`, `sender`, `status`, and `enqueued_at`. Acknowledge with the same endpoint and
 `{"session":"worker","acknowledge":["41:operation-id"]}`. Pass each complete `ack_token` returned by the inbox, not a numeric row ID.
+The inbox of an [inbox-only](configuration.md#agents) agent also returns
+escalation notices (their text starts `[via:backbone]` without a `from:`),
+so it can be the `escalation.target`.
 Up to 20 tokens per acknowledgement; stale or mismatched tokens return 409, unknown session 404.
 The existing shared API key is required. Session names are self-asserted, as with
 ordinary messaging; this is not a per-agent authentication boundary.

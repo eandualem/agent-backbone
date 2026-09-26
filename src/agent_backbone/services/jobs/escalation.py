@@ -259,6 +259,13 @@ def _record_plan_notification(session_name: str, source_ref: str) -> None:
     _plan_notified.mark((session_name, source_ref))
 
 
+def _reachable(config: BackboneConfig, session: str, live) -> bool:
+    """Whether escalation notices can reach ``session`` now: a live session,
+    or an inbox-only agent, whose notices wait in its inbox."""
+    spec = config.agents.get(session)
+    return session in live or (spec is not None and spec.inbox_only)
+
+
 def _escalation_session(config: BackboneConfig, source_session: str) -> str | None:
     target = config.escalation.target
     if not target or target == source_session or target not in config.agents:
@@ -340,7 +347,7 @@ async def handle_stalls(config: BackboneConfig, states: AgentStates, db: Backbon
         ):
             continue
         escalation_session = _escalation_session(config, stall["session"])
-        if escalation_session and escalation_session in states:
+        if escalation_session and _reachable(config, escalation_session, states):
             msg = format_stall_notification(
                 stall["session"],
                 stall["issue_number"] or 0,
@@ -383,7 +390,7 @@ async def handle_offline(
         ):
             accepted = False
             escalation_session = _escalation_session(config, agent["session"])
-            if escalation_session and escalation_session in active_sessions:
+            if escalation_session and _reachable(config, escalation_session, active_sessions):
                 msg = format_unexpected_offline_notification(
                     agent["session"], agent["entity"], agent["pending_count"]
                 )
@@ -451,7 +458,7 @@ async def report_offline_queues(
             continue
         msg = format_offline_queue_notification(spec.name, queued)
         escalation_session = _escalation_session(config, spec.name)
-        if escalation_session and escalation_session in active_sessions:
+        if escalation_session and _reachable(config, escalation_session, active_sessions):
             await safe_deliver(
                 escalation_session,
                 msg,
@@ -553,7 +560,7 @@ async def check_plan_waiting(
                 log.info("Sent plan-waiting notification for %s", name)
 
         escalation_session = _escalation_session(config, name)
-        if escalation_session and escalation_session in states:
+        if escalation_session and _reachable(config, escalation_session, states):
             orch_ref = _plan_notification_source_ref(
                 channel="tmux",
                 recipient=escalation_session,

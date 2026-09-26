@@ -710,9 +710,15 @@ async def prompt_hook_after(state_dir, session_name: str, since: float, message:
 
 @_serialized
 async def checkpoint_inbox(
-    session_name: str, *, db: BackboneDB, acknowledge: list[str] | None = None
+    session_name: str,
+    *,
+    db: BackboneDB,
+    acknowledge: list[str] | None = None,
+    escalations: bool = False,
 ) -> dict:
-    """Read/ack checkpoints under the same session lock as terminal delivery."""
+    """Read/ack checkpoints under the same session lock as terminal delivery.
+    ``escalations``: the reader is inbox-only, so escalation notices are its too."""
     if acknowledge:
         return {"acknowledged": await db.queue.acknowledge_checkpoint(session_name, acknowledge)}
-    return {"session": session_name, "messages": await db.queue.checkpoint(session_name)}
+    messages = await db.queue.checkpoint(session_name, escalations=escalations)
+    return {"session": session_name, "messages": messages}

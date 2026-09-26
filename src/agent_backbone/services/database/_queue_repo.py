@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
@@ -363,10 +363,11 @@ class QueueRepo(Repo):
             return int(result.scalar_one())
 
     async def inbox_rows(
-        self, session_name: str | None = None
+        self, session_name: str | None = None, *, inbox_sessions: Collection[str] = ()
     ) -> dict[str, frozenset[tuple[int, str | None]]]:
         """Per session with any, the rows waiting for its inbox (held
-        ``checkpoint``/``uncertain`` rows and pending direct messages;
+        ``checkpoint``/``uncertain`` rows and pending direct messages, plus
+        escalation notices for ``inbox_sessions``, the inbox-only agents;
         ``checkpoint`` hands them out ten at a time), each as
         ``(id, operation_id)``: an identity a reused id cannot repeat."""
         only = "AND session_name = :session " if session_name is not None else ""
@@ -375,9 +376,11 @@ class QueueRepo(Repo):
                 text(
                     "SELECT session_name, id, operation_id FROM message_queue "
                     "WHERE (status IN ('checkpoint', 'uncertain') "
-                    "OR (status = 'pending' AND delivery_kind = 'direct_message')) " + only
-                ),
-                {"session": session_name},
+                    "OR (status = 'pending' AND delivery_kind = 'direct_message') "
+                    "OR (status = 'pending' AND delivery_kind = 'escalation' "
+                    "AND session_name IN :inbox)) " + only
+                ).bindparams(bindparam("inbox", expanding=True)),
+                {"session": session_name, "inbox": list(inbox_sessions)},
             )
             rows: dict[str, set[tuple[int, str | None]]] = {}
             for row in result.mappings():
@@ -520,7 +523,8 @@ class QueueRepo(Repo):
         measures the hold, not whether the message is still wanted. After the
         hold is acknowledged the queue gets a full window from that moment.
         For ``inbox_sessions`` (inbox-only agents) the rule is simpler: a
-        direct message waits for ``backbone inbox``, its only way in, and
+        direct message or escalation notice waits for ``backbone inbox``, its
+        only way in, and
         every other row, which can never reach it, expires (a subscription
         batch, brief or restart message left from before it became
         inbox-only included).
@@ -535,7 +539,8 @@ class QueueRepo(Repo):
                 text(
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE status = 'pending' AND enqueued_at < :cutoff
-                         AND ((session_name IN :inbox AND delivery_kind != 'direct_message')
+                         AND ((session_name IN :inbox
+                               AND delivery_kind NOT IN ('direct_message', 'escalation'))
                          OR (session_name NOT IN :inbox
                          AND delivery_kind != 'subscription'
                          AND source NOT IN ('agent-restart', 'queue-expiry', :brief)
@@ -624,13 +629,18 @@ class QueueRepo(Repo):
                 {"id": message_id},
             )
 
-    async def checkpoint(self, session_name: str, limit: int = 10) -> list[dict]:
+    async def checkpoint(
+        self, session_name: str, limit: int = 10, *, escalations: bool = False
+    ) -> list[dict]:
         """Take direct messages out of terminal delivery until explicit acknowledgement.
 
         Re-reading returns the same unacknowledged IDs, including after a lost
         HTTP response or process restart. Ambiguous pastes are labeled uncertain.
         Issue notifications retain the issue routing/acknowledgement protocol.
+        ``escalations`` also claims escalation notices: for an inbox-only
+        agent, which has no terminal to take them.
         """
+        kinds = "('direct_message', 'escalation')" if escalations else "('direct_message')"
         async with self._tx() as conn:
             params = {"session": session_name, "limit": limit}
             held = await conn.execute(
@@ -648,7 +658,9 @@ class QueueRepo(Repo):
                     "UPDATE message_queue SET status='checkpoint', leased_at=NULL "
                     "WHERE status='pending' AND id IN (SELECT id FROM message_queue "
                     "WHERE session_name=:session AND status='pending' "
-                    "AND delivery_kind='direct_message' ORDER BY enqueued_at,id LIMIT :limit "
+                    "AND delivery_kind IN "
+                    + kinds
+                    + " ORDER BY enqueued_at,id LIMIT :limit "
                     + lock
                     + ") RETURNING *"
                 ),
