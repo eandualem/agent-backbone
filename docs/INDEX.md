@@ -37,6 +37,7 @@ branch or tag you are viewing. Relative links keep you on that same revision.
 
 - [How it works](how-it-works.md) — follow requests through the system.
 - [Security](security.md) — trust boundaries and defaults.
+- [Runtime capabilities](runtime-capabilities.md) — which capabilities work on which agent CLI.
 - [Status and roadmap](status-and-roadmap.md) — verified capabilities and remaining work.
 - [Contributing](../CONTRIBUTING.md) — development and checks.
 

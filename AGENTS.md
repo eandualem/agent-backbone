@@ -135,6 +135,19 @@ Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way
   (`codex sandbox … --log-denials`, never under `/tmp`, which it treats as
   writable) and open exactly that.
 
+## Runtime parity
+
+A Backbone capability is never designed, merged or released for only one CLI.
+
+- **The contract declares support.** The capability contract (`services/runtimes/capabilities.py`, rendered in `docs/runtime-capabilities.md`) lists every user-reachable capability, including behaviour in hooks, launchers and helpers outside `services/runtimes`. Each row names the implementation path and the behaviour test for each runtime. A flag that defaults to off does not declare support. The CLI, `doctor` and the docs read their coverage from the contract. There is no separately maintained table that can drift from it.
+- **Claude Code and Codex are the required pair.** A new or changed user-facing capability merges, counts as done and ships only when it gives the same user-visible outcome in Claude Code and in Codex, verified by the same behaviour test run against both, plus a live check where the behaviour depends on the CLI. An open issue or a documented limitation never replaces that verification. Only the owner adds a runtime to the required set.
+- **Every other shipped adapter has explicit coverage.** For each other shipped adapter, the contract records the capability as verified equivalent, or as a gap with its issue, the documented fallback and the agent instructions for that runtime. The CLI, `doctor` and the docs surface that coverage. Unsupported behaviour is never reported as success. Not applicable only where the capability cannot exist on that adapter, for a reason recorded in the contract (for example, a plain shell runs no model). A missing integration or an upstream limit is a gap, never not applicable.
+- **Safety gates stay.** Parity answers or reports each runtime's own dialogs, refusals and sandbox. It never bypasses or weakens them.
+- **Upstream limits are escalated, not exempted.** When Claude Code or Codex cannot provide the behaviour, record the evidence and pursue an equivalent mechanism or an upstream fix. Do not merge. Only the owner's explicit decision on a named capability makes an exception; the contract records it with its issue and the decision, and the CLI and `doctor` report the capability as unavailable on that runtime.
+- **Shipped gaps are open defects.** Until fixed, the CLI and `doctor` report the capability as unavailable on the affected runtime. Documenting a gap does not close its issue. Reducing a runtime's recorded coverage, dropping an adapter or disabling a shipped capability is a separate explicit owner decision.
+- **Every PR carries evidence.** It lists Claude Code and Codex with their tests and live checks, and every other shipped adapter with its test or its gap issue. Each receipt states whether the live check made a model call; paid inference needs the owner's approval. A registry test fails when a cell claims support its adapter does not implement, when any shipped adapter has no recorded cell, or when Claude Code or Codex has an unsupported cell outside the recorded baseline of shipped defects, which only shrinks.
+- **Review checks** the contract row, the evidence for Claude Code and Codex, the recorded coverage for every other adapter, and that no unapproved exception exists.
+
 ## Schema changes
 
 Edit `services/database/models.py`, then regenerate the **single** initial

@@ -19,6 +19,7 @@ class Gemini(Runtime):
     aliases = ("gemini-cli",)
     binary = "gemini"
     brief_mode = "initial_prompt"
+    declared_capabilities = frozenset({"trust"})
 
     hook_events = (
         ("SessionStart", None),
