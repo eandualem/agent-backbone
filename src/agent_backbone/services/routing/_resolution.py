@@ -16,15 +16,20 @@ log = logging.getLogger(__name__)
 
 
 def is_valid_issue_target(target: str, config: BackboneConfig) -> bool:
-    """Whether a ``for:`` issue target is routable (configured agent or ignored name)."""
-    return target in config.routing.ignore_targets or target in config.agents
+    """Whether a ``for:`` issue target is routable (configured agent or ignored name).
+    An inbox-only agent is not: it takes no part in GitHub routing."""
+    spec = config.agents.get(target)
+    return target in config.routing.ignore_targets or (spec is not None and not spec.inbox_only)
 
 
 def validate_issue_targets(targets: list[str], config: BackboneConfig) -> None:
     """Reject issue targets that are not configured agents."""
     invalid = [target for target in targets if not is_valid_issue_target(target, config)]
     if invalid:
-        known = ", ".join(sorted(config.agents.names)) or "<none configured>"
+        known = (
+            ", ".join(sorted(s.name for s in config.agents if not s.inbox_only))
+            or "<none configured>"
+        )
         raise ValueError(
             f"unknown issue target(s): {', '.join(invalid)}; configured agents: {known}"
         )

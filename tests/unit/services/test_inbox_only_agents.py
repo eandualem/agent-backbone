@@ -10,10 +10,11 @@ import pytest
 from sqlalchemy import text
 
 from agent_backbone.config import AgentsConfig, AgentSpec, agents_from_rows
-from agent_backbone.models import DeliveryOutcome
+from agent_backbone.models import DeliveryOutcome, EventType, IssueData, ParsedLabels
 from agent_backbone.services.agents import AgentStore
 from agent_backbone.services.agents.operations import (
     StartRequest,
+    forget_agent,
     resolve_agent,
     start_resolved,
     stop_agent_session,
@@ -24,7 +25,9 @@ from agent_backbone.services.jobs import escalation as esc
 from agent_backbone.services.jobs.monitor import read_states
 from agent_backbone.services.jobs.retry import drain_message_queue
 from agent_backbone.services.jobs.transitions import run_transitions
-from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.routing import route_issue, safe_deliver
+from agent_backbone.services.routing._resolution import is_valid_issue_target
+from agent_backbone.services.routing._targets import issue_parties
 
 _OPS = "agent_backbone.services.agents.operations"
 _STORE = "agent_backbone.services.agents.store"
@@ -148,6 +151,26 @@ async def test_a_session_with_its_name_is_not_read_as_its_state(config):
         assert "ike" not in await read_states(config, {"ike", "bell"})
     assert capture.await_count == 1
     assert not (await build_enriched_agent("ike", config, {"ike"}, {"attached": True})).online
+
+
+def test_github_labels_do_not_route_to_it(config):
+    config = _inbox_only(config)
+    issue = IssueData(
+        number=1,
+        title="t",
+        labels=ParsedLabels(sender="ike", targets=["ike"], issue_type="task"),
+        repo_full_name="example/ike",
+    )
+    assert route_issue(issue, EventType.ISSUE_OPENED, config).queue == []
+    assert issue_parties(issue, config) == []
+    assert not is_valid_issue_target("ike", config)
+
+
+async def test_it_is_forgotten_despite_a_session_with_its_name(db, tmp_path):
+    store = await _store(db, tmp_path)
+    await _register_client(store, tmp_path)
+    with patch(f"{_OPS}.session_exists", AsyncMock(return_value=True)):
+        assert await forget_agent(store, "client") is True
 
 
 def test_a_restart_is_refused(config):
