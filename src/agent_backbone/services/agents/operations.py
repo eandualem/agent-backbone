@@ -147,9 +147,7 @@ async def forget_agent(store: AgentStore, name: str) -> bool:
     Holds the agent's lifecycle lock, so a start in progress finishes first
     and the session check right before the delete sees it."""
     async with lifecycle_lock(name):
-        spec = store.agents.get(name)
-        # An inbox-only agent has no session: one with its name is not its own.
-        if not (spec is not None and spec.inbox_only) and await session_exists(name):
+        if await session_exists(name):
             raise RuntimeError(f"'{name}' is running — stop it first")
         return await store.forget(name)
 

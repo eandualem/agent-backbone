@@ -15,7 +15,6 @@ from agent_backbone.services.agents import AgentState, AgentStore, agent_state
 from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.operations import (
     StartRequest,
-    forget_agent,
     resolve_agent,
     start_resolved,
     stop_agent_session,
@@ -189,13 +188,6 @@ def test_a_swarm_member_cannot_be_inbox_only(tmp_path):
         validate_agent_spec(member)
 
 
-async def test_it_is_forgotten_despite_a_session_with_its_name(db, tmp_path):
-    store = await _store(db, tmp_path)
-    await _register_client(store, tmp_path)
-    with patch(f"{_OPS}.session_exists", AsyncMock(return_value=True)):
-        assert await forget_agent(store, "client") is True
-
-
 def test_a_restart_is_refused(config):
     config = _inbox_only(config)
     with pytest.raises(ValueError, match="inbox-only"):
@@ -270,3 +262,21 @@ async def test_its_prompts_are_never_answered_nor_a_terminal_read(
     for path in ("terminal", "output"):
         response = await api_client.get(f"/api/sessions/ike/{path}", headers=auth_headers)
         assert response.status_code == 409
+
+
+async def test_the_offline_cli_shows_no_terminal_output(config, capsys):
+    import argparse
+
+    from agent_backbone.cli import _common
+    from agent_backbone.cli.agents import _agent_output
+
+    args = argparse.Namespace(name="ike", lines=5, since=None, before=None, end=None, screen=True)
+    with (
+        patch.object(_common, "read_client_config", AsyncMock()),
+        patch.object(_common, "api_up", AsyncMock(return_value=False)),
+        patch.object(_common, "read_config", AsyncMock(return_value=_inbox_only(config))),
+        patch("agent_backbone.services.agents.transcript.output_page", AsyncMock()) as read,
+    ):
+        assert await _agent_output(args) == 1
+    read.assert_not_awaited()
+    assert "inbox-only" in capsys.readouterr().out

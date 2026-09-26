@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.config import AgentsConfig, AgentSpec
+from agent_backbone.config import AgentSpec
 from agent_backbone.services.agents import AgentStore
 from agent_backbone.services.agents.launch import StartResult
 from agent_backbone.services.agents.operations import (
@@ -35,7 +35,7 @@ async def test_stop_stops_an_agent(config):
 
 
 async def test_forget_refuses_a_running_agent():
-    store = AsyncMock(agents=AgentsConfig(specs={}))
+    store = AsyncMock()
     with patch(f"{_OPS}.session_exists", new_callable=AsyncMock, return_value=True):
         with pytest.raises(RuntimeError):
             await forget_agent(store, "ike")
@@ -104,7 +104,7 @@ async def test_forget_during_real_start_waits_then_refuses(db, tmp_path):
 
 
 async def test_forget_removes_a_stopped_agent():
-    store = AsyncMock(agents=AgentsConfig(specs={}))
+    store = AsyncMock()
     store.forget.return_value = True
     with patch(f"{_OPS}.session_exists", new_callable=AsyncMock, return_value=False):
         assert await forget_agent(store, "ike") is True
@@ -117,7 +117,7 @@ async def test_forget_waits_for_a_start_in_progress_and_then_refuses():
 
     from agent_backbone.services.agents.operations import lifecycle_lock
 
-    store = AsyncMock(agents=AgentsConfig(specs={}))
+    store = AsyncMock()
     store.forget.return_value = True
     running = False
 

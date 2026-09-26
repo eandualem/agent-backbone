@@ -154,8 +154,12 @@ async def _agent_output(args: argparse.Namespace) -> int:
         from agent_backbone.services.agents.transcript import output_page
 
         config = await _common.read_config()
-        if config.agents.get(name) is None:
+        spec = config.agents.get(name)
+        if spec is None:
             print(f"unknown agent '{name}'")
+            return 1
+        if spec.inbox_only:
+            print(f"'{name}' is inbox-only: it has no terminal")
             return 1
         page = await output_page(
             config,
