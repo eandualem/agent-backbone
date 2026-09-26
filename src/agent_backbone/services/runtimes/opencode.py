@@ -49,6 +49,7 @@ class OpenCode(Runtime):
     # (opencode 1.18 TUI); a `permission` deny in the user's config still
     # holds. OpenCode has no OS sandbox: this is trust on the machine.
     unattended_args = ("--auto",)
+    hook_context = True  # the plugin adds a user message to the running turn
 
     def hook_settings(self, data_dir, state_dir, *, python=None):
         raise RuntimeError("OpenCode state comes from a plugin, not a command hook")

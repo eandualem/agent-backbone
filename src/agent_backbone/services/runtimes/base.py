@@ -289,8 +289,9 @@ class Runtime:
     """``(event, matcher)`` pairs the hook listens to, in the CLI's own names."""
     hook_context: bool = False
     """The hook can add context to the model mid-turn (``hookSpecificOutput.
-    additionalContext``): how a high-priority subscription batch reaches a
-    working agent without a paste. False: it waits for the prompt."""
+    additionalContext``; OpenCode's plugin adds a user message to the running
+    turn): how a steer or a high-priority subscription batch reaches a working
+    agent without a paste. False: a batch waits for the prompt, a steer is refused."""
     hook_timeout: int = 10
     """Per-hook timeout in the unit the CLI uses (seconds for Claude Code and
     Codex, milliseconds for Gemini CLI)."""

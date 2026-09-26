@@ -103,7 +103,7 @@ async def steer(
     """Hand a working agent guidance for its current task through its
     runtime's hook — a transient offer, never a queue row and never a paste.
     Refused, with the reason, when the agent is not working, its runtime has
-    no hook context (Claude Code and Codex only) or the session was not
+    no hook context (Claude Code, Codex and OpenCode only) or the session was not
     started by the backbone; nothing is queued on refusal."""
     registered_agent_or_404(config, body.target_session)
     report = await steer_agent(
