@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import text
 
-from agent_backbone.config import AgentsConfig, AgentSpec, agents_from_rows
+from agent_backbone.config import AgentsConfig, AgentSpec, EscalationConfig, agents_from_rows
 from agent_backbone.models import DeliveryOutcome, EventType, IssueData, ParsedLabels
 from agent_backbone.services.agents import AgentState, AgentStore, agent_state, write_state_file
 from agent_backbone.services.agents._validation import validate_agent_spec
@@ -295,3 +295,47 @@ async def test_the_offline_cli_shows_no_terminal_output(config, capsys):
         assert await _agent_output(args) == 1
     read.assert_not_awaited()
     assert "inbox-only" in capsys.readouterr().out
+
+
+# Escalations through the inbox (#311)
+
+
+async def test_only_an_inbox_only_agents_inbox_claims_escalations(db):
+    await db.queue.enqueue(
+        session_name="ike", message="[via:backbone] stall", delivery_kind="escalation"
+    )
+    assert await db.queue.checkpoint("ike") == []  # a terminal agent gets it as a paste
+    (row,) = await db.queue.checkpoint("ike", escalations=True)
+    assert row["message"] == "[via:backbone] stall"
+
+
+async def test_its_escalations_wait_in_the_inbox(db):
+    await db.queue.enqueue(session_name="ike", message="alert", delivery_kind="escalation")
+    await db.queue.enqueue(session_name="bell", message="alert", delivery_kind="escalation")
+    async with db.queue._tx() as conn:
+        await conn.execute(text("UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00Z'"))
+    expired = await db.queue.expire_pending(inbox_sessions=("ike",))
+    assert [row["session_name"] for row in expired] == ["bell"]
+
+
+async def test_an_inbox_only_escalation_target_is_told(config, db):
+    config = replace(_inbox_only(config), escalation=EscalationConfig(target="ike"))
+    await db.queue.enqueue(session_name="bell", message="hi", delivery_kind="direct_message")
+    with (
+        patch(f"{esc.__name__}.safe_deliver", AsyncMock()) as deliver,
+        patch(f"{esc.__name__}.notify_humans", AsyncMock(return_value=True)),
+    ):
+        await esc.report_offline_queues(config, set(), db)  # no session is live
+    assert deliver.await_args.args[0] == "ike"
+    assert deliver.await_args.kwargs["delivery_kind"] == "escalation"
+
+
+async def test_its_inbox_read_returns_escalations(api_app, api_client, auth_headers):
+    api_app.state.config = _inbox_only(api_app.state.config)
+    await api_app.state.db.queue.enqueue(
+        session_name="ike", message="[via:backbone] alert", delivery_kind="escalation"
+    )
+    response = await api_client.post(
+        "/api/messages/inbox", headers=auth_headers, json={"session": "ike"}
+    )
+    assert [m["message"] for m in response.json()["messages"]] == ["[via:backbone] alert"]

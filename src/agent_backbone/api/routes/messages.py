@@ -137,9 +137,11 @@ async def read_checkpoint_inbox(
     Holding a message prevents automatic redelivery; acknowledge after applying
     or explicitly superseding it, and inspect uncertain sends before repeating work.
     """
-    registered_agent_or_404(config, body.session)
+    spec = registered_agent_or_404(config, body.session)
     try:
-        result = await checkpoint_inbox(body.session, db=db, acknowledge=body.acknowledge)
+        result = await checkpoint_inbox(
+            body.session, db=db, acknowledge=body.acknowledge, escalations=spec.inbox_only
+        )
         if body.acknowledge:
             return result
         rows = result["messages"]

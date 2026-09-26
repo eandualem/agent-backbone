@@ -626,6 +626,9 @@ coordination, acknowledgement and retention.
 `{"session":"worker","messages":[...]}` with `id`, `operation_id`, `message`,
 `ack_token`, `sender`, `status`, and `enqueued_at`. Acknowledge with the same endpoint and
 `{"session":"worker","acknowledge":["41:operation-id"]}`. Pass each complete `ack_token` returned by the inbox, not a numeric row ID.
+The inbox of an [inbox-only](configuration.md#agents) agent also returns
+escalation notices (their text starts `[via:backbone]` without a `from:`),
+so it can be the `escalation.target`.
 Up to 20 tokens per acknowledgement; stale or mismatched tokens return 409, unknown session 404.
 The existing shared API key is required. Session names are self-asserted, as with
 ordinary messaging; this is not a per-agent authentication boundary.
