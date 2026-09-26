@@ -216,13 +216,14 @@ async def test_never_typed_into_even_when_a_session_has_its_name(config, db):
 async def test_its_direct_messages_wait_while_others_expire(db):
     held = await db.queue.enqueue(session_name="ike", message="to", delivery_kind="direct_message")
     await db.queue.enqueue(session_name="ike", message="issue", issue_number=7)
+    await db.queue.enqueue(session_name="ike", message="batch", delivery_kind="subscription")
     await db.queue.enqueue(
         session_name="other", message="from", sender="ike", delivery_kind="direct_message"
     )
     async with db.queue._tx() as conn:
         await conn.execute(text("UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00Z'"))
     expired = await db.queue.expire_pending(inbox_sessions=("ike",))
-    assert {row["message"] for row in expired} == {"issue", "from"}
+    assert {row["message"] for row in expired} == {"issue", "batch", "from"}
     assert [row["id"] for row in await db.queue.checkpoint("ike")] == [held.id]
 
 

@@ -497,8 +497,11 @@ class QueueRepo(Repo):
         row holds the whole queue until it is acknowledged, so the wait
         measures the hold, not whether the message is still wanted. After the
         hold is acknowledged the queue gets a full window from that moment.
-        Nor does a direct message to one of ``inbox_sessions`` (inbox-only
-        agents): it waits for ``backbone inbox``, which is its only way in.
+        For ``inbox_sessions`` (inbox-only agents) the rule is simpler: a
+        direct message waits for ``backbone inbox``, its only way in, and
+        every other row, which can never reach it, expires (a subscription
+        batch, brief or restart message left from before it became
+        inbox-only included).
 
         ``notices`` turns the expired rows into notices written in the same
         transaction: an expiry is never committed without them, and a failure
@@ -510,6 +513,8 @@ class QueueRepo(Repo):
                 text(
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE status = 'pending' AND enqueued_at < :cutoff
+                         AND ((session_name IN :inbox AND delivery_kind != 'direct_message')
+                         OR (session_name NOT IN :inbox
                          AND delivery_kind != 'subscription'
                          AND source NOT IN ('agent-restart', 'queue-expiry', :brief)
                          AND session_name NOT IN (
@@ -519,8 +524,7 @@ class QueueRepo(Repo):
                              WHERE source IN ('uncertain-acknowledged', 'uncertain-retired')
                                AND created_at >= :cutoff)
                          AND session_name NOT IN :protected
-                         AND COALESCE(sender, '') NOT IN :protected
-                         AND NOT (session_name IN :inbox AND delivery_kind = 'direct_message')
+                         AND COALESCE(sender, '') NOT IN :protected))
                        RETURNING *"""
                 ).bindparams(
                     bindparam("protected", expanding=True), bindparam("inbox", expanding=True)

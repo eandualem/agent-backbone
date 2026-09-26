@@ -656,9 +656,10 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"tmux: {denied}")
             return 1
         config = await _common.read_config()
-        online = await session_exists(args.name)
-        snapshot = await agent_state(config, args.name)
         spec = config.agents.get(args.name)
+        # An inbox-only agent has no session: one with its name is not its own.
+        online = not (spec is not None and spec.inbox_only) and await session_exists(args.name)
+        snapshot = await agent_state(config, args.name)
         if args.json:
             from dataclasses import asdict
 
