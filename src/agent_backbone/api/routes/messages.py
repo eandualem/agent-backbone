@@ -50,7 +50,7 @@ async def send_message(
         if swarm is not None and swarm.get("status") == "active":
             target = swarm["coordinator"]
     # Only registered agents are typed into — never an arbitrary tmux session.
-    registered_agent_or_404(config, target)
+    spec = registered_agent_or_404(config, target)
 
     report = await safe_deliver(
         session_name=target,
@@ -72,7 +72,9 @@ async def send_message(
         outcome=report.outcome.value,
         queued=report.queued,
         queue=report.queue,
-        detail=queue_detail(report, target, config.timing.queue_expiry_minutes),
+        detail=queue_detail(
+            report, target, config.timing.queue_expiry_minutes, inbox_only=spec.inbox_only
+        ),
         operation_id=report.operation_id,
         delivery_id=report.delivery_id,
         queue_id=report.queue_id,

@@ -471,6 +471,10 @@ class AgentSpec:
     ``--dangerously-skip-permissions``, Gemini ``--approval-mode yolo``) it
     is trust on the machine. Off by default; sandboxed swarm members get it
     from ``swarm.unattended_members``."""
+    inbox_only: bool = False
+    """A client without a terminal (a service reading the API): never launched
+    and never typed into. Its messages wait for ``backbone inbox`` without
+    expiring, and it raises no offline alerts. Off by default."""
 
     @property
     def path(self) -> Path:
@@ -1050,5 +1054,6 @@ def agents_from_rows(rows: list[dict]) -> AgentsConfig:
             description=row.get("description") or "",
             always_on=bool(row.get("always_on")),
             unattended=bool(row.get("unattended")),
+            inbox_only=bool(row.get("inbox_only")),
         )
     return AgentsConfig(specs=specs)

@@ -478,6 +478,7 @@ class QueueRepo(Repo):
         max_age_minutes: int = 30,
         *,
         protected_sessions: tuple[str, ...] = (),
+        inbox_sessions: tuple[str, ...] = (),
         notices: Notices | None = None,
     ) -> list[dict]:
         """Expire pending messages older than the cutoff and, in the same
@@ -496,6 +497,8 @@ class QueueRepo(Repo):
         row holds the whole queue until it is acknowledged, so the wait
         measures the hold, not whether the message is still wanted. After the
         hold is acknowledged the queue gets a full window from that moment.
+        Nor does a direct message to one of ``inbox_sessions`` (inbox-only
+        agents): it waits for ``backbone inbox``, which is its only way in.
 
         ``notices`` turns the expired rows into notices written in the same
         transaction: an expiry is never committed without them, and a failure
@@ -517,13 +520,17 @@ class QueueRepo(Repo):
                                AND created_at >= :cutoff)
                          AND session_name NOT IN :protected
                          AND COALESCE(sender, '') NOT IN :protected
+                         AND NOT (session_name IN :inbox AND delivery_kind = 'direct_message')
                        RETURNING *"""
-                ).bindparams(bindparam("protected", expanding=True)),
+                ).bindparams(
+                    bindparam("protected", expanding=True), bindparam("inbox", expanding=True)
+                ),
                 {
                     "now": now,
                     "cutoff": cutoff_iso(minutes=max_age_minutes),
                     "brief": BRIEF_SOURCE,
                     "protected": list(protected_sessions),
+                    "inbox": list(inbox_sessions),
                 },
             )
             rows = [dict(row._mapping) for row in result.fetchall()]

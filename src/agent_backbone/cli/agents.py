@@ -296,6 +296,11 @@ def _print_start_result(data: dict) -> None:
         return
     ready = data.get("ready", "not_waited")
     repo = f" repo {data['repo']}" if data.get("repo") else " (no GitHub remote)"
+    if ready == "inbox_only":
+        print(f"{name}: registered inbox-only —{repo}")
+        print(f"  dir: {data.get('working_directory')}")
+        print(f"  messages: backbone inbox --agent {name}")
+        return
     label = {
         "ready": "ready",
         "waiting_for_human": "started, waiting for you",
@@ -322,6 +327,16 @@ async def _agent_start(args: argparse.Namespace) -> int:
         len(args.names) > 1 or getattr(args, "always_on", False)
     ):
         print("--attach requires a single agent")
+        return 1
+    if getattr(args, "inbox_only", False) and (
+        len(args.names) > 1
+        or args.attach
+        or args.always_on
+        or args.resume
+        or args.runtime
+        or args.model
+    ):
+        print("--inbox-only registers one agent without launching it: drop the launch options")
         return 1
     boot = await _common.read_client_config()
     if getattr(args, "always_on", False):
@@ -371,6 +386,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
         "resume": args.resume,
         "watch": args.watch or [],
         "wait": not args.no_wait,
+        "inbox_only": getattr(args, "inbox_only", False),
     }
 
     if await _common.api_up(boot):
@@ -403,6 +419,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
             resume=args.resume,
             watch=tuple(args.watch or ()),
             wait=not args.no_wait,
+            inbox_only=body["inbox_only"],
         )
         # The brief below shares the start's timeout with the readiness wait.
         deadline = asyncio.get_running_loop().time() + direct.config.timing.start_timeout_seconds
@@ -696,7 +713,7 @@ async def _agent(args: argparse.Namespace) -> int:
                 print(f"expected key=value, got {item!r}")
                 return 1
             key, raw = item.split("=", 1)
-            json_keys = ("tags", "env", "always_on", "unattended")
+            json_keys = ("tags", "env", "always_on", "unattended", "inbox_only")
             changes[key] = _common.parse_value(raw) if key in json_keys else raw
         if api_up:
             result = await _common.api(boot, "PATCH", f"/api/agents/{args.name}", json_body=changes)

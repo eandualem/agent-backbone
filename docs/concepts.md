@@ -96,7 +96,7 @@ Derived from the state plus the terminal, right before anything is pasted:
 
 | Condition | Meaning | Deliverable? |
 |---|---|---|
-| `offline` | no session | no — queued |
+| `offline` | no session, or an [inbox-only](configuration.md#agents) agent | no — queued (an inbox-only agent reads its messages with `backbone inbox`) |
 | `waiting_for_human` | agent is asking a person something | no — queued |
 | `agent_working` | starting, busy, or blocked on a usage limit or provider failure | no — queued (never bypassed) |
 | `human_reading` | someone is selecting text or reading tmux scrollback | no — queued, even with `priority` |
@@ -140,7 +140,7 @@ minutes is delivered with `(queued N min ago)` (`N h` from two hours) after
 its envelope, so a review or comment drained after a long busy stretch
 does not read as current; queued messages expire after
 `timing.queue_expiry_minutes` (30), except active swarm coordination, inbox holds,
-an agent's startup brief and `subscription` batches (facts, not conversation: they grow while the agent
+direct messages to an inbox-only agent, an agent's startup brief and `subscription` batches (facts, not conversation: they grow while the agent
 is busy and are retired only when delivered). Nothing expires for an agent whose
 queue is held by an unconfirmed (`uncertain`) delivery: that wait measures the
 hold, not whether the message is still wanted. Once the hold is acknowledged,

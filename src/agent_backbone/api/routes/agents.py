@@ -38,7 +38,7 @@ from agent_backbone.api.models import (
     WatchRequest,
 )
 from agent_backbone.api.session_updates import SessionFeed
-from agent_backbone.config import BackboneConfig
+from agent_backbone.config import AgentSpec, BackboneConfig
 from agent_backbone.services.agents import (
     AgentConfigView,
     AgentStore,
@@ -262,6 +262,7 @@ def _request(body: AgentStartRequest, *, name: str | None = None) -> StartReques
         resume=body.resume,
         watch=tuple(body.watch),
         wait=body.wait,
+        inbox_only=body.inbox_only,
     )
 
 
@@ -349,6 +350,14 @@ async def list_restarts(
     return [AgentTransitionView.from_row(row) for row in rows]
 
 
+def _typed_into_or_409(config: BackboneConfig, name: str) -> AgentSpec:
+    """A registered agent that has a terminal to answer: never an inbox-only one."""
+    spec = registered_agent_or_404(config, name)
+    if spec.inbox_only:
+        raise HTTPException(status_code=409, detail=f"'{name}' is inbox-only: it has no terminal")
+    return spec
+
+
 _APPROVE_STATUS = {
     "not_waiting": 409,
     "not_permission": 409,
@@ -380,7 +389,7 @@ async def approve_agent_prompt(
                 "`backbone config set security.allow_remote_approval true` to enable."
             ),
         )
-    spec = registered_agent_or_404(config, name)
+    spec = _typed_into_or_409(config, name)
     approved_by = (body.from_entity if body else "") or "api"
     outcome, evidence = await approve_agent(name, runtime=spec.runtime)
     if outcome != "approved":
@@ -420,7 +429,7 @@ async def deny_agent_prompt(
                 "`backbone config set security.allow_remote_approval true` to enable."
             ),
         )
-    spec = registered_agent_or_404(config, name)
+    spec = _typed_into_or_409(config, name)
     denied_by = (body.from_entity if body else "") or "api"
     outcome, evidence = await deny_agent(name, runtime=spec.runtime)
     if outcome != "denied":

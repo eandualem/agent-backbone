@@ -31,7 +31,8 @@ class StartRequest:
 
     ``directory`` discovers (or re-registers) the agent for that directory;
     the name defaults to the directory name. Without it the agent must
-    already be known by ``name``.
+    already be known by ``name``. ``inbox_only`` registers the agent as
+    inbox-only instead of launching it.
     """
 
     name: str | None = None
@@ -41,6 +42,7 @@ class StartRequest:
     resume: bool = False
     watch: tuple[str, ...] = ()
     wait: bool = True
+    inbox_only: bool = False
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
@@ -103,6 +105,7 @@ async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
             runtime=req.runtime,
             model=req.model,
             watches=req.watch,
+            inbox_only=req.inbox_only,
         )
 
     if not req.name:
@@ -117,6 +120,8 @@ async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
         changes["runtime"] = req.runtime
     if req.model is not None and (req.model != spec.model or "runtime" in changes):
         changes["model"] = req.model
+    if req.inbox_only and not spec.inbox_only:
+        changes["inbox_only"] = True
     if changes:
         spec = await store.update(spec.name, **changes)
     return spec
@@ -151,10 +156,26 @@ async def start_resolved(
     *,
     db: BackboneDB | None,
 ) -> StartResult:
-    """Start a resolved agent. Raises ValueError for a runtime or directory that cannot work."""
+    """Start a resolved agent. Raises ValueError for a runtime or directory that cannot work.
+
+    An inbox-only agent is never launched: asked for as such it is only
+    registered (``ready`` is ``inbox_only``); any other start is refused."""
     started = time.monotonic()
     runtime = req.runtime or spec.runtime
+    if spec.inbox_only and req.inbox_only:
+        return StartResult(
+            ok=True,
+            ready="inbox_only",
+            evidence=(
+                f"never launched: it reads its messages with backbone inbox --agent {spec.name}",
+            ),
+        )
     try:
+        if spec.inbox_only:
+            raise ValueError(
+                f"'{spec.name}' is inbox-only: it is never launched "
+                f"(backbone agent set {spec.name} inbox_only=false to launch it)"
+            )
         validate_agent_spec(spec)
         if runtime not in RUNTIMES:
             raise ValueError(f"Unknown runtime: {runtime}")

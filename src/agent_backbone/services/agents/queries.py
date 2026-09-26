@@ -82,6 +82,7 @@ class AgentConfigView(BaseModel):
     description: str = ""
     always_on: bool = False
     unattended: bool = False
+    inbox_only: bool = False
 
     @classmethod
     def from_spec(cls, spec: AgentSpec) -> AgentConfigView:
@@ -97,6 +98,7 @@ class AgentConfigView(BaseModel):
             description=spec.description,
             always_on=spec.always_on,
             unattended=spec.unattended,
+            inbox_only=spec.inbox_only,
         )
 
 

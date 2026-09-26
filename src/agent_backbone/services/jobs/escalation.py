@@ -435,9 +435,10 @@ async def report_offline_queues(
 ) -> None:
     """Tell the humans (and the escalation target) about messages waiting for
     an agent that is not running — the consequence of an absence, not the
-    absence itself. ``always_on`` agents were already reported when they died."""
+    absence itself. ``always_on`` agents were already reported when they died;
+    an inbox-only agent has no session, and its messages wait for its inbox."""
     for spec in config.agents:
-        if spec.name in active_sessions or spec.always_on:
+        if spec.name in active_sessions or spec.always_on or spec.inbox_only:
             continue
         try:
             queued = await db.queue.pending_count(spec.name)
