@@ -19,12 +19,11 @@ from agent_backbone.hooks.backbone_state import (
     steer_offers,
     take_context,
 )
-from agent_backbone.services.agents import AgentState, StateSnapshot
+from agent_backbone.services.agents import AgentState
 from agent_backbone.services.routing import settle_steers, steer_agent
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 
 _STEER = "agent_backbone.services.routing._steer"
-_INFERENCE = "agent_backbone.services.agents._inference"
 
 
 def _profile(intel, runtime="claude"):
@@ -109,10 +108,7 @@ async def test_a_turn_that_ends_while_the_offer_is_written_never_reaches_the_nex
             _hook(hook, config, {**prompt, "prompt": "task two"})
         return placed if placed is not None else offer_steer(*args)
 
-    with (
-        patch(f"{_STEER}.offer_steer", side_effect=offer_as_the_turn_ends),
-        patch(f"{_INFERENCE}.capture_pane", new_callable=AsyncMock, return_value=""),
-    ):
+    with patch(f"{_STEER}.offer_steer", side_effect=offer_as_the_turn_ends):
         report = await steer_agent("ike", "x", config, db=db, sender="peer")
     assert report.outcome == "refused" and report.reason == "not_working"
     assert take_context(config.state_dir, "ike", launch_id="L1") == []
@@ -120,26 +116,32 @@ async def test_a_turn_that_ends_while_the_offer_is_written_never_reaches_the_nex
     assert [r["outcome"] for r in rows] == ["not_taken"]
 
 
-async def test_a_turn_that_ends_on_a_dialog_still_withdraws_the_steer(
-    config, db, working, monkeypatch
+@pytest.mark.parametrize(
+    ("hook", "dialog"),
+    [
+        (
+            claude_hook,
+            {"hook_event_name": "Notification", "message": "Claude needs your permission"},
+        ),
+        (codex_hook, {"hook_event_name": "PermissionRequest"}),
+    ],
+)
+async def test_a_dialog_within_the_turn_keeps_the_steer_for_it(
+    config, db, working, monkeypatch, hook, dialog
 ):
-    """After the turn's end the screen may show a dialog: that is not working either."""
+    """A permission dialog pauses the task; the steer is still for it."""
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
     monkeypatch.setenv("BACKBONE_LAUNCH_ID", "L1")
-    _hook(claude_hook, config, {"hook_event_name": "UserPromptSubmit", "session_id": "s"})
+    _hook(hook, config, {"hook_event_name": "UserPromptSubmit", "session_id": "s", "prompt": "t"})
 
-    def offer_as_the_turn_ends(*args):
-        _hook(claude_hook, config, {"hook_event_name": "Stop", "session_id": "s"})
+    def offer_as_a_dialog_opens(*args):
+        _hook(hook, config, {**dialog, "session_id": "s"})
         return offer_steer(*args)
 
-    waiting = StateSnapshot(AgentState.WAITING_FOR_HUMAN, reason="question")
-    with (
-        patch(f"{_STEER}.offer_steer", side_effect=offer_as_the_turn_ends),
-        patch(f"{_STEER}.agent_state", new_callable=AsyncMock, return_value=waiting),
-    ):
+    with patch(f"{_STEER}.offer_steer", side_effect=offer_as_a_dialog_opens):
         report = await steer_agent("ike", "x", config, db=db, sender="peer")
-    assert report.outcome == "refused" and report.reason == "not_working"
-    assert take_context(config.state_dir, "ike", launch_id="L1") == []
+    assert report.outcome == "offered"
+    assert len(take_context(config.state_dir, "ike", launch_id="L1")) == 1
 
 
 async def test_an_old_idle_record_does_not_withdraw_a_steer_the_terminal_shows_working(
