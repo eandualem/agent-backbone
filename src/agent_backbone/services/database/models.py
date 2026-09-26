@@ -42,6 +42,8 @@ class AgentORM(Base):
     """1 when a dead session must be reported at once (``AgentSpec.always_on``)."""
     unattended: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     """1 when the runtime is launched with its no-approval switch (``AgentSpec.unattended``)."""
+    inbox_only: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    """1 for a client that is never launched or typed into (``AgentSpec.inbox_only``)."""
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     last_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)

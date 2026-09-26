@@ -69,6 +69,8 @@ def validate_transition(config: BackboneConfig, spec: AgentSpec, req: Transition
     """Refuse a request that could not work, before anything is torn down (``ValueError``)."""
     if spec.name == config.backbone.session_name:
         raise ValueError("refusing to restart the backbone's own session")
+    if spec.inbox_only:
+        raise ValueError(f"'{spec.name}' is inbox-only: it has no session to restart")
     if req.delay_seconds is not None and req.start_at is not None:
         raise ValueError("give a delay or a start time, not both")
     if req.delay_seconds is not None and not 0 <= req.delay_seconds <= MAX_DELAY_SECONDS:

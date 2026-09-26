@@ -109,6 +109,10 @@ Discovers (or re-registers) the agent for `dir`, starts it and — with
 `ready` is `ready`, `waiting_for_human` (the runtime is asking something —
 `evidence` shows the question), `timeout`, `exited` or `not_waited`.
 
+With `"inbox_only": true` the agent is registered as
+[inbox-only](configuration.md#agents) and nothing is launched: `ready` is
+`inbox_only`. A start without it for an inbox-only agent returns 400.
+
 ### `POST /api/agents/{name}/start`
 
 Same body; starts a known agent (`dir` in the body registers it first).
@@ -236,7 +240,7 @@ includes `last_message`, `detail`, `state_source` and `evidence`, when available
 CLI status uses those observations without polling GitHub for task estimates.
 
 Change `dir`, `runtime`, `model`, `repo`, `tags`, `env`, `description`,
-`always_on`, `unattended` (booleans; see [configuration](configuration.md#agents)).
+`always_on`, `unattended`, `inbox_only` (booleans; see [configuration](configuration.md#agents)).
 Changing `runtime` clears `unattended` unless the same request sets it: a
 freedom granted with one CLI's sandbox in mind does not follow the agent to
 another.

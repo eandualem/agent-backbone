@@ -373,6 +373,9 @@ async def on_callback(
     if spec is None:
         await query.answer(f"Unknown agent {agent}.")
         return
+    if spec.inbox_only:
+        await query.answer(f"{agent} is inbox-only: it has no terminal to answer.")
+        return
     actor, who = _who(update)
     security = bot.config.security
 

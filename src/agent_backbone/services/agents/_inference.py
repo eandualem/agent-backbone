@@ -366,8 +366,15 @@ async def _get_agent_state(
 async def agent_state(
     config: BackboneConfig, name: str, *, pane_content: str | None = None
 ) -> StateSnapshot:
-    """``get_agent_state`` with the paths and thresholds taken from the configuration."""
+    """``get_agent_state`` with the paths and thresholds taken from the configuration.
+
+    An inbox-only agent has no session: nothing a tmux session with its
+    name shows (a dialog, a plan) is its state."""
     spec = config.agents.get(name)
+    if spec is not None and spec.inbox_only:
+        return StateSnapshot(
+            state=AgentState.UNKNOWN, evidence=["inbox-only agent: it has no session"]
+        )
     snapshot = await get_agent_state(
         config.state_dir,
         name,

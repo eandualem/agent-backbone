@@ -2,7 +2,7 @@
 
 Priority (first match wins):
 
-1. no tmux session                       -> OFFLINE
+1. no tmux session, or inbox-only agent  -> OFFLINE
 2. agent waiting for a human             -> WAITING_FOR_HUMAN
 3. agent starting/busy                   -> AGENT_WORKING
 4. tmux copy mode (reading/selection)     -> HUMAN_READING
@@ -44,6 +44,14 @@ async def get_session_intelligence(
     idle_since: float | None = None,
 ) -> SessionProfile:
     """Derive the delivery condition for a session, with evidence."""
+    spec = config.agents.get(session_name)
+    if spec is not None and spec.inbox_only:
+        # Whatever tmux shows: a session with this name is not the agent.
+        return SessionProfile(
+            session_name=session_name,
+            intelligence=SessionIntelligence.OFFLINE,
+            evidence=["inbox-only agent: never typed into; it reads messages with backbone inbox"],
+        )
     evidence: list[str] = []
 
     active = await list_sessions()

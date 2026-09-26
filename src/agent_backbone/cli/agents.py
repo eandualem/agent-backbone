@@ -154,8 +154,12 @@ async def _agent_output(args: argparse.Namespace) -> int:
         from agent_backbone.services.agents.transcript import output_page
 
         config = await _common.read_config()
-        if config.agents.get(name) is None:
+        spec = config.agents.get(name)
+        if spec is None:
             print(f"unknown agent '{name}'")
+            return 1
+        if spec.inbox_only:
+            print(f"'{name}' is inbox-only: it has no terminal")
             return 1
         page = await output_page(
             config,
@@ -296,6 +300,11 @@ def _print_start_result(data: dict) -> None:
         return
     ready = data.get("ready", "not_waited")
     repo = f" repo {data['repo']}" if data.get("repo") else " (no GitHub remote)"
+    if ready == "inbox_only":
+        print(f"{name}: registered inbox-only —{repo}")
+        print(f"  dir: {data.get('working_directory')}")
+        print(f"  messages: backbone inbox --agent {name}")
+        return
     label = {
         "ready": "ready",
         "waiting_for_human": "started, waiting for you",
@@ -322,6 +331,20 @@ async def _agent_start(args: argparse.Namespace) -> int:
         len(args.names) > 1 or getattr(args, "always_on", False)
     ):
         print("--attach requires a single agent")
+        return 1
+    if getattr(args, "inbox_only", False) and (
+        len(args.names) > 1
+        or args.attach
+        or args.always_on
+        or args.resume
+        or args.runtime
+        or args.model
+        or args.watch
+    ):
+        print(
+            "--inbox-only registers one agent without launching it: "
+            "drop the launch and watch options"
+        )
         return 1
     boot = await _common.read_client_config()
     if getattr(args, "always_on", False):
@@ -371,6 +394,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
         "resume": args.resume,
         "watch": args.watch or [],
         "wait": not args.no_wait,
+        "inbox_only": getattr(args, "inbox_only", False),
     }
 
     if await _common.api_up(boot):
@@ -403,6 +427,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
             resume=args.resume,
             watch=tuple(args.watch or ()),
             wait=not args.no_wait,
+            inbox_only=body["inbox_only"],
         )
         # The brief below shares the start's timeout with the readiness wait.
         deadline = asyncio.get_running_loop().time() + direct.config.timing.start_timeout_seconds
@@ -635,9 +660,10 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"tmux: {denied}")
             return 1
         config = await _common.read_config()
-        online = await session_exists(args.name)
-        snapshot = await agent_state(config, args.name)
         spec = config.agents.get(args.name)
+        # An inbox-only agent has no session: one with its name is not its own.
+        online = not (spec is not None and spec.inbox_only) and await session_exists(args.name)
+        snapshot = await agent_state(config, args.name)
         if args.json:
             from dataclasses import asdict
 
@@ -696,7 +722,7 @@ async def _agent(args: argparse.Namespace) -> int:
                 print(f"expected key=value, got {item!r}")
                 return 1
             key, raw = item.split("=", 1)
-            json_keys = ("tags", "env", "always_on", "unattended")
+            json_keys = ("tags", "env", "always_on", "unattended", "inbox_only")
             changes[key] = _common.parse_value(raw) if key in json_keys else raw
         if api_up:
             result = await _common.api(boot, "PATCH", f"/api/agents/{args.name}", json_body=changes)
@@ -747,6 +773,9 @@ async def _agent(args: argparse.Namespace) -> int:
                             await direct.store.unwatch(name, repo)
                     except KeyError:
                         print(f"unknown agent '{name}'")
+                        return 1
+                    except ValueError as exc:
+                        print(f"error: {exc}")
                         return 1
             print(f"{name}: {'now watching' if sub == 'watch' else 'stopped watching'} {repo}")
         return 0
