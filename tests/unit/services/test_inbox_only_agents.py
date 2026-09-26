@@ -75,6 +75,11 @@ async def test_start_inbox_only_registers_without_launching(db, tmp_path):
     launch.assert_not_awaited()
     assert result.ok and result.ready == "inbox_only"
     assert store.agents.get("client").inbox_only
+    await store.forget("client")  # between resolving and starting
+    with pytest.raises(ValueError, match="forgotten"):
+        await start_resolved(store, store.config, spec, req, db=db)
+    with pytest.raises(ValueError, match="nothing to resume"):
+        await resolve_agent(store, replace(req, resume=True))
 
 
 async def test_a_launch_of_an_inbox_only_agent_is_refused(db, tmp_path):
