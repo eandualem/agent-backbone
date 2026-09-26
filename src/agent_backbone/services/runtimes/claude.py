@@ -115,6 +115,8 @@ class ClaudeCode(Runtime):
     )
     hook_timeout = 10  # seconds
     hook_context = True  # PostToolUse additionalContext
+    refusal_check = "Claude's auto-mode safety check"
+    refusal_allow = "/permissions"
 
     prompt_prefixes = ("❯",)
     prompt_suffixes = ("$", "%")

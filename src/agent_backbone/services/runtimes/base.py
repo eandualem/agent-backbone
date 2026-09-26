@@ -223,6 +223,11 @@ class Runtime:
     auto_review_args: tuple[str, ...] = ()
     """Opt into the runtime's permission reviewer while retaining its sandbox.
     Empty means no support; unattended mode takes precedence."""
+    refusal_check: str = ""
+    """What refuses an action without a dialog, as the refusal alert names it
+    ("Claude's auto-mode safety check"). Empty: no such refusal is reported."""
+    refusal_allow: str = ""
+    """The command in the session that allows a refused action (``/permissions``)."""
 
     # --- pane recognition -------------------------------------------------
     prompt_prefixes: tuple[str, ...] = ()

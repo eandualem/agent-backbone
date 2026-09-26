@@ -22,6 +22,10 @@ REFUSAL = {
 
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
+    # In a backbone-started session BACKBONE_STATE_DIR points at the real state
+    # directory, and wins over the hooks' --state-dir; TMUX_PANE at a real pane.
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
     monkeypatch.setattr(escalation, "_denial_log_offset", None)
     monkeypatch.setattr(escalation, "_denial_log_inode", None)
     monkeypatch.setattr(escalation, "_denial_watch_started", 0.0)
@@ -142,3 +146,70 @@ async def test_repeats_during_an_outage_do_not_crowd_out_other_notices(config):
         "Action: gh api",
         "Action: gh issue edit",
     ]
+
+
+# One behaviour, run against the required pair: each runtime's own refusal
+# evidence (Claude Code's PermissionDenied event; Codex's screen line after a
+# PermissionRequest, from its 0.157.1 TUI snapshot) reaches the humans as one
+# notice naming the action safely and the runtime's own way to allow it.
+_CODEX_REFUSAL = (
+    "⚠ Automatic approval review denied (risk: high): would push private text\n\n"
+    "✗ Request denied for codex to run gh issue edit 40 --body-file /tmp/private.md\n"
+)
+
+
+def _refuse_in_claude(state_dir, agent):
+    from agent_backbone.hooks import claude_hook
+
+    payload = {
+        "hook_event_name": "PermissionDenied",
+        "session_id": "s1",
+        "tool_name": "Bash",
+        "tool_input": {"command": "gh issue edit 40 --body-file /tmp/private.md"},
+        "tool_use_id": "toolu_1",
+        "reason": "denied by the auto mode classifier. Reason: [External System Writes].",
+    }
+    _run_hook(claude_hook, state_dir, agent, payload)
+
+
+def _refuse_in_codex(state_dir, agent):
+    from agent_backbone.hooks import codex_hook
+
+    for event, screen in (("PermissionRequest", ""), ("PreToolUse", _CODEX_REFUSAL)):
+        payload = {"hook_event_name": event, "session_id": "s1", "tool_name": "Bash"}
+        with patch.object(codex_hook, "own_screen", return_value=screen):
+            _run_hook(codex_hook, state_dir, agent, payload)
+
+
+def _run_hook(module, state_dir, agent, payload):
+    import io
+
+    with patch.object(module.bb.sys, "stdin", io.StringIO(json.dumps(payload))):
+        assert module.main(["--state-dir", str(state_dir), "--agent", agent]) == 0
+
+
+@pytest.mark.parametrize(
+    ("runtime", "refuse", "why", "allow"),
+    [
+        ("claude", _refuse_in_claude, "(External System Writes)", "/permissions"),
+        ("codex", _refuse_in_codex, "(risk: high)", "/approve"),
+    ],
+)
+async def test_a_refusal_without_a_dialog_reaches_the_humans_in_both_runtimes(
+    config, runtime, refuse, why, allow
+):
+    from dataclasses import replace
+
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    config.agents.specs["ike"] = replace(config.agents.get("ike"), runtime=runtime)
+    await _check(config)  # the watch starts
+    refuse(config.state_dir, "ike")
+    notify = await _check(config)
+    [call] = notify.await_args_list
+    text = call.args[1]
+    assert call.kwargs == {"agent": "ike"}  # no buttons: nothing to approve remotely
+    assert "Refused — ike" in text and "Action: gh issue edit" in text
+    assert f"{RUNTIMES[runtime].refusal_check} refused it {why}" in text
+    assert f"tmux attach -t ike, then {allow}" in text and "does not retry" in text
+    assert "private" not in text and "40" not in text

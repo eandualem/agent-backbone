@@ -156,6 +156,11 @@ class Codex(Runtime):
     )
     hook_timeout = 10  # seconds
     hook_context = True  # PostToolUse additionalContext
+    # Its automatic reviewer (`auto_review_args`) refuses without a dialog; the
+    # hook reads the refusal from the screen after a PermissionRequest.
+    # "/approve: approve one retry of a recent auto-review denial" (0.157).
+    refusal_check = "Codex's automatic reviewer"
+    refusal_allow = "/approve"
 
     prompt_prefixes = ("›",)
     runtime_markers = ("openai codex", "gpt-5.", "context left")

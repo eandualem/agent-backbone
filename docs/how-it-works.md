@@ -171,6 +171,14 @@ SessionEnd record expires; stale permission requests are not revived:
 | `Stop`, `Interrupt` | `idle`, with `last_assistant_message` |
 | `SessionEnd` | `unknown` |
 
+Codex's automatic reviewer (`agents.auto_review`) refuses an action without a
+dialog, and Codex sends no hook event for it. After a `PermissionRequest`,
+the hook reads its own pane at each later `PreToolUse` of that turn and at the
+turn's end. A new `✗ Request denied …` or `✗ Review timed out before …` line
+from Codex becomes a `permission_denied` record in the action log, as a
+Claude Code `PermissionDenied` does (see the refusal alert in
+[Telegram](telegram.md)). A person's own "You did not approve" is not one.
+
 | Gemini CLI event | State written |
 |---|---|
 | `SessionStart` | `idle` |
