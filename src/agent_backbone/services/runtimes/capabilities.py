@@ -261,7 +261,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="State is read from the terminal, which is slower and less certain.",
         implemented=lambda rt: bool(rt.hook_script),
         claude=_ok("tests/unit/hooks/test_claude_hook.py"),
-        codex=_ok("tests/unit/hooks/test_codex_hook.py"),
+        codex=_ok(
+            "tests/unit/hooks/test_codex_hook.py",
+            note="from its first prompt (the brief): Codex runs no hook before its first turn",
+        ),
         gemini=_ok("tests/unit/hooks/test_gemini_hook.py"),
         opencode=_ok("tests/unit/hooks/test_opencode_hook.py"),
         deepcode=_gap(275, "read from the terminal only"),
