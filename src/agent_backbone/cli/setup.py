@@ -305,14 +305,22 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         if found:
             note(f"  - runtimes installed: {', '.join(found)}")
             # The capability contract: what each installed runtime lacks, and its issue.
-            for runtime_id in found:
-                if missing := unavailable(runtime_id):
-                    named = ", ".join(
+            gaps = [
+                (
+                    runtime_id,
+                    "\n".join(
                         cap.id
                         + (f" (#{cell.issue})" if (cell := cap.cells[runtime_id]).issue else "")
                         for cap in missing
-                    )
-                    note(f"  ! {runtime_id} lacks: {named}")
+                    ),
+                )
+                for runtime_id in found
+                if (missing := unavailable(runtime_id))
+            ]
+            if gaps:
+                print_table(
+                    "Unavailable on installed runtimes", ("CLI", "Capability (issue)"), gaps
+                )
             note("    details: `backbone docs runtime-capabilities`")
 
         note("Security")

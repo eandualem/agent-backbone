@@ -37,6 +37,27 @@ def test_the_required_pair_is_shipped():
     assert set(REQUIRED) <= set(RUNTIMES)
 
 
+# The baseline as the contract shipped it. Entries are only ever removed: a new
+# required-pair gap needs the owner's explicit exception (the ``exception`` status),
+# never a baseline entry.
+INITIAL_BASELINE = {
+    ("global-instructions-detected", "claude", 274),
+    ("global-instructions-detected", "codex", 274),
+    ("cli-memory", "claude", 292),
+    ("cli-memory", "codex", 292),
+    ("plan-approval", "codex", 278),
+    ("refusal-alert", "codex", 279),
+    ("browser-group-name", "codex", 270),
+    ("bounded-unattended", "claude", 285),
+    ("auto-review", "claude", 293),
+    ("deep-review", "codex", 288),
+}
+
+
+def test_the_baseline_never_grows():
+    assert REQUIRED_BASELINE <= INITIAL_BASELINE
+
+
 def test_the_required_pair_lacks_nothing_outside_the_shipped_baseline():
     for cap in CAPABILITIES:
         for runtime_id in REQUIRED:
@@ -84,8 +105,8 @@ def test_cells_carry_what_their_status_requires(cap):
         if cell.status == "n/a":
             assert cell.note, f"{where}: not applicable says why"
             assert cell.issue is None, f"{where}: an open issue means a gap, not n/a"
-        if cell.status == "unverified" and runtime_id in REQUIRED:
-            assert cell.issue is not None, f"{where}: the required pair tracks what is unverified"
+        if cell.status == "unverified":
+            assert cell.issue is not None, f"{where}: an issue tracks the verification"
 
 
 @_ROWS

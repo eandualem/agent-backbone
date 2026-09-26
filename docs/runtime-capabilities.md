@@ -26,9 +26,9 @@ claims support that the adapter's code does not declare.
 <!-- capability-table:begin -->
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
-| Message delivery into the session | ✅ | ✅ | ? not verified live | ✅ | ✅ | ? not verified live | ✅ plumbing tests only |
-| Folder-trust dialog answered at start | ✅ | ✅ | ✅ `--skip-trust` | n/a | n/a | ? not checked | n/a |
-| Brief reaches a fresh session before other work | ✅ | ✅ | ? | ✅ | ? | ? not verified live | n/a |
+| Message delivery into the session | ✅ | ✅ | ? #302 not verified live | ✅ | ✅ | ? #302 not verified live | ✅ plumbing tests only |
+| Folder-trust dialog answered at start | ✅ | ✅ | ✅ `--skip-trust` | n/a | n/a | ? #302 not checked | n/a |
+| Brief reaches a fresh session before other work | ✅ | ✅ | ? #302 | ✅ | ? #302 | ? #302 not verified live | n/a |
 | Current brief after resume | ✅ | ✅ | ❌ #273 | ❌ #273 | ❌ #273 | ❌ #273 | n/a |
 | Brief followed after context compaction | ✅ | ✅ | ? #291 | ❌ #291 the rule is kept but no longer followed | ? #291 | ? #291 | n/a |
 | Project AGENTS.md loaded at start | ✅ | ✅ | ❌ #286 reads GEMINI.md unless context.fileName is set | ✅ | ? #286 | ❌ #286 reads only files passed to it | n/a |
@@ -36,7 +36,7 @@ claims support that the adapter's code does not declare.
 | CLI-native memory disabled or detected | ❌ #292 auto-memory is on | ? #292 | ? #292 | ? #292 | ? #292 | ? #292 | n/a |
 | State reported by the runtime (hooks) | ✅ | ✅ | ✅ | ✅ | ❌ #275 read from the terminal only | ❌ #275 read from the terminal only | n/a |
 | Steer and high-priority events into a working agent | ✅ | ✅ | ❌ #276 | ❌ #276 | ❌ #276 | ❌ #276 | n/a |
-| Permission dialog detected and alerted | ✅ | ✅ | ? markers not verified live | ✅ | ❌ #287 dialog not captured | ? markers not verified live | n/a |
+| Permission dialog detected and alerted | ✅ | ✅ | ? #302 markers not verified live | ✅ | ❌ #287 dialog not captured | ? #302 markers not verified live | n/a |
 | Permission dialog answered (agent approve) | ✅ | ✅ | ❌ #277 | ✅ | ❌ #277 | ❌ #277 | n/a |
 | Permission dialog refused (agent deny) | ✅ | ✅ | ❌ #299 | ❌ #299 | ❌ #299 | ❌ #299 | n/a |
 | Plan approval answered | ✅ | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | n/a |
@@ -47,7 +47,7 @@ claims support that the adapter's code does not declare.
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ #281 | ❌ #281 | n/a |
 | Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ #285 | ❌ #285 | ❌ #285 | ❌ #285 | n/a |
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ #293 | ❌ #293 | ❌ #293 | ❌ #293 | n/a |
-| Shared skills linked | ✅ | ✅ | ? linked by the shared code; not tested for this runtime | ? linked by the shared code; not tested for this runtime | ❌ #282 | ❌ #282 | n/a |
+| Shared skills linked | ✅ | ✅ | ? #302 linked by the shared code; not tested for this runtime | ? #302 linked by the shared code; not tested for this runtime | ❌ #282 | ❌ #282 | n/a |
 | Token usage recorded | ✅ | ✅ | ❌ #283 | ✅ | ❌ #283 | ❌ #283 | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ❌ #284 | ❌ #284 | ❌ #284 | ❌ #284 | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ #295 | ✅ | ❌ #295 | ❌ #295 | n/a |
@@ -92,6 +92,8 @@ claims support that the adapter's code does not declare.
   individuals") before any model call; Backbone reports such a session as
   `waiting_for_human`. An API key is the documented alternative. Cells marked
   unverified for Gemini have not been checked against a signed-in session.
+- **Folder trust.** OpenCode and Deep Code show no folder-trust dialog, so
+  that row is n/a for them. Every other n/a is the plain shell's.
 - **Deep Code** is `@vegamo/deepcode-cli`, the community CLI DeepSeek's docs
   point to. Its permission dialog has not been captured, so `agent approve`
   refuses it until then.
