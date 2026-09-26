@@ -314,3 +314,27 @@ async def test_a_queued_message_hints_the_recipients_inbox(api_client, auth_head
     readable = await read()
     receipt = response.json()
     assert readable == {"ike": frozenset({(receipt["queue_id"], receipt["operation_id"])})}
+
+
+async def test_the_hint_waits_until_after_the_reply(config, db):
+    """The reply is built before the hint runs: a slow hint never delays the sender."""
+    from fastapi import BackgroundTasks
+
+    from agent_backbone.api.models import MessageRequest
+    from agent_backbone.api.routes.messages import send_message
+
+    feed = AsyncMock()
+    background = BackgroundTasks()
+    stored = DeliveryReport(DeliveryOutcome.OFFLINE, "stored")
+    with patch("agent_backbone.api.routes.messages.safe_deliver", AsyncMock(return_value=stored)):
+        reply = await send_message(
+            MessageRequest(target_session="ike", from_entity="bell", message="hi"),
+            background,
+            config=config,
+            db=db,
+            feed=feed,
+        )
+    assert reply.queue == "stored"
+    feed.hint_inbox.assert_not_awaited()  # not inline
+    await background()  # what the server runs after sending the reply
+    feed.hint_inbox.assert_awaited_once()

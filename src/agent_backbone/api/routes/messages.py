@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from agent_backbone.api.deps import get_config, get_db, get_feed, registered_agent_or_404
@@ -36,6 +36,7 @@ router = APIRouter(prefix="/api", tags=["messages"])
 @router.post("/messages", response_model=MessageResponse)
 async def send_message(
     body: MessageRequest,
+    background: BackgroundTasks,
     config=Depends(get_config),
     db=Depends(get_db),
     feed=Depends(get_feed),
@@ -68,11 +69,9 @@ async def send_message(
         "Message from %s → %s: %s (%s)", body.from_entity, target, report.outcome, report.queue
     )
     if report.queue == "stored":
-        try:
-            inbox = (target,) if spec.inbox_only else ()
-            await feed.hint_inbox(lambda: db.queue.inbox_rows(target, inbox_sessions=inbox))
-        except Exception:
-            log.exception("Inbox hint for %s failed (non-fatal)", target)
+        # After the response: the hint never delays the sender.
+        inbox = (target,) if spec.inbox_only else ()
+        background.add_task(_hint_inbox, feed, db, target, inbox)
     return MessageResponse(
         ok=report.outcome == DeliveryOutcome.DELIVERED,
         session=target,
@@ -86,6 +85,13 @@ async def send_message(
         delivery_id=report.delivery_id,
         queue_id=report.queue_id,
     )
+
+
+async def _hint_inbox(feed, db, target: str, inbox: tuple[str, ...]) -> None:
+    try:
+        await feed.hint_inbox(lambda: db.queue.inbox_rows(target, inbox_sessions=inbox))
+    except Exception:
+        log.exception("Inbox hint for %s failed (non-fatal)", target)
 
 
 @router.post("/steer", response_model=SteerResponse)
