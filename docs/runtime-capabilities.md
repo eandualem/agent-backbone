@@ -38,6 +38,7 @@ claims support that the adapter's code does not declare.
 | Steer and high-priority events into a working agent | ✅ | ✅ | ❌ #276 | ❌ #276 | ❌ #276 | ❌ #276 | n/a |
 | Permission dialog detected and alerted | ✅ | ✅ | ? markers not verified live | ✅ | ❌ #287 dialog not captured | ? markers not verified live | n/a |
 | Permission dialog answered (agent approve) | ✅ | ✅ | ❌ #277 | ✅ | ❌ #277 | ❌ #277 | n/a |
+| Permission dialog refused (agent deny) | ✅ | ✅ | ❌ #299 | ❌ #299 | ❌ #299 | ❌ #299 | n/a |
 | Plan approval answered | ✅ | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | n/a |
 | Alert when an automatic safety check refuses an action | ✅ | ❌ #279 | ❌ #279 | ❌ #279 | ❌ #279 | ❌ #279 | n/a |
 | Browser tab group named after the agent | ✅ with `backbone chrome install` | ❌ #270 | ❌ #270 | ❌ #270 | ❌ #270 | ❌ #270 | n/a |
@@ -67,6 +68,7 @@ claims support that the adapter's code does not declare.
 | Steer and high-priority events into a working agent | Send an ordinary message; it waits until the agent is at its prompt. |
 | Permission dialog detected and alerted | Watch the session (`agent attach`) for dialogs. |
 | Permission dialog answered (agent approve) | Answer the dialog in the session (`agent attach`). |
+| Permission dialog refused (agent deny) | Refuse the dialog in the session (`agent attach`). |
 | Plan approval answered | Answer the plan in the session (`agent attach`). |
 | Alert when an automatic safety check refuses an action | Watch the agent's output (`agent output`) for refused actions. |
 | Browser tab group named after the agent | A Codex agent can name its own group with its Chrome client's `nameSession`. |
